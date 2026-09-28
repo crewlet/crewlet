@@ -163,7 +163,7 @@ func TestAProofFortyMinutesOldMayNotChangeAnybodysGrants(t *testing.T) {
 //
 // `DELETE /iam/credentials/{id}` is mounted on the ordinary credential write,
 // and once it has read which credential the id names it asks the sensitive
-// verb for a password, a second factor, the recovery codes or a provider link:
+// verb for a password, a second factor or the recovery codes:
 // each of those is a second-factor reset by another door, and the reset
 // itself asks the quarter-hour. So a proof forty minutes old withdraws a
 // machine token and is refused a second factor naming `step_up_sensitive`,

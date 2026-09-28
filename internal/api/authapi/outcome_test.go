@@ -172,7 +172,7 @@ func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 		t.Parallel()
 		writer := &recordingWriter{unresolved: true}
 		mux := http.NewServeMux()
-		buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+		buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 			o.Directory = liveInvitation{}
 			o.Writer = writer
 		}).Routes(mux)

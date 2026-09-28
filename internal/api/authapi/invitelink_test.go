@@ -5,16 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
@@ -29,6 +25,22 @@ func (seatedInvitation) InvitationByID(ctx context.Context, id string) (
 	row.Seat, row.SeatHandle, row.SeatName = "platform-lead", "eng-lead",
 		"Engineering lead"
 	return row, err
+}
+
+// issuedInvitation is [sealedInvitation] under one id and nothing under any
+// other, so a case can present an id nobody issued beside one somebody did.
+type issuedInvitation struct {
+	sealedInvitation
+	id string
+}
+
+func (d issuedInvitation) InvitationByID(ctx context.Context, id string) (
+	iamdomain.InvitationRow, error) {
+
+	if id != d.id {
+		return iamdomain.InvitationRow{}, nil
+	}
+	return d.sealedInvitation.InvitationByID(ctx, id)
 }
 
 // A GET ON AN INVITE RENDERS AND NEVER SPENDS.
@@ -47,7 +59,7 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 	t.Parallel()
 	writer := &recordingWriter{}
 	mux := http.NewServeMux()
-	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = seatedInvitation{}
 		o.Sealer = stubSealer{address: "dana@example.com"}
 		o.Writer = writer
@@ -121,8 +133,8 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 // A LINK'S SECRET IS WHAT OPENS IT, AND A WRONG ONE IS AN ABSENT INVITATION.
 //
 // The id is in every snapshot, backup and access log, so presenting it opens
-// nothing: the view, the redemption and the provider redemption each check the
-// secret the link carries beside it. And each refuses a missing or wrong one
+// nothing: the view and the redemption each check the secret the link carries
+// beside it. And each refuses a missing or wrong one
 // with EXACTLY the answer an id nobody issued gets — the same status, the same
 // bytes, counted as a failed attempt — because told apart, a
 // guessed secret against a leaked id would say the id exists.
@@ -131,10 +143,6 @@ func TestAGetOnAnInviteRendersAndNeverSpends(t *testing.T) {
 // renders or redeems; answer it with a code of its own and the bytes differ.
 func TestALinksSecretIsWhatOpensIt(t *testing.T) {
 	t.Parallel()
-	idp := oidc.NewProvider(oidc.Config{
-		Issuer: "https://idp.example.com", ClientID: "crewlet",
-		RedirectURI: "https://crewlet.example.com" + auth.PathAuthOIDCCallback,
-	}, nil, func() time.Time { return clock })
 	const nobodyIssued = "018f3a9c-4d2e-7000-8000-000000000bad"
 	routes := []struct {
 		name  string
@@ -154,10 +162,6 @@ func TestALinksSecretIsWhatOpensIt(t *testing.T) {
 			return httptest.NewRequest(http.MethodPost, "/auth/invite/"+id,
 				strings.NewReader(string(raw)))
 		}},
-		{"the provider redemption", func(id, secret string) *http.Request {
-			return redemptionStart(id, url.Values{"secret": {secret},
-				"login": {"dana.sre"}})
-		}},
 	}
 	for _, route := range routes {
 		t.Run(route.name, func(t *testing.T) {
@@ -165,9 +169,9 @@ func TestALinksSecretIsWhatOpensIt(t *testing.T) {
 			audit := &recordingAudit{}
 			writer := &recordingWriter{}
 			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), idp, func(o *authapi.Options) {
-				o.Directory = offeredInvitation{id: invitationID}
-				o.Sealer = stubSealer{address: invitedAddress}
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
+				o.Directory = issuedInvitation{id: invitationID}
+				o.Sealer = stubSealer{address: "dana@example.com"}
 				o.Writer = writer
 				o.Audit = audit
 			}).Routes(mux)
@@ -220,7 +224,7 @@ func TestARedemptionWhoseSeatWasTakenSaysSo(t *testing.T) {
 	t.Parallel()
 	const holder = "018f3a9c-0000-7000-8000-0000000000a2"
 	mux := http.NewServeMux()
-	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = seatedInvitation{}
 		o.Sealer = stubSealer{address: "dana@example.com"}
 		o.Writer = refusingWriter{err: &iamdomain.ErrClaimed{

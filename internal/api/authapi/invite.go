@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 
 	"github.com/google/uuid"
 
@@ -37,8 +36,8 @@ import (
 // browser never sends to any server — so neither half reaches a proxy's access
 // log by the person following it. The screen then calls these routes with the
 // id in the path and the secret beside it, never in a URL: the view in the
-// [inviteSecretHeader] header, the redemption in its JSON body, and the
-// provider redemption in its form. The id alone is in every snapshot, backup
+// [inviteSecretHeader] header and the redemption in its JSON body. The id
+// alone is in every snapshot, backup
 // and access log and opens nothing; what the estate keeps of the secret is its
 // verifier ([iamdomain.InvitationRow.Admits]).
 //
@@ -85,19 +84,6 @@ type inviteView struct {
 	// binds none. It is part of what the person is agreeing to, so the
 	// form shows it before anything is spent.
 	Seat *inviteSeat `json:"seat,omitempty"`
-
-	// ProviderStart is where the form POSTS for a person who would rather
-	// redeem this invitation through the company's identity provider than
-	// set a password here — [Service.StartProviderRedemption], with a
-	// `login` field carrying the login the person chose (the proposal above
-	// when it carries none). A FORM ACTION and never a link, because a link
-	// is what another site can send a browser to. The provider account they
-	// come back with is LINKED to the person the invitation creates — the
-	// one way a subject is pinned without an administrator. Absent on a
-	// deployment with no provider. The form carries the link's
-	// secret as a `secret` field beside `login`, as the password
-	// redemption's body does.
-	ProviderStart string `json:"provider_start,omitempty"`
 }
 
 // inviteSeat is the seat an invitation binds, as its view shows it.
@@ -151,10 +137,6 @@ func (s *Service) ViewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	if held.Seat != "" {
 		view.Seat = &inviteSeat{Handle: held.SeatHandle, Name: held.SeatName}
-	}
-	if s.provider != nil {
-		view.ProviderStart = auth.AuthInvitePrefix + url.PathEscape(held.ID) +
-			providerRedemption
 	}
 	httpjson.Write(w, http.StatusOK, view)
 }
@@ -351,9 +333,8 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 }
 
 // presentedInvitation resolves one invitation from the two halves of its link —
-// the id a route's path names and the secret presented beside it, or the pair
-// a redemption through the identity provider sealed into its flight —
-// answering false once it has written the refusal.
+// the id a route's path names and the secret presented beside it — answering
+// false once it has written the refusal.
 //
 // ONE REFUSAL FOR ABSENT, REDEEMED, EXPIRED AND A SECRET THAT IS NOT THE
 // LINK'S, because the first three have one remedy — ask for a new one — and

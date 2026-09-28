@@ -1,9 +1,5 @@
 package auth
 
-import (
-	"context"
-)
-
 // A PRESENTED BEARER IS COMPARED AS IT ARRIVES, AND ITS VALUE IS WHAT PROTECTS
 // IT.
 //
@@ -48,25 +44,3 @@ import (
 // guarded route is a failed attempt in the audit trail's per-client, per-minute
 // tally (audit.go), so a spray is a row an operator reads, naming the client
 // and how many different values it tried.
-
-// bearerKey marks a request that presented a bearer, whatever became of it.
-type bearerKey struct{}
-
-// withBearer marks ctx as carrying a presented bearer.
-func withBearer(ctx context.Context) context.Context {
-	return context.WithValue(ctx, bearerKey{}, true)
-}
-
-// PresentedBearer reports whether a request to an UNGUARDED route presented a
-// bearer, which the guard marks there and never compares — see
-// [Guard.resolveUnguarded].
-//
-// FOR THE ONE UNGUARDED ROUTE THAT READS A RESOLUTION, the provider step-up
-// start, which confirms a BROWSER's own session with the identity provider: a
-// bearer proves nobody is present, so it refuses every presented bearer alike,
-// and a request carrying one resolves as nobody there rather than as whoever
-// its cookie names.
-func PresentedBearer(ctx context.Context) bool {
-	presented, _ := ctx.Value(bearerKey{}).(bool)
-	return presented
-}

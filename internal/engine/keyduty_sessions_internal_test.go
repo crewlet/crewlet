@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // peopleInBuckets mints n people who fall in n different identity buckets, so a
@@ -27,20 +26,6 @@ func peopleInBuckets(n int) []string {
 		}
 	}
 	return out
-}
-
-// sessionRecord is a peer's login opening a session for somebody: the record
-// whose rows a node that retained it never writes.
-func sessionRecord(lineage, person string) iamdomain.MutationRecord {
-	return iamdomain.MutationRecord{
-		RecordEnvelope: iamdomain.RecordEnvelope{
-			V: iamdomain.BaseRecordVersion, OpID: uuid.Must(uuid.NewV7()).String(),
-			Subject: iamdomain.SessionSubject(lineage), Op: iamdomain.OpOpen,
-			CreatedAt: time.Now().UTC(), Writer: "node-peer",
-			Scope: iamdomain.PeopleScope(person),
-		},
-		Person: person, Actor: "node-peer", ActorKind: "machine",
-	}
 }
 
 // enrolMachine enrols one active service account through the node's own
@@ -125,66 +110,6 @@ func TestARetainedRecordCoversExactlyItsPersonsBucket(t *testing.T) {
 		t.Error("Resolve reads C's rows as complete while this node holds a " +
 			"record about C it could not apply — an absent session row there " +
 			"answers 401 and signs C out of a session the record opened")
-	}
-}
-
-// A REFRESH GRANT WHOSE SESSION THIS NODE RETAINED IS KEPT.
-//
-// The key duty collects the refresh token of every session that is over, and a
-// session was over when its row was missing on a node whose checkpoint was past
-// the session's start. The checkpoint moves past a record the node retains, so
-// a node that retained the session's own opening record read the session as
-// over and destroyed its token — the one thing the deactivation probe asks the
-// provider with, so a person disabled there kept the session until its
-// absolute deadline.
-//
-// The CONTROL is on the same node and the same pass: a grant whose session row
-// is missing where nothing about its person is retained IS collected.
-func TestARefreshGrantWhoseSessionThisNodeRetainedIsKept(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	e, b := retentionNode(t)
-	people := peopleInBuckets(2)
-	retainedPerson, gonePerson := people[0], people[1]
-
-	custody := e.RefreshCustody()
-	if custody == nil {
-		t.Fatal("the node keeps no refresh custody")
-	}
-	lineage := uuid.Must(uuid.NewV7()).String()
-	seq := retain(t, e, b, retainedUnderUnknownKey, sessionRecord(lineage, retainedPerson))
-	started := statelog.Position{Stream: iamdomain.Domain{}.Stream().Name,
-		Generation: e.native.log.Domain(iamdomain.Domain{}.Name()).runner.Committed().Generation,
-		Seq:        seq}
-	if err := custody.Hold(ctx, iamdomain.RefreshGrant{
-		Lineage: lineage, Person: retainedPerson, Issuer: "https://idp.example.com",
-		Token: "refresh-retained", Start: uint64(started.Packed()),
-	}, time.Now()); err != nil {
-		t.Fatalf("hold the retained session's grant: %v", err)
-	}
-	gone := uuid.Must(uuid.NewV7()).String()
-	if err := custody.Hold(ctx, iamdomain.RefreshGrant{
-		Lineage: gone, Person: gonePerson, Issuer: "https://idp.example.com",
-		Token: "refresh-gone", Start: 1,
-	}, time.Now()); err != nil {
-		t.Fatalf("hold the gone session's grant: %v", err)
-	}
-
-	collected, skipped, err := custody.CollectEnded(ctx, e.native.iamReader, time.Now())
-	if err != nil || len(skipped) != 0 {
-		t.Fatalf("CollectEnded: %v %v", err, skipped)
-	}
-	if !slices.Equal(collected, []string{gone}) {
-		t.Fatalf("the collection took %v, want exactly the session nothing "+
-			"retained is about (%s) — a grant whose session this node retained "+
-			"is a live session's", collected, gone)
-	}
-	grants, _, err := custody.Held(ctx)
-	if err != nil {
-		t.Fatalf("Held: %v", err)
-	}
-	if len(grants) != 1 || grants[0].Lineage != lineage {
-		t.Errorf("custody holds %+v, want the retained session's grant alone", grants)
 	}
 }
 

@@ -109,8 +109,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// A REVOCATION IS ADMITTED ON THE ORDINARY VERB and asks the
 	// sensitive one from inside once it has read which credential the id
 	// names: a machine token's is an ordinary write, and a password's, a
-	// second factor's, the recovery codes' or a provider link's changes
-	// how somebody proves who they are — which the pattern cannot see.
+	// second factor's or the recovery codes' changes how somebody proves
+	// who they are — which the pattern cannot see.
 	mount("DELETE /iam/credentials/{id}",
 		ofSubject(authz.ActionCredentialWrite), s.DeleteCredential)
 	// BOTH HATS, the deployment's grant and the directory's — sessions.go
@@ -301,15 +301,13 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 // different thing to do next. What is particular here is [iamdomain.ErrRefused]
 // and [iamdomain.ErrClaimed]: the first is authority (403, and it will never
 // land however often it is retried) and the second is a lost race on an
-// address, a login or a seat (409, naming who holds it). A provider subject
-// somebody else holds, and a person already linked to a different one
-// ([iamdomain.ErrLinked]), are 409 `subject_conflict` — the code the sign-in
-// surface answers the same fact with. An estate that could not decide is 503
-// WITH the operation id and the Retry-After the refusal's own rule gives
-// ([auth.RetryIdentity]): it used to be a bare 503, which a client cannot tell
-// from a node that is gone for good — and then a 503 carrying the identity
-// hint whatever refused it, which told a client to come back in two seconds
-// for a record too large to place, a full log or an evicted node.
+// address, a login or a seat (409, naming who holds it). An estate that could
+// not decide is 503 WITH the operation id and the Retry-After the refusal's
+// own rule gives ([auth.RetryIdentity]): it used to be a bare 503, which a
+// client cannot tell from a node that is gone for good — and then a 503
+// carrying the identity hint whatever refused it, which told a client to come
+// back in two seconds for a record too large to place, a full log or an
+// evicted node.
 //
 // THREE ARE SUCCESSES, and they are what the writer's answer used to hide —
 // it answered a bare position, so an `unknown` outcome read as 200:
@@ -350,19 +348,6 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	switch {
 	case errors.Is(err, iamdomain.ErrRefused):
 		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
-			httpjson.Detail{"detail": err.Error()})
-		return
-	case errors.As(err, &claimed) && claimed.Kind == iamdomain.KindLink:
-		// THE HOLDER AND NEVER THE BLIND: the administrator reading this
-		// may manage people and needs to know whose link it is; the
-		// blind is a keyed hash nobody can act on.
-		refuse(http.StatusConflict, httpjson.CodeSubjectConflict,
-			httpjson.Detail{"detail": "that identity provider account is " +
-				"already linked to person " + claimed.Holder + "; unlink them " +
-				"first if it is theirs no longer", "holder": claimed.Holder})
-		return
-	case errors.Is(err, iamdomain.ErrLinked):
-		refuse(http.StatusConflict, httpjson.CodeSubjectConflict,
 			httpjson.Detail{"detail": err.Error()})
 		return
 	case errors.Is(err, iamdomain.ErrOperationReused):

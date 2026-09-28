@@ -149,25 +149,24 @@ func TestOnlyTheDeclaredExemptionsAreUnguarded(t *testing.T) {
 	}
 }
 
-// THE TWO SIGN-OUTS OF THIS SESSION ARE EXEMPT, AND NO OTHER SIGN-OUT IS.
+// THE SIGN-OUT OF THIS SESSION IS EXEMPT, AND NO OTHER SIGN-OUT IS.
 //
 // A sign-out clears the cookie whatever the node can read, and guarded, a node
 // that could not read its identity estate answered it 503 before it ran — so
 // nobody could sign out on exactly the node that could vouch for nobody. The
-// two that end THIS session verify every bearer the browser holds themselves,
-// so they need no guard. Signing out everywhere and ending a named session act
+// one that ends THIS session verifies every bearer the browser holds itself,
+// so it needs no guard. Signing out everywhere and ending a named session act
 // on a caller the guard resolved, and exempting them — or a /auth/logout/
 // prefix, which would take both with it — would be a credential surface
 // behind no credential.
 //
-// Mutation: drop either sign-out from the exact set and its row is guarded;
+// Mutation: drop the sign-out from the exact set and its row is guarded;
 // exempt a prefix and the last two rows are served without a credential.
-func TestOnlyThisSessionsSignOutsAreUnguarded(t *testing.T) {
+func TestOnlyThisSessionsSignOutIsUnguarded(t *testing.T) {
 	t.Parallel()
 	for path, exempt := range map[string]bool{
-		auth.PathAuthLogout:                                 true,
-		auth.PathAuthLogoutProvider:                         true,
-		"/auth/logout/all":                                  false,
+		auth.PathAuthLogout: true,
+		"/auth/logout/all":  false,
 		"/auth/logout/018f3a9c-0000-7000-8000-0000000000bb": false,
 	} {
 		if auth.Unguarded(path) != exempt {

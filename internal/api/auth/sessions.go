@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -191,12 +190,9 @@ func enrolmentRefusal() *Refusal {
 //     opens another enrolment-only session, since a password is still all
 //     they hold.
 //
-// And TO LEAVE, both sign-outs of this session — `POST /auth/logout` and, where
-// a provider is, `POST /auth/logout/oidc` — which are not here because the
-// guard does not judge them at all: they are [Unguarded], so no refusal
-// reaches them, this one included. The provider sign-out was missing while
-// both were guarded, and a session that could only enrol was answered this
-// refusal there, its cookie kept and the provider never reached.
+// And TO LEAVE, the sign-out of this session — `POST /auth/logout` — which is
+// not here because the guard does not judge it at all: it is [Unguarded], so
+// no refusal reaches it, this one included.
 //
 // AN EXACT LIST OF METHOD AND PATH, never a prefix, for the exemption list's
 // reason: the same surface regenerates recovery codes, signs a person out
@@ -789,14 +785,11 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 		Seat:     binding.Handle(),
 		SeatAt:   person.SeatAt,
 		Position: binding.Seat.Unit,
-		// WHAT THE PERSON WAS GIVEN HERE AND WHAT THIS SESSION CARRIES,
-		// clamped to this node's ceiling. The carried half is the
-		// identity provider's group mapping, recorded on the session
-		// that presented it: it used to be merged into the sign-in's
-		// sighting and then dropped, so no group mapping ever conferred
-		// anything. The zero session — a row this node has not applied —
-		// carries nothing, which only ever narrows.
-		Grants:    intersect(union(person.Grants, v.Session.GroupGrants), ceiling),
+		// WHAT THE PERSON WAS GIVEN HERE, clamped to this node's
+		// ceiling. A session carries no authority of its own: the grants
+		// are the person's row's, so an administrator's edit reaches
+		// every session they hold on its next request.
+		Grants:    intersect(person.Grants, ceiling),
 		Colleague: person.Colleague,
 		Stage:     person.Stage,
 		// AND THROUGH WHAT: this session, by its lineage. The person is
@@ -813,25 +806,6 @@ func (s *Sessions) principal(v session.Validation, binding session.Binding,
 	// step-up surface at all — enrolling a second factor included.
 	proof.stamp(&p, v.Session.ProvedAt)
 	return p
-}
-
-// union is every grant in either set, once each, in the order they were first
-// named.
-//
-// A UNION AND NEVER A REPLACEMENT, because the two answer different
-// questions: a person's declared grants are what this company gave them, and
-// the carried ones are what their directory membership said when they signed
-// in. Replacing either with the other would make a group removal at the
-// provider silently revoke something an administrator granted here, or an
-// administrator's edit silently drop what the provider asserted.
-func union(declared, carried []iam.Grant) []iam.Grant {
-	out := slices.Clone(declared)
-	for _, g := range carried {
-		if !slices.Contains(out, g) {
-			out = append(out, g)
-		}
-	}
-	return out
 }
 
 // proofWindows is this node's two step-up windows: `api.auth.session.step_up`
@@ -881,7 +855,7 @@ func (w proofWindows) stamp(p *iam.Principal, provedAt time.Time) {
 // THEMSELVES rather than on a grant: the safety argument was that no token
 // carries a grant the sensitive rows ask for, and a self arm asks none. The
 // break-glass credential keeps both windows ([Guard.principalFor]), because it
-// has to reach a sensitive gesture on the day the identity provider is down.
+// has to reach a sensitive gesture on the day nobody else can sign in.
 func (w proofWindows) stampOrdinary(p *iam.Principal, provedAt time.Time) {
 	w.stamp(p, provedAt)
 	p.SensitiveReauthAt = time.Time{}

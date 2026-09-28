@@ -100,7 +100,7 @@ type Health struct {
 	// Always an object, for Domains' reason: the engine always knows what
 	// it armed, so a null would be a claim this body never has to make. It
 	// is where an operator reads that the key duty is running at all, and
-	// at which interval the deactivation probe asks the provider.
+	// at which interval each duty runs.
 	IdentityDutySeconds map[string]float64 `json:"identity_duty_seconds"`
 
 	// StallLagSeconds is how far behind this node's watched duty is,

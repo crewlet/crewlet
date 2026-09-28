@@ -158,9 +158,9 @@ func (b *barrierBinding) BoundSeat(context.Context, string) (session.PersonRow, 
 // a matching Tier A token reads the identity directory for its seat binding
 // before it answers, a refused one returns after a map compare — so a guess
 // against /health or a static asset was timed at line rate, on routes whose
-// refusals nothing counts. The request is anonymous there, marked as having
-// presented a bearer, and the guarded route beside it is the control: the same
-// value reads the directory once and resolves.
+// refusals nothing counts. The request is anonymous there, and the guarded
+// route beside it is the control: the same value reads the directory once and
+// resolves.
 //
 // Mutation: resolve the bearer on every route, and each unguarded request
 // below reads the directory.
@@ -170,32 +170,29 @@ func TestAnUnguardedRouteNeverComparesABearer(t *testing.T) {
 	g := tierA(t, newAuditTrail(t), false).BindSeats(auth.SeatBindings{
 		Directory: directory,
 	})
-	seen := func(path string) (iam.Resolution, bool) {
+	seen := func(path string) iam.Resolution {
 		var how iam.Resolution
-		var presented bool
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+goodValue)
 		g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, how = iam.From(r.Context())
-			presented = auth.PresentedBearer(r.Context())
 			w.WriteHeader(http.StatusOK)
 		})).ServeHTTP(httptest.NewRecorder(), req)
-		return how, presented
+		return how
 	}
 	for _, path := range []string{"/health", "/favicon.ico", "/static/app.js",
-		auth.WebhookPrefix + "forge", auth.PathAuthOIDCStart} {
+		auth.WebhookPrefix + "forge", auth.PathAuthLogout} {
 
-		how, presented := seen(path)
-		if how != iam.Anonymous || !presented {
-			t.Errorf("%s: the bearer resolved to %v (presented %v), want an "+
-				"anonymous request marked as presenting one", path, how, presented)
+		if how := seen(path); how != iam.Anonymous {
+			t.Errorf("%s: the bearer resolved to %v, want an anonymous "+
+				"request", path, how)
 		}
 	}
 	if n := directory.reads.Load(); n != 0 {
 		t.Errorf("unguarded routes read the directory %d times for a presented "+
 			"bearer — a right value is answered slower than a wrong one", n)
 	}
-	if how, _ := seen("/agents"); how != iam.Resolved || directory.reads.Load() != 1 {
+	if how := seen("/agents"); how != iam.Resolved || directory.reads.Load() != 1 {
 		t.Errorf("the guarded route resolved the token to %v after %d directory "+
 			"reads, want resolved after one", how, directory.reads.Load())
 	}

@@ -224,7 +224,7 @@ func newFounderNode(t *testing.T, estate *codeEstate, now func() time.Time,
 		mutate(&b)
 	}
 	audit := &recordingAudit{}
-	svc := buildWith(t, b, nil, func(o *authapi.Options) {
+	svc := buildWith(t, b, func(o *authapi.Options) {
 		o.Directory, o.Writer, o.Now, o.Audit = estate, estate, now, audit
 	})
 	mux := http.NewServeMux()

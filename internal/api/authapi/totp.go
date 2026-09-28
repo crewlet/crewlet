@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -53,10 +54,10 @@ type totpEnrolRequest struct {
 	// Secret is echoed back on the second leg, from the first leg's
 	// answer.
 	//
-	// CARRIED BY THE CLIENT rather than parked on the node, for the
-	// reason an OIDC flight is: the two legs may land on different
-	// ingress nodes, and a seed held in a map on the first is an
-	// enrolment that fails whenever the second goes elsewhere. It is not
+	// CARRIED BY THE CLIENT rather than parked on the node: the two
+	// legs may land on different ingress nodes, and a seed held in a map
+	// on the first is an enrolment that fails whenever the second goes
+	// elsewhere. It is not
 	// a credential until a code proves it, so a client holding it for
 	// one round trip is holding a value that grants nothing.
 	Secret string `json:"secret"`
@@ -316,8 +317,8 @@ func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 // is a fact about the session, recorded once when it opened. The enrolment
 // satisfies the rule the restriction stood for: the person now holds a second
 // factor. So the gesture opens the session that earns, and ENDS the
-// restricted one first, exactly as a step-up does — the same deadline, the
-// same carried grants, one live session and not two. A restriction lifted in
+// restricted one first, exactly as a step-up does — the same deadline, one
+// live session and not two. A restriction lifted in
 // place would be a session that proved one thing and is trusted for another.
 //
 // # And it keeps the restricted session's PROOF
@@ -338,10 +339,9 @@ func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 	}, signIn{
 		method: types.SignInPassword, factor: types.FactorTOTP,
 		stepUp: true, replaces: replaced.Bearer.Lineage.String(),
-		absolute:    replaced.Bearer.AbsoluteExpiresAt,
-		groupGrants: replaced.Session.GroupGrants,
-		provedAt:    &proved,
-		because:     "replaced by a second factor's enrolment",
+		absolute: replaced.Bearer.AbsoluteExpiresAt,
+		provedAt: &proved,
+		because:  "replaced by a second factor's enrolment",
 	})
 	if !ok {
 		return
@@ -493,10 +493,11 @@ func refuseStepUp(w http.ResponseWriter, window iam.Recency, detail string) {
 // Crewlet deployments and a constant would render them as identical rows in
 // one app — which is how somebody types the staging code into production.
 func (s *Service) issuerLabel() string {
-	if label := providerLabel(s.boot.API.ExternalBase()); label != "" {
-		return label
+	parsed, err := url.Parse(s.boot.API.ExternalBase())
+	if err != nil || parsed.Host == "" {
+		return "Crewlet"
 	}
-	return "Crewlet"
+	return parsed.Host
 }
 
 // without is a credential set with one method removed.

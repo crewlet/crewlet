@@ -53,10 +53,11 @@ var log = logging.Get("api.iam")
 
 // Directory is the read side this surface needs.
 //
-// CONSUMER-DEFINED and eight methods wide: internal/iamdomain's reader answers
-// more than this — a sign-in's keyed lookups among them — and those are
-// exactly what must not be reachable from a route. Naming the eight is what
-// keeps the enumeration-safe half of that package out of an HTTP handler.
+// CONSUMER-DEFINED and kept to what the routes read: internal/iamdomain's
+// reader answers more than this — a sign-in's keyed lookups among them — and
+// those are exactly what must not be reachable from a route. Naming each
+// method here is what keeps the enumeration-safe half of that package out of
+// an HTTP handler.
 type Directory interface {
 	People(ctx context.Context, q iamdomain.PeopleQuery) (iamdomain.PeoplePage, error)
 	Person(ctx context.Context, id string) (iamdomain.PersonRow, error)
@@ -65,13 +66,11 @@ type Directory interface {
 	History(ctx context.Context, q iamdomain.HistoryQuery) (iamdomain.HistoryPage, error)
 	PositionAt(ctx context.Context, at time.Time) (uint64, error)
 
-	// PersonByLogin and PersonBySubjectBlind name who holds a login or a
-	// provider account on this node, which an edit asks BEFORE its first
-	// record: a claim move refused by somebody else holding the name,
-	// met only at its own record, was met after an earlier step landed.
+	// PersonByLogin names who holds a login on this node, which an edit
+	// asks BEFORE its first record: a rename refused by somebody else
+	// holding the name, met only at its own record, was met after an
+	// earlier step landed.
 	PersonByLogin(ctx context.Context, login string) (iamdomain.Sighting, error)
-	PersonBySubjectBlind(ctx context.Context, blind string, now time.Time) (
-		iamdomain.Sighting, error)
 
 	// Claims and KeyCensus are the two identity duties' own readings,
 	// which the report shows on demand: a duplicate or an orphan the claim
@@ -121,13 +120,6 @@ type Writer interface {
 	// the caller may not confer is refused with nothing moved.
 	MayConfer(before, after []iam.Grant) error
 
-	// Link pins an identity provider subject to somebody who already
-	// exists, or moves them from one to another; Unlink takes it off
-	// them. Two gestures rather than a Claim and a Release, because each
-	// states the issuer and announces itself.
-	Link(ctx context.Context, in iamdomain.LinkChange) (statelog.Result, error)
-	Unlink(ctx context.Context, personID string, link iamdomain.Link,
-		opID, reason string) (statelog.Result, error)
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 	InvalidateAll(ctx context.Context, opID, reason string) (statelog.Result, error)
 	Remove(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
@@ -162,16 +154,6 @@ type Authority func(principal iam.Principal) Writer
 type Opener interface {
 	Open(ctx context.Context, personID string, field iamdomain.Field,
 		sealed string) (string, error)
-}
-
-// Blinds resolves the keyed blind a provider subject is held under.
-//
-// CONSUMER-DEFINED AND ONE METHOD, like [Opener]: this surface blinds the
-// subject an administrator pins and nothing else. Resolved per write rather
-// than held, for [iamdomain.Blinds]' reason — the key is minted by whichever
-// node first needs it.
-type Blinds interface {
-	Blinder(ctx context.Context) (*iamdomain.Blinder, error)
 }
 
 // Bootstrap is how a company with nobody in it acquires its first
@@ -231,15 +213,6 @@ type Options struct {
 	// has started (409).
 	Bootstrap Bootstrap
 
-	// Issuer is the identity provider this deployment signs people in
-	// through (`api.auth.oidc.issuer`), and Blinds what a subject pinned to
-	// somebody is blinded with. Both are needed for `oidc_subject` and
-	// nothing else, so their ABSENCE REFUSES THAT FIELD rather than the
-	// surface: a deployment with no provider has no subject to pin, and it
-	// says so naming the setting.
-	Issuer string
-	Blinds Blinds
-
 	// ExternalBase is `api.external_url`, which is what an invitation's
 	// link is built from.
 	//
@@ -297,8 +270,6 @@ type Service struct {
 	opener    Opener
 	bootstrap Bootstrap
 	external  string
-	issuer    string
-	blinds    Blinds
 	bindings  Bindings
 	ceiling   []iam.Grant
 	audit     Audit
@@ -327,7 +298,6 @@ func New(opts Options) (*Service, error) {
 		directory: opts.Directory, authority: opts.Authority,
 		opener: opts.Opener, bootstrap: opts.Bootstrap,
 		external: opts.ExternalBase, bindings: opts.Bindings,
-		issuer: opts.Issuer, blinds: opts.Blinds,
 		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
 		logEnd: opts.LogEnd,
 		now:    opts.Now,

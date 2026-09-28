@@ -1,10 +1,7 @@
 package authapi
 
 import (
-	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,15 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
-
-// providerLabel is the host a provider is reached at, for a button's label.
-func providerLabel(issuer string) string {
-	parsed, err := url.Parse(strings.TrimSpace(issuer))
-	if err != nil || parsed.Host == "" {
-		return ""
-	}
-	return parsed.Host
-}
 
 // directoryFor adapts this surface's own seam to the one
 // [session.Signer.Validate] takes.
@@ -51,25 +39,16 @@ func (s *Service) directoryFor() session.Directory { return s.sessions }
 // # What is in it, and what is deliberately not
 //
 // Enough to render the right form and nothing that says who works here. A
-// backend name, whether a provider button is offered and what it is called,
-// whether the first-operator route is still open, and the password floor so a
-// form can refuse twelve characters before a round trip.
+// backend name, whether the first-operator route is still open, and the
+// password floor so a form can refuse twelve characters before a round trip.
 //
 // THERE IS NO USER LIST, no count of people, and no hint of whether any
 // particular login exists. This route is unguarded, so everything on it is
 // public — and the one question an attacker most wants answered here is who
 // they could be.
 type configResponse struct {
-	// Backend is how this deployment signs people in: local, oidc or
-	// none.
+	// Backend is how this deployment signs people in: local or none.
 	Backend config.AuthBackend `json:"backend"`
-
-	// Provider is the identity provider's host, for a button to be
-	// labelled with. The HOST and never the whole issuer URL: a browser
-	// is redirected to that host the moment somebody clicks, so it is not
-	// a secret — while the path, which may name a tenant or a realm, is
-	// deployment topology nothing on a sign-in page needs.
-	Provider string `json:"provider,omitempty"`
 
 	// Bootstrap reports whether the first-operator route is still
 	// available. It closes for good the moment anybody is enrolled.
@@ -97,9 +76,6 @@ func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 	if s.backend() == config.AuthBackendLocal {
 		out.MinPasswordLength = s.passwordFloor()
 		out.SecondFactor = string(s.boot.API.Auth.Local.TOTP)
-	}
-	if s.provider != nil {
-		out.Provider = providerLabel(s.boot.API.Auth.OIDC.Issuer)
 	}
 	// THE ROUTE'S OWN GATE, so this flag and the route can never
 	// disagree: `api.auth.bootstrap` says whether the route MAY run and
@@ -174,8 +150,8 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		// THE THIRD ANSWER. This node could not tell, which is 503 and
 		// never 401: a browser reads 401 as "sign in again" and
 		// discards the cookie, so answering it during an identity
-		// outage signs the whole company out and stampedes the provider
-		// with re-authentications.
+		// outage signs the whole company out and sends everybody back
+		// to the sign-in form at once.
 		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
 		return
 	default:
@@ -267,27 +243,20 @@ func (s *Service) stepUpDue(p iam.Principal) bool {
 // session a record had already ended. A node that cannot read its rows still
 // records the close the person asked for, and announces nothing it cannot say
 // was live.
-func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
-	s.signOut(w, r)
-	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
-}
-
-// signOut is [Service.Logout] up to its answer: the cookie cleared under
-// every name, and each session a cookie named closed and announced when this
-// node's rows still hold it. Both sign-outs answer after it — the plain one
-// with a body, the provider one with a redirect — so they end a session
-// identically.
 //
-// EVERY BEARER THE BROWSER HOLDS, under either name ([session.Held]), where
-// the guard authenticates only the name this deployment issues: a browser
-// still holding the name an http deployment issued before it moved to https
-// is signed in by nothing any more, and its session is closed here rather
-// than left live behind a cookie the sign-out merely forgot.
-func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
+// # Every bearer the browser holds
+//
+// Under either name ([session.Held]), where the guard authenticates only the
+// name this deployment issues: a browser still holding the name an http
+// deployment issued before it moved to https is signed in by nothing any
+// more, and its session is closed here rather than left live behind a cookie
+// the sign-out merely forgot.
+func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 	s.clearSession(w)
 	for _, cookie := range session.Held(r, s.boot.API.ExternalBase()) {
 		s.endHeld(r, s.signer.Validate(r.Context(), s.directoryFor(), cookie))
 	}
+	httpjson.Write(w, http.StatusOK, map[string]string{"status": "signed out"})
 }
 
 // endHeld closes and announces one session a sign-out found, when this node's
@@ -343,105 +312,6 @@ func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 		})
 	}
 	log.InfoContext(r.Context(), "api_sign_out", "lineage", lineage)
-}
-
-// providerSession says what became of the person's session at the identity
-// provider, on a sign-out that could not send the browser there.
-type providerSession string
-
-// providerNotEnded is the one value: the session here is over and the one at
-// the provider is not, which the person has to know if they are walking away
-// from a shared machine.
-const providerNotEnded providerSession = "not_ended"
-
-// providerLogoutAnswer is what a provider sign-out answers when it cannot
-// redirect: the plain sign-out's own status, and what it could not do.
-type providerLogoutAnswer struct {
-	Status          string          `json:"status"`
-	ProviderSession providerSession `json:"provider_session"`
-	Detail          string          `json:"detail"`
-}
-
-// LogoutProvider ends THIS session and then sends the browser to the identity
-// provider to end the person's session THERE — OpenID Connect's RP-initiated
-// logout.
-//
-// # Why it exists beside the plain sign-out
-//
-// Signing out here ends this engine's session and leaves the provider's: the
-// next "sign in with the provider" is answered from it without anybody typing
-// anything. On a machine somebody else uses next, that is the same as not
-// having signed out. So this route ends the session here exactly as
-// [Service.Logout] does — the same close, the same only-a-live-session rule,
-// the cookie cleared first — and answers `303` to the provider's
-// `end_session_endpoint`, naming this client and asking to be sent back to the
-// dashboard. A 303 because the caller is a browser that POSTed: it is what
-// makes the browser follow with a GET, as a top-level navigation the provider's
-// own page can answer.
-//
-// # What it cannot promise
-//
-// It sends no `id_token_hint`, because this engine keeps no ID token once a
-// sign-in completes: a provider that requires one asks the person to confirm,
-// or refuses, at its own page — and the session HERE is over either way. And a
-// provider that publishes no `end_session_endpoint`, or whose discovery cannot
-// be reached, is answered as the plain sign-out is, saying the provider's
-// session was not ended: the local half happened, and the person is told the
-// other did not rather than being sent nowhere.
-//
-// `post_logout_redirect_uri` is `api.external_url` + `/dashboard`, and the
-// provider only honours one registered for this client — so it is registered
-// beside the callback, or the provider leaves the person on its own page.
-//
-// UNGUARDED for [Service.Logout]'s reason, and here it matters twice: a node
-// that cannot read its identity estate must still clear the cookie AND still
-// send the browser to the provider, which is the half a person on a shared
-// machine is relying on.
-func (s *Service) LogoutProvider(w http.ResponseWriter, r *http.Request) {
-	s.signOut(w, r)
-
-	notEnded := func(why string) {
-		httpjson.Write(w, http.StatusOK, providerLogoutAnswer{
-			Status: "signed out", ProviderSession: providerNotEnded, Detail: why,
-		})
-	}
-	metadata, err := s.provider.Metadata(r.Context())
-	if err != nil {
-		log.WarnContext(r.Context(), "api_oidc_discovery_failed", "error", err)
-		notEnded("signed out here; the identity provider could not be reached, " +
-			"so your session there was not ended — sign out at the provider too")
-		return
-	}
-	if metadata.EndSessionEndpoint == "" {
-		notEnded("signed out here; the identity provider publishes no " +
-			"end_session_endpoint, so your session there was not ended — sign " +
-			"out at the provider too")
-		return
-	}
-	// AN HTTPS ADDRESS ON A HOST, as the issuer itself must be, or the
-	// browser is not sent there at all. It used to be enough that the value
-	// parsed: a RELATIVE one was then a path on this deployment and a
-	// plain-http one an address anybody on the path could answer, and either
-	// redirect read to the person as a sign-out at their provider that did
-	// not happen.
-	target, err := url.Parse(metadata.EndSessionEndpoint)
-	if err == nil && (target.Scheme != "https" || target.Host == "") {
-		err = fmt.Errorf("%q is not an https address on a host",
-			metadata.EndSessionEndpoint)
-	}
-	if err != nil {
-		log.WarnContext(r.Context(), "api_oidc_end_session_unusable",
-			"endpoint", metadata.EndSessionEndpoint, "error", err)
-		notEnded("signed out here; the identity provider's end_session_endpoint " +
-			"is not an https address, so your session there was not ended — " +
-			"sign out at the provider too")
-		return
-	}
-	query := target.Query()
-	query.Set("client_id", s.provider.Config().ClientID)
-	query.Set("post_logout_redirect_uri", s.boot.API.ExternalBase()+auth.PathDashboard)
-	target.RawQuery = query.Encode()
-	http.Redirect(w, r, target.String(), http.StatusSeeOther)
 }
 
 // callerName is the name a row about this request records as its author, or

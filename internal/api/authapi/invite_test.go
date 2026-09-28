@@ -25,8 +25,7 @@ import (
 const invitationID = "018f3a9c-4d2e-7000-8000-0000000001d1"
 
 // invitationSecret is the secret that invitation's link carries beside its id:
-// what every view presents in its header, every redemption in its body and a
-// provider redemption in its form.
+// what every view presents in its header and every redemption in its body.
 const invitationSecret = "the-links-own-secret-beside-its-id"
 
 // secretHeader is the header an invitation's view reads the secret from — the
@@ -75,7 +74,7 @@ func (sealedInvitation) InvitationByID(ctx context.Context, id string) (
 func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
-	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = sealedInvitation{}
 		o.Sealer = stubSealer{address: "Dana.SRE+invites@example.com"}
 	}).Routes(mux)
@@ -103,7 +102,7 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 // what makes a walk visible. It meets no curve: a link carries 256 bits of
 // secret, so there is nothing a curve would slow, and a curve keyed on the
 // address a link was presented from let one stranger there hold every
-// colleague's invitation, provider sign-in and founder's code at 429.
+// colleague's invitation and founder's code at 429.
 //
 // Mutation: drop the count from the 410 and the tally is empty; key the
 // invitation on its source and the walk meets 429.
@@ -111,7 +110,7 @@ func TestAnInvitationIDThatResolvesToNothingIsCounted(t *testing.T) {
 	t.Parallel()
 	audit := &recordingAudit{}
 	mux := http.NewServeMux()
-	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Audit = audit
 	}).Routes(mux)
 	const walk = 32
@@ -172,7 +171,7 @@ func TestASpentLinkThatProvesItselfIsNotAFailedAttempt(t *testing.T) {
 			t.Parallel()
 			audit := &recordingAudit{}
 			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				o.Directory, o.Audit = spentInvitation{}, audit
 			}).Routes(mux)
 			for range presentations {
@@ -257,7 +256,7 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				o.Directory = liveInvitation{}
 				o.Writer = refusingWriter{err: tc.err}
 			}).Routes(mux)
@@ -365,7 +364,7 @@ func TestARedemptionToldItsLoginIsTakenCanTryAnother(t *testing.T) {
 		Kind: iamdomain.KindLogin, Token: "dana.sre",
 		Holder: "018f3a9c-0000-7000-8000-0000000000a1"}}}
 	mux := http.NewServeMux()
-	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = liveInvitation{}
 		o.Writer = writer
 	}).Routes(mux)
@@ -452,7 +451,7 @@ func TestALinkWhoseAddressIsEnrolledIsSpent(t *testing.T) {
 			t.Parallel()
 			writer := &recordingWriter{}
 			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				o.Directory = enrolledAddress{holder: tc.holder}
 				o.Writer = writer
 			}).Routes(mux)

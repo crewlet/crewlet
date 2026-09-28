@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Finding the running node, and authenticating to it.
@@ -144,8 +143,8 @@ func nodeAPIToken(surface string) (string, error) {
 // and it is not any more: Tier A refuses a file without a usable keyring and
 // the engine refuses to start without one, so a session signer this function
 // cannot build is a fault it returns rather than a node it quietly narrows.
-func signInSurface(boot *config.Bootstrap, e *engine.Engine,
-	cipher secrets.Cipher) (*authapi.Service, *auth.Sessions, error) {
+func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
+	*authapi.Service, *auth.Sessions, error) {
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
@@ -198,18 +197,10 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		Blinder:  e.PersonBlinder(),
 		Sealer:   e.PersonSealer(),
 		Sessions: reader,
-		Cipher:   cipher,
 		// THE SAME PURE FUNCTION THE GUARD USES over the same Tier A,
 		// which is one PARSER rather than one instance — see
 		// [auth.Clients].
 		Clients: auth.NewClients(boot),
-		// THE PROCESS'S ONE PROVIDER, which the deactivation probe asks
-		// through too — so both share one cache of its discovery document
-		// and keys, and one reading of the Tier A block that built it.
-		Provider: e.IdentityProvider(),
-		// AND WHERE A SIGN-IN'S REFRESH TOKEN GOES, which is the only
-		// thing the probe has to ask the provider with.
-		Custody: refreshCustody(e),
 		// THE NODE'S ONE AUDIT TRAIL, which the guard and the directory
 		// hand what they saw to as well: a failed sign-in and a refused
 		// bearer fold into one row per client per minute only because
@@ -244,21 +235,6 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 		return nil, nil, fmt.Errorf("api: the session arm: %w", err)
 	}
 	return surface, sessions, nil
-}
-
-// refreshCustody is the engine's refresh-token custody as the sign-in surface's
-// seam, or a genuine nil.
-//
-// THE CONVERSION IS EXPLICIT because a typed nil in an interface is not nil:
-// handing the pointer straight over would give the surface a non-nil Custody
-// wrapping nothing, and the constructor's "required where a provider is" check
-// would pass on a node that cannot keep a token.
-func refreshCustody(e *engine.Engine) authapi.Custody {
-	custody := e.RefreshCustody()
-	if custody == nil {
-		return nil
-	}
-	return custody
 }
 
 // seatHeld reports whether a seat is one somebody in the identity directory is
@@ -319,12 +295,6 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		Opener:       e.PersonSealer(),
 		Bootstrap:    bootstrapReissue(boot, nodeID, auth),
 		ExternalBase: boot.API.ExternalBase(),
-		// THE PROVIDER THE SIGN-IN SURFACE USES, read off the one the
-		// engine built rather than the config block again, so a subject
-		// an administrator pins is blinded under the issuer every
-		// provider sign-in resolves under.
-		Issuer: providerIssuer(e),
-		Blinds: e.PersonBlinder(),
 		// THIS NODE'S OWN CEILING, which the report compares a person's
 		// declared grants against: it is applied at decision time and
 		// never written, so a fleet mid-rollout legally disagrees and
@@ -347,15 +317,6 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		return nil, fmt.Errorf("api: the identity directory: %w", err)
 	}
 	return surface, nil
-}
-
-// providerIssuer is the identity provider this node signs people in through,
-// or empty where it signs nobody in that way.
-func providerIssuer(e *engine.Engine) string {
-	if p := e.IdentityProvider(); p != nil {
-		return p.Config().Issuer
-	}
-	return ""
 }
 
 // bootstrapReissue is the one-time code's re-issue, or nil where this node

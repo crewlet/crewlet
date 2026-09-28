@@ -3,14 +3,12 @@ package iamapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -69,12 +67,6 @@ type personView struct {
 	Seat   string `json:"seat,omitempty"`
 	SeatAt uint64 `json:"seat_at,omitempty"`
 
-	// OIDC is the identity provider this person is linked to, present
-	// only when they are. The ISSUER and never the subject: the estate
-	// holds a subject only as a keyed blind, which is not a value anybody
-	// can read back — the provider is where to look up which account.
-	OIDC *oidcView `json:"oidc,omitempty"`
-
 	Grants    []iam.Grant   `json:"grants,omitempty"`
 	Colleague iam.Colleague `json:"colleague"`
 
@@ -85,11 +77,6 @@ type personView struct {
 	Version   uint64    `json:"version"`
 }
 
-// oidcView is a person's provider link as the directory renders it.
-type oidcView struct {
-	Issuer string `json:"issuer"`
-}
-
 // viewOf renders one row, opening what it is entitled to open.
 func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personView {
 	out := personView{
@@ -98,9 +85,6 @@ func (s *Service) viewOf(ctx context.Context, row iamdomain.PersonRow) personVie
 		Colleague: row.Colleague, Epoch: row.Epoch,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		Version: row.Version, Reserved: row.Reserved,
-	}
-	if row.Link.Blind != "" {
-		out.OIDC = &oidcView{Issuer: row.Link.Issuer}
 	}
 	name, removedName := s.open(ctx, row.ID, iamdomain.FieldName, row.NameSealed)
 	email, removedEmail := s.open(ctx, row.ID, iamdomain.FieldEmail, row.EmailSealed)
@@ -293,13 +277,6 @@ type patchBody struct {
 	Colleague *iam.Colleague `json:"colleague"`
 	Stage     *iam.Stage     `json:"stage"`
 
-	// OIDCSubject pins the person to the subject — the `sub` claim — of
-	// an account at this deployment's identity provider, moving them from
-	// whatever account they are linked to now; the empty string unlinks
-	// them. One of the only two ways a subject is ever pinned, the other
-	// being an invitation redeemed through the provider.
-	OIDCSubject *string `json:"oidc_subject"`
-
 	Reason string `json:"reason"`
 }
 
@@ -327,53 +304,8 @@ func (b patchBody) refusal() string {
 	case len(b.Reason) > iamdomain.MaxReason:
 		return "the reason is " + strconv.Itoa(len(b.Reason)) + " bytes and " +
 			"the cap is " + strconv.Itoa(iamdomain.MaxReason)
-	case b.OIDCSubject != nil && strings.TrimSpace(*b.OIDCSubject) != *b.OIDCSubject:
-		// A SUBJECT IS COMPARED BYTE FOR BYTE, so a pasted value with a
-		// stray space would pin an account the provider never asserts —
-		// a link that looks made and signs nobody in.
-		return "oidc_subject carries leading or trailing whitespace; a " +
-			"provider's subject is matched exactly"
-	case b.OIDCSubject != nil && len(*b.OIDCSubject) > maxSubjectBytes:
-		return "oidc_subject is " + strconv.Itoa(len(*b.OIDCSubject)) +
-			" bytes; OpenID Connect bounds a subject at " +
-			strconv.Itoa(maxSubjectBytes)
 	}
 	return ""
-}
-
-// maxSubjectBytes is the longest provider subject an administrator may pin.
-//
-// 255, OpenID Connect Core's own bound on the `sub` claim ("MUST NOT exceed
-// 255 ASCII characters"), so anything longer is not a subject any compliant
-// provider can assert.
-const maxSubjectBytes = 255
-
-// linkTarget is what an `oidc_subject` edit asks for, decided BEFORE the first
-// record: the link to pin (zero to unlink), and whether anything changes.
-func (s *Service) linkTarget(r *http.Request, in patchBody,
-	held iamdomain.PersonRow) (iamdomain.Link, bool, string, error) {
-
-	if in.OIDCSubject == nil {
-		return iamdomain.Link{}, false, "", nil
-	}
-	if *in.OIDCSubject == "" {
-		return iamdomain.Link{}, held.Link.Blind != "", "", nil
-	}
-	if s.issuer == "" || s.blinds == nil {
-		return iamdomain.Link{}, false, "this deployment signs nobody in " +
-			"through an identity provider, so there is no subject to pin — " +
-			"set api.auth.oidc in the node's configuration first", nil
-	}
-	blinder, err := s.blinds.Blinder(r.Context())
-	if err != nil {
-		return iamdomain.Link{}, false, "", err
-	}
-	blind, err := blinder.Subject(s.issuer, *in.OIDCSubject)
-	if err != nil {
-		return iamdomain.Link{}, false, "", err
-	}
-	link := iamdomain.Link{Issuer: s.issuer, Blind: blind}
-	return link, blind != held.Link.Blind, "", nil
 }
 
 // PatchPerson is `PATCH /iam/people/{id}`.
@@ -394,8 +326,7 @@ func (s *Service) linkTarget(r *http.Request, in patchBody,
 // level, a login being cleared — is refused before the first record, and so is
 // everything this node's rows can already establish a LATER record would be
 // refused for ([Service.judgeEdit]): a login its holder's kind may not hold, a
-// login or a provider account somebody else holds, a grant the caller may not
-// confer. Those used to be met only at their own record, so `{"seat", "login":
+// login somebody else holds, a grant the caller may not confer. Those used to be met only at their own record, so `{"seat", "login":
 // "Bob.SRE"}` moved the seat and then answered 400 — refused, with the seat
 // already moved. A login or a seat MOVES through the domain's own gesture,
 // which claims the new one before it releases the old. This used to release
@@ -438,25 +369,10 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	}
 	opID := s.opIDFor(r, "people:update:"+id)
 	reason := reasonOr(in.Reason, "changed through /iam/people")
-	link, relink, refusal, err := s.linkTarget(r, in, held)
-	switch {
-	case refusal != "":
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": refusal})
-		return
-	case err != nil:
-		// THE BLIND KEY, unreadable or not yet minted: nothing has been
-		// published, and the same edit lands once the key is readable.
-		log.WarnContext(r.Context(), "api_iam_subject_unblinded", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
-		return
-	}
-	refused, unreadable := s.judgeEdit(r.Context(), writer, id, in, held,
-		link, relink)
+	refused, unreadable := s.judgeEdit(r.Context(), writer, id, in, held)
 	switch {
 	case unreadable != nil:
-		s.unavailable(w, r, "read who holds a login or a provider account",
-			unreadable)
+		s.unavailable(w, r, "read who holds a login", unreadable)
 		return
 	case refused != nil:
 		s.answerWrite(w, r, opID, statelog.Result{}, refused,
@@ -524,26 +440,6 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if relink {
-		// A CLAIM LIKE THE TWO ABOVE, and after them for the same order
-		// they keep: the claims first, because they are what can be
-		// refused. A move names the link the person holds NOW — read a
-		// moment ago — so a relink never happens in passing; the domain
-		// refuses it if that link moved underneath this edit.
-		var linked statelog.Result
-		if link.Blind == "" {
-			linked, err = writer.Unlink(r.Context(), id, held.Link,
-				opID+":unlink", reason)
-		} else {
-			linked, err = writer.Link(r.Context(), iamdomain.LinkChange{
-				PersonID: id, Link: link, Replacing: held.Link.Blind,
-				OpID: opID + ":link", Reason: reason,
-			})
-		}
-		if !step("oidc_subject")(linked, err) {
-			return
-		}
-	}
 	if in.Stage != nil {
 		if !step("stage")(writer.SetStage(r.Context(), id, *in.Stage,
 			opID+":stage", reason)) {
@@ -599,8 +495,8 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 
 // judgeEdit refuses, BEFORE THE FIRST RECORD, what a later record of an edit
 // would be refused for and this node's rows can already establish: a login its
-// holder's kind may not hold, a login or a provider account somebody else
-// holds, and a grant the caller may not confer. Each is the domain's own rule
+// holder's kind may not hold, a login somebody else holds, and a grant the
+// caller may not confer. Each is the domain's own rule
 // ([iamdomain.LoginFits], [iamdomain.Writer.MayConfer]) or the holder the
 // claim's own decide would name, asked early — and each used to be met only at
 // its own record, after a seat or a login ahead of it had already moved.
@@ -615,8 +511,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 // refused is answered as the domain's own refusal would be; unreadable is a
 // read this node could not make, with nothing judged.
 func (s *Service) judgeEdit(ctx context.Context, writer Writer, id string,
-	in patchBody, held iamdomain.PersonRow, link iamdomain.Link, relink bool) (
-	refused, unreadable error) {
+	in patchBody, held iamdomain.PersonRow) (refused, unreadable error) {
 
 	if in.Login != nil && *in.Login != held.Login {
 		if err := iamdomain.LoginFits(held.Kind, *in.Login); err != nil {
@@ -629,21 +524,6 @@ func (s *Service) judgeEdit(ctx context.Context, writer Writer, id string,
 		if holder.ID != "" && holder.ID != id {
 			return &iamdomain.ErrClaimed{Kind: iamdomain.KindLogin,
 				Token: *in.Login, Holder: holder.ID}, nil
-		}
-	}
-	if relink && link.Blind != "" {
-		holder, err := s.directory.PersonBySubjectBlind(ctx, link.Blind, s.now())
-		switch {
-		case errors.Is(err, iamdomain.ErrSubjectAmbiguous):
-			// TWO PEOPLE HOLD IT ALREADY — a restore's residue, which the
-			// claim report names — so pinning it to anybody else is a
-			// conflict an administrator resolves by unlinking one of them.
-			return fmt.Errorf("%w: %w", statelog.ErrConflict, err), nil
-		case err != nil:
-			return nil, err
-		case holder.ID != "" && holder.ID != id:
-			return &iamdomain.ErrClaimed{Kind: iamdomain.KindLink,
-				Token: link.Blind, Holder: holder.ID}, nil
 		}
 	}
 	if in.Grants != nil {

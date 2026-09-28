@@ -20,17 +20,15 @@ import (
 // opens a session marked enrolment-only, and the guard answers every guarded
 // route but three `403 second_factor_enrolment_required` — the /auth surface
 // included, whose other routes mint recovery codes and end every session the
-// person holds, and the socket too. The two sign-outs of this session are not
-// guarded at all, so they are reached too — the provider one was missing from
-// the list while both were guarded, and answered the refusal with the cookie
-// kept. The person stays RESOLVED on every admitted route, which need to know
-// who they are.
+// person holds, and the socket too. The sign-out of this session is not
+// guarded at all, so it is reached too. The person stays RESOLVED on every
+// admitted route, which need to know who they are.
 //
 // The CONTROL is the same session unmarked, which reaches every route — so the
 // refusals are the mark's and nothing else's. Mutation: drop the guard's check
 // and every refused row reaches its handler; widen the three to the /auth
-// prefix and the recovery and sign-out-everywhere rows do; guard the provider
-// sign-out again and its row is refused.
+// prefix and the recovery and sign-out-everywhere rows do; guard the sign-out
+// again and its row is refused.
 func TestASessionThatMayOnlyEnrolReachesOnlyTheRoutesThatLetItIn(t *testing.T) {
 	t.Parallel()
 	routes := []struct {
@@ -41,7 +39,6 @@ func TestASessionThatMayOnlyEnrolReachesOnlyTheRoutesThatLetItIn(t *testing.T) {
 		{http.MethodPost, auth.PathAuthTOTP, true},
 		{http.MethodPost, auth.PathAuthStepUp, true},
 		{http.MethodPost, auth.PathAuthLogout, true},
-		{http.MethodPost, auth.PathAuthLogoutProvider, true},
 		{http.MethodPost, "/auth/totp/recovery", false},
 		{http.MethodPost, "/auth/logout/all", false},
 		{http.MethodPost, "/auth/logout/018f3a9c-0000-7000-8000-0000000000bb", false},

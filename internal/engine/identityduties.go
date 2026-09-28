@@ -5,50 +5,40 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule"
 )
 
-// THE IDENTITY DUTIES: four fleet singletons that keep the identity estate
+// THE IDENTITY DUTIES: three fleet singletons that keep the identity estate
 // honest, each on its own lease and its own interval.
 //
 //   - THE SWEEP PUBLISHER turns `api.audit`'s two horizons into positions and
 //     publishes a retention record for every bucket that is due
 //     ([iamdomain.Writer.Sweep]). The applier on every node deletes the same
 //     rows; nothing else ever deletes from this estate.
-//   - THE DEACTIVATION PROBE asks the identity provider about every live OIDC
-//     session with its refresh token ([oidc.Prober] over
-//     [iamdomain.ProbeSessions]). A provider tells nobody when somebody is
-//     disabled, so this is the only thing that ends their session before its
-//     absolute deadline.
 //   - THE KEY DUTY destroys a removed person's key when the removal's own
 //     post-commit shred failed, and retries until it lands; destroys a key
 //     NOBODY owns — minted for an enrolment or an invitation refused after
 //     the mint, or left by an invitation the sweep collected — once it is past
 //     the grace on a node whose rows have APPLIED the whole log, not merely
-//     consumed it ([iamdomain.ShredKeys]); and collects the refresh token of every OIDC
-//     session that is over ([iamdomain.Refreshes.CollectEnded]). Until each
-//     lands, what the key sealed is readable from every backup, and a grant
-//     is a live credential at somebody else's provider.
+//     consumed it ([iamdomain.ShredKeys]). Until each lands, what the key
+//     sealed is readable from every backup.
 //   - THE CLAIM REPORT names a duplicate a restore produced and a reservation
 //     an enrolment left behind ([iamdomain.Reader.Claims]). It reports and
 //     never repairs: which of two people keeps an address is a decision.
 //
-// # Four leases rather than one duty with four jobs
+// # Three leases rather than one duty with three jobs
 //
-// They share nothing but the domain. Their intervals differ by an order of
-// magnitude and one of them is an operator's setting, their costs land on
-// different systems — the log, somebody else's identity provider, the
-// coordination store, the local database — and a lease flap on one should
-// cost that one a skipped interval rather than all four. So each claims its
-// own `worker:` lease through [Engine.workerDuty], which also gives each the
-// roles gate and the release on a graceful stop that every singleton has.
+// They share nothing but the domain. Their intervals differ, their costs land
+// on different systems — the log, the coordination store, the local database —
+// and a lease flap on one should cost that one a skipped interval rather than
+// all three. So each claims its own `worker:` lease through
+// [Engine.workerDuty], which also gives each the roles gate and the release on
+// a graceful stop that every singleton has.
 //
 // # Every loop ticks once at start
 //
@@ -56,17 +46,16 @@ import (
 // deploy does not run it once per replica. Here the first tick is the useful
 // one: the claim report after a boot is how a restore's duplicate is named the
 // moment the restored node is back rather than an hour later; the key duty
-// after a boot is how a shred that failed during the outage lands; and the two
-// that write — the sweep and the probe — are gated on something being due, so
-// a tick that finds nothing costs reads and no records.
+// after a boot is how a shred that failed during the outage lands; and the one
+// that writes — the sweep — is gated on something being due, so a tick that
+// finds nothing costs reads and no records.
 
 // identityLog is the duties' own voice.
 var identityLog = logging.Get("iam.duty")
 
-// The four duties' lease names.
+// The three duties' lease names.
 const (
 	identitySweepDuty  = "iam_sweep"
-	identityProbeDuty  = "iam_deactivation_probe"
 	identityKeysDuty   = "iam_key_shred"
 	identityClaimsDuty = "iam_claims"
 )
@@ -83,7 +72,7 @@ const (
 const IdentitySweepInterval = time.Hour
 
 // IdentityKeysInterval is how often the key duty looks for a key that outlived
-// its owner and a refresh grant that outlived its session.
+// its owner.
 //
 // THE MAINTENANCE SWEEP'S FIFTEEN MINUTES. A removal's pending key exists only
 // because a coordination write failed at the instant of a removal, so the
@@ -91,9 +80,8 @@ const IdentitySweepInterval = time.Hour
 // delay is a minute a removed person's name is readable from a backup. A key
 // nobody owns waits out [iamdomain.OrphanKeyGrace]'s hour first, so fifteen
 // minutes collects it within a quarter of that past it. A pass that finds
-// nothing is two secret-store listings, one read of each held refresh grant and
-// two local reads, so a shorter interval would buy almost nothing but load on
-// the coordination store.
+// nothing is two secret-store listings and two local reads, so a shorter
+// interval would buy almost nothing but load on the coordination store.
 const IdentityKeysInterval = maintenance.Interval
 
 // IdentityClaimsInterval is how often the claim report runs.
@@ -105,38 +93,13 @@ const IdentityKeysInterval = maintenance.Interval
 // not the log.
 const IdentityClaimsInterval = time.Hour
 
-// identityClaimCeiling is the longest a duty goes between two claims of its
-// lease, whatever its own interval.
-//
-// AN HOUR, because a lease may live no longer than [coord.MaxDutyTTL] (three
-// hours) and every singleton here keeps the three-claims ratio. The probe's
-// interval is an operator's setting that may be a day, and a lease claimed
-// once a day would have to live three: every backend refuses that claim, and a
-// refused duty never runs at all. So a long interval is claimed hourly and run
-// every so many claims.
-const identityClaimCeiling = time.Hour
-
-// claimCadence is how often a duty that runs every `every` claims its lease,
-// and how many claims make one run.
-//
-// THE CADENCE DIVIDES THE INTERVAL EXACTLY — ninety minutes is two claims of
-// forty-five rather than a claim an hour and a run every hour or two — so the
-// operator's interval is the interval the duty keeps.
-func claimCadence(every time.Duration) (time.Duration, int) {
-	claims := int((every + identityClaimCeiling - 1) / identityClaimCeiling)
-	if claims < 1 {
-		claims = 1
-	}
-	return every / time.Duration(claims), claims
-}
-
-// identityDutyTTL is a duty's lease: three of its claims, the ratio every
+// identityDutyTTL is a duty's lease: three of its intervals, the ratio every
 // singleton here takes, so one slow claim does not hand the duty to a peer and
-// a dead holder's duty moves within about three claims.
-func identityDutyTTL(every time.Duration) time.Duration {
-	cadence, _ := claimCadence(every)
-	return 3 * cadence
-}
+// a dead holder's duty moves within about three ticks.
+//
+// EVERY INTERVAL HERE IS AN HOUR OR LESS, so the lease stays inside
+// [coord.MaxDutyTTL]'s three hours and the duty claims once per tick.
+func identityDutyTTL(every time.Duration) time.Duration { return 3 * every }
 
 // identityDuty is one loop's declaration.
 type identityDuty struct {
@@ -161,8 +124,8 @@ type identityDuties struct {
 // worker singleton, whose claim that node's roles gate refuses on every tick
 // ([Engine.workerDuty]), so arming them there would be loops that never run,
 // reported by [Engine.IdentityDuties] as duties that do. Within that, each duty
-// is armed only where it has what it needs: the probe needs a provider and
-// custody, the key duty the company's secret store.
+// is armed only where it has what it needs: the key duty needs the company's
+// secret store.
 func (e *Engine) startIdentityDuties(ctx context.Context, boot *config.Bootstrap) {
 	duties := e.identityDutiesFor(boot)
 	if len(duties) == 0 {
@@ -260,90 +223,33 @@ func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
 			identityLog.Error("iam_duty_unarmed", "duty", identityKeysDuty,
 				"error", err.Error())
 		} else {
-			// AND REFRESH CUSTODY WHERE THERE IS A KEYRING: collecting a
-			// grant whose session is over is this duty's, because this
-			// duty is armed wherever a grant can exist and the probe only
-			// while a provider is configured. Nil on a node with no
-			// keyring, which holds no grant to collect.
-			custody := e.RefreshCustody()
 			out = append(out, duty(identityKeysDuty, IdentityKeysInterval,
 				func(ctx context.Context) {
-					keysPass(ctx, reader, store, sealer, e.IdentityLogEnd, custody)
+					keysPass(ctx, reader, store, sealer, e.IdentityLogEnd)
 				}))
-		}
-	}
-	if provider, custody := e.identityProvider, e.RefreshCustody(); provider != nil &&
-		custody != nil {
-		sessions, err := iamdomain.NewProbeSessions(reader, writer, custody,
-			provider.Config().Issuer, nil)
-		if err != nil {
-			identityLog.Error("iam_duty_unarmed", "duty", identityProbeDuty,
-				"error", err.Error())
-		} else {
-			prober := e.newProber(provider, sessions)
-			out = append(out, duty(identityProbeDuty, prober.Interval(),
-				func(ctx context.Context) { probePass(ctx, prober) }))
 		}
 	}
 	return out
 }
 
-// runIdentityDuty ticks one duty until the context ends.
-//
-// IT CLAIMS ON THE CADENCE AND RUNS ON THE INTERVAL — see [claimCadence]. The
-// count of claims since the last run is this node's own and does not travel
-// with the lease: a duty that moves runs at its new holder's first claim, which
-// costs at most one early pass per move and never a skipped one.
+// runIdentityDuty ticks one duty until the context ends: a claim of its lease
+// every interval, and the pass on every claim this node holds.
 func runIdentityDuty(ctx context.Context, duty identityDuty) {
-	cadence, claims := claimCadence(duty.interval)
-	ticker := time.NewTicker(cadence)
+	ticker := time.NewTicker(duty.interval)
 	defer ticker.Stop()
-	plan := newPassSchedule(claims)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		tickIdentityDuty(ctx, duty, plan)
+		if mine(ctx, duty) {
+			duty.pass(ctx)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
-}
-
-// tickIdentityDuty is one claim of one duty, reporting whether it ran the pass.
-//
-// THE CLAIM FIRST, AND THE SCHEDULE ASKED ONLY ON A HELD ONE. [passSchedule]
-// counts the claims this node WON, so asking it on a claim a peer won would
-// count that claim here: a node that lost the lease for a while would run
-// early the moment it won it back, or spend its first held claim's run on a
-// tick it never held.
-func tickIdentityDuty(ctx context.Context, duty identityDuty, plan *passSchedule) bool {
-	if !mine(ctx, duty) || !plan.held() {
-		return false
-	}
-	duty.pass(ctx)
-	return true
-}
-
-// passSchedule decides, claim by claim, when a duty that claims more often than
-// it runs should run: on its first held claim, and then every `every` held
-// claims. A claim a peer won does not count — the pass ran over there.
-type passSchedule struct{ every, since int }
-
-func newPassSchedule(every int) *passSchedule {
-	return &passSchedule{every: every, since: every}
-}
-
-// held records one held claim and reports whether this one runs the pass.
-func (p *passSchedule) held() bool {
-	run := p.since >= p.every
-	if run {
-		p.since = 0
-	}
-	p.since++
-	return run
 }
 
 // mine claims a duty for one tick. Nil is the single-node answer: nobody to
@@ -425,14 +331,12 @@ func duplicateAttrs(dup iamdomain.DuplicateClaim, at string) []any {
 		"decide who keeps it and release it from the others — nothing here picks")
 }
 
-// keysPass destroys every key a removal left behind and every key nobody owns,
-// and collects every refresh grant whose session is over.
+// keysPass destroys every key a removal left behind and every key nobody owns.
 //
 // NO PERSON'S ID REACHES A WARNING about a key nobody owns: such a key is by
 // definition not a person's, and the count is what an operator acts on.
 func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyIndex,
-	shredder iamdomain.KeyDestroyer, logEnd func(context.Context) (uint64, error),
-	custody *iamdomain.Refreshes) {
+	shredder iamdomain.KeyDestroyer, logEnd func(context.Context) (uint64, error)) {
 
 	report, err := iamdomain.ShredKeys(ctx, reader, keys, shredder, time.Now(),
 		logEnd)
@@ -475,84 +379,6 @@ func keysPass(ctx context.Context, reader *iamdomain.Reader, keys iamdomain.KeyI
 				"still readable from backups taken before its removal; the "+
 				"duty retries every interval")
 	}
-	if custody == nil {
-		return
-	}
-	collected, skipped, err := custody.CollectEnded(ctx, reader, time.Now())
-	if len(collected) > 0 {
-		identityLog.InfoContext(ctx, "iam_refresh_grants_collected",
-			"grants", len(collected))
-	}
-	for _, reason := range skipped {
-		identityLog.WarnContext(ctx, "iam_refresh_grant_kept",
-			"error", reason.Error(),
-			"detail", "this grant was not collected this pass; every other "+
-				"one was judged, and the next pass tries it again")
-	}
-	if err != nil {
-		identityLog.WarnContext(ctx, "iam_refresh_grants_unjudged",
-			"error", err.Error())
-	}
-}
-
-// probePass asks the provider about every live session once.
-//
-// A PASS THAT COULD NOT ASK ABOUT EVERYBODY IS A WARNING, not a quiet success:
-// each skipped or failed session is already named on its own line, and this is
-// the one line that says how much of the company the pass did not reach.
-func probePass(ctx context.Context, prober *oidc.Prober) {
-	pass, err := prober.Run(ctx)
-	if err != nil {
-		identityLog.WarnContext(ctx, "iam_probe_failed", "error", err.Error(),
-			"checked", pass.Checked, "ended", pass.Ended)
-		return
-	}
-	switch {
-	case pass.Skipped > 0 || pass.Failed > 0:
-		identityLog.WarnContext(ctx, "iam_probe_pass_partial",
-			"checked", pass.Checked, "ended", pass.Ended,
-			"skipped", pass.Skipped, "failed", pass.Failed,
-			"detail", "every other session was asked about; the ones "+
-				"named above are asked again next pass")
-	case pass.Ended > 0:
-		identityLog.InfoContext(ctx, "iam_probe_pass", "checked", pass.Checked,
-			"ended", pass.Ended)
-	}
-}
-
-// identityProvider is the OIDC provider Tier A names, or nil on a deployment
-// that signs in another way.
-//
-// EVERY FIELD THE FLOW READS comes from the block here and nowhere else — the
-// scopes and the probe interval were once dropped at this step, so the request
-// asked for the package's scopes and the probe ran at the package's hour
-// whatever the file said.
-func identityProvider(boot *config.Bootstrap) *oidc.Provider {
-	if boot == nil {
-		return nil
-	}
-	block := boot.API.Auth.OIDC
-	if block == nil || block.Issuer == "" {
-		return nil
-	}
-	return oidc.NewProvider(oidc.Config{
-		Issuer:            block.Issuer,
-		ClientID:          block.ClientID,
-		ClientSecret:      block.ClientSecret,
-		RedirectURI:       boot.API.ExternalBase() + auth.PathAuthOIDCCallback,
-		GroupsClaim:       block.GroupsClaim,
-		RequireACR:        block.RequireACR,
-		Scopes:            block.RequestedScopes(),
-		DeactivationProbe: block.DeactivationProbe(),
-	}, nil, nil)
-}
-
-// IdentityProvider is this process's OIDC provider, or nil.
-func (e *Engine) IdentityProvider() *oidc.Provider {
-	if e == nil {
-		return nil
-	}
-	return e.identityProvider
 }
 
 // PersonKeyIndex is the company's secret store as the identity duties and the
@@ -570,21 +396,4 @@ func (e *Engine) PersonKeyIndex() iamdomain.KeyIndex {
 		return nil
 	}
 	return fleetsecrets.New(e.backends.Fleet, e.cipher).Estate()
-}
-
-// RefreshCustody is where an OIDC session's refresh token is kept, or nil on
-// an Engine with no company secret store — one built by hand in a test, since
-// [New] refuses a node without a keyring or a fleet backend — which cannot
-// keep one, because custody seals the token and reads it back.
-func (e *Engine) RefreshCustody() *iamdomain.Refreshes {
-	if e == nil || e.backends == nil || e.backends.Fleet == nil || e.cipher == nil ||
-		e.native == nil {
-		return nil
-	}
-	custody, err := iamdomain.NewRefreshes(
-		fleetsecrets.New(e.backends.Fleet, e.cipher).Estate(), e.native.nodeID)
-	if err != nil {
-		return nil
-	}
-	return custody
 }

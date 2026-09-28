@@ -25,7 +25,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -103,15 +102,7 @@ type Engine struct {
 	// nobody's. Tier A, so read once at boot like the ceiling beside it.
 	tierATokens map[string]struct{}
 
-	// identityProvider is the company's OIDC provider as Tier A names it,
-	// or nil on a deployment that signs in some other way. ONE INSTANCE
-	// for the process, shared by the sign-in surface and the deactivation
-	// probe, because it caches the provider's discovery document and keys:
-	// two would be two caches of one provider disagreeing after a rotation,
-	// and two copies of the Tier A mapping that built them.
-	identityProvider *oidc.Provider
-
-	// identity is the four identity duties' loops, or nil on a node that
+	// identity is the three identity duties' loops, or nil on a node that
 	// arms none of them. See identityduties.go. ATOMIC because `/health`
 	// reads the roster from the socket's health tick while a stop clears
 	// it: a plain pointer there was a data race the race detector caught
@@ -900,7 +891,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	for _, token := range opts.Bootstrap.API.Auth.Tokens {
 		e.tierATokens[token.ID] = struct{}{}
 	}
-	e.identityProvider = identityProvider(opts.Bootstrap)
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	// BEFORE the node, which registers every seat's mailbox through it on

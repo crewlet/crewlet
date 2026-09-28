@@ -61,8 +61,7 @@ func (e *estate) Resolve(_ context.Context, lineage, person string) (
 			continue
 		}
 		identity.Session = session.LineageRow{Found: true, Epoch: e.counters.Epoch,
-			ProvedAt: start.ProvedAt, GroupGrants: start.GroupGrants,
-			EnrolmentOnly: start.EnrolmentOnly,
+			ProvedAt: start.ProvedAt, EnrolmentOnly: start.EnrolmentOnly,
 			Ended: slices.ContainsFunc(e.closes, func(c closedSession) bool {
 				return c.lineage == lineage
 			})}
@@ -287,21 +286,18 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 // enrolment rather than a broken first screen. The step-up matters most: it is
 // one of the four routes an enrolment-only session reaches, and it opens a
 // replacement — which, left whole, would turn a password alone into a whole
-// session in one request. A sign-in that PROVED a factor is whole, and so is a
-// provider's, whose second factor is the provider's own and invisible here —
-// asking for one on top would be a factor on top of a factor the engine cannot
-// see. Mutation: restrict on the deployment's setting alone and the
-// second-factor and provider rows are restricted; skip any of the four
-// password routes — `if how.stepUp { return false }` in enrolmentOnly
-// included — and its row is whole; answer `signed_in` whatever was opened and
-// the restricted rows' statuses are wrong.
+// session in one request. A sign-in that PROVED a factor is whole. Mutation:
+// restrict on the deployment's setting alone and the second-factor row is
+// restricted; skip any of the four password routes — `if how.stepUp { return
+// false }` in enrolmentOnly included — and its row is whole; answer
+// `signed_in` whatever was opened and the restricted rows' statuses are wrong.
 func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 	t.Parallel()
 	required := func(o *authapi.Options) { requiring(o, iam.SecondFactorRequired) }
 	for _, tc := range []struct {
 		name string
 		// opened is every session the gesture opened and the `status`
-		// its answer carried — nil for an answer that is a redirect.
+		// its answer carried.
 		opened     func(t *testing.T) ([]iamdomain.SessionStart, any)
 		restricted bool
 	}{
@@ -335,7 +331,7 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 		{"an invitation's redemption", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			writer := &recordingWriter{}
 			mux := http.NewServeMux()
-			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				required(o)
 				o.Directory = sealedInvitation{}
 				o.Sealer = stubSealer{address: "dana@example.com"}
@@ -346,20 +342,6 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 				"password": "a-perfectly-fine-passphrase"})
 			return writer.opened(), statusOf(rec)
 		}, true},
-		{"a provider sign-in", func(t *testing.T) ([]iamdomain.SessionStart, any) {
-			idp := newProvider(t)
-			b := bootstrapFor(t)
-			b.API.Auth.Backend = config.AuthBackendOIDC
-			b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
-			recorder := &sessionRecorder{}
-			signInThroughProvider(t, idp, b, func(o *authapi.Options) {
-				required(o)
-				o.Writer = recorder
-			})
-			// A REDIRECT, which a browser follows rather than reads: the
-			// session it opened is what says whether it is whole.
-			return recorder.opened(), nil
-		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -370,9 +352,6 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 			if got := starts[0].EnrolmentOnly; got != tc.restricted {
 				t.Errorf("the session opened enrolment-only %v, want %v", got,
 					tc.restricted)
-			}
-			if status == nil {
-				return
 			}
 			want := "signed_in"
 			if tc.restricted {

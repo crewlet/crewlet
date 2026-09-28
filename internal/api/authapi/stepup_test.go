@@ -25,7 +25,6 @@ type stepUpRig struct {
 	lineage  uuid.UUID
 	cookie   string
 	absolute time.Time
-	carried  []iam.Grant
 }
 
 func newStepUpRig(t *testing.T, row session.Row) *stepUpRig {
@@ -41,12 +40,10 @@ func newStepUpRigWith(t *testing.T, row session.Row,
 
 	t.Helper()
 	absolute := clock.Add(72 * time.Hour)
-	carried := []iam.Grant{iam.GrantWorkWrite}
 	identity := session.Identity{
 		Applied: ^uint64(0) >> 1, Generation: 2,
 		Session: session.LineageRow{Found: true, Epoch: 3,
-			ProvedAt: clock.Add(-2 * time.Hour), GroupGrants: carried,
-			EnrolmentOnly: restricted},
+			ProvedAt: clock.Add(-2 * time.Hour), EnrolmentOnly: restricted},
 		Person: session.PersonRow{Found: true, Epoch: 3,
 			Stage: iam.StageActive, Login: "jane.doe"},
 	}
@@ -73,7 +70,7 @@ func newStepUpRigWith(t *testing.T, row session.Row,
 		t.Fatalf("mint: %v", err)
 	}
 	return &stepUpRig{signInRig: r, lineage: lineage, cookie: cookie,
-		absolute: absolute, carried: carried}
+		absolute: absolute}
 }
 
 // stepUp posts one confirmation from the presented session.
@@ -102,10 +99,8 @@ func (r *stepUpRig) stepUp(t *testing.T) *httptest.ResponseRecorder {
 // The proof opens a fresh session. It used to leave the one it was made from
 // running, so every confirmation left a second live session behind and a copy
 // of the old cookie went on working for the rest of its week. The replacement
-// keeps the replaced session's absolute deadline — or confirming a session
-// would keep it alive for ever — and the grants its identity provider's groups
-// conferred, or stepping up would cost a person the authority they stepped up
-// to use.
+// keeps the replaced session's absolute deadline, or confirming a session
+// would keep it alive for ever.
 func TestAStepUpEndsTheSessionItReplaces(t *testing.T) {
 	t.Parallel()
 	r := newStepUpRig(t, session.RowValid)
@@ -130,10 +125,6 @@ func TestAStepUpEndsTheSessionItReplaces(t *testing.T) {
 	if !opened.AbsoluteExpiresAt.Equal(r.absolute) {
 		t.Errorf("the replacement ends at %s, want the replaced session's %s",
 			opened.AbsoluteExpiresAt, r.absolute)
-	}
-	if !slices.Equal(opened.GroupGrants, r.carried) {
-		t.Errorf("the replacement carries %v, want the replaced session's %v",
-			opened.GroupGrants, r.carried)
 	}
 	if !opened.ProvedAt.Equal(clock) {
 		t.Errorf("the replacement was proved at %s, want now", opened.ProvedAt)

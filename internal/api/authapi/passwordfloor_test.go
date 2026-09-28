@@ -79,7 +79,7 @@ func TestTheDeploymentsPasswordFloorIsTheOneEnforcedAndReported(t *testing.T) {
 
 			// THE REDEMPTION.
 			mux = http.NewServeMux()
-			buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				withFloor(o, tc.floor)
 				o.Directory = sealedInvitation{}
 				o.Sealer = stubSealer{address: "dana@example.com"}

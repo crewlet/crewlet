@@ -355,9 +355,9 @@ func (s *Service) keyFindings(r *http.Request) (out []Finding, unchecked int,
 
 // hasCredential reports whether somebody can prove themselves at all.
 //
-// ANY LIVE METHOD COUNTS — a password, an identity provider binding, a token
-// — because the question the report asks is "can this person get in", and a
-// company signing in entirely through an IdP holds no passwords at all.
+// ANY LIVE METHOD COUNTS — a password, a second factor, a token — because the
+// question the report asks is "can this person get in", and a service account
+// holds no password at all.
 //
 // AN UNREADABLE ANSWER IS `true`, which is the direction that does not raise
 // a false alarm: reporting somebody as credential-less because a read failed

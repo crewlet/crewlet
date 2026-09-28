@@ -261,7 +261,7 @@ func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
 	audit := &recordingAudit{}
 	b := bootstrapFor(t)
 	b.API.Auth.Backend = config.AuthBackendLocal
-	svc := buildWith(t, b, nil, func(o *authapi.Options) {
+	svc := buildWith(t, b, func(o *authapi.Options) {
 		o.Directory, o.Writer, o.Hasher, o.Audit = e, e, hasher, audit
 		if replace != nil {
 			replace(o)

@@ -260,8 +260,8 @@ func (d *fakeDirectory) PositionAt(context.Context, time.Time) (uint64, error) {
 	return 0, d.err
 }
 
-// PersonByLogin and PersonBySubjectBlind answer the rows as the reader does:
-// nobody is the zero sighting, never an error.
+// PersonByLogin answers the rows as the reader does: nobody is the zero
+// sighting, never an error.
 func (d *fakeDirectory) PersonByLogin(_ context.Context, login string) (
 	iamdomain.Sighting, error) {
 
@@ -270,21 +270,6 @@ func (d *fakeDirectory) PersonByLogin(_ context.Context, login string) (
 	}
 	for _, row := range d.people {
 		if row.Login == login {
-			return iamdomain.Sighting{ID: row.ID, Kind: row.Kind,
-				Stage: row.Stage, Login: row.Login}, nil
-		}
-	}
-	return iamdomain.Sighting{}, nil
-}
-
-func (d *fakeDirectory) PersonBySubjectBlind(_ context.Context, blind string,
-	_ time.Time) (iamdomain.Sighting, error) {
-
-	if d.err != nil {
-		return iamdomain.Sighting{}, d.err
-	}
-	for _, row := range d.people {
-		if blind != "" && row.Link.Blind == blind {
 			return iamdomain.Sighting{ID: row.ID, Kind: row.Kind,
 				Stage: row.Stage, Login: row.Login}, nil
 		}
@@ -337,11 +322,6 @@ type fakeWriter struct {
 
 	// moved is every login and seat MOVE the surface asked for.
 	moved []move
-
-	// links are the provider pins asked for, and unlinked the links taken
-	// off somebody (the blind as `from`).
-	links    []iamdomain.LinkChange
-	unlinked []move
 
 	// held is the credential set a SetCredentials call's Apply is run
 	// against, the way the real decide runs it against the snapshot.
@@ -495,20 +475,6 @@ func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
 		}
 	}
 	return nil
-}
-
-func (w *fakeWriter) Link(_ context.Context, in iamdomain.LinkChange) (
-	statelog.Result, error) {
-
-	w.links = append(w.links, in)
-	return w.did("link")
-}
-
-func (w *fakeWriter) Unlink(_ context.Context, person string,
-	link iamdomain.Link, _, _ string) (statelog.Result, error) {
-
-	w.unlinked = append(w.unlinked, move{"link", person, link.Blind, ""})
-	return w.did("unlink")
 }
 
 func (w *fakeWriter) Revoke(_ context.Context, _, _, _ string) (

@@ -13,15 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -108,7 +104,7 @@ func (failingRevoke) Revoke(context.Context, string, string, string) (statelog.R
 // 503 a browser reads as the engine being gone.
 func TestASignOutEverywhereThatCannotLandSaysWhenToRetry(t *testing.T) {
 	t.Parallel()
-	svc := buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	svc := buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Writer = failingRevoke{}
 	})
 	mux := http.NewServeMux()
@@ -154,7 +150,7 @@ func TestASignOutEverywhereTheLogRefusedSaysWhetherToRetry(t *testing.T) {
 	} {
 		t.Run(string(tc.reason), func(t *testing.T) {
 			t.Parallel()
-			svc := buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+			svc := buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				o.Writer = refusingRevoke{reason: tc.reason}
 			})
 			mux := http.NewServeMux()
@@ -173,34 +169,5 @@ func TestASignOutEverywhereTheLogRefusedSaysWhetherToRetry(t *testing.T) {
 					tc.retry)
 			}
 		})
-	}
-}
-
-// A SIGN-IN THAT CANNOT START BECAUSE OF THIS NODE'S OWN CONFIGURATION IS A
-// FAULT, NOT AN OUTAGE.
-//
-// Starting a provider round trip fails on a provider block that does not
-// validate, a keyring this node lacks, or its own randomness — none of which
-// clears by waiting — and it answered 503, which told every client to retry in
-// two seconds for ever. It is a 500; what does clear by waiting, the
-// provider's discovery being unreachable, stays a 503 with its hint.
-func TestAProviderSignInThatCannotStartIsAFault(t *testing.T) {
-	t.Parallel()
-	idp := newProvider(t)
-	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendOIDC
-	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
-	// NO CLIENT SECRET, which the provider block refuses before it seals
-	// anything.
-	svc := build(t, b, oidc.NewProvider(oidc.Config{
-		Issuer: idp.URL, ClientID: idpClientID,
-		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
-	}, idp.Client(), func() time.Time { return clock }))
-	mux := http.NewServeMux()
-	svc.Routes(mux)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, auth.PathAuthOIDCStart, nil))
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("answered %d (%s), want 500", rec.Code, rec.Body)
 	}
 }

@@ -39,10 +39,6 @@ type credentialView struct {
 	// every request. Absent on every other method.
 	Grants    []iam.Grant   `json:"grants,omitempty"`
 	Colleague iam.Colleague `json:"colleague,omitempty"`
-
-	// Issuer is the identity provider an `oidc` credential — a provider
-	// link — belongs to. Absent on every other method.
-	Issuer string `json:"issuer,omitempty"`
 }
 
 // GetCredentials is `GET /iam/credentials?person=`.
@@ -67,7 +63,7 @@ func (s *Service) GetCredentials(w http.ResponseWriter, r *http.Request) {
 			Label: row.Label, CreatedAt: row.CreatedAt,
 			ExpiresAt: row.ExpiresAt, RevokedAt: row.RevokedAt,
 			Revoked: row.Revoked(now), Grants: row.Grants,
-			Colleague: row.Colleague, Issuer: row.Issuer,
+			Colleague: row.Colleague,
 		})
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{"credentials": out})
@@ -295,8 +291,8 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 // The route is admitted on the ordinary credential write, which is what
 // revoking a MACHINE TOKEN is — a leaked one withdrawn from wherever it was
 // found. Revoking anything else changes how its owner proves who they are: a
-// password, a second factor, the recovery codes or a provider link, each of
-// them a second-factor reset by another door. So once the id is read, such a
+// password, a second factor or the recovery codes, each of them a
+// second-factor reset by another door. So once the id is read, such a
 // revocation asks the SENSITIVE verb as well ([authz.ActionCredentialProof]),
 // the one `/auth`'s own second-factor routes ask. The method of a credential
 // id never changes, so the read that picks the verb and the snapshot that
@@ -339,9 +335,9 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
 			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeUnauthorized,
 				map[string]string{"detail": "a machine token revokes machine " +
-					"tokens and nothing else: a password, a second factor, the " +
-					"recovery codes and an identity provider link are how its " +
-					"owner signs in, and are withdrawn by the person, signed in"})
+					"tokens and nothing else: a password, a second factor and " +
+					"the recovery codes are how its owner signs in, and are " +
+					"withdrawn by the person, signed in"})
 			return
 		}
 		if !authz.Admit(w, r, guard, authz.Policy{
@@ -352,18 +348,6 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		}) {
 			return
 		}
-	}
-	// A PROVIDER LINK IS NOT IN THE PERSON'S CREDENTIAL SET: it is its
-	// claim's row, and a set rewritten without it would leave it exactly
-	// where it was while answering "nothing changed". So an id naming a live
-	// one is an UNLINK.
-	if proof && named.Method == iamdomain.MethodOIDC {
-		unlinkOp := s.opIDFor(r, "credentials:unlink:"+id)
-		unlinked, unlinkErr := writer.Unlink(r.Context(), person, iamdomain.Link{
-			Issuer: named.Issuer, Blind: named.SubjectBlind,
-		}, unlinkOp, "a provider link was revoked")
-		s.answerWrite(w, r, unlinkOp, unlinked, unlinkErr, map[string]any{"id": id})
-		return
 	}
 	found = false
 	var method iamdomain.CredentialMethod

@@ -1571,7 +1571,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// THE WAY IN. Built before the options below so a node that cannot
 	// serve one says so in its own log line rather than by a route that
 	// is quietly absent.
-	authSurface, sessions, err := signInSurface(boot, e, cipher)
+	authSurface, sessions, err := signInSurface(boot, e)
 	if err != nil {
 		return nil, err
 	}

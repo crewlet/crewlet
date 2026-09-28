@@ -473,23 +473,6 @@ const (
 	// evidence it was issued to them.
 	CodeInviteSpent Code = "invite_spent"
 
-	// CodeSubjectConflict is an identity provider account this company
-	// cannot sign in as the person a round trip was for: it is linked to
-	// somebody else, an invitation was begun with a different account, or
-	// a restore left it linked to two people.
-	//
-	// SPECIFIC AND A 409, because it is reached only past an ID token that
-	// verified — the caller has proved they hold that account, and what it
-	// tells them is about their own account — and because no retry clears
-	// it: somebody has to remove a link.
-	//
-	// NEVER A 503 for the same reason: an answer carrying a Retry-After
-	// would have a browser retry for ever against a state only an
-	// administrator's change of a link ends. A sign-in names NEITHER holder
-	// — who else holds the link is not the caller's to learn, and the log
-	// line names both for the administrator who has to decide.
-	CodeSubjectConflict Code = "subject_conflict"
-
 	// CodeSeatUnavailable is somebody whose session validated perfectly
 	// and whose SEAT the org chart no longer holds.
 	//
@@ -715,9 +698,6 @@ var codes = map[Code]string{
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
-	CodeSubjectConflict: "That identity provider account is linked to " +
-		"somebody else here, so it cannot sign you in. The detail says what to " +
-		"do; an administrator can change which account is linked to whom.",
 
 	CodeForbidden: "You are signed in, and you may not make this change. The " +
 		"detail names what it needs.",

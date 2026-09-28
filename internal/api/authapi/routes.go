@@ -32,16 +32,15 @@ const Prefix = "/auth/"
 // # The auth column, stated here because it is the whole security shape
 //
 // SOME ARE UNGUARDED, because requiring a credential to obtain one is a
-// deployment nobody can enter: the posture read, the sign-in, the bootstrap
-// and the OIDC pair — and the invitation's own three, its view, its
-// redemption and its redemption through the provider, because holding the
-// link is the credential. The sign-in meets the throttle's curve, keyed on
-// the login as TYPED from the caller's source; the rest present a credential
-// that names nobody and meet no curve ([Service.uncounted]). And the two
-// sign-outs of THIS session, because a sign-out clears the cookie whatever
-// this node can read — guarded, a node that could not read its identity
-// estate answered them 503 before they ran — and each verifies every bearer
-// the browser holds for itself ([Service.signOut]). Every one is
+// deployment nobody can enter: the posture read, the sign-in and the
+// bootstrap — and the invitation's own two, its view and its redemption,
+// because holding the link is the credential. The sign-in meets the
+// throttle's curve, keyed on the login as TYPED from the caller's source; the
+// rest present a credential that names nobody and meet no curve
+// ([Service.uncounted]). And the sign-out of THIS session, because a sign-out
+// clears the cookie whatever this node can read — guarded, a node that could
+// not read its identity estate answered it 503 before it ran — and it verifies
+// every bearer the browser holds for itself ([Service.Logout]). Every one is
 // origin-checked like any other state change.
 //
 // THE REST NEED A SESSION, and they are guarded by the same middleware every
@@ -69,25 +68,6 @@ func (s *Service) Routes(mux auth.Mux) {
 	mux.HandleFunc("GET "+auth.AuthInvitePrefix+"{id}", s.ViewInvite)
 	mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}", s.RedeemInvite)
 	mux.HandleFunc("POST "+auth.PathAuthLogout, s.Logout)
-	if s.provider != nil {
-		// ABSENT RATHER THAN ERRORING on a deployment with no provider,
-		// which is the honest shape: a 404 says this company does not
-		// sign in that way, where a 503 would say it does and is broken.
-		mux.HandleFunc("GET "+auth.PathAuthOIDCStart, s.OIDCStart)
-		mux.HandleFunc("GET "+auth.PathAuthOIDCCallback, s.OIDCCallback)
-		// A REDEMPTION THROUGH THE PROVIDER IS THE INVITATION'S OWN POST
-		// and never the start's query parameter: its callback binds a
-		// provider account, so it is started only where the origin check
-		// can refuse another site starting it.
-		mux.HandleFunc("POST "+auth.AuthInvitePrefix+"{id}"+providerRedemption,
-			s.StartProviderRedemption)
-		// SIGNING OUT OF THE PROVIDER TOO, where there is one. It shares
-		// its shape with `/auth/logout/{lineage}` below, which would
-		// otherwise read it as a lineage named `oidc`: the mux prefers
-		// the literal segment whatever the order, so the two can sit in
-		// different groups, unguarded here and guarded there.
-		mux.HandleFunc("POST "+auth.PathAuthLogoutProvider, s.LogoutProvider)
-	}
 
 	// Guarded.
 	mux.HandleFunc("GET "+auth.PathAuthSession, s.Session)
@@ -107,8 +87,8 @@ func (s *Service) Routes(mux auth.Mux) {
 // ONE HOUR, and shorter than a person's session on purpose. What this
 // exchanges is a credential in a config file for one in a cookie, so the
 // window is sized to the gesture it exists for — a script or an operator CLI
-// doing a burst of work, or an operator using the dashboard on the day the
-// identity provider is down — rather than to a working day. A stolen cookie
+// doing a burst of work, or an operator using the dashboard on the day nobody
+// can sign in as a person — rather than to a working day. A stolen cookie
 // is as good as the token for this long and no longer: the entry leaving the
 // configuration ends it at once, and so does `crewlet iam invalidate-all`.
 const tokenLifetime = time.Hour
@@ -141,7 +121,7 @@ const tokenLifetime = time.Hour
 // IT IS STEPPED UP BY CONSTRUCTION, as the bearer is: presenting the token was
 // the proof, and there is nothing else a config-file credential could present.
 // A break-glass session that could reach no sensitive surface would be no use
-// on the day it exists for — the day the identity provider is down.
+// on the day it exists for — the day nobody can sign in as a person.
 //
 // # Only a presented token is exchanged
 //
@@ -259,11 +239,8 @@ type stepUpRequest struct {
 // cookie went on working for the rest of its week, and a person's session
 // listing grew by one per confirmation. And the replacement CONFIRMS the
 // sign-in rather than repeating it, so it inherits that session's absolute
-// deadline and the grants its identity provider's groups conferred: a step-up
-// that restarted the absolute clock would let a session be kept alive for
-// ever by confirming it, and one that dropped the carried grants would cost a
-// person the authority they stepped up to use — or, copied onto a fresh
-// deadline, let group-derived authority outlive the provider's assertion.
+// deadline: a step-up that restarted the absolute clock would let a session be
+// kept alive for ever by confirming it.
 func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 	principal, resolution := iam.From(r.Context())
@@ -367,10 +344,9 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	adm.ticket.Succeed(r.Context())
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
-		stepUp:      true,
-		replaces:    replaced.Bearer.Lineage.String(),
-		absolute:    replaced.Bearer.AbsoluteExpiresAt,
-		groupGrants: replaced.Session.GroupGrants,
+		stepUp:   true,
+		replaces: replaced.Bearer.Lineage.String(),
+		absolute: replaced.Bearer.AbsoluteExpiresAt,
 	})
 }
 
@@ -379,12 +355,11 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 //
 // # Read under the signature AND the rows, and never the bare cookie
 //
-// What a step-up inherits — the absolute deadline and the carried grants —
-// and what it ends are the session the caller PRESENTED, so it is read the
-// way the guard read it: the signature decides the lineage, and this node's
-// rows decide that it is live. A lineage off an unverified cookie would let a
-// caller name somebody else's session to end, and a deadline off one would
-// let them choose their own.
+// What a step-up inherits — the absolute deadline — and what it ends are the
+// session the caller PRESENTED, so it is read the way the guard read it: the
+// signature decides the lineage, and this node's rows decide that it is live.
+// A lineage off an unverified cookie would let a caller name somebody else's
+// session to end, and a deadline off one would let them choose their own.
 //
 // THE PERSON MUST BE THE ONE WHO PROVED: a principal resolved from a cookie
 // is its bearer's person, so a mismatch is a session that changed hands

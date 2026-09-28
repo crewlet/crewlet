@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -127,12 +126,12 @@ const (
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 	if s.backend() != config.AuthBackendLocal {
-		// A DEPLOYMENT THAT SIGNS IN THROUGH A PROVIDER SERVES NO
-		// PASSWORD ROUTE, and it says so rather than refusing as though
-		// the credentials were wrong: this is a fact about the
-		// deployment that every caller may know, and answering
-		// `sign_in_refused` would send somebody to reset a password
-		// this company does not have.
+		// A DEPLOYMENT WHOSE PEOPLE DO NOT SIGN IN SERVES NO PASSWORD
+		// ROUTE, and it says so rather than refusing as though the
+		// credentials were wrong: this is a fact about the deployment
+		// that every caller may know, and answering `sign_in_refused`
+		// would send somebody to reset a password this company does not
+		// have.
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownQuery,
 			map[string]string{
 				"detail": "this deployment does not sign in with passwords",
@@ -193,9 +192,9 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 
 	verifier, found := firstCredential(held.Credentials, iamdomain.MethodPassword)
 	if !found {
-		// A PERSON WITH NO PASSWORD — enrolled through a provider, or
-		// invited and not yet redeemed. The decoy again, for the same
-		// reason the stage arm pays it.
+		// A PERSON WITH NO PASSWORD — one who never set one, or whose
+		// password was revoked. The decoy again, for the same reason the
+		// stage arm pays it.
 		if s.decoy(w, r, adm, in.Password) {
 			s.refuseSignIn(w, r, adm, attempt, "no password credential")
 		}
@@ -822,10 +821,6 @@ type signIn struct {
 	method types.SignInMethod
 	factor types.SecondFactor
 
-	// acr is what an identity provider asserted about the authentication
-	// it performed, and empty on every other method.
-	acr string
-
 	// stepUp marks a signed-in person confirming who they are again, which
 	// announces itself as a step-up rather than as a fresh sign-in; replaces
 	// is the session the confirmation was made from, which is ENDED before
@@ -835,33 +830,14 @@ type signIn struct {
 	replaces string
 	absolute time.Time
 
-	// groupGrants are what the identity provider's groups conferred, and
-	// empty on every other method. They ride into the session record and
-	// never onto the person — see [iamdomain.Session.GroupGrants].
-	groupGrants []iam.Grant
-
-	// redirect is where a BROWSER that arrived by navigation goes next,
-	// rather than a JSON body it has no script to read. Empty answers
-	// JSON, which is what every fetch-driven route wants.
-	redirect string
-
-	// refresh is the refresh token a PROVIDER sign-in obtained, and empty
-	// for every other way in: the deactivation probe asks the provider
-	// with it, so it goes into custody beside the session it belongs to —
-	// see [Service.keep].
-	refresh string
-
 	// provedAt is when this sign-in's person proved who they are, where
 	// that was NOT here and now — and nil for every way in that was: a
 	// password, a second factor, an invitation, the bootstrap code.
 	//
-	// TWO WAYS IN SET IT. A PROVIDER sign-in's person authenticated at the
-	// provider ([oidc.Flight.ProvedAt]) — possibly long ago, and the zero
-	// time when the provider did not say, which is kept as zero: nothing
-	// datable was proved. And an ENROLMENT's replacement session inherits
-	// the proof of the enrolment-only session it replaces, because the
-	// code the enrolment checked proves possession of a seed that same
-	// session was handed moments earlier — which says nothing about who is
+	// ONE WAY IN SETS IT: an ENROLMENT's replacement session inherits the
+	// proof of the enrolment-only session it replaces, because the code
+	// the enrolment checked proves possession of a seed that same session
+	// was handed moments earlier — which says nothing about who is
 	// holding it. Dated now, it restarted both step-up windows and handed
 	// whoever held the restricted cookie a sensitive window its password
 	// never earned. A POINTER, so "proved nothing datable" (a zero time)
@@ -885,9 +861,8 @@ type signIn struct {
 // and the step-up demand a code from anybody who holds a factor, and a new
 // person holds none yet.
 //
-// A PROVIDER'S SIGN-IN IS NEVER RESTRICTED, because its second factor is the
-// provider's and invisible here — asking for one on top would be a factor on
-// top of a factor the engine cannot see. A Tier A exchange never reaches this.
+// A Tier A exchange never reaches this: presenting the token was its whole
+// proof, and it holds no second factor to enrol.
 func (s *Service) enrolmentOnly(how signIn) bool {
 	switch how.method {
 	case types.SignInPassword, types.SignInInvite, types.SignInBootstrap:
@@ -900,21 +875,17 @@ func (s *Service) enrolmentOnly(how signIn) bool {
 // of somebody who signs in with a password: the `api.auth.local` block's own
 // `totp`, and nothing where there is no such block.
 //
-// THE BLOCK AND NOT THE RESOLVED BACKEND, because the block is what states what
-// a password sign-in needs: a deployment whose people sign in through a
-// provider can still found its company and redeem invitations by password, and
-// the local block — where there is one — is what says whether those need a
-// factor. [iam.SecondFactor.Requires] reads a value this build does not know
-// as required, which is the safe direction for "must you prove more".
+// THE BLOCK IS WHAT STATES what a password sign-in needs, and
+// [iam.SecondFactor.Requires] reads a value this build does not know as
+// required, which is the safe direction for "must you prove more".
 func (s *Service) secondFactorRequired() bool {
 	local := s.boot.API.Auth.Local
 	return local != nil && local.TOTP.Requires()
 }
 
-// proofOf is the instant a sign-in proved who somebody is: the provider's own
-// for a provider sign-in, the replaced session's for an enrolment's
-// replacement, and this one for everything this surface verified itself — see
-// [signIn.provedAt].
+// proofOf is the instant a sign-in proved who somebody is: the replaced
+// session's for an enrolment's replacement, and this one for everything this
+// surface verified itself — see [signIn.provedAt].
 func (s *Service) proofOf(how signIn) time.Time {
 	if how.provedAt != nil {
 		return *how.provedAt
@@ -928,17 +899,6 @@ func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 
 	answer, ok := s.openSignIn(w, r, held, how)
 	if !ok {
-		return
-	}
-	if how.redirect != "" {
-		// A BROWSER THAT ARRIVED BY NAVIGATION leaves the same way. The
-		// cookie is on this response, so the page it lands on is signed
-		// in; a JSON body here was what the provider's callback answered,
-		// which a browser renders as text and goes nowhere.
-		//
-		// JUDGED AGAIN HERE, where it leaves: the value came out of a
-		// flight another node may have sealed — see [returnPath].
-		http.Redirect(w, r, returnPath(how.redirect), http.StatusFound)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, answer)
@@ -997,16 +957,13 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
 		// EVERY PATH HERE IS A PROOF — a password and its second factor,
-		// an identity provider's token, an invitation, the bootstrap
-		// code, a step-up — so the session is fresh from the instant it
-		// was proved, and a step-up surface asks again once this node's
-		// window has passed. It is the one field that says so: without it
-		// every session was stale from its first request. A PROVIDER'S
-		// proof is dated by the provider, because it answers from its own
-		// session and a token received now may carry an authentication
-		// from last week — see [Service.proofOf].
-		ProvedAt:    s.proofOf(how),
-		GroupGrants: how.groupGrants,
+		// an invitation, the bootstrap code, a step-up — so the session
+		// is fresh from the instant it was proved, and a step-up surface
+		// asks again once this node's window has passed. It is the one
+		// field that says so: without it every session was stale from
+		// its first request. An enrolment's replacement keeps the proof
+		// of the session it replaces — see [Service.proofOf].
+		ProvedAt: s.proofOf(how),
 		// A PASSWORD ALONE WHERE A SECOND FACTOR IS REQUIRED opens a
 		// session that may only enrol one — see [Service.enrolmentOnly].
 		EnrolmentOnly: restricted,
@@ -1030,10 +987,6 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		return loginResponse{}, false
 	}
 	at := opened.Result.Position
-	if how.refresh != "" && !s.keep(r, lineage.String(), held.ID, how.refresh, at) {
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil))
-		return loginResponse{}, false
-	}
 
 	// THE EPOCH AND THE GENERATION THE SESSION WAS OPENED AT, as the
 	// domain read them in the snapshot it formed the record in. A bearer
@@ -1069,7 +1022,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		s.audit.Emit(r.Context(), types.IAMSessionStarted{
 			Person: held.ID, Login: held.Login, Method: how.method,
 			Lineage: lineage.String(), Remote: s.sourceOf(r),
-			SecondFactor: how.factor, ACR: how.acr, ExpiresAt: expires,
+			SecondFactor: how.factor, ExpiresAt: expires,
 		})
 	}
 	status := statusSignedIn
@@ -1081,48 +1034,6 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		ExpiresAt: expires, Position: at.String(), Status: status,
 	}, true
 }
-
-// keep takes custody of a provider sign-in's refresh token, reporting whether
-// the sign-in may go on.
-//
-// A SIGN-IN WHOSE TOKEN COULD NOT BE KEPT IS REFUSED, and the session it just
-// opened is closed. Admitted, it would be a session the deactivation probe
-// never sees — somebody disabled at the provider keeping it until its absolute
-// deadline, which is the one thing the probe exists to prevent; refused, it
-// costs the person one retry. The close is best effort and is the node's own
-// record under the lineage's op id: no cookie was issued, so nothing can
-// present the session either way, and the close only keeps the sessions
-// screen from listing it as live.
-func (s *Service) keep(r *http.Request, lineage, person, refresh string,
-	at statelog.Position) bool {
-
-	err := s.custody.Hold(r.Context(), iamdomain.RefreshGrant{
-		Lineage: lineage, Person: person,
-		Issuer: s.provider.Config().Issuer, Token: refresh,
-		Start: uint64(at.Packed()),
-	}, s.now())
-	if err == nil {
-		return true
-	}
-	log.ErrorContext(r.Context(), "api_sign_in_refresh_unkept",
-		"person", person, "lineage", lineage, "error", err,
-		"detail", "the provider's refresh token could not be kept, so the "+
-			"deactivation probe could never ask about this session; the "+
-			"sign-in is refused rather than admitted unprobed")
-	// WITHOUT CANCEL: the request is about to be answered and its context
-	// ended, and a cleanup that inherits a dead context does nothing.
-	closed, err := s.writer.CloseSession(context.WithoutCancel(r.Context()),
-		lineage, person, reasonRefreshUnkept, "close:"+lineage)
-	if err != nil || !landed(closed) {
-		log.WarnContext(r.Context(), "api_sign_in_session_left_open",
-			"lineage", lineage, "error", errText(err), "op_id", closed.OpID,
-			"outcome", string(closed.Outcome))
-	}
-	return false
-}
-
-// reasonRefreshUnkept is what a session closed by [Service.keep] records.
-const reasonRefreshUnkept = "refresh_unkept"
 
 // backend is how this deployment signs people in.
 func (s *Service) backend() config.AuthBackend {

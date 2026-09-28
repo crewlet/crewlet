@@ -52,11 +52,11 @@ func (d armsDirectory) PersonByLogin(_ context.Context, login string) (
 			Stage: iam.StageSuspended, Login: login, Credentials: password}, nil
 	case "half.enrolled":
 		return iamdomain.Sighting{ID: "p-half", Login: login, Reserved: true}, nil
-	case "provider.only":
-		return iamdomain.Sighting{ID: "p-oidc", Kind: iam.KindPerson,
+	case "no.password":
+		return iamdomain.Sighting{ID: "p-nopass", Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: login,
 			Credentials: []iamdomain.Credential{{V: iamdomain.DocumentVersion,
-				ID: "link-1", Method: iamdomain.MethodOIDC}}}, nil
+				ID: "pat-1", Method: iamdomain.MethodToken}}}, nil
 	case "dana.sre":
 		return iamdomain.Sighting{ID: "p-dana", Kind: iam.KindPerson,
 			Stage: iam.StageActive, Login: login, Credentials: password}, nil
@@ -134,7 +134,7 @@ func (p *padRecorder) take() []time.Duration {
 //
 // A sign-in surface must not be a roster: whatever went wrong — nobody by that
 // login, nobody at that address, a person suspended, a half-finished
-// enrolment, somebody who signs in only through a provider, a wrong password,
+// enrolment, somebody who holds no password, a wrong password,
 // a directory this node could not read, or the right password with a wrong app
 // code or a recovery code already spent — the caller gets ONE status, ONE
 // body, byte for byte, padded to ONE deadline measured from admission, and one
@@ -182,7 +182,7 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	b := bootstrapFor(t)
 	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
-	buildWith(t, b, nil, func(o *authapi.Options) {
+	buildWith(t, b, func(o *authapi.Options) {
 		throttle, err := credential.NewThrottle(credential.ThrottleDeps{
 			Now: func() time.Time { return clock }, Sleep: pads.sleep,
 		})
@@ -217,7 +217,7 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 		{"a directory this node cannot read", "broken.store", rightPassword, ""},
 		{"a person suspended, with the right password", "sam.suspended", rightPassword, ""},
 		{"an enrolment nobody finished", "half.enrolled", rightPassword, ""},
-		{"a person who signs in only through a provider", "provider.only", rightPassword, ""},
+		{"a person who holds no password", "no.password", rightPassword, ""},
 		{"a wrong password", "dana.sre", "not-the-passphrase-at-all", ""},
 		// PAST THE FIRST FACTOR, and refused at the second — a path of its
 		// own through the second-factor check, which must answer in the

@@ -101,7 +101,7 @@ func (r *exchangeRig) rebuild(b config.Bootstrap) {
 		Directory: r.estate, Chart: r.chart,
 	}).WithSessions(arm).WithAudit(audit)
 	mux := http.NewServeMux()
-	buildWith(r.t, b, nil, func(o *authapi.Options) {
+	buildWith(r.t, b, func(o *authapi.Options) {
 		o.Writer, o.Sessions = r.estate, r.estate
 	}).Routes(mux)
 	mux.HandleFunc("GET /probe", func(w http.ResponseWriter, req *http.Request) {

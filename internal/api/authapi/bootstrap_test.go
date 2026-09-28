@@ -65,7 +65,7 @@ func bootstrapSurfaceWith(t *testing.T, codes []iamdomain.BootstrapCode,
 		}
 	}
 	mux := http.NewServeMux()
-	buildWith(t, b, nil, func(o *authapi.Options) {
+	buildWith(t, b, func(o *authapi.Options) {
 		o.Directory = codeDirectory{codes: codes}
 		o.Writer = writer
 		if replace != nil {

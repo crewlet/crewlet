@@ -61,7 +61,7 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 	}
 	writer := &credentialCounter{}
 	mux := http.NewServeMux()
-	buildWith(t, b, nil, func(o *authapi.Options) { o.Writer = writer }).Routes(mux)
+	buildWith(t, b, func(o *authapi.Options) { o.Writer = writer }).Routes(mux)
 	guarded := auth.New(&b).WithTokens(arm).Middleware(mux)
 
 	for _, path := range []string{"/auth/totp/recovery", "/auth/totp", "/auth/step-up"} {

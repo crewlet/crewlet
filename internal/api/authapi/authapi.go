@@ -10,9 +10,8 @@
 //
 // The machinery it drives belongs to other packages and none of it is
 // reimplemented here: internal/iam/credential hashes and verifies, throttles
-// and pads; internal/iam/oidc runs the provider round trip;
-// internal/iam/session mints and validates the bearer; internal/iamdomain
-// writes the records and reads the estate. What this package owns is the HTTP
+// and pads; internal/iam/session mints and validates the bearer;
+// internal/iamdomain writes the records and reads the estate. What this package owns is the HTTP
 // shape of the sequence and the refusals.
 //
 // # The rule that shapes every refusal on this surface
@@ -89,7 +88,7 @@
 //
 // Some routes here are unguarded, because requiring a credential to obtain one
 // is a deployment nobody can enter: the posture read, the login itself, the
-// first operator's bootstrap, the OIDC pair and the invitation pair. Each that
+// first operator's bootstrap and the invitation pair. Each that
 // touches the store is admitted by the throttle first, and each that
 // changes state is origin-checked like every other write (internal/api/auth's
 // CSRF gate) — the guard is what they are exempt from, not the cross-site
@@ -112,11 +111,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -140,12 +137,6 @@ type Directory interface {
 	// PersonByEmailBlind resolves a keyed address blind, on the same three
 	// answers.
 	PersonByEmailBlind(ctx context.Context, blind string) (iamdomain.Sighting, error)
-
-	// PersonBySubjectBlind resolves an identity provider's blinded subject
-	// to whoever holds a LIVE link to it, on the same three answers — and
-	// an error for a subject two people hold, which resolves neither.
-	PersonBySubjectBlind(ctx context.Context, blind string, now time.Time) (
-		iamdomain.Sighting, error)
 
 	// AnyPerson reports whether anybody is enrolled at all, which is the
 	// bootstrap decision. One bit, never a listing.
@@ -313,8 +304,7 @@ type Sealer interface {
 		field iamdomain.Field, sealed string) (string, error)
 }
 
-// Blinds is where the keyed blind an address or a provider subject is matched
-// on comes from.
+// Blinds is where the keyed blind an address is matched on comes from.
 //
 // THE BLIND AND NEVER THE ADDRESS, because a sign-in runs before anybody is
 // authenticated and the lookup must not carry personal data. It must agree
@@ -323,10 +313,7 @@ type Sealer interface {
 //
 // RESOLVED PER REQUEST rather than held from construction, for
 // [iamdomain.Blinds]' reason: the company's key is minted by the first node
-// that needs it, after this surface was built. The blinder that comes back
-// keeps the two classes apart in its own signature — [iamdomain.Blinder.Email]
-// and [iamdomain.Blinder.Subject] — so no caller can blind an address under
-// the subject class and read the miss as nobody holding it.
+// that needs it, after this surface was built.
 type Blinds interface {
 	Blinder(ctx context.Context) (*iamdomain.Blinder, error)
 }
@@ -350,15 +337,6 @@ type Audit interface {
 	Failed(ctx context.Context, f authevents.Failure)
 }
 
-// Custody keeps an OIDC session's refresh token for the deactivation probe.
-//
-// CONSUMER-DEFINED and one method wide: internal/iamdomain's Refreshes
-// satisfies it, and the only thing this surface ever does with a refresh
-// token is hand it over — nothing on the request path reads one back.
-type Custody interface {
-	Hold(ctx context.Context, grant iamdomain.RefreshGrant, now time.Time) error
-}
-
 // Options is what the surface is built from.
 type Options struct {
 	// Bootstrap is Tier A. REQUIRED: the cookie's name and Secure flag,
@@ -378,7 +356,7 @@ type Options struct {
 	Signer *session.Signer
 
 	// Hasher verifies passwords. REQUIRED on the `local` backend and
-	// unused on the others, but taken unconditionally: a nil here would
+	// unused on `none`, but taken unconditionally: a nil here would
 	// make the local backend's refusal a panic on the first sign-in
 	// rather than a refusal at boot.
 	Hasher *credential.Hasher
@@ -388,19 +366,8 @@ type Options struct {
 	// oracle with a stopwatch, and a password is guessed at line rate.
 	Throttle *credential.Throttle
 
-	// Blinder is where the address and subject blinds come from. REQUIRED.
+	// Blinder is where the address blinds come from. REQUIRED.
 	Blinder Blinds
-
-	// Cipher seals the OIDC login-in-progress. REQUIRED when a provider
-	// is configured and unused otherwise, but taken unconditionally: a
-	// nil here would make the start route panic on the first login
-	// rather than refuse at boot.
-	//
-	// THE FLEET'S KEYRING, which is what lets a login begun on one
-	// ingress node be finished on another — a flight sealed under a
-	// per-node key is a login that fails whenever the callback lands
-	// somewhere else.
-	Cipher secrets.Cipher
 
 	// Sealer seals and opens the values this surface handles. REQUIRED.
 	//
@@ -429,19 +396,6 @@ type Options struct {
 	// exchanged from a Tier A token is judged here exactly as the guard
 	// judges it — see [Service.directoryFor].
 	Sessions session.Directory
-
-	// Provider is the OIDC provider, or nil on a deployment that has
-	// none. Nil is an ORDINARY state: the two OIDC routes are then absent
-	// rather than answering an error, which is the honest shape for a
-	// company signing in with passwords.
-	Provider *oidc.Provider
-
-	// Custody keeps the refresh token a provider sign-in obtains, for the
-	// deactivation probe. REQUIRED WHERE A PROVIDER IS: the probe is the
-	// only thing that notices somebody disabled at the provider, and a
-	// sign-in whose token was dropped is a session no central
-	// deactivation ends before its absolute deadline.
-	Custody Custody
 
 	// Clients resolves a caller's own address through this deployment's
 	// trusted proxies. REQUIRED.
@@ -475,17 +429,9 @@ type Service struct {
 	blinder   Blinds
 	sessions  session.Directory
 	sealer    Sealer
-	cipher    secrets.Cipher
 	clients   *auth.Clients
-	provider  *oidc.Provider
 	audit     Audit
-	custody   Custody
 	now       func() time.Time
-
-	// redeemed is every provider round trip this node has finished, so a
-	// flight cookie is exchanged at the provider once however often it is
-	// presented — see [oidc.Redemptions].
-	redeemed *oidc.Redemptions
 
 	// codeMu serialises every change to this node's founder-code FILE —
 	// the boot offer, a re-issue and the removal after a redemption — so
@@ -530,12 +476,6 @@ func New(opts Options) (*Service, error) {
 		{"Blinder", opts.Blinder == nil},
 		{"Sessions", opts.Sessions == nil},
 		{"Sealer", opts.Sealer == nil},
-		// THE CIPHER ONLY WHERE A PROVIDER IS. A deployment signing in
-		// with passwords seals no flight, so requiring it would refuse
-		// a wiring that is complete.
-		{"Cipher", opts.Provider != nil && opts.Cipher == nil},
-		// AND CUSTODY, for the same reason and the same condition.
-		{"Custody", opts.Provider != nil && opts.Custody == nil},
 		{"Clients", opts.Clients == nil},
 		{"Audit", opts.Audit == nil},
 	} {
@@ -557,11 +497,7 @@ func New(opts Options) (*Service, error) {
 		// cost a token's own sign-out.
 		sessions: auth.SessionSubjects(opts.Bootstrap, opts.Sessions),
 		sealer:   opts.Sealer,
-		cipher:   opts.Cipher,
-		provider: opts.Provider,
-		custody:  opts.Custody,
 		clients:  opts.Clients, audit: opts.Audit, now: opts.Now,
-		redeemed: oidc.NewRedemptions(),
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -704,21 +640,19 @@ func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 }
 
 // uncounted is the admission of an attempt whose credential names nobody — a
-// founder's code, an invitation link, a provider's round trip: the instant its
-// refusal is padded from and where it came from, and no ticket.
+// founder's code or an invitation link: the instant its refusal is padded from
+// and where it came from, and no ticket.
 //
 // # No curve, and not for want of a key
 //
 // The only key such an attempt has is its SOURCE, and a curve on the source
 // alone is one anybody sharing the address holds shut for everybody else at
 // it — an office, a VPN's egress, the whole internet behind a proxy this
-// deployment was not told to trust. These routes had one: a provider callback
-// nobody started fails for free, so one stranger could keep every provider
-// sign-in, every invitation and the founder's code at that address answering
-// 429. What bounds a walk is the credential itself — a link's secret and a
-// founder's code are each 256 bits of crypto/rand, and a provider's round trip
-// is the provider's — and what shows one is the audit trail's failure tally,
-// which every refusal still reaches.
+// deployment was not told to trust. These routes had one, so one stranger
+// could keep every invitation and the founder's code at that address
+// answering 429. What bounds a walk is the credential itself — a link's secret
+// and a founder's code are each 256 bits of crypto/rand — and what shows one is
+// the audit trail's failure tally, which every refusal still reaches.
 func (s *Service) uncounted(r *http.Request) admission {
 	return admission{at: s.throttle.Now(), source: s.sourceOf(r)}
 }

@@ -78,7 +78,7 @@ func TestASignOutEndsTheBearerUnderEitherName(t *testing.T) {
 
 	writer := &closingWriter{}
 	mux := http.NewServeMux()
-	buildWith(t, b, nil, func(o *authapi.Options) { o.Writer = writer }).Routes(mux)
+	buildWith(t, b, func(o *authapi.Options) { o.Writer = writer }).Routes(mux)
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	req.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: bearer})
 	rec := httptest.NewRecorder()

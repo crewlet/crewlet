@@ -85,8 +85,7 @@ func (s *Service) PostInvite(w http.ResponseWriter, r *http.Request) {
 		//
 		// A 500 AND NOT A 503: this node's own configuration lacks the
 		// setting, and no amount of waiting supplies it — a 503 told
-		// every client to retry in two seconds for ever, which is the
-		// same reason authapi's provider start answers a fault as one.
+		// every client to retry in two seconds for ever.
 		httpjson.FailWith(w, http.StatusInternalServerError,
 			httpjson.CodeNoExternalURL, map[string]string{
 				"config_path": "api.external_url",

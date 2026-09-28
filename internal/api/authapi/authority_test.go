@@ -50,7 +50,7 @@ func TestARedemptionNamesItsInvitationAsTheAuthority(t *testing.T) {
 	t.Parallel()
 	var got iamdomain.Enrolment
 	mux := http.NewServeMux()
-	buildWith(t, bootstrapFor(t), nil, func(o *authapi.Options) {
+	buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 		o.Directory = liveInvitation{}
 		o.Writer = enrolmentRecorder{got: &got}
 	}).Routes(mux)
@@ -116,7 +116,7 @@ func TestTheFirstPersonNamesTheCodeAsTheAuthority(t *testing.T) {
 			// a code only the file holds (withdrawn, spent or expired)
 			// creates nobody, which is a different case.
 			sum := sha256.Sum256([]byte(code))
-			buildWith(t, b, nil, func(o *authapi.Options) {
+			buildWith(t, b, func(o *authapi.Options) {
 				o.Directory = codeDirectory{codes: []iamdomain.BootstrapCode{{
 					ID: hex.EncodeToString(sum[:]), MintedAt: clock,
 					ExpiresAt: clock.Add(time.Hour),

@@ -130,8 +130,8 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	// There is nothing else it could present: a Tier A token has no second
 	// factor, no session and no person behind it. A credential that could
 	// never be fresh would be one that could never reach a sensitive gesture
-	// — which is precisely the job break-glass exists for, on the day the
-	// identity provider is down and an administrator is locked out.
+	// — which is precisely the job break-glass exists for, on the day an
+	// administrator is locked out and nobody else can sign in.
 	g.proof.stamp(&p, now)
 	// A BOUND CREDENTIAL ACTS AS ITS SEAT, which is the one thing this
 	// translation is not blunt about. The binding is the IDENTITY

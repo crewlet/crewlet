@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -38,22 +37,6 @@ func bootstrapFor(t *testing.T) config.Bootstrap {
 	return b
 }
 
-// withProvider is [surface] for a deployment that signs in through an
-// identity provider, which mounts two more routes.
-func withProvider(t *testing.T) *authapi.Service {
-	t.Helper()
-	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendOIDC
-	b.API.Auth.OIDC = &config.APIOIDC{
-		Issuer:   "https://idp.example.com",
-		ClientID: "crewlet",
-	}
-	return build(t, b, oidc.NewProvider(oidc.Config{
-		Issuer: b.API.Auth.OIDC.Issuer, ClientID: "crewlet",
-		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
-	}, nil, func() time.Time { return clock }))
-}
-
 // surface builds the sign-in surface over fakes.
 //
 // EVERY DEPENDENCY IS A FAKE and none is nil, which is what the constructor
@@ -61,19 +44,18 @@ func withProvider(t *testing.T) *authapi.Service {
 // refuses by name rather than a posture.
 func surface(t *testing.T) *authapi.Service {
 	t.Helper()
-	return build(t, bootstrapFor(t), nil)
+	return build(t, bootstrapFor(t))
 }
 
-// build is the shared construction, so the two fixtures differ in exactly the
-// field they are about.
-func build(t *testing.T, b config.Bootstrap, provider *oidc.Provider) *authapi.Service {
+// build is the shared construction over a Tier A a case chose.
+func build(t *testing.T, b config.Bootstrap) *authapi.Service {
 	t.Helper()
-	return buildWith(t, b, provider, nil)
+	return buildWith(t, b, nil)
 }
 
 // buildWith is [build] with one or more of the fakes replaced, for a case whose
 // subject is what a seam ANSWERS rather than which routes exist.
-func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
+func buildWith(t *testing.T, b config.Bootstrap,
 	replace func(*authapi.Options)) *authapi.Service {
 
 	t.Helper()
@@ -100,9 +82,6 @@ func buildWith(t *testing.T, b config.Bootstrap, provider *oidc.Provider,
 		Sealer:    stubSealer{},
 		Sessions:  stubSessions{},
 		Clients:   auth.NewClients(&b),
-		Provider:  provider,
-		Custody:   stubCustody{},
-		Cipher:    stubCipher{},
 		Audit:     &recordingAudit{},
 		Now:       func() time.Time { return clock },
 	}
@@ -148,11 +127,6 @@ func (stubDirectory) PersonByLogin(context.Context, string) (iamdomain.Sighting,
 }
 
 func (stubDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sighting, error) {
-	return iamdomain.Sighting{}, nil
-}
-
-func (stubDirectory) PersonBySubjectBlind(context.Context, string, time.Time) (
-	iamdomain.Sighting, error) {
 	return iamdomain.Sighting{}, nil
 }
 
@@ -275,22 +249,6 @@ func sealedSeed(t *testing.T, person, credentialID, seed string) string {
 		t.Fatalf("seal a seed: %v", err)
 	}
 	return sealed
-}
-
-// stubCipher seals nothing and opens nothing, which is what a case about
-// ROUTES needs: the flight's own sealing has its own suite in
-// internal/iam/oidc.
-type stubCipher struct{}
-
-func (stubCipher) Encrypt(plaintext, _ string) (string, error) { return plaintext, nil }
-func (stubCipher) Decrypt(sealed, _ string) (string, error)    { return sealed, nil }
-
-// stubCustody keeps nothing, which a case about ROUTES needs: what a sign-in
-// hands custody has its own case in keep_internal_test.go.
-type stubCustody struct{}
-
-func (stubCustody) Hold(context.Context, iamdomain.RefreshGrant, time.Time) error {
-	return nil
 }
 
 type stubSessions struct{}

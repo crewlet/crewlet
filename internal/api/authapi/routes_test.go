@@ -7,13 +7,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/oidc"
 )
 
 // EVERY ROUTE THIS SURFACE REGISTERS IS DELIBERATELY GUARDED OR DELIBERATELY
@@ -44,15 +42,6 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 		auth.PathAuthConfig, auth.PathAuthLogin, auth.PathAuthBootstrap,
 		auth.AuthInvitePrefix + "{id}", auth.PathAuthLogout,
 	}
-	// THE OIDC PAIR IS CONDITIONAL, and this case is over a surface with
-	// no provider — which is an ordinary deployment rather than a gap:
-	// a company signing in with passwords serves no provider routes, and
-	// they are ABSENT rather than answering an error, because a 404 says
-	// this company does not sign in that way where a 503 would say it
-	// does and is broken. Their exemption is asserted below, on a surface
-	// that has one.
-	optional := []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
-		auth.AuthInvitePrefix + "{id}/provider", auth.PathAuthLogoutProvider}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
 	// than derived as "the rest": a route that went missing from the
 	// registration would otherwise pass silently, and one added would be
@@ -74,7 +63,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	for _, pattern := range registered {
 		path := pathOf(pattern)
 		switch {
-		case slices.Contains(unguarded, path), slices.Contains(optional, path):
+		case slices.Contains(unguarded, path):
 			if !auth.Unguarded(strings.Replace(path, "{id}", "abc", 1)) {
 				t.Errorf("%s is declared unguarded here and the guard guards "+
 					"it: a sign-in route behind a credential is a deployment "+
@@ -118,8 +107,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 // what the routes wrote carried one: a wrapper around them could not reach the
 // answers written before them — the guard's refusals, the origin check's, the
 // mux's own 404 and 405. So the guard marks every answer under /auth, and this
-// walks EVERY route the surface registers — on a deployment with a provider,
-// so the conditional three are mounted too — through the REAL guard and origin
+// walks EVERY route the surface registers through the REAL guard and origin
 // check a node runs them behind, and holds each answer, whatever its status
 // and whoever wrote it, to `no-store`: with no credential (the guard's 401 on
 // every guarded route), from another site, an enrolment-only session on a
@@ -128,19 +116,13 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 // Mutation: drop the guard's marking and every row fails.
 func TestNothingThisSurfaceAnswersMayBeStored(t *testing.T) {
 	t.Parallel()
-	idp := newProvider(t)
 	b := bootstrapFor(t)
-	b.API.Auth.Backend = config.AuthBackendOIDC
-	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
-	svc := build(t, b, oidc.NewProvider(oidc.Config{
-		Issuer: idp.URL, ClientID: idpClientID,
-		RedirectURI: b.API.ExternalBase() + auth.PathAuthOIDCCallback,
-	}, idp.Client(), func() time.Time { return clock }))
+	svc := build(t, b)
 
 	serve := http.NewServeMux()
 	recorded := &recordingMux{}
 	svc.Routes(teeMux{recorded, serve})
-	if len(recorded.patterns) < 15 {
+	if len(recorded.patterns) < 12 {
 		t.Fatalf("the surface registered %d routes (%v); this walk is not "+
 			"reading the mux", len(recorded.patterns), recorded.patterns)
 	}
@@ -224,44 +206,6 @@ func pathOf(pattern string) string {
 	return pattern
 }
 
-// AND THE PROVIDER ROUTES ARE MOUNTED AND EXEMPT WHERE THERE IS ONE.
-//
-// They are absent from the case above because that surface has no provider,
-// which is what a company signing in with passwords looks like. Asserted
-// separately rather than folded in, because "not registered" and "registered
-// and guarded" are different failures with different remedies, and a single
-// case over an optional route can only report one of them.
-func TestTheProviderRoutesAreMountedAndExemptWhereThereIsOne(t *testing.T) {
-	t.Parallel()
-	mux := &recordingMux{}
-	withProvider(t).Routes(mux)
-
-	for _, want := range []string{auth.PathAuthOIDCStart, auth.PathAuthOIDCCallback,
-		auth.AuthInvitePrefix + "{id}/provider", auth.PathAuthLogoutProvider} {
-		if !slices.ContainsFunc(mux.patterns, func(p string) bool {
-			return pathOf(p) == want
-		}) {
-			t.Errorf("%s is not mounted on a deployment that has a provider, "+
-				"so its only way in does not exist", want)
-			continue
-		}
-		if !auth.Unguarded(strings.Replace(want, "{id}", "abc", 1)) {
-			t.Errorf("%s is guarded: a provider round trip is a BROWSER "+
-				"following a redirect, which carries nothing this engine "+
-				"issued, and signing out of the provider must clear the "+
-				"cookie on a node that cannot read its identity estate — so "+
-				"requiring a credential makes it unreachable there", want)
-		}
-	}
-	// AND IT IS ABSENT WHERE THERE IS NONE, as the round trip is.
-	plain := &recordingMux{}
-	surface(t).Routes(plain)
-	if slices.Contains(plain.patterns, "POST "+auth.PathAuthLogoutProvider) {
-		t.Errorf("%s is mounted on a deployment with no provider",
-			auth.PathAuthLogoutProvider)
-	}
-}
-
 // A BODY OVER THE CAP IS ANSWERED 413, not abandoned.
 //
 // The sign-in and bootstrap handlers returned without writing a status when
@@ -276,7 +220,7 @@ func TestAnOversizedSignInIsAnsweredRatherThanDropped(t *testing.T) {
 	b := bootstrapFor(t)
 	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
-	build(t, b, nil).Routes(mux)
+	build(t, b).Routes(mux)
 	for _, path := range []string{auth.PathAuthLogin, auth.PathAuthBootstrap} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,

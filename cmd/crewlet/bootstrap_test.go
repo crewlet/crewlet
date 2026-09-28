@@ -66,11 +66,7 @@ func newFounderRigWith(t *testing.T, mutate func(*config.Bootstrap)) founderRig 
 	if e.IAMWriter() == nil {
 		t.Fatal("the node runs no identity domain")
 	}
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		t.Fatalf("keyring: %v", err)
-	}
-	surface, _, err := signInSurface(boot, e, cipher)
+	surface, _, err := signInSurface(boot, e)
 	if err != nil || surface == nil {
 		t.Fatalf("sign-in surface: %v", err)
 	}
