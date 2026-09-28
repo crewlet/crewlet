@@ -134,20 +134,22 @@ holds — while `/health` carries its counts for every reader. See
 [the continuous report](configuration.md#the-continuous-report-what-nothing-can-refuse-at-a-write).
 
 **One of its findings reads the identity directory**, and what it says depends
-on whether this node has one. `seat_unheld` is a human seat nobody in the
+on whether this node could read it. `seat_unheld` is a human seat nobody in the
 directory is bound to — a seat the chart holds, work routes to, and no person
-can sign in and act as. On a node that runs no identity domain that arm is
-**skipped rather than answered**: such a node's copy of that estate is
-legitimately empty, so reading it would report every human seat in the company
-as unheld. A report that cannot ask does not guess.
+can sign in and act as. Where the directory cannot be asked that arm is
+**left undecided rather than answered**: a seat whose holder this node failed
+to read is counted in the report's `unchecked` instead of reported unheld, and
+on a node that started with no active company — which holds no directory at
+all — the arm is skipped. A report that cannot ask does not guess.
 
 **And the seats nobody holds are listable.** `GET /chart/seats?kind=human&unheld=true`
 answers the same question as a filter, which is what an invite screen needs
 before it asks who to send a link to — and so it takes what the directory's own
-listing takes, `people:manage` or `audit:read`, rather than the board's read. On a node with no identity domain the
-filter is **refused with `503`** rather than applied to an empty directory —
-returning every human seat in the company under a parameter that promised the
-opposite is the one failure a screen renders as a finished answer.
+listing takes, `people:manage` or `audit:read`, rather than the board's read.
+Where the directory cannot be asked the filter is **refused with `503`** rather
+than applied to what could not be read — returning every human seat in the
+company under a parameter that promised the opposite is the one failure a
+screen renders as a finished answer.
 
 **Removing a seat somebody holds is refused, and the refusal is advisory.** The
 chart's removal decide reads the directory inside its own snapshot and names

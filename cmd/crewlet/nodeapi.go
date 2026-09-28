@@ -243,19 +243,20 @@ func refreshCustody(e *engine.Engine) authapi.Custody {
 }
 
 // seatHeld reports whether a seat is one somebody in the identity directory is
-// bound to, or nil on a node that cannot tell.
+// bound to, or nil on a node with no directory to ask.
 //
-// # The nil is the third value, and it is the whole of this function
+// # The nil says nobody can be asked, which is not "nobody holds it"
 //
-// A node that runs no identity domain has a legitimately EMPTY copy of that
-// estate — it never applies the records — so asking it produces false for
-// every seat in the company, which reads as "nobody works here". That is the
-// shape of the bug the continuous report already had for a different reason:
-// it read a seat's declared contact block, so a company managing its people
-// elsewhere saw every human seat reported.
+// A node that started with no active company runs no native runtime and holds
+// no identity rows at all, and read as a directory that would answer "not
+// held" for every seat in the company — which reads as "nobody works here".
+// That is the shape of the bug the continuous report already had for a
+// different reason: it read a seat's declared contact block, so a company
+// managing its people elsewhere saw every human seat reported.
 //
-// So a node with no reader supplies NO ANSWER, and the report skips that arm
-// rather than answering it. See [chartapi.Held].
+// So such a node supplies NO ANSWER, and the report skips that arm rather than
+// answering it. A directory that is there and cannot be read answers an error,
+// which leaves the arm undecided the same way. See [chartapi.Held].
 func seatHeld(e *engine.Engine) chartapi.Held {
 	reader := e.IAM()
 	if reader == nil {
@@ -264,7 +265,7 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 	// THE CALLER'S CONTEXT, which the seam carries: every evaluation is
 	// made for a request — /chart/check, /health, the seat listing — so a
 	// read for one that has gone has nobody to answer.
-	return reader.SeatHeld
+	return reader.HeldSeats
 }
 
 // directorySurface builds /iam, or reports that this node serves none.

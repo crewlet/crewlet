@@ -217,13 +217,14 @@ func (s *Service) report(ctx context.Context) Report {
 // Options wire the service.
 type Options struct {
 	// Held reports whether a seat is one somebody in the identity
-	// directory is bound to, or nil where this node cannot tell.
+	// directory is bound to, or nil where this node has no directory to
+	// ask.
 	//
 	// NIL IS AN ORDINARY WIRING rather than a mistake, and the report
-	// SKIPS the unheld arm rather than answering it: a node that runs no
-	// identity domain has a legitimately empty copy of that estate, and
-	// reading it as "nobody holds any seat" would report every human seat
-	// in the company. See [Held].
+	// SKIPS the unheld arm rather than answering it: a node that started
+	// with no active company holds no identity rows at all, and reading
+	// that as "nobody holds any seat" would report every human seat in
+	// the company. See [Held].
 	Held Held
 
 	// Reader answers the chart's rows. Required: a surface that could not

@@ -172,6 +172,13 @@ type Consistency struct {
 	// Counts is how many of each kind, so a reader watching the number
 	// climb can say WHICH class grew without opening another surface.
 	Counts map[string]int `json:"counts,omitempty"`
+
+	// Unchecked is how many human seats this node could not ask the
+	// identity directory about, so `seat_unheld` was left undecided for
+	// them — [chartapi.Report.Unchecked], carried here for the reason
+	// Evaluated is: a count of findings that silently excluded them would
+	// read as a clean bill. Absent at zero.
+	Unchecked int `json:"unchecked,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -301,6 +308,7 @@ func consistencyOf(got chartapi.Report) Consistency {
 		Evaluated: got.Evaluated,
 		Findings:  len(got.Findings),
 		Worst:     string(got.Worst()),
+		Unchecked: got.Unchecked,
 	}
 	if len(got.Counts) > 0 {
 		out.Counts = make(map[string]int, len(got.Counts))

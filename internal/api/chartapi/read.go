@@ -363,20 +363,40 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 	kind := chart.SeatKind(strings.TrimSpace(r.URL.Query().Get(KindParam)))
 	if unheld && s.held == nil {
 		// THE FILTER CANNOT BE ANSWERED, so it is REFUSED rather than
-		// applied to an empty directory. A node running no identity
-		// domain holds a legitimately empty copy of that estate, so
-		// filtering against it would return EVERY human seat in the
-		// company under a parameter that promised the opposite — which
-		// is the one failure a screen renders as a finished answer.
+		// applied to an empty directory. A node that started with no
+		// active company holds no identity rows at all, so filtering
+		// against them would return EVERY human seat in the company under
+		// a parameter that promised the opposite — which is the one
+		// failure a screen renders as a finished answer.
 		//
-		// NO Retry-After, because waiting on THIS node never changes it:
-		// the answer is another node, and a header saying "come back"
-		// would send the caller back here.
+		// NO Retry-After, because waiting never changes it: what opens
+		// this node's directory is a company revision and a restart, and
+		// a header saying "come back" would send the caller back here.
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
-			"detail": "this node runs no identity domain, so it cannot " +
-				"say which seats nobody holds; ask a node that does",
+			"detail": "this node started with no active company, so it " +
+				"holds no identity directory and cannot say which seats " +
+				"nobody holds",
 		})
 		return
+	}
+	var held map[string]bool
+	if unheld {
+		if held, err = s.held(r.Context()); err != nil {
+			// A DIRECTORY THAT CANNOT BE READ REFUSES THE PAGE, where the
+			// report only counts what it could not decide: the report's
+			// other findings are still true without this one, while a
+			// filtered list is a wrong answer to the only question this
+			// parameter asks. The store's own words go to the log, never
+			// the body; see [internalError].
+			log.WarnContext(r.Context(), "api_chart_holding_unreadable",
+				"error", err)
+			httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+				retryAfter(err), httpjson.Detail{
+					"detail": "this node could not read the identity " +
+						"directory, so it cannot say which seats nobody holds",
+				})
+			return
+		}
 	}
 	seats := make([]seatView, 0, len(got.Seats))
 	for _, seat := range got.Seats {
@@ -387,7 +407,7 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 		// exactly as the report asks: a binding names that (ADR-0020), so
 		// asked by the handle it answers to now, a renamed seat somebody
 		// holds was listed as one nobody does.
-		if unheld && s.held(r.Context(), seat.Origin()) {
+		if unheld && held[seat.Origin()] {
 			continue
 		}
 		seats = append(seats, viewOfSeat(seat, runtime))

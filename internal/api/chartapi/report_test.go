@@ -3,6 +3,7 @@ package chartapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"testing"
@@ -185,7 +186,7 @@ func TestAHumanSeatWithNoContactIsAdmittedAndReportedUnreachable(t *testing.T) {
 
 	_, settings := running()
 	// HELD, so the only finding left is the one about the contact block.
-	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context, string) bool { return true })
+	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil })
 	want := []chartapi.Finding{{
 		Kind: chartapi.KindSeatUnreachable, Severity: chartapi.SeverityWarning,
 		Object: "cto",
@@ -278,7 +279,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 	// this case reports is the directory's doing.
 	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
 
-	held := chartapi.Evaluate(t.Context(), view, settings, func(context.Context, string) bool { return true })
+	held := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil })
 	if held.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a seat somebody holds was reported unheld: %v", held.Counts)
 	}
@@ -287,7 +288,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 			held.Counts)
 	}
 
-	unheld := chartapi.Evaluate(t.Context(), view, settings, func(context.Context, string) bool { return false })
+	unheld := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil })
 	if unheld.Counts[chartapi.KindSeatUnheld] == 0 {
 		t.Errorf("a seat nobody in the directory holds was not reported: %v",
 			unheld.Counts)
@@ -309,21 +310,20 @@ func TestARenamedSeatIsAskedAboutByItsIdentity(t *testing.T) {
 	cto.DeclaredHandle, cto.OriginHandle = "chief-tech", "cto"
 	cto.FormerHandles = []string{"cto"}
 
-	got := chartapi.Evaluate(t.Context(), view, settings, func(_ context.Context, seat string) bool { return seat == "cto" })
+	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil })
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a renamed seat whose identity is held was reported unheld: %v",
 			got.Counts)
 	}
 }
 
-// AND A NODE THAT CANNOT TELL DOES NOT GUESS.
+// AND A NODE WITH NO DIRECTORY DOES NOT GUESS.
 //
-// This is the whole reason the seam is a nil-able function rather than a bool
-// inside the report. A node that runs no identity domain has a legitimately
-// EMPTY copy of that estate — it never applies the records — so asking it
-// produces false for every seat in the company, which renders as "nobody works
-// here" on a screen an operator is about to act on. The absence of a reader is
-// the third value, and the arm is SKIPPED.
+// A node that started with no active company holds no identity rows at all, so
+// asking it would produce false for every seat in the company, which renders as
+// "nobody works here" on a screen an operator is about to act on. The absence
+// of a reader is the third value, and the arm is SKIPPED — with nothing
+// counted, since it is one fact about the node rather than one per seat.
 func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
 	t.Parallel()
 	view, settings := running()
@@ -332,14 +332,48 @@ func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
 
 	got := chartapi.Evaluate(t.Context(), view, settings, nil)
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
-		t.Errorf("a node that cannot read the directory reported %d seats "+
-			"unheld: a seats-only satellite would report every human seat in "+
-			"the company", got.Counts[chartapi.KindSeatUnheld])
+		t.Errorf("a node with no directory reported %d seats unheld: it "+
+			"would report every human seat in the company",
+			got.Counts[chartapi.KindSeatUnheld])
+	}
+	if got.Unchecked != 0 {
+		t.Errorf("a node with no directory counted %d seats unchecked; the "+
+			"arm is off, which is not a per-seat fact", got.Unchecked)
 	}
 	// THE CONTROL: the arms that need no directory still fire, or this
 	// case would pass on a report that had stopped evaluating anything.
 	view.Role("cto").Contact = nil
 	if got := chartapi.Evaluate(t.Context(), view, settings, nil); got.Counts[chartapi.KindSeatUnreachable] == 0 {
 		t.Errorf("the contact arm stopped firing too: %v", got.Counts)
+	}
+}
+
+// A DIRECTORY THIS NODE HOLDS AND CANNOT READ IS NEITHER A FINDING NOR A CLEAN
+// BILL.
+//
+// The read used to answer false on an error, so a store fault reported every
+// human seat in the company as held by nobody — an operator sent to invite
+// people who were signed in. The seat whose holder could not be read is left
+// undecided and COUNTED, so the report does not read as clean either.
+func TestAnUnreadableDirectoryLeavesTheSeatUncheckedRatherThanUnheld(t *testing.T) {
+	t.Parallel()
+	view, settings := running()
+	view.Role("cto").Kind = org.KindHuman
+	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
+
+	got := chartapi.Evaluate(t.Context(), view, settings,
+		func(context.Context) (map[string]bool, error) {
+			return nil, errors.New("the replicated estate is not open")
+		})
+	if got.Counts[chartapi.KindSeatUnheld] != 0 {
+		t.Errorf("an unreadable directory reported %d seats unheld",
+			got.Counts[chartapi.KindSeatUnheld])
+	}
+	if got.Unchecked != 1 {
+		t.Errorf("Unchecked = %d, want the one human seat whose holder could "+
+			"not be read", got.Unchecked)
+	}
+	if !got.Evaluated {
+		t.Error("the report stopped evaluating the arms that need no directory")
 	}
 }

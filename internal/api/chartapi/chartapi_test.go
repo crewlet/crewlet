@@ -348,7 +348,9 @@ func TestTheSeatListingFiltersByKindAndByWhoHoldsASeat(t *testing.T) {
 		{Handle: "sre", Kind: chart.SeatAgent},
 		{Handle: "writer", Kind: chart.SeatHuman},
 	}}
-	held := func(_ context.Context, seat string) bool { return seat == "writer" }
+	held := func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"writer": true}, nil
+	}
 
 	if got := servedSeats(t, company, held, "/chart/seats?kind=human",
 		http.StatusOK); !slices.Equal(got, []string{"designer", "writer"}) {
@@ -358,10 +360,22 @@ func TestTheSeatListingFiltersByKindAndByWhoHoldsASeat(t *testing.T) {
 		http.StatusOK); !slices.Equal(got, []string{"designer"}) {
 		t.Errorf("kind=human&unheld=true listed %v, want only designer", got)
 	}
-	// AND A NODE THAT CANNOT READ THE DIRECTORY REFUSES THE FILTER rather
-	// than applying it to an empty one, which would list every human seat.
+	// AND A NODE WITH NO DIRECTORY REFUSES THE FILTER rather than applying
+	// it to an empty one, which would list every human seat.
 	servedSeats(t, company, nil, "/chart/seats?unheld=true",
 		http.StatusServiceUnavailable)
+	// AND SO DOES ONE WHOSE DIRECTORY IS THERE AND CANNOT BE READ: read as
+	// false, every seat it failed on was listed as one nobody holds.
+	unreadable := func(context.Context) (map[string]bool, error) {
+		return nil, errors.New("the replicated estate is not open")
+	}
+	servedSeats(t, company, unreadable, "/chart/seats?unheld=true",
+		http.StatusServiceUnavailable)
+	// WHILE THE UNFILTERED LISTING NEVER ASKS IT, and is served.
+	if got := servedSeats(t, company, unreadable, "/chart/seats?kind=human",
+		http.StatusOK); !slices.Equal(got, []string{"designer", "writer"}) {
+		t.Errorf("kind=human over an unreadable directory listed %v", got)
+	}
 }
 
 // WHO HOLDS NOBODY IS THE DIRECTORY'S QUESTION, AND TAKES ITS GRANT.
@@ -380,7 +394,9 @@ func TestTheUnheldFilterIsADirectoryRead(t *testing.T) {
 		{Handle: "designer", Kind: chart.SeatHuman},
 		{Handle: "writer", Kind: chart.SeatHuman},
 	}}
-	held := func(_ context.Context, seat string) bool { return seat == "writer" }
+	held := func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"writer": true}, nil
+	}
 	listing := func(who iam.Principal, path string) *httptest.ResponseRecorder {
 		svc, err := chartapi.New(chartapi.Options{
 			Reader: &reader{chart: company},
@@ -443,7 +459,9 @@ func TestTheUnheldFilterAsksARenamedSeatByItsIdentity(t *testing.T) {
 			FormerHandles: []string{"cto"}},
 		{Handle: "designer", Kind: chart.SeatHuman},
 	}}
-	held := func(_ context.Context, seat string) bool { return seat == "cto" }
+	held := func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"cto": true}, nil
+	}
 
 	if got := servedSeats(t, company, held, "/chart/seats?unheld=true",
 		http.StatusOK); !slices.Equal(got, []string{"designer"}) {

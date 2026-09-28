@@ -13,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -48,8 +47,6 @@ import (
 // leaves opening them to a surface that has a reason to — which is also what
 // keeps an identity read a keyed lookup rather than a round trip, and why
 // internal/store's reserved connection is enough for it.
-
-var log = logging.Get("iam.read")
 
 // Reader answers questions about this node's copy of the identity estate.
 type Reader struct {
@@ -1114,39 +1111,52 @@ func (r *Reader) SessionStanding(ctx context.Context, lineage string,
 	return owner, owner != "" && state == SessionLive, nil
 }
 
-// SeatHeld reports whether a seat — named by its IDENTITY, the handle it was
-// created under (ADR-0020) — is one somebody in this estate is bound to.
+// HeldSeats is every seat an ACTIVE person in this estate is bound to, each
+// named by its IDENTITY — the handle it was created under (ADR-0020) — read
+// in ONE snapshot.
 //
-// # A BOOL HERE, deliberately, and the third value is the reader's absence
+// # One snapshot, because it answers a whole report
 //
-// Everywhere else in this file an error is the unknown arm. This one answers
-// a REPORT rather than a request: the chart's continuous check asks it per
-// seat while rendering, and a per-seat error would make one unreadable row
-// fail a page that is otherwise correct. So a read this node cannot perform
-// answers FALSE and says so in the log — and the third value is carried one
-// level up, by the caller passing no reader at all on a node that does not
-// run this domain (see [chartapi.Held]).
+// The chart's continuous check and the seat listing's `unheld` filter each ask
+// about every human seat in the company at once. Asked a seat at a time it was
+// a transaction per seat — every `/health` a load balancer polled paid for all
+// of them — and the answers were taken at different instants, so one report
+// could combine bindings that never coexisted.
 //
-// That division is what stops a seats-only satellite reporting every human
-// seat in the company as unheld: its copy of this estate is legitimately
-// empty because it never applies the domain, so it supplies no reader rather
-// than a reader that answers false for everybody.
-func (r *Reader) SeatHeld(ctx context.Context, seat string) bool {
-	if seat == "" {
-		return false
+// # An error is never "nobody", here either
+//
+// It used to answer a read it could not perform as NOT HELD, on the reasoning
+// that one unreadable row should not fail a page that is otherwise correct.
+// What that bought was the report naming every human seat in the company as
+// held by nobody during a store fault, and the filter listing all of them
+// under a parameter that promised the vacancies: the false answer is the exact
+// one the caller acts on. So the error travels, and each caller decides what
+// it costs — the report leaves the finding undecided and counts it, the
+// filter refuses.
+func (r *Reader) HeldSeats(ctx context.Context) (map[string]bool, error) {
+	held := map[string]bool{}
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		clear(held)
+		rows, err := tx.QueryContext(ctx, `
+			SELECT seat_id FROM iam_people
+			 WHERE seat_id != '' AND stage = ?`, string(iam.StageActive))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var seat string
+			if err := rows.Scan(&seat); err != nil {
+				return err
+			}
+			held[seat] = true
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: read which seats are held: %w", err)
 	}
-	var held bool
-	if err := r.withTx(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT EXISTS(
-				SELECT 1 FROM iam_people
-				 WHERE seat_id = ? AND stage = ?)`,
-			seat, string(iam.StageActive)).Scan(&held)
-	}); err != nil {
-		log.Warn("iam_seat_held_unreadable", "seat", seat, "error", err)
-		return false
-	}
-	return held
+	return held, nil
 }
 
 // HolderOf names the person bound to a seat — by its IDENTITY, the handle it
@@ -1172,10 +1182,9 @@ func (r *Reader) SeatHeld(ctx context.Context, seat string) bool {
 //
 // # An error is never "nobody"
 //
-// Unlike [Reader.SeatHeld], which answers a report per seat and swallows a
-// read it cannot perform, this answers a WRITE: a removal decided on an
-// unreadable directory is one that silently orphans whoever holds the seat.
-// So the error travels, and the chart refuses.
+// It answers a WRITE: a removal decided on an unreadable directory is one that
+// silently orphans whoever holds the seat. So the error travels, and the chart
+// refuses.
 func (r *Reader) HolderOf(ctx context.Context, tx *sql.Tx, seat string) (string, error) {
 	if seat == "" {
 		return "", nil
