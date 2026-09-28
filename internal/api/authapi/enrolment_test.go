@@ -279,16 +279,16 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 
 // ONLY A SIGN-IN THAT PROVED A PASSWORD AND NOTHING ELSE IS RESTRICTED.
 //
-// Every way this surface opens a session on a password — the sign-in, the
-// founding, an invitation's redemption, and a password step-up — opens one that
+// Every way this surface opens a session on a password — the sign-in, an
+// invitation's redemption, and a password step-up — opens one that
 // may only enrol where a second factor is required and none was proved, and
 // SAYS so in its answer's `status`, which is how a client learns to render the
 // enrolment rather than a broken first screen. The step-up matters most: it is
-// one of the four routes an enrolment-only session reaches, and it opens a
+// one of the routes an enrolment-only session reaches, and it opens a
 // replacement — which, left whole, would turn a password alone into a whole
 // session in one request. A sign-in that PROVED a factor is whole. Mutation:
 // restrict on the deployment's setting alone and the second-factor row is
-// restricted; skip any of the four password routes — `if how.stepUp { return
+// restricted; skip any of the three password routes — `if how.stepUp { return
 // false }` in enrolmentOnly included — and its row is whole; answer
 // `signed_in` whatever was opened and the restricted rows' statuses are wrong.
 func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
@@ -319,15 +319,6 @@ func TestOnlyASignInThatProvedAPasswordAloneIsRestricted(t *testing.T) {
 				rec := r.stepUp(t)
 				return r.estate.starts, statusOf(rec)
 			}, true},
-		{"the founding", func(t *testing.T) ([]iamdomain.SessionStart, any) {
-			writer := &recordingWriter{}
-			mux := bootstrapSurfaceWith(t, []iamdomain.BootstrapCode{{
-				ID: codeID(), MintedBy: "node-a", ExpiresAt: clock.Add(time.Hour),
-				MintedAt: clock.Add(-time.Minute),
-			}}, writer, true, required)
-			rec := postBootstrap(t, mux, theCode, "founder.one")
-			return writer.opened(), statusOf(rec)
-		}, true},
 		{"an invitation's redemption", func(t *testing.T) ([]iamdomain.SessionStart, any) {
 			writer := &recordingWriter{}
 			mux := http.NewServeMux()

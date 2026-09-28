@@ -32,8 +32,8 @@ const Prefix = "/auth/"
 // # The auth column, stated here because it is the whole security shape
 //
 // SOME ARE UNGUARDED, because requiring a credential to obtain one is a
-// deployment nobody can enter: the posture read, the sign-in and the
-// bootstrap — and the invitation's own two, its view and its redemption,
+// deployment nobody can enter: the posture read and the sign-in — and the
+// invitation's own two, its view and its redemption,
 // because holding the link is the credential. The sign-in meets the
 // throttle's curve, keyed on the login as TYPED from the caller's source; the
 // rest present a credential that names nobody and meet no curve
@@ -59,7 +59,6 @@ func (s *Service) Routes(mux auth.Mux) {
 	// Unguarded.
 	mux.HandleFunc("GET "+auth.PathAuthConfig, s.Config)
 	mux.HandleFunc("POST "+auth.PathAuthLogin, s.Login)
-	mux.HandleFunc("POST "+auth.PathAuthBootstrap, s.Bootstrap)
 	// THE GET RENDERS AND THE POST SPENDS, and they are different
 	// operations rather than one route branching on a method: a link is
 	// followed by mail clients prefetching, scanners and preview cards,

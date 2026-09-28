@@ -2,11 +2,8 @@ package authapi_test
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
 // THREE OUTCOMES STAY THREE, ON EVERY WRITE THIS SURFACE MAKES.
@@ -132,15 +128,14 @@ func TestAnUnknownOutcomeIsNeverBuiltOnOrAnnounced(t *testing.T) {
 
 // AN ENROLMENT NOBODY CAN CONFIRM IS NOT A PERSON: NOTHING BUILT ON IT.
 //
-// Both enrolments this surface performs are sequences — enrol, then finish
-// with the credential that authorised it (spend the invitation, remove this
-// node's code file), then sign the new person in — and each step after the
-// first was built on an enrolment answered `unknown`. The op id is derived from
-// what the caller presented (the invitation, the code), so the answer names the
-// id the retry lands under by construction.
+// The enrolment this surface performs is a sequence — enrol, then spend the
+// invitation that authorised it, then sign the new person in — and each step
+// after the first was built on an enrolment answered `unknown`. The op id is
+// derived from what the caller presented (the invitation), so the answer
+// names the id the retry lands under by construction.
 //
-// Mutation: drop either route's outcome check and its case spends the link or
-// removes the code file and answers 200.
+// Mutation: drop the route's outcome check and it spends the link and
+// answers 200.
 func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 	t.Parallel()
 	check := func(t *testing.T, rec *httptest.ResponseRecorder, writer *recordingWriter,
@@ -181,32 +176,6 @@ func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 			"/auth/invite/"+invitationID, strings.NewReader(
 				`{"secret":"`+invitationSecret+`","login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
 		check(t, rec, writer, "invite:"+invitationID)
-	})
-
-	t.Run("the bootstrap code", func(t *testing.T) {
-		t.Parallel()
-		writer := &recordingWriter{unresolved: true}
-		var file string
-		mux := bootstrapSurfaceWith(t, []iamdomain.BootstrapCode{{
-			ID: codeID(), MintedBy: "node-a", ExpiresAt: clock.Add(time.Hour),
-			MintedAt: clock.Add(-time.Hour),
-		}}, writer, true, func(o *authapi.Options) {
-			file = filepath.Join(filepath.Dir(o.Bootstrap.Store.Path),
-				authapi.BootstrapCodeFile)
-		})
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/bootstrap",
-			strings.NewReader(`{"code":"`+theCode+`","login":"founder.one",`+
-				`"email":"founder@example.com","name":"Founder",`+
-				`"password":"a-perfectly-fine-passphrase"}`)))
-		check(t, rec, writer, "bootstrap:"+codeID())
-		// THE FILE STAYS: the enrolment may not have landed, and a file gone
-		// from under a company with nobody in it is a node with no code to
-		// offer.
-		if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
-			t.Error("removed this node's code file on an enrolment nobody " +
-				"can confirm")
-		}
 	})
 }
 

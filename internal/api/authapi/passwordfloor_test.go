@@ -7,12 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
 // fifteen is a password fifteen characters long and on no blocklist: over the
@@ -33,13 +31,12 @@ func withFloor(o *authapi.Options, floor int) {
 // by nothing: every route that sets a password checked the engine's twelve, and
 // both answers that tell a form what to refuse — `/auth/config` and the
 // invitation's view — said twelve whatever the file said. So a company that
-// asked for twenty accepted fifteen at its founding and at every redemption,
-// and a form built from the reported floor agreed with the route while both
-// disagreed with the company.
+// asked for twenty accepted fifteen at every redemption, and a form built from
+// the reported floor agreed with the route while both disagreed with the
+// company.
 //
-// Mutation: pass the engine's floor at either setting site and that arm
-// accepts fifteen; report the engine's floor from either answer and it says
-// 12. The control is the same requests under the engine's own floor, which
+// Mutation: pass the engine's floor at the redemption and it accepts
+// fifteen; report the engine's floor from either answer and it says 12. The control is the same requests under the engine's own floor, which
 // all succeed — so the refusals are about the floor and nothing else.
 func TestTheDeploymentsPasswordFloorIsTheOneEnforcedAndReported(t *testing.T) {
 	t.Parallel()
@@ -56,29 +53,8 @@ func TestTheDeploymentsPasswordFloorIsTheOneEnforcedAndReported(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			// THE FOUNDING.
-			writer := &recordingWriter{}
-			mux := bootstrapSurfaceWith(t, []iamdomain.BootstrapCode{{
-				ID: codeID(), MintedBy: "node-a", ExpiresAt: clock.Add(time.Hour),
-				MintedAt: clock.Add(-time.Minute),
-			}}, writer, true, func(o *authapi.Options) { withFloor(o, tc.floor) })
-			founding := postJSON(t, mux, "/auth/bootstrap", map[string]string{
-				"code": theCode, "login": "founder.one",
-				"email": "founder@example.com", "name": "Founder",
-				"password": fifteen,
-			})
-			assertFloorAnswer(t, "the founding", founding, tc.status, tc.floor)
-			if tc.status != http.StatusOK && len(writer.enrolled) != 0 {
-				t.Errorf("the founding enrolled %d people on a refused "+
-					"password", len(writer.enrolled))
-			}
-			if got := reportedFloor(t, mux, "/auth/config"); got != tc.report {
-				t.Errorf("/auth/config reports a floor of %d, want %d", got,
-					tc.report)
-			}
-
 			// THE REDEMPTION.
-			mux = http.NewServeMux()
+			mux := http.NewServeMux()
 			buildWith(t, bootstrapFor(t), func(o *authapi.Options) {
 				withFloor(o, tc.floor)
 				o.Directory = sealedInvitation{}
@@ -91,6 +67,10 @@ func TestTheDeploymentsPasswordFloorIsTheOneEnforcedAndReported(t *testing.T) {
 			if got := reportedFloor(t, mux, "/auth/invite/"+invitationID); got != tc.report {
 				t.Errorf("the invitation's view reports a floor of %d, want %d",
 					got, tc.report)
+			}
+			if got := reportedFloor(t, mux, "/auth/config"); got != tc.report {
+				t.Errorf("/auth/config reports a floor of %d, want %d", got,
+					tc.report)
 			}
 		})
 	}

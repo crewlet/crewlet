@@ -2,30 +2,24 @@ package authapi_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// WHAT THE TWO ENROLMENTS THIS SURFACE PERFORMS NAME AS THEIR AUTHORITY.
+// WHAT THE ONE ENROLMENT THIS SURFACE PERFORMS NAMES AS ITS AUTHORITY.
 //
-// Both run under the node's own writer, which holds fleet:operate and
-// people:manage and nothing else — so the domain would refuse either one on
-// the writer's own grants. What makes them land is the basis each NAMES: the
-// invitation a redemption spends, and the one-time code the first person
-// redeems. The domain holds the enrolment to that basis in its own snapshot;
-// these cases hold the surface to naming it.
+// It runs under the node's own writer, which holds fleet:operate and
+// people:manage and nothing else — so the domain would refuse it on the
+// writer's own grants. What makes it land is the basis it NAMES: the
+// invitation a redemption spends, which its issuer was held to their own
+// grants for. The domain holds the enrolment to that basis in its own
+// snapshot; this case holds the surface to naming it.
 
 // enrolmentRecorder is a writer that keeps the enrolment it was asked for.
 type enrolmentRecorder struct {
@@ -61,83 +55,8 @@ func TestARedemptionNamesItsInvitationAsTheAuthority(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	if got.Invitation != invitationID || got.BootstrapCode != "" {
-		t.Errorf("the redemption's enrolment names invitation %q and code %q, "+
-			"want the invitation it redeems and no code", got.Invitation,
-			got.BootstrapCode)
-	}
-}
-
-// THE FIRST PERSON NAMES THE CODE, and a record that refuses the exemption is
-// the closed answer rather than an outage.
-//
-// Mutation: drop the field and the enrolment names no code; map the refusal to
-// the shared helper and it answers 503, which tells the first operator to try
-// again at a door that has closed for good.
-func TestTheFirstPersonNamesTheCodeAsTheAuthority(t *testing.T) {
-	t.Parallel()
-	const code = "a-one-time-code-somebody-read-off-the-host"
-	for _, tc := range []struct {
-		name   string
-		err    error
-		status int
-	}{
-		{"the record accepts it", nil, http.StatusOK},
-		{"the exemption closed at the record",
-			fmt.Errorf("%w: %w: this company already has somebody in it",
-				iamdomain.ErrRefused, iamdomain.ErrBootstrapClosed),
-			http.StatusConflict},
-		// THE CODE DIED BETWEEN THE ROUTE'S READ AND THE RECORD'S —
-		// aged out that second, or withdrawn by a re-issue — which is
-		// the stale answer, one command away, never the closed one.
-		{"the code died at the record",
-			fmt.Errorf("%w: %w: the one-time code is aged_out",
-				iamdomain.ErrRefused, iamdomain.ErrBootstrapCodeDead),
-			http.StatusGone},
-		// ANY OTHER REFUSAL IS THE NODE'S OWN WRITER being refused —
-		// its grants, or a ceiling this build cannot name — which no
-		// founder can clear and no wait fixes.
-		{"the node's writer was refused",
-			fmt.Errorf("%w: people:manage is required", iamdomain.ErrRefused),
-			http.StatusInternalServerError},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			b := bootstrapFor(t)
-			dir := t.TempDir()
-			b.Store.Path = filepath.Join(dir, "node.db")
-			if err := os.WriteFile(filepath.Join(dir, authapi.BootstrapCodeFile),
-				[]byte(code+"\n"), 0o600); err != nil {
-				t.Fatalf("write the code: %v", err)
-			}
-			var got iamdomain.Enrolment
-			mux := http.NewServeMux()
-			// THE CODE IS OUTSTANDING ON THE LOG as well as in the file:
-			// a code only the file holds (withdrawn, spent or expired)
-			// creates nobody, which is a different case.
-			sum := sha256.Sum256([]byte(code))
-			buildWith(t, b, func(o *authapi.Options) {
-				o.Directory = codeDirectory{codes: []iamdomain.BootstrapCode{{
-					ID: hex.EncodeToString(sum[:]), MintedAt: clock,
-					ExpiresAt: clock.Add(time.Hour),
-				}}}
-				o.Writer = enrolmentRecorder{got: &got, err: tc.err}
-			}).Routes(mux)
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-				"/auth/bootstrap", strings.NewReader(`{"code":"`+code+
-					`","login":"jane.doe","email":"jane@example.com",`+
-					`"name":"Jane","password":"a-perfectly-fine-passphrase"}`)))
-			if rec.Code != tc.status {
-				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status,
-					rec.Body.String())
-			}
-			if got.BootstrapCode != hex.EncodeToString(sum[:]) ||
-				got.Invitation != "" {
-				t.Errorf("the first person's enrolment names code %q and "+
-					"invitation %q, want the code's own id and no invitation",
-					got.BootstrapCode, got.Invitation)
-			}
-		})
+	if got.Invitation != invitationID {
+		t.Errorf("the redemption's enrolment names invitation %q, want the "+
+			"invitation it redeems", got.Invitation)
 	}
 }

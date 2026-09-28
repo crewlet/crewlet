@@ -60,7 +60,6 @@ func TestEveryDirectoryWriteAsksForAProofInItsWindow(t *testing.T) {
 		"DELETE /iam/credentials/{id}":     iam.RecencyStepUp,
 		"POST /iam/invalidate-all":         iam.RecencySensitive,
 		"GET /iam/check":                   iam.RecencyAny,
-		"POST /iam/bootstrap-code":         iam.RecencyStepUp,
 		"GET /iam/audit":                   iam.RecencyAny,
 	}
 	r := newRig(t)

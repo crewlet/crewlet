@@ -1575,17 +1575,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, fmt.Errorf("api: the machine-token arm: %w", err)
 	}
-	// AND THE WAY IN FOR A COMPANY THAT HAS NOBODY IN IT. A fresh estate
-	// holds no person, so the one-time code is what creates the first —
-	// written 0600 beside the store, its hash published so any ingress
-	// node validates any node's, and its PATH in the log line rather than
-	// its value. A node whose rows already hold somebody mints nothing,
-	// which is what stops an established fleet of a hundred nodes leaving
-	// a superuser-claim file on every machine.
-	openBootstrap(ctx, authSurface, nodeID)
+	// AND WHAT A COMPANY WITH NOBODY IN IT DOES NEXT: its first person is
+	// invited under a Tier A token like everybody after them, and the log
+	// says so once at boot.
+	announceUnclaimed(ctx, e)
 	// AND THE DIRECTORY, which is nil on exactly the nodes the sign-in
 	// surface is nil on.
-	directory, err := directorySurface(boot, e, nodeID, authSurface)
+	directory, err := directorySurface(boot, e)
 	if err != nil {
 		return nil, err
 	}
@@ -1945,12 +1941,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the REQUEST's context, so a probe against a slow broker ends at
 		// its own deadline rather than at the process's.
 		Estate: e.SeatsServiceable,
-		// WHETHER THIS COMPANY HAS ITS FIRST PERSON, and while it does
-		// not where this node's founder code is — the one thing an
+		// WHETHER THIS COMPANY HAS ITS FIRST PERSON — the one thing an
 		// unclaimed company's dashboard can read, since /health is the
-		// probe every visitor reaches. Nil where this node serves no
-		// sign-in surface, which leaves the field out; see [foundingOf].
-		Founding: foundingOf(authSurface),
+		// probe every visitor reaches. Nil where this node holds no
+		// identity rows, which leaves the field out; see [identityOf].
+		Identity: identityOf(e),
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner

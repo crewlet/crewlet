@@ -152,7 +152,7 @@ func seatRefusal(binding session.Binding) *Refusal {
 // # Why a session and not a sign-in refusal
 //
 // `api.auth.local.totp: required` says nobody signs in on a password alone,
-// and a person who holds no second factor — freshly invited, the founder, one
+// and a person who holds no second factor — freshly invited, or one
 // an administrator reset — has nothing else to present. Refusing the sign-in
 // would lock them out of the one gesture that satisfies the rule, so the
 // sign-in succeeds into a session that can make THAT gesture and nothing else,

@@ -216,7 +216,7 @@ func TestASignInRouteIsRefusedForACrossSiteOrigin(t *testing.T) {
 	t.Parallel()
 	c := csrfFixture(t)
 	for _, path := range []string{
-		auth.PathAuthLogin, auth.PathAuthBootstrap,
+		auth.PathAuthLogin, auth.PathAuthLogout,
 		auth.AuthInvitePrefix + "an-invitation",
 	} {
 		status, ran := send(t, c, http.MethodPost, path,

@@ -39,7 +39,7 @@ func TestEveryAuthRouteIsClassified(t *testing.T) {
 	// it must clear the cookie on a node that cannot read its identity
 	// estate, verifying every bearer it ends for itself.
 	unguarded := []string{
-		auth.PathAuthConfig, auth.PathAuthLogin, auth.PathAuthBootstrap,
+		auth.PathAuthConfig, auth.PathAuthLogin,
 		auth.AuthInvitePrefix + "{id}", auth.PathAuthLogout,
 	}
 	// EVERYTHING ELSE NEEDS A SESSION, and the list is spelled out rather
@@ -208,7 +208,7 @@ func pathOf(pattern string) string {
 
 // A BODY OVER THE CAP IS ANSWERED 413, not abandoned.
 //
-// The sign-in and bootstrap handlers returned without writing a status when
+// The sign-in and redemption handlers returned without writing a status when
 // the body reader refused a body, so the caller was answered an empty 200 —
 // which a client reads as signed in with no cookie. A 413 discloses nothing a
 // roster could be built from: it is about the size of the request, answered
@@ -221,7 +221,7 @@ func TestAnOversizedSignInIsAnsweredRatherThanDropped(t *testing.T) {
 	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	build(t, b).Routes(mux)
-	for _, path := range []string{auth.PathAuthLogin, auth.PathAuthBootstrap} {
+	for _, path := range []string{auth.PathAuthLogin, auth.AuthInvitePrefix + invitationID} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,
 			strings.NewReader(`{"login":"`+strings.Repeat("x", 8<<10)+`"}`)))

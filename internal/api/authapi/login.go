@@ -832,7 +832,7 @@ type signIn struct {
 
 	// provedAt is when this sign-in's person proved who they are, where
 	// that was NOT here and now — and nil for every way in that was: a
-	// password, a second factor, an invitation, the bootstrap code.
+	// password, a second factor, an invitation.
 	//
 	// ONE WAY IN SETS IT: an ENROLMENT's replacement session inherits the
 	// proof of the enrolment-only session it replaces, because the code
@@ -856,7 +856,7 @@ type signIn struct {
 //
 // `api.auth.local.totp: required` says nobody signs in on a password alone. So
 // a sign-in THIS SURFACE verified — the password route, a password step-up, an
-// invitation's redemption, the founding — that proved no second factor opens
+// invitation's redemption — that proved no second factor opens
 // a restricted session. Proving none means holding none: the password route
 // and the step-up demand a code from anybody who holds a factor, and a new
 // person holds none yet.
@@ -865,7 +865,7 @@ type signIn struct {
 // proof, and it holds no second factor to enrol.
 func (s *Service) enrolmentOnly(how signIn) bool {
 	switch how.method {
-	case types.SignInPassword, types.SignInInvite, types.SignInBootstrap:
+	case types.SignInPassword, types.SignInInvite:
 		return how.factor == "" && s.secondFactorRequired()
 	}
 	return false
@@ -957,7 +957,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		Lineage: lineage.String(), Person: held.ID,
 		AbsoluteExpiresAt: expires,
 		// EVERY PATH HERE IS A PROOF — a password and its second factor,
-		// an invitation, the bootstrap code, a step-up — so the session
+		// an invitation, a step-up — so the session
 		// is fresh from the instant it was proved, and a step-up surface
 		// asks again once this node's window has passed. It is the one
 		// field that says so: without it every session was stale from

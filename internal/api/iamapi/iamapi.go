@@ -156,30 +156,6 @@ type Opener interface {
 		sealed string) (string, error)
 }
 
-// Bootstrap is how a company with nobody in it acquires its first
-// administrator, as this surface uses it.
-//
-// ONE METHOD, and it answers the FILE PATH rather than the value: the code is
-// written 0600 beside the store and its hash is published so any ingress node
-// can validate any node's, and a route that returned the value would put a
-// superuser claim in a response body, a proxy log and a shell history.
-type Bootstrap interface {
-	MintCode(ctx context.Context) (BootstrapFile, error)
-}
-
-// BootstrapFile is where a freshly minted code was written: the path on the
-// host, and WHICH host — on a fleet the file lands on whichever node served
-// the request, and a path with no node is a file nobody can find.
-//
-// A mint for a company that has started answers an error wrapping
-// [iamdomain.ErrBootstrapClosed], which this surface answers 409. A deployment
-// whose `api.auth.bootstrap` is closed hands in no seam at all, and the route
-// is absent.
-type BootstrapFile struct {
-	Path string
-	Node string
-}
-
 // Audit is where this surface's identity facts go: a credential minted or
 // revoked, a second factor reset, a session ended by somebody other than its
 // holder.
@@ -205,13 +181,6 @@ type Options struct {
 	// company secret store holds the ciphertext and no key, so a row
 	// renders as sealed rather than being refused.
 	Opener Opener
-
-	// Bootstrap mints the one-time code. Nil serves no bootstrap route —
-	// `POST /iam/bootstrap-code` answers 404 — which is the honest shape for
-	// a deployment whose `api.auth.bootstrap` is closed: it never
-	// bootstraps that way, which is a different fact from a company that
-	// has started (409).
-	Bootstrap Bootstrap
 
 	// ExternalBase is `api.external_url`, which is what an invitation's
 	// link is built from.
@@ -268,7 +237,6 @@ type Service struct {
 	directory Directory
 	authority Authority
 	opener    Opener
-	bootstrap Bootstrap
 	external  string
 	bindings  Bindings
 	ceiling   []iam.Grant
@@ -296,7 +264,7 @@ func New(opts Options) (*Service, error) {
 	}
 	s := &Service{
 		directory: opts.Directory, authority: opts.Authority,
-		opener: opts.Opener, bootstrap: opts.Bootstrap,
+		opener:   opts.Opener,
 		external: opts.ExternalBase, bindings: opts.Bindings,
 		ceiling: slices.Clone(opts.Ceiling), audit: opts.Audit, keys: opts.Keys,
 		logEnd: opts.LogEnd,

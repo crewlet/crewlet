@@ -7,13 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -31,10 +29,10 @@ import (
 // a node a few hundred milliseconds short of the session's start. The guard
 // used to refuse that write 503 on every real run, and only a real node — its
 // own identity log, its own applier, its own guard in front of its own routes
-// — could show it. So this is the whole path: the founder walks in with the
-// node's own one-time code, the command signs in as them with the password on
-// standard input, mints, and signs out; the token it printed then works, and
-// the session it opened is over. Mutation: drop the guard's wait for the
+// — could show it. So this is the whole path: the founder is invited under
+// the deployment's Tier A token and redeems the link, the command signs in as
+// them with the password on standard input, mints, and signs out; the token it
+// printed then works, and the session it opened is over. Mutation: drop the guard's wait for the
 // bearer's start and the mint answers 503.
 func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	t.Parallel()
@@ -62,26 +60,24 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	client := httpxtest.Pool(t)
 
-	// THE FOUNDER, through the node's own one-time code.
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(boot.Store.Path),
-		authapi.BootstrapCodeFile))
-	if err != nil {
-		t.Fatalf("the node wrote no founder code: %v", err)
-	}
+	// THE FOUNDER, invited under the Tier A token and redeeming the link
+	// as anybody would.
 	const password = "a-perfectly-fine-passphrase"
+	id, secret := inviteOverHTTP(t, client, base, "jane@example.com",
+		[]iam.Grant{iam.GrantStateRead, iam.GrantPeopleManage})
 	founder, _ := json.Marshal(map[string]string{
-		"code": strings.TrimSpace(string(raw)), "login": "jane.founder",
-		"email": "jane@example.com", "name": "Jane Founder", "password": password,
+		"secret": secret, "login": "jane.founder", "name": "Jane Founder",
+		"password": password,
 	})
-	status, body := post(t, client, base+"/auth/bootstrap", founder)
+	status, body := post(t, client, base+"/auth/invite/"+id, founder)
 	if status != http.StatusOK {
-		t.Fatalf("the founder's bootstrap answered %d: %s", status, body)
+		t.Fatalf("the founder's redemption answered %d: %s", status, body)
 	}
 	var signedIn struct {
 		Person string `json:"person"`
 	}
 	if err := json.Unmarshal([]byte(body), &signedIn); err != nil || signedIn.Person == "" {
-		t.Fatalf("the bootstrap answered no person (%v): %s", err, body)
+		t.Fatalf("the redemption answered no person (%v): %s", err, body)
 	}
 
 	// THE COMMAND, as a founder types it, pointed at the deployment by the
@@ -99,7 +95,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 		t.Errorf("the session the command opened was left open:\n%s", errs.String())
 	}
 	// THE SESSION IT OPENED IS OVER, on the node's own rows: the founder's
-	// bootstrap session is the one left live, and the command's is ended —
+	// redemption session is the one left live, and the command's is ended —
 	// its sign-out is a write straight after a sign-in too.
 	sessions, err := e.IAM().Sessions(t.Context(), signedIn.Person)
 	if err != nil {
@@ -115,7 +111,7 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	}
 	if len(sessions) != 2 || live != 1 || ended != 1 {
 		t.Errorf("the founder holds %d sessions, %d live and %d ended — want "+
-			"the bootstrap's live and the command's ended: %+v",
+			"the redemption's live and the command's ended: %+v",
 			len(sessions), live, ended, sessions)
 	}
 	token, _, _ := strings.Cut(out.String(), "\n")
@@ -140,6 +136,36 @@ func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 		t.Errorf("the minted token answered %d on a read it carries the grant "+
 			"for, want 200", res.StatusCode)
 	}
+}
+
+// inviteOverHTTP issues one invitation under the fixture's Tier A token, the
+// way `crewlet iam invite` does, and answers the id and secret its link
+// carries.
+func inviteOverHTTP(t *testing.T, client *http.Client, base, email string,
+	grants []iam.Grant) (id, secret string) {
+
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"email": email, "grants": grants})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		base+"/iam/invitations", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cliFixtureToken)
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("invite %s: %v", email, err)
+	}
+	defer res.Body.Close()
+	var issued struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&issued); err != nil ||
+		res.StatusCode != http.StatusCreated {
+		t.Fatalf("the invitation answered %d (%v)", res.StatusCode, err)
+	}
+	return inviteLink(t, issued.URL, base)
 }
 
 // post sends one unauthenticated JSON write and answers its status and body.

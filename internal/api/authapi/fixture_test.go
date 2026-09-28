@@ -127,18 +127,12 @@ func (stubDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 	return iamdomain.Sighting{}, nil
 }
 
-func (stubDirectory) AnyPerson(context.Context) (bool, error) { return false, nil }
-
 func (stubDirectory) InvitationByID(context.Context, string) (iamdomain.InvitationRow, error) {
 	return iamdomain.InvitationRow{}, nil
 }
 
 func (stubDirectory) SessionStanding(context.Context, string, time.Time) (string, bool, error) {
 	return "", false, nil
-}
-
-func (stubDirectory) BootstrapCode(context.Context, string) (iamdomain.BootstrapCode, error) {
-	return iamdomain.BootstrapCode{}, nil
 }
 
 type stubWriter struct{}
@@ -165,14 +159,6 @@ func (stubWriter) Revoke(context.Context, string, string, string) (statelog.Resu
 }
 
 func (stubWriter) Enrol(context.Context, iamdomain.Enrolment) (statelog.Result, error) {
-	return applied(statelog.Position{}), nil
-}
-
-func (stubWriter) MintBootstrap(context.Context, iamdomain.BootstrapMint) (statelog.Result, error) {
-	return applied(statelog.Position{}), nil
-}
-
-func (stubWriter) ReissueBootstrap(context.Context, iamdomain.BootstrapMint) (statelog.Result, error) {
 	return applied(statelog.Position{}), nil
 }
 

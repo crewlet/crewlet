@@ -252,8 +252,7 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 // had nobody in it. The routes are ABSENT rather than answering an error —
 // which takes returning an untyped nil; see [surfaceMounter] for what a typed
 // one did.
-func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
-	auth *authapi.Service) (surfaceMounter, error) {
+func directorySurface(boot *config.Bootstrap, e *engine.Engine) (surfaceMounter, error) {
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
@@ -275,7 +274,6 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 			return writer.As(principal)
 		},
 		Opener:       e.PersonSealer(),
-		Bootstrap:    bootstrapReissue(boot, nodeID, auth),
 		ExternalBase: boot.API.ExternalBase(),
 		// THIS NODE'S OWN CEILING, which the report compares a person's
 		// declared grants against: it is applied at decision time and
@@ -299,42 +297,6 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 		return nil, fmt.Errorf("api: the identity directory: %w", err)
 	}
 	return surface, nil
-}
-
-// bootstrapReissue is the one-time code's re-issue, or nil where this node
-// serves no sign-in surface or the deployment has shut the founder route.
-//
-// THE SAME SERVICE THAT MINTS ONE AT BOOT, rather than a second
-// implementation: the file's path, its mode, the hash that is published and
-// the domain gesture that ends every other code before it lands are one
-// sequence, and a copy of it here would be a second answer to "how many codes
-// work".
-//
-// NIL WHERE `api.auth.bootstrap` IS CLOSED, which is the shape iamapi
-// documents for that deployment — 404, "this engine does not bootstrap that
-// way" — rather than a route that minted a code the redemption it exists for
-// would never honour. The re-issue refuses a closed route itself as well, so
-// this is the honest shape rather than the only guard.
-func bootstrapReissue(boot *config.Bootstrap, nodeID string,
-	auth *authapi.Service) iamapi.Bootstrap {
-
-	if auth == nil || boot.API.Auth.Bootstrap == config.BootstrapAccessClosed {
-		return nil
-	}
-	return bootstrapMinter{auth: auth, node: nodeID}
-}
-
-type bootstrapMinter struct {
-	auth *authapi.Service
-	node string
-}
-
-func (b bootstrapMinter) MintCode(ctx context.Context) (iamapi.BootstrapFile, error) {
-	path, err := b.auth.ReissueBootstrapCode(ctx, b.node)
-	if err != nil {
-		return iamapi.BootstrapFile{}, err
-	}
-	return iamapi.BootstrapFile{Path: path, Node: b.node}, nil
 }
 
 // danglingBindings is the dangling-binding arm of the directory report, or nil
@@ -361,84 +323,43 @@ func danglingBindings(e *engine.Engine) iamapi.Bindings {
 	}
 }
 
-// openBootstrap writes this node's one-time founder code when the company has
-// nobody in it.
+// identityOf is what /health says about whether anybody is enrolled, or nil
+// where this node holds no identity rows — one that started with no active
+// company — which the health body answers by leaving the field out rather than
+// calling the company unclaimed.
 //
-// # Why it runs at boot and not on demand
-//
-// A company with no person has no way to create one: every /iam route needs a
-// credential, and the Tier A token an operator holds is the deployment's
-// rather than anybody's. The code is what closes that, and it has to exist
-// BEFORE somebody opens the dashboard — a welcome screen that told them to run
-// a command to mint a code would be a welcome screen for an operator with a
-// shell rather than for the founder.
-//
-// # And why a node that already has people mints nothing
-//
-// The file is a superuser claim sitting on a host. An established fleet of a
-// hundred nodes must not leave one on every machine, so the offer is gated on
-// the estate being genuinely empty — and on `api.auth.bootstrap` being open,
-// which is how a deployment whose first person is created by `POST /iam/people`
-// under a Tier A token says so. [authapi.Service.OfferBootstrapCode] owns that
-// gate, the route's own, and REMOVES a file left from before the company
-// started rather than leaving it on the host.
-//
-// # And why a file already there is not simply advertised
-//
-// It is checked against the log first: a code that aged out, was withdrawn or
-// never published is replaced, and only a live one is kept. This used to keep
-// any file, so a node restarted a day after its first boot logged a code the
-// log had aged out, and the founder who read it was refused as having typed it
-// wrong.
-//
-// # Nothing here stops the node
-//
-// A code that could not be offered — an estate this node cannot read, a mint
-// that did not land, a file it could not write — is LOGGED WITH ITS REMEDY and
-// the node boots anyway. The two failure directions are not symmetric: a code
-// nobody needed is a live superuser claim on a host, and a code that was not
-// written is one command, or one restart, away. It used to stop `crewlet run`
-// on a mint whose outcome was merely unknown, which took the node — and every
-// Tier A token that could have created the first person through it — down
-// over a file.
-// foundingOf is what /health says about the company's first person, or nil
-// where this node serves no sign-in surface — which the health body answers by
-// leaving the field out rather than calling the company unclaimed.
-//
-// NIL AND NEVER A FUNCTION OVER A NIL SERVICE: `auth` is nil exactly where
-// [signInSurface] decided this node serves no sign-in, and a closure over it
-// would panic on the first probe.
-func foundingOf(auth *authapi.Service) api.Founding {
-	if auth == nil {
+// NIL AND NEVER A FUNCTION OVER A NIL READER, which would panic on the first
+// probe.
+func identityOf(e *engine.Engine) api.Identity {
+	reader := e.IAM()
+	if reader == nil {
 		return nil
 	}
-	return func(ctx context.Context) (api.FoundingState, error) {
-		got, err := auth.Founding(ctx)
-		return api.FoundingState{Claimed: got.Claimed, CodePath: got.CodePath,
-			CodeExpiresAt: got.CodeExpiresAt}, err
-	}
+	return reader.AnyPerson
 }
 
-func openBootstrap(ctx context.Context, auth *authapi.Service, nodeID string) {
-	if auth == nil {
+// announceUnclaimed says, once at boot, what an operator does next with a
+// company nobody is enrolled in yet: invite its first person under a Tier A
+// token, exactly as every later person is invited.
+//
+// A LOG LINE AND NOTHING ELSE. There is no founder route and no code to
+// write: the Tier A token every serving node already requires is the
+// credential a company has before it has anybody, so the first invitation is
+// an ordinary one. An estate this node cannot read says nothing here — /health
+// answers `unknown` for it — rather than telling an operator to invite
+// somebody into a company that may have started.
+func announceUnclaimed(ctx context.Context, e *engine.Engine) {
+	reader := e.IAM()
+	if reader == nil {
 		return
 	}
-	path, err := auth.OfferBootstrapCode(ctx, nodeID)
-	if err != nil {
-		logging.Get("cli").Warn("api_bootstrap_not_offered",
-			"error", err,
-			"detail", "this node did not offer a founder code; a restart "+
-				"offers one once it can, and `crewlet iam bootstrap-code` "+
-				"mints one on whichever node serves it")
+	enrolled, err := reader.AnyPerson(ctx)
+	if err != nil || enrolled {
 		return
 	}
-	if path == "" {
-		return
-	}
-	// THE PATH AND NEVER THE VALUE. A log is shipped, aggregated and
-	// searched, and a superuser claim in one outlives every rotation.
-	logging.Get("cli").Warn("iam_bootstrap_code_ready", "path", path,
-		"node", nodeID,
-		"detail", "this company has nobody in it; the one-time founder code "+
-			"is in that file, mode 0600, on this host, and lasts 24 hours")
+	logging.Get("cli").Warn("iam_unclaimed",
+		"detail", "this company has nobody in it; invite its first person "+
+			"with `crewlet iam invite <address> -grants <grants>` and "+
+			apiTokenEnv+" set to one of api.auth.tokens, then send them the "+
+			"link it prints")
 }

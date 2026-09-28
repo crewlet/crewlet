@@ -436,37 +436,6 @@ const (
 	// Authorization header it sent.
 	CodeSessionRevoked Code = "session_revoked"
 
-	// CodeBootstrapClosed is the one-time founder route asked for on a
-	// deployment where it may not run: somebody is already enrolled, or
-	// `api.auth.bootstrap` is closed.
-	CodeBootstrapClosed Code = "bootstrap_closed"
-
-	// CodeBootstrapCodeStale is a REAL one-time founder code that no longer
-	// works: it aged out, a re-issue withdrew it, or the node that wrote it
-	// never got its hash onto the log.
-	//
-	// ITS OWN CODE AND NEVER [CodeBootstrapClosed], because the remedies
-	// are opposite: that one is permanent and says ask somebody who has an
-	// account, this one is one command away. And specific without being an
-	// oracle, because it is reachable only by presenting a code whose
-	// digest is on the log or in the serving node's own file, or one whose
-	// OWN spelled expiry has passed — answered alike whoever minted it, so
-	// it says nothing a stranger could not read off their own request. A
-	// stranger guessing gets [CodeSignInRefused] like every other failed
-	// attempt.
-	CodeBootstrapCodeStale Code = "bootstrap_code_stale"
-
-	// CodeBootstrapInProgress is a live founder code presented while
-	// ANOTHER code's founding is part-way through: the company's one
-	// bootstrap subject holds that code's take, so exactly one founder can
-	// land. The detail's `until` is when that founding lapses on its own.
-	//
-	// ITS OWN CODE, for the stale one's reason: neither remedy is the other
-	// one's — this code works the moment the other founding finishes or
-	// lapses, and `crewlet iam bootstrap-code` ends it at once. Reachable
-	// only by presenting a live code, so it tells a stranger nothing.
-	CodeBootstrapInProgress Code = "bootstrap_in_progress"
-
 	// CodeInviteSpent is an invitation that is redeemed, withdrawn or
 	// expired. SPECIFIC because the holder of the link needs to know to
 	// ask for another one, and because holding the link is already
@@ -682,16 +651,6 @@ var codes = map[Code]string{
 		"and you have not set one up yet. Add an authenticator app to your " +
 		"account, and everything else opens once you have.",
 	CodeSessionRevoked: "This session has ended. Sign in again.",
-	CodeBootstrapClosed: "The first-operator setup is not available on this " +
-		"deployment. Ask somebody who already has an account to invite you.",
-	CodeBootstrapCodeStale: "That founder code no longer works: codes last 24 " +
-		"hours, and a newer one replaces an older. Run `crewlet iam " +
-		"bootstrap-code` for a fresh one, or restart the node that wrote the " +
-		"file, and use the code in the file it names.",
-	CodeBootstrapInProgress: "Somebody else is setting up the first account " +
-		"with another founder code right now, and only one founder can. Wait " +
-		"until the time in the detail and try again, or run `crewlet iam " +
-		"bootstrap-code` to end that setup and get a fresh code.",
 	CodeSeatUnavailable: "The seat you are bound to is no longer in this " +
 		"company's org chart, so there is nothing for you to act as. An " +
 		"administrator can bind you to another one.",

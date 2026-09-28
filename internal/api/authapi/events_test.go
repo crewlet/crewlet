@@ -167,8 +167,6 @@ func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sight
 	return held, nil
 }
 
-func (e *estate) AnyPerson(context.Context) (bool, error) { return true, nil }
-
 func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

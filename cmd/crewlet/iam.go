@@ -64,7 +64,6 @@ Usage:
                                                        Withdraw one credential
   crewlet iam reset-mfa ID                             Clear the second factor and end sessions
   crewlet iam invalidate-all                           Invalidate EVERY session and machine token
-  crewlet iam bootstrap-code                           Re-issue the one-time founder code
   crewlet iam check                                    What is wrong with this company's access
   crewlet iam audit [-person ID] [-event OP] [-since POSITION] [-at TIME]
                                                        The identity estate's own trail
@@ -311,8 +310,6 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			"/iam/people/"+subject+"/mfa/reset", nil))
 	case "invalidate-all":
 		return out.written(client.post(ctx, "/iam/invalidate-all", nil))
-	case "bootstrap-code":
-		return out.bootstrap(client.post(ctx, "/iam/bootstrap-code", nil))
 	case "check":
 		return out.check(client.get(ctx, "/iam/check", nil))
 	case "audit":
@@ -362,9 +359,8 @@ var iamSubjects = subjectTable{
 // again — which a command that could not send the key could never perform, so
 // the retry an operator could actually run was a fresh operation.
 //
-// TWO WRITES ARE MISSING, deliberately, and [iamUnkeyed] says why to whoever
-// asks: a mint answers a value only its first attempt could show, and a
-// re-issue is its own retry.
+// ONE WRITE IS MISSING, deliberately, and [iamUnkeyed] says why to whoever
+// asks: a mint answers a value only its first attempt could show.
 var iamKeyed = map[string]bool{
 	"invite": true, "create": true, "bind": true, "unbind": true,
 	"grant": true, "suspend": true, "activate": true, "remove": true,
@@ -383,10 +379,6 @@ func iamUnkeyed(sub string) error {
 			"against nothing, so a mint whose outcome was unknown is minted " +
 			"again, and the one that may have landed is a token nobody holds, " +
 			"which expires")
-	case "bootstrap-code":
-		return errors.New("a re-issue takes no -idempotency-key: it is its own " +
-			"retry — run it again, and it withdraws every outstanding code " +
-			"and mints one")
 	}
 	return fmt.Errorf("-idempotency-key retries a write whose outcome was "+
 		"unknown, and `iam %s` writes nothing", sub)
@@ -897,21 +889,6 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 	fmt.Fprintln(p.w, "This value is shown once. What the estate holds is a "+
 		"hash of it, so nothing can read it back. Present it as "+
 		apiTokenEnv+", or as an `Authorization: Bearer` header.")
-	return nil
-}
-
-func (p *iamPrinter) bootstrap(answer map[string]any, err error) error {
-	if err != nil {
-		return err
-	}
-	if p.raw {
-		return p.dump(answer)
-	}
-	fmt.Fprintf(p.w, "the one-time founder code is in %s on node %s's "+
-		"host, mode 0600\n", str(answer["path"]), str(answer["node"]))
-	fmt.Fprintln(p.w, "It lasts 24 hours. Every code outstanding before this "+
-		"one was withdrawn and any setup left part-way through was ended, so "+
-		"it is the one code that works.")
 	return nil
 }
 

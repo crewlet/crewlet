@@ -39,8 +39,8 @@ func (s *Service) directoryFor() session.Directory { return s.sessions }
 // # What is in it, and what is deliberately not
 //
 // Enough to render the right form and nothing that says who works here. A
-// backend name, whether the first-operator route is still open, and the
-// password floor so a form can refuse twelve characters before a round trip.
+// backend name, the password floor so a form can refuse a short password
+// before a round trip, and whether a second factor is required.
 //
 // THERE IS NO USER LIST, no count of people, and no hint of whether any
 // particular login exists. This route is unguarded, so everything on it is
@@ -49,15 +49,6 @@ func (s *Service) directoryFor() session.Directory { return s.sessions }
 type configResponse struct {
 	// Backend is how this deployment signs people in: local or none.
 	Backend config.AuthBackend `json:"backend"`
-
-	// Bootstrap reports whether the first-operator route is still
-	// available. It closes for good the moment anybody is enrolled.
-	//
-	// IT IS SAFE TO SAY, and saying it is what a client needs to render
-	// the difference between a sign-in form and a set-up form. What it
-	// discloses is whether this company has started, which whoever can
-	// reach an unstarted one is about to find out anyway.
-	Bootstrap bool `json:"bootstrap"`
 
 	// MinPasswordLength is the floor a form enforces before it posts.
 	MinPasswordLength int `json:"min_password_length,omitempty"`
@@ -76,22 +67,6 @@ func (s *Service) Config(w http.ResponseWriter, r *http.Request) {
 	if s.backend() == config.AuthBackendLocal {
 		out.MinPasswordLength = s.passwordFloor()
 		out.SecondFactor = string(s.boot.API.Auth.Local.TOTP)
-	}
-	// THE ROUTE'S OWN GATE, so this flag and the route can never
-	// disagree: `api.auth.bootstrap` says whether the route MAY run and
-	// the estate says whether it still can — a company with people in it
-	// closes it for good whatever the file says, because the route creates
-	// an operator carrying the whole ceiling.
-	closed, err := s.bootstrapClosed(r.Context())
-	if err != nil {
-		// THE UNKNOWN ARM IS REPORTED AS CLOSED, which is the fail-safe
-		// direction: a client told the route is open and refused is
-		// confusing, and a client told it is closed when the estate
-		// could not be read merely waits.
-		log.WarnContext(r.Context(), "api_auth_config_estate_unreadable",
-			"error", err)
-	} else {
-		out.Bootstrap = closed == ""
 	}
 	httpjson.Write(w, http.StatusOK, out)
 }

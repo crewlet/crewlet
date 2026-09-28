@@ -31,7 +31,7 @@ const Prefix = "/iam/"
 // carries the id and the route accepts it back.
 const IdempotencyHeader = "Idempotency-Key"
 
-// Routes registers the sixteen on a mux.
+// Routes registers the fifteen on a mux.
 //
 // EVERY ROUTE CARRIES ITS OWN POLICY, stated where it is mounted, through
 // [authz.Router] — which is the only reader of the matched pattern, because a
@@ -120,8 +120,6 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("POST /iam/invalidate-all",
 		at(authz.ActionSessionInvalidate), s.PostInvalidateAll)
 	mount("GET /iam/check", at(authz.ActionDirectoryRead), s.GetCheck)
-	mount("POST /iam/bootstrap-code",
-		at(authz.ActionDirectoryWrite), s.PostBootstrapCode)
 	// THE AUDIT VERB IT ALREADY HAS. `/iam/audit` and `/events` are the
 	// same question read from two tables — what did this company do, and
 	// who asked it to — so a grant of its own here would be a second

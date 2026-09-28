@@ -35,10 +35,7 @@
 // holds climbs the curve exactly as a real one does — so it tells somebody
 // they are rate-limited, which they knew; a second-factor
 // prompt is reached only by somebody who already passed the first; an
-// invitation's refusal is read by somebody holding the link; and a STALE
-// founder code (`bootstrap_code_stale`) is answered only to somebody presenting
-// a code whose digest is on the identity log or in the serving node's own file
-// — which is to say, holding a real one.
+// invitation's refusal is read by somebody holding the link.
 //
 // # A second factor is spent by the sign-in it completes
 //
@@ -87,8 +84,8 @@
 // # A login cannot require a login
 //
 // Some routes here are unguarded, because requiring a credential to obtain one
-// is a deployment nobody can enter: the posture read, the login itself, the
-// first operator's bootstrap and the invitation pair. Each that
+// is a deployment nobody can enter: the posture read, the login itself and
+// the invitation pair. Each that
 // touches the store is admitted by the throttle first, and each that
 // changes state is origin-checked like every other write (internal/api/auth's
 // CSRF gate) — the guard is what they are exempt from, not the cross-site
@@ -100,7 +97,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -138,10 +134,6 @@ type Directory interface {
 	// answers.
 	PersonByEmailBlind(ctx context.Context, blind string) (iamdomain.Sighting, error)
 
-	// AnyPerson reports whether anybody is enrolled at all, which is the
-	// bootstrap decision. One bit, never a listing.
-	AnyPerson(ctx context.Context) (bool, error)
-
 	// InvitationByID resolves one invitation, on the same three answers:
 	// the zero value for one nobody issued, and an error for a node that
 	// could not tell.
@@ -159,12 +151,6 @@ type Directory interface {
 	// again.
 	SessionStanding(ctx context.Context, lineage string, now time.Time) (
 		owner string, live bool, err error)
-
-	// BootstrapCode resolves one code by its digest WHATEVER BECAME OF IT
-	// — the zero value for one the log holds no row for — which is what
-	// lets a founder holding a code that no longer works be told why, and
-	// what lets any node redeem a code another node wrote.
-	BootstrapCode(ctx context.Context, id string) (iamdomain.BootstrapCode, error)
 }
 
 // Writer is what this surface writes, defined here for Directory's reason.
@@ -196,24 +182,10 @@ type Writer interface {
 	// they hold.
 	Revoke(ctx context.Context, personID, opID, reason string) (statelog.Result, error)
 
-	// Enrol creates a person. Reached by the bootstrap route and by
-	// redeeming an invitation, and by nothing else here.
+	// Enrol creates a person. Reached by redeeming an invitation, and by
+	// nothing else here: the first person is invited like everybody
+	// after them, by an administrator or a Tier A token through /iam.
 	Enrol(ctx context.Context, in iamdomain.Enrolment) (statelog.Result, error)
-
-	// MintBootstrap publishes the hash of the one-time code this node
-	// wrote at boot. Every node's lands: a fleet offers one code per node.
-	//
-	// There is no spend here. A founding is [Writer.Enrol] naming the code,
-	// which TAKES it on the company's one bootstrap subject before it
-	// claims anything — that take, not a spend published after the
-	// person, is what makes exactly one founder land.
-	MintBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (statelog.Result, error)
-
-	// ReissueBootstrap withdraws every outstanding code, releases an
-	// unfinished founding, and mints the given one — decided in the mint's
-	// own snapshot, so exactly one code is live where it lands.
-	ReissueBootstrap(ctx context.Context, in iamdomain.BootstrapMint) (
-		statelog.Result, error)
 
 	// SetCredentials replaces a person's credential set, forming the new
 	// whole from their own row INSIDE the snapshot — which is what keeps
@@ -236,14 +208,6 @@ func landed(result statelog.Result) bool {
 		result.Outcome == statelog.OutcomePending
 }
 
-// ErrUnresolved reports a write this surface made whose outcome could not be
-// established, to a caller that is not a request — the boot path that mints
-// the first bootstrap code, and `POST /iam/bootstrap-code`, which re-issues
-// one. It is statelog's own ErrUnavailable underneath, so a caller that asks
-// `errors.Is(err, statelog.ErrUnavailable)` answers it as the 503 it is.
-var ErrUnresolved = fmt.Errorf("authapi: the write's outcome is unknown: %w",
-	statelog.ErrUnavailable)
-
 // errText is an error's message, or empty — so a log line carries the field
 // only when there is one.
 func errText(err error) string {
@@ -263,8 +227,8 @@ func errText(err error) string {
 // Retry-After — an unknown outcome is the one a retry under the same id is
 // FOR, so it always carries one — and the OPERATION ID, which is how the write is
 // found in `iam_history` and, where the gesture derives its id from what the
-// caller presented (a logout of one lineage, an invitation, the bootstrap
-// code), the id the retry lands under by construction.
+// caller presented (a logout of one lineage, an invitation), the id the retry
+// lands under by construction.
 func unresolved(w http.ResponseWriter, r *http.Request, event string,
 	result statelog.Result) {
 
@@ -432,12 +396,6 @@ type Service struct {
 	clients   *auth.Clients
 	audit     Audit
 	now       func() time.Time
-
-	// codeMu serialises every change to this node's founder-code FILE —
-	// the boot offer, a re-issue and the removal after a redemption — so
-	// two re-issues arriving at once cannot each withdraw, each write and
-	// each mint, leaving two live codes and a file holding only one.
-	codeMu sync.Mutex
 
 	// rehashes are the password rewrites this surface runs after a
 	// sign-in has answered — see [Service.rehashPassword] — and what
@@ -639,9 +597,9 @@ func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 	return "", false
 }
 
-// uncounted is the admission of an attempt whose credential names nobody — a
-// founder's code or an invitation link: the instant its refusal is padded from
-// and where it came from, and no ticket.
+// uncounted is the admission of an attempt whose credential names nobody — an
+// invitation link: the instant its refusal is padded from and where it came
+// from, and no ticket.
 //
 // # No curve, and not for want of a key
 //
@@ -649,10 +607,10 @@ func (s *Service) hash(w http.ResponseWriter, r *http.Request, in admission,
 // alone is one anybody sharing the address holds shut for everybody else at
 // it — an office, a VPN's egress, the whole internet behind a proxy this
 // deployment was not told to trust. These routes had one, so one stranger
-// could keep every invitation and the founder's code at that address
-// answering 429. What bounds a walk is the credential itself — a link's secret
-// and a founder's code are each 256 bits of crypto/rand — and what shows one is
-// the audit trail's failure tally, which every refusal still reaches.
+// could keep every invitation at that address answering 429. What bounds a
+// walk is the credential itself — a link's secret is 256 bits of crypto/rand
+// — and what shows one is the audit trail's failure tally, which every refusal
+// still reaches.
 func (s *Service) uncounted(r *http.Request) admission {
 	return admission{at: s.throttle.Now(), source: s.sourceOf(r)}
 }

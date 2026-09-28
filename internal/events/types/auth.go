@@ -80,10 +80,6 @@ const (
 	// the person it just enrolled.
 	SignInInvite SignInMethod = "invite"
 
-	// SignInBootstrap is the first person, opened by the one-time code a
-	// node wrote beside its store.
-	SignInBootstrap SignInMethod = "bootstrap"
-
 	// SignInToken is a Tier A token exchanged for a session. The principal
 	// is the TOKEN, acting as itself — never a person.
 	SignInToken SignInMethod = "token"
@@ -92,7 +88,7 @@ const (
 // Valid reports whether m is a method this build names.
 func (m SignInMethod) Valid() bool {
 	switch m {
-	case SignInPassword, SignInInvite, SignInBootstrap, SignInToken:
+	case SignInPassword, SignInInvite, SignInToken:
 		return true
 	}
 	return false
@@ -182,9 +178,6 @@ const (
 	// FailSecondFactor is a correct password with a wrong code.
 	FailSecondFactor FailureMethod = "second_factor"
 
-	// FailBootstrap is a wrong one-time founder code.
-	FailBootstrap FailureMethod = "bootstrap"
-
 	// FailInvite is an invitation link that did not prove itself: an id
 	// nobody issued, or a secret that is not the id's link's — each a
 	// 410. THE LINK IS THE CREDENTIAL, so a source presenting ids or
@@ -208,7 +201,7 @@ const (
 // Valid reports whether m is a method this build names.
 func (m FailureMethod) Valid() bool {
 	switch m {
-	case FailPassword, FailSecondFactor, FailBootstrap, FailInvite,
+	case FailPassword, FailSecondFactor, FailInvite,
 		FailBearer:
 		return true
 	}
@@ -218,7 +211,7 @@ func (m FailureMethod) Valid() bool {
 // FailureMethods is every method, for a metrics dimension and a test that
 // walks the set.
 var FailureMethods = []FailureMethod{
-	FailPassword, FailSecondFactor, FailBootstrap, FailInvite, FailBearer,
+	FailPassword, FailSecondFactor, FailInvite, FailBearer,
 }
 
 // CredentialKind is what sort of credential a mint or a revocation was about.

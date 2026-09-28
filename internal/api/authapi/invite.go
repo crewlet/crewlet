@@ -297,8 +297,8 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 // It says the login or the address is taken, which the person needs in order
 // to choose another, and it does NOT say by whom. The domain's own refusal
 // names the holder's id, which is right for an administrator and wrong here:
-// the caller is holding an invitation link or a bootstrap code, which is
-// evidence of who THEY are and of nothing about anybody else.
+// the caller is holding an invitation link, which is evidence of who THEY are
+// and of nothing about anybody else.
 func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err error) {
 	var claimed *iamdomain.ErrClaimed
 	switch {

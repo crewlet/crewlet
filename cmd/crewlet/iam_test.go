@@ -455,7 +455,6 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	// told nothing.
 	for _, args := range [][]string{
 		{"iam", "token", "-person", "svc-1"},
-		{"iam", "bootstrap-code"},
 		{"iam", "show", "p-1"},
 	} {
 		err := run(append(args, "-idempotency-key", "k", "-config", cfg,

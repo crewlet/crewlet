@@ -267,54 +267,6 @@ func TestARefusedWriteSaysWhenAndWhatToRetry(t *testing.T) {
 	}
 }
 
-// fakeBootstrap mints a code, or fails with err.
-// A BOOTSTRAP CODE THAT CANNOT BE MINTED SAYS WHETHER WAITING WILL HELP.
-//
-// Every failure answered a bare 503 — no Retry-After, and a status that told
-// a client to come back when a file this node could not write never would be
-// written. What clears by waiting (an estate that could not be read, a record
-// that could not be landed or confirmed) is 503 with the hint; a fault is 500.
-func TestABootstrapMintFailureSaysWhetherWaitingHelps(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name  string
-		err   error
-		want  int
-		retry string
-	}{
-		{"a record that could not be landed",
-			fmt.Errorf("authapi: publish: %w", statelog.ErrUnavailable),
-			http.StatusServiceUnavailable, "2"},
-		{"a file this node could not write",
-			errors.New("authapi: write the bootstrap code: permission denied"),
-			http.StatusInternalServerError, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r := newRig(t, func(o *iamapi.Options) {
-				o.Bootstrap = &fakeBootstrap{err: tc.err}
-			})
-			// AN ESTATE NOBODY CAN ADMINISTER, so the route reaches the mint.
-			for id, row := range r.directory.people {
-				row.Stage = iam.StageSuspended
-				r.directory.people[id] = row
-			}
-			got := r.as(administrator(), http.MethodPost, "/iam/bootstrap-code", nil)
-			if got.status != tc.want || got.header.Get("Retry-After") != tc.retry {
-				t.Errorf("answered %d with Retry-After %q (%v), want %d with %q",
-					got.status, got.header.Get("Retry-After"), got.body, tc.want, tc.retry)
-			}
-			// A FAULT'S OWN WORDS STAY IN THE LOG, where `internal_error`
-			// sends a reader: a path on this host is not the caller's.
-			if tc.want == http.StatusInternalServerError {
-				if detail, _ := got.body["detail"].(string); strings.Contains(detail, "permission denied") {
-					t.Errorf("the fault's own words reached the caller: %v", got.body)
-				}
-			}
-		})
-	}
-}
-
 // A WRITE THAT FAULTED KEEPS ITS OWN WORDS IN THE LOG.
 //
 // `internal_error` says the reason is in this node's log, and a fault's reason
