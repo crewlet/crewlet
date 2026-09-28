@@ -114,6 +114,12 @@ type retention struct {
 	// report" rather than as no coverage.
 	coverage func(context.Context) (float64, bool, error)
 
+	// index fills the semantic index's half of a reading: the recall its
+	// last training measured and the floor for the size it measured at.
+	// Nil on an engine that holds no vectors, which reads as nothing to
+	// report.
+	index func(context.Context, *statelog.Reading)
+
 	// objects fills the object store's half of a reading — its health and
 	// what its passes found. Nil on an engine built without one, which
 	// reads as nothing to report.
@@ -174,6 +180,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		nodeID:      s.nodeID,
 		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
+		index:       e.indexReading,
 		objects:     e.objectsReading,
 		pooled:      map[string]poolCounters{},
 		done:        make(chan struct{}),

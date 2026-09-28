@@ -858,7 +858,7 @@ type ProbeChoice struct {
 
 // Passed reports that Probes met every shape's floor with no head miss.
 // False means even every list did not — the corpus's first stage, the scan
-// included, is below the floor.
+// included, is below the floor, which is the `ivf_recall_below_floor` alarm.
 func (c ProbeChoice) Passed() bool { return c.Measurement.Passed() }
 
 // Worthwhile reports whether an index needing c.Probes of lists lists is worth

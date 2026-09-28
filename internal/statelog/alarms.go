@@ -145,30 +145,31 @@ type Kind string
 // things, and the reference suite is what refuses a rule whose meaning nobody
 // wrote.
 const (
-	KindApplyLag         Kind = "apply_lag"
-	KindReadRefusals     Kind = "read_refusals"
-	KindBarrierSlow      Kind = "barrier_slow"
-	KindLogHeadroom      Kind = "log_headroom"
-	KindBackupAge        Kind = "backup_age"
-	KindTrimBlocked      Kind = "trim_blocked"
-	KindDeferredOld      Kind = "deferred_old"
-	KindFloorUnknown     Kind = "floor_unknown"
-	KindPrefetchSlow     Kind = "prefetch_slow"
-	KindSearchSlow       Kind = "search_slow"
-	KindSearchDegraded   Kind = "search_degraded"
-	KindSearchScoped     Kind = "search_scoped"
-	KindRecallBelowFloor Kind = "recall_below_floor"
-	KindRecordsGated     Kind = "records_gated"
-	KindFeedUnreadable   Kind = "feed_unreadable"
-	KindMaintenanceOpen  Kind = "maintenance_open"
-	KindVolumeLow        Kind = "volume_low"
-	KindWALLarge         Kind = "wal_large"
-	KindPoolStarved      Kind = "pool_starved"
-	KindCensusDrift      Kind = "census_drift"
-	KindObjectsMissing   Kind = "objects_missing"
-	KindObjectsDegraded  Kind = "objects_degraded"
-	KindObjectsUnhealthy Kind = "objects_store_unhealthy"
-	KindObjectsNearFull  Kind = "objects_store_nearfull"
+	KindApplyLag            Kind = "apply_lag"
+	KindReadRefusals        Kind = "read_refusals"
+	KindBarrierSlow         Kind = "barrier_slow"
+	KindLogHeadroom         Kind = "log_headroom"
+	KindBackupAge           Kind = "backup_age"
+	KindTrimBlocked         Kind = "trim_blocked"
+	KindDeferredOld         Kind = "deferred_old"
+	KindFloorUnknown        Kind = "floor_unknown"
+	KindPrefetchSlow        Kind = "prefetch_slow"
+	KindSearchSlow          Kind = "search_slow"
+	KindSearchDegraded      Kind = "search_degraded"
+	KindSearchScoped        Kind = "search_scoped"
+	KindRecallBelowFloor    Kind = "recall_below_floor"
+	KindIVFRecallBelowFloor Kind = "ivf_recall_below_floor"
+	KindRecordsGated        Kind = "records_gated"
+	KindFeedUnreadable      Kind = "feed_unreadable"
+	KindMaintenanceOpen     Kind = "maintenance_open"
+	KindVolumeLow           Kind = "volume_low"
+	KindWALLarge            Kind = "wal_large"
+	KindPoolStarved         Kind = "pool_starved"
+	KindCensusDrift         Kind = "census_drift"
+	KindObjectsMissing      Kind = "objects_missing"
+	KindObjectsDegraded     Kind = "objects_degraded"
+	KindObjectsUnhealthy    Kind = "objects_store_unhealthy"
+	KindObjectsNearFull     Kind = "objects_store_nearfull"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -246,6 +247,24 @@ type Reading struct {
 	// embeddings configured measures nothing, and zero coverage is the
 	// alarm rather than the absence.
 	SemanticCoverage *float64
+
+	// IVFRecall is the recall the latest measurement of this node's
+	// partition's semantic index found against the exact scan (ADR-0022) —
+	// its training's, or the duty's later re-measurement's — in the query
+	// shape nearest its floor, IVFShape; IVFRecallFloor is that shape's
+	// floor, and IVFMeasuredOn how many sources the partition held.
+	//
+	// THE FLOOR IS SUPPLIED rather than named here, because the curve is
+	// internal/search's — its FloorAt, the same curve `crewlet search eval`
+	// judges against, at the size of the corpus each shape searches — and
+	// that package imports this one. A POINTER, for SemanticCoverage's
+	// reason: a partition whose index was never trained, or was retired for
+	// its size, measured nothing, and zero recall is the alarm rather than
+	// the absence.
+	IVFRecall      *float64
+	IVFRecallFloor float64
+	IVFMeasuredOn  int
+	IVFShape       string
 
 	// RecordsGated and FeedUnreadable are counts over the last day. Any
 	// value above zero is an alarm: a gated record is recoverable by
@@ -531,6 +550,36 @@ var table = []rule{
 		},
 		remedy: "The embed duty is behind. Semantic recall is answering from a " +
 			"corpus it does not cover.",
+	},
+	{
+		// THE FLOOR IS THE EVALUATION'S, borrowed (ADR-0015): the recall
+		// curve `crewlet search eval` judges a corpus against, at the size
+		// of the corpus the shape searched. A training installs the
+		// smallest probe count that meets it in every shape, and a
+		// re-measurement that finds none within the ceiling retrains in the
+		// same tick rather than recording the failure — so a recall below
+		// it was measured probing EVERY list, the full scan's own pool, and
+		// says the codes fail this corpus, not that the index was trained
+		// badly.
+		kind: KindIVFRecallBelowFloor,
+		fires: func(r Reading) (string, bool) {
+			if r.IVFRecall == nil {
+				return "", false
+			}
+			return fmt.Sprintf("the semantic index's latest measurement found "+
+					"recall %.4f against the exact scan in the %s shape over %d "+
+					"sources, below its %.4f floor", *r.IVFRecall, r.IVFShape,
+					r.IVFMeasuredOn, r.IVFRecallFloor),
+				*r.IVFRecall < r.IVFRecallFloor
+		},
+		remedy: "The 1-bit first stage is failing this corpus, index or not: " +
+			"`crewlet search eval` against a backup's copy of the partition " +
+			"measures the full scan beside the index in every query shape and " +
+			"will say the same. The remedy is the evaluation's — raise " +
+			"BinaryOversample, then an int8 first stage, both code changes (see " +
+			"docs/guides/search.md). No index is installed meanwhile, so " +
+			"searches answer from the full scan at the recall the evaluation " +
+			"reports.",
 	},
 	{
 		kind: KindRecordsGated,

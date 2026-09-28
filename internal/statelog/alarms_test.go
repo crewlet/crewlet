@@ -101,6 +101,12 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{SemanticCoverage: statelog.Frac(0.5)},
 			"current vectors",
 		},
+		"an index measured below its floor": {
+			statelog.KindIVFRecallBelowFloor,
+			statelog.Reading{IVFRecall: statelog.Frac(0.91), IVFRecallFloor: 0.98,
+				IVFMeasuredOn: 20_000, IVFShape: "source:page"},
+			"0.9100 against the exact scan in the source:page shape over 20000 sources",
+		},
 		"a gated record": {
 			statelog.KindRecordsGated,
 			statelog.Reading{RecordsGated: 1},
@@ -223,6 +229,37 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 	got := statelog.Evaluate(measured)
 	if len(got) != 2 {
 		t.Errorf("a measured zero raised %v, want both fraction alarms", kindsOf(got))
+	}
+}
+
+// THE INDEX RECALL ALARM FIRES AT THE EVALUATION'S FLOOR, NOT BELOW A NUMBER OF
+// ITS OWN (ADR-0015).
+//
+// The floor is the curve `crewlet search eval` judges a corpus against, at the
+// size the training measured, handed in by the engine because the curve is the
+// search package's. A recall AT the floor passes that evaluation, so it must
+// not alarm; a partition whose index nobody trained measured nothing and must
+// not alarm either — zero recall is the alarm, not the absence.
+func TestTheIndexRecallAlarmFiresAtTheEvaluationsFloor(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"a recall at the floor": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.93), IVFRecallFloor: 0.93}, false},
+		"a recall above it": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.99), IVFRecallFloor: 0.93}, false},
+		"a recall a hair below it": {statelog.Reading{
+			IVFRecall: statelog.Frac(0.9299), IVFRecallFloor: 0.93}, true},
+		"a measured zero": {statelog.Reading{
+			IVFRecall: statelog.Frac(0), IVFRecallFloor: 0.93}, true},
+		"nothing measured": {statelog.Reading{IVFRecallFloor: 0.93}, false},
+	} {
+		_, fired := find(statelog.Evaluate(c.reading), statelog.KindIVFRecallBelowFloor)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
 	}
 }
 

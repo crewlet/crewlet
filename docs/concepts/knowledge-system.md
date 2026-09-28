@@ -231,9 +231,10 @@ hundred and twenty thousand, 0.88 at half a million. A single threshold would
 certify the smallest deployment and say nothing about the largest. A narrowed
 shape is judged at the size of the corpus **it** searches. The index's own
 training and its daily re-measurement are judged against the same curve, and
-one that found recall below it even reading every list — which is the full
-scan's own candidate pool — means the codes are failing this corpus rather than
-the index.
+the [`ivf_recall_below_floor`](../reference/alarms.md) alarm fires when the
+latest one found recall below it even reading every list — which is the full
+scan's own candidate pool, so it means the codes are failing this corpus rather
+than the index.
 
 If a run comes back below the floor, the remedy is decided in advance:
 

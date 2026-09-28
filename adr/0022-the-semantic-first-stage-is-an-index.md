@@ -125,7 +125,8 @@ decision about what a search promises rather than about the index.
 
 Whether the 1-bit first stage suits a company's corpus at all — that is
 `crewlet search eval`, which now measures the index and the full scan side by
-side. The source filter's plan, which is still the primary key's seek.
+side, and `ivf_recall_below_floor`, which fires when even every list misses
+the floor. The source filter's plan, which is still the primary key's seek.
 How a partitioned estate asks each partition — the index is built per
 partition file so that it can be, and the fan-out across partitions is the
 estate's own decision.

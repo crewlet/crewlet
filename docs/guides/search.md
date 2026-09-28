@@ -202,11 +202,12 @@ ranges can go missing.
    each narrowed shape how many of its searches scanned. A partition scans
    below 1 024 sources, while a model change is re-embedding it, when its
    training measured that no index reading half its lists or fewer meets the
-   recall floor in every shape — which is a property of the corpus — and
-   throughout a rolling upgrade, until every node applying the vector log runs
-   a build that reads the index's records (the duty logs `search_index_held`,
-   naming the nodes it waits for; an offline node on an old build holds it
-   until it returns upgraded or is evicted).
+   recall floor in every shape — which is a property of the corpus, and
+   `ivf_recall_below_floor` says when it is the codes rather than the index
+   that fall short — and throughout a rolling upgrade, until every node
+   applying the vector log runs a build that reads the index's records (the
+   duty logs `search_index_held`, naming the nodes it waits for; an offline
+   node on an old build holds it until it returns upgraded or is evicted).
 
 There is nothing to tune: the index's list count follows the corpus, how many
 lists a search reads is its own training's measurement, and there is no shard

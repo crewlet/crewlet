@@ -63,6 +63,11 @@ var alarmMeaning = map[Kind]string{
 		"because a node did not answer its bucket range.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
+	KindIVFRecallBelowFloor: "The latest measurement of the partition's " +
+		"semantic index found recall against the exact scan below the floor, " +
+		"in a query shape a search is issued in, even probing every list — " +
+		"which is the full scan's own candidate pool, so the first stage is " +
+		"below the floor on this corpus with or without the index.",
 	KindRecordsGated: "An apply gate dropped a record. A gated record is " +
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +

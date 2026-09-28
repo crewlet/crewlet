@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -450,4 +451,43 @@ func (e *Engine) vectorCoverage(ctx context.Context) (float64, bool, error) {
 		return 0, false, nil
 	}
 	return search.Coverage(ctx, e.corpora(), model, provider.Width())
+}
+
+// indexReading is the semantic index's alarm input (ADR-0022): the latest
+// measurement of the partition's index against the exact scan — the worst
+// query shape's recall and the floor its training judged it against, the
+// evaluation's own curve borrowed rather than restated (ADR-0015).
+//
+// ONLY FOR THE SPACE THE COMPANY EMBEDS IN NOW. An index trained under a
+// model the company has since changed serves no query — every one is in the
+// new space and scans until the duty retrains — so its recall describes
+// nothing a search does, and alarming on it would page an operator about a
+// model they have already left. A read that fails reports nothing, for
+// vectorCoverage's reason: an unreadable index is not a failing one.
+func (e *Engine) indexReading(ctx context.Context, out *statelog.Reading) {
+	provider, model, configured := e.embedModel()
+	if !configured || e.backends == nil || e.backends.Store == nil {
+		return
+	}
+	var head search.IndexHead
+	var indexed bool
+	if err := e.backends.Store.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		head, indexed, err = search.ReadIndex(ctx, tx)
+		return err
+	}); err != nil {
+		log.WarnContext(ctx, "vector_index_unreadable", "err", err)
+		return
+	}
+	if !indexed || head.Measurement == nil || !head.InSpace(model, provider.Width()) {
+		return
+	}
+	m := *head.Measurement
+	out.IVFRecall = &m.Recall
+	out.IVFRecallFloor = m.Floor
+	out.IVFMeasuredOn = m.Sources
+	out.IVFShape = string(m.Shape)
+	if m.ShapeSource != "" {
+		out.IVFShape += ":" + string(m.ShapeSource)
+	}
 }
