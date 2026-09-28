@@ -2,11 +2,14 @@ package partmap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -59,6 +62,26 @@ import (
 // the whole estate still answers for it, and says so itself when a read needs
 // rows it has not applied. What the leases are for is what a MAP decides by: a
 // joiner's word that it serves, and a leaver's that it has let go.
+//
+// # Which version wins
+//
+// Within one LINEAGE of the map — its [Map.Generation] — a later write of the
+// one key has a larger version, which coordtest certifies both backends for,
+// so a delivery at or below the newest version held is one the view already
+// has or one a slow path served late. ACROSS lineages versions say nothing: a
+// map written again after its key was lost starts its versions again, and a
+// view comparing them would keep the lost map — or keep answering that there
+// is none — until the new one's version overtook the old, which for a map
+// rewritten often is for ever. So a record of ANOTHER lineage replaces the one
+// held whatever its version, as the object map's cache does
+// (objstore/transfer).
+//
+// And a READ that nothing overtook is the store's answer NOW, from the leader
+// that orders every write, so the view takes it whatever it is — an absence, a
+// lower version, another lineage, a version it cannot decode. That is what
+// ends every state a restored or recreated store could leave a view in, within
+// one [ViewConfirm]. A read that raced a delivery is weighed like a delivery
+// instead: the delivery may be the newer of the two.
 //
 // # Freshness
 //
@@ -138,18 +161,25 @@ type View struct {
 	now     func() time.Time
 
 	mu sync.Mutex
-	// known is whether the store has answered at all; found whether it
-	// held a map when it last did, state that map and version its version.
-	known   bool
-	found   bool
-	state   MapState
-	version uint64
-	// seen is the highest version this view has taken in, so an older
-	// delivery arriving after a newer read is never taken over it.
+	// known is whether the store has answered at all; present whether it
+	// held a record when the view last took one in.
+	known, present bool
+	// state is that record's map, and undecodable why this build could not
+	// read it — state is then the zero value, since the map before it is
+	// no longer the map and must never be answered or handed to a watch.
+	state       MapState
+	undecodable error
+	// gen and seen are the lineage and the version of the newest record the
+	// view took in — gen is uuid.Nil where not even the lineage could be
+	// read — and are KEPT across an absence, so a late delivery of the lost
+	// lineage is not taken back in while a new lineage always is.
+	gen  uuid.UUID
 	seen uint64
-	// undecodable is why the newest version held could not be read, nil
-	// while it could; lastErr is the last read or watch failure.
-	undecodable, lastErr error
+	// taken counts what the view has taken in, so a read can tell whether
+	// anything was taken in while it was asked.
+	taken uint64
+	// lastErr is the last read or watch failure.
+	lastErr error
 	// confirmedAt is when the store last answered, by a read or a
 	// delivery.
 	confirmedAt time.Time
@@ -235,7 +265,7 @@ func (v *View) follow(ctx context.Context) {
 				watch = nil
 				continue
 			}
-			v.fold(rec, true, 0)
+			v.delivered(rec)
 		case <-confirm.C:
 			v.read(ctx)
 		}
@@ -247,20 +277,21 @@ func (v *View) follow(ctx context.Context) {
 func (v *View) read(ctx context.Context) {
 	asked, cancel := context.WithTimeout(ctx, ViewConfirm)
 	defer cancel()
-	before := v.seenVersion()
+	before := v.takenCount()
 	rec, found, err := v.maps.EstateMap(asked)
 	if err != nil {
 		v.failed(ctx, fmt.Errorf("read the estate map: %w", err))
 		return
 	}
-	v.fold(rec, found, before)
+	v.answered(rec, found, before)
 }
 
-// seenVersion is the highest version this view has taken in.
-func (v *View) seenVersion() uint64 {
+// takenCount is how many take-ins the view has made: what a read compares
+// against when its answer arrives.
+func (v *View) takenCount() uint64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.seen
+	return v.taken
 }
 
 // failed records a failure the view is carrying, unless it is this view's own
@@ -274,57 +305,134 @@ func (v *View) failed(ctx context.Context, err error) {
 	v.mu.Unlock()
 }
 
-// fold takes in what the store answered — a version, or that there is no map —
-// never an older version over a newer one, and hands a newly held map to every
-// watch. before is, for a read, the highest version the view had taken in when
-// the read was asked.
-//
-// VERSIONS ARE COMPARED, which coordtest certifies both backends for: a later
-// write of the one key has a larger version, so a delivery at or below the
-// newest version this view took in is one it already has or an older one a
-// replica served late.
-//
-// AN ABSENCE HAS NO VERSION to compare, so a read that found no map is taken
-// only if nothing newer was taken in while it was asked: a read answered as of
-// an instant before the first map was written, arriving after the watch
-// delivered that map, would otherwise put a fleet with a map back to one
-// without.
-func (v *View) fold(rec coord.EstateMapRecord, found bool, before uint64) {
+// delivered takes in a version the watch handed over — one the store held at
+// some instant, in the order it was written — when it is newer than what the
+// view holds: ANOTHER LINEAGE whatever its version, or a later version of the
+// same one (see the file's doc). Anything else confirms the view and changes
+// nothing.
+func (v *View) delivered(rec coord.EstateMapRecord) {
+	state, gen, err := readRecord(rec.Value)
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	now := v.now()
-	if !found {
-		if v.seen != before {
-			// OVERTAKEN: the view took in a version while this read was
-			// asked. The store answered, which confirms the view.
-			v.confirmedAt, v.lastErr = now, nil
+	if !v.known || v.newerLocked(rec.Version, gen) {
+		v.takeLocked(rec.Version, state, gen, err)
+		return
+	}
+	v.confirmLocked()
+}
+
+// answered takes in what a read of the store answered — a version, or that
+// there is no map. before is how many take-ins the view had made when the read
+// was asked.
+//
+// NOTHING TAKEN IN MEANWHILE makes the answer the store's value now, from its
+// leader, and it is taken whatever it is ordered against: a lower version is a
+// store that went back, and another lineage a key written again. SOMETHING
+// TAKEN IN MEANWHILE makes it a delivery that may be older than what arrived
+// beside it — above all an absence, which has no version to compare: a read
+// answered as of an instant before the first map was written, arriving after
+// the watch delivered that map, would otherwise put a fleet with a map back to
+// one without — so it is taken only when it is a later version of the lineage
+// held.
+func (v *View) answered(rec coord.EstateMapRecord, found bool, before uint64) {
+	var (
+		state MapState
+		gen   uuid.UUID
+		err   error
+	)
+	if found {
+		state, gen, err = readRecord(rec.Value)
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	overtaken := v.taken != before
+	switch {
+	case !found && overtaken:
+		v.confirmLocked()
+	case !found:
+		// THE STORE HOLDS NO MAP NOW. The lineage and version are kept
+		// (see the struct).
+		if !v.known || v.present {
+			v.known, v.present, v.state, v.undecodable = true, false, MapState{}, nil
+			v.taken++
+		}
+		v.confirmLocked()
+	case !v.known:
+		v.takeLocked(rec.Version, state, gen, err)
+	case overtaken:
+		if gen != uuid.Nil && gen == v.gen && rec.Version > v.seen {
+			v.takeLocked(rec.Version, state, gen, err)
 			return
 		}
-		// THE STORE HOLDS NO MAP NOW. Kept at the highest version seen,
-		// so a delivery from before a removal is not taken back in.
-		v.known, v.found, v.state, v.version, v.undecodable = true, false, MapState{}, 0, nil
-		v.confirmedAt, v.lastErr = now, nil
-		return
+		v.confirmLocked()
+	case v.present && rec.Version == v.seen && gen == v.gen:
+		// ALREADY HELD: the store answered, so the view is confirmed.
+		v.confirmLocked()
+	default:
+		v.takeLocked(rec.Version, state, gen, err)
 	}
-	if v.known && rec.Version <= v.seen {
-		// Already held, or older than what is: the store answered, so
-		// the view is confirmed, and nothing else changes.
-		v.confirmedAt, v.lastErr = now, nil
-		return
+}
+
+// newerLocked reports whether a delivery of version, of lineage gen, is newer
+// than the newest record the view took in: another lineage whatever its
+// version, a later version of the same one — and, where either lineage could
+// not be read, a later version, the one order left. The caller holds the lock.
+func (v *View) newerLocked(version uint64, gen uuid.UUID) bool {
+	if gen != uuid.Nil && v.gen != uuid.Nil && gen != v.gen {
+		return true
 	}
-	v.seen, v.known, v.confirmedAt, v.lastErr = rec.Version, true, now, nil
-	state, err := DecodeMapState(rec.Value)
-	if err != nil {
+	return version > v.seen
+}
+
+// takeLocked makes a record the newest the view holds, and hands a readable map
+// to every watch. The caller holds the lock.
+func (v *View) takeLocked(version uint64, state MapState, gen uuid.UUID, decodeErr error) {
+	was, held := v.gen, v.present && v.undecodable == nil
+	v.known, v.present, v.gen, v.seen = true, true, gen, version
+	v.taken++
+	v.confirmLocked()
+	if decodeErr != nil {
 		// A VERSION THIS BUILD CANNOT READ is the newest there is, so the
 		// one before it is no longer the map: unknown until a readable
 		// version replaces it.
-		v.undecodable = err
+		v.state, v.undecodable = MapState{}, decodeErr
 		return
 	}
-	v.found, v.state, v.version, v.undecodable = true, state, rec.Version, nil
+	if held && was != gen {
+		log.Warn("estate_map_generation_changed", "was", was.String(), "now", gen.String(),
+			"epoch", state.Map.Epoch, "version", version,
+			"detail", "the stored estate map was written again from nothing; this node "+
+				"routes and acts by the new one")
+	}
+	v.state, v.undecodable = state, nil
 	for w := range v.watches {
 		w.push(state.Map)
 	}
+}
+
+// confirmLocked records that the store answered. The caller holds the lock.
+func (v *View) confirmLocked() {
+	v.confirmedAt, v.lastErr = v.now(), nil
+}
+
+// readRecord decodes a stored map, and — where it cannot — still reads the
+// lineage it names when that much of it parses, so a version this build cannot
+// decode is ordered against the one held rather than taken on its version
+// alone. uuid.Nil where even that is unreadable.
+func readRecord(raw []byte) (MapState, uuid.UUID, error) {
+	state, err := DecodeMapState(raw)
+	if err == nil {
+		return state, state.Map.Generation, nil
+	}
+	var peek struct {
+		Map struct {
+			Generation uuid.UUID `json:"generation"`
+		} `json:"map"`
+	}
+	if json.Unmarshal(raw, &peek) != nil {
+		return MapState{}, uuid.Nil, err
+	}
+	return MapState{}, peek.Map.Generation, err
 }
 
 // Map is the newest estate map this view holds and its version, false when the
@@ -337,10 +445,10 @@ func (v *View) Map() (Map, uint64, bool, error) {
 	if err := v.unknownLocked(); err != nil {
 		return Map{}, 0, false, err
 	}
-	if !v.found {
+	if !v.present {
 		return Map{}, 0, false, nil
 	}
-	return v.state.Map.Clone(), v.version, true, nil
+	return v.state.Map.Clone(), v.seen, true, nil
 }
 
 // unknownLocked is why the map half cannot answer, nil when it can. The caller
@@ -428,12 +536,12 @@ func (v *View) wholeServers(p statelog.PartitionID) ([]string, error) {
 // it — for a caller told its routing is stale, which must not wait for the
 // watch. [ErrNoMap] when the store holds none.
 func (v *View) Read(ctx context.Context) (Map, uint64, error) {
-	before := v.seenVersion()
+	before := v.takenCount()
 	rec, found, err := v.maps.EstateMap(ctx)
 	if err != nil {
 		return Map{}, 0, fmt.Errorf("%w: read the estate map: %w", coord.ErrUnavailable, err)
 	}
-	v.fold(rec, found, before)
+	v.answered(rec, found, before)
 	m, version, held, err := v.Map()
 	switch {
 	case err != nil:
@@ -471,14 +579,17 @@ func (v *View) Invalidate() {
 }
 
 // Watch delivers every map this view takes in from now until ctx ends — the one
-// it holds first, then each newer one in order. It may skip a version replaced
-// before it was handed over, as the store's own watch does: a reader acts on
-// the newest map it holds. The channel closes when ctx ends.
+// [View.Map] answers first, then each newer one in order. It may skip a version
+// replaced before it was handed over, as the store's own watch does: a reader
+// acts on the newest map it holds. It hands over NOTHING while the view cannot
+// answer: a newest version this build cannot read makes the one before it no
+// longer the map, and a reader handed that one would act on a map the fleet has
+// replaced. The channel closes when ctx ends.
 func (v *View) Watch(ctx context.Context) (<-chan Map, error) {
 	w := &viewWatch{wake: make(chan struct{}, 1)}
 	v.mu.Lock()
 	v.watches[w] = struct{}{}
-	if v.found {
+	if v.unknownLocked() == nil && v.present {
 		w.push(v.state.Map)
 	}
 	v.mu.Unlock()
@@ -518,7 +629,8 @@ type viewWatch struct {
 }
 
 // push puts a map in the slot, replacing one not yet handed over. Maps arrive
-// under the view's lock in version order, so the slot only moves forward.
+// under the view's lock in the order the view takes them in, so the slot only
+// moves forward.
 func (w *viewWatch) push(m Map) {
 	c := m.Clone()
 	w.mu.Lock()

@@ -191,8 +191,10 @@
 // which layout the fleet runs and who serves a partition, three-valued, and
 // under layout 0 it answers that the one partition is served by every live
 // data node, from PRESENCE ([Roster]) — never from the estate leases, which a
-// build from before them does not claim while it serves the whole estate.
-// Routing may use it at any age; anything that decides asks [View.Fresh],
-// which is false once either half was last confirmed more than
-// statelog.FloorCacheStale ago.
+// build from before them does not claim while it serves the whole estate. It
+// orders versions within a map's LINEAGE only, so a map written again after its
+// key was lost replaces the lost one whatever its version, and it takes a read
+// nothing overtook as the store's value now. Routing may use it at any age;
+// anything that decides asks [View.Fresh], which is false once either half was
+// last confirmed more than statelog.FloorCacheStale ago.
 package partmap

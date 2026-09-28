@@ -1,6 +1,7 @@
 package partmap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -327,57 +328,187 @@ func TestAViewFollowsTheMapAsItChanges(t *testing.T) {
 	}
 }
 
+// encoded is a state's stored form.
+func encoded(t *testing.T, s MapState) []byte {
+	t.Helper()
+	raw, err := s.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// unreadable is a stored map this build cannot decode — its generation is not
+// a uuid, so not even its lineage reads.
+func unreadable(raw []byte) []byte {
+	return []byte(strings.Replace(string(raw), `"generation":"`, `"generation":"not-a-uuid-`, 1))
+}
+
 // A VIEW NEVER TAKES AN OLDER MAP OVER A NEWER ONE: a version a replica served
 // late, a read answered before the first map was written that arrives after the
 // watch delivered it, and a version this build cannot read — which makes the
 // view unknown until a readable one replaces it, rather than leaving it routing
-// by the version before.
+// by the version before, or handing that version to a reader who starts
+// watching meanwhile.
 func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 	t.Parallel()
 	_, state, _ := storeWithMap(t)
-	raw, err := state.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := encoded(t, state)
 	older := state.Clone()
 	older.Map.Epoch = 1
 	for i := range older.Map.Partitions {
 		older.Map.Partitions[i].Holders = nil
 	}
-	oldRaw, err := older.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	oldRaw := encoded(t, older)
 	v := viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
 
-	before := v.seenVersion()
-	v.fold(coord.EstateMapRecord{Value: raw, Version: 5}, true, 0)
-	v.fold(coord.EstateMapRecord{}, false, before) // a read asked before version 5
-	v.fold(coord.EstateMapRecord{Value: oldRaw, Version: 4}, true, 0)
+	before := v.takenCount()
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 5})
+	v.answered(coord.EstateMapRecord{}, false, before) // a read asked before version 5
+	if _, version, found, err := v.Map(); err != nil || !found || version != 5 {
+		t.Fatalf("a read answered before the first map, arriving after it, left (version %d, "+
+			"found %v, %v), want version 5", version, found, err)
+	}
+	v.delivered(coord.EstateMapRecord{Value: oldRaw, Version: 4})
+	before = v.takenCount()
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 6})
+	v.answered(coord.EstateMapRecord{Value: raw, Version: 5}, true, before) // raced version 6
 	m, version, found, err := v.Map()
-	if err != nil || !found || version != 5 || m.Epoch != state.Map.Epoch {
-		t.Fatalf("the view holds (version %d, epoch %d, found %v, %v), want version 5",
+	if err != nil || !found || version != 6 || m.Epoch != state.Map.Epoch {
+		t.Fatalf("the view holds (version %d, epoch %d, found %v, %v), want version 6",
 			version, m.Epoch, found, err)
 	}
 
-	unreadable := strings.Replace(string(raw), `"generation":"`, `"generation":"not-a-uuid-`, 1)
-	v.fold(coord.EstateMapRecord{Value: []byte(unreadable), Version: 6}, true, 0)
+	v.delivered(coord.EstateMapRecord{Value: unreadable(raw), Version: 7})
 	if _, _, _, err := v.Map(); !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("a newest version this build cannot read = %v, want unknown", err)
 	}
 	if _, _, err := v.Serving(estateZero); !errors.Is(err, coord.ErrUnavailable) {
 		t.Errorf("routing by the version before an unreadable one: %v", err)
 	}
-	v.fold(coord.EstateMapRecord{Value: raw, Version: 7}, true, 0)
-	if _, version, found, err := v.Map(); err != nil || !found || version != 7 {
-		t.Errorf("a readable version after it = (%d, %v, %v), want version 7", version, found, err)
+	watch, err := v.Watch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-watch:
+		t.Fatalf("a reader watching while the newest version is unreadable was handed "+
+			"epoch %d, a map the fleet has replaced", m.Epoch)
+	case <-time.After(50 * time.Millisecond):
+	}
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 8})
+	if _, version, found, err := v.Map(); err != nil || !found || version != 8 {
+		t.Errorf("a readable version after it = (%d, %v, %v), want version 8", version, found, err)
+	}
+	select {
+	case m := <-watch:
+		if m.Generation != state.Map.Generation || m.Epoch != state.Map.Epoch {
+			t.Errorf("the watch was handed epoch %d first, want the readable version's %d",
+				m.Epoch, state.Map.Epoch)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the readable version after an unreadable one never reached the watch")
 	}
 
 	// AND AN ABSENCE THE STORE ANSWERS WITH NOTHING TAKEN IN MEANWHILE is
 	// the map gone, never kept as the last one held.
-	v.fold(coord.EstateMapRecord{}, false, v.seenVersion())
+	v.answered(coord.EstateMapRecord{}, false, v.takenCount())
 	if _, _, found, err := v.Map(); err != nil || found {
 		t.Errorf("an answered absence reads as (found %v, %v)", found, err)
+	}
+	// ...and a late delivery of the lineage it lost is not taken back in.
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 8})
+	if _, _, found, err := v.Map(); err != nil || found {
+		t.Errorf("a late delivery of the lost map was taken back in: (found %v, %v)", found, err)
+	}
+}
+
+// A VIEW TAKES A MAP WRITTEN AGAIN AFTER ITS KEY WAS LOST, whatever its version:
+// a recreated key starts its versions again, so a view that ordered by version
+// alone would keep routing by the lost map — or keep answering that there is
+// none — until the new one's version overtook the old, while every read of the
+// store confirmed it. A new lineage replaces the old whether the watch or a read
+// hands it over, and whether the view held the old map or had seen it go; a
+// read that nothing overtook is the store's value now, so a store restored to
+// an EARLIER version of the same lineage is taken too, and so is a new lineage
+// this build cannot read; but a read that raced the new lineage's delivery and
+// answered the old one is late, and changes nothing.
+func TestAViewTakesAMapWrittenAgainAfterItsKeyWasLost(t *testing.T) {
+	t.Parallel()
+	_, lost, _ := storeWithMap(t)
+	_, recreated, _ := storeWithMap(t)
+	if lost.Map.Generation == recreated.Map.Generation {
+		t.Fatal("the premise: two first maps name two lineages")
+	}
+	lostRaw, newRaw := encoded(t, lost), encoded(t, recreated)
+	holds := func(v *View, want MapState, version uint64) {
+		t.Helper()
+		m, got, found, err := v.Map()
+		if err != nil || !found || got != version || m.Generation != want.Map.Generation {
+			t.Fatalf("the view holds (lineage %s, version %d, found %v, %v), want lineage %s "+
+				"at version %d", m.Generation, got, found, err, want.Map.Generation, version)
+		}
+	}
+
+	// BY THE WATCH, over a map held at a higher version.
+	v := viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	watch, err := v.Watch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-watch
+	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 3})
+	holds(v, recreated, 3)
+	select {
+	case m := <-watch:
+		if m.Generation != recreated.Map.Generation {
+			t.Errorf("the watch was handed lineage %s, want the recreated map's", m.Generation)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a map written again never reached the watch")
+	}
+	// ...and the lost lineage delivered late is not taken back.
+	before := v.takenCount()
+	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 4})
+	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, true, before)
+	holds(v, recreated, 4)
+
+	// BY THE WATCH, after a read saw the key gone.
+	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.answered(coord.EstateMapRecord{}, false, v.takenCount())
+	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 1})
+	holds(v, recreated, 1)
+
+	// BY A READ NOTHING OVERTOOK, after a read saw the key gone.
+	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.answered(coord.EstateMapRecord{}, false, v.takenCount())
+	v.answered(coord.EstateMapRecord{Value: newRaw, Version: 1}, true, v.takenCount())
+	holds(v, recreated, 1)
+
+	// A STORE RESTORED TO AN EARLIER VERSION OF THE SAME LINEAGE, by a
+	// read nothing overtook: the store's value now.
+	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 30}, true, v.takenCount())
+	holds(v, lost, 30)
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 31})
+	holds(v, lost, 31)
+
+	// A NEW LINEAGE THIS BUILD CANNOT READ, delivered at a lower version:
+	// unknown, never the lost map.
+	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	// A holder state this build does not know: the lineage still reads.
+	future := []byte(strings.Replace(string(newRaw), `"state":"`, `"state":"resting-`, 1))
+	if _, err := DecodeMapState(future); err == nil || bytes.Equal(future, newRaw) {
+		t.Fatal("the premise: a map this build cannot decode")
+	}
+	v.delivered(coord.EstateMapRecord{Value: future, Version: 2})
+	if _, _, _, err := v.Map(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("an unreadable map of a new lineage left the view answering %v, want unknown", err)
 	}
 }
 
