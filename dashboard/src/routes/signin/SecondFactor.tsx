@@ -30,7 +30,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Callout, FormField, Input, Skeleton, Text } from "@crewlethq/ui";
+import { Button, Callout, FormField, Input, Modal, Skeleton, Text } from "@crewlethq/ui";
+import { KeyGlyph, ShieldPersonGlyph } from "@crewlethq/icons/glyphs";
 import { CopyButton, DownloadButton } from "~/ui/primitives.tsx";
 import { refusalText } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -263,5 +264,135 @@ export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
         I have saved them — continue
       </Button>
     </div>
+  );
+}
+
+/**
+ * Adding or replacing an authenticator, from a person's own menu.
+ *
+ * THE ENGINE ASKS FOR A FRESH PROOF FIRST — the sensitive window, because this
+ * is the gesture that decides whether a stolen session becomes a permanent
+ * hold on somebody's account — and the step-up ceremony answers it before the
+ * seed arrives, so this dialog only ever shows a seed its reader proved they
+ * may have.
+ */
+export function AuthenticatorDialog({ onClose }: { onClose: () => void }) {
+  const [enrolled, setEnrolled] = useState(false);
+  return (
+    <Modal
+      open
+      title="Two-step verification"
+      icon={<ShieldPersonGlyph size="md" />}
+      onClose={onClose}
+      size="md"
+      stackBody
+      footer={
+        <Button variant={enrolled ? "primary" : "tertiary"} onClick={onClose}>
+          {enrolled ? "Done" : "Cancel"}
+        </Button>
+      }
+    >
+      {enrolled ? (
+        <Text as="p" variant="body">
+          Your authenticator is set up, and signing in asks for its code from now on. If it replaced
+          one you had, codes from the old app no longer work; your recovery codes are unchanged.
+        </Text>
+      ) : (
+        <>
+          <Text as="p" variant="body" tone="secondary">
+            Signing in will ask for a code from this app as well as your password. If you already
+            use one, this replaces it.
+          </Text>
+          <SecondFactorSetup onEnrolled={() => setEnrolled(true)} />
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * Issuing a fresh set of recovery codes, from a person's own menu.
+ *
+ * ASKED FOR, never issued on opening: a new set RETIRES the old one, so a
+ * person who opened this to look and closed it again must still hold the set
+ * they came with.
+ */
+export function RecoveryCodesDialog({ onClose }: { onClose: () => void }) {
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  async function issue() {
+    if (busy) return;
+    setBusy(true);
+    setRefusal(null);
+    try {
+      setCodes((await auth.recoveryCodes()).codes);
+    } catch (err) {
+      // TWO DIFFERENT AFTERMATHS. A refusal stored nothing, so the set held
+      // still works; an answer nobody can confirm — the engine's `503`, or no
+      // answer at all — may have stored a set this page will never see, which
+      // would have retired the one held. Saying "still works" there is the
+      // claim a person would find out was false on the day they need it.
+      const unknown = err instanceof RestError && (err.status === 503 || err.status === 0);
+      setRefusal(
+        `${refusalText(err)} ${
+          unknown
+            ? "It is not known whether a new set was stored, which would retire the one you hold — issue a new set to be sure."
+            : "No codes were issued; the set you hold still works."
+        }`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      title="Recovery codes"
+      icon={<KeyGlyph size="md" />}
+      onClose={onClose}
+      dismissable={!busy}
+      closeDisabledReason="Waiting for the engine to answer."
+      size="md"
+      stackBody
+      footer={
+        codes ? (
+          <Button variant="primary" onClick={onClose}>
+            I have saved them
+          </Button>
+        ) : (
+          <>
+            <Button variant="tertiary" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void issue()} disabled={busy}>
+              {busy ? "Issuing" : "Issue new codes"}
+            </Button>
+          </>
+        )
+      }
+    >
+      {codes ? (
+        <>
+          <Text as="p" variant="body">
+            Your earlier codes no longer work. Keep these somewhere safe:{" "}
+            <strong>they are shown this once</strong>.
+          </Text>
+          <RecoveryCodeList codes={codes} />
+        </>
+      ) : (
+        <Text as="p" variant="body" tone="secondary">
+          Each recovery code signs you in once in place of a code from your authenticator, for the
+          day you do not have it. Issuing a new set retires the one you hold now.
+        </Text>
+      )}
+      {refusal && (
+        <Callout variant="danger" role="alert">
+          {refusal}
+        </Callout>
+      )}
+    </Modal>
   );
 }

@@ -102,4 +102,20 @@ export const auth = {
 
   /** Who this browser is signed in as. */
   session: async (): Promise<SessionAnswer> => (await rest.get("/auth/session")) as SessionAnswer,
+
+  /**
+   * End this browser's session. The engine clears the cookie whatever its
+   * own write did, so an answer at all means this browser holds no session.
+   */
+  logout: async (): Promise<void> => {
+    await rest.post("/auth/logout", {});
+  },
+
+  /**
+   * End every session the caller holds, on every device, by moving their
+   * revocation epoch — this browser's included.
+   */
+  logoutEverywhere: async (): Promise<void> => {
+    await rest.post("/auth/logout/all", {});
+  },
 };

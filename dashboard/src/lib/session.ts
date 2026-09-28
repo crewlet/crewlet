@@ -24,13 +24,18 @@
  * re-dials, because the one it has was opened as nobody. A session that may
  * only enrol a second factor goes to the enrolment screen instead, carrying
  * `next` along, and the socket waits: it would only be refused again.
+ *
+ * # And a sign-out leaves nothing behind
+ *
+ * Signing out, here or everywhere, ends in a RELOAD at the sign-in — see
+ * [page] — because the tab is about to be somebody else's.
  */
 
 import { useCallback } from "react";
 import { buildHash, parseHash, useNavigator } from "~/app/router.tsx";
 import { framelessOf } from "~/app/nav.ts";
 import { useClient } from "~/lib/store-hooks.ts";
-import { sessionRestored, type SessionStatus } from "~/protocol/index.ts";
+import { auth, sessionRestored, type SessionStatus } from "~/protocol/index.ts";
 
 /** Where a sign-in lands when `next` names nowhere it may go. */
 export const LANDING = "#/";
@@ -88,6 +93,52 @@ export function signInHash(from: string): string {
  */
 export function goSignIn(): void {
   location.hash = signInHash(location.hash);
+}
+
+/**
+ * The one move that leaves NOTHING of a session in the tab.
+ *
+ * A RELOAD, not a navigation. A sign-out on a shared machine is a person
+ * handing the tab to somebody else, and a route change would leave the whole
+ * company as the last person saw it in memory — the store, every answer a
+ * screen cached, the socket's last snapshot — for whoever sits down next. A
+ * reload is the only thing that drops all of it at once and cannot miss a
+ * cache added later. An object rather than a bare function, so a suite can
+ * stand in for a reload jsdom cannot perform.
+ */
+export const page = {
+  reloadInto(hash: string): void {
+    history.replaceState(null, "", hash);
+    location.reload();
+  },
+};
+
+/**
+ * Sign this browser out, and start again at the sign-in with nothing held.
+ *
+ * ONLY ON AN ANSWER. The engine clears the cookie whatever its own write did,
+ * so any answer means this browser holds no session; a request it never
+ * answered — or refused before it ran, as a cross-site post — cleared
+ * nothing, and reloading would put the person straight back where they were
+ * while telling them they had left. That throws, for the caller to say so.
+ */
+export async function signOut(): Promise<void> {
+  await auth.logout();
+  page.reloadInto("#/login");
+}
+
+/**
+ * End every session this person holds, on every device, and this one with
+ * them.
+ *
+ * A REVOCATION NOBODY CAN CONFIRM is a `503` carrying its operation id, and
+ * it throws rather than reloading: saying "signed out everywhere" about a
+ * laptop left open somewhere, when nothing can say it was, is the one claim
+ * this gesture exists to make true.
+ */
+export async function signOutEverywhere(): Promise<void> {
+  await auth.logoutEverywhere();
+  page.reloadInto("#/login");
 }
 
 /**

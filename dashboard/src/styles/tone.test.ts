@@ -72,9 +72,9 @@ const ACCENT: Site[] = [
     why: "The same fact, in the retention table's node column.",
   },
   {
-    file: "app/Shell.tsx",
+    file: "app/frame/IdentityMenu.tsx",
     line: `tone="brand"`,
-    why: 'THE badge that IS the reader — the rail\'s own account row. `AvatarTone` in @crewlethq/ui reserves `brand` for exactly this: "the one badge that is the reader themselves". It is the strongest reading of the rule this file enforces, not an exception to it.',
+    why: 'THE badge that IS the reader — the page bar\'s own account menu. `AvatarTone` in @crewlethq/ui reserves `brand` for exactly this: "the one badge that is the reader themselves". It is the strongest reading of the rule this file enforces, not an exception to it.',
   },
   {
     file: "routes/work/SavedViews.tsx",

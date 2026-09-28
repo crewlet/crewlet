@@ -378,7 +378,7 @@ describe("the frame's layout", () => {
   // group, portalled in — was `flex: 0 0 auto`: 364px on the audit and 478px
   // on the turns list, inside a 390px viewport, shoving everything after it
   // off the right edge of a bar whose `overflow` is `visible`. Off the edge
-  // meant UNREACHABLE: the star, Copy link, the viewer chip and the search
+  // meant UNREACHABLE: the star, Copy link, the identity menu and the search
   // trigger — the command palette's only pointer affordance — were all past
   // x=390 with nothing to scroll. The trail shrank to exactly 0px wide.
   //
@@ -891,7 +891,7 @@ describe("the frame's layout", () => {
     // always break" — and the break lands in source order, which on a turn
     // page is after the screen's own controls. Measured on
     // `#/activity/turns/<id>` at a 1919px window with the rail and the
-    // sidebar open: a 1587px bar, and the viewer chip and the SEARCH TRIGGER
+    // sidebar open: a 1587px bar, and the identity menu and the SEARCH TRIGGER
     // — the command palette's only pointer affordance — alone at the left of
     // a second line under the trail, with a hundred pixels spare on the
     // first.
@@ -913,7 +913,7 @@ describe("the frame's layout", () => {
 
     // THE TRAIL IS THE ONE THING THAT GIVES WAY, and it stops before the way
     // back out is gone. `flex-grow` is the `.spacer` this replaced; the large
-    // shrink factor is the ordering against the viewer chip and the search
+    // shrink factor is the ordering against the identity menu and the search
     // trigger; and the floor is what keeps the trail from being squeezed to
     // nothing beside a screen's own controls, which at `min-width: 0` rendered
     // it as "Activit". 20ch is what the NARROWEST line can give — measured at
@@ -985,8 +985,8 @@ describe("the frame's layout", () => {
     // matches `order: 0` — the INITIAL value — so the whole content of the
     // assertion was "is there an order at all", and `order: 0` puts the
     // controls back exactly where document order already had them: between
-    // the trail and the viewer chip, so the line breaks there and pushes the
-    // chip and the search trigger down with them. That is the failure this
+    // the trail and the identity menu, so the line breaks there and pushes the
+    // menu and the search trigger down with them. That is the failure this
     // clause names, passing its own gate.
     const order = /order:\s*(-?\d+)/.exec(broken);
     expect(order, "the controls carry no order, so they break where they sit").not.toBeNull();
