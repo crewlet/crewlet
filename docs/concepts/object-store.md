@@ -632,7 +632,8 @@ plain about what does not:
   The finest map — a group per slot — still gives about two thousand data
   nodes their hundred copies each at three copies.
 - **Every data node is a broker member.** On an embedded stream a data node
-  holds a share of the broker's replicas and votes in its quorums, and chunks
+  holds a share of the broker's replicas and votes in its quorums — Tier A
+  refuses a data node on a leaf until the partitioned estate is live — and chunks
   travel over the broker's routes: an upload of a 1 GiB file at three copies
   is three gibibytes across them. Adding data nodes for space adds members to
   the broker's cluster as well.

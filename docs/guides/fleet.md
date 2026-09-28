@@ -137,6 +137,89 @@ come back.
 **The schema, applied first.** [`crewlet migrate`](../reference/cli.md#crewlet-migrate)
 before starting any node.
 
+## The broker: members and leaves
+
+How a node's broker takes part in the fleet's is its **broker kind**, and it
+comes from the node's `stream` block — never from its roles:
+
+| Broker kind | The `stream` block that makes it | What its broker does |
+|---|---|---|
+| `member` | embedded, with no `stream.leaf.urls` | Runs JetStream in the process, holds stream replicas, votes in the metadata group that places every stream and consumer |
+| `leaf` | embedded, with `stream.leaf.urls` | Runs with JetStream off and reaches the members' across a leaf link. Holds nothing, votes in nothing |
+| `client` | `stream.type: nats` | A plain client of an external cluster somebody else runs |
+
+Every node advertises its kind on its presence lease, beside its roles and
+labels, and the Fleet screen and `crewlet fleet broker list` show it. A node
+running a build older than the field shows as `unknown`, and is counted as a
+member wherever that is the safe reading.
+
+**The broker is a fixed few members.** Three survive one member lost; five
+survive two, and five is the recommendation for a fleet whose company runs
+the engine's own tracker at scale. No stream keeps more than five copies
+(`stream.replicas` stops at five, JetStream's own ceiling), so a sixth member
+holds no copy anybody asked for and only adds a voter every election and
+every create waits on — `crewlet validate` warns about a peer list naming more
+than four other members. **Beyond five, a fleet grows by adding leaves, not
+members.**
+
+**A member of a fleet persists.** A member that names a cluster, lists peers or
+opens a leaf listener holds the fleet's streams for every node that reaches
+it — every seat's mailbox, every record the tracker and the knowledge base
+write, every coordination bucket — so Tier A requires `stream.store_dir` on it
+whatever its roles: one kept in memory loses its copy of all of them at its
+next restart.
+
+**Which roles pair with which broker, under this release.** A node without
+`data` joins an embedded fleet as a leaf, and a node with `data` is a member
+(or a client of an external cluster). Three pairings are **refused until the
+partitioned estate is live**, and each refusal says so: a data node on a leaf,
+a broker member that holds no data, and `ingress` or `workers` on a node
+without `data`. Under the single-file layout this release runs, every data node
+holds the whole estate as a member of the broker, and a node without data
+reaches the estate through one.
+
+**A capacity seal counts every broker.** Changing a log's byte ceiling
+restarts the fleet into a maintenance mode, and the seal that proves no queued
+request survived is established from every data node and every broker member
+acknowledging, whatever its roles — see
+[who has to acknowledge](retention.md#who-has-to-acknowledge).
+
+### A member that is gone for good
+
+Two records say who the broker's members are, and they can disagree: the
+presence leases, and the metadata group's own list of voters. A member whose
+host died for good loses its presence within a lease TTL, but the metadata
+group goes on counting it in every election and every create until it is
+removed — so a three-member fleet that lost two for good has no quorum left to
+create anything with, and nothing on the presence side says why.
+
+```
+crewlet fleet broker list
+```
+
+puts what each node advertises beside how the group counts it, and names every
+disagreement: a **dead member** (a voter no live node is, or whose node came
+back as a leaf or a client), a node advertising a member the group does not
+count, and a node that does not say. Once a dead member is not coming back:
+
+```
+crewlet fleet broker remove node-c -confirm node-c
+```
+
+The node you ask forwards the removal to a live member, never the one being
+removed while another will do, because nats-server answers a membership change
+only on a member's own system account. It is refused while the named node
+still holds a live presence lease — a running member removed from the group
+rejoins it as a voter at its next restart — and `-force` overrides that for a
+member wedged in a way that still renews its lease. The dead member is often
+the one that was the group's **leader**, and only a leader answers a
+membership change — so the removal asks again every second while the
+survivors elect another, and returns once the member carrying it no longer
+counts the dead one. It fails only when nobody answers for the whole wait (two
+minutes): a group with no leader cannot change its own membership, so bring
+enough members back for a quorum first. The Fleet screen's **Broker members**
+panel offers the same removal.
+
 ## Node roles
 
 Every process declares what it is willing to do. The default is all four
@@ -151,7 +234,7 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Holds the company's durable state: a full copy of the replicated estate (the tracker, the knowledge base, the vectors), a member's share of the broker's replicas and a vote in its quorums, the event log, and a share of the [object store](../concepts/object-store.md) where the company's files are kept. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, the vectors), the event log, and a share of the [object store](../concepts/object-store.md) where the company's files are kept. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's placement map, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
@@ -177,10 +260,12 @@ estate at all — and on an embedded stream its broker joins the fleet as a
 is the shape for an agent host you want small and disposable, and
 [Running One Agent Somewhere Else](satellite-nodes.md) walks through one.
 
-What it can run is `seats` alone. `ingress` and `workers` read and write a
-node's own copy of the estate directly — the API's tracker and knowledge
-surfaces, the retention report, the scheduler, the trim — so Tier A refuses
-either without `data`, naming the field. Its seats use exactly the tools a data
+What it can run is `seats` alone, until the partitioned estate is live.
+`ingress` and `workers` read and write a node's own copy of the estate
+directly under this release's single-file layout — the API's tracker and
+knowledge surfaces, the retention report, the scheduler, the trim — so Tier A
+refuses either without `data`, naming the field and saying the refusal lasts
+only as long as that layout. Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to one data node the asking node picks, and move to
@@ -212,9 +297,10 @@ node answers, its seats' tracker and knowledge tools fail saying so, and
 `fleet_role_unmanned` names `data` if no live node holds it.
 
 The members that stateless nodes join open a leaf listener
-(`stream.leaf.port`) and must persist (`stream.store_dir`), and every node of
-such a fleet runs `coordination.type: embedded-kv`: the leases a stateless
-node holds are the fleet's, reached over the same link.
+(`stream.leaf.port`) and must persist (`stream.store_dir`) — as every member of
+a fleet must — and every node of such a fleet runs `coordination.type:
+embedded-kv`: the leases a stateless node holds are the fleet's, reached over
+the same link.
 
 ### How `workers` is enforced
 

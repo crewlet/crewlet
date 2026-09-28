@@ -18,10 +18,16 @@ A satellite comes in two shapes, and the difference is the `data` role:
 | | `roles: [seats]` — **stateless** | `roles: [data, seats]` — **holds data** |
 |---|---|---|
 | Its store | Scratch: deleted at every boot, and no copy of the tracker or knowledge base | Its own full copy of the replicated estate |
-| Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster member, holding replicas |
+| Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster **member**, holding replicas (a data node on a leaf is refused until the partitioned estate is live) |
 | Disk it needs | Its seats' memory and working rows, nothing else | The whole company's history |
 | Its seats' tools | Read and write through a data node, over the broker | Read and write its own copy |
 | Replacing it | Delete it and start another — it keeps nothing | A member leaving and joining |
+
+Which of the two its broker is — its **broker kind** — comes from its `stream`
+block, never from its roles: `stream.leaf.urls` makes it a leaf, and every node
+advertises the kind it runs on its presence (`crewlet fleet broker list`, or
+the Fleet screen's Broker column). See
+[The broker: members and leaves](fleet.md#the-broker-members-and-leaves).
 
 **Stateless is what you want for an agent host you intend to keep small and
 disposable**: it can be rebuilt from its Tier A file alone, holds no raft
@@ -122,8 +128,8 @@ coordination:
 ```
 
 The members open that listener with `stream.leaf.port`, and a member that
-opens one must persist (`stream.store_dir`): the nodes that join it keep
-nothing, so it keeps everything they do.
+opens one must persist (`stream.store_dir`), as every member of a fleet must:
+the nodes that join it keep nothing, so it keeps everything they do.
 
 ```yaml
 # on node-a and node-b — alongside their existing cluster block
@@ -139,7 +145,10 @@ and `roles: [seats]`.
 
 A satellite that **holds data** is the same file with `roles: [data, seats]`,
 a durable store (no `scratch`) and a cluster member's `stream.cluster` block
-instead of `stream.leaf` — see [Running a Fleet](fleet.md).
+and `stream.store_dir` instead of `stream.leaf` — see
+[Running a Fleet](fleet.md). It joins the broker as a voter: mind the
+[five-member ceiling](fleet.md#the-broker-members-and-leaves) before adding
+one to a fleet that already has five.
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment
