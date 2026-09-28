@@ -32,7 +32,7 @@ func registry(t *testing.T) *notify.Registry {
 	t.Helper()
 	o := company()
 	o.Normalize()
-	return notify.NewRegistry(o)
+	return notify.NewRegistry(o, nil)
 }
 
 // inbox is a seat's mailbox subject in the fixture company.
@@ -116,7 +116,7 @@ func TestAPlusAddressNamesTheSeatItSpells(t *testing.T) {
 	o := company()
 	o.Roles[0].Email = "notif+backend-engineer@example.com"
 	o.Normalize()
-	contested := notify.NewRegistry(o)
+	contested := notify.NewRegistry(o, nil)
 
 	p, ok = contested.ByEmail("notif+backend-engineer@example.com")
 	if !ok {
@@ -124,6 +124,72 @@ func TestAPlusAddressNamesTheSeatItSpells(t *testing.T) {
 	}
 	if p.Handle != "backend-engineer" {
 		t.Fatalf("the declared address beat the plus-address: %q", p.Handle)
+	}
+}
+
+// A PERSON'S OWN SUB-ADDRESS IS THEIR ADDRESS.
+//
+// Somebody who signed a vendor up as dana+jira@example.com is the seat
+// declaring dana@example.com: a tag that spells nobody's handle is the
+// person's own filter, and the declared-address arm matches in the form
+// iam.NormalizeEmail folds to — the one the identity estate blinds a person's
+// address under. Keyed on the lower-cased address alone, the registry told the
+// Jira parser this assignee was an outsider and the notification was dropped,
+// while the same address signed in as Dana.
+func TestASubAddressReachesTheSeatDeclaringItsBase(t *testing.T) {
+	r := registry(t)
+
+	p, ok := r.ByEmail(" Dana+Jira@Example.COM ")
+	if !ok {
+		t.Fatal("a sub-address of a declared address resolved to nobody")
+	}
+	if p.Handle != "dana-founder" {
+		t.Fatalf("resolved %q, want dana-founder", p.Handle)
+	}
+	// THE FOLD IS SYMMETRIC: a seat that declared its tagged form is
+	// found by its base too, since both sides are one mailbox.
+	o := company()
+	o.Roles[0].Email = "lead+eng@example.com"
+	o.Normalize()
+	if p, ok := notify.NewRegistry(o, nil).ByEmail("lead@example.com"); !ok ||
+		p.Handle != "engineering-lead" {
+		t.Fatalf("the base of a declared sub-address resolved to %+v, %v", p, ok)
+	}
+}
+
+// A DECLARED ADDRESS IS RESOLVED BEFORE IT IS INDEXED.
+//
+// The org chart seals a literal address into the secret store and its row
+// carries the `${VAR}` naming it, so a view derived from the rows holds a
+// reference for every seat with an address. Indexed as written, the reference
+// was the key — a string no payload carries — and every seat derived from the
+// chart was unreachable by address.
+func TestADeclaredAddressIsResolvedBeforeItIsIndexed(t *testing.T) {
+	o := company()
+	o.Roles[2].Email = "${CHART_SEAT_DANA_FOUNDER_EMAIL}"
+	o.Roles[0].Email = "${NOBODY_SET_THIS}"
+	o.Normalize()
+	lookup := func(name string) (string, bool) {
+		if name == "CHART_SEAT_DANA_FOUNDER_EMAIL" {
+			return " Dana@Example.com ", true
+		}
+		return "", false
+	}
+	r := notify.NewRegistry(o, lookup)
+
+	if p, ok := r.ByEmail("dana@example.com"); !ok || p.Handle != "dana-founder" {
+		t.Fatalf("the resolved address resolved to %+v, %v — want dana-founder", p, ok)
+	}
+	// AND THE REFERENCE ITSELF NAMES NOBODY, resolved or not: an address
+	// is what a payload carries, and a reference that does not resolve
+	// is a seat with no address rather than one whose address is the
+	// reference's text.
+	for _, ref := range []string{
+		"${CHART_SEAT_DANA_FOUNDER_EMAIL}", "${NOBODY_SET_THIS}",
+	} {
+		if p, ok := r.ByEmail(ref); ok {
+			t.Errorf("the reference %s resolved to %q", ref, p.Handle)
+		}
 	}
 }
 
@@ -173,7 +239,7 @@ func TestAllEnumeratesBothKindsInOrgOrder(t *testing.T) {
 // `crewlet validate` and a node that has not applied a revision both run
 // this way.
 func TestAnEmptyRegistryAnswersNobody(t *testing.T) {
-	r := notify.NewRegistry(nil)
+	r := notify.NewRegistry(nil, nil)
 
 	if _, ok := r.ByHandle("engineering-lead"); ok {
 		t.Fatal("an empty registry resolved a handle")
@@ -202,7 +268,7 @@ func TestADuplicateHandleDoesNotDisplaceTheFirstSeat(t *testing.T) {
 		},
 	}
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
 	p, ok := r.ByHandle("engineering-lead")
 	if !ok {
@@ -231,7 +297,7 @@ func TestASeatWithNoHandleIsNotIndexed(t *testing.T) {
 		Roles: []*org.Role{{Name: "   "}, {Name: "Backend Engineer"}},
 	}
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
 	if _, ok := r.ByHandle(""); ok {
 		t.Fatal("an empty handle resolved to a seat")

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -724,21 +723,21 @@ func writeSeat(ctx context.Context, tx *sql.Tx, at applyContext, seat Seat) (int
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chart_seats
-			(handle, former_keys_json, kind, name, email, email_index,
+			(handle, former_keys_json, kind, name, email,
 			 backstory, goal, project, space, unit_key, created_at, updated_at,
 			 version, scoped_through, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
 		ON CONFLICT (handle) DO UPDATE SET
 			former_keys_json = excluded.former_keys_json,
 			kind = excluded.kind, name = excluded.name, email = excluded.email,
-			email_index = excluded.email_index, backstory = excluded.backstory,
+			backstory = excluded.backstory,
 			goal = excluded.goal, project = excluded.project,
 			space = excluded.space, unit_key = excluded.unit_key,
 			updated_at = excluded.updated_at, version = excluded.version,
 			document = excluded.document
 		WHERE excluded.version > chart_seats.version`,
 		seat.Handle, string(formerJSON), string(seat.Kind), seat.Name,
-		seat.Email, iam.NormalizeEmail(seat.Email), seat.Backstory, seat.Goal,
+		seat.Email, seat.Backstory, seat.Goal,
 		seat.Project, seat.Space, seat.UnitKey,
 		store.EncodeTime(seat.CreatedAt), store.EncodeTime(seat.UpdatedAt),
 		at.packed, document)

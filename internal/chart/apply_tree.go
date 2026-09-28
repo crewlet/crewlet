@@ -616,10 +616,10 @@ func (a *Applier) writeSeatStructure(ctx context.Context, tx *sql.Tx,
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chart_seats
-			(handle, former_keys_json, kind, name, email, email_index,
+			(handle, former_keys_json, kind, name, email,
 			 backstory, goal, project, space, unit_key, created_at, updated_at,
 			 version, scoped_through, document)
-		VALUES (?, '[]', ?, '', '', '', '', '', '', '', ?, ?, ?, 0, ?, ?)
+		VALUES (?, '[]', ?, '', '', '', '', '', '', ?, ?, ?, 0, ?, ?)
 		ON CONFLICT (handle) DO NOTHING`,
 		seat.Handle, string(seat.Kind), seat.UnitKey,
 		store.EncodeTime(seat.CreatedAt), store.EncodeTime(seat.UpdatedAt),

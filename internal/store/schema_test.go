@@ -100,17 +100,16 @@ func TestTheChartOpsLedgerCarriesTheFrameworksFourColumns(t *testing.T) {
 //
 // schema_migrations keys on the FILENAME, so editing a migration that has
 // already run silently never re-runs it: every database that applied it keeps
-// the old shape while the code assumes the new one. `former_keys_json` and
-// `email_index` are both columns the applier fills from the first record it
-// ever writes, so they have to ship in the migration that creates the table
-// rather than in the one that starts using them.
+// the old shape while the code assumes the new one. `former_keys_json` is a
+// column the applier fills from the first record it ever writes, so it has to
+// ship in the migration that creates the table rather than in the one that
+// starts using it.
 func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	t.Parallel()
 
 	db := openReplicated(t)
 	for table, column := range map[string]string{
 		"chart_units": "former_keys_json",
-		"chart_seats": "email_index",
 		// And the additive column on a table this domain does not own,
 		// which is the tracker's chart guard now that the writer has
 		// moved onto it.
@@ -130,6 +129,25 @@ func TestTheChartTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 		t.Error("tracker_projects still carries chart_epoch — nothing writes it " +
 			"since the chart guard moved onto chart_position, and a column no " +
 			"writer fills is a value every reader is entitled to misread")
+	}
+	// AND SO IS THE ADDRESS INDEX nobody read. It held a sealed address's
+	// `${VAR}` reference folded, which matches no payload, while the party
+	// registry resolves the reference and matches in memory — a column
+	// beside that is a second, wrong answer to "which seat is this address".
+	if cols := columnsOf(t, db, "chart_seats"); slices.Contains(cols, "email_index") {
+		t.Error("chart_seats still carries email_index — nothing reads it, and " +
+			"what the applier wrote there was a reference, not an address")
+	}
+	var indexes int
+	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master
+			WHERE type = 'index' AND name = 'chart_seats_email_idx'`).Scan(&indexes)
+	}); err != nil {
+		t.Fatalf("read the estate's indexes: %v", err)
+	}
+	if indexes != 0 {
+		t.Error("chart_seats_email_idx is still in the estate, over a column " +
+			"nothing reads")
 	}
 }
 

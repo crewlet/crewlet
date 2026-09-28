@@ -426,7 +426,7 @@ func registry(t *testing.T) *notify.Registry {
 		{Name: "Writer", DeclaredHandle: "writer"},
 	}}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	for id, handle := range map[string]string{
 		acctLead: "lead", acctSWE: "swe", acctWriter: "writer",
 	} {
@@ -1036,7 +1036,7 @@ func TestAHumanSeatIsNeitherSubscribedNorWoken(t *testing.T) {
 			{Name: "Dana", Kind: org.KindHuman, Contact: &org.HumanContact{}},
 		}}
 		o.Normalize()
-		reg := notify.NewRegistry(o)
+		reg := notify.NewRegistry(o, nil)
 		for id, handle := range map[string]string{
 			acctLead: "lead", acctSWE: "swe", acctHuman: "dana",
 		} {

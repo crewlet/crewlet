@@ -25,7 +25,7 @@ func TestAWithheldSeatRegistersNoContactIdentity(t *testing.T) {
 	o.Normalize()
 
 	// THE CONTROL: the org view alone routes to the suspended founder.
-	chartOnly := notify.NewRegistry(o)
+	chartOnly := notify.NewRegistry(o, nil)
 	chartOnly.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if _, ok := chartOnly.ByExternalID("slack", "U0FOUNDER"); !ok {
 		t.Fatal("the org-view-only registry does not route the founder at all, " +
@@ -35,7 +35,7 @@ func TestAWithheldSeatRegistersNoContactIdentity(t *testing.T) {
 	suspended := notify.StandingOf([]notify.Holder{
 		{Seat: "dana-founder", Stage: iam.StageSuspended},
 	})
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	rec := r.ReconcileHumanContacts(o, env(nil), suspended)
 
 	for ns, id := range map[string]string{"slack": "U0FOUNDER", "github": "danaf"} {
@@ -67,7 +67,7 @@ func TestAMovedStandingWithdrawsAndRestoresOnOneRegistry(t *testing.T) {
 	t.Parallel()
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
 	r.ReconcileHumanContacts(o, env(nil), notify.StandingOf([]notify.Holder{
 		{Seat: "dana-founder", Stage: iam.StageActive},
@@ -222,7 +222,7 @@ func TestASuspensionAfterARenameStillWithholdsTheSeat(t *testing.T) {
 		}
 	}
 
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	rec := r.ReconcileHumanContacts(o, env(nil), suspended)
 	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
 		t.Errorf("a suspended holder's account still resolves to %q after the "+
@@ -265,7 +265,7 @@ func TestABindingFollowsItsSeatAndNeverTheAddressItWasMadeWith(t *testing.T) {
 	})
 	o.Normalize()
 
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	r.ReconcileHumanContacts(o, env(nil), notify.StandingOf([]notify.Holder{
 		{Seat: "founder", Stage: iam.StageSuspended},
 		{Seat: "dana-founder", Stage: iam.StageActive},

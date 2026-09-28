@@ -231,14 +231,15 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 //
 // # It had a second verb, a blind-index key, and nothing derived a value under it
 //
-// The chart matches a vendor payload's address against `chart_seats.email_index`,
-// which the applier writes as the address's MATCHED FORM (iam.NormalizeEmail),
-// in the clear. A keyed blind of the address was designed beside it and never
-// wired: the only thing that read the key was a writer method nothing called,
-// so the key was minted on demand, without the guard the identity estate's has
-// against minting over a deleted one, for an index no row held. Keying the
-// chart's address index is part of sealing a human seat's personal fields, and
-// it arrives with that — together with the rows it would be derived into.
+// A keyed blind of a seat's address was designed for a chart column the
+// applier filled and nothing read, and the only reader of its key was a writer
+// method nothing called — so the key was minted on demand, without the guard
+// the identity estate's has against minting over a deleted one, for an index
+// no row held. Both are gone: a seat's address is SEALED here like any other
+// literal (the row carries its `${VAR}`), and the party registry resolves that
+// reference and matches the address in memory with iam.NormalizeEmail, the
+// fold the identity estate blinds under. A person's own name and address live
+// under a key that can be deleted in the identity directory, not in the chart.
 //
 // NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
 // [New] refuses a node without a keyring or a fleet backend — and the chart's

@@ -588,6 +588,11 @@ type Role struct {
 	OriginHandle  string   `yaml:"-" json:"-"`
 	FormerHandles []string `yaml:"-" json:"-"`
 
+	// Email is the seat's address AS WRITTEN: a literal in an authored file,
+	// and a whole `${VAR}` reference in every view derived from the org
+	// chart's rows, because the chart seals a literal address into the
+	// company's secret store and its row carries the reference. Anything
+	// that MATCHES on it reads [Role.ResolvedEmail].
 	Email string `yaml:"email,omitempty" json:"email,omitempty"`
 
 	// UnitRef is a SOFT reference, by unit KEY ([Unit.Key]), to the unit
@@ -789,6 +794,39 @@ func (r *Role) Origin() string {
 		return r.OriginHandle
 	}
 	return r.Handle()
+}
+
+// ResolvedEmail is the address this seat declares, ready to match on: a whole
+// `${VAR}` reference resolved through lookup, a literal trimmed, and "" when
+// the seat has none or its reference does not resolve. A nil lookup reads the
+// process environment, as [HumanContact.ResolvedIdentities] does.
+//
+// A REFERENCE IS THE ORDINARY CASE rather than the exotic one: a view derived
+// from the chart's rows holds one for every seat that has an address. Used as
+// written, it is a string no vendor payload can ever carry, which is the
+// failure [HumanContact.ResolvedIdentities] names for a contact id — a seat
+// whose address never matches, read as a colleague the vendor does not know.
+//
+// NOT FOLDED. The form an address is compared in is [iam.NormalizeEmail]'s,
+// and a caller that compares folds both sides with it; this is the value a
+// person would read back.
+func (r *Role) ResolvedEmail(lookup EnvLookup) string {
+	if r == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(r.Email)
+	name, isRef := envref.Whole(raw)
+	if !isRef {
+		return raw
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	v, ok := lookup(name)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 // humanForbidden is the runtime-only surface a human seat must not carry,

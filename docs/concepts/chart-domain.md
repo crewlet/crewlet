@@ -433,7 +433,7 @@ file, and nothing here is in the coordination store.
 | Table | What it holds |
 |---|---|
 | `chart_units` | One unit: its key, its display name, its purpose and goals, its chat channel, its tracker and knowledge identities, where it sits, and who leads it. Plus `former_keys_json` — the keys it used to answer to |
-| `chart_seats` | One seat, agent or human: its handle, its backstory and goal, its contact address, its identities, and which unit it sits in. Plus `email_index`, the matched form of its address, and `document` — which carries the seat's **runtime** half (below) |
+| `chart_seats` | One seat, agent or human: its handle, its backstory and goal, its contact address, its identities, and which unit it sits in. The address is a `${VAR}` reference, because a literal one is sealed into the [secret store](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not); nothing matches on this column — the party registry resolves the reference and matches a vendor payload's address in memory. Plus `document`, which carries the seat's **runtime** half (below) |
 | `chart_manages` | One authored `manages:` entry, stored **unexpanded** — a `manages:` naming a unit reaches every seat in its subtree, and that expansion is a function of the tree at the moment it is read |
 | `chart_leads` | One unit's authored lead, as an edge. Lead *inheritance* means the effective lead of a team is an ancestor's authored row, so this is walked rather than read |
 | `chart_history` | One row per change: what happened, to what, by whom, from which config revision, and when |

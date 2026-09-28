@@ -39,7 +39,7 @@ func registry(t *testing.T) *notify.Registry {
 		},
 	}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	for id, handle := range map[string]string{
 		acctLead: "lead", acctSWE: "swe", acctQA: "qa",
 	} {
@@ -311,7 +311,7 @@ func TestAHumanSeatsDeclaredAtlassianAccountRoutes(t *testing.T) {
 		{Name: "SWE", DeclaredHandle: "swe"},
 	}}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	reg.ReconcileHumanContacts(o, func(string) (string, bool) { return "", false },
 		notify.Standing{})
 
@@ -331,7 +331,7 @@ func TestDataCentreUsernamesRouteLikeCloudAccountIds(t *testing.T) {
 		{Name: "SWE", DeclaredHandle: "swe"},
 	}}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	if err := reg.Register(jira.Backend, "swe.account", "swe"); err != nil {
 		t.Fatal(err)
 	}

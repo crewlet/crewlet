@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -59,7 +60,7 @@ type Registry struct {
 	byHandle map[string]Party
 	byRole   map[string]string    // role name  -> handle
 	byID     map[uuid.UUID]string // derived id -> handle
-	byEmail  map[string]string    // lowercased -> handle
+	byEmail  map[string]string    // matched form (iam.NormalizeEmail) -> handle
 	parties  []Party              // org order, stable
 
 	// external and reverse are exact INVERSES of each other within each
@@ -99,7 +100,15 @@ type identityKey struct{ namespace, externalID string }
 // A nil org yields an empty registry rather than a nil one. `crewlet
 // validate` and a node that has not yet applied a revision both run without
 // a company, and they should get "nobody matches" rather than a panic.
-func NewRegistry(o *org.Organization) *Registry {
+//
+// LOOKUP RESOLVES EACH SEAT'S DECLARED ADDRESS ([org.Role.ResolvedEmail]) —
+// the lookup [Registry.ReconcileHumanContacts] resolves contact ids through,
+// and nil reads the process environment as it does there. It is not optional
+// in practice: the org chart seals a literal address into the secret store and
+// its row carries the `${VAR}` naming it, so an org derived from the rows holds
+// a reference for every seat with an address, and an index built from those
+// as written matched no payload at all.
+func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
 	r := &Registry{
 		byHandle: make(map[string]Party),
 		byRole:   make(map[string]string),
@@ -154,7 +163,7 @@ func NewRegistry(o *org.Organization) *Registry {
 				r.byID[p.AgentID] = handle
 			}
 		}
-		if email := strings.ToLower(strings.TrimSpace(role.Email)); email != "" {
+		if email := iam.NormalizeEmail(role.ResolvedEmail(lookup)); email != "" {
 			if _, dup := r.byEmail[email]; !dup {
 				r.byEmail[email] = handle
 			}
@@ -275,21 +284,34 @@ func (r *Registry) ByAgentID(id uuid.UUID) (Party, bool) {
 	return r.ByHandle(handle)
 }
 
-// ByEmail resolves an address to a party.
+// ByEmail resolves an address to a party. TWO ARMS, in this order:
 //
-// A plus-address names a seat DIRECTLY — notif+engineer@example.com is the
-// engineer, whatever that seat's own configured address happens to be — so
-// it is tried first. A seat's declared address is the fallback, matched
-// case-insensitively because no mail system treats the local part's case as
-// significant in practice and a third-party app hands back whatever the
-// sender typed.
+//   - A PLUS TAG THAT SPELLS A SEAT'S HANDLE names that seat:
+//     notif+engineer@example.com is the engineer, whatever address that seat
+//     declares and whichever seat declares the rest of the address. A retired
+//     handle counts, as it does for [Registry.ByHandle]. This is how a seat is
+//     reached through a shared mailbox, so a tag that is somebody's handle is
+//     never read as anything else — which is why a person's own sub-address
+//     tag should not be a seat's handle.
+//   - Otherwise THE SEAT WHOSE DECLARED ADDRESS HAS THE SAME MATCHED FORM:
+//     both sides folded by [iam.NormalizeEmail], lower-cased with the plus tag
+//     dropped. A third-party app hands back whatever the sender typed, no mail
+//     system treats the local part's case as significant in practice, and a
+//     person who signed a vendor up as sarah.chen+jira@example.com is the seat
+//     declaring sarah.chen@example.com. It is the fold the identity estate
+//     blinds a person's address under, so an address reaches a seat and a
+//     person through one normalisation rather than two.
 func (r *Registry) ByEmail(email string) (Party, bool) {
 	if handle := PlusAddress(email); handle != "" {
 		if p, ok := r.ByHandle(handle); ok {
 			return p, true
 		}
 	}
-	handle, ok := r.byEmail[strings.ToLower(strings.TrimSpace(email))]
+	folded := iam.NormalizeEmail(email)
+	if folded == "" {
+		return Party{}, false
+	}
+	handle, ok := r.byEmail[folded]
 	if !ok {
 		return Party{}, false
 	}

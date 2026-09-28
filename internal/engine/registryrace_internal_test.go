@@ -30,7 +30,7 @@ func TestAStaleRewireCannotWriteTheCurrentRegistry(t *testing.T) {
 	previous := &Company{Org: &org.Organization{Name: "acme"}}
 	current := &Company{Org: &org.Organization{Name: "acme"}}
 
-	e.notify.registry = notify.NewRegistry(previous.Org)
+	e.notify.registry = notify.NewRegistry(previous.Org, nil)
 	e.notify.registryFor = previous
 	if got := e.registryOf(previous); got == nil {
 		t.Fatal("the pass that built the live registry cannot write it")
@@ -38,7 +38,7 @@ func TestAStaleRewireCannotWriteTheCurrentRegistry(t *testing.T) {
 
 	// AN APPLY PUBLISHES A NEW PAIR, which is the instant the retry's
 	// work goes stale.
-	fresh := notify.NewRegistry(current.Org)
+	fresh := notify.NewRegistry(current.Org, nil)
 	e.notify.registry, e.notify.registryFor = fresh, current
 
 	if got := e.registryOf(previous); got != nil {

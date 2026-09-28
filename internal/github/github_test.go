@@ -448,7 +448,7 @@ func TestOnlyRoutableLoginsProduceNotifications(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "eng"}},
 	}
-	reg := notify.NewRegistry(organization)
+	reg := notify.NewRegistry(organization, nil)
 	if err := reg.Register(github.Backend, "eng-bot", "eng"); err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestAnAgentsOwnAppIsRoutableUnderBothItsNames(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
 	}
-	reg := notify.NewRegistry(organization)
+	reg := notify.NewRegistry(organization, nil)
 	// The two registrations the engine makes for one app.
 	if err := reg.Register(github.Backend, "acme-sre-lead", "sre-lead"); err != nil {
 		t.Fatal(err)

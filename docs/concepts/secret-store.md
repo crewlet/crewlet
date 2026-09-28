@@ -83,21 +83,28 @@ So the chart makes its own trade, and states it rather than inheriting one:
 - **A whole `${VAR}` is stored as written.** It names a credential rather than
   being one, it is what you edit, and sealing it would put a pointer inside the
   store and a pointer to that pointer on the record.
-- **A human seat's own fields are not sealed.** A seat's name and address
-  are fields of the chart like any other, in every node's rows, in every
-  snapshot and on the log itself, and its `email_index` is the address's
-  normalised form, in the clear — that is what a vendor payload's address is
-  matched against, one indexed read. The place a *person's* name and address
-  live under a key that can be deleted is the
-  [identity directory](identity-and-access.md): removing somebody there
+- **A seat's address is sealed like a credential; its name is not.** A
+  literal `email` on a seat is sealed here under a name derived from the seat
+  (`CHART_SEAT_SARAH_CHEN_EMAIL` for `sarah-chen`) and the row carries the
+  reference, exactly as a literal credential is. A
+  vendor payload's address is matched by the party registry, which resolves
+  that reference from the node's secret snapshot — so a newly sealed address
+  is matched once the node next takes one (the propagation table below) — and
+  compares both sides lower-cased with any plus tag dropped, the fold the
+  identity directory blinds a person's address under. A seat's `name` is a
+  field of the chart like any other, in every node's rows, in every snapshot
+  and on the log itself. Neither is where a *person* lives: the place a
+  person's name and address live under a key that can be deleted is the
+  [identity directory](identity-and-access.md). Removing somebody there
   destroys that key, which makes every copy of them that does not also hold
   the key unreadable at once — the only erasure a write-ahead log can actually
   offer. A backup taken before the removal does hold it, because this store's
   bucket is in every backup, so that backup goes on opening their name and
   address for whoever holds it and the keyring until it is deleted
   ([what a removal reaches](identity-and-access.md#removing-somebody-destroys-a-key-not-a-row)).
-  A leaver's seat still names them until the seat's own `name` and `email`
-  are cleared.
+  A leaver's seat still names them until the seat's own `name` is cleared,
+  and clearing its `email` empties the field without deleting the sealed
+  value: remove the name its reference held with `crewlet secrets unset` too.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 

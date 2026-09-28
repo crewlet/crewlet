@@ -358,26 +358,24 @@ func ValidLoginFor(k Kind, s string) bool {
 // NormalizeEmail is the form an email address is MATCHED on.
 //
 // LOWER-CASED AND PLUS-TAG STRIPPED. Inbound Jira and GitHub payloads identify
-// people by address, and a company routinely subscribes its seats with a
-// plus-addressed form (`notif+sarah-chen@example.com`) so vendor mail is
-// filterable — so the address on a record and the address in a payload are
-// routinely different strings naming one person.
-//
-// IT IS COMPUTED ONCE, AT THE WRITE, and stored or hashed. The alternative is
-// a LOWER(...) predicate over every row on every inbound webhook, which cannot
-// use an index and has to re-derive the plus rule in SQL, in a dialect where
-// this Go answer beside it would then be a second opinion.
+// people by address, and people routinely sign a vendor up with a
+// sub-addressed form (`sarah.chen+jira@example.com`) so its mail is
+// filterable — so the address somebody declared and the address in a payload
+// are routinely different strings naming one mailbox.
 //
 // # Why it lives in the vocabulary leaf
 //
-// TWO DOMAINS MATCH ON IT and they must never disagree: the org chart derives
-// `chart_seats.email_index` from it so a vendor payload resolves to a seat,
-// and the identity estate derives a person's keyed BLIND from it so a sign-in
-// resolves to a person. Written twice, one address would reach a seat and a
-// different person — the two halves of "who is this" answering differently
-// about one string, which is the class of failure this package's namespace
-// rules exist to make unrepeatable. A leaf is where the shared answer can sit
-// without either domain importing the other.
+// TWO PLACES MATCH ON IT and they must never fold differently: the party
+// registry (internal/notify) folds a seat's declared address and a payload's
+// address with it so a vendor payload resolves to a SEAT, and the identity
+// estate derives a person's keyed BLIND from it, once at the write, so a
+// sign-in resolves to a PERSON. Folded twice by two rules, one address would
+// reach a seat and a different person — the two halves of "who is this"
+// answering differently about one string, which is the class of failure this
+// package's namespace rules exist to make unrepeatable. A leaf is where the
+// shared answer can sit without either importing the other. (The registry
+// reads one convention before the fold, and it is the registry's own: a plus
+// tag that spells a seat's HANDLE names that seat.)
 //
 // IT DOES NOT VALIDATE. An address that is not one is returned folded and
 // unchanged, because the caller that has to refuse one says so where the field

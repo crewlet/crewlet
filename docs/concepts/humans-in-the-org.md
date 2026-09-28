@@ -553,8 +553,10 @@ change is then applied like any other (see
 indexes every **party**, agent and human seats alike, and resolves one by
 handle (`ByHandle`), exact role name (`ByRole`), derived agent id
 (`ByAgentID`, which never matches a human seat because a human has no agent
-id), email (`ByEmail`, where a plus-address naming a handle wins over a
-seat's declared address), or an external ID on a surface (`ByExternalID`).
+id), email (`ByEmail`: a plus tag naming a handle wins, and otherwise the
+seat whose declared address — its `${VAR}` resolved — compares equal
+lower-cased with any plus tag dropped), or an external ID on a surface
+(`ByExternalID`).
 Each `Party` carries a `Human` flag, and the notification spine reads it to
 skip a human recipient rather than wake it.
 

@@ -334,7 +334,7 @@ func env(pairs map[string]string) org.EnvLookup {
 func TestHumanContactsRegisterFromTheOrg(t *testing.T) {
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
 	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if rec.Registered != 2 {
@@ -356,7 +356,7 @@ func TestHumanContactsRegisterFromTheOrg(t *testing.T) {
 func TestAReconcileWithdrawsItsOwnStalePairs(t *testing.T) {
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 
 	next := company()
@@ -384,7 +384,7 @@ func TestAnIDMovingBetweenHumanSeatsLands(t *testing.T) {
 		Contact: &org.HumanContact{MattermostUserID: "shared"},
 	})
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if p, _ := r.ByExternalID("mattermost", "shared"); p.Handle != "sam-ops" {
 		t.Fatalf("the id started at %q", p.Handle)
@@ -412,7 +412,7 @@ func TestAReconcileNeverTakesAnAgentsIdentity(t *testing.T) {
 	o := company()
 	o.Roles[2].Contact.MattermostUserID = "contested"
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	if err := r.Register("mattermost", "contested", "backend-engineer"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	o := company()
 	o.Roles[2].Contact.SlackUserID = "${FOUNDER_SLACK_ID}"
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
 	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if rec.Unresolved != 1 {
@@ -468,7 +468,7 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 func TestASeatThatStopsBeingHumanLosesItsContactIDs(t *testing.T) {
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 
 	next := company()

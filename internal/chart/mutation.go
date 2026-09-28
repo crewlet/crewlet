@@ -270,10 +270,12 @@ type SeatPayload struct {
 
 	Name string `json:"name,omitempty"`
 
-	// Email is the address a vendor payload identifies this person by. The
-	// applier derives `email_index` from it with [iam.NormalizeEmail]; the
-	// record carries what was AUTHORED, because that is what a person reads
-	// back out of the config.
+	// Email is the address a vendor payload identifies this seat by, as a
+	// whole `${VAR}` reference: a literal is SEALED into the company's
+	// secret store by the decide and never reaches a record. Nothing here
+	// derives a matched form from it — a reference folds to nothing useful —
+	// so the address is resolved and matched in memory, by the party
+	// registry (internal/notify), with the fold the identity estate uses.
 	Email string `json:"email,omitempty"`
 
 	Backstory string `json:"backstory,omitempty"`

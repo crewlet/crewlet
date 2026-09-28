@@ -452,7 +452,7 @@ Marcus Rivera       marcus-rivera
 Alex Kim            alex-kim
 ```
 
-Handles are the canonical identity **inside the document as well as outside it**: a unit's `lead:` and every `manages:` entry name a seat by its handle, and so do notification routing and external system mappings (e.g. a Jira assignee, a GitLab service account). A name is prose a founder edits; an identity is not, so nothing references a seat by its `name`. A seat's `email` is matched too — inbound Jira and GitHub payloads identify people by address, and a plus-addressed form (`notif+sarah-chen@co.com`) resolves back to the handle. You can set a custom handle:
+Handles are the canonical identity **inside the document as well as outside it**: a unit's `lead:` and every `manages:` entry name a seat by its handle, and so do notification routing and external system mappings (e.g. a Jira assignee, a GitLab service account). A name is prose a founder edits; an identity is not, so nothing references a seat by its `name`. A seat's `email` is matched too — inbound Jira and GitHub payloads identify people by address. A plus tag that spells a seat's handle names that seat (`notif+sarah-chen@co.com` is `sarah-chen`, whatever address she declares); otherwise an address matches the seat that declared it, compared lower-cased with any plus tag dropped, so `sarah+jira@co.com` reaches the seat declaring `sarah@co.com`. Two seats whose addresses compare equal that way are refused, and a person's own sub-address tag should not be a seat's handle. You can set a custom handle:
 
 ```yaml
 roles:

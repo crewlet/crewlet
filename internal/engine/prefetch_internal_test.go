@@ -187,7 +187,7 @@ func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 		Roles: []*org.Role{{Name: "Tech Lead", DeclaredHandle: "lead"}},
 	}}}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	for _, id := range []struct{ ns, external string }{
 		{"chat", "U-lead"}, {"gitlab", "lead-bot"},
 	} {

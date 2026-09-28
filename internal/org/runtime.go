@@ -51,7 +51,7 @@ var seatRowFields = map[string]string{
 	"DeclaredHandle":       "the row's primary key",
 	"OriginHandle":         "the row's `origin_handle`, frozen by the first rename and written by nothing else",
 	"FormerHandles":        "the row's `former_keys_json`",
-	"Email":                "the row's `email` column, plus the derived `email_index`",
+	"Email":                "the row's `email` column, a sealed address's `${VAR}` reference",
 	"Backstory":            "the row's `backstory` column",
 	"Goal":                 "the row's `goal` column",
 	"Responsibilities":     "the row's own column",

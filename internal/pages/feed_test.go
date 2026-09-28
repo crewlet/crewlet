@@ -204,7 +204,7 @@ func registry(t *testing.T, handles ...string) *notify.Registry {
 		})
 	}
 	o.Normalize()
-	return notify.NewRegistry(o)
+	return notify.NewRegistry(o, nil)
 }
 
 // route runs one committed record through BOTH halves — the feed's translator

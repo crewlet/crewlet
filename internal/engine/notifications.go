@@ -293,8 +293,13 @@ func (e *Engine) refreshParties(ctx context.Context, c *Company) {
 // did not touch, and a patch applied to the live one mutates a value a
 // running turn may be reading.
 func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
-	reg := notify.NewRegistry(c.Org)
-	rec := reg.ReconcileHumanContacts(c.Org, e.resolver().LookupOK, standing)
+	// ONE SNAPSHOT for both halves, because a seat's address and its contact
+	// ids are both `${VAR}` references a chart row carries, and two reads of
+	// the resolver could straddle a refresh and index the seat's address and
+	// its identities against two different stores.
+	lookup := e.resolver().LookupOK
+	reg := notify.NewRegistry(c.Org, lookup)
+	rec := reg.ReconcileHumanContacts(c.Org, lookup, standing)
 
 	// The CODE HOST's seat identities are config-derived, so they are
 	// rebuilt from the new company here rather than carried across. Doing

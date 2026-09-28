@@ -33,7 +33,7 @@ func registry(t *testing.T) *notify.Registry {
 		},
 	}}}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	for username, handle := range map[string]string{
 		agentLead: "lead", agentSWE: "swe", agentQA: "qa",
 	} {

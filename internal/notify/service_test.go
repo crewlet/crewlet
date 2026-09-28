@@ -638,7 +638,7 @@ func TestTheServiceResolvesAgainstTheLiveRegistry(t *testing.T) {
 	o := company()
 	o.Roles = append(o.Roles, &org.Role{Name: "New Seat"})
 	o.Normalize()
-	h.reg = notify.NewRegistry(o)
+	h.reg = notify.NewRegistry(o, nil)
 
 	h.svc.Handle(t.Context(), delivery("tracker"))
 	if woken := h.inbox(t, "new-seat"); len(woken) != 1 {

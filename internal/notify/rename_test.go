@@ -36,7 +36,7 @@ func renamed() *org.Organization {
 func TestARenamedSeatsPartyCarriesTheIDItsMailboxIsOn(t *testing.T) {
 	t.Parallel()
 	o := renamed()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
 	p, ok := r.ByHandle("head-reliability")
 	if !ok {
@@ -71,7 +71,7 @@ func TestARenamedSeatsPartyCarriesTheIDItsMailboxIsOn(t *testing.T) {
 // "nobody" is an alert that wakes no one while the seat sits there working.
 func TestAReferenceToARetiredHandleStillNamesTheSeat(t *testing.T) {
 	t.Parallel()
-	r := notify.NewRegistry(renamed())
+	r := notify.NewRegistry(renamed(), nil)
 
 	p, ok := r.ByHandle("sre-lead")
 	if !ok {
@@ -112,7 +112,7 @@ func TestALiveHandleOutranksAnotherSeatsAlias(t *testing.T) {
 	}
 	o.Normalize()
 
-	p, ok := notify.NewRegistry(o).ByHandle("sre-lead")
+	p, ok := notify.NewRegistry(o, nil).ByHandle("sre-lead")
 	if !ok {
 		t.Fatalf("sre-lead resolves to nobody")
 	}

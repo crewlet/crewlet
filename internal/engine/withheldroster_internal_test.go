@@ -90,7 +90,7 @@ func leadEngine(t *testing.T, prov llm.Provider, standing notify.Standing) *Engi
 			MaxIterations: 1, DelegationDepthLimit: 3, MaxToolRounds: 1,
 		}},
 	})
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	reg.ReconcileHumanContacts(o, func(string) (string, bool) { return "", false }, standing)
 	e.notify.registry = reg
 	return e

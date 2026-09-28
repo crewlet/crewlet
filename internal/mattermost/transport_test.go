@@ -180,7 +180,7 @@ func TestStartRegistersBothHalvesOfTheIdentity(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe", IsBot: true},
 	})
-	reg := notify.NewRegistry(seatOrg(t))
+	reg := notify.NewRegistry(seatOrg(t), nil)
 	tr := transport(t, inst, func(o *mattermost.TransportOptions) {
 		o.Registry = func() *notify.Registry { return reg }
 	})

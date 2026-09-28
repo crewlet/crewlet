@@ -58,7 +58,7 @@ func TestASuspensionWithdrawsContactIdentitiesWithinOneApply(t *testing.T) {
 	}
 
 	// THE CONTROL: the org view alone still routes to them.
-	chartOnly := notify.NewRegistry(rig.company.Org)
+	chartOnly := notify.NewRegistry(rig.company.Org, nil)
 	chartOnly.ReconcileHumanContacts(rig.company.Org, rig.engine.resolver().LookupOK,
 		notify.Standing{})
 	if p, ok := chartOnly.ByExternalID("slack", founderSlack); !ok || p.Handle != founderSeat {
@@ -165,7 +165,7 @@ func TestAnEngineWithNoNativeRuntimeIsChartOnly(t *testing.T) {
 	if reg.Standing().Consulted() {
 		t.Error("an engine with no directory built its registry from a reading")
 	}
-	chartOnly := notify.NewRegistry(company.Org)
+	chartOnly := notify.NewRegistry(company.Org, nil)
 	chartOnly.ReconcileHumanContacts(company.Org, e.resolver().LookupOK, notify.Standing{})
 	want, got := chartOnly.Identities("slack"), reg.Identities("slack")
 	if len(want) == 0 || fmt.Sprint(want) != fmt.Sprint(got) {

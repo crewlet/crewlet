@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -213,10 +215,13 @@ func listOrNone(set map[string]struct{}) string {
 // identity ([org.Organization.validateContactIdentities]) and was written for
 // the same registry behaviour. Email was the one address it did not cover.
 //
-// FOLDED AND TRIMMED, exactly as the registry folds it, because agreeing with
-// the consumer is the whole point: a rule comparing `Ada@example.com` and
-// `ada@example.com` as different values would pass a document the registry
-// then collapses.
+// IN THE FORM THE REGISTRY MATCHES ON — [iam.NormalizeEmail], lower-cased
+// with the plus tag dropped — because agreeing with the consumer is the whole
+// point: a rule comparing `Ada@example.com` and `ada+ops@example.com` as
+// different values would pass a document the registry then collapses onto
+// one mailbox. A whole `${VAR}` is compared as written, since two seats naming
+// one variable are one address and validation resolves nothing to tell two
+// variables apart.
 //
 // REPORTED AT EVERY SEAT THAT HOLDS THE ADDRESS, not just the second: an
 // operator fixing this has to decide which seat keeps it, and a message
@@ -231,7 +236,10 @@ func (c *Company) validateSeatEmails() error {
 	var order []string
 	byEmail := map[string][]holder{}
 	for role, path := range c.eachRole() {
-		email := strings.ToLower(strings.TrimSpace(role.Email))
+		email := strings.TrimSpace(role.Email)
+		if _, isRef := envref.Whole(email); !isRef {
+			email = iam.NormalizeEmail(email)
+		}
 		if email == "" {
 			continue
 		}
@@ -253,8 +261,9 @@ func (c *Company) validateSeatEmails() error {
 		}
 		for _, h := range holders {
 			p.add(at(h.path, "email"), ErrConflict,
-				"%d seats declare the email %q (%s). The party registry keys "+
-					"on it and the first seat wins, so all but one of these "+
+				"%d seats declare the email %q (%s; compared lower-cased with "+
+					"any plus tag dropped). The party registry keys on that "+
+					"form and the first seat wins, so all but one of these "+
 					"silently stops being findable by address — mail meant for "+
 					"one person resolves to another. Give each seat its own "+
 					"address",

@@ -304,7 +304,7 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
 		}},
 	})
-	e.notify.registry = notify.NewRegistry(organization)
+	e.notify.registry = notify.NewRegistry(organization, nil)
 	e.notify.slack = transport
 	return e, ws
 }

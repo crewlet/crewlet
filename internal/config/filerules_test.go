@@ -206,6 +206,43 @@ units:
 	}
 }
 
+// A SUB-ADDRESS IS THE SAME MAILBOX, AND TWO SEATS HOLDING IT COLLIDE.
+//
+// The registry matches a declared address in iam.NormalizeEmail's form, so
+// `ada@` and `ada+ops@` are one key and the second seat is dropped from the
+// index. A rule that folded case alone passed the document; the registry then
+// answered every payload for either address with the first seat.
+func TestTwoSeatsDeclaringOneMailboxThroughATagCollide(t *testing.T) {
+	t.Parallel()
+
+	err := rejects(t, `
+name: Acme
+roles:
+  - {name: CEO, handle: ceo, email: ada@example.com}
+  - {name: Dev, handle: dev, email: Ada+Ops@Example.com}
+`, "roles[1].email")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+
+	// A REFERENCE IS COMPARED AS WRITTEN: one variable is one address, and
+	// two different variables are nothing validation can judge.
+	if err := rejects(t, `
+name: Acme
+roles:
+  - {name: CEO, handle: ceo, email: "${ADA_EMAIL}"}
+  - {name: Dev, handle: dev, email: "${ADA_EMAIL}"}
+`, "roles[0].email"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("two seats naming one variable: want ErrConflict, got %v", err)
+	}
+	mustCompany(t, `
+name: Acme
+roles:
+  - {name: CEO, handle: ceo, email: "${ADA_EMAIL}"}
+  - {name: Dev, handle: dev, email: "${ada_email}"}
+`)
+}
+
 // AND TWO SEATS WITH NO EMAIL DO NOT COLLIDE.
 //
 // The rule every duplicate check in this tree follows: an identity that is
