@@ -290,8 +290,12 @@ func (e *Engine) rebuildChart(ctx context.Context) (org.ViewPosition, error) {
 		return org.ViewPosition{}, nil
 	}
 	at := reader.At()
+	// AN EQUAL CURSOR IS NOT ENOUGH WHILE THE CHART'S SEALED VALUES ARE
+	// STALE: the rows have not moved, but the last re-read of what they name
+	// failed, and the composition built on it resolved an old credential.
+	// See chartsecrets.go.
 	if held, ok := e.epoch.viewAt(); ok && held.Generation == at.Generation &&
-		held.Seq == at.Seq {
+		held.Seq == at.Seq && !e.chartSecretsStale.Load() {
 		return held, nil
 	}
 
@@ -321,6 +325,11 @@ func (e *Engine) rebuildChart(ctx context.Context) (org.ViewPosition, error) {
 			e.epoch.finishRebuild()
 			return org.ViewPosition{}, err
 		}
+		// THE VALUES THESE ROWS SEALED, before the company composed from
+		// them is published: everything built from that company resolves
+		// the rows' references, and a snapshot taken before a chart write
+		// sealed them holds nothing — or the previous value — under them.
+		e.coverChartSecrets(ctx, rows)
 		e.epoch.setRows(rows)
 		if e.epoch.finishRebuild() {
 			break

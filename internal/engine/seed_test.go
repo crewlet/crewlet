@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -84,8 +85,18 @@ func TestABootSeedTurnsAFileIntoChartRows(t *testing.T) {
 	if dev.Name != "Dev" {
 		t.Errorf("name = %q, want the file's", dev.Name)
 	}
-	if got := dev.MCPEnv["tracker"]["SEAT_TOKEN"]; got != "dev-secret" {
-		t.Errorf("the seat's credentials did not reach the view: %v", dev.MCPEnv)
+	// A SEALED REFERENCE IN THE VIEW, AND THE VALUE BEHIND IT ON THIS NODE:
+	// the file's literal was sealed by the seed's content write, after this
+	// node took its boot snapshot, so it resolves only because the view
+	// rebuild re-read what the rows name.
+	token := dev.MCPEnv["tracker"]["SEAT_TOKEN"]
+	if name, whole := envref.Whole(token); !whole || !chart.OwnsSecret(name) {
+		t.Errorf("the seat's credential reached the view as %q, want the "+
+			"reference the chart sealed it under", token)
+	}
+	if got := e.Resolve(token); got != "dev-secret" {
+		t.Errorf("the seat's credential resolves to %q on the node that seeded "+
+			"it, want the file's value", got)
 	}
 	if !slices.Contains(dev.LLM, "zulu") {
 		t.Errorf("llm = %v, want the file's — a seat with no model chain "+

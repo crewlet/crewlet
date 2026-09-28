@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -309,16 +310,30 @@ type Engine struct {
 	// is never hydrated.
 	native *native
 
-	// env is this node's ${VAR} resolver: the secret store in front of the
-	// process environment, refreshed on every apply. One per node rather
-	// than one per call site — see secrets.go for why that matters.
+	// env is this node's ${VAR} resolver and the store snapshot it answers
+	// from: the secret store in front of the process environment, refreshed
+	// on every apply, and the org chart's own sealed values re-read whenever
+	// the rows naming them move (chartsecrets.go). One per node rather than
+	// one per call site — see secrets.go for why that matters.
 	//
-	// Pointer[Resolver], not Pointer[*Resolver]. The doubled indirection
-	// bought a second nilable level with no meaning of its own — a stored
-	// non-nil pointer to a nil resolver read the same as nothing stored —
-	// so every reader had to check both, and one that checked only the
-	// outer would have dereferenced nil.
-	env atomic.Pointer[config.Resolver]
+	// ONE POINTER TO BOTH, because the chart's re-read merges into the
+	// snapshot the resolver was built from: two pointers could be read
+	// torn, a resolver from one snapshot beside another's values.
+	env atomic.Pointer[secretView]
+
+	// secretsMu serialises every writer of env — the whole-store refresh
+	// and the chart's re-read — so neither builds on a snapshot the other
+	// has replaced: a re-read merging into the snapshot an apply just
+	// superseded would put the rotation that apply picked up back.
+	secretsMu sync.Mutex
+
+	// chartSealedAt is, per chart object, the instant of the last record
+	// its row had applied when this node last read the values it seals,
+	// and chartSecretsStale says the last re-read failed. Both are the
+	// view rebuild's, touched only under its claim; see chartsecrets.go.
+	chartSealedAt     map[chart.ObjectRef]time.Time
+	chartSecretsStale atomic.Bool
+	chartSecretsGap   string
 
 	// republish coalesces the re-activations a provisioning pass asks for
 	// when it seals a credential. See republish.go.

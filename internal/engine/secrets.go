@@ -59,10 +59,28 @@ func (e *Engine) LookupSecret(name string) (string, bool) { return e.resolver().
 // Never nil: until a snapshot is installed — and on an engine holding no
 // store at all — it resolves from the environment alone.
 func (e *Engine) resolver() *config.Resolver {
-	if r := e.env.Load(); r != nil {
-		return r
+	if v := e.env.Load(); v != nil {
+		return v.resolver
 	}
 	return config.EnvOnly()
+}
+
+// secretView is this node's ${VAR} resolver and the store snapshot it answers
+// from, published together — see [Engine.env].
+type secretView struct {
+	resolver *config.Resolver
+
+	// values is the store snapshot the resolver was built from, never nil:
+	// an engine with no store holds no view at all.
+	values map[string]string
+}
+
+// installSecrets publishes one snapshot as this node's resolver. The caller
+// holds [Engine.secretsMu].
+func (e *Engine) installSecrets(values map[string]string) {
+	e.env.Store(&secretView{
+		resolver: config.WithStore(config.MapSource(values)), values: values,
+	})
 }
 
 // refreshSecrets rebuilds the resolver from the secret store.
@@ -86,6 +104,12 @@ func (e *Engine) resolver() *config.Resolver {
 // can tell "this node has no secret store" from "the store answered with
 // nothing in it", which the resolver renders identically.
 func (e *Engine) refreshSecrets(ctx context.Context) bool {
+	// SERIALISED WITH THE CHART'S RE-READ, which merges into the snapshot
+	// this replaces: the store is read under the same lock the snapshot is
+	// installed under, so whichever of the two runs later read the store
+	// later, and neither installs a snapshot older than the other's.
+	e.secretsMu.Lock()
+	defer e.secretsMu.Unlock()
 	values, err := e.secretSnapshot(ctx)
 	if err != nil {
 		// NO KEYRING IS NOT A QUIET CASE ANY MORE. It was a supported
@@ -105,7 +129,7 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 		// line would conclude the store is wired when it is not.
 		return false
 	}
-	e.env.Store(config.WithStore(config.MapSource(values)))
+	e.installSecrets(values)
 	// NAMES ONLY. This is the one log line that could put a company's whole
 	// credential set into a file, so it counts them instead.
 	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))
@@ -271,8 +295,10 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string,
 	// to tell a credential a founder typed into a seat from one a
 	// provisioner minted. The two have different remedies when they stop
 	// working, and a listing that called both "api" would send somebody to
-	// the wrong place.
-	return c.store.Set(ctx, name, value, by, "chart", c.now())
+	// the wrong place. It is also what the orphan sweep asks before it
+	// deletes a value nothing names ([chart.OrphanedSeals]), so it is the
+	// chart's own constant rather than a literal here.
+	return c.store.Set(ctx, name, value, by, chart.SealSource, c.now())
 }
 
 // PersonSealer is the per-person key store, which seals a person's own values
