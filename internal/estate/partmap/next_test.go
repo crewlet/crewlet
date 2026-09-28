@@ -1,6 +1,7 @@
 package partmap
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"math/rand/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/membership"
+	"github.com/crewlet/crewlet/internal/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -1062,6 +1064,74 @@ func TestTheEstateBalanceConvergesAtWhatTheLayoutPromises(t *testing.T) {
 					"promises: %+v", size, mixed, b)
 			}
 		}
+	}
+}
+
+// THE MAINTAINER BALANCES WHEN WHAT THE MAP PLACES CHANGES, AND ONLY THEN. A
+// member arriving, a weight changing and the company's copies changing each
+// move the draw, and the tick that sees it balances the shares again — to the
+// tolerance the layout promises for the fleet as it now is — so the record's
+// balance describes the draw it is stored with. A tick that changes nothing
+// the map places balances nothing: a balance moves shares, and a share moved
+// with nothing to answer is partitions moved for nothing, on every tick.
+func TestTheMaintainerBalancesWhenPlacementChangesAndOnlyThen(t *testing.T) {
+	t.Parallel()
+	lease := func(weight int) Meta { return Meta{Weight: weight, Layout: layoutNo(1), Healthy: yes()} }
+	fleet := func(weights ...int) []Presence {
+		var out []Presence
+		for i, w := range weights {
+			out = append(out, Presence{Node: nodeIDs(len(weights))[i], Meta: lease(w)})
+		}
+		return out
+	}
+	in := Input{Layout: ownerLayout, Live: fleet(1, 1, 1, 1, 1), Company: company(3, "", 1), Now: base}
+	first, _ := Next(MapState{}, in)
+
+	// A tick that places nothing differently keeps every share and the
+	// balance as they were, to the byte.
+	in.Now = in.Now.Add(membership.TickInterval)
+	again, _ := Next(first, in)
+	if !slices.Equal(again.Map.Members, first.Map.Members) {
+		t.Fatalf("a tick that changed no placement moved the shares:\n%+v\n%+v",
+			first.Map.Members, again.Map.Members)
+	}
+	was, _ := json.Marshal(first.Balance)
+	is, _ := json.Marshal(again.Balance)
+	if string(was) != string(is) {
+		t.Fatalf("a tick that changed no placement balanced again: %s, was %s", is, was)
+	}
+
+	for name, change := range map[string]func(Input) Input{
+		"a member joins": func(in Input) Input {
+			in.Live = fleet(1, 1, 1, 1, 1, 1)
+			return in
+		},
+		"a weight changes": func(in Input) Input {
+			in.Live = fleet(4, 1, 1, 1, 1)
+			return in
+		},
+		"the copies change": func(in Input) Input {
+			in.Company = company(2, "", 2)
+			return in
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			next, changed := Next(first, change(in))
+			if !changed {
+				t.Fatal("the change wrote nothing")
+			}
+			d := next.Map.Draw()
+			b, dev := next.Balance, d.Layout().Deviation()
+			if want := d.Reachable(placement.DefaultTolerance); b.Tolerance != want {
+				t.Fatalf("balanced at a tolerance of %.4f, where the layout promises %.4f for "+
+					"the fleet as it now is", b.Tolerance, want)
+			}
+			if b.Deviation != dev || !b.Converged || dev > b.Tolerance {
+				t.Fatalf("the draw stored is %.4f off against a tolerance of %.4f, and the "+
+					"record says %+v", dev, b.Tolerance, b.BalanceReport)
+			}
+		})
 	}
 }
 
