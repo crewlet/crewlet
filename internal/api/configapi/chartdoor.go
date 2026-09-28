@@ -205,20 +205,14 @@ func refuseChartIn(w http.ResponseWriter, sent submitted, method string) bool {
 // So the two doors are one rule stated at both of its entrances, and this one
 // is the entrance where the chart arrives WITHOUT naming itself.
 //
-// # Why it is at the HTTP door and not inside the draft
+// # Why it is said at the HTTP door
 //
-// [Service.ApplyEntity] is the same write one layer down, and it is NOT
-// refused. That looks like a hole and is not, because of the rule the entity
-// write already had: it never CREATES. A settings revision carries no seats,
-// so an entity write naming one finds nothing and is refused as absent — and
-// the only document a splice can land on is one that already held a chart,
-// which is already a revision no node will apply. Refusing there would change
-// which error the engine's own setup flow gets while changing no outcome.
-//
-// What it would change is the message a PERSON gets, and that is the whole
-// reason this exists: `no roles called ceo in the active revision`, answered
-// to a founder whose company plainly has a CEO, reads as the engine having
-// lost their org chart.
+// The route table mounts no write for a chart collection, so this is where a
+// request for one is answered, and what it adds over the entity draft's own
+// read-only refusal is the message a PERSON gets: `no roles called ceo in the
+// active revision`, answered to a founder whose company plainly has a CEO,
+// reads as the engine having lost their org chart, and this names the route
+// that does write one.
 func refuseChartEntity(w http.ResponseWriter, kind, id string) bool {
 	// THE TABLE DECIDES, not a second list of kinds. entities.go states
 	// which collections this surface still writes, and a copy of that

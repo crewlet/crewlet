@@ -60,8 +60,9 @@ type submitted struct {
 	doc *yaml.Node
 }
 
-// asText is a body no summary was lifted from, read by nobody but a reader of
-// bytes: what a programmatic caller hands a write.
+// asText is a body no summary was lifted from and no document was parsed out
+// of — an empty one, or one that does not parse — read by nobody but a reader
+// of bytes, which reports its failure in its own words.
 func asText(body []byte) submitted { return submitted{text: body} }
 
 // company reads the company a body carries, from the document as it was sent

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A write made by this build keeps what this build cannot represent.
@@ -434,9 +433,10 @@ func TestReloadAndRevertKeepWhatThisBuildCannotRepresent(t *testing.T) {
 	assertNewerKeysKept(t, s, "revert")
 }
 
-// A QUOTED ENTITY-TAG IS AN ENTITY WRITE'S PRECONDITION TOO. ApplyEntity
-// compared the raw expectation with the revision id, so the standard spelling
-// a caller forwards from an `If-Match` header was answered as a lost race.
+// A QUOTED ENTITY-TAG IS AN ENTITY WRITE'S PRECONDITION TOO. The entity
+// write compared the raw expectation with the revision id, so the standard
+// spelling a caller forwards in an `If-Match` header was answered as a lost
+// race; every spelling this surface documents is held here at the route.
 func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -450,14 +450,12 @@ func TestAnEntityWriteAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("active: %v", err)
 		}
-		if _, err := s.svc.ApplyEntity(t.Context(), configapi.ApplyEntityRequest{
-			Kind: configapi.EntityLLMProviders, ID: "zulu",
-			Body: []byte(`{"type": "anthropic", "model": "claude-sonnet-5",
-			  "api_keys": ["sk-` + strings.ReplaceAll(name, " ", "-") + `"]}`),
-			Summary: "an entity", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator},
-			Expect: spell(current.ID),
-		}); err != nil {
-			t.Errorf("ApplyEntity with %s = %v", name, err)
+		body := `{"type": "anthropic", "model": "claude-sonnet-5",
+		  "api_keys": ["sk-` + strings.ReplaceAll(name, " ", "-") + `"]}`
+		res := s.do(t, http.MethodPut, "/config/llm-providers/zulu", body,
+			map[string]string{"X-Summary": "an entity", "If-Match": spell(current.ID)})
+		if res.Code != http.StatusCreated {
+			t.Errorf("an entity write with %s = %d: %s", name, res.Code, res.Body)
 		}
 	}
 }

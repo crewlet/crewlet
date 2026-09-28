@@ -66,8 +66,8 @@ var ErrEntityReadOnly = errors.New("configapi: this collection is read-only here
 // WritableEntityKinds names the collections a write may address, sorted.
 //
 // DERIVED FROM THE TABLE rather than listed beside it, so the route table, the
-// HTTP door and [Service.ApplyEntity] cannot come to disagree about which half
-// of a company this surface writes.
+// HTTP door and the entity draft cannot come to disagree about which half of
+// a company this surface writes.
 func WritableEntityKinds() []string {
 	var out []string
 	for kind, access := range entityKinds {
@@ -135,10 +135,11 @@ type entityAccess struct {
 	// revision written before the split still carries both inside it, and
 	// somebody repairing one has to be able to see it.
 	//
-	// STATED IN THE TABLE rather than checked at each door, because there
-	// are three doors — the HTTP route, [Service.ApplyEntity] and the route
-	// table that decides which patterns to mount — and a rule written three
-	// times is a rule two of them eventually stop obeying.
+	// STATED IN THE TABLE rather than checked at each place that asks,
+	// because there are three — the route table that decides which
+	// patterns to mount, the HTTP door that refuses a chart collection by
+	// name, and the entity draft — and a rule written three times is a rule
+	// two of them eventually stop obeying.
 	replace func(*config.Company, string, submitted) error
 	// stored finds the entity under an id in a STORED document, decoded as
 	// a tree: the same entity find returns, found the same way, so a write
@@ -378,9 +379,9 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 
 // putEntity replaces one entity and stores the resulting document.
 //
-// The same write [Service.ApplyEntity] performs, through the same draft, with
-// the refusals an HTTP caller needs spelled out: which entity was missing, and
-// why a rename is not an edit.
+// Through the entity draft ([entityDraft]), with the refusals an HTTP caller
+// needs spelled out: which entity was missing, and why a rename is not an
+// edit.
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
