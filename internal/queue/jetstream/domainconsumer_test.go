@@ -776,6 +776,89 @@ func TestARecordDeliveredToARequestTheClientGaveUpOnIsTakenByTheNext(t *testing.
 	}
 }
 
+// standPhantom makes the client count a request the server never received —
+// which is what a request looks like once the connection it was served on
+// has dropped, or once its ending status was lost: nothing will ever end it
+// but the client's own presumption.
+func standPhantom(t *testing.T, cons *DomainConsumer, until time.Duration) {
+	t.Helper()
+	p, err := cons.standing()
+	if err != nil {
+		t.Fatalf("the standing pull: %v", err)
+	}
+	p.mu.Lock()
+	p.requests = append(p.requests, &standingRequest{batch: 1, until: time.Now().Add(until)})
+	p.mu.Unlock()
+}
+
+// A FETCH IS BOUNDED BY ITS WAIT AND THE GRACE even when the request it is
+// waiting on never ends.
+//
+// The ending status is not guaranteed: a dropped connection takes the
+// server's copy of a request with it, and a slow consumer's inbox drops a
+// status like any other message. Past its deadline a fetch counted the
+// request as standing until a delivery woke it to look, and nothing would —
+// so it waited out an HOUR's timer, and the applier calling it applied
+// nothing for that long. The error is the discriminator: a fetch that
+// honours the presumption returns nothing, cleanly, well inside the
+// context's ten seconds.
+func TestAFetchIsBoundedEvenWhenItsRequestNeverEnds(t *testing.T) {
+	t.Parallel()
+	q, _ := openDomain(t, "CREWLET_LOST_LOG", "crewlet.lost.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_LOST_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	standPhantom(t, cons, 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	got, err := cons.Fetch(ctx, 1, 0, 50*time.Millisecond)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("a fetch waiting on a request nothing serves answered %d record(s), "+
+			"%v — want nothing, once the request is presumed gone", len(got), err)
+	}
+}
+
+// A REQUEST LEFT STANDING DOES NOT KEEP THE NEXT FETCH FROM ASKING once it is
+// presumed gone.
+//
+// A fetch sends a request only when none stands, so one an earlier fetch left
+// behind — a caller whose context ended — is what this fetch waits on. If
+// that request's end never comes, the presumption is the only thing that lets
+// this fetch send its own: evaluated only on a wake, it did not, and a record
+// appended meanwhile was delivered to nobody until the fetch's whole wait had
+// passed. The wait here is twenty seconds; the request must reach the server
+// inside [waitStanding]'s five.
+func TestARequestLeftStandingDoesNotKeepTheNextFetchFromAsking(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_LEFT_LOG", "crewlet.left.log")
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_LEFT_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	standPhantom(t, cons, 200*time.Millisecond)
+	type fetched struct {
+		got []statelog.Message
+		err error
+	}
+	done := make(chan fetched, 1)
+	go func() {
+		got, err := cons.Fetch(t.Context(), 1, 0, 20*time.Second)
+		done <- fetched{got, err}
+	}()
+	waitStanding(t, cons)
+	appendN(t, log, "crewlet.left.log.task", 1)
+	select {
+	case f := <-done:
+		if f.err != nil || len(f.got) != 1 || seqOf(f.got) != 1 {
+			t.Fatalf("the fetch returned %d record(s) from %d, %v, want sequence 1",
+				len(f.got), seqOf(f.got), f.err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a record appended into a fetch's own request was not handed over")
+	}
+}
+
 // A RECORD IS HANDED OVER WITH ITS BURST, not at the end of the wait.
 //
 // One record does not end a pull request, so a fetch that read its request

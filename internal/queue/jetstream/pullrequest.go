@@ -287,18 +287,41 @@ func (p *puller) fetch(ctx context.Context, maxMessages, maxBytes int,
 			}
 			asked = true
 		}
+		wakeAt := p.wakeAt(now, deadline)
 		p.mu.Unlock()
+		timer.Reset(time.Until(wakeAt))
 		select {
 		case <-p.wake:
 		case <-timer.C:
-			// The deadline: the loop hands over what came, or finds
-			// that nothing did.
-			timer.Reset(time.Hour)
-			deadline = time.Now()
+			// The deadline, or the oldest request presumed gone: the
+			// loop hands over what came, sends the request that
+			// replaces it, or finds that nothing did.
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// wakeAt is when a fetch waiting at now has to look again without being woken:
+// its deadline, or the instant the oldest standing request is presumed gone,
+// whichever is first — and past the deadline, always the latter. Held under
+// p.mu, with a request standing.
+//
+// THE PRESUMPTION IS WHAT BOUNDS THE WAIT, because a request's ending status
+// is not guaranteed to arrive: a connection that drops takes the server's copy
+// of the request with it and nobody is left to send the `408`, and a slow
+// consumer's inbox drops a status like anything else. Evaluated only when a
+// delivery woke the fetch, the rule [pullGrace] states did nothing on exactly
+// those paths — past its deadline a fetch waited out an hour's timer on a
+// request nothing was serving, and before it, a request left standing by an
+// earlier fetch kept this one from sending its own until its whole wait had
+// passed, so a record appended meanwhile was delivered to nobody.
+func (p *puller) wakeAt(now, deadline time.Time) time.Time {
+	until := p.requests[0].until
+	if !now.Before(deadline) || until.Before(deadline) {
+		return until
+	}
+	return deadline
 }
 
 // full reports whether the buffer already holds a whole fetch. Held under p.mu.
