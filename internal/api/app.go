@@ -96,6 +96,7 @@ type App struct {
 	// [App.Configured] asks.
 	company  func() (*config.Company, *org.Organization)
 	seatHeld chartapi.Held
+	resolve  chartapi.Resolve
 
 	// estate answers whether the replicated estate can be read at the
 	// log's floor, for /ready. See [EstateFloor].
@@ -263,6 +264,13 @@ type Options struct {
 	// that as "nobody holds any seat" would report every human seat in the
 	// company as unheld on /health — see [chartapi.Held].
 	SeatHeld chartapi.Held
+
+	// Resolve is this node's own `${VAR}` resolution, which the continuous
+	// report compares seats' addresses and contact identities through —
+	// the same answer /chart/check is given ([chartapi.Resolve]). NIL SKIPS
+	// that one finding rather than answering it: every address on the
+	// chart's rows is a sealed reference, and references never collide.
+	Resolve chartapi.Resolve
 
 	// Sessions turns a browser's cookie into the person holding it.
 	//
@@ -544,6 +552,7 @@ func New(opts Options) (*App, error) {
 		// the whole question [App.Configured] asks.
 		company:  opts.Sources.Company,
 		seatHeld: opts.SeatHeld,
+		resolve:  opts.Resolve,
 		estate:   opts.Estate,
 		founding: opts.Founding,
 	}

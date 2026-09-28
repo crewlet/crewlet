@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -152,6 +153,21 @@ const (
 	// the one signal an operator gets that nobody can be @-mentioned there,
 	// and a warning rather than an error because the state is legitimate.
 	KindSeatUnreachable FindingKind = "seat_unreachable"
+
+	// KindIdentityShared is a seat whose ADDRESS or CONTACT IDENTITY another
+	// seat resolves to as well. An address and a contact identity are what
+	// an inbound payload is routed by, and each routes to ONE seat: the
+	// party registry keeps the first seat declaring an address and the
+	// last declaring a contact id, so every other seat claiming it stops
+	// receiving what is addressed there — and an action by that account is
+	// attributed to a colleague — with nothing anywhere saying so.
+	//
+	// HERE BECAUSE NOTHING ELSE CAN SAY IT. A chart write arbitrates on one
+	// object's subject and cannot refuse a rule across two of them, and
+	// the address is SEALED: two rows carry two different references, so
+	// only a node that resolves both can see they are one mailbox. An
+	// error, because one of the seats is unreachable today.
+	KindIdentityShared FindingKind = "identity_shared"
 )
 
 // FindingKinds is every kind, for the walks and for a surface rendering a
@@ -159,7 +175,18 @@ const (
 var FindingKinds = []FindingKind{
 	KindProviderUnknown, KindWorkerUnknown, KindSandboxUnconfigured,
 	KindReferenceDangling, KindSeatUnheld, KindSeatUnreachable,
+	KindIdentityShared,
 }
+
+// Resolve answers a `${VAR}` name through this node's own resolution chain —
+// the secret store in front of the environment — reporting whether anything
+// answered.
+//
+// NIL SKIPS THE SHARED-IDENTITY ARM rather than answering it, for [Held]'s
+// reason: an address the chart sealed is a reference on every row, so a report
+// that could not resolve them would compare references, which never collide,
+// and call a company clean that is routing two people's mail to one of them.
+type Resolve = org.EnvLookup
 
 // Finding is one thing wrong with the company as it is actually running.
 type Finding struct {
@@ -234,9 +261,10 @@ func (r Report) Worst() Severity {
 //
 // A NIL HALF IS "COULD NOT EVALUATE", never "nothing is wrong". See
 // [Report.Evaluated]. The context is handed to held and to nothing else: the
-// directory is the one input that is not a value.
+// directory is the one input that is not a value. Resolve is how this node
+// resolves a `${VAR}`, and nil skips the one arm that needs it ([Resolve]).
 func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company,
-	held Held) Report {
+	held Held, resolve Resolve) Report {
 	if o == nil || settings == nil {
 		return Report{Findings: []Finding{}}
 	}
@@ -258,6 +286,9 @@ func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company
 	}
 	for _, ref := range o.DanglingRefs() {
 		out.Findings = append(out.Findings, danglingFinding(ref))
+	}
+	if resolve != nil {
+		out.Findings = append(out.Findings, sharedIdentityFindings(o, resolve)...)
 	}
 	for _, f := range out.Findings {
 		out.Counts[f.Kind]++
@@ -468,6 +499,90 @@ func sandboxUnbacked(role *org.Role, settings *config.Company) bool {
 // unreachable reports a human seat nobody can be reached at.
 func unreachable(role *org.Role) bool {
 	return role.IsHuman() && (role.Contact == nil || role.Contact.IsEmpty())
+}
+
+// sharedIdentityFindings is every seat an address or a contact identity it
+// declares does not route to, because another seat resolves to it too.
+//
+// ASKED OF THE ROUTING ITSELF rather than of a rule written beside it. The
+// address arm builds the party registry every node routes an address through
+// ([notify.NewRegistry]) and asks it where each seat's own resolved address
+// goes — which is exactly the question, plus tags and the fold included: two
+// seats sharing a mailbox through `notif+<handle>@` each get their own, and a
+// tag spelling somebody else's handle does not. The contact arm follows
+// [notify.Registry.ReconcileHumanContacts]' own rule, the last human seat in
+// chart order keeping an identity, and names every other one — once per
+// identity, however many transports read it (Jira and Confluence share one
+// account id).
+func sharedIdentityFindings(o *org.Organization, resolve Resolve) []Finding {
+	var out []Finding
+	registry := notify.NewRegistry(o, resolve)
+	for role := range o.AllRoles() {
+		handle := role.Handle()
+		address := role.ResolvedEmail(resolve)
+		if handle == "" || address == "" {
+			continue
+		}
+		party, routed := registry.ByEmail(address)
+		if !routed || party.Handle == handle {
+			continue
+		}
+		out = append(out, Finding{
+			Kind: KindIdentityShared, Severity: SeverityError,
+			Object: handle, Names: "email",
+			Detail: fmt.Sprintf("%s's address resolves to the one %s declares, "+
+				"and an address routes to one seat: a vendor payload from it — a "+
+				"comment, a push, a review — is attributed to %s, and nothing "+
+				"addressed there reaches %s", handle, party.Handle, party.Handle,
+				handle),
+			Remedy: "give the seat an address of its own — or, for seats that " +
+				"share one mailbox, plus-address it with the seat's own handle " +
+				"(notif+<handle>@…), which routes by the tag",
+		})
+	}
+
+	type contact struct {
+		transport org.Transport
+		id        string
+	}
+	holders := map[contact][]string{}
+	for role := range o.AllRoles() {
+		if !role.IsHuman() || role.Contact == nil || role.Handle() == "" {
+			continue
+		}
+		for _, id := range role.Contact.ResolvedIdentities(resolve) {
+			key := contact{id.Transport, id.ExternalID}
+			if !slices.Contains(holders[key], role.Handle()) {
+				holders[key] = append(holders[key], role.Handle())
+			}
+		}
+	}
+	type loss struct{ seat, keeper, id string }
+	lost := map[loss][]string{}
+	for key, seats := range holders {
+		if len(seats) < 2 {
+			continue
+		}
+		keeper := seats[len(seats)-1]
+		for _, seat := range seats[:len(seats)-1] {
+			at := loss{seat, keeper, key.id}
+			lost[at] = append(lost[at], string(key.transport))
+		}
+	}
+	for at, transports := range lost {
+		slices.Sort(transports)
+		surfaces := strings.Join(transports, ", ")
+		out = append(out, Finding{
+			Kind: KindIdentityShared, Severity: SeverityError,
+			Object: at.seat, Names: surfaces,
+			Detail: fmt.Sprintf("%s shares its %s identity with %s, and a contact "+
+				"identity routes to one seat: a message or a mention from that "+
+				"account is attributed to %s, and %s is not reachable there",
+				at.seat, surfaces, at.keeper, at.keeper, at.seat),
+			Remedy: "give each seat its own account on that surface",
+		})
+	}
+	return out
 }
 
 // danglingFinding renders one reference that resolves to nothing.

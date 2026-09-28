@@ -181,6 +181,7 @@ type Service struct {
 	fleet     Fleet
 	company   func() (*config.Company, *org.Organization)
 	held      Held
+	resolve   Resolve
 	now       func() time.Time
 }
 
@@ -215,7 +216,7 @@ func (s *Service) report(ctx context.Context) Report {
 		return Report{Findings: []Finding{}}
 	}
 	settings, view := s.company()
-	return Evaluate(ctx, view, settings, s.held)
+	return Evaluate(ctx, view, settings, s.held, s.resolve)
 }
 
 // Options wire the service.
@@ -230,6 +231,12 @@ type Options struct {
 	// that as "nobody holds any seat" would report every human seat in
 	// the company. See [Held].
 	Held Held
+
+	// Resolve is this node's own `${VAR}` resolution, which the report's
+	// shared-identity arm compares addresses and contact ids through. NIL
+	// SKIPS THAT ARM, for [Resolve]'s reason: every address on the chart's
+	// rows is a sealed reference, and comparing references finds nothing.
+	Resolve Resolve
 
 	// Reader answers the chart's rows. Required: a surface that could not
 	// read would serve writes whose result nobody can see.
@@ -302,5 +309,6 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{reader: opts.Reader, authority: opts.Authority,
 		principal: opts.Principal, chart: opts.Chart, fleet: opts.Fleet,
-		company: opts.Company, held: opts.Held, now: now}, nil
+		company: opts.Company, held: opts.Held, resolve: opts.Resolve,
+		now: now}, nil
 }

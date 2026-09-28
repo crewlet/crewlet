@@ -1517,6 +1517,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// WHO HOLDS A SEAT, or nil where this node cannot tell — see
 		// [seatHeld] for why the absence is the third value here.
 		Held: seatHeld(e),
+		// HOW THIS NODE RESOLVES A ${VAR}, for the report's one finding
+		// that has to compare sealed addresses by what they hold.
+		Resolve: e.LookupSecret,
 		// ONE WRITER PER PARTY, derived from the node's own. The chart's
 		// author is a property of the writer and never of the call — a
 		// chart whose author field is chosen by the caller is not an
@@ -1896,6 +1899,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
 		// the screen that renders the report cannot disagree.
 		SeatHeld: seatHeld(e),
+		// AND THIS NODE'S OWN RESOLUTION, which the report compares
+		// addresses through: the chart seals every address, so its rows
+		// carry references only a node that resolves them can compare.
+		Resolve: e.LookupSecret,
 		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that started
 		// with no active company — see [signInSurface] for why that is
 		// honest rather than a fault.

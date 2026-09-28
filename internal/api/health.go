@@ -335,7 +335,7 @@ func (a *App) report(ctx context.Context) chartapi.Report {
 	// the screen that renders the report can never disagree about whether
 	// a seat is held — which is the whole reason one evaluation feeds
 	// every surface.
-	return chartapi.Evaluate(ctx, view, settings, a.seatHeld)
+	return chartapi.Evaluate(ctx, view, settings, a.seatHeld, a.resolve)
 }
 
 // tickReadBudget bounds a read done for a push tick rather than a request.

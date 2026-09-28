@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/chartapi"
@@ -59,14 +60,14 @@ func TestASettingsRevisionRemovingAReferencedProviderIsReported(t *testing.T) {
 	view, settings := running()
 	// THE CONTROL FIRST: the pair as it stands is clean, so the case
 	// below is about the edit rather than about the fixture.
-	if got := chartapi.Evaluate(t.Context(), view, settings, nil); len(got.Findings) != 0 {
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil, nil); len(got.Findings) != 0 {
 		t.Fatalf("the unchanged pair reports %v", got.Findings)
 	}
 
 	// The edit: somebody removes the provider the seat runs on.
 	settings.Providers.LLM = map[string]config.LLMProvider{"openai": {}}
 
-	got := chartapi.Evaluate(t.Context(), view, settings, nil)
+	got := chartapi.Evaluate(t.Context(), view, settings, nil, nil)
 	if len(got.Findings) != 1 {
 		t.Fatalf("findings = %+v, want exactly the seat that lost its model", got.Findings)
 	}
@@ -107,7 +108,7 @@ func TestANodeThatCouldNotEvaluateSaysSoRatherThanReportingNothingWrong(t *testi
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := chartapi.Evaluate(t.Context(), c.view, c.cfg, nil)
+			got := chartapi.Evaluate(t.Context(), c.view, c.cfg, nil, nil)
 			if got.Evaluated {
 				t.Error("a node that read nothing reported an evaluation")
 			}
@@ -145,7 +146,7 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 			t.Parallel()
 			view, settings := running()
 			c.edit(view, settings)
-			got := chartapi.Evaluate(t.Context(), view, settings, nil)
+			got := chartapi.Evaluate(t.Context(), view, settings, nil, nil)
 			if got.Counts[c.want] == 0 {
 				t.Fatalf("counts = %v, want a %q", got.Counts, c.want)
 			}
@@ -186,7 +187,7 @@ func TestAHumanSeatWithNoContactIsAdmittedAndReportedUnreachable(t *testing.T) {
 
 	_, settings := running()
 	// HELD, so the only finding left is the one about the contact block.
-	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil })
+	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil }, nil)
 	want := []chartapi.Finding{{
 		Kind: chartapi.KindSeatUnreachable, Severity: chartapi.SeverityWarning,
 		Object: "cto",
@@ -214,7 +215,7 @@ func TestTheSelfCellNeedsNoSandboxBackend(t *testing.T) {
 	t.Parallel()
 	view, settings := running()
 	view.Role("sre").Sandbox = &org.RoleSandbox{Enabled: true, RunIn: "self"}
-	if got := chartapi.Evaluate(t.Context(), view, settings, nil); len(got.Findings) != 0 {
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil, nil); len(got.Findings) != 0 {
 		t.Errorf("findings = %+v, want none — `self` runs in this process", got.Findings)
 	}
 }
@@ -250,7 +251,7 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 	// because a struct compared against a decoded map would fail on key
 	// order rather than on content.
 	var direct map[string]any
-	if err := json.Unmarshal(mustMarshal(t, chartapi.Evaluate(t.Context(), view, settings, nil)),
+	if err := json.Unmarshal(mustMarshal(t, chartapi.Evaluate(t.Context(), view, settings, nil, nil)),
 		&direct); err != nil {
 		t.Fatalf("decode the evaluation: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestTheContinuousReportAndChartCheckNeverDisagree(t *testing.T) {
 		t.Errorf("the route and the evaluation disagree:\n route: %s\n  eval: %s",
 			mustMarshal(t, body["report"]), mustMarshal(t, direct))
 	}
-	if want := chartapi.Evaluate(t.Context(), view, settings, nil).Worst(); body["worst"] != string(want) {
+	if want := chartapi.Evaluate(t.Context(), view, settings, nil, nil).Worst(); body["worst"] != string(want) {
 		t.Errorf("worst = %v, want %q", body["worst"], want)
 	}
 }
@@ -279,7 +280,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 	// this case reports is the directory's doing.
 	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
 
-	held := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil })
+	held := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil }, nil)
 	if held.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a seat somebody holds was reported unheld: %v", held.Counts)
 	}
@@ -288,7 +289,7 @@ func TestAnUnheldSeatIsTheDirectorysAnswerAndNotTheContactBlocks(t *testing.T) {
 			held.Counts)
 	}
 
-	unheld := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil })
+	unheld := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }, nil)
 	if unheld.Counts[chartapi.KindSeatUnheld] == 0 {
 		t.Errorf("a seat nobody in the directory holds was not reported: %v",
 			unheld.Counts)
@@ -310,7 +311,7 @@ func TestARenamedSeatIsAskedAboutByItsIdentity(t *testing.T) {
 	cto.DeclaredHandle, cto.OriginHandle = "chief-tech", "cto"
 	cto.FormerHandles = []string{"cto"}
 
-	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil })
+	got := chartapi.Evaluate(t.Context(), view, settings, func(context.Context) (map[string]bool, error) { return map[string]bool{"cto": true}, nil }, nil)
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a renamed seat whose identity is held was reported unheld: %v",
 			got.Counts)
@@ -330,7 +331,7 @@ func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
 	view.Role("cto").Kind = org.KindHuman
 	view.Role("cto").Contact = &org.HumanContact{MattermostUserID: "cto"}
 
-	got := chartapi.Evaluate(t.Context(), view, settings, nil)
+	got := chartapi.Evaluate(t.Context(), view, settings, nil, nil)
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("a node with no directory reported %d seats unheld: it "+
 			"would report every human seat in the company",
@@ -343,7 +344,7 @@ func TestANodeWithNoDirectoryReportsNoSeatUnheld(t *testing.T) {
 	// THE CONTROL: the arms that need no directory still fire, or this
 	// case would pass on a report that had stopped evaluating anything.
 	view.Role("cto").Contact = nil
-	if got := chartapi.Evaluate(t.Context(), view, settings, nil); got.Counts[chartapi.KindSeatUnreachable] == 0 {
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil, nil); got.Counts[chartapi.KindSeatUnreachable] == 0 {
 		t.Errorf("the contact arm stopped firing too: %v", got.Counts)
 	}
 }
@@ -364,7 +365,7 @@ func TestAnUnreadableDirectoryLeavesTheSeatUncheckedRatherThanUnheld(t *testing.
 	got := chartapi.Evaluate(t.Context(), view, settings,
 		func(context.Context) (map[string]bool, error) {
 			return nil, errors.New("the replicated estate is not open")
-		})
+		}, nil)
 	if got.Counts[chartapi.KindSeatUnheld] != 0 {
 		t.Errorf("an unreadable directory reported %d seats unheld",
 			got.Counts[chartapi.KindSeatUnheld])
@@ -375,5 +376,77 @@ func TestAnUnreadableDirectoryLeavesTheSeatUncheckedRatherThanUnheld(t *testing.
 	}
 	if !got.Evaluated {
 		t.Error("the report stopped evaluating the arms that need no directory")
+	}
+}
+
+// AN ADDRESS OR A CONTACT IDENTITY TWO SEATS RESOLVE TO REACHES ONE OF THEM.
+//
+// A chart write arbitrates on one object and cannot refuse a rule across two,
+// and the address is SEALED — two rows, two different references — so only a
+// node resolving both can see they are one mailbox. The routing keeps one seat
+// for each, and the report names every OTHER seat: the one nothing addressed
+// there reaches. Two seats plus-addressing one mailbox with their own handles
+// share nothing that routes, and are not reported.
+func TestASharedAddressOrContactIsReportedOnTheSeatItDoesNotReach(t *testing.T) {
+	t.Parallel()
+	view := &org.Organization{
+		Name: "Nimbus",
+		Units: []*org.Unit{{
+			Name: "Engineering", ID: "engineering", Lead: "cto",
+			Roles: []*org.Role{
+				{Name: "CTO", DeclaredHandle: "cto", Kind: org.KindHuman,
+					Email:   "${CHART_SEAT_CTO_EMAIL_AAAAAAAAAA}",
+					Contact: &org.HumanContact{SlackUserID: "U1", AtlassianAccountID: "acc-1"}},
+				{Name: "SRE", DeclaredHandle: "sre", Kind: org.KindHuman,
+					Email:   "${CHART_SEAT_SRE_EMAIL_BBBBBBBBBB}",
+					Contact: &org.HumanContact{SlackUserID: "U1", AtlassianAccountID: "acc-1"}},
+				{Name: "Dev", DeclaredHandle: "dev", LLM: org.ProviderKeys{"anthropic"},
+					Email: "notif+dev@example.com"},
+				{Name: "Ops", DeclaredHandle: "ops", LLM: org.ProviderKeys{"anthropic"},
+					Email: "notif+ops@example.com"},
+			},
+		}},
+	}
+	view.Normalize()
+	_, settings := running()
+	held := func(context.Context) (map[string]bool, error) {
+		return map[string]bool{"cto": true, "sre": true}, nil
+	}
+	// THE TWO SEALED ADDRESSES ARE ONE MAILBOX, told apart only by case and
+	// a plus tag that names no seat — the fold every address routes by.
+	resolve := func(name string) (string, bool) {
+		value, ok := map[string]string{
+			"CHART_SEAT_CTO_EMAIL_AAAAAAAAAA": "Pat@Example.com",
+			"CHART_SEAT_SRE_EMAIL_BBBBBBBBBB": "pat+work@example.com",
+		}[name]
+		return value, ok
+	}
+
+	// THE CONTROL: without a resolver the arm is skipped, because the rows
+	// hold two different references and comparing those finds nothing.
+	if got := chartapi.Evaluate(t.Context(), view, settings, held, nil); got.Counts[chartapi.KindIdentityShared] != 0 {
+		t.Fatalf("a report that cannot resolve reported shared identities: %+v", got.Findings)
+	}
+
+	got := chartapi.Evaluate(t.Context(), view, settings, held, resolve)
+	var shared []string
+	for _, f := range got.Findings {
+		if f.Kind != chartapi.KindIdentityShared {
+			continue
+		}
+		if f.Severity != chartapi.SeverityError || f.Detail == "" || f.Remedy == "" {
+			t.Errorf("finding %+v — a seat unreachable today is an error, and "+
+				"says what is wrong and what to do", f)
+		}
+		shared = append(shared, f.Object+":"+f.Names)
+	}
+	slices.Sort(shared)
+	// THE ADDRESS KEEPS THE FIRST SEAT DECLARING IT and a contact identity
+	// the LAST, which is how the registry routes each — so the address
+	// finding is SRE's and the contact finding CTO's, once for the Atlassian
+	// account however many surfaces read it.
+	want := []string{"cto:confluence, jira", "cto:slack", "sre:email"}
+	if !slices.Equal(shared, want) {
+		t.Errorf("shared identities = %v, want %v", shared, want)
 	}
 }
