@@ -364,7 +364,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	// fresh reauth instant on the row every node reads. A field written
 	// locally would be proof on ONE node, and the surface that asks for it
 	// is reached through whichever node a request lands on.
-	adm.ticket.Succeed(r.Context())
+	adm.ticket.Succeed()
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 		stepUp:      true,

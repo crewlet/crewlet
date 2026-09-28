@@ -624,7 +624,7 @@ func TestARefusalGivesItsTurnBackBeforeItsPad(t *testing.T) {
 	b.API.Auth.OIDC = &config.APIOIDC{Issuer: idp.URL, ClientID: idpClientID}
 	padding := make(chan struct{}, 2)
 	resume := make(chan struct{})
-	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+	throttle := credential.NewThrottle(credential.ThrottleDeps{
 		Now: func() time.Time { return clock },
 		// THE PAD, parked until the case has looked beside it.
 		Sleep: func(ctx context.Context, _ time.Duration) {
@@ -635,9 +635,6 @@ func TestARefusalGivesItsTurnBackBeforeItsPad(t *testing.T) {
 			}
 		},
 	})
-	if err != nil {
-		t.Fatalf("credential.NewThrottle: %v", err)
-	}
 	audit := &recordingAudit{}
 	rig := newProviderRig(t, idp, b, func(o *authapi.Options) {
 		o.Throttle = throttle

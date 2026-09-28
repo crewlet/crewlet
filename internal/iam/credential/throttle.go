@@ -9,16 +9,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // THE ENUMERATION ORACLE, AND THE THREE THINGS THAT CLOSE IT.
@@ -117,10 +114,9 @@ import (
 // every verification and every decoy a source causes waits for that source's
 // one turn at the verify cap (turns.go), so one address is served one name per
 // derivation, however many it sends at once, and never ahead of another
-// address's turn; and its fleet cost is its allowance of fresh pairs
-// ([FreshPairBurst]). Past that, the password floor and the blocklist. What
-// makes it seen is the audit trail's per-client, per-minute failure tally,
-// which counts the distinct names a client tried.
+// address's turn. Past that, the password floor and the blocklist. What makes
+// it seen is the audit trail's per-client, per-minute failure tally, which
+// counts the distinct names a client tried.
 //
 // # And a second factor on the person, whatever the address
 //
@@ -142,51 +138,35 @@ import (
 // was a way for a stranger to hold a company's provider sign-ins shut, since a
 // callback nobody started fails for free.
 //
-// # The fleet shares the pair, at every step
+// # Each node keeps its own curve
 //
 // A load balancer puts each attempt of a guessing run on whichever node it
-// likes, so a curve each node kept to itself would be one the attacker divides
-// by the number of nodes without knowing it. So a pair's curve is the FLEET's:
-// every failure is written to [coord.Attempts], a success flushes it, and a
-// node READS the pair's record before each attempt it admits on a pair that is
-// already climbing — that is, before every step of the curve — and counts, on
-// top of what it read, only its own failures the record could not yet have
-// held. A clean pair is read when a node first meets it and not again for the
-// window while it stays clean, so an honest sign-in pays one read, and its
-// second-factor step none.
+// likes, and a node counts only the failures it saw. So on a fleet of N nodes
+// serving sign-ins, a run rotated across all of them meets each node's curve
+// separately and is admitted up to N times as often as it would be on one —
+// and that residual is DECIDED, not overlooked. The curve was once shared
+// through the coordination store: every failure written to a fleet bucket, a
+// climbing pair read back before each step, each writer's clock re-dated, a
+// per-source allowance bounding the reads a spray of fresh names drove, a
+// pause when the store stopped answering, and a digest key derived from the
+// keyring so every node named a pair alike. That is a coordination round trip
+// on the sign-in path and a subsystem of its own, bought for a factor of N on
+// a rate the curve has already cut sixty-fold at its first step — and on the
+// single node most deployments are, it bought nothing at all. What bounds a
+// run at one account on N nodes is what bounds it on one, multiplied by N:
+// thirty seconds per attempt per node at the ceiling, each attempt an
+// argon2id verification in its source's turn, against a password at least
+// twelve characters long that is not on the blocklist, and — for a person who
+// holds one — a second factor, whose own curve a guesser meets only once they
+// already hold the password.
 //
-// What that costs the store is bounded by the curve itself rather than by
-// whoever is sending: a pair whose wait this node already knows is past
-// [InlineDelay] is refused with no round trip at all, so a pair is read at
-// most once per attempt the curve admits and written once per failure. Every
-// failure is written, the ceiling's included: the fleet's newest failure is
-// what every node measures a pair's wait from, and a record that stopped at
-// the sixth left every node timing the ceiling from its own last failure, so a
-// round-robin run was admitted once per node per thirty seconds rather than
-// once.
+// EVERY INSTANT HERE IS THIS PROCESS'S OWN CLOCK, read through [time.Now]'s
+// monotonic reading, so a wall-clock step — an NTP correction, a VM migration
+// — neither stretches a pair's wait nor ends it early: a monotonic reading is
+// what every comparison below is between.
 //
-// No curve bounds a spray of FRESH names, though — every one is a pair nobody
-// has met — and each cost a read and, failing, a write, as fast as one source
-// could type them. So a source may ask the fleet about pairs this node holds
-// no record of only as fast as its ALLOWANCE refills ([FreshPairBurst],
-// [FreshPairEvery]); past it a fresh pair is decided on this node's count and
-// its failure kept here, which costs a name tried once its fleet-wide view and
-// nothing else — the pair's next attempt finds a record here and is shared
-// again, and a success on a pair never asked about still clears the fleet.
-//
-// EVERY INSTANT IN IT IS THE WRITING NODE'S CLOCK, and a node whose clock runs
-// fast stamps its failures into every reader's future. So a reader takes none
-// of the fleet's failures as later than its own now, and none of its own as
-// later than the start it could have scheduled — each re-dated once, where it
-// is first found past that, and each on its own — and no clock anywhere can
-// stretch a wait past the ceiling: taken as written, one failure on a node ten
-// minutes fast was a ten-minute 429 for that login on every other node. Nor
-// can one shorten it: read as the record's newest instant alone, the fast
-// writer's failure hid every real one after it, and the wait stopped moving
-// for the whole skew. See [standing.weight].
-//
-// Nothing the fleet holds is what was typed: a pair is a keyed digest, and the
-// key never leaves the deployment's keyring.
+// Nothing held is what was typed: a pair is a keyed digest under a key this
+// process generated and never wrote anywhere.
 //
 // # Concurrency is paid for, too
 //
@@ -212,37 +192,19 @@ import (
 // test still passing.
 const PadDeadline = 400 * time.Millisecond
 
-// Window is how long a failure counts against its key: the fleet's attempts
-// window, which every node counts a curve over, so a caller that has to say
-// "once per curve" — one row per person whose second factor reached its
+// Window is how long a failure counts against its key, so a caller that has to
+// say "once per curve" — one row per person whose second factor reached its
 // ceiling — says it over the same span.
-const Window = coord.AttemptWindow
-
-// DegradeInterval is how often an unreachable attempts store is reported.
 //
-// ONCE PER [coord.AttemptWindow], because the alternative is a log line per
-// request at exactly the moment the coordination store is already unwell — a
-// guessing run against a degraded fleet would write the log that fills the
-// disk. One line per window says the same thing and says it once.
-const DegradeInterval = coord.AttemptWindow
-
-// FleetRetry is how long a throttle leaves the attempts store alone after it
-// failed to answer: no read and no failure written until it has passed.
-//
-// A round trip to a store that is down costs whoever is waiting on it the
-// store's own timeout, and a read now precedes every step of every climbing
-// curve — so without a pause an outage would put that timeout under every
-// sign-in that follows a mistake. THIRTY SECONDS, the curve's own
-// [DelayCeiling]: a store that answers again is back in use within one
-// ceiling's wait, so no pair at full strength takes more than one attempt on
-// this node's count alone, and one that stays down costs one failing round
-// trip per half minute rather than one per attempt. A success's flush is
-// still attempted where this node knows the pair has failures against it,
-// because it is what lifts a person's wait on every other node and it happens
-// once per sign-in that followed a mistake — but never for a pair the pause
-// kept this node from reading, which is every honest sign-in during it
-// ([Ticket.Succeed]).
-const FleetRetry = DelayCeiling
+// FIFTEEN MINUTES is the interval the curve actually has to reason over. From
+// below it is bounded by the curve itself: a run held at [DelayCeiling] makes
+// one attempt per ceiling, so a window shorter than [CurveSteps] of those
+// would let the oldest failures age out under a run that never stopped, and
+// the run would slide back down the curve while it was being throttled. From
+// above it is bounded by the person who mistyped: past a quarter hour an
+// honest mistake should stop costing anything, and a failure that counted for
+// longer would meet them at their next sign-in as a wait nobody could explain.
+const Window = 15 * time.Minute
 
 // The curve.
 const (
@@ -278,32 +240,21 @@ const (
 	// against a morning.
 	DelayedCap = 64
 
-	// FreshPairBurst is how many pairs this node holds no record of that
-	// one source's attempts may ask the fleet about at once: sixteen, a
-	// room signing in together. Each is a read of the pair's window and,
-	// if the attempt fails, the write of its failure — so a source typing a
-	// new name every time costs the coordination store at most this, and
-	// then what [FreshPairEvery] refills, rather than two round trips per
-	// name at whatever rate it can send.
-	FreshPairBurst = 16
-
-	// FreshPairEvery is how often one more comes back: a second, the
-	// curve's own [DelayFloor] — the fastest one account's run is allowed
-	// its second attempt, and far above the rate any address signs honest
-	// people in at. An honest sign-in past it loses nothing: a pair that
-	// nobody here has met owes no wait either way, and its success clears
-	// the fleet's record regardless ([Ticket.Succeed]).
-	FreshPairEvery = time.Second
-
-	// LocalKeys is how many pairs one throttle holds, the least recently
-	// used forgotten past it: 16384 — and as many sources' allowances.
-	// Every pair costs at most [pairKeep] instants of its own and
-	// [coord.AttemptCap] of the fleet's, each held with the dating this
-	// node gave it, so the bound is about twenty megabytes of memory an
-	// unauthenticated caller cannot grow — where a map walked on every
-	// failure was both unbounded and O(keys) per write. A pair forgotten
-	// early is re-seeded from the fleet the next time it is met.
-	LocalKeys = 16384
+	// MaxPairs is how many pairs one throttle holds, the least recently
+	// used forgotten past it: 16384. Every pair costs at most [pairKeep]
+	// failure instants and its pending attempts, beside its digest and
+	// its place in the order — about half a kilobyte — so the bound is
+	// under ten megabytes of memory an unauthenticated caller cannot
+	// grow, where a map walked on every failure was both unbounded and
+	// O(keys) per write.
+	//
+	// A PAIR FORGOTTEN EARLY STARTS ITS CURVE AGAIN, which is what the
+	// bound costs, and why it is set this high: to push one climbing pair
+	// out, a guesser has to fail 16384 others inside [Window] — each a
+	// verification or a decoy in its source's one turn at the verify cap,
+	// so from one address that takes longer than the window it was
+	// meant to reset.
+	MaxPairs = 16384
 )
 
 // pairKeep is how many failure instants a pair keeps, NEWEST FIRST OUT LAST:
@@ -364,70 +315,38 @@ type Attempt struct {
 //
 // SAFE FOR CONCURRENT USE.
 type Throttle struct {
-	attempts coord.Attempts
 	key      []byte
 	deadline time.Duration
 	now      func() time.Time
 	sleep    func(context.Context, time.Duration)
-	logger   *slog.Logger
 
-	mu       sync.Mutex
-	pairs    *keyed[standing]
-	sources  *keyed[allowance]
-	delayed  int
-	degraded time.Time
-	// quietUntil is when the attempts store may be asked again after it
-	// failed to answer. See [FleetRetry].
-	quietUntil time.Time
+	mu      sync.Mutex
+	pairs   *lru
+	delayed int
 }
 
-// ThrottleDeps is what a throttle is built from.
+// ThrottleDeps is what a throttle is built from. Every field is optional.
 type ThrottleDeps struct {
-	// Attempts is the fleet's window every pair's curve is shared through.
-	// NIL IS A REAL POSTURE, not a misconfiguration: a single node with no
-	// coordination backend still throttles on its own curve.
-	Attempts coord.Attempts
-
-	// Key digests a (subject, source) pair before it is held anywhere,
-	// here or in the fleet. REQUIRED with Attempts, and it must be the
-	// same on every node — the deployment's keyring is where it comes
-	// from — or two nodes would keep one pair under two names and seed
-	// nothing from each other. Without Attempts, empty takes a key this
-	// process generates, which is correct because nothing else ever
-	// compares a digest this process made.
-	Key []byte
-
 	// Deadline is the pad. Zero takes [PadDeadline].
 	Deadline time.Duration
 
-	Now    func() time.Time
-	Sleep  func(context.Context, time.Duration)
-	Logger *slog.Logger
+	// Now is the clock. Nil takes [time.Now], whose monotonic reading is
+	// what keeps a wall-clock step out of every wait — see this file's
+	// head — so a production caller leaves it nil.
+	Now func() time.Time
+
+	// Sleep is how a wait is served. Nil takes a sleep the request's
+	// context cancels.
+	Sleep func(context.Context, time.Duration)
 }
 
 // NewThrottle builds one.
-func NewThrottle(deps ThrottleDeps) (*Throttle, error) {
-	if deps.Attempts != nil && len(deps.Key) == 0 {
-		return nil, errors.New("credential: a throttle seeded from the fleet " +
-			"needs a digest key every node shares; without one each node would " +
-			"keep a pair under a name of its own and learn nothing from the " +
-			"fleet")
-	}
-	return build(deps), nil
-}
-
-// build is [NewThrottle] past its one refusal.
-func build(deps ThrottleDeps) *Throttle {
-	key := deps.Key
-	if len(key) == 0 {
-		key = randomKey()
-	}
+func NewThrottle(deps ThrottleDeps) *Throttle {
 	t := &Throttle{
-		attempts: deps.Attempts, key: key,
+		key:      randomKey(),
 		deadline: deps.Deadline,
-		now:      deps.Now, sleep: deps.Sleep, logger: deps.Logger,
-		pairs:   newKeyed(LocalKeys, func() *standing { return &standing{} }),
-		sources: newKeyed(LocalKeys, func() *allowance { return &allowance{} }),
+		now:      deps.Now, sleep: deps.Sleep,
+		pairs: newLRU(MaxPairs),
 	}
 	if t.deadline <= 0 {
 		t.deadline = PadDeadline
@@ -438,33 +357,7 @@ func build(deps ThrottleDeps) *Throttle {
 	if t.sleep == nil {
 		t.sleep = sleepUntil
 	}
-	if t.logger == nil {
-		t.logger = slog.Default()
-	}
 	return t
-}
-
-// ThrottleKeyDomain separates the throttle's digest key from every other thing
-// the fleet's keyring derives: a pair digest is never a session signature, a
-// run token or a seal, and a key derived for one is never the key of another.
-const ThrottleKeyDomain = "crewlet/iam/throttle/v1"
-
-// PairKey is the digest key every node of a fleet derives from the keyring's
-// ACTIVE entry for [ThrottleDeps.Key], or false where the keyring names none.
-//
-// THE ACTIVE KEY AND NOT THE WHOLE RING, because every node must derive the
-// same one and the active entry is the one they agree on. Flipping the active
-// key moves every pair to a new name, so a window's worth of counts is left
-// under the old ones to age out — one window of a curve forgotten per keyring
-// rotation, which is the price of never holding a pair under a key the fleet
-// does not share.
-func PairKey(m runtoken.Material) ([]byte, bool) {
-	for _, key := range m.Keys {
-		if key.ID == m.ActiveID {
-			return runtoken.DeriveKey(ThrottleKeyDomain, key.ID, key.Material), true
-		}
-	}
-	return nil, false
 }
 
 // randomKey is thirty-two bytes nothing outside this process ever sees.
@@ -481,12 +374,9 @@ func randomKey() []byte {
 // # Nothing is looked up before it, and nothing about the subject is looked up
 // inside it
 //
-// It is called before the subject resolves. The PAIR is decided on this
-// node's own count first, with no I/O, so a pair already past [InlineDelay]
-// costs this node a map lookup and the fleet nothing; then, unless the pair is
-// clean and was read inside the window, the fleet's record of it is read and
-// the wait decided again on both, and the attempt waits up to [InlineDelay]
-// inside this call. A longer wait is a [*Throttled].
+// It is called before the subject resolves, and decides on the pair's own
+// count with no I/O: a map lookup under a lock. The attempt waits up to
+// [InlineDelay] inside this call; a longer wait is a [*Throttled].
 //
 // # What it hands back
 //
@@ -511,8 +401,7 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 	if a.Source == "" || a.Subject == "" {
 		return nil, nil
 	}
-	source := sourceKeyOf(a.Source)
-	return t.admit(ctx, t.pairOf(a.Subject, source), source)
+	return t.admit(ctx, t.pairOf(a.Subject, sourceKeyOf(a.Source)))
 }
 
 // AdmitSecondFactor decides whether a second factor may be checked for
@@ -526,51 +415,28 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 // each spelling of the login is a fresh pair, so a /48 of IPv6 addresses is
 // sixty-five thousand of them, each allowed a handful of guesses a minute, and
 // what is left to bound six digits is the verify cap. So a code is ALSO
-// decided on a curve keyed on the person, shared across the fleet like every
-// pair, and every address's guesses climb it together.
+// decided on a curve keyed on the person, and every address's guesses climb
+// it together.
 //
 // It is keyed on who the login RESOLVED to, which is exactly what the pair's
 // curve must never be (this file's head), and the difference is who can reach
 // it: this is asked only once the password has proved itself, so the only
 // caller who can drive it holds the password, and it tells them nothing about
 // who exists that the password did not. Its digest is taken in a domain of its
-// own, so no typed subject can ever name it.
-//
-// NOT ON THE SOURCE'S ALLOWANCE ([FreshPairBurst]): a person's curve is met
-// only past their password, so what it costs the fleet is bounded by the
-// people whose passwords are known to somebody guessing, not by what a stranger
-// can type. An empty person is admitted uncounted.
+// own, so no typed subject can ever name it. An empty person is admitted
+// uncounted.
 func (t *Throttle) AdmitSecondFactor(ctx context.Context, person string) (*Ticket, error) {
 	if person == "" {
 		return nil, nil
 	}
-	return t.admit(ctx, t.factorOf(person), "")
+	return t.admit(ctx, t.factorOf(person))
 }
 
-// admit is [Throttle.Admit] and [Throttle.AdmitSecondFactor] past the key: the
-// curve on key, whose fresh-pair reads are charged to source's allowance, or
-// to none where source is empty.
-func (t *Throttle) admit(ctx context.Context, pair, source string) (*Ticket, error) {
-	// ON THIS NODE'S OWN COUNT FIRST, before anything is read from
-	// anywhere: a pair this node already refuses costs the fleet nothing.
+// admit is [Throttle.Admit] and [Throttle.AdmitSecondFactor] past the key.
+func (t *Throttle) admit(ctx context.Context, pair string) (*Ticket, error) {
 	t.mu.Lock()
 	now := t.now()
 	wait := t.waitLocked(pair, now)
-	var read *pendingRead
-	if wait <= InlineDelay {
-		read = t.issueRead(pair, source, now)
-	}
-	t.mu.Unlock()
-	if wait > InlineDelay {
-		return nil, &Throttled{RetryAfter: wait}
-	}
-	if read != nil {
-		t.refresh(ctx, read)
-	}
-
-	t.mu.Lock()
-	now = t.now()
-	wait = t.waitLocked(pair, now)
 	if wait > InlineDelay || (wait > 0 && t.delayed >= DelayedCap) {
 		t.mu.Unlock()
 		return nil, &Throttled{RetryAfter: wait}
@@ -608,90 +474,46 @@ type Ticket struct {
 	done atomic.Bool
 }
 
-// Fail resolves the attempt as a credential that did not prove itself.
-//
-// Recorded against the pair, here and in the fleet — every failure, the
-// ceiling's included, because the fleet's newest failure is what every node
-// measures the pair's wait from; see this file's head for why that costs the
-// store no more than the curve admits. A failure the store did not
-// acknowledge stays this node's own, and is counted on top of whatever the
-// fleet says until a read could have seen it — and so does one on a FRESH
-// pair its source's allowance could not pay to ask about ([FreshPairBurst]):
-// the read it went without would have been paid for with this write.
+// Fail resolves the attempt as a credential that did not prove itself, and
+// records the failure against its pair.
 //
 // It reports whether the key's curve is now AT ITS CEILING — [CurveSteps]
-// failures inside the window, as this node counts them — which a caller whose
-// key is a person reads as somebody guessing at them ([Throttle.AdmitSecondFactor]).
-func (k *Ticket) Fail(ctx context.Context) (ceiling bool) {
+// failures inside the window — which a caller whose key is a person reads as
+// somebody guessing at them ([Throttle.AdmitSecondFactor]).
+func (k *Ticket) Fail() (ceiling bool) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return false
 	}
 	t := k.t
 	t.mu.Lock()
-	at := t.now()
+	defer t.mu.Unlock()
+	now := t.now()
+	// DATED NO EARLIER THAN THE START ADMISSION SCHEDULED, so the wait
+	// the next attempt owes runs from when this one could first have
+	// been made rather than from a clock that has not reached it yet.
+	at := now
 	if at.Before(k.at) {
 		at = k.at
 	}
 	p := t.pairs.take(k.pair)
 	p.unpend(k.at)
-	seq := p.fail(at)
-	count, _ := p.weight(t.now())
-	ceiling = count >= CurveSteps
-	write := t.attempts != nil && !at.Before(t.quietUntil) && !p.unasked
-	t.mu.Unlock()
-	if !write {
-		return ceiling
-	}
-	if err := t.attempts.Fail(ctx, k.pair, at); err != nil {
-		t.unanswered(ctx, err)
-		return ceiling
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if cur := t.pairs.get(k.pair); cur == p {
-		p.shared(seq)
-	}
-	return ceiling
+	p.fail(at)
+	count, _ := p.weight(now)
+	return count >= CurveSteps
 }
 
 // Succeed resolves the attempt as a credential that proved itself: its pair is
-// forgotten, here and in the fleet — and NOTHING ELSE is, which is what keeps
-// an account holder from wiping the record of their guesses at somebody
-// else's by signing in as themselves between them.
-func (k *Ticket) Succeed(ctx context.Context) {
+// forgotten — and NOTHING ELSE is, which is what keeps an account holder from
+// wiping the record of their guesses at somebody else's by signing in as
+// themselves between them.
+func (k *Ticket) Succeed() {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return
 	}
 	t := k.t
 	t.mu.Lock()
-	// A PAIR THIS NODE KNOWS HAS FAILURES AGAINST IT IS FLUSHED — its own,
-	// or the fleet's as it last read them — because what the fleet holds
-	// under it would delay this person's next attempt on every other node
-	// for a failure their success has answered.
-	//
-	// SO IS ONE WHOSE FLEET RECORD IT DOES NOT KNOW — one the bound forgot
-	// after admission took it, one admitted without a read because its
-	// source's allowance was spent — since unknown is not nothing. But not
-	// while the store is being left alone after failing to answer
-	// ([FleetRetry]): a pair admitted then is unknown only BECAUSE of the
-	// outage, and flushing it put the store's timeout under every honest
-	// sign-in on the node for as long as the pause lasted, which is the
-	// round trip the pause exists to spare them.
-	//
-	// Only a pair read clean and failed nowhere since costs nothing, which is
-	// an honest sign-in's.
-	p := t.pairs.get(k.pair)
-	known := p != nil && (len(p.fails) > 0 || len(p.fleet) > 0)
-	unknown := p == nil || p.readIndex == 0
-	flush := t.attempts != nil &&
-		(known || (unknown && !t.now().Before(t.quietUntil)))
+	defer t.mu.Unlock()
 	t.pairs.drop(k.pair)
-	t.mu.Unlock()
-	if flush {
-		if err := t.attempts.Flush(ctx, k.pair); err != nil {
-			t.unanswered(ctx, err)
-		}
-	}
 }
 
 // Release resolves an attempt that never reached a verdict — a body that did
@@ -699,10 +521,6 @@ func (k *Ticket) Succeed(ctx context.Context) {
 // password that proved itself where a second factor is still to come — so it
 // counts as nothing. A no-op once the ticket is resolved, so it is what a
 // caller defers.
-//
-// THE PAIR'S READ IS KEPT: the attempt that follows a released one is almost
-// always the same person's next step — the code after the password — and a
-// clean pair read inside the window needs no second round trip.
 func (k *Ticket) Release() {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return
@@ -743,15 +561,11 @@ func (t *Throttle) Now() time.Time { return t.now() }
 // waitLocked is how long an attempt on pair must wait at now. Held under the
 // lock.
 //
-// NEVER MORE THAN [DelayCeiling] PAST THE LATER OF NOW AND THIS NODE'S NEWEST
-// ADMITTED ATTEMPT, whatever any clock says — so never more than
-// [InlineDelay] plus [DelayCeiling] in all, and never more than the ceiling on
-// the fleet's word alone: the curve measures from the newest failure it knows,
-// the fleet's is taken to be no later than now, and this node's own no later
-// than the start it could have scheduled ([standing.weight]). That start may
-// be ahead of now, because it is when this node scheduled the attempt to
-// begin; the lead is what serialises a burst at one pair, and an admission
-// never schedules one further ahead than [InlineDelay].
+// NEVER MORE THAN [InlineDelay] PLUS [DelayCeiling]: the curve measures from
+// the newest failure or pending attempt it holds, and neither is dated past the
+// start an admission scheduled, which is never more than [InlineDelay] ahead of
+// the clock it was scheduled at. The lead is what serialises a burst at one
+// pair.
 func (t *Throttle) waitLocked(pair string, now time.Time) time.Duration {
 	s := t.pairs.get(pair)
 	if s == nil {
@@ -765,88 +579,13 @@ func (t *Throttle) waitLocked(pair string, now time.Time) time.Duration {
 	return max(last.Add(delay).Sub(now), 0)
 }
 
-// pendingRead is one read of the fleet's record of a pair, issued and not yet
-// answered.
-type pendingRead struct {
-	pair  string
-	into  *standing
-	index uint64
-	at    time.Time
-}
-
-// issueRead is the read an attempt on pair, from source, must make before its
-// wait is decided, or nil when none is needed. Held under the lock.
-//
-// NONE WHERE NOTHING COULD HAVE MOVED IT: a pair this node has read inside the
-// window and found clean — nothing in the fleet's record, and no failure here
-// since — is answered from here, which is what spares an honest sign-in's
-// second step a round trip. EVERY OTHER PAIR IS READ, because another node may
-// have failed on it since this one last looked, and a curve decided on a
-// stale count is the curve divided by the number of nodes. None while the
-// store is being left alone after failing to answer ([FleetRetry]).
-//
-// AND A FRESH PAIR ONLY AS FAST AS ITS SOURCE'S ALLOWANCE REFILLS. A pair this
-// node holds no record of is what every new name a guessing run types
-// arrives as, and no curve slows that: without the allowance one source drove
-// a read per name, and a write per name that failed, at whatever rate it
-// could send. One the allowance cannot pay for is decided on this node's
-// count — which for a pair nobody here has met is nothing — and marked
-// UNASKED, so its failure stays here too ([Ticket.Fail]). The pair's next
-// attempt finds a record here and is read like any other, so a run at one
-// account is shared at every step after its first on each node, whatever its
-// source has spent; what the allowance withholds is the fleet's view of names
-// a source tries once.
-func (t *Throttle) issueRead(pair, source string, now time.Time) *pendingRead {
-	if t.attempts == nil || now.Before(t.quietUntil) {
-		return nil
-	}
-	fresh := t.pairs.get(pair) == nil
-	s := t.pairs.take(pair)
-	if source != "" && (fresh || s.untouched()) {
-		if !t.sources.take(source).spend(now) {
-			s.unasked = true
-			return nil
-		}
-	} else if s.clean(now) {
-		return nil
-	}
-	s.unasked = false
-	s.reads++
-	return &pendingRead{pair: pair, into: s, index: s.reads, at: now}
-}
-
-// refresh performs read and folds what the fleet said into the pair it was
-// issued for.
-//
-// FAILING OPEN: a store that cannot answer leaves the pair on this node's own
-// count and is left alone for [FleetRetry] — asking again on every attempt
-// while coordination is down would put its timeout under every sign-in. An
-// unreachable store is reported once per window.
-//
-// A READ THAT LOST A RACE CHANGES NOTHING. Two attempts on one pair may each
-// issue a read, and the later-issued one is the one that can have seen more:
-// an answer older than the one already held is dropped, and so is one for a
-// standing the bound has since forgotten.
-func (t *Throttle) refresh(ctx context.Context, read *pendingRead) {
-	window, err := t.attempts.Failures(ctx, read.pair, read.at)
-	if err != nil {
-		t.unanswered(ctx, err)
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if cur := t.pairs.get(read.pair); cur == read.into {
-		cur.learn(window, read.index, read.at)
-	}
-}
-
-// pairOf is the key a (typed subject, source) pair is held under — here and
-// in the fleet: a keyed digest, never the value.
+// pairOf is the key a (typed subject, source) pair is held under: a keyed
+// digest, never the value.
 //
 // THE VALUE IS WHAT WAS TYPED, and a password typed into the login box is what
 // lands there often enough to matter. Held in the clear for a window, or
-// hashed without a key, it would be recoverable from this process's memory or
-// from the fleet's bucket against the company's own roster in one pass.
+// hashed without a key, it would be recoverable from this process's memory
+// against the company's own roster in one pass.
 //
 // NORMALISED, NEVER RESOLVED. An address folds the way the identity estate
 // folds one ([iam.NormalizeEmail]) — so a plus tag, which reaches the same
@@ -866,9 +605,9 @@ func (t *Throttle) pairOf(subject, source string) string {
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
-// factorOf is the key a person's second-factor curve is held under — here and
-// in the fleet: a keyed digest of the person's id, in a domain no pair's digest
-// shares, so no subject anybody types names it.
+// factorOf is the key a person's second-factor curve is held under: a keyed
+// digest of the person's id, in a domain no pair's digest shares, so no subject
+// anybody types names it.
 func (t *Throttle) factorOf(person string) string {
 	mac := hmac.New(sha256.New, t.key)
 	mac.Write([]byte("factor\x00"))
@@ -899,42 +638,6 @@ func sourceKeyOf(source string) string {
 	return addr.String()
 }
 
-// unanswered is an attempts store call that failed: the store's fault unless
-// the request it was made for went away first.
-//
-// A CALLER HANGING UP IS NOT AN OUTAGE. The call runs on the request's
-// context, so a client that disconnects mid-read cancels it — and read as the
-// store failing, one closed tab would leave the whole node deciding every
-// curve on its own count for [FleetRetry].
-func (t *Throttle) unanswered(ctx context.Context, err error) {
-	if ctx.Err() != nil {
-		return
-	}
-	t.degrade(err)
-}
-
-// degrade leaves an unreachable attempts store alone for [FleetRetry], and
-// reports it at most once per window.
-func (t *Throttle) degrade(err error) {
-	now := t.now()
-	t.mu.Lock()
-	t.quietUntil = now.Add(FleetRetry)
-	quiet := now.Sub(t.degraded) < DegradeInterval
-	if !quiet {
-		t.degraded = now
-	}
-	t.mu.Unlock()
-	if quiet {
-		return
-	}
-	t.logger.Warn("credential_throttle_degraded",
-		"error", err.Error(),
-		"detail", "the fleet's failed-authentication window could not be "+
-			"read or written, so this node is throttling on its own curve "+
-			"alone: a guessing run moved to another node starts that node's "+
-			"curve from nothing until coordination recovers")
-}
-
 // sleepUntil is the default wait, cancellable so a shutting-down node does not
 // hold a request open for it.
 func sleepUntil(ctx context.Context, d time.Duration) {
@@ -960,286 +663,109 @@ func delayFor(count int) time.Duration {
 	return min(DelayFloor<<(count-1), DelayCeiling)
 }
 
-// ---- the local curve --------------------------------------------------------- //
+// ---- the curve's memory ------------------------------------------------------ //
 
-// keyed is a bounded set of records by key, the least recently used forgotten
-// past its bound — the pairs' standings and the sources' allowances, each of
-// which an unauthenticated caller grows one key at a time, so each is bounded
-// rather than a map walked or kept for ever.
-type keyed[T any] struct {
+// lru is the pairs' standings by key, the least recently used forgotten past
+// its bound — an unauthenticated caller grows it one key at a time, so it is
+// bounded rather than a map walked or kept for ever.
+type lru struct {
 	bound int
-	fresh func() *T
-	byKey map[string]*list.Element // of *entry[T]
+	byKey map[string]*list.Element // of *entry
 	order *list.List               // most recently used at the front
 }
 
-type entry[T any] struct {
+type entry struct {
 	key string
-	val *T
+	val *standing
 }
 
-func newKeyed[T any](bound int, fresh func() *T) *keyed[T] {
-	return &keyed[T]{bound: bound, fresh: fresh,
-		byKey: map[string]*list.Element{}, order: list.New()}
+func newLRU(bound int) *lru {
+	return &lru{bound: bound, byKey: map[string]*list.Element{}, order: list.New()}
 }
 
-// get is key's record, or nil, marking it used.
-func (k *keyed[T]) get(key string) *T {
-	el, ok := k.byKey[key]
+// get is key's standing, or nil, marking it used.
+func (l *lru) get(key string) *standing {
+	el, ok := l.byKey[key]
 	if !ok {
 		return nil
 	}
-	k.order.MoveToFront(el)
-	return el.Value.(*entry[T]).val
+	l.order.MoveToFront(el)
+	return el.Value.(*entry).val
 }
 
-// take is key's record, made if there is none — forgetting the least recently
-// used key when that would pass the bound.
-func (k *keyed[T]) take(key string) *T {
-	if v := k.get(key); v != nil {
+// take is key's standing, made if there is none — forgetting the least
+// recently used key when that would pass the bound.
+func (l *lru) take(key string) *standing {
+	if v := l.get(key); v != nil {
 		return v
 	}
-	if k.order.Len() >= k.bound {
-		oldest := k.order.Back()
-		k.order.Remove(oldest)
-		delete(k.byKey, oldest.Value.(*entry[T]).key)
+	if l.order.Len() >= l.bound {
+		oldest := l.order.Back()
+		l.order.Remove(oldest)
+		delete(l.byKey, oldest.Value.(*entry).key)
 	}
-	v := k.fresh()
-	k.byKey[key] = k.order.PushFront(&entry[T]{key: key, val: v})
+	v := &standing{}
+	l.byKey[key] = l.order.PushFront(&entry{key: key, val: v})
 	return v
 }
 
 // drop forgets key.
-func (k *keyed[T]) drop(key string) {
-	if el, ok := k.byKey[key]; ok {
-		k.order.Remove(el)
-		delete(k.byKey, key)
+func (l *lru) drop(key string) {
+	if el, ok := l.byKey[key]; ok {
+		l.order.Remove(el)
+		delete(l.byKey, key)
 	}
 }
 
 // len is how many keys this holds.
-func (k *keyed[T]) len() int { return k.order.Len() }
+func (l *lru) len() int { return l.order.Len() }
 
 // standing is what one pair has against it.
 type standing struct {
-	// fails are this node's failures inside the window, oldest first and
-	// the newest at most [pairKeep] of them.
-	fails []failure
+	// fails are the pair's failures inside the window, in the order they
+	// were recorded, the latest [pairKeep] of them.
+	fails []time.Time
 
 	// pending are the start instants of attempts admitted and not yet
 	// resolved, each counted as a failure until it is.
 	pending []time.Time
-
-	// fleet is the fleet's record of the pair as the newest read to land
-	// found it — every failure in it, each as this node dates it
-	// ([standing.weight]) — readIndex which read that was (zero: none has
-	// landed), and readAt when it was issued. reads is how many have been
-	// issued.
-	fleet     []dated
-	readIndex uint64
-	readAt    time.Time
-	reads     uint64
-
-	// seq numbers this node's failures, so a write acknowledged after the
-	// lock was let go can find the one it recorded.
-	seq uint64
-
-	// unasked marks a pair admitted without a read because its source's
-	// allowance was spent: its failures are kept here and not written,
-	// until an attempt that finds a record here reads it again.
-	unasked bool
-}
-
-// untouched reports a standing that holds nothing at all — no failure, nothing
-// pending, and no read ever issued: a pair this node has met only by name.
-func (s *standing) untouched() bool {
-	return len(s.fails) == 0 && len(s.pending) == 0 && s.reads == 0
-}
-
-// dated is one of the fleet's failures: raw, the instant its writer's clock
-// recorded, and at, when this node takes it to have happened — the same
-// instant, unless the writer's clock was ahead of this node's, in which case
-// at is the moment this node first found it ahead ([standing.weight]).
-type dated struct {
-	raw, at time.Time
-}
-
-// failure is one failed attempt on this node.
-type failure struct {
-	at  time.Time
-	seq uint64
-
-	// sharedFrom is the index of the first read that could hold this
-	// failure — the one issued after the store acknowledged it — or zero
-	// while it is unacknowledged. A read issued before the acknowledgement
-	// may or may not have seen it, so it is counted on top of that read's
-	// answer: the strict direction, one step at most, and only in a race.
-	sharedFrom uint64
 }
 
 // weight is how many failures count against this pair at now, pending
 // attempts included, and the latest instant among them.
-//
-// NO FAILURE IS FURTHER AHEAD OF THIS NODE'S CLOCK THAN IT COULD HAVE BEEN.
-// The curve measures its wait from the newest instant it knows, and an instant
-// ahead of where it could be is a clock that was wrong — a peer's that runs
-// fast, or this node's own before it stepped back: taken as recorded, one
-// failure from a node ten minutes fast owed ten minutes here, which is no
-// ceiling at all. How far ahead an instant may be is where it came from:
-//
-//   - THE FLEET'S: not at all. A peer's failure had happened by the time the
-//     store answered, so one dated after now is the peer's clock. Each of
-//     the fleet's failures is judged ON ITS OWN, which is what lets the
-//     correct clocks' failures go on moving the wait while a fast one's is
-//     still ahead: judged as the record's newest instant alone, the fast
-//     writer's failure WAS the newest for the whole of the skew, so it was
-//     re-dated once and the wait ran from there however many real failures
-//     landed after it — every node owed only its own failures' waits, and a
-//     run spread across N nodes was admitted N times per ceiling.
-//   - THIS NODE'S OWN: up to [InlineDelay]. An attempt is dated no earlier
-//     than the start this node scheduled for it ([Ticket.Fail]), which is up
-//     to [InlineDelay] ahead of the clock at its admission, and an admitted
-//     attempt still pending counts from that start.
-//
-// An instant past its bound is RE-DATED to the bound the first time it is
-// found there, in place, and not merely capped on each look: capped afresh
-// every time, it would stay "just now" for as long as the skew lasted, and a
-// pair at the ceiling would owe thirty seconds on every attempt for ten
-// minutes. Together that is [Throttle.waitLocked]'s bound.
-//
-// THE FLEET'S RECORD PLUS THIS NODE'S FAILURES IT CANNOT HOLD YET, never the
-// larger of the two: the record is every node's failures, this node's that it
-// had acknowledged before the read was issued among them, so those are
-// counted once through it; every other failure here — made after the read, or
-// never acknowledged — is on top of it. Taking the larger held a run moved to
-// this node at the count it arrived with until this node's own failures
-// overtook it.
 func (s *standing) weight(now time.Time) (int, time.Time) {
-	cut := now.Add(-coord.AttemptWindow)
-	s.prune(cut)
-	var count int
+	s.prune(now.Add(-Window))
 	var last time.Time
-	for i := range s.fleet {
-		f := &s.fleet[i]
-		if f.at.After(now) {
-			f.at = now
-		}
-		if f.at.After(cut) {
-			count++
-			if f.at.After(last) {
-				last = f.at
-			}
-		}
-	}
-	lead := now.Add(InlineDelay)
-	for i := range s.fails {
-		f := &s.fails[i]
-		if f.at.After(lead) {
-			f.at = lead
-		}
-		if !s.holds(*f) {
-			count++
-		}
-		if f.at.After(last) {
-			last = f.at
-		}
-	}
-	for _, at := range s.pending {
-		count++
-		if at.After(lead) {
-			at = lead
-		}
+	for _, at := range s.fails {
 		if at.After(last) {
 			last = at
 		}
 	}
-	return count, last
-}
-
-// holds reports whether the fleet's record as last read already counts f.
-func (s *standing) holds(f failure) bool {
-	return f.sharedFrom != 0 && s.readIndex >= f.sharedFrom
-}
-
-// clean reports a pair read inside the window and found with nothing against
-// it, fleet or local: one whose read still answers for it.
-func (s *standing) clean(now time.Time) bool {
-	cut := now.Add(-coord.AttemptWindow)
-	s.prune(cut)
-	if s.readIndex == 0 || !s.readAt.After(cut) || len(s.fails) > 0 {
-		return false
-	}
-	for _, f := range s.fleet {
-		if f.at.After(cut) {
-			return false
+	for _, at := range s.pending {
+		if at.After(last) {
+			last = at
 		}
 	}
-	return true
-}
-
-// learn folds a read that landed into the pair: the newest answer wins, and a
-// local failure that answer already counts is forgotten here, since the
-// record holds it and its instant.
-//
-// A FAILURE READ BACK KEEPS THE DATING IT WAS GIVEN. Every instant in the
-// fleet's record is the WRITING node's clock, and one a fast writer stamped
-// into this node's future is re-dated to the moment it is first found ahead
-// ([standing.weight]); the next read carries the same instant again, and taken
-// as written it would be found ahead — and re-dated to that later moment — on
-// every read, so the wait it earns would never run out while the skew lasted.
-// So each instant the last read held is matched, by what its writer recorded,
-// against the one this read holds, and keeps its dating — and ONLY that one:
-// every other instant is taken as written, which is what lets a real failure
-// landing after a fast writer's move the wait on. A writer running SLOW needs
-// nothing: its failures fall inside the window and count, and only their wait
-// has already passed.
-func (s *standing) learn(window coord.Attempted, index uint64, at time.Time) {
-	if index <= s.readIndex {
-		return
-	}
-	was := s.fleet
-	matched := make([]bool, len(was))
-	next := make([]dated, 0, len(window.At))
-	for _, raw := range window.At {
-		d := dated{raw: raw, at: raw}
-		for i := range was {
-			if !matched[i] && was[i].raw.Equal(raw) {
-				matched[i], d.at = true, was[i].at
-				break
-			}
-		}
-		next = append(next, d)
-	}
-	s.fleet, s.readIndex, s.readAt = next, index, at
-	kept := s.fails[:0]
-	for _, f := range s.fails {
-		if !s.holds(f) {
-			kept = append(kept, f)
-		}
-	}
-	clear(s.fails[len(kept):])
-	s.fails = kept
+	return len(s.fails) + len(s.pending), last
 }
 
 // prune drops the failures that have aged out of the window.
 func (s *standing) prune(cut time.Time) {
 	kept := s.fails[:0]
-	for _, f := range s.fails {
-		if f.at.After(cut) {
-			kept = append(kept, f)
+	for _, at := range s.fails {
+		if at.After(cut) {
+			kept = append(kept, at)
 		}
 	}
 	clear(s.fails[len(kept):])
 	s.fails = kept
 }
 
-// empty reports a standing that can delay nobody and spare no read: no
-// failure in the window, nothing pending, and no read still answering for it.
+// empty reports a standing that can delay nobody: no failure in the window and
+// nothing pending.
 func (s *standing) empty(now time.Time) bool {
-	cut := now.Add(-coord.AttemptWindow)
-	s.prune(cut)
-	return len(s.fails) == 0 && len(s.pending) == 0 &&
-		(s.readIndex == 0 || !s.readAt.After(cut))
+	s.prune(now.Add(-Window))
+	return len(s.fails) == 0 && len(s.pending) == 0
 }
 
 // pend counts an admitted attempt that starts at.
@@ -1255,60 +781,21 @@ func (s *standing) unpend(at time.Time) {
 	}
 }
 
-// fail records a failure, keeping the newest [pairKeep], and answers its
-// number.
-func (s *standing) fail(at time.Time) uint64 {
-	s.seq++
-	s.fails = append(s.fails, failure{at: at, seq: s.seq})
+// fail records a failure, keeping the newest [pairKeep].
+func (s *standing) fail(at time.Time) {
+	s.fails = append(s.fails, at)
 	if over := len(s.fails) - pairKeep; over > 0 {
 		s.fails = append(s.fails[:0], s.fails[over:]...)
 	}
-	return s.seq
 }
 
-// shared marks failure seq acknowledged by the store: every read issued from
-// now on holds it.
-func (s *standing) shared(seq uint64) {
-	for i := range s.fails {
-		if s.fails[i].seq == seq {
-			s.fails[i].sharedFrom = s.reads + 1
-			return
-		}
-	}
-}
-
-// allowance is what one source may still ask the fleet about pairs this node
-// holds no record of: [FreshPairBurst] at once, one more every
-// [FreshPairEvery].
-type allowance struct {
-	left float64
-	at   time.Time
-}
-
-// spend takes one from the allowance at now, reporting false when there is
-// none. A clock that stepped back refills nothing until it has caught up.
-func (a *allowance) spend(now time.Time) bool {
-	if a.at.IsZero() {
-		a.left, a.at = FreshPairBurst, now
-	}
-	if gone := now.Sub(a.at); gone > 0 {
-		a.left = min(FreshPairBurst, a.left+float64(gone)/float64(FreshPairEvery))
-		a.at = now
-	}
-	if a.left < 1 {
-		return false
-	}
-	a.left--
-	return true
-}
-
-// LocalKeysHeld is how many pairs this throttle's own curve holds, for the
-// suite that asserts the bound.
+// PairsHeld is how many pairs this throttle holds, for the suite that asserts
+// the bound.
 //
 // EXPORTED FOR A TEST AND SAYING SO: the bound is the property, and the only
 // way to see it hold is to count what is left after more keys than it admits
 // have been met.
-func LocalKeysHeld(t *Throttle) int {
+func PairsHeld(t *Throttle) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.pairs.len()

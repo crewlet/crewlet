@@ -185,14 +185,10 @@ func TestWrongCodesFromManyAddressesClimbThePersonsCurve(t *testing.T) {
 	t.Parallel()
 	moving := &movingClock{at: clock}
 	r := newSignInRigWith(t, func(o *authapi.Options) {
-		throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+		o.Throttle = credential.NewThrottle(credential.ThrottleDeps{
 			Now:   moving.now,
 			Sleep: func(context.Context, time.Duration) {},
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		o.Throttle = throttle
 	})
 	mux := http.NewServeMux()
 	r.svc.Routes(mux)

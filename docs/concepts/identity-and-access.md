@@ -1059,7 +1059,7 @@ wipe the record of every one.
 
 **A second factor also climbs the person's own curve.** Past the password,
 the code is decided on the pair's curve *and* on one keyed on the person the
-login resolved to, shared across the fleet the same way, because the pair alone
+login resolved to, because the pair alone
 lets somebody holding the password divide the curve by every address they have
 — a `/48` of IPv6 is sixty-five thousand fresh pairs, and six digits fall to
 that in about an hour. Every address's wrong codes climb the one curve, a wait
@@ -1080,8 +1080,8 @@ counted against it, a dozen colleagues signing in at once met the same `429`
 with nobody failing. What that leaves unslowed by a curve is one password tried
 against many names from one address. What bounds that is the address's one
 turn at the verify cap — one name per derivation, however many it sends at once
-— its allowance of fresh names the fleet is asked about, the twelve-character
-floor and its blocklist, and the pad on every answer; what shows it is the
+— the twelve-character floor and its blocklist, and the pad on every answer;
+what shows it is the
 audit trail's per-client, per-minute failure tally, which counts how many
 different names one client tried.
 
@@ -1099,40 +1099,29 @@ attempts are held waiting on a curve at once on a node — past that, a wait is
 answered `429` straight away rather than parked on an open connection an
 attacker chose to open.
 
-**The fleet shares the pair, at every step.** The window is fifteen minutes.
-Every failure is written to the coordination store, the ceiling's included —
-the fleet's newest failure is what every node measures the wait from — and a
-node reads a pair's record before each attempt it admits on a pair that is
-already climbing, counting on top of it only its own failures the record could
-not yet hold. So however a load balancer spreads a run across nodes, the sixth
-failure anywhere owes the thirty-second ceiling everywhere. The store is still
-never on the path of every attempt: a pair this node already knows is owed more
-than five seconds is refused with a map lookup and no round trip, so a pair
-costs at most one read per attempt its curve lets through; a clean pair is read
-once a window, so an honest sign-in pays one read and its second-factor step
-none; a record is one value read with one get, never a consumer; and a store
-that fails to answer is left alone for thirty seconds rather than timed out on
-every sign-in. A pair nobody has met yet — what every new name a guessing run
-types arrives as — is asked about only as fast as its **source's allowance**
-refills: sixteen at once, then one a second. Past it, a fresh name is decided
-on the node's own count and its failure kept there, so one address typing new
-names costs the coordination store a bounded trickle rather than two round
-trips per name; the same pair's next attempt is shared as ever, and a success
-still clears the fleet's record. Each failure is dated by the clock of the node
-that saw it, and **no node's clock can stretch a wait past the ceiling**: a
-reader takes none of the fleet's failures as later than its own clock, so a
-node ten minutes fast costs a mistyped password the ordinary second elsewhere
-rather than ten minutes, and a node ten minutes slow still counts toward the
-curve — its failures are inside the window, only their wait has passed. Nor
-can a fast clock **shorten** a wait: each failure is judged on its own, so the
-failures made on correct clocks after a fast node's go on moving the wait
-while the fast one is still ahead of the reader's clock, and the fast one keeps
-the time it was first seen once the reader's clock reaches it rather than
-counting as a fresh failure then. What the fleet holds is a digest of the pair
-under a key
-derived from the active keyring entry, never what was typed — a password typed
-into the login box is what lands in that field often enough to matter. A node
-whose coordination store is unreachable goes on throttling on its own curve.
+**Each node keeps its own curve.** The window is fifteen minutes — long
+enough that a run held at the ceiling, one attempt every thirty seconds, never
+ages back down the curve, and short enough that an honest mistake stops
+costing anything inside the quarter hour — and the curve lives in the memory
+of the node that served the attempt. Nothing about it is written to the
+coordination store, so a sign-in never waits on a round trip, and on the single
+node most deployments are there is nothing more to say. On a fleet of N nodes
+serving sign-ins, a guesser whose attempts a load balancer spreads across all
+of them meets N separate curves and is admitted up to **N times as often** as
+on one node. That residual is deliberate: the curve was once shared through the
+coordination store, which put a read and a write on every step of every sign-in
+and a subsystem of its own — clock skew between writers, a per-address budget
+for the reads a spray of fresh names drove, a pause for a store that stopped
+answering — behind a factor of N on a rate the curve has already cut sixty-fold
+at its first step. What still bounds a run at one account on N nodes is what
+bounds it on one, times N: at the ceiling, one guess per node every thirty
+seconds, each an argon2id verification in its source's turn, against a password
+of at least twelve characters that is not on the blocklist — and, for a person
+who holds one, a second factor whose own curve a guesser reaches only once they
+already hold the password. A node holds a pair under a keyed digest, the key
+generated by the process and never written anywhere, never what was typed — a
+password typed into the login box is what lands in that field often enough to
+matter.
 
 A spent invitation link that **proved itself** — redeemed, expired, its
 address already enrolled — is refused like every other `410` and is **not** a

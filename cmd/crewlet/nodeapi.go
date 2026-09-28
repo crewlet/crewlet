@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -162,27 +161,10 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
 	}
-	// THE KEY A PAIR IS DIGESTED UNDER, the same on every node because it
-	// is derived from the keyring's active entry — which the signer above
-	// has just proved this node holds.
-	pairKey, ok := credential.PairKey(boot.Secrets.TokenMaterial())
-	if !ok {
-		return nil, nil, errors.New("api: the sign-in throttle: the keyring " +
-			"names no active key to derive its digest key from")
-	}
-	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
-		// THE FLEET'S OWN WINDOW, so a guessing run the load balancer
-		// moves to another ingress node starts that node's curve where
-		// the fleet left it. Nil is a real deployment — a single node
-		// with no coordination backend — and it throttles on its own
-		// curve alone.
-		Attempts: e.Backends().Fleet,
-		Key:      pairKey,
-		Logger:   logging.Get("api.auth"),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("api: the sign-in throttle: %w", err)
-	}
+	// THIS NODE'S OWN CURVE, and nobody else's: a guessing run a load
+	// balancer rotates across the fleet meets each node's separately, which
+	// is the residual internal/iam/credential's throttle states and bounds.
+	throttle := credential.NewThrottle(credential.ThrottleDeps{})
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
 		Directory: reader,

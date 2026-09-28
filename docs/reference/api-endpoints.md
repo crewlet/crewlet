@@ -371,7 +371,7 @@ One key: the login or address **as typed** (an address folded the way the
 directory folds one), from one source — the client's address as the trusted
 proxies resolve it, an IPv6 client by its `/64`. It has no allowance, so the
 first failure already costs a second, and it catches a run at one account. A
-success clears that pair on every node and nothing else: clearing more was a
+success clears that pair and nothing else: clearing more was a
 bypass, since anybody holding an account could sign in as themselves between
 guesses at somebody else's and wipe the record of every one. An attempt still
 being checked counts as a failure against its pair until it resolves, so a
@@ -383,7 +383,7 @@ person's password could otherwise guess at the six digits from every address
 they have, each a fresh pair — a `/48` of IPv6 is sixty-five thousand of them,
 enough to find a code in about an hour. So once the password has proved
 itself, the code is also decided on a curve keyed on the person the login
-resolved to, shared across the fleet, the same 1-to-30-second doubling: every
+resolved to, the same 1-to-30-second doubling: every
 address's wrong codes climb it together, and a wait past five seconds is
 `429 throttled`. Keyed on the resolved person here and nowhere else, because
 it is reached only past the password, so it tells nobody anything the password
@@ -399,20 +399,22 @@ failure every twenty-five seconds, at any name, kept every sign-in from that
 office or proxy at `429`, the right passwords included. So one password tried
 against many names from one address meets no curve; it is bounded by the
 address's one turn at the node's verify cap — one name per verification,
-however many it sends at once — by its allowance of fresh names the
-coordination store is asked about (sixteen at once, then one a second), by the
-password floor and blocklist, and by the pad, and it is shown by the audit
-trail's per-client failure tally. A credential that
-names nobody — an invitation link, a founder's code, a provider's round trip —
-meets no curve at all, and every refusal of one is still counted in the tally.
+however many it sends at once — by the password floor and blocklist, and by
+the pad, and it is shown by the audit trail's per-client failure tally. A
+credential that names nobody — an invitation link, a founder's code, a
+provider's round trip — meets no curve at all, and every refusal of one is
+still counted in the tally.
 
-The window is fifteen minutes and the fleet shares it at every step: every
-failure is written, and a node reads a climbing pair's record before each
-attempt it admits, so however a load balancer spreads a run across nodes the
-sixth failure anywhere owes the ceiling everywhere. A pair already being
-refused costs the coordination store nothing, and a clean one is read once a
-window. What the fleet holds is a keyed digest of the
-pair, never what was typed.
+The window is fifteen minutes, and **each node keeps its own curve**: nothing
+about it is written to the coordination store, so a sign-in never waits on a
+round trip. On a fleet of N nodes serving sign-ins, a guesser whose attempts a
+load balancer spreads across all of them is admitted up to N times as often as
+on one node — still one guess per node every thirty seconds at the ceiling,
+each an argon2id verification, against a password of at least twelve
+characters that is not on the blocklist, and a second factor behind it for a
+person who holds one. A node holds a pair under a keyed digest, never what was
+typed. See [identity and access](../concepts/identity-and-access.md#a-failure-costs-a-wait-never-a-lockout)
+for why the curve is not shared.
 
 #### A bearer is its own protection
 
