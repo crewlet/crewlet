@@ -160,9 +160,8 @@ func NewWriter(deps WriterDeps) (*Writer, error) {
 // inside a decide, and a writer whose directory moved under a write in flight
 // would decide two removals two ways.
 //
-// NIL IS A NODE THAT DOES NOT RUN THE IDENTITY DOMAIN, and either gesture
-// through it is then REFUSED naming the node rather than allowed — see
-// [Holders].
+// NIL IS A WRITER WITH NO DIRECTORY, and either gesture through it is then
+// REFUSED rather than allowed — see [Holders].
 func (w *Writer) WithHolders(h Holders) *Writer {
 	w.holders = h
 	return w

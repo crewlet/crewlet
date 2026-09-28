@@ -129,11 +129,10 @@ func reclaimed(claim func(time.Time) (bool, error), verb, key string,
 //
 // The three-valued rule at its narrowest. A caller that named nothing has not
 // lost a race to anybody, so "false" — which every one of these callers reads
-// as "somebody else has this" — drops the delivery, refuses the setup
-// callback, or reports a clean record for a caller nobody can throttle. The
-// same argument fault reaches every verb, so the check sends it to every verb:
-// a guard added to one of them and forgotten on the next is the ordinary way
-// this reappears.
+// as "somebody else has this" — drops the delivery or refuses the setup
+// callback. The same argument fault reaches every verb, so the check sends it
+// to every verb: a guard added to one of them and forgotten on the next is the
+// ordinary way this reappears.
 func CheckUnnamedRecordsAreRefused(ctx context.Context, f coord.Fleet, at time.Time) []error {
 	var errs []error
 	if ok, err := f.Claim(ctx, "", at); err == nil {
@@ -145,20 +144,6 @@ func CheckUnnamedRecordsAreRefused(ctx context.Context, f coord.Fleet, at time.T
 		errs = append(errs, fmt.Errorf("an empty key reached ClaimSetup, which "+
 			"answered %t rather than an error: false there refuses a callback "+
 			"nobody has spent", ok))
-	}
-	if err := f.Fail(ctx, "", at); err == nil {
-		errs = append(errs, errors.New("an empty subject reached Fail, which "+
-			"answered no error: an attempt nobody can be throttled by reads as "+
-			"a caller with a clean record"))
-	}
-	if got, err := f.Failures(ctx, "", at); err == nil {
-		errs = append(errs, fmt.Errorf("an empty subject reached Failures, which "+
-			"answered %+v rather than an error — the answer a throttle lets "+
-			"through", got))
-	}
-	if err := f.Flush(ctx, ""); err == nil {
-		errs = append(errs, errors.New("an empty subject reached Flush, which "+
-			"answered no error: a flush that forgot nothing reported success"))
 	}
 	return errs
 }
@@ -178,19 +163,17 @@ const (
 )
 
 // CheckCreatesOverARemovedRecordAreRaces verifies that callers racing to write
-// a record somebody has just REMOVED are each told what happened — every failed
-// attempt counted, every charge landed, and one creator first with the rest
-// told they lost — and none of them that the store is down.
+// a record somebody has just REMOVED are each told what happened — every charge
+// landed, and one creator first with the rest told they lost — and none of
+// them that the store is down.
 //
 // A removal on a KV bucket leaves a MARKER, and a create over one is a
 // compare-and-set on the marker's revision, so every loser of that race is a
 // caller a first writer beat. On a replicated stream the broker answered a
 // share of those losers with a refusal the client wrapped in neither of its
 // sentinels, and every create that matched a sentinel read it as an outage: a
-// failed sign-in racing another node's to a record a success had just flushed
-// went unrecorded and left its node's throttle on its own curve for half a
-// minute, a delivery claim racing another to one just released answered
-// "unknown" and was processed twice, a charge to a counter just reset failed.
+// delivery claim racing another to one just released answered "unknown" and
+// was processed twice, a charge to a counter just reset failed.
 //
 // EVERY VERB WHOSE RECORD CAN BE REMOVED, because the refusal is the
 // broker's and not any one verb's: the fix is one classifier every create
@@ -200,7 +183,7 @@ func CheckCreatesOverARemovedRecordAreRaces(ctx context.Context, f coord.Fleet,
 
 	for round := range RacedRounds {
 		for _, check := range []func(context.Context, coord.Fleet, int, time.Time) []error{
-			raceAttempts, raceClaims, raceBudgets, raceRuns, raceFollows,
+			raceClaims, raceBudgets, raceRuns, raceFollows,
 			raceMailboxes, raceSecrets,
 		} {
 			if errs := check(ctx, f, round, at); len(errs) > 0 {
@@ -251,29 +234,6 @@ func raced(verb string, errs []error) []error {
 func firstOfMany(verb string, won int) error {
 	return fmt.Errorf("%s racing %d callers over a record just removed: %d "+
 		"were told they wrote it, want exactly one", verb, Racers, won)
-}
-
-func raceAttempts(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {
-	subject := fmt.Sprintf("token:raced-%d", round)
-	if err := f.Fail(ctx, subject, at); err != nil {
-		return []error{fmt.Errorf("the first Fail: %w", err)}
-	}
-	if err := f.Flush(ctx, subject); err != nil {
-		return []error{fmt.Errorf("the flush: %w", err)}
-	}
-	_, errs := race(func() (bool, error) { return true, f.Fail(ctx, subject, at) })
-	if len(errs) > 0 {
-		return raced("Fail", errs)
-	}
-	got, err := f.Failures(ctx, subject, at)
-	if err != nil {
-		return []error{fmt.Errorf("reading the window back: %w", err)}
-	}
-	if got.Count() != Racers {
-		return []error{fmt.Errorf("%d failures racing to a flushed record left "+
-			"%d counted, want every one", Racers, got.Count())}
-	}
-	return nil
 }
 
 func raceClaims(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {

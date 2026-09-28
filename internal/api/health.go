@@ -90,14 +90,9 @@ type Health struct {
 	AppliedEpoch int64    `json:"applied_epoch"`
 	Seats        []string `json:"seats"`
 
-	// Domains are the state-log domains this node runs, derived from
-	// node.roles. A fleet's members legitimately differ, so this is how an
-	// operator reads off which node is applying what.
-	Domains []string `json:"domains"`
-
 	// IdentityDutySeconds maps each identity duty this node armed to the
 	// interval it runs at, in seconds — `{}` on a node that armed none.
-	// Always an object, for Domains' reason: the engine always knows what
+	// Always an object, for Seats' reason: the engine always knows what
 	// it armed, so a null would be a claim this body never has to make. It
 	// is where an operator reads that the key duty is running at all, and
 	// at which interval each duty runs.
@@ -136,8 +131,8 @@ type Health struct {
 	// [IdentityReady], [IdentityUnclaimed] or [IdentityUnknown]. See
 	// [Founding] for why it is on this body.
 	//
-	// ABSENT on a node that serves no sign-in surface: one running no
-	// identity domain holds a legitimately empty copy of that estate, and
+	// ABSENT on a node that serves no sign-in surface: one that started
+	// with no active company holds no identity rows at all, and
 	// `unclaimed` from it would be the one false line this body carries.
 	// Like [Health.Consistency], IT DOES NOT MOVE Status — a company
 	// waiting for its founder is not a node that should leave rotation.
@@ -177,6 +172,13 @@ type Consistency struct {
 	// Counts is how many of each kind, so a reader watching the number
 	// climb can say WHICH class grew without opening another surface.
 	Counts map[string]int `json:"counts,omitempty"`
+
+	// Unchecked is how many human seats this node could not ask the
+	// identity directory about, so `seat_unheld` was left undecided for
+	// them — [chartapi.Report.Unchecked], carried here for the reason
+	// Evaluated is: a count of findings that silently excluded them would
+	// read as a clean bill. Absent at zero.
+	Unchecked int `json:"unchecked,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -225,13 +227,6 @@ func (a *App) health(ctx context.Context) Health {
 		// a null here would read as "cannot say", which this node can.
 		seats = []string{}
 	}
-	domains := state.Domains
-	if domains == nil {
-		// Same rule, and here it is the stronger statement: a node
-		// running no domain at all refuses to start, so a null would be
-		// a claim this body can never honestly make.
-		domains = []string{}
-	}
 	body := Health{
 		Status:       StatusOK,
 		Node:         a.nodeID,
@@ -245,7 +240,6 @@ func (a *App) health(ctx context.Context) Health {
 		Posture:      state.Posture,
 		AppliedEpoch: state.AppliedEpoch,
 		Seats:        seats,
-		Domains:      domains,
 		// The floor is the store's own, not a number this package picked:
 		// it is what every read is bounded by.
 		EventHistorySeconds: int(store.EventHistory.Seconds()),
@@ -314,6 +308,7 @@ func consistencyOf(got chartapi.Report) Consistency {
 		Evaluated: got.Evaluated,
 		Findings:  len(got.Findings),
 		Worst:     string(got.Worst()),
+		Unchecked: got.Unchecked,
 	}
 	if len(got.Counts) > 0 {
 		out.Counts = make(map[string]int, len(got.Counts))

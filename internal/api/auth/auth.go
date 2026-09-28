@@ -342,8 +342,8 @@ type Guard struct {
 	sessions *Sessions
 
 	// machine turns a machine token — a personal access token or a service
-	// account's — into its owner, or nil on a node that runs no identity
-	// domain. See tokens.go.
+	// account's — into its owner, or nil where nothing installed the arm
+	// (a suite). See tokens.go.
 	machine *Tokens
 
 	// audit is where a refused credential is counted and a Tier A

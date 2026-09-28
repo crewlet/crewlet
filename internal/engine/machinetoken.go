@@ -14,10 +14,10 @@ import (
 //
 // What the rows MEAN is internal/iam/credential's table, over the value this
 // returns: the row, the owner as this node holds them now, and how far the node
-// can vouch for both. An ERROR is the unknown arm, always — a node running no
-// identity domain answers [errNoIdentityDomain] rather than an empty row,
-// because an empty copy of the estate read as "no such token" is a 401 to a
-// pipeline whose credential is fine, on exactly the nodes that cannot see it.
+// can vouch for both. An ERROR is the unknown arm, always — an engine holding
+// no identity directory answers [errNoDirectory] rather than an empty row,
+// because an absent estate read as "no such token" is a 401 to a pipeline
+// whose credential is fine.
 //
 // BOUNDED BY [requestReadBudget], for [Engine.BoundSeat]'s reason: it is a
 // keyed read of this node's own replicated rows in front of every request a
@@ -27,11 +27,11 @@ func (e *Engine) MachineToken(ctx context.Context, id string) (
 	credential.TokenRow, error) {
 
 	if e == nil {
-		return credential.TokenRow{}, errNoIdentityDomain
+		return credential.TokenRow{}, errNoDirectory
 	}
 	reader := e.IAM()
 	if reader == nil {
-		return credential.TokenRow{}, errNoIdentityDomain
+		return credential.TokenRow{}, errNoDirectory
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
 	defer cancel()

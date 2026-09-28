@@ -646,12 +646,6 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		res.Summary = map[string]any{
 			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
 			"store": boot.Store.Path, "roles": boot.Node.Roles,
-			// AND WHAT THOSE ROLES MEAN THIS NODE APPLIES, which is
-			// otherwise invisible until the node boots. Narrowing
-			// node.roles narrows the state-log domains a node runs,
-			// and the only other symptom is a peer's board answering
-			// a question this node's copy cannot.
-			"domains": validatedDomains(boot),
 		}
 		return report(stdout, res, asJSON)
 	}
@@ -759,11 +753,6 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),
 		"stream":        boot.Stream.Type, "coordination": boot.Coordination.Type,
-		// AND HERE TOO, not only on the one-file report. This is the
-		// invocation a pipeline runs — both tiers, by the flags — so a
-		// field only the single-file path carried is a field the place
-		// it matters never shows.
-		"domains": validatedDomains(boot),
 	}
 	return report(stdout, res, asJSON)
 }
@@ -883,19 +872,17 @@ func summaryLine(res validation) string {
 		line := fmt.Sprintf("%s: %d agent seats, %d LLM providers",
 			name, res.Summary["seats"], res.Summary["llm_providers"])
 		if stream, both := res.Summary["stream"]; both {
-			line += fmt.Sprintf(", stream %q, coordination %q, domains %v",
-				stream, res.Summary["coordination"], res.Summary["domains"])
+			line += fmt.Sprintf(", stream %q, coordination %q",
+				stream, res.Summary["coordination"])
 		}
 		return line
 	}
 	// THE PROSE LINE CARRIES EVERY FIELD THE JSON DOES. Most people run
 	// this without `-json`, so a summary key only the machine-readable
-	// shape prints is one almost nobody reads — and which domains these
-	// roles make a node apply is the one consequence of `node.roles` that
-	// is otherwise invisible until the node boots.
-	return fmt.Sprintf("%s: stream %q, coordination %q, store %q, roles %v, domains %v",
+	// shape prints is one almost nobody reads.
+	return fmt.Sprintf("%s: stream %q, coordination %q, store %q, roles %v",
 		res.File, res.Summary["stream"], res.Summary["coordination"],
-		res.Summary["store"], res.Summary["roles"], res.Summary["domains"])
+		res.Summary["store"], res.Summary["roles"])
 }
 
 // errSilent asks the caller to exit non-zero without printing anything more.
@@ -1577,9 +1564,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	// AND THE THIRD CREDENTIAL, a machine token the directory minted —
 	// built on EVERY node, not only those that sign people in: it needs no
-	// keyring, and on a node running no identity domain its read answers
-	// "cannot say", so a token minted elsewhere is a 503 there rather than
-	// a 401 telling a pipeline its credential is broken.
+	// keyring, and on a node that started with no company, and so holds no
+	// directory, its read answers "cannot say" — a 503 rather than a 401
+	// telling a pipeline its credential is broken.
 	machineTokens, err := auth.NewTokens(auth.TokensDeps{
 		Directory: e, Chart: engine.SeatViewOf(e),
 	})
@@ -1910,9 +1897,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
 		// the screen that renders the report cannot disagree.
 		SeatHeld: seatHeld(e),
-		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that runs no
-		// identity domain — see [signInSurface] for why that is honest
-		// rather than a fault.
+		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that started
+		// with no active company — see [signInSurface] for why that is
+		// honest rather than a fault.
 		Auth: authSurface,
 		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
 		// Auth is: a node that cannot sign one has none to check.
@@ -1920,8 +1907,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND OF THE TOKENS /iam/credentials MINTS — `crewlet iam
 		// token`'s value, presented as CREWLET_API_TOKEN.
 		Tokens: machineTokens,
-		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that runs no
-		// identity domain — see [directorySurface].
+		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that started with
+		// no active company — see [directorySurface].
 		IAM: directory,
 		// AND THE HUMAN WRITE SURFACE over the tracker and the knowledge
 		// base, nil on a company that runs neither natively — see
@@ -2964,20 +2951,4 @@ func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
 		return s
 	}
 	return nil
-}
-
-// validatedDomains is the state-log domain set this Tier A produces.
-//
-// ALWAYS A LIST. A field whose TYPE depended on whether the document was
-// valid is the one shape a client decoding this summary cannot handle, and
-// the error arm cannot arrive anyway: a role name the parser refuses is a
-// problem [config.ParseBootstrap] raises, so such a document never reaches a
-// summary at all. The arm is here because the accessor returns an error, not
-// because there is a document that takes it.
-func validatedDomains(boot *config.Bootstrap) []string {
-	roles, err := boot.Node.RoleSet()
-	if err != nil {
-		return []string{}
-	}
-	return engine.DomainsForRoles(roles)
 }

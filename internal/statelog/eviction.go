@@ -53,45 +53,13 @@ type Tombstone struct {
 
 // Presence is a node holding a live lease, whether or not it has reported a
 // position yet.
+//
+// A LIVE NODE COUNTS FOR EVERY DOMAIN. Every node runs every domain whatever
+// its roles, so a live node that has published no position for a log is one
+// between boot and its first heartbeat — never one that declined the log and
+// will never report.
 type Presence struct {
 	NodeID string
-
-	// Domains is the set of state-log domains that node RUNS, which is
-	// what decides whether its silence about this one is a node still
-	// booting or a node that will never report.
-	//
-	// WITHOUT IT A DECLINED DOMAIN IS A PERMANENT BLOCK. A live node
-	// publishes a position for every domain it applies and none for the
-	// rest, so a satellite whose roles exclude a domain would be unioned
-	// in at position zero on every tick, for ever, and that domain's log
-	// would grow without bound on any fleet with one.
-	//
-	// EMPTY MEANS EVERY DOMAIN, because that is the only safe reading of
-	// a row written by a build that predates the field — the same rule
-	// [placement.RoleSet] takes for an absent role list, and for the same
-	// reason: a rolling upgrade puts exactly that row in front of the new
-	// nodes, and reading it as "runs nothing" would trim past a peer that
-	// is still applying.
-	Domains []string
-}
-
-// runs reports whether this node applies the named domain.
-//
-// AN EMPTY NAME ASKS "for anything at all", which is what the fleet-wide
-// operator report wants: its block is per NODE rather than per domain, and
-// every node that is up runs at least one domain or it would have refused to
-// start. Answering false there would render a live peer as uncounted on a
-// screen whose whole job is to say who the trim is waiting for.
-func (p Presence) runs(domain string) bool {
-	if domain == "" || len(p.Domains) == 0 {
-		return true
-	}
-	for _, name := range p.Domains {
-		if name == domain {
-			return true
-		}
-	}
-	return false
 }
 
 // CountedSet is who the trim counts: the positions register's own keys, UNION
@@ -113,7 +81,7 @@ func (p Presence) runs(domain string) bool {
 // The tombstones are what let an operator advance a floor an absent node is
 // pinning, and they take effect only after the window — because a node that
 // has not yet noticed is a node still writing.
-func CountedSet(now time.Time, domain string, reported []NodePosition,
+func CountedSet(now time.Time, reported []NodePosition,
 	live []Presence, tombs []Tombstone) []NodePosition {
 
 	byID := make(map[string]NodePosition, len(reported)+len(live))
@@ -122,14 +90,6 @@ func CountedSet(now time.Time, domain string, reported []NodePosition,
 	}
 	for _, p := range live {
 		if _, known := byID[p.NodeID]; known {
-			continue
-		}
-		if !p.runs(domain) {
-			// A NODE THAT DOES NOT RUN THIS DOMAIN IS NOT COUNTED
-			// FOR IT. Its silence is a declaration rather than a
-			// node between boot and its first heartbeat, so unioning
-			// it in at zero would block this domain's trim for as
-			// long as the node lives.
 			continue
 		}
 		// A NODE WITH A LIVE LEASE AND NO POSITION YET COUNTS AT

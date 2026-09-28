@@ -264,23 +264,12 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	return db, nil
 }
 
-// storeOptions is what this node's store is opened with, decided from Tier A,
-// the node's roles and the company.
+// storeOptions is what this node's store is opened with, decided from Tier A
+// and the company.
 //
 // APART FROM THE OPEN so that what the pool is sized for can be asked of a
-// node's configuration without a file: the pinned writers follow the ROLES,
-// and a table over the role sets is the only honest way to hold that.
+// node's configuration without a file.
 func storeOptions(b *config.Bootstrap, c *config.Company) (store.Options, error) {
-	// Tier A validated the roles before anything reached here, so a parse
-	// failure at this point is a build fault rather than an operator's —
-	// and it is still an error rather than a default, because silently
-	// reading it as "every role" would size the pool for domains this node
-	// may not run.
-	roles, err := b.Node.RoleSet()
-	if err != nil {
-		return store.Options{}, fmt.Errorf("engine: read this node's roles to "+
-			"size the store's pinned writers: %w", err)
-	}
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
@@ -307,12 +296,10 @@ func storeOptions(b *config.Bootstrap, c *config.Company) (store.Options, error)
 		// both take a pooled write transaction now, which reaches the
 		// same lock through the same queue.
 		//
-		// THE DOMAINS THIS NODE RUNS, not every domain this build
-		// registers. A satellite whose roles exclude a domain starts no
-		// applier for it, so a pin reserved for one is a connection the
-		// pool holds and nothing ever takes — which is a reader's
-		// connection, permanently.
-		PinnedWriters: len(participationOf(roles).Run),
+		// EVERY REGISTERED DOMAIN, because every node runs every one of
+		// them whatever its roles, so every pin declared here has an
+		// apply loop that takes it.
+		PinnedWriters: len(register()),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
@@ -525,7 +512,6 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered boo
 		RateWindow:         coord.RateWindow,
 		ClaimTTL:           coord.ClaimTTL,
 		SetupOnceRetention: coord.SetupOnceRetention,
-		AttemptWindow:      coord.AttemptWindow,
 		LedgerRetention:    coord.LedgerRetention,
 		FireRetention:      coord.FireRetention,
 		FollowRetention:    coord.FollowRetention,

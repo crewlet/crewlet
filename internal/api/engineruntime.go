@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -116,12 +115,6 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// never report a node in rotation while its routes refuse.
 		ShuttingDown: r.ShuttingDown(),
 		Seats:        host.Held(),
-		// WHAT THIS NODE APPLIES, off the engine rather than re-derived
-		// from the roles here: the engine decided it once at boot and
-		// every other reader of that decision reads the same value, so
-		// a second derivation on this surface is how a probe comes to
-		// name a set the appliers do not match.
-		Domains: domainNames(r.engine.Domains()),
 		// WHICH IDENTITY DUTIES THIS NODE ARMED, off the engine's own
 		// record of the loops it started — the same answer the arming
 		// decision produced, never a second derivation from the roles.
@@ -155,17 +148,4 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		Posture:      string(r.reconciler.Posture(ctx)),
 		AppliedEpoch: r.reconciler.Applied(),
 	}
-}
-
-// domainNames renders the engine's declarations as the names a probe carries.
-//
-// A NAME RATHER THAN THE DECLARATION, because this crosses a wire: a reader is
-// a dashboard or an operator's `curl`, and what either can do with a domain is
-// recognise it.
-func domainNames(domains []statelog.Domain) []string {
-	out := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		out = append(out, domain.Name())
-	}
-	return out
 }

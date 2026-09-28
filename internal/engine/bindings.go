@@ -56,9 +56,7 @@ import (
 // observations have kept finding the residue — first sighting to latest — and
 // never a persistence nobody saw. The observations are the alarm table's own
 // heartbeat, every [statelog.AlarmInterval] (see [retention.heartbeat]) on every
-// node that RUNS THE IDENTITY DOMAIN — one that runs none holds an empty copy
-// of the directory, so it keeps no watch and observes nothing rather than
-// reporting a company with no residue (see [newBindingWatch]). That is what
+// node, since every node runs the identity domain. That is what
 // lets the alarm fire at the stall grace the design gives it rather than at the
 // trim's quarter-hour, and what keeps the three surfaces in step: the gauge,
 // the log line and the screen all read the same observation.
@@ -205,7 +203,7 @@ type classified struct {
 // claiming a persistence this process did not see.
 type bindingWatch struct {
 	// dir and chart are this node's directory and chart view. A nil dir
-	// is a node running no identity domain, which observes nothing.
+	// is an engine with no native runtime, which observes nothing.
 	dir   bindingSource
 	chart session.Chart
 
@@ -240,10 +238,9 @@ type bindingWatch struct {
 	logger *slog.Logger
 }
 
-// newBindingWatch is the watch over one engine, or nil on a node that runs no
-// identity domain — which has a legitimately empty copy of the directory, so a
-// walk over it would report every node without one as having no residue at all
-// rather than as not asking.
+// newBindingWatch is the watch over one engine, or nil on an engine with no
+// native runtime — which has no directory to walk, so it reports nothing rather
+// than a company with no residue.
 func newBindingWatch(e *Engine) *bindingWatch {
 	dir := e.IAM()
 	if dir == nil {

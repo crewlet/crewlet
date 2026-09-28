@@ -129,8 +129,8 @@ func containing(errs []error, want string) bool {
 // markerLoser is the KV backend as it WAS on a replicated stream: every writer
 // after the first to reach a record just removed is told the store is down,
 // because the broker's refusal of a create over the removal's marker matched
-// neither sentinel the create looked for. Only the attempts window and the
-// delivery claims are made to lie — two verbs are enough to show the check
+// neither sentinel the create looked for. Only the delivery claims and the
+// token counters are made to lie — two verbs are enough to show the check
 // reads what each verb answered rather than trusting any of them.
 type markerLoser struct {
 	wholeFleet
@@ -158,19 +158,6 @@ func (m *markerLoser) lost(key string) bool {
 	return removed && landed
 }
 
-func (m *markerLoser) Flush(ctx context.Context, subject string) error {
-	m.removed("attempt|" + subject)
-	return m.wholeFleet.Flush(ctx, subject)
-}
-
-func (m *markerLoser) Fail(ctx context.Context, subject string, now time.Time) error {
-	if m.lost("attempt|" + subject) {
-		return fmt.Errorf("%w: record the failed attempt: wrong last sequence",
-			coord.ErrUnavailable)
-	}
-	return m.wholeFleet.Fail(ctx, subject, now)
-}
-
 func (m *markerLoser) Release(ctx context.Context, key string) error {
 	m.removed("claim|" + key)
 	return m.wholeFleet.Release(ctx, key)
@@ -182,6 +169,21 @@ func (m *markerLoser) Claim(ctx context.Context, key string, now time.Time) (boo
 			coord.ErrUnavailable)
 	}
 	return m.wholeFleet.Claim(ctx, key, now)
+}
+
+func (m *markerLoser) Reset(ctx context.Context, scope string) (int, error) {
+	m.removed("budget|" + scope)
+	return m.wholeFleet.Reset(ctx, scope)
+}
+
+func (m *markerLoser) Charge(ctx context.Context, agentScope string,
+	tokens, orgLimit, agentLimit int) (coord.Spend, error) {
+
+	if m.lost("budget|") {
+		return coord.Spend{}, fmt.Errorf("%w: charge the counter: wrong last sequence",
+			coord.ErrUnavailable)
+	}
+	return m.wholeFleet.Charge(ctx, agentScope, tokens, orgLimit, agentLimit)
 }
 
 func TestTheSuiteCatchesARaceOverARemovedRecordAnsweredAsAnOutage(t *testing.T) {
@@ -198,31 +200,31 @@ func TestTheSuiteCatchesARaceOverARemovedRecordAnsweredAsAnOutage(t *testing.T) 
 		&markerLoser{wholeFleet: memory.NewFleet(), raced: map[string]bool{}}, at)
 	if len(errs) == 0 {
 		t.Fatal("the check passed a backend that tells every loser of a create " +
-			"over a removed record the store is down — a failed sign-in left " +
-			"unrecorded, a delivery claim answered unknown and processed twice")
+			"over a removed record the store is down — a delivery claim " +
+			"answered unknown and processed twice, a charge refused")
 	}
-	if !containing(errs, "Fail racing") {
-		t.Errorf("the check objected, but not to the failed attempts: %v", errs)
-	}
-
-	// AND THE CLAIMS, which the check reaches only once the attempts come
-	// back clean: a verb a check stops at is one it never looked at.
-	honestAttempts := &markerLoser{wholeFleet: memory.NewFleet(), raced: map[string]bool{}}
-	errs = coordtest.CheckCreatesOverARemovedRecordAreRaces(ctx,
-		claimsOnly{honestAttempts}, at)
 	if !containing(errs, "Claim racing") {
-		t.Errorf("a backend lying only about claims came back %v, want the "+
-			"claims named", errs)
+		t.Errorf("the check objected, but not to the claims: %v", errs)
+	}
+
+	// AND THE COUNTERS, which the check reaches only once the claims come
+	// back clean: a verb a check stops at is one it never looked at.
+	honestClaims := &markerLoser{wholeFleet: memory.NewFleet(), raced: map[string]bool{}}
+	errs = coordtest.CheckCreatesOverARemovedRecordAreRaces(ctx,
+		chargesOnly{honestClaims}, at)
+	if !containing(errs, "Charge racing") {
+		t.Errorf("a backend lying only about charges came back %v, want the "+
+			"charges named", errs)
 	}
 }
 
-// claimsOnly is a [markerLoser] whose attempts window tells the truth.
-type claimsOnly struct{ *markerLoser }
+// chargesOnly is a [markerLoser] whose delivery claims tell the truth.
+type chargesOnly struct{ *markerLoser }
 
-func (c claimsOnly) Flush(ctx context.Context, subject string) error {
-	return c.wholeFleet.Flush(ctx, subject)
+func (c chargesOnly) Release(ctx context.Context, key string) error {
+	return c.wholeFleet.Release(ctx, key)
 }
 
-func (c claimsOnly) Fail(ctx context.Context, subject string, now time.Time) error {
-	return c.wholeFleet.Fail(ctx, subject, now)
+func (c chargesOnly) Claim(ctx context.Context, key string, now time.Time) (bool, error) {
+	return c.wholeFleet.Claim(ctx, key, now)
 }

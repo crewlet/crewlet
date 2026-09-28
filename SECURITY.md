@@ -81,7 +81,12 @@ A few things worth knowing when deploying Crewlet:
   refused under 26 characters), and every refused one is counted in the audit
   trail's per-client failure tally. Behind a proxy, name it in
   `api.trusted_proxies`: otherwise every caller is the proxy, and a stranger
-  guessing at somebody's login slows that person's own sign-in.
+  guessing at somebody's login slows that person's own sign-in. The curve is
+  each node's own and is not shared through the coordination store, so on a
+  fleet of N nodes serving sign-ins a run a load balancer spreads across all
+  of them is admitted up to N times as often — still bounded by the
+  twelve-character floor, the blocklist, the argon2id cost and, for a person
+  who holds one, a second factor.
 - **Passwords are argon2id at 64 MiB, t=3, p=1, with a twelve-character
   minimum and no composition rules.** The parameters are in the stored
   verifier, so raising the cost re-hashes each person's on their next

@@ -347,9 +347,9 @@ suspended by anything but the org chart and the process.
 ### What a suspension reaches, and how fast
 
 A suspension is ONE record on the identity log — `crewlet iam suspend`, or a
-`PATCH /iam/people/{id}` naming the stage — and no chart write. Every node that runs the
-identity domain (`ingress` and `workers`) applies it, and what follows is
-decided on each of them from that node's own rows:
+`PATCH /iam/people/{id}` naming the stage — and no chart write. Every node
+applies it, whatever its roles, and what follows is decided on each of them
+from that node's own rows:
 
 | What | When | How |
 |---|---|---|
@@ -373,16 +373,9 @@ record — and a later rename, grant change or credential change forms its
 document from the stage the row holds, so no edit made while somebody is
 suspended can quietly reinstate them.
 
-**What it does not reach:**
-
-- **The seat.** It stays in the chart, work can still be assigned to it, and
-  the tracker still writes its notices; whoever is bound to it next reads
-  them. Suspending a person is not removing a seat.
-- **Instantly, on a node that runs no identity domain.** A seats-only
-  satellite holds no directory of its own, so it asks the nodes that do on its
-  thirty-second re-read: its contact routing withdraws the person within that
-  interval rather than within one apply. See [Humans in the Org
-  Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-chart-record).
+**What it does not reach is the seat.** It stays in the chart, work can still
+be assigned to it, and the tracker still writes its notices; whoever is bound
+to it next reads them. Suspending a person is not removing a seat.
 
 ---
 
@@ -688,8 +681,7 @@ What that means in practice:
   chart and records the seat's **identity**: the handle it was *created* under,
   which no rename moves and the chart never issues to another seat. Every
   reader turns it back into a seat the same way — the request path, the
-  dangling-binding check, contact routing, a satellite's view of the directory
-  — so a binding follows its seat through every rename, and never follows an
+  dangling-binding check, contact routing — so a binding follows its seat through every rename, and never follows an
   old handle to a seat somebody created later. Keyed on the handle typed at the
   time, a renamed seat could be claimed again under its new name, and a
   removed person's claim on the old name went on withholding the seat from
@@ -732,8 +724,6 @@ the seat — and one evaluation feeds every surface that reports it:
 - The **`iam_binding_dangling`** alarm fires once a residue has persisted past
   the same 60 seconds every other alarm uses. The age is how long this node's
   own evaluations — on the alarm heartbeat, every fifteen seconds, on every node
-  that runs the identity domain (`ingress`, `workers`; a seats-only node holds
-  no directory to observe, and raises nothing rather than reporting a clean one)
   — have kept finding it, from the first that did to the latest: nothing records
   when a binding began to dangle, so the alarm never claims a persistence
   nobody saw. A bind racing a removal, or a hire a node applies a few seconds
@@ -749,11 +739,10 @@ the seat — and one evaluation feeds every surface that reports it:
   heartbeat costs two position reads. See [Alarms](../reference/alarms.md).
 
 **A node that cannot read the directory refuses the removal rather than
-allowing it.** A node running no identity domain holds an empty copy of those
-rows, so reading them answers "nobody holds this seat" for every seat in the
-company — which would make a seats-only satellite the one place every removal
-succeeds. The refusal names the node, because the remedy is to do it somewhere
-else.
+allowing it.** A read that failed has said nothing, and reading that silence as
+"nobody holds this seat" would make a store fault the one moment every removal
+succeeds. The refusal says the directory could not be read; the remedy is to
+try again once it can.
 
 ## Sessions go stale, and an unset deadline is stale
 
@@ -1055,7 +1044,7 @@ wipe the record of every one.
 
 **A second factor also climbs the person's own curve.** Past the password,
 the code is decided on the pair's curve *and* on one keyed on the person the
-login resolved to, shared across the fleet the same way, because the pair alone
+login resolved to, because the pair alone
 lets somebody holding the password divide the curve by every address they have
 — a `/48` of IPv6 is sixty-five thousand fresh pairs, and six digits fall to
 that in about an hour. Every address's wrong codes climb the one curve, a wait
@@ -1076,8 +1065,8 @@ counted against it, a dozen colleagues signing in at once met the same `429`
 with nobody failing. What that leaves unslowed by a curve is one password tried
 against many names from one address. What bounds that is the address's one
 turn at the verify cap — one name per derivation, however many it sends at once
-— its allowance of fresh names the fleet is asked about, the twelve-character
-floor and its blocklist, and the pad on every answer; what shows it is the
+— the twelve-character floor and its blocklist, and the pad on every answer;
+what shows it is the
 audit trail's per-client, per-minute failure tally, which counts how many
 different names one client tried.
 
@@ -1095,40 +1084,29 @@ attempts are held waiting on a curve at once on a node — past that, a wait is
 answered `429` straight away rather than parked on an open connection an
 attacker chose to open.
 
-**The fleet shares the pair, at every step.** The window is fifteen minutes.
-Every failure is written to the coordination store, the ceiling's included —
-the fleet's newest failure is what every node measures the wait from — and a
-node reads a pair's record before each attempt it admits on a pair that is
-already climbing, counting on top of it only its own failures the record could
-not yet hold. So however a load balancer spreads a run across nodes, the sixth
-failure anywhere owes the thirty-second ceiling everywhere. The store is still
-never on the path of every attempt: a pair this node already knows is owed more
-than five seconds is refused with a map lookup and no round trip, so a pair
-costs at most one read per attempt its curve lets through; a clean pair is read
-once a window, so an honest sign-in pays one read and its second-factor step
-none; a record is one value read with one get, never a consumer; and a store
-that fails to answer is left alone for thirty seconds rather than timed out on
-every sign-in. A pair nobody has met yet — what every new name a guessing run
-types arrives as — is asked about only as fast as its **source's allowance**
-refills: sixteen at once, then one a second. Past it, a fresh name is decided
-on the node's own count and its failure kept there, so one address typing new
-names costs the coordination store a bounded trickle rather than two round
-trips per name; the same pair's next attempt is shared as ever, and a success
-still clears the fleet's record. Each failure is dated by the clock of the node
-that saw it, and **no node's clock can stretch a wait past the ceiling**: a
-reader takes none of the fleet's failures as later than its own clock, so a
-node ten minutes fast costs a mistyped password the ordinary second elsewhere
-rather than ten minutes, and a node ten minutes slow still counts toward the
-curve — its failures are inside the window, only their wait has passed. Nor
-can a fast clock **shorten** a wait: each failure is judged on its own, so the
-failures made on correct clocks after a fast node's go on moving the wait
-while the fast one is still ahead of the reader's clock, and the fast one keeps
-the time it was first seen once the reader's clock reaches it rather than
-counting as a fresh failure then. What the fleet holds is a digest of the pair
-under a key
-derived from the active keyring entry, never what was typed — a password typed
-into the login box is what lands in that field often enough to matter. A node
-whose coordination store is unreachable goes on throttling on its own curve.
+**Each node keeps its own curve.** The window is fifteen minutes — long
+enough that a run held at the ceiling, one attempt every thirty seconds, never
+ages back down the curve, and short enough that an honest mistake stops
+costing anything inside the quarter hour — and the curve lives in the memory
+of the node that served the attempt. Nothing about it is written to the
+coordination store, so a sign-in never waits on a round trip, and on the single
+node most deployments are there is nothing more to say. On a fleet of N nodes
+serving sign-ins, a guesser whose attempts a load balancer spreads across all
+of them meets N separate curves and is admitted up to **N times as often** as
+on one node. That residual is deliberate: the curve was once shared through the
+coordination store, which put a read and a write on every step of every sign-in
+and a subsystem of its own — clock skew between writers, a per-address budget
+for the reads a spray of fresh names drove, a pause for a store that stopped
+answering — behind a factor of N on a rate the curve has already cut sixty-fold
+at its first step. What still bounds a run at one account on N nodes is what
+bounds it on one, times N: at the ceiling, one guess per node every thirty
+seconds, each an argon2id verification in its source's turn, against a password
+of at least twelve characters that is not on the blocklist — and, for a person
+who holds one, a second factor whose own curve a guesser reaches only once they
+already hold the password. A node holds a pair under a keyed digest, the key
+generated by the process and never written anywhere, never what was typed — a
+password typed into the login box is what lands in that field often enough to
+matter.
 
 A spent invitation link that **proved itself** — redeemed, expired, its
 address already enrolled — is refused like every other `410` and is **not** a
@@ -1301,8 +1279,9 @@ token is no good answers `401`. A node that cannot tell answers `503` and a
 pipeline retries: one that has not yet applied the mint the token names (the
 position in the value is what tells "not yet" from "gone"), one whose identity
 applier is past the sixty-second stall grace, one holding a record it cannot
-decode about the owner, and one that runs no identity domain at all. A `401`
-there would teach a pipeline that a credential that is fine is broken.
+decode about the owner, and one that started with no active company and so
+holds no directory at all. A `401` there would teach a pipeline that a
+credential that is fine is broken.
 
 ---
 
@@ -2389,17 +2368,17 @@ that has not yet applied a revocation is designed to answer a session with
 **503**, never 401. A 401 tells a browser to sign in again, and one stalled
 applier would sign everybody on that node out at once.
 
-**A seats-only node does not run this domain at all.** It is the first domain
-whose participation narrows on `node.roles`: ingress runs it because it serves
-requests, workers runs it because it sweeps, and a satellite that only holds
-seats runs neither — so it does not pay the disk or the applier to hold a
-directory of people it authenticates nobody against. It still counts the
-log's share of the broker's budget: the stream and its reserved ceiling are
-the fleet's, created and sized on every node whatever it runs, because a
-stream keeps the ceiling of whichever node created it first. The corollary
-matters when you read a satellite's tables: `iam_people`
-there is empty because the domain is not running, **not** because the company
-has nobody, and every reader in this estate is three-valued for that reason.
+**Every node runs this domain, a seats-only satellite included.** It once
+narrowed — a satellite that serves no request and runs no duty skipped it —
+and the narrowing cost more than the disk it saved: a satellite still routes
+inbound deliveries by who holds each seat, so it had to ask the fleet for the
+directory over a signed request-and-reply of its own, adoption had to strip the
+estate out of every snapshot it installed, and the trim had to know which
+peers declined which log. None of that protected anything, because a
+satellite's host holds the fleet keyring — which it needs to verify every
+record on every log — and the keyring opens the company's secret store, every
+person's key in it included. See
+[what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds).
 
 ### Sizing `stream.iam_log_max_bytes`
 

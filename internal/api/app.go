@@ -256,20 +256,20 @@ type Options struct {
 	SeatBindings auth.SeatBindings
 
 	// SeatHeld reports whether a seat is one somebody in the identity
-	// directory is bound to, or nil on a node that cannot tell.
+	// directory is bound to, or nil on a node with no directory to ask.
 	//
-	// NIL SKIPS THE QUESTION rather than answering it. A node that runs no
-	// identity domain has a legitimately empty copy of that estate, and
-	// reading it as "nobody holds any seat" would report every human seat
-	// in the company as unheld on /health — see [chartapi.Held].
+	// NIL SKIPS THE QUESTION rather than answering it. A node that started
+	// with no active company holds no identity rows at all, and reading
+	// that as "nobody holds any seat" would report every human seat in the
+	// company as unheld on /health — see [chartapi.Held].
 	SeatHeld chartapi.Held
 
 	// Sessions turns a browser's cookie into the person holding it.
 	//
 	// OPTIONAL, and nil is the same posture that leaves [Options.Auth]
-	// nil: a node whose keyring cannot sign for the fleet, or which runs
-	// no identity domain, mints no cookie and therefore has none to
-	// resolve. Tier A tokens remain the whole of authentication there.
+	// nil: a node that started with no active company holds no identity
+	// directory, mints no cookie and therefore has none to resolve. Tier
+	// A tokens remain the whole of authentication there.
 	Sessions *auth.Sessions
 
 	// Tokens turns a machine token — a person's own access token or a
@@ -278,10 +278,11 @@ type Options struct {
 	//
 	// NIL IS AN API THAT RESOLVES NO MACHINE TOKEN, which is what a suite
 	// has. `crewlet run` ALWAYS builds one over its engine, including on a
-	// node that runs no identity domain: there the read answers "this
-	// node cannot say", so a token minted elsewhere in the fleet is a 503
-	// a pipeline retries rather than a 401 that tells it a credential that
-	// is fine is broken.
+	// node that started with no active company and so holds no identity
+	// directory: there the read answers "this node cannot say", so a
+	// token minted elsewhere in the fleet is a 503 a pipeline retries
+	// rather than a 401 that tells it a credential that is fine is
+	// broken.
 	Tokens *auth.Tokens
 
 	// AuthEvents is where the guard counts a refused credential and
@@ -399,11 +400,11 @@ type Options struct {
 	// directory.
 	//
 	// OPTIONAL, and nil is the same posture that leaves [Options.Auth]
-	// nil — a node running no identity domain has nothing to serve here
-	// — so the routes are ABSENT rather than refusing. A 404 says this
-	// node does not hold the directory; a 503 would say it does and is
-	// broken, and send an operator looking for an outage on the node
-	// least able to help.
+	// nil — a node that started with no active company holds no identity
+	// directory to serve — so the routes are ABSENT rather than refusing.
+	// A 404 says this node does not hold the directory; a 503 would say it
+	// does and is broken, and send an operator looking for an outage on
+	// the node least able to help.
 	IAM guardedMounter
 
 	// Work serves the human write surface over the company's own tracker
@@ -482,10 +483,10 @@ type Options struct {
 	// person. See [Founding].
 	//
 	// Optional, and nil is a real configuration: a node that serves no
-	// sign-in surface — one running no identity domain holds a
-	// legitimately empty copy of that estate — has nothing honest to say
-	// about who is in the company, so its health body leaves the field
-	// out rather than calling the company unclaimed.
+	// sign-in surface — one that started with no active company holds no
+	// identity rows at all — has nothing honest to say about who is in
+	// the company, so its health body leaves the field out rather than
+	// calling the company unclaimed.
 	Founding Founding
 
 	// Estate answers whether this node's replicated estate can be read at

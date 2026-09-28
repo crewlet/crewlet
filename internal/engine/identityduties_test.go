@@ -4,7 +4,6 @@ import (
 	"context"
 	"maps"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -12,8 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE IDENTITY DUTIES ARE ARMED WHERE THEIR INPUTS ARE, and nowhere else.
@@ -26,7 +23,8 @@ import (
 //
 //  1. A node running the identity domain arms all three, at their stated
 //     intervals.
-//  2. A seats-only satellite runs no identity domain and arms nothing.
+//  2. A seats-only satellite RUNS the domain, as every node does, and arms
+//     nothing, for the reason the next one does.
 //  3. An ingress-only node RUNS the domain and still arms nothing: every duty
 //     is a worker singleton its roles gate would refuse on every tick, and
 //     loops that never run reported as armed duties are exactly the
@@ -50,33 +48,25 @@ func TestTheIdentityDutiesAreArmedWhereTheirInputsAre(t *testing.T) {
 		}
 	})
 
-	t.Run("a seats-only satellite", func(t *testing.T) {
-		t.Parallel()
-		e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			storeDir(b)
-			b.Node.Roles = []string{"seats"}
-		})})
-		if got := e.IdentityDuties(); len(got) != 0 {
-			t.Fatalf("a node running no identity domain armed %v", got)
-		}
-	})
-
-	t.Run("an ingress-only node", func(t *testing.T) {
-		t.Parallel()
-		e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			storeDir(b)
-			b.Node.Roles = []string{"ingress"}
-		})})
-		if !slices.ContainsFunc(e.Domains(), func(d statelog.Domain) bool {
-			return d.Name() == iamdomain.Domain{}.Name()
-		}) {
-			t.Fatalf("precondition: an ingress node runs %v, and this case is about "+
-				"one that runs the identity domain", e.Domains())
-		}
-		if got := e.IdentityDuties(); len(got) != 0 {
-			t.Fatalf("a node that runs no workers armed %v", got)
-		}
-	})
+	for name, roles := range map[string][]string{
+		"a seats-only satellite": {"seats"},
+		"an ingress-only node":   {"ingress"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+				storeDir(b)
+				b.Node.Roles = roles
+			})})
+			if e.IAM() == nil {
+				t.Fatalf("precondition: a node with roles %v opened no identity "+
+					"domain, and this case is about one that runs it", roles)
+			}
+			if got := e.IdentityDuties(); len(got) != 0 {
+				t.Fatalf("a node that runs no workers armed %v", got)
+			}
+		})
+	}
 }
 
 // EVERY IDENTITY DUTY IS A LEASE-CLAIMED FLEET SINGLETON.

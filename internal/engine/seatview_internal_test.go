@@ -13,8 +13,8 @@ import (
 
 // A NODE WITH NO CHART DOMAIN ANSWERS UNKNOWN, NEVER SEATLESS.
 //
-// The zero [SeatView] is what a seats-only satellite passes, and the one
-// answer it must not give is "no seat" — [session.ResolveSeat] reads that as
+// The zero [SeatView] is what an engine with no native runtime passes, and the
+// one answer it must not give is "no seat" — [session.ResolveSeat] reads that as
 // the seatless arm and hands somebody bound to a lead's seat an empty handle,
 // which is the silent fall-through the whole three-valued shape exists to
 // prevent. Both methods error, and a person is then 503 rather than served.
@@ -22,11 +22,11 @@ func TestASeatViewWithNoChartRefusesRatherThanAnsweringSeatless(t *testing.T) {
 	t.Parallel()
 	var view SeatView
 	if _, found, err := view.Seat(t.Context(), "platform-lead"); err == nil {
-		t.Errorf("Seat answered found=%v with no error, so a satellite would "+
-			"report every seat in the company as gone", found)
+		t.Errorf("Seat answered found=%v with no error, so a view with no chart "+
+			"would report every seat in the company as gone", found)
 	}
 	if _, _, err := view.Position(t.Context()); err == nil {
-		t.Error("Position answered with no error, so a satellite's zero " +
+		t.Error("Position answered with no error, so a view with no chart " +
 			"would read as a node that has applied everything")
 	}
 	// AND THROUGH THE RESOLVER, which is where it matters: the row must

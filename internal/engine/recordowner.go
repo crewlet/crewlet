@@ -51,11 +51,11 @@ import (
 // answer — a 503 — never "nobody".
 func (e *Engine) HolderRecord(ctx context.Context, login string) (string, error) {
 	if e == nil {
-		return "", errNoIdentityDomain
+		return "", errNoDirectory
 	}
 	reader := e.IAM()
 	if reader == nil {
-		return "", errNoIdentityDomain
+		return "", errNoDirectory
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestReadBudget)
 	defer cancel()

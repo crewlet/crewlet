@@ -26,8 +26,7 @@ import (
 // Two observations, both taken the instant [New] returns and neither of them a
 // wait, because both halves of the unwind are synchronous:
 //
-//   - every answerer the native start registered — the search slice, and the
-//     seat holders a seats-only peer reads the directory through — is
+//   - every answerer the native start registered — the search slice — is
 //     WITHDRAWN, which is the first step of [native.shutdown] and therefore
 //     says the native runtime was stopped rather than abandoned;
 //   - this node's ADMISSION is gone, which says the unwind is the whole
@@ -71,11 +70,10 @@ roles:
 // its peers' search fan-out, and a registration is a claim on buckets a
 // coordinator counts as answered. One left behind by a node whose boot failed
 // is not a leak somebody notices as memory — it is a peer's search silently
-// returning a sixty-fourth of the corpus as a complete answer. The same holds
-// for every other answerer the native start registers — a seats-only peer
-// asking who holds each seat would take a dead node's last answer as the
-// fleet's — so the counts are PER SUBJECT: one total would read a second
-// answerer as a boot that started twice.
+// returning a sixty-fourth of the corpus as a complete answer. The same would
+// hold for any other answerer the native start registers, so the counts are
+// PER SUBJECT: one total would read a second answerer as a boot that started
+// twice.
 type servedQueue struct {
 	*jetstream.Queue
 

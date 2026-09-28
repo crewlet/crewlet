@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -31,24 +30,13 @@ import (
 //
 // # Every node, from its own applier
 //
-// Every node that runs the identity domain applies every record, so each one
-// rebuilds its OWN registry from its OWN rows within its own apply. The change
-// feed would be the wrong carrier for the same reason it is for the chart view:
-// it relays a record to one node, and the rest would go on attributing a
-// suspended person's messages to their seat.
-//
-// # A node that runs no identity domain asks the fleet
-//
-// A seats-only satellite does not apply this domain, so it has no rows to read
-// — and its empty copy of the tables must never be read as "nobody holds any
-// seat", which would route every human seat by the chart whatever its holder's
-// standing ELSEWHERE claimed. Nor may it route by the chart alone: it consumes
-// inbound deliveries and runs seats like every other node, so a chart-only
-// registry there attributed a suspended person's messages to their seat for
-// every delivery it happened to win. It reads the FLEET's directory instead,
-// over the broker — see fleetdirectory.go — on the periodic net, since it has
-// no applier to signal it. The chart-only reading is left to an engine with no
-// native runtime at all, which is `crewlet validate` and a test.
+// Every node applies every identity record — the domain runs on every node,
+// whatever its roles — so each one rebuilds its OWN registry from its OWN rows
+// within its own apply. The change feed would be the wrong carrier for the same
+// reason it is for the chart view: it relays a record to one node, and the rest
+// would go on attributing a suspended person's messages to their seat. The
+// chart-only reading is left to an engine with no native runtime at all, which
+// is `crewlet validate` and a test.
 //
 // # Serialised, because two triggers now rebuild one pointer
 //
@@ -87,61 +75,14 @@ func (d iamDirectory) SeatHolders(ctx context.Context) ([]notify.Holder, error) 
 	return out, nil
 }
 
-// directoryFor is the directory a native runtime's party registry reads, and
-// the position its readings are taken at.
-//
-// THE NODE'S ROLES DECIDE, through what they made of the runtime: a node that
-// runs the identity domain reads its own rows, gated on its own applier's
-// position; one that does not asks the fleet, with no position to gate on —
-// its reading is the fleet's, and a question costs a scatter only every
-// [DirectoryRefresh].
-func (e *Engine) directoryFor(ctx context.Context, n *native) (
-	notify.Directory, func() statelog.Position, error) {
-
-	if n.iamReader != nil {
-		return iamDirectory{reader: n.iamReader}, n.iamReader.At, nil
-	}
-	host, ok := e.backends.Queue.(domainHost)
-	if !ok {
-		return nil, nil, fmt.Errorf("engine: the stream is %T, which cannot say "+
-			"whether the identity log has records, so this node runs no identity "+
-			"domain and has no way to read the fleet's", e.backends.Queue)
-	}
-	iamLog, err := host.DomainLog(ctx, iamdomain.Domain{}.Stream().Name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("engine: open the identity log to read the "+
-			"fleet's directory through: %w", err)
-	}
-	// THE FLEET'S OWN KEYRING, which is what the answers are signed under:
-	// see fleetdirectory.go for why an unsigned answer is an instruction.
-	verifier, err := statelog.NewVerifier(holdersSignatureLabel, n.log.ring)
-	if err != nil {
-		return nil, nil, fmt.Errorf("engine: build the verifier the fleet's "+
-			"directory answers are opened with: %w", err)
-	}
-	return &fleetDirectory{
-		ask: e.backends.Queue,
-		answerers: func(ctx context.Context) (int, error) {
-			return directoryAnswerers(ctx, e.backends.Coord)
-		},
-		head: func(ctx context.Context) (uint64, error) {
-			stats, err := iamLog.Stats(ctx)
-			if err != nil {
-				return 0, err
-			}
-			return stats.LastSeq, nil
-		},
-		verifier: verifier,
-	}, nil, nil
-}
-
 // useDirectory hands the party registry this node's identity directory, and
-// the position its readings are taken at — nil for a directory that has none
-// to gate on, which the periodic net then reads on every tick.
+// the position its readings are taken at — the identity applier's own, so the
+// periodic net reads the rows only when the applier has moved. A nil position
+// is a directory with no applier behind it, which the net reads on every tick;
+// only a test hands one over.
 //
-// Called once, by the native runtime, with what [Engine.directoryFor] chose. An
-// engine with no native runtime never calls it and keeps the chart-only
-// behaviour.
+// Called once, by the native runtime. An engine with no native runtime never
+// calls it and keeps the chart-only behaviour.
 func (e *Engine) useDirectory(dir notify.Directory, at func() statelog.Position) {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -331,11 +272,8 @@ func (e *Engine) nudgeDirectory() {
 // seconds, because that is what the alarm table already calls a stall: a
 // registry behind its own directory for longer than that is a fault an
 // operator is being told about, so a slower net would report what it was not
-// fixing. It costs nothing when idle on a node that runs the domain — the
-// identity applier's position is compared first, and the directory is read
-// only when it moved. On a node that runs none it is the ONLY trigger, and each
-// tick costs one presence listing and one scatter the answering nodes serve
-// from a local read: that is how long a suspension takes to reach a satellite.
+// fixing. It costs nothing when idle — the identity applier's position is
+// compared first, and the directory is read only when it moved.
 const DirectoryRefresh = ViewRefresh
 
 // watchDirectory is the directory trigger's loop: the committed hook's signal,

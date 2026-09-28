@@ -628,8 +628,8 @@ reinstatement, a bind, an unbind, a removal). The node then reads the
 directory once and, if the answer moved, builds a new registry for the same
 company and swaps it in — never a diff against the live one, so a reader
 always sees one reading of each source. That is **within one apply** of the
-record on every node that runs the identity domain, and a thirty-second
-re-read is the safety net behind the signal. The log line `parties_indexed`
+record on every node, and a thirty-second re-read is the safety net behind the
+signal. The log line `parties_indexed`
 reports `withheld_seats` and whether a `directory` was consulted.
 
 **A directory this node cannot read keeps the last reading** rather than
@@ -641,34 +641,12 @@ every human seat is withheld (`directory_unread`) until the net's first
 successful read — people are briefly unreachable through the engine rather
 than a suspended person's accounts being routed to their seat.
 
-**A node that does not run the identity domain asks the fleet.** A seats-only
-satellite holds an empty copy of the directory, and an empty copy is not
-"nobody holds any seat" — but neither may it route by the chart, because it
-consumes inbound deliveries and runs seats like every other node. So it asks:
-every node that runs the identity domain (`ingress`, `workers`) answers who
-holds each seat from its own rows, over the broker's request-and-reply, and
-the satellite builds its registry from the most caught-up answer. It has no
-applier to signal it, so it asks on the thirty-second re-read, and a suspension
-reaches it within that interval rather than within one apply. If nobody
-answers, the log decides: a log nothing was ever written to is a company with
-nobody bound (an all-seats fleet, which has no sign-in surface), and a log with
-records is a directory the satellite cannot read — it keeps its last reading,
-or withholds every human seat if it has never had one.
-
-**The satellite reads only what the fleet signed, and never goes backward.**
-The broker authenticates nothing, so an answer on that subject is signed under
-the fleet's own keyring (`secrets.keys`) exactly as every state-log record is,
-and a satellite ignores one the keyring does not open — an answer that could be
-forged would let anything on the broker route every suspended person's accounts
-back to their seats. A signed answer must also echo the question it answers
-(an answer captured from an earlier ask is ignored) and must not claim records
-the identity log does not hold. And a satellite remembers how far the last
-reading it took had got: an answer from a node still behind that — the node
-that had applied a suspension restarting, and a slower one answering instead —
-keeps the last reading rather than routing the suspended person again. The log
-lines are `directory_answer_refused` (an answer the keyring does not open),
-`directory_answer_implausible` (a signed answer past the log's head) and
-`party_directory_unreadable` for a reading kept.
+**Every node reads its own directory, a satellite included.** A seats-only
+satellite consumes inbound deliveries and runs seats like every other node, so
+it may not route by the chart alone — and it runs the identity domain like
+every other node, whatever its roles, so a suspension reaches it within one
+apply of its own. See
+[what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds).
 
 **What agents are shown follows the same reading.** Every turn pins the
 registry's reading beside the org it runs under, so a lead's roster renders a

@@ -45,13 +45,13 @@ inbox topic, and the node holding that seat's lease is the one consuming
 it — so nothing that publishes has to know where the agent is, and a
 Slack message routed to that agent works exactly as before.
 
-A satellite is also a **replica**, not just an agent host: it applies the
-company's shared state logs — the work tracker, the knowledge base, the
-search vectors and the org chart — into its own database, exactly as a
-core node does. It does **not** replicate the identity estate unless you
-give it `ingress` or `workers`. Which logs it applies follows from the
-roles you gave it, and nothing else; see
-[which state-log domains the node runs](#which-state-log-domains-the-node-runs).
+A satellite is also a **replica**, not just an agent host: it applies
+every one of the company's shared state logs — the work tracker, the
+knowledge base, the search vectors, the org chart and the identity
+directory — into its own database, exactly as a core node does. Roles
+decide what a node serves and which duties it holds, never which logs it
+applies; see [what a satellite holds](#what-a-satellite-holds) before you
+choose a host for one.
 
 ```mermaid
 flowchart LR
@@ -115,10 +115,9 @@ secrets:                          # REQUIRED on every node, this one too
 ```
 
 The `secrets:` block is not optional on a satellite, although it serves no
-API and signs no session cookie. It runs state logs like every other node —
-the tracker, the vectors, the pages and the org chart, whatever its roles —
-and every record on every one of them is signed and verified under this
-keyring, because the broker authenticates nothing. The company document the
+API and signs no session cookie. It runs every state log like every other
+node, whatever its roles, and every record on every one of them is signed
+and verified under this keyring, because the broker authenticates nothing. The company document the
 satellite fetches from its peers is authenticated by its seal under the same
 keys. `crewlet validate` refuses a Tier A file without it, naming
 `secrets.keys`; generate a key once with `crewlet secrets keygen` and give
@@ -210,145 +209,67 @@ Two failures to know by sight:
 
 ---
 
-## Which state-log domains the node runs
+## What a satellite holds
 
 The work tracker, the knowledge base, the search vectors, the org chart
-and the identity estate are [replicated state machines](replication.md). Each is one ordered log the
-whole fleet shares, and a node that **runs** a domain applies that log
-into its own copy of the rows — so it can answer questions about it
-locally, and so it can donate a snapshot of it to a member that fell
-behind.
+and the identity directory are [replicated state machines](replication.md).
+Each is one ordered log the whole fleet shares, and every node applies
+**every** log into its own copy of the rows — so it answers questions
+about each one locally, and so it can donate a snapshot of all of them to
+a member that fell behind. There is no key that narrows it: `node.roles`
+decides what a node serves and which duties it holds, and never which
+logs it applies.
 
-Which domains a node runs is **derived from `node.roles`**. There is no
-separate key for it, no per-domain switch, and nothing to keep in step
-with the roles you already wrote: subtract a role and you subtract
-whatever that role was the only reason for.
+**That includes the identity directory**: the people in your company, the
+addresses and logins they are known by, the verifiers of their passwords,
+recovery codes and machine tokens, their seat bindings, their grants, the
+invitations that enrolled them and the sessions they are signed in with.
+A satellite needs it for the same reason every other node does — it
+consumes inbound deliveries and runs seats, so whose Slack member or Jira
+account counts as a colleague depends on who holds each seat and whether
+they are suspended, and the satellite answers that from its own rows the
+moment its applier has the change.
 
-| Role | Domains it runs | Why it needs them |
-|---|---|---|
-| `ingress` | `tracker`, `vectors`, `pages`, `chart`, **`iam`** | It serves the board, the knowledge base, search and the org chart over the REST API and the dashboard — and it resolves who is asking, which is the identity estate |
-| `seats` | `tracker`, `vectors`, `pages`, `chart` | A turn reads and writes all four |
-| `workers` | `tracker`, `vectors`, `pages`, `chart`, **`iam`** | The retention sweep runs over each one's ledger, the embedding duty fills the vectors, and the identity duties sweep sessions and report duplicate claims |
+Be clear about what that puts on the host, and why it is not a new
+exposure:
 
-Four of the five run everywhere, and that is a **decision, not an
-absence**: each of them states in its own right that every role needs it,
-and a node running no domain at all refuses to boot rather than coming up
-as a member that serves no work item, no page and no search.
+- **Names and addresses are sealed** under each person's own key, and a
+  password, a recovery code or a machine token is stored only as a
+  verifier. Logins, grants, seat bindings and session rows are in the
+  clear.
+- **The host already holds the fleet keyring**, which the node cannot run
+  without — it verifies every record on every log with it and opens the
+  company document with it. The same keyring opens the company's
+  [secret store](../concepts/secret-store.md), every vendor credential and
+  every person's key in it. A satellite's host could decrypt every company
+  secret before it held a copy of the directory, and keeping the
+  directory off it never took the directory out of that host's reach.
 
-**The identity estate is the one that narrows.** A seats-only satellite
-does not run it, and that is the point of the derivation: no turn reads
-it — a seat's principal is its own handle and its authority comes from the
-[org chart](../concepts/chart-domain.md) — so a satellite running it would
-pay the disk and the applier to hold a directory of your people that it
-authenticates nobody against. Not the broker's budget: the identity log's
-stream and its reserved ceiling are the **fleet's**, created and sized on
-every node whatever its roles, because a stream keeps the ceiling of
-whichever node created it first — so that share is spent on a satellite
-too, and `stream.iam_log_max_bytes` still counts in its broker's budget.
+So choose a satellite's host as you would any node's: somewhere you would
+trust with the company's secrets. If a seat needs to run somewhere you
+would not, a satellite is not the mechanism — the host is a full member
+of the fleet, whatever roles you give it.
 
-> **Reading a satellite's tables.** `iam_people` on a seats-only node is
-> **empty because the domain is not running**, not because the company has
-> nobody. The two are the same rows. Anything asking a satellite who holds
-> a seat gets "this node does not hold that answer" rather than "nobody" —
-> and if you are querying the database directly, that distinction is yours
-> to make.
+Two rules follow, and both are worth knowing before you need them:
 
-**A satellite still honours a suspension.** Whose contact identities route —
-which Slack member is a colleague, which Jira account is a seat — depends on
-the directory, and a satellite consumes inbound deliveries and runs seats like
-every other node. So it asks the nodes that run the estate who holds each seat,
-every thirty seconds, over the broker's request-and-reply; they answer from
-their own rows, naming seats and stages and never a person. A suspended
-holder's accounts stop being attributed on a satellite within that interval.
+- **Every domain, or none.** A node that could not start one of the
+  domains refuses to start at all. It does not come up serving the ones
+  that did start: a node applying half the logs serves rows derived from
+  one while another's records pile up unapplied, and nothing above it can
+  tell that apart from a node that is merely behind.
+- **Every live node counts for every log's trim.** A node that has
+  published no position for a log yet is between boot and its first
+  heartbeat, so it is counted at position zero and holds that log's floor
+  for that one heartbeat. (See the counted set in
+  [Retention](retention.md#the-six-terms).)
 
-So narrowing a satellite to `roles: [seats]` now changes something real:
-it stops replicating people, credentials and sessions to a host you put
-somewhere else on purpose. If that host also needs to serve the API, give
-it `ingress` and it will run the estate too.
-
-Two rules follow from it, and both are worth knowing before you need
-them:
-
-- **Every domain a node declares, or none.** A node that could not start
-  one of the domains its roles say it runs refuses to start at all. It
-  does not come up serving the ones that did start: a node applying half
-  of what it declared serves rows derived from one log while another
-  log's records pile up unapplied, and nothing above it can tell that
-  apart from a node that is merely behind.
-- **A domain a node's roles exclude is a declaration, not a shortfall.**
-  Such a node publishes no position for that domain, and it is *not
-  counted* for that domain's trim — peers read its roles off its presence
-  lease and derive the same answer this node did. Counted at zero it
-  would instead pin that log's floor for as long as the node lived, and
-  the log would grow without bound on any fleet with one satellite in it.
-  (See the counted set in [Retention](retention.md#the-six-terms).)
-
-### Reading it before the node boots
-
-The consequence is otherwise invisible until start-up, so `crewlet
-validate` answers it from the Tier A document alone — no broker, no
-store, nothing running:
-
-```bash
-crewlet validate crewlet.yaml -json
-```
-
-```json
-{
-  "valid": true,
-  "tier": "bootstrap",
-  "file": "crewlet.yaml",
-  "problems": [],
-  "warnings": [],
-  "summary": {
-    "roles": ["seats"],
-    "domains": ["tracker", "vectors", "pages", "chart"],
-    "stream": "nats",
-    "coordination": "embedded-kv",
-    "store": "/var/lib/crewlet/sat-eu-1.db"
-  }
-}
-```
-
-`summary.domains` is what the roles beside it resolve to. Every form of
-the command carries it — the JSON payload above, the one-line prose
-summary, and the two-file `crewlet validate -config … -company …` a
-pipeline runs:
+At boot every node logs the logs it started, whether or not it serves
+HTTP — which on a `roles: [seats]` satellite is the one place to look,
+because such a node [binds no listener](#1-give-the-satellite-a-tier-a-config):
 
 ```
-crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages chart]
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages chart iam]"
 ```
-
-### Reading it off a running node
-
-At boot, every node logs what it started, whether or not it serves HTTP —
-which on a `roles: [seats]` satellite is the one place to look, because
-such a node [binds no listener](#1-give-the-satellite-a-tier-a-config):
-
-```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages chart]"
-```
-
-On a node that **does** run `ingress`, `GET /health` carries the same
-list:
-
-```bash
-curl -s http://node-a:8000/health | python3 -m json.tool
-```
-
-```json
-{
-  "node": "node-a",
-  "status": "ok",
-  "seats": ["ceo", "eng"],
-  "domains": ["tracker", "vectors", "pages", "chart", "iam"]
-}
-```
-
-A fleet's members may legitimately differ here, so read it per node
-rather than assuming the one you reached speaks for the rest. It is also
-what to check after *adding* a role: the domain appears once the node is
-really applying it, not when you edited the file.
 
 ---
 
@@ -368,10 +289,11 @@ the dependency surface before choosing a host for it:
   or an on-premises OpenAI-compatible endpoint.
 - **The MCP servers its role declares, installed on that host** — the
   whole reason the seat is there.
-- **The same keyring**, if company-config encryption is on. The
-  satellite decrypts the company document and the
-  [secret store](../concepts/secret-store.md) itself; without the
-  keyring it cannot read the config at all.
+- **The same keyring** every other node holds. The satellite verifies
+  every state-log record with it and decrypts the company document and
+  the [secret store](../concepts/secret-store.md) itself; without it the
+  node refuses to start — see [what a satellite holds](#what-a-satellite-holds)
+  for what that means for the host.
 - **Nothing inbound**, unless a seat pinned here runs in agent mode. No
   port, no ingress rule, no public URL. That is what makes this shape
   workable in a zone the rest of the fleet is not in. An agent-mode seat

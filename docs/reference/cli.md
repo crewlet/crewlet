@@ -144,7 +144,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers — and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. Roles also decide which [state-log domains the node applies](../guides/satellite-nodes.md#which-state-log-domains-the-node-runs): the identity estate only with `ingress` or `workers`, so a `seats`-only node replicates no people, credentials or sessions; [`crewlet validate`](#crewlet-validate) prints the set before the node boots. See [Running a Fleet](../guides/fleet.md). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. Roles decide what a node serves and which duties it holds, never which state logs it applies: every node applies all five, the identity directory included — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying `api.auth.max_grants` and no more. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run".
@@ -729,26 +729,18 @@ hold their work until a provider is added (see
 | `-json` | Emit a machine-readable result on stdout instead of prose. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
-**A Tier A document also says which state-log domains it makes a node
-apply**, because `node.roles` decides that and nothing else shows it until the
-node boots: a `seats`-only node runs no identity estate (see
-[Which state-log domains the node runs](../guides/satellite-nodes.md#which-state-log-domains-the-node-runs)).
-The prose summary ends with it —
+A Tier A document's prose summary names what it resolved to:
 
 ```
-crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats], domains [tracker vectors pages chart]
+crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats]
 ```
-
-— and so does the two-tier form's line, after the company's seats and
-providers.
 
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
 "problems": [...], "warnings": [...], "summary": {...}}`. `summary` is what the
 document resolved to: a Tier B file's `company`, `seats` and `llm_providers`;
-a Tier A file's `stream`, `coordination`, `store`, `roles` and `domains`; and
-for the two-tier form the company's three beside `stream`, `coordination` and
-`domains`. `summary.domains` is always a list, in the order the engine reports
-domains everywhere else. Each problem is located and classified, so an editor,
+a Tier A file's `stream`, `coordination`, `store` and `roles`; and for the
+two-tier form the company's three beside `stream` and `coordination`. Each
+problem is located and classified, so an editor,
 CI job, or [AI authoring loop](../getting-started/ai-authoring.md) can fix
 everything in one pass:
 

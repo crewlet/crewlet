@@ -56,9 +56,14 @@ import (
 // question they answer is a company's from the start: the company's sealed
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
 // may still have, the [PositionRegister] and its neighbours the state log
-// trims against, the [SetupClaims] that spend a setup callback exactly once,
-// and the [Attempts] the sign-in throttle shares its curves through. The list
-// above is the migration, not the estate.
+// trims against, and the [SetupClaims] that spend a setup callback exactly
+// once. The list above is the migration, not the estate.
+//
+// The sign-in throttle is deliberately NOT here. Its curve was once shared
+// through a bucket of its own, so a guessing run a load balancer rotated
+// across nodes met one curve; it is each node's own now, because that sharing
+// put a coordination round trip on the sign-in path to buy back a factor of N
+// on a rate the curve already bounds — see internal/iam/credential.
 //
 // # Every contract here fails in a stated direction
 //
@@ -119,20 +124,6 @@ const (
 	// bucket, silently, which is exactly the bug this constant exists to
 	// end.
 	SetupOnceRetention = 15 * time.Minute
-
-	// AttemptWindow is how long a failed authentication counts against the
-	// caller that made it, and therefore the attempts bucket's age: each
-	// failure's own instant is what ends its part of the window, and the
-	// bucket's expiry is what removes a caller's record a window after the
-	// last write to it, so nothing sweeps.
-	//
-	// Fifteen minutes is the interval a throttle actually has to reason
-	// over: long enough that a guessing run cannot wait it out between
-	// attempts and still make progress at any useful rate, short enough
-	// that an honest mistake stops costing anything inside the quarter
-	// hour. A failure costs only a wait, never a refusal — see
-	// internal/iam/credential's throttle.
-	AttemptWindow = 15 * time.Minute
 
 	// LedgerRetention is how long a turn completion is remembered. It has
 	// to outlast both the queue's redelivery horizon and the scheduler's
@@ -211,27 +202,6 @@ const (
 	// configplane for one constant would invert the dependency.
 	ReconcileInterval = 15 * time.Second
 )
-
-// AttemptCap is how many failed authentications one caller's record keeps.
-//
-// NOT A RETENTION AND NOT CONFIGURATION. It bounds the instants one record
-// holds, and the one thing it decides is what happens when a caller overflows
-// it: the OLDEST attempt is discarded and the newest is kept. The other
-// direction is the one that cannot be survived: the record would freeze at the
-// oldest attempts, they would age out of [AttemptWindow] one by one, and the
-// caller would be un-throttled in the middle of exactly the flood the cap was
-// reached by.
-//
-// Sixteen is comfortably above the six failures that take the sign-in curve to
-// its ceiling, so the count a caller reads is a real count rather than a
-// saturation, and it is small enough that the whole estate an unauthenticated
-// stranger can grow is sixteen instants per name they can reach — a value of a
-// few hundred bytes, which is what every read of the record carries.
-//
-// A constant rather than a field on either backend's config: the twin and the
-// KV must cap identically or the contract suite certifies two different
-// contracts, and no deployment has a reason to differ.
-const AttemptCap = 16
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
 // valve.
@@ -314,109 +284,6 @@ type SetupClaims interface {
 	// lapses [SetupOnceRetention] after it is written, by the bucket's own
 	// expiry, and an empty key is an error for [Claims.Claim]'s reason.
 	ClaimSetup(ctx context.Context, key string, now time.Time) (bool, error)
-}
-
-// Attempts is the fleet's failed-authentication window, behind the API's
-// sign-in throttle.
-//
-// # Why the company has to agree on it
-//
-// A guessing run reaches whichever ingress node a load balancer picks, so a
-// per-process counter is one the attacker divides by the number of nodes
-// without knowing it. The throttle shares each (subject, source) pair's curve
-// through here — reading a climbing pair's window before each attempt its
-// curve admits and writing each failure — so every step of a run at one
-// account is decided on what the whole fleet has seen, whichever node it lands
-// on; and each person's second-factor curve the same way, under a subject of
-// its own. The one pair it does not share is a name a source tries past its
-// allowance of fresh pairs, whose failure the node keeps — that pair's next
-// attempt is shared as ever. The store is never on the path of every attempt:
-// an attempt a node already knows is owed a long wait is refused with no round
-// trip, so what reaches here is bounded by what the curve lets through.
-//
-// # Neither bound is a sweep
-//
-// A caller's record keeps at most [AttemptCap] instants, the oldest discarded,
-// and each counts until it is [AttemptWindow] old; the record itself leaves
-// the store a window after its last write. Nothing sweeps and nothing resets a
-// counter, and two nodes recording a failure in the same instant record two
-// attempts rather than racing over one number — a backend that holds the
-// instants in one value writes it by compare-and-set.
-//
-// # It fails OPEN, and the asymmetry is deliberate
-//
-// Every read here answers what it could see; an unreachable store yields the
-// error and a caller that treats it as "nothing recorded elsewhere". That is
-// the opposite of [Counter], whose valve fails closed, and the reason is what
-// the two refusals cost: a valve that opens delays a notification, while a
-// throttle that closes locks every operator out of /config, /secrets and the
-// dashboard — the one surface an incident is fixed from — at the moment the
-// coordination store is already unwell. What the open window leaves is each
-// node's own curve, which is still a curve.
-type Attempts interface {
-	// Fail records one failed authentication against subject at now.
-	//
-	// ONE WRITE AND NO ANSWER. The throttle reads the window before the
-	// next attempt it admits, not after this one, so a count read back
-	// here would be a second round trip nobody reads.
-	//
-	// An empty subject is an error for [Claims.Claim]'s reason: a count
-	// nobody can be throttled by reads exactly like a caller with a clean
-	// record.
-	Fail(ctx context.Context, subject string, now time.Time) error
-
-	// Failures reports what the window holds against subject at now —
-	// EVERY attempt inside it, oldest first, at most [AttemptCap] of them —
-	// WITHOUT recording one.
-	//
-	// THE INSTANTS AND NOT A SUMMARY OF THEM. A throttle's delay runs from
-	// the newest failure, so a count alone would have a node date every
-	// failure somebody made elsewhere to the moment it asked, and a pair
-	// re-read on each attempt would then never see its delay end. And the
-	// newest alone is not enough either, because every instant is the
-	// WRITING node's clock: a reader takes one its own clock has not
-	// reached yet as a writer running fast and re-dates it, and summarised
-	// to the newest, a fast writer's failure IS the newest for as long as
-	// the skew lasts — every real failure after it hidden behind it, so
-	// the wait stopped moving and a run spread across the fleet was
-	// admitted once per node per ceiling. Each instant is judged on its
-	// own.
-	//
-	// ONE READ AND NO CONSUMER. The throttle asks this before an attempt
-	// its curve admits — a clean pair once a window — which puts it on the
-	// path of every fresh name a guessing run types, so a backend answers
-	// it with a single get of one record. On the KV backend it was an
-	// ephemeral ordered consumer over the subject's revisions: two
-	// proposals through a clustered fleet's metadata group per read. A
-	// pair the throttle has already refused locally never reaches here at
-	// all.
-	Failures(ctx context.Context, subject string, now time.Time) (Attempted, error)
-
-	// Flush forgets every attempt against subject — what a SUCCESSFUL
-	// authentication does, fleet-wide, so the delay a pair earned on one
-	// node is lifted on all of them by the credential that proves the
-	// caller is who the throttle was protecting.
-	Flush(ctx context.Context, subject string) error
-}
-
-// Attempted is what [Attempts] holds against one subject.
-type Attempted struct {
-	// At are the attempts inside the window, OLDEST FIRST, at most
-	// [AttemptCap] of them, each dated by the clock of the node that
-	// recorded it.
-	At []time.Time
-}
-
-// Count is how many attempts are inside the window, saturating at
-// [AttemptCap].
-func (a Attempted) Count() int { return len(a.At) }
-
-// Last is the newest of them, and the zero instant when there are none.
-func (a Attempted) Last() time.Time {
-	if len(a.At) == 0 {
-		return time.Time{}
-	}
-	return a.At[len(a.At)-1]
 }
 
 // Ledger is the fleet's record of work already done, behind the
@@ -1369,7 +1236,6 @@ type Fleet interface {
 	Counter
 	Claims
 	SetupClaims
-	Attempts
 	Ledger
 	Cooldowns
 	Budgets

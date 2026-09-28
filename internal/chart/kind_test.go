@@ -81,7 +81,7 @@ func TestASetKindChangesWhatHoldsASeat(t *testing.T) {
 	}
 	_, err = r.writer.WithHolders(nil).WriteBatch(t.Context(), "op-blind", toAgent)
 	if ref := refusal(t, err); ref.Rule != chart.RuleDirectoryUnreadable {
-		t.Errorf("a node that cannot read the directory: rule = %q, want %q",
+		t.Errorf("a writer with no directory: rule = %q, want %q",
 			ref.Rule, chart.RuleDirectoryUnreadable)
 	}
 

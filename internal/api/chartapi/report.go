@@ -48,28 +48,32 @@ import (
 // wrong, which is the failure mode the state log's alarm table exists to
 // prevent and this borrows wholesale.
 
-// Held reports whether a seat — named by its IDENTITY, the handle it was
-// created under ([org.Role.Origin], ADR-0020) — is one somebody in the
-// identity directory is bound to.
+// Held answers which seats somebody in the identity directory is bound to,
+// each named by its IDENTITY — the handle it was created under
+// ([org.Role.Origin], ADR-0020) — and read in ONE snapshot.
 //
-// # Consumer-defined, and THREE-VALUED by its absence rather than its return
+// # One read for the whole answer
 //
-// A nil Held means this node cannot answer the question at all — it runs no
-// identity domain, or has no directory behind this report — and the
-// [KindSeatUnheld] arm is then SKIPPED rather than answered. That is the
-// difference between "nobody holds this seat" and "I cannot tell", and
-// collapsing them is how a seats-only satellite reports every human seat in
-// the company as unheld: its own copy of the estate is legitimately empty
-// because it never applies that domain.
+// It used to be asked per seat, a transaction each: an evaluation over forty
+// human seats was forty reads at forty instants, so a report could combine
+// bindings that never coexisted, and every `/health` a load balancer polled
+// paid for all of them. One reading is what every surface renders from.
 //
-// A bool inside the function would be the wrong shape for the same reason a
-// bool is the wrong shape everywhere in this tree, and here the absence IS the
-// third value: a report that cannot ask does not guess.
+// # Consumer-defined, and THREE-VALUED in two places
+//
+// An ERROR is this node failing to read a directory it holds, and a NIL Held
+// is a node with no directory to ask at all — one that started with no active
+// company, and so opened no native runtime, or a surface stood up with no
+// directory behind it. Neither is "nobody holds this seat", and collapsing
+// either into it is how every human seat in the company gets reported unheld
+// at once: the report then leaves [KindSeatUnheld] UNDECIDED rather than
+// answering it — the arm off under a nil, every human seat counted in
+// [Report.Unchecked] under an error — and the seat listing's `unheld` filter
+// refuses rather than filtering.
 //
 // IT TAKES THE CALLER'S CONTEXT, because it is a read of the identity
-// estate's rows: a request that is gone, or a node shutting down, stops the
-// reads it would otherwise go on making for every seat in the company.
-type Held func(ctx context.Context, seat string) bool
+// estate's rows: a request that is gone, or a node shutting down, stops it.
+type Held func(ctx context.Context) (map[string]bool, error)
 
 // Severity orders a finding by what it costs.
 type Severity string
@@ -194,6 +198,14 @@ type Report struct {
 	Seats int `json:"seats"`
 	Units int `json:"units"`
 
+	// Unchecked is how many human seats this evaluation could not ask the
+	// identity directory about, so [KindSeatUnheld] was left UNDECIDED for
+	// them rather than answered — see [Held]. Absent at zero. It is the
+	// same rule as [Report.Evaluated] one arm down: a seat whose holder
+	// could not be read is neither a finding nor a clean bill, and a count
+	// of findings that silently excluded it would read as the second.
+	Unchecked int `json:"unchecked,omitempty"`
+
 	// Evaluated is false when this node could not evaluate at all — it
 	// holds no chart view, or no settings epoch. ABSENT EVIDENCE IS NOT A
 	// CLEAN BILL: a report of zero findings from a node that read nothing
@@ -232,9 +244,17 @@ func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company
 	for range o.AllUnits() {
 		out.Units++
 	}
+	holding := holdingOf(ctx, o, held)
 	for role := range o.AllRoles() {
 		out.Seats++
-		out.Findings = append(out.Findings, seatFindings(ctx, role, settings, held)...)
+		out.Findings = append(out.Findings, seatFindings(role, settings)...)
+		finding, unchecked := holding.finding(role)
+		if finding != nil {
+			out.Findings = append(out.Findings, *finding)
+		}
+		if unchecked {
+			out.Unchecked++
+		}
 	}
 	for _, ref := range o.DanglingRefs() {
 		out.Findings = append(out.Findings, danglingFinding(ref))
@@ -261,8 +281,7 @@ func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company
 }
 
 // seatFindings is everything wrong with one seat against these settings.
-func seatFindings(ctx context.Context, role *org.Role, settings *config.Company,
-	held Held) []Finding {
+func seatFindings(role *org.Role, settings *config.Company) []Finding {
 	handle := role.Handle()
 	var out []Finding
 	for _, key := range missingProviders(role, settings) {
@@ -312,21 +331,70 @@ func seatFindings(ctx context.Context, role *org.Role, settings *config.Company,
 				"assigning it in the tracker rather than mentioning them",
 		})
 	}
+	return out
+}
+
+// holding is ONE reading of the directory, for one evaluation.
+type holding struct {
+	// asked is false where there was no directory to ask — a nil [Held] —
+	// or no human seat to ask about, and the arm is then off.
+	asked bool
+	seats map[string]bool
+	err   error
+}
+
+// holdingOf reads the directory once for an evaluation, and only when the
+// chart holds a human seat to ask about: an all-agent company pays nothing.
+//
+// A NIL held asks nothing — the whole arm is off on a node with no directory,
+// which is one fact about the node rather than a count of seats. An ERROR is
+// logged once and every human seat is then UNCHECKED: a directory this node
+// holds and cannot read is a fault with a cause, and the count is what keeps
+// the report from reading as clean while it lasts.
+func holdingOf(ctx context.Context, o *org.Organization, held Held) holding {
+	if held == nil {
+		return holding{}
+	}
+	for role := range o.AllRoles() {
+		if !role.IsHuman() {
+			continue
+		}
+		seats, err := held(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "chart_report_holding_unreadable",
+				"error", err)
+		}
+		return holding{asked: true, seats: seats, err: err}
+	}
+	return holding{}
+}
+
+// finding is the one arm of a seat's findings that reads the identity
+// directory: a [KindSeatUnheld] finding, or nil, and whether the seat was left
+// UNCHECKED because the read failed.
+func (h holding) finding(role *org.Role) (*Finding, bool) {
+	if !h.asked || !role.IsHuman() {
+		return nil, false
+	}
+	if h.err != nil {
+		return nil, true
+	}
 	// ASKED BY THE SEAT'S IDENTITY — the handle it was created under — which
 	// is what a binding names (ADR-0020): asked by the handle it answers to
 	// now, a renamed seat whose holder is bound read as unheld.
-	if role.IsHuman() && held != nil && !held(ctx, role.Origin()) {
-		out = append(out, Finding{
-			Kind: KindSeatUnheld, Severity: SeverityWarning,
-			Object: handle,
-			Detail: fmt.Sprintf("%s is a human seat nobody in the directory "+
-				"is bound to, so no person can sign in and act as it — work "+
-				"routed here waits for somebody who cannot arrive", handle),
-			Remedy: "invite the person who holds this seat, or bind an " +
-				"existing person to it",
-		})
+	if h.seats[role.Origin()] {
+		return nil, false
 	}
-	return out
+	handle := role.Handle()
+	return &Finding{
+		Kind: KindSeatUnheld, Severity: SeverityWarning,
+		Object: handle,
+		Detail: fmt.Sprintf("%s is a human seat nobody in the directory "+
+			"is bound to, so no person can sign in and act as it — work "+
+			"routed here waits for somebody who cannot arrive", handle),
+		Remedy: "invite the person who holds this seat, or bind an " +
+			"existing person to it",
+	}, false
 }
 
 // missingProviders is every provider key this seat names that the settings do

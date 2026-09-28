@@ -533,7 +533,7 @@ func joinNames(names []string) string {
 func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request,
 	in admission, attempt authevents.Failure, why string) {
 
-	in.ticket.Fail(r.Context())
+	in.ticket.Fail()
 	s.audit.Failed(r.Context(), attempt)
 	log.WarnContext(r.Context(), "api_sign_in_refused",
 		// THE ARM, for the log only. Never the login, never the

@@ -242,7 +242,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		defer s.rehashPassword(r, held.ID, verifier, in.Password)
 	}
 
-	adm.ticket.Succeed(r.Context())
+	adm.ticket.Succeed()
 	s.completeSignIn(w, r, held, signIn{
 		method: types.SignInPassword, factor: factor.factor,
 	})
@@ -722,7 +722,7 @@ func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credenti
 // they have: a /48 of IPv6 is sixty-five thousand fresh pairs, and six digits
 // fall to that in about an hour. So a code is ALSO decided on a curve keyed
 // on the PERSON the login resolved to ([credential.Throttle.AdmitSecondFactor]),
-// shared across the fleet, before it is checked: every address's guesses at
+// before it is checked: every address's guesses at
 // one person climb it together, a wait past five seconds is `429` with the
 // time left, a wrong code or a code already spent is a failure on it, and the
 // code that completes the sign-in lifts it. Keyed on the resolved person here
@@ -789,7 +789,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		unresolved(w, r, "api_second_factor_unresolved", spend)
 		return factorUse{}, false
 	}
-	curve.Succeed(r.Context())
+	curve.Succeed()
 	if use.factor == types.FactorRecovery {
 		s.audit.Emit(r.Context(), types.IAMRecoveryCodeUsed{
 			Person: held.ID, Login: held.Login, Remaining: use.remaining,
@@ -807,7 +807,7 @@ func (s *Service) refuseSecondFactor(w http.ResponseWriter, r *http.Request,
 	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	curve *credential.Ticket, why string) {
 
-	if curve.Fail(r.Context()) {
+	if curve.Fail() {
 		s.audit.EmitOnce(r.Context(), authevents.OnceSecondFactorCeiling,
 			held.ID, credential.Window, types.IAMSecondFactorThrottled{
 				Person: held.ID, Login: held.Login, Remote: attempt.Client,

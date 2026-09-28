@@ -849,9 +849,9 @@ than an hour later — and then on its interval.
 The fourth is the operation ledger's sweep, which runs in the ordinary
 maintenance tick on every node.
 
-A node arms these only if it runs the identity domain **and** the `workers`
-role: an ingress-only node applies the identity log but claims no singleton, so
-it arms none rather than running loops its roles would refuse on every tick.
+A node arms these only if it runs the `workers` role: every node applies the
+identity log, but a node without `workers` claims no singleton, so it arms none
+rather than running loops its roles would refuse on every tick.
 `identity_duty_seconds` on [`GET /health`](../reference/api-endpoints.md#the-health-envelope)
 names the ones a node armed and each interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.

@@ -77,34 +77,6 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 			"did exactly what was asked is refused", coord.SetupOnceRetention)
 	}
 
-	// The authentication window and its cap are one decision in two
-	// numbers, and the direction each must not drift in is what can be
-	// checked. A window shorter than the interval a guessing run can wait
-	// out between attempts is not a throttle; a cap at or below a
-	// threshold anything would refuse at saturates before the throttle can
-	// see the difference between "at the limit" and "far past it".
-	if coord.AttemptWindow < time.Minute {
-		t.Errorf("coord.AttemptWindow %v is short enough for a guessing run to wait out "+
-			"between attempts and still make progress, which is a throttle that only "+
-			"slows somebody down to its own window", coord.AttemptWindow)
-	}
-	if coord.AttemptCap < 5 {
-		t.Errorf("coord.AttemptCap %d is at or below a lockout threshold anything would "+
-			"refuse at, so the count a throttle reads saturates before it can tell "+
-			"a caller at the limit from one far past it", coord.AttemptCap)
-	}
-	// AND THE RECORD STAYS SMALL, because it is read WHOLE: the throttle
-	// reads a pair's record before every step its curve admits and on
-	// every fresh name a guessing run types, so each instant the cap
-	// admits is carried by every one of those reads. Sixty-four instants
-	// is a value of a couple of kilobytes; past that the cap is buying a
-	// count nothing reads — the curve stops climbing at its sixth failure.
-	if coord.AttemptCap > 64 {
-		t.Errorf("coord.AttemptCap %d makes the record every throttle read "+
-			"carries grow past a couple of kilobytes, for counts past the "+
-			"sixth failure that no curve reads", coord.AttemptCap)
-	}
-
 	// The thread-follow horizon is the one here that is not sized from
 	// another subsystem's cadence — it is sized from a fact about chat
 	// products, that a quarter-old thread is reachable only through search

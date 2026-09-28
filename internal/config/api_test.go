@@ -108,9 +108,9 @@ func TestANodeThatServesNoApiNeedsNoneOfIt(t *testing.T) {
 // binds a port.
 //
 // It used to be one of the rules above, required only once `api.port` was
-// set. Every node runs state logs, though — the tracker, the vectors, the
-// pages and the chart run on a seats-only satellite too — and every record on
-// every log is signed and verified under the keyring, so the engine refused
+// set. Every node runs every state log, though — a seats-only satellite
+// included, the identity directory's too — and every record on every log is
+// signed and verified under the keyring, so the engine refused
 // the keyless satellite the moment it started its logs, after this command had
 // called its file sound. The satellite is the case, because it is the one the
 // old rule let through.

@@ -69,10 +69,10 @@ one JSON object, and it always has the same three parts in the same places:
   (`surface_busy`) — carries a `Retry-After` in seconds, derived from the
   refusal where the refusal knows (a node behind its log estimates from its
   own backlog) and a few seconds otherwise. A `503` for a missing piece of
-  THIS node's configuration — a node that runs no identity domain asked a
-  question only one that does can answer — carries NONE, because no wait
-  changes what the node runs: the header's absence is the answer, and the
-  `hint` names what to do instead. So does a refusal from the state log
+  THIS node's configuration — a node that started with no active company
+  asked a question only its identity directory can answer — carries NONE,
+  because no wait changes what the node holds: the header's absence is the
+  answer, and the `hint` names what to do instead. So does a refusal from the state log
   that waiting cannot clear on THIS node — a node evicted from the fleet, one
   holding a record it cannot decode, a log at its byte ceiling
   (`log_full`), a record larger than the broker takes in one message
@@ -202,7 +202,7 @@ A write still needs its token first: an unauthenticated write answers `401` whet
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows and compared against the caller the guard resolved; `fleet:operate` may end one they do not own. A session already over — ended by a record, past its absolute deadline, revoked or invalidated — answers `ended` with nothing written or announced. A node that cannot read its rows answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id` — the id is derived from the lineage, so asking again is the same operation |
 | `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they hold, and the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through. An unbound credential is an **ordinary state**, not an error — a pipeline's token acts under its own login, and binding a person to a seat is a directory row rather than a different credential |
 | `GET` | `/chart` | The company's **org chart** — its units, its seats, every `manages:` edge and every unit's lead — with the position the answer was read at. The **runtime half of every object is stripped** unless the caller asks for it AND may read it; the answer says which it got in `runtime`. **Always needs a token** (see [below](#chart--the-org-chart-auth-gated)) |
-| `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once. `/chart/seats` filters: `kind=human` (or `agent`) keeps one kind, and `unheld=true` keeps the seats **nobody in the identity directory is bound to**, asked by the handle each seat was created under so a renamed seat is judged by its binding. `unheld=true` is the **directory's** question, so it takes what the directory's own listing takes — `people:manage` (whoever invites somebody into one of those seats) or `audit:read` — and a reader holding the board's grant alone is refused `403` naming both. On a node that runs no identity domain it is `503` rather than applied to an empty directory, and with no `Retry-After` — the answer is another node |
+| `GET` | `/chart/units` `/chart/seats` | One half each, for a client that renders people constantly and the tree once. `/chart/seats` filters: `kind=human` (or `agent`) keeps one kind, and `unheld=true` keeps the seats **nobody in the identity directory is bound to**, asked by the handle each seat was created under so a renamed seat is judged by its binding. `unheld=true` is the **directory's** question, so it takes what the directory's own listing takes — `people:manage` (whoever invites somebody into one of those seats) or `audit:read` — and a reader holding the board's grant alone is refused `403` naming both. On a node that started with no active company, and so holds no directory, it is `503` rather than applied to an empty one, with no `Retry-After` — waiting does not give the node a directory; and where the directory is there and a read of it fails it is `503` too, with one, rather than a list missing a seat or carrying one it should not |
 | `GET` | `/chart/units/{key}` | One unit, what it directly holds, and its own history |
 | `GET` | `/chart/seats/{handle}` | One seat, what it manages, and its own history |
 | `GET` | `/chart/history` | The company-wide **reorganisation feed**, newest first: who moved, who was hired, which team was dissolved — quiet changes included. **Takes `audit:read`**: the record of what happened across the whole company, where one object's own history above is the context of the object you asked about and takes the board's read |
@@ -367,7 +367,7 @@ One key: the login or address **as typed** (an address folded the way the
 directory folds one), from one source — the client's address as the trusted
 proxies resolve it, an IPv6 client by its `/64`. It has no allowance, so the
 first failure already costs a second, and it catches a run at one account. A
-success clears that pair on every node and nothing else: clearing more was a
+success clears that pair and nothing else: clearing more was a
 bypass, since anybody holding an account could sign in as themselves between
 guesses at somebody else's and wipe the record of every one. An attempt still
 being checked counts as a failure against its pair until it resolves, so a
@@ -379,7 +379,7 @@ person's password could otherwise guess at the six digits from every address
 they have, each a fresh pair — a `/48` of IPv6 is sixty-five thousand of them,
 enough to find a code in about an hour. So once the password has proved
 itself, the code is also decided on a curve keyed on the person the login
-resolved to, shared across the fleet, the same 1-to-30-second doubling: every
+resolved to, the same 1-to-30-second doubling: every
 address's wrong codes climb it together, and a wait past five seconds is
 `429 throttled`. Keyed on the resolved person here and nowhere else, because
 it is reached only past the password, so it tells nobody anything the password
@@ -395,20 +395,21 @@ failure every twenty-five seconds, at any name, kept every sign-in from that
 office or proxy at `429`, the right passwords included. So one password tried
 against many names from one address meets no curve; it is bounded by the
 address's one turn at the node's verify cap — one name per verification,
-however many it sends at once — by its allowance of fresh names the
-coordination store is asked about (sixteen at once, then one a second), by the
-password floor and blocklist, and by the pad, and it is shown by the audit
-trail's per-client failure tally. A credential that
-names nobody — an invitation link or a founder's code — meets no curve at all,
-and every refusal of one is still counted in the tally.
+however many it sends at once — by the password floor and blocklist, and by
+the pad, and it is shown by the audit trail's per-client failure tally. A
+credential that names nobody — an invitation link or a founder's code — meets
+no curve at all, and every refusal of one is still counted in the tally.
 
-The window is fifteen minutes and the fleet shares it at every step: every
-failure is written, and a node reads a climbing pair's record before each
-attempt it admits, so however a load balancer spreads a run across nodes the
-sixth failure anywhere owes the ceiling everywhere. A pair already being
-refused costs the coordination store nothing, and a clean one is read once a
-window. What the fleet holds is a keyed digest of the
-pair, never what was typed.
+The window is fifteen minutes, and **each node keeps its own curve**: nothing
+about it is written to the coordination store, so a sign-in never waits on a
+round trip. On a fleet of N nodes serving sign-ins, a guesser whose attempts a
+load balancer spreads across all of them is admitted up to N times as often as
+on one node — still one guess per node every thirty seconds at the ceiling,
+each an argon2id verification, against a password of at least twelve
+characters that is not on the blocklist, and a second factor behind it for a
+person who holds one. A node holds a pair under a keyed digest, never what was
+typed. See [identity and access](../concepts/identity-and-access.md#a-failure-costs-a-wait-never-a-lockout)
+for why the curve is not shared.
 
 #### A bearer is its own protection
 
@@ -865,7 +866,7 @@ they were made:
 | `sandbox_unconfigured` | error | A seat's code gate is open on a company with no sandbox backend |
 | `worker_unknown` | warning | A seat's `workers:` narrowing names a template that is gone, so it narrows to fewer workers than the list suggests |
 | `reference_dangling` | warning | A `manages:` entry, a unit's lead or a seat's unit resolves to nothing |
-| `seat_unheld` | warning | A human seat **nobody in the identity directory is bound to**, so no person can sign in and act as it — work routed there waits for somebody who cannot arrive. **Skipped, not answered,** on a node that runs no identity domain: its copy of that estate is legitimately empty, so reading it would report every human seat in the company |
+| `seat_unheld` | warning | A human seat **nobody in the identity directory is bound to**, so no person can sign in and act as it — work routed there waits for somebody who cannot arrive. **Left undecided, not answered,** where the directory cannot be asked: on a node that started with no active company the whole arm is skipped, and a seat whose holder this node failed to read is counted in the report's `unchecked` instead — neither is reported as held by nobody, which is the answer an operator would act on |
 | `seat_unreachable` | warning | A human seat with no contact identity, so nothing addressed to it reaches anybody on the chat surface this company runs. Validation **admits** such a seat — a person who works only through the dashboard has no chat account to declare — so this report is the only place it is named, and a warning rather than an error because the state is legitimate. Independent of the above and with a different remedy — a seat can have either without the other |
 
 The **same** evaluation is summarised on `/health` under `consistency`, so a
@@ -878,7 +879,10 @@ seat into an outage.
 `evaluated: false` means this node could not evaluate at all — it holds no
 chart view, or has applied no settings epoch. Check it before the count:
 `findings: 0` from a node that read nothing is the most misleading answer this
-surface could give.
+surface could give. `unchecked`, present only when it is not zero, is the same
+rule one arm down: how many human seats this node could not ask the identity
+directory about, so `seat_unheld` was not decided for them. Both the report and
+`/health`'s `consistency` carry it.
 
 ### `/iam/*` — the company's people, credentials and sessions (auth-gated)
 
@@ -2595,7 +2599,6 @@ that needs the rest of the envelope asks the `stream` query for it.
   "posture": "serve",
   "applied_epoch": 41,
   "seats": ["ceo", "cto"],
-  "domains": ["tracker", "vectors", "pages", "chart", "iam"],
   "identity_duty_seconds": {"iam_sweep": 3600, "iam_claims": 3600, "iam_key_shred": 900},
   "unproven_seconds": {"eng": 312.5},
   "identity": "ready"
@@ -2628,12 +2631,11 @@ founder code is:
 | `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
-| `domains` | The state-log domains **this node** applies, derived from `node.roles`. A fleet's members may legitimately run different sets, so this is how you read off which node is applying what — and the only other symptom of a node that declines a domain is a peer's board answering a question this node's copy cannot. Always a list: a node that runs no domain at all refuses to start, so this is never `null`. `crewlet validate` reports the same set from a Tier A document, before the node boots. |
-| `identity_duty_seconds` | Each [identity duty](../guides/retention.md#the-identity-duties) **this node** armed, mapped to the interval it runs at, in seconds, whenever it holds that duty's lease. `{}` on a node that armed none — one running no identity domain, or no `workers` role, since every one of them is a worker singleton. A duty that was never armed looks from every other vantage point exactly like one quietly finding nothing to do, so this is where you read that the key duty is running at all (it needs the company's secret store). Which node holds each lease right now is the coordination store's answer, not this node's. |
+| `identity_duty_seconds` | Each [identity duty](../guides/retention.md#the-identity-duties) **this node** armed, mapped to the interval it runs at, in seconds, whenever it holds that duty's lease. `{}` on a node that armed none — one running no `workers` role, since every one of them is a worker singleton, or one that started with no active company. A duty that was never armed looks from every other vantage point exactly like one quietly finding nothing to do, so this is where you read that the key duty is running at all (it needs the company's secret store). Which node holds each lease right now is the coordination store's answer, not this node's. |
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
-| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for its founder to redeem the [one-time code](../concepts/identity-and-access.md#how-the-first-person-exists) — and `unknown` where this node cannot read its identity estate, which is never reported as `unclaimed`, because a dashboard told nobody is in would offer a founder route to a company that may have started. **Absent** on a node that serves no sign-in surface: one running no identity domain holds a legitimately empty copy of that estate. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
+| `identity` | Whether this company has its **first person**: `ready` once anybody is enrolled, `unclaimed` while nobody is — a fresh install waiting for its founder to redeem the [one-time code](../concepts/identity-and-access.md#how-the-first-person-exists) — and `unknown` where this node cannot read its identity estate, which is never reported as `unclaimed`, because a dashboard told nobody is in would offer a founder route to a company that may have started. **Absent** on a node that serves no sign-in surface: one that started with no active company holds no identity rows at all, and `unclaimed` from it would be false. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
 | `bootstrap_code_path` | **This node's** founder code file, present only while `identity` is `unclaimed` and the file holds a code the log still honours — live, or taken by a founding that has not finished. The path and never the value: reading it needs shell on this host. On a fleet every node that booted onto the empty estate offers its own, and each names only its own; a code that has died is not named, since it is not a way in (a restart of this node or `crewlet iam bootstrap-code` replaces it). |
 | `bootstrap_code_expires_at` | When the code in `bootstrap_code_path` stops working, RFC 3339 in UTC. Present exactly when the path is. |
 | `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |

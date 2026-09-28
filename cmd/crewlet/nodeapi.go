@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -130,14 +129,13 @@ func nodeAPIToken(surface string) (string, error) {
 //
 // # One posture produces a nil, and it is not a fault
 //
-// THIS NODE RUNS NO IAM DOMAIN. It is the first domain in the register that
-// narrows: a seats-only satellite does not apply it, because no turn reads
-// identity and shedding a company's seats because a human cannot sign in
-// would be an outage caused by the wrong subsystem. Such a node serves seats
-// and no sign-in, which is what its `node.roles` asked for, and the routes
-// are ABSENT rather than answering an error: a 404 says this deployment does
-// not sign in that way, where a 503 would say it does and is broken and send
-// an operator looking for an outage.
+// THIS NODE STARTED WITH NO COMPANY. Every node runs the identity domain,
+// whatever its roles, but the state log it rides on is part of the native
+// runtime, and a node that booted before any revision was active opens none —
+// it serves its HTTP surface unconfigured until the first revision arrives.
+// Such a node has no directory to sign anybody in against, and the routes are
+// ABSENT rather than answering an error, as every other surface the native
+// runtime feeds is on that node.
 //
 // A keyring that cannot sign for the fleet USED TO BE a second such posture,
 // and it is not any more: Tier A refuses a file without a usable keyring and
@@ -150,9 +148,9 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	if reader == nil || writer == nil {
 		log := logging.Get("cli")
 		log.Info("api_sign_in_absent",
-			"reason", "this node runs no identity domain",
-			"hint", "node.roles narrows which domains a node applies; a "+
-				"seats-only satellite serves no sign-in surface")
+			"reason", "this node started with no active company, so it runs "+
+				"no native runtime and holds no identity directory",
+			"hint", "activate a company revision and restart the node")
 		return nil, nil, nil
 	}
 	signer, err := session.New(session.Options{
@@ -161,27 +159,10 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
 	}
-	// THE KEY A PAIR IS DIGESTED UNDER, the same on every node because it
-	// is derived from the keyring's active entry — which the signer above
-	// has just proved this node holds.
-	pairKey, ok := credential.PairKey(boot.Secrets.TokenMaterial())
-	if !ok {
-		return nil, nil, errors.New("api: the sign-in throttle: the keyring " +
-			"names no active key to derive its digest key from")
-	}
-	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
-		// THE FLEET'S OWN WINDOW, so a guessing run the load balancer
-		// moves to another ingress node starts that node's curve where
-		// the fleet left it. Nil is a real deployment — a single node
-		// with no coordination backend — and it throttles on its own
-		// curve alone.
-		Attempts: e.Backends().Fleet,
-		Key:      pairKey,
-		Logger:   logging.Get("api.auth"),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("api: the sign-in throttle: %w", err)
-	}
+	// THIS NODE'S OWN CURVE, and nobody else's: a guessing run a load
+	// balancer rotates across the fleet meets each node's separately, which
+	// is the residual internal/iam/credential's throttle states and bounds.
+	throttle := credential.NewThrottle(credential.ThrottleDeps{})
 	surface, err := authapi.New(authapi.Options{
 		Bootstrap: boot,
 		Directory: reader,
@@ -238,19 +219,20 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 }
 
 // seatHeld reports whether a seat is one somebody in the identity directory is
-// bound to, or nil on a node that cannot tell.
+// bound to, or nil on a node with no directory to ask.
 //
-// # The nil is the third value, and it is the whole of this function
+// # The nil says nobody can be asked, which is not "nobody holds it"
 //
-// A node that runs no identity domain has a legitimately EMPTY copy of that
-// estate — it never applies the records — so asking it produces false for
-// every seat in the company, which reads as "nobody works here". That is the
-// shape of the bug the continuous report already had for a different reason:
-// it read a seat's declared contact block, so a company managing its people
-// elsewhere saw every human seat reported.
+// A node that started with no active company runs no native runtime and holds
+// no identity rows at all, and read as a directory that would answer "not
+// held" for every seat in the company — which reads as "nobody works here".
+// That is the shape of the bug the continuous report already had for a
+// different reason: it read a seat's declared contact block, so a company
+// managing its people elsewhere saw every human seat reported.
 //
-// So a node with no reader supplies NO ANSWER, and the report skips that arm
-// rather than answering it. See [chartapi.Held].
+// So such a node supplies NO ANSWER, and the report skips that arm rather than
+// answering it. A directory that is there and cannot be read answers an error,
+// which leaves the arm undecided the same way. See [chartapi.Held].
 func seatHeld(e *engine.Engine) chartapi.Held {
 	reader := e.IAM()
 	if reader == nil {
@@ -259,26 +241,26 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 	// THE CALLER'S CONTEXT, which the seam carries: every evaluation is
 	// made for a request — /chart/check, /health, the seat listing — so a
 	// read for one that has gone has nobody to answer.
-	return reader.SeatHeld
+	return reader.HeldSeats
 }
 
 // directorySurface builds /iam, or reports that this node serves none.
 //
 // NIL IS A REAL POSTURE, exactly as [signInSurface]'s is and for the same
-// reason: a node that runs no identity domain holds a legitimately empty copy
-// of that estate, and a surface over it would serve an empty directory as
-// though the company had nobody in it. The routes are ABSENT rather than
-// answering an error — which takes returning an untyped nil; see
-// [surfaceMounter] for what a typed one did.
+// reason: a node that started with no active company holds no identity rows,
+// and a surface over it would serve an empty directory as though the company
+// had nobody in it. The routes are ABSENT rather than answering an error —
+// which takes returning an untyped nil; see [surfaceMounter] for what a typed
+// one did.
 func directorySurface(boot *config.Bootstrap, e *engine.Engine, nodeID string,
 	auth *authapi.Service) (surfaceMounter, error) {
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
 		logging.Get("cli").Info("api_directory_absent",
-			"reason", "this node runs no identity domain",
-			"hint", "node.roles narrows which domains a node applies; a "+
-				"seats-only satellite serves no directory")
+			"reason", "this node started with no active company, so it runs "+
+				"no native runtime and holds no identity directory",
+			"hint", "activate a company revision and restart the node")
 		return nil, nil
 	}
 	surface, err := iamapi.New(iamapi.Options{
@@ -366,9 +348,9 @@ func (b bootstrapMinter) MintCode(ctx context.Context) (iamapi.BootstrapFile, er
 // person bound to an AGENT seat went unreported while every request they made
 // was refused.
 //
-// NIL ON A NODE RUNNING NO CHART DOMAIN, which is the same third value
-// [seatHeld] answers with: its copy of the chart is legitimately empty, so the
-// arm is skipped rather than asked.
+// NIL ON A NODE WITH NO CHART READER — one that started with no active
+// company — which is the same third value [seatHeld] answers with: there are
+// no rows to ask, so the arm is skipped rather than asked.
 func danglingBindings(e *engine.Engine) iamapi.Bindings {
 	if e.Chart() == nil {
 		return nil

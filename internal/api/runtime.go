@@ -63,23 +63,12 @@ type RuntimeState struct {
 	// the API is served inside the engine's process.
 	StartedAt string
 
-	// Domains are the state-log domains THIS NODE runs, which is derived
-	// from node.roles and is not the same on every member of a fleet.
-	//
-	// ON THE PROBE BECAUSE IT IS NOT VISIBLE ANYWHERE ELSE. An operator
-	// who narrows a node's roles narrows what it applies, and the only
-	// other symptom is a peer's board answering a question this node's
-	// cannot — which reads as a bug in the node rather than as the
-	// declaration it is. It is also what an operator checks after ADDING a
-	// role: the domain appears here once the node is actually applying it.
-	Domains []string
-
 	// IdentityDuties are the identity estate's fleet-singleton duties THIS
 	// NODE armed, each with the interval it runs at when it holds the
 	// lease. Nil is "armed none", which is a real answer: a node running
-	// no identity domain, or no workers, arms none — and a duty that was
-	// never armed looks from every other vantage point exactly like one
-	// quietly finding nothing to do.
+	// no workers arms none — and a duty that was never armed looks from
+	// every other vantage point exactly like one quietly finding nothing
+	// to do.
 	IdentityDuties map[string]time.Duration
 
 	// Seats are the handles this node is serving. The first question about

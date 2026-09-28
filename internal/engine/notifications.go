@@ -79,7 +79,7 @@ type notifications struct {
 	rebuilding sync.Mutex
 
 	// directory is this node's identity directory as the registry reads
-	// it, or nil on a node that runs no identity domain — which keeps the
+	// it, or nil on an engine with no native runtime — which keeps the
 	// chart-only behaviour. Set once, when the native runtime opens the
 	// domain, under mu.
 	directory notify.Directory

@@ -60,7 +60,7 @@ func buildWith(t *testing.T, b config.Bootstrap,
 
 	t.Helper()
 	signer := fixtureSigner(t)
-	throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+	throttle := credential.NewThrottle(credential.ThrottleDeps{
 		Now: func() time.Time { return clock },
 		// NO PAD IN A TEST, because the pad is a wall-clock sleep: the
 		// timing defence has its own cases in internal/iam/credential,
@@ -68,9 +68,6 @@ func buildWith(t *testing.T, b config.Bootstrap,
 		// deadline.
 		Sleep: func(context.Context, time.Duration) {},
 	})
-	if err != nil {
-		t.Fatalf("credential.NewThrottle: %v", err)
-	}
 	opts := authapi.Options{
 		Bootstrap: &b,
 		Directory: stubDirectory{},

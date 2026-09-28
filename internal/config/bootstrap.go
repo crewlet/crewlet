@@ -411,15 +411,14 @@ func (b *Bootstrap) validateTopology() error {
 	// It used to be required only once `api.port` was set, which is where
 	// it signs every session cookie and derives the key each per-run token
 	// is verified with. That left a node serving no API free to leave it
-	// out — and every node runs state-log domains, whatever its roles (the
-	// tracker, the vectors, the pages and the org chart run everywhere),
-	// every record on every one of those logs is signed and verified under
-	// this keyring because the broker authenticates nothing, and the
-	// company document a peer fetches from the coordination store is
-	// authenticated by its seal. So a keyless satellite validated here and
-	// was then refused by the engine the moment it started its logs, which
-	// is a configuration this command called sound and the node could not
-	// run.
+	// out — and every node runs every state-log domain, whatever its roles
+	// (the identity directory included), every record on every one of
+	// those logs is signed and verified under this keyring because the
+	// broker authenticates nothing, and the company document a peer
+	// fetches from the coordination store is authenticated by its seal.
+	// So a keyless satellite validated here and was then refused by the
+	// engine the moment it started its logs, which is a configuration this
+	// command called sound and the node could not run.
 	//
 	// A CROSS-BLOCK RULE ONLY IN WHERE IT USED TO BE: the refusal no longer
 	// reads `api:`, and it sits here beside the other deployment-shape

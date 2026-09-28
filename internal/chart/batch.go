@@ -304,14 +304,14 @@ const (
 	// person's name in the message.
 	RuleSeatHeld = "somebody holds the seat"
 
-	// RuleDirectoryUnreadable is either of [RuleSeatHeld]'s gestures on a
-	// node that cannot see the identity directory at all.
+	// RuleDirectoryUnreadable is either of [RuleSeatHeld]'s gestures where
+	// the identity directory cannot be asked — a read of it that failed, or
+	// a writer given none.
 	//
-	// A REFUSAL AND NOT A PASS, which is the whole of it: a node that does
-	// not run the identity domain has a legitimately EMPTY copy of those
-	// rows, and reading that emptiness as "nobody holds this seat" would
-	// make a satellite the one place every removal succeeds. It names the
-	// node, because the remedy is to make the removal somewhere else.
+	// A REFUSAL AND NOT A PASS, which is the whole of it: a directory that
+	// could not be read has said nothing, and reading that silence as
+	// "nobody holds this seat" is how whoever holds it is orphaned without
+	// a word, in the one place it is least likely to be noticed.
 	RuleDirectoryUnreadable = "this node cannot read the directory"
 )
 
@@ -442,12 +442,14 @@ func (b Batch) Validate(ctx context.Context, tx *sql.Tx, holders Holders) (
 //
 // # Nil is a REFUSAL, not a pass
 //
-// A node that does not run the identity domain holds an empty copy of those
-// rows, so reading them would answer "nobody holds anything" for the whole
-// company. The removal is refused NAMING THE NODE instead — see
-// [RuleDirectoryUnreadable]. That is the one place this seam's absence is not
-// the third value but the second: a report may skip a finding it cannot
-// compute, and a WRITE may not proceed on evidence it does not have.
+// A writer given no directory is the type's zero value, and it REFUSES both
+// gestures rather than allowing them — see [RuleDirectoryUnreadable]. Every
+// running node hands its writer the identity rows it applies, so the nil arm
+// is a wiring that left the directory out, and a wiring mistake must not be
+// the one path on which every removal succeeds. That is the one place this
+// seam's absence is not the third value but the second: a report may skip a
+// finding it cannot compute, and a WRITE may not proceed on evidence it does
+// not have.
 type Holders interface {
 	// HolderOf names the person bound to a seat, empty for a seat nobody
 	// holds, and an ERROR for rows this node could not read.
@@ -495,11 +497,10 @@ func checkHeld(ctx context.Context, tx *sql.Tx, index int, op Operation,
 	if holders == nil {
 		return &RefusalError{
 			Index: index, Operation: op, Rule: RuleDirectoryUnreadable,
-			Detail: fmt.Sprintf("seat %q cannot be changed here — %s is refused "+
-				"on a node that does not run the identity domain, because its "+
-				"copy of the directory is empty for every seat and cannot say "+
-				"whether anybody holds this one. Make the change on a node that "+
-				"serves people", handle, gesture),
+			Detail: fmt.Sprintf("seat %q cannot be changed: this writer was "+
+				"given no identity directory, so nothing can say whether "+
+				"anybody holds the seat, and %s without it is how whoever "+
+				"holds it is silently orphaned", handle, gesture),
 		}
 	}
 	holder, err := holders.HolderOf(ctx, tx, identity)

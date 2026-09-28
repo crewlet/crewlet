@@ -134,18 +134,14 @@ node:
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
 | `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
-Roles decide one more thing, and it is not in the table because it is not a
-job somebody does: which
-[state-log domains this node applies](satellite-nodes.md#which-state-log-domains-the-node-runs).
-Four of the five run on every node whatever its roles — the tracker, the
-vectors, the knowledge base and the org chart, which every role reads. The
-**identity estate runs only where `ingress` or `workers` is declared**: a
-seats-only node authenticates nobody, so it does not replicate your people,
-their credentials or their sessions. The set is *derived* from the roles
-rather than configured beside them — `crewlet validate` prints it before a
-node boots, `/health` reports it on a running one (and a node that serves no
-HTTP logs it as `statelog_started`), and it decides whose snapshot this node
-can adopt; see [Who can donate to whom](#who-can-donate-to-whom).
+Roles decide what a node serves and which duties it holds, and **nothing
+about which state logs it applies**. Every node applies all five — the
+tracker, the vectors, the knowledge base, the org chart and the identity
+directory — whatever its roles, so a seats-only satellite holds a copy of
+your people, the verifiers of their credentials and their sessions like
+every other member; see
+[what a satellite holds](satellite-nodes.md#what-a-satellite-holds) for why,
+and for what that means for the host you put one on.
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -451,45 +447,24 @@ Three things make that work, and all three are per node:
 
 ### Who can donate to whom
 
-Which [state-log domains a node runs](satellite-nodes.md#which-state-log-domains-the-node-runs)
-is derived from its `node.roles`, so the members of one fleet can legitimately
-run different sets — and a donor's artefact covers exactly the domains that
-donor runs. The rule is **asymmetric**, and it is the asymmetry that makes
-snapshots work at all in a mixed fleet:
+**Any member to any other.** Every node runs every state-log domain whatever
+its roles, so every artefact covers everything a recipient applies, and a
+seats-only satellite is as good a donor as a node running every role.
 
-- **A donor that runs more than the recipient is fine.** The recipient adopts
-  the artefact and **strips** the domains it does not run out of the staged
-  copy — their rows *and* their checkpoints — before the file is installed. It
-  says so once, as `statelog_artefact_stripped`, naming the donor and the
-  domains it removed. Refusing such an artefact instead would break snapshots
-  in exactly the topology this exists for: the node with the most to give is
-  the one running everything, and the node most likely to need it is the
-  narrow one.
-- **A donor that runs fewer is refused**, from its manifest alone, before a
-  single byte is transferred. An artefact that names no position for a domain
-  the recipient runs is one the recipient would come up believing it was
-  caught up on — with a checkpoint and no rows behind it. The joiner moves on
-  to the next offer, and only if **every** offer was unusable does it say so,
-  with `statelog_no_snapshot_offered`.
+The one refusal is a **donor that runs fewer domains than the recipient** —
+which, with every node running all of them, is a donor on an older build
+during a rolling upgrade. It is refused from its manifest alone, before a
+single byte is transferred: an artefact that names no position for a domain
+the recipient runs is one the recipient would come up believing it was caught
+up on, with a checkpoint and no rows behind it. The joiner moves on to the
+next offer, logging `statelog_adoption_refused` naming the donor, and only if
+**every** offer was unusable does it say so, with
+`statelog_no_snapshot_offered`.
 
-```mermaid
-flowchart LR
-    F["<b>full node</b> · ingress, seats, workers<br/>runs tracker · vectors · pages · chart · iam"]
-    S["<b>satellite</b> · seats<br/>runs tracker · vectors · pages · chart"]
-    JS["<b>joining satellite</b> · seats"]
-    JI["<b>joining ingress node</b> · ingress"]
-    F -->|"adopted, then<br/>iam stripped"| JS
-    F -->|"adopted"| JI
-    S -->|"adopted"| JS
-    S -->|"refused: names no<br/>position for iam"| JI
-```
-
-The practical consequence for an operator: **keep at least one node that runs
-every domain**, so that there is always a member whose artefact any other
-member can use. A node that found no usable offer does not stop — it comes up
-on the history it has, its reads report the coverage they could not account
-for, the domains that gate seat admission keep it from claiming work it cannot
-answer for, and it asks again on a widening interval.
+A node that found no usable offer does not stop — it comes up on the history
+it has, its reads report the coverage they could not account for, the domains
+that gate seat admission keep it from claiming work it cannot answer for, and
+it asks again on a widening interval.
 
 **A fleet with no successful backups eventually stops trimming**, which is
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can

@@ -33,8 +33,7 @@ func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 	store, err := coordkv.OpenFleet(t.Context(), c.Client(t, 0).Conn(),
 		coordkv.FleetConfig{
 			BucketPrefix: "raced", Replicas: len(c.Servers), Clustered: true,
-			RateWindow: time.Minute, ClaimTTL: 10 * time.Minute,
-			SetupOnceRetention: 10 * time.Minute, AttemptWindow: 10 * time.Minute,
+			RateWindow: time.Minute, ClaimTTL: 10 * time.Minute, SetupOnceRetention: 10 * time.Minute,
 			LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 			FollowRetention: 10 * time.Minute, CooldownMax: time.Hour,
 			StatusFreshness: 10 * time.Minute,

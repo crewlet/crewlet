@@ -183,13 +183,9 @@ func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	b.API.Auth.Backend = config.AuthBackendLocal
 	mux := http.NewServeMux()
 	buildWith(t, b, func(o *authapi.Options) {
-		throttle, err := credential.NewThrottle(credential.ThrottleDeps{
+		o.Throttle = credential.NewThrottle(credential.ThrottleDeps{
 			Now: func() time.Time { return clock }, Sleep: pads.sleep,
 		})
-		if err != nil {
-			t.Fatalf("credential.NewThrottle: %v", err)
-		}
-		o.Throttle = throttle
 		o.Hasher = hasher
 		o.Directory = armsDirectory{verifier: verifier, factors: factors}
 		o.Audit = audit

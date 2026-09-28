@@ -41,13 +41,13 @@ type SeatView struct{ reader *chart.Reader }
 
 var _ session.Chart = SeatView{}
 
-// SeatViewOf is the seam over one engine, or the zero value on a node that
-// runs no chart domain.
+// SeatViewOf is the seam over one engine, or the zero value over an engine with
+// no native runtime, which holds no chart rows.
 //
-// THE ZERO VALUE IS NOT NIL, and the difference is what a satellite answers. A
-// nil [session.Chart] would make every bound person seatless — the one arm
-// [session.Binding.Handle] is documented never to be reached by a
-// fall-through — so a node with no reader answers UNKNOWN to every seat
+// THE ZERO VALUE IS NOT NIL, and the difference is what such an engine
+// answers. A nil [session.Chart] would make every bound person seatless — the
+// one arm [session.Binding.Handle] is documented never to be reached by a
+// fall-through — so a view with no reader answers UNKNOWN to every seat
 // question instead, which is 503 and says come back to a node that can tell.
 func SeatViewOf(e *Engine) SeatView {
 	if e == nil {
@@ -56,9 +56,9 @@ func SeatViewOf(e *Engine) SeatView {
 	return SeatView{reader: e.Chart()}
 }
 
-// errNoChartDomain is what a node that applies no chart records answers.
-var errNoChartDomain = errors.New("engine: this node runs no org chart, so it " +
-	"cannot say which seat anybody holds")
+// errNoChartDomain is what a view with no chart reader answers.
+var errNoChartDomain = errors.New("engine: this engine holds no org chart, so " +
+	"it cannot say which seat anybody holds")
 
 // Seat resolves a binding's seat — by its IDENTITY, the handle it was created
 // under — to the seat as it is known now.
