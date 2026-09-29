@@ -109,14 +109,10 @@ func Next(state MapState, in Input) (next MapState, changed bool) {
 		return membership.Presence{Node: p.Node, Weight: p.Meta.Weight}
 	})
 	presences := make([]membership.Presence, 0, len(live))
-	able := map[string]bool{}
 	for _, node := range slices.Sorted(maps.Keys(live)) {
-		mp := live[node].membership(layout.Number)
-		presences = append(presences, mp)
-		if !mp.Unhealthy {
-			able[node] = true
-		}
+		presences = append(presences, live[node].membership(layout.Number))
 	}
+	able := Able(in.Live, layout.Number)
 
 	before := state.Map
 	ms, drawn := membership.Tick(state.State, before.Draw(), presences, in.Company, in.Now)
