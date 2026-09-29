@@ -540,8 +540,10 @@ change is then applied like any other (see
   releases it, and its mailbox is retired after the grace period described
   in [Seat Ownership: The removed seat](seat-ownership.md#the-removed-seat).
   An agent's id is derived from the company name and the handle it was
-  created under (`org.DeriveAgentID`), so flipping the seat back to `agent` later
-  reattaches its diary, episodes and onboarding marker.
+  created under (`org.DeriveAgentID`), so flipping the seat back to `agent`
+  later is the same seat: its diary and onboarding marker are where it left
+  them, its episodes too while its handle has not changed, and within the
+  grace period its mailbox and the mail waiting in it.
 - Contact and availability edits take effect with the next **published
   company**, which for a seat's own fields means the chart write that carried
   them: every publish builds a new party registry and reconciles the human

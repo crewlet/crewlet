@@ -21,11 +21,12 @@ import (
 // A seat's mailbox is a durable subscription, and a durable subscription on
 // the agent stream retains every message addressed to it until a consumer
 // acks it. That is what makes an unowned seat's mail safe, and it is also why
-// a seat REMOVED from the company is a leak: nothing consumes its mailbox
-// again, nothing deletes it, and every event still addressed to the handle is
-// kept for the life of the deployment. Worse, a seat later added under the
-// same handle attaches to that mailbox and works the backlog under a role
-// definition that never wrote it.
+// a seat that LEAVES the company's agent seats — removed from the chart, or
+// made a person's — is a leak: nothing consumes its mailbox again, nothing
+// deletes it, and every event still addressed to the seat is kept for the
+// life of the deployment. No other seat ever attaches to it: the mailbox is
+// named by an id derived from the handle the seat was created under, which
+// the chart never issues twice (ADR-0019).
 //
 // So a mailbox is retired once its seat has been absent from the active
 // revision for [MailboxRetirementGrace]. The pieces, and why each is shaped
@@ -74,29 +75,32 @@ import (
 //     is gone. A seat whose lease somebody else holds is not retired at all.
 //
 //   - A RETIREMENT ENDS THE SEAT'S CODING RUNS FIRST. A detached run belongs to
-//     its seat, and a removed seat's runs are kept through the grace for the
-//     same reason its mail is: a seat restored within it comes back to its
-//     parked questions and running jobs. Once the grace has passed nothing can
+//     its seat, and a departed seat's runs are kept through the grace for the
+//     same reason its mail is: a seat made an agent's again within it comes
+//     back to its parked questions and running jobs. Once the grace has passed nothing can
 //     reach them (a resume needs the seat, an answer arrives on the inbox about
 //     to go, and a completion is routed to the control topic that goes with
 //     it), so while the lease is held they are ended ([SeatRunRetirer]) before
 //     a single subscription is deleted, and a retirement that cannot end them
 //     is undone and retried like one that cannot delete.
 //
-// Memory is NOT retired. A seat's diary, episodes, counterparty profiles and
-// onboarding markers are keyed by its handle or by the agent id derived from
-// it, so a seat added again under the same handle reattaches to them. That is a documented
-// property of handle identity rather than a leak, and the learning lifecycle
-// is what bounds it.
+// Memory is NOT retired. A seat's diary and onboarding markers are keyed by
+// its agent id, and its episodes, synthesized skills and counterparty
+// profiles by the handle their rows were written under, so a seat made a
+// person's and an agent's again finds them where it left them. A REMOVED
+// seat's id-keyed rows are reachable by no other seat, because its id is
+// never derived again, and the learning lifecycle is what bounds them.
 
 // MailboxRetirementGrace is how long a seat must have been absent from the
 // active revision before its mailbox is deleted.
 //
 // Twenty-four hours, sized from the two things it trades against. Long enough
-// that a seat deleted by accident and restored within a working day, from the
-// builder's undo, a revert or a corrected import, comes back to its backlog
-// intact rather than to an empty mailbox. Short enough that mail addressed to a
-// seat nobody runs is not retained for longer than one day plus a tick.
+// that a seat made a person's by mistake and made an agent's again within a
+// working day — the one departure from the agent seats that can be undone,
+// since a removal retires the seat's address and identity for good — comes
+// back to its backlog intact rather than to an empty mailbox. Short enough
+// that mail addressed to a seat nobody runs is not retained for longer than
+// one day plus a tick.
 //
 // The clock starts when a sweep FIRST OBSERVES the absence, so the effective
 // delay is this plus up to one [Interval], and longer while no duty holder can
@@ -754,8 +758,8 @@ func (m *Mailboxes) workLimit() time.Duration {
 // releaseSeat gives back the lease a retirement claimed.
 //
 // On a context of its own, as a teardown: the retirement may have ended on its
-// deadline, and a release that inherited it would leave a seat added back
-// unclaimable for a full TTL. A release that fails leaves exactly that, which
+// deadline, and a release that inherited it would leave a seat made an
+// agent's again unclaimable for a full TTL. A release that fails leaves exactly that, which
 // is logged rather than returned because the retirement itself is settled.
 func (m *Mailboxes) releaseSeat(ctx context.Context, lease coord.Lease) {
 	teardown, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.budget)

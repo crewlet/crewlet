@@ -221,10 +221,11 @@ const (
 	// writes on one row failed in a row.
 	SandboxFailureClaimStranded = "claim_unreverted"
 
-	// SandboxFailureSeatRemoved is a run of a seat that was removed from the
-	// company and not restored within the mailbox retirement grace. It is
-	// ended when the seat's mailbox is retired, because no resume, answer or
-	// completion can reach a seat that is gone.
+	// SandboxFailureSeatRemoved is a run of a seat that left the company's
+	// agent seats — removed from the chart, or made a person's and not an
+	// agent's again within the mailbox retirement grace. It is ended when the
+	// seat's mailbox is retired, because no resume, answer or completion can
+	// reach a seat that is gone.
 	SandboxFailureSeatRemoved = "seat_removed"
 )
 

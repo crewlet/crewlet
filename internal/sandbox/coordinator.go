@@ -1661,8 +1661,9 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 // active revision for the whole retirement grace, and the caller HOLDS ITS
 // LEASE under owner and epoch, so no node can claim the seat and recover these
 // runs while they are ended. Until then they are kept on purpose, for the
-// reason the mailbox is: a seat restored within the grace comes back to its
-// parked questions and its running jobs rather than to lost turns.
+// reason the mailbox is: a seat made an agent's again within the grace comes
+// back to its parked questions and its running jobs rather than to lost
+// turns.
 //
 // Every run is ended whatever its status, because none can continue: a resume
 // needs the seat in the company, a parked question's answer arrives on an
@@ -1727,8 +1728,9 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 			continue
 		}
 		c.announceFailure(ctx, run, types.SandboxFailureSeatRemoved,
-			"the seat was removed from the company and not restored within the retirement "+
-				"grace, so its run was ended; any work it pushed is on its branch")
+			"the seat left the company's agent seats — removed from the chart, or made a "+
+				"person's and not an agent's again within the retirement grace — so its run "+
+				"was ended; any work it pushed is on its branch")
 		log.InfoContext(ctx, "sandbox_retired_seat_run_ended",
 			"turn_id", run.TurnID, "agent", handle, "status", run.Status, "sandbox_id", run.SandboxID)
 	}
