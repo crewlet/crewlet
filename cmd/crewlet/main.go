@@ -183,6 +183,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runWork(rest, stdout, stderr)
 	case "objects":
 		return runObjects(rest, stdout, stderr)
+	case "estate":
+		return runEstate(rest, stdout, stderr)
 	case "fleet":
 		return runFleet(rest, stdout, stderr)
 	case "llm":
@@ -216,6 +218,9 @@ Usage:
                               produced and which nothing undoes
   crewlet objects <cmd>       Where the company's files are placed, and the gestures
                               on it: take a data node out, put it back, hold the map
+  crewlet estate <cmd>        Which data nodes hold each partition of the estate, and
+                              the gestures on the estate map: out, in, hold, release,
+                              move a partition's copy off a node
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
