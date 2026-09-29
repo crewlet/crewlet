@@ -98,6 +98,11 @@ func TestATrainingRunsOnItsShareOfTheCores(t *testing.T) {
 	cores := spent.Seconds() / wall.Seconds()
 	t.Logf("a share of %d workers ran %d of them at once and kept %.2f cores "+
 		"busy for %v", workers, alive, cores, wall)
+	if alive == 0 {
+		// A sampler that matches nothing passes every bound below.
+		t.Fatalf("the sampler saw no training worker at all over %v — it no "+
+			"longer recognises one, and would pass a training on every core", wall)
+	}
 	if alive > workers {
 		t.Fatalf("training and filing %d codes over %d lists ran %d workers at "+
 			"once, want at most the %d of its share", codes.Len(), lists, alive, workers)
@@ -112,14 +117,21 @@ func TestATrainingRunsOnItsShareOfTheCores(t *testing.T) {
 	}
 }
 
-// workersAlive runs work and reports the most training workers that were alive
-// at once while it ran: the goroutines [parallelRanges] started, found by what
-// their stacks say created them.
+// workersAlive runs work and reports the most training workers that were at
+// work at once while it ran: the goroutines [parallelRanges] started, found by
+// what their stacks say created them, while they are inside [walkStrides].
 //
 // BY CREATOR, NOT BY COUNT. The process runs goroutines of its own beside the
 // training — the NATS server's process-statistics poll starts one on a timer
 // in every binary that links the server — and a count of every goroutine
 // read that one as a third worker beside a share of two.
+//
+// AND ONLY WHILE WALKING A RANGE. A worker that has signalled its WaitGroup
+// has finished its range but is still listed until it returns, and on a busy
+// machine it may not run again before the next k-means round has started its
+// own two: counted by creator alone, that exit read as a third worker beside a
+// share of two, and the case failed under `make test` while no worker ever
+// ran over its share.
 //
 // SAMPLED every two milliseconds: a k-means round's ranges each run for tens of
 // milliseconds and more, so a worker alive for a round cannot fall between two
@@ -129,6 +141,7 @@ func workersAlive(t *testing.T, work func()) int {
 	t.Helper()
 	creator := []byte("created by " +
 		runtime.FuncForPC(reflect.ValueOf(parallelRanges).Pointer()).Name() + " ")
+	walking := []byte(runtime.FuncForPC(reflect.ValueOf(walkStrides).Pointer()).Name() + "(")
 	stop, peak := make(chan struct{}), make(chan int, 1)
 	go func() {
 		ticker := time.NewTicker(2 * time.Millisecond)
@@ -140,7 +153,13 @@ func workersAlive(t *testing.T, work func()) int {
 				buf = make([]byte, 2*len(buf))
 				n = runtime.Stack(buf, true)
 			}
-			most = max(most, bytes.Count(buf[:n], creator))
+			working := 0
+			for _, g := range bytes.Split(buf[:n], []byte("\n\n")) {
+				if bytes.Contains(g, creator) && bytes.Contains(g, walking) {
+					working++
+				}
+			}
+			most = max(most, working)
 			select {
 			case <-stop:
 				peak <- most

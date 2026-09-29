@@ -772,17 +772,9 @@ const ivfStride = 1024
 // of whichever node holds the duty. A caller handed an error discards what
 // the ranges wrote: a stride finished is not a range finished.
 func parallelRanges(ctx context.Context, workers, n int, fn func(from, to int)) error {
-	strided := func(from, to int) {
-		for at := from; at < to; at += ivfStride {
-			if ctx.Err() != nil {
-				return
-			}
-			fn(at, min(at+ivfStride, to))
-		}
-	}
 	workers = min(workers, max(n, 1))
 	if workers <= 1 {
-		strided(0, n)
+		walkStrides(ctx, 0, n, fn)
 		return ctx.Err()
 	}
 	var wg sync.WaitGroup
@@ -791,11 +783,28 @@ func parallelRanges(ctx context.Context, workers, n int, fn func(from, to int)) 
 		wg.Add(1)
 		go func(from, to int) {
 			defer wg.Done()
-			strided(from, to)
+			walkStrides(ctx, from, to, fn)
 		}(from, min(from+step, n))
 	}
 	wg.Wait()
 	return ctx.Err()
+}
+
+// walkStrides runs fn over [from, to) in strides of [ivfStride], stopping at
+// the first stride boundary after ctx ends.
+//
+// A FUNCTION OF ITS OWN rather than a closure, so a worker doing a range's
+// work is one a stack names: a goroutine that has signalled its WaitGroup is
+// no longer in here although the runtime still lists it, and counting those
+// read a worker on its way out beside the next round's as one worker too
+// many (TestATrainingRunsOnItsShareOfTheCores).
+func walkStrides(ctx context.Context, from, to int, fn func(from, to int)) {
+	for at := from; at < to; at += ivfStride {
+		if ctx.Err() != nil {
+			return
+		}
+		fn(at, min(at+ivfStride, to))
+	}
 }
 
 // IVFCandidates is the first stage over an index, as a pure function: the
