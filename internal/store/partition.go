@@ -137,7 +137,9 @@ func partitionPath(nodePath, configured string, f PartitionFile) string {
 // a tracker count of 64 and 321 at 256. The pool and the per-connection page
 // cache were sized when the replicated estate was ONE file, so each file taking
 // that one file's share would multiply both by the partition count. These are
-// the numbers that divide them instead.
+// the numbers that divide them instead; BenchmarkANodeOpensEveryPartition is
+// the measurement they were checked against, and its result is recorded
+// there.
 const (
 	// PartitionReadConns is the fewest readers a partition file's pool
 	// holds, beside the writers its apply loops pin.
@@ -174,7 +176,9 @@ const (
 	// Past 40 open files the floors alone exceed [partitionCacheKiB] and
 	// every file gets the floor — which the default layout's 81 and 321
 	// files both are, so on a node holding every partition the budget is
-	// the engine's minimum times the connections rather than 32 MiB.
+	// the engine's minimum times the connections rather than 32 MiB, about
+	// 1 GiB at 321 files. BenchmarkANodeOpensEveryPartition measured it
+	// against the node footprint the partition count was chosen under.
 	partitionCacheFloorKiB = 800
 )
 
