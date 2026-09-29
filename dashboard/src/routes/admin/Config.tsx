@@ -96,11 +96,23 @@ const FLEET_POLL_MS = 15_000;
  * differently asks for a collection that does not exist, and the answer is a
  * bad-params refusal rather than anything a reader could act on.
  */
+/**
+ * The collections the settings revision can be read by, the first one the
+ * lens opens on.
+ *
+ * SEATS AND UNITS ARE THE ORG CHART'S, and last. The chart left the company
+ * document for a log of its own, so a revision stores them only when it was
+ * written before that — the engine keeps the two collections readable for
+ * exactly that repair. They were first, so the lens opened on "Seats" and
+ * answered "the active revision declares none of these" for every company
+ * whose seats are all in the chart: a screen saying the company has nobody.
+ * `chart` marks them, so an empty one says where seats and units live now.
+ */
 const ENTITY_KINDS = [
-  { kind: "roles", label: "Seats" },
-  { kind: "units", label: "Units" },
-  { kind: "llm-providers", label: "LLM providers" },
-  { kind: "mcp-servers", label: "MCP servers" },
+  { kind: "llm-providers", label: "LLM providers", chart: false },
+  { kind: "mcp-servers", label: "MCP servers", chart: false },
+  { kind: "roles", label: "Seats", chart: true },
+  { kind: "units", label: "Units", chart: true },
 ] as const;
 
 /**
@@ -676,10 +688,15 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 ? NO_REVISION
                 : (ids.data?.ids ?? []).length
                   ? undefined
-                  : {
-                      title: "Nothing in this collection",
-                      hint: "The active revision declares none of these.",
-                    }
+                  : ENTITY_KINDS.find((k) => k.kind === kind)?.chart
+                    ? {
+                        title: "The active revision stores none of these",
+                        hint: "Seats and units are the org chart's, read and edited on the Company screen. A revision stores them only when it was written before the chart had a log of its own.",
+                      }
+                    : {
+                        title: "Nothing in this collection",
+                        hint: "The active revision declares none of these.",
+                      }
             }
           >
             <div className="row gap-3 wrap" style={{ alignItems: "flex-start" }}>

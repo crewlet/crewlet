@@ -178,14 +178,30 @@ test("a collection with no active revision says so, not that the revision declar
   expect(screen.queryByText(/declares none of these/)).toBeNull();
 });
 
-// THE CONTROL. An active revision that genuinely declares no seats is a
+// THE CONTROL. An active revision that genuinely declares no providers is a
 // different fact and keeps its own wording — without this, collapsing both
 // into the no-revision sentence would pass the case above.
 test("an empty collection under an active revision still reads as empty", async () => {
-  mount("#/config?lens=entities", diff, { kind: "roles", ids: [] });
+  mount("#/config?lens=entities", diff, { kind: "llm-providers", ids: [] });
 
   expect(await screen.findByText("Nothing in this collection")).toBeDefined();
   expect(screen.queryByText("No company configuration is active")).toBeNull();
+});
+
+// SEATS AND UNITS ARE THE ORG CHART'S. A revision stores them only when it
+// was written before the chart had a log of its own, so an empty collection
+// of them says where they live now — the lens opened on "Seats" and told
+// every company it declared none. It opens on the providers instead.
+test("the lens opens on the providers, and an empty seats collection points at the chart", async () => {
+  mount("#/config?lens=entities", diff, { kind: "llm-providers", ids: [] });
+  expect(await screen.findByText("Nothing in this collection")).toBeDefined();
+  expect(asked.find((q) => q.what === "config_entities")?.params?.kind).toBe("llm-providers");
+  cleanup();
+
+  mount("#/config?lens=entities&kind=roles", diff, { kind: "roles", ids: [] });
+  expect(await screen.findByText("The active revision stores none of these")).toBeDefined();
+  expect(screen.getByText(/Seats and units are the org chart's/)).toBeDefined();
+  expect(screen.queryByText("Nothing in this collection")).toBeNull();
 });
 
 // `entity` is a URL key, so a shared or bookmarked link lands on the panel in
