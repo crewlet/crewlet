@@ -505,7 +505,7 @@ func (c *Company) ReferenceWarnings() []Warning {
 		return []Warning{}
 	}
 	o, x := c.organization()
-	refs := append(o.DanglingRefs(), c.danglingAccessLevels(o)...)
+	refs := append(o.DanglingRefs(), c.DanglingSettingsRefs(o)...)
 	out := make([]Warning, 0, len(refs))
 	for _, ref := range refs {
 		w := Warning{

@@ -652,13 +652,13 @@ The engine reports them rather than letting them pass silently. **Each node logs
 | `lead` | A unit's own `lead` is no seat's handle | The unit | The handle as written |
 | `unit` | A root seat's `unit` is no unit's key | The seat | The key as written |
 | `manages` | A `manages` entry is neither a seat's handle nor a unit's key | The seat | The entry as written |
-| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` is no seat's handle | `integrations.gitlab.provisioning.access_levels` | The handle |
+| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat answers to it, by its current handle or one it used to have | `integrations.gitlab.provisioning.access_levels` | The handle |
 
 Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
 
 **What was written is reported, once.** A dangling lead is reported on the unit that declares it, never on the child units that inherit it: they wrote nothing, and there is nothing to fix on them. A child unit that writes the same name itself is reported separately, because it is a second place to correct. A `manages` entry keying a unit that holds no seats resolves to nobody but is not a misspelling, so it is not reported.
 
-**A stale GitLab access level is worth removing promptly.** Access level overrides are looked up by handle when a seat's service account is provisioned, so the entry left behind by a removed seat grants its level to the next seat that derives the same handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
+**A stale GitLab access level is worth removing promptly.** An override follows the seat its key names — through a rename, by the handles the seat used to answer to — so it is dangling only when no seat answers to the key at all, and then it grants its level to whichever seat is next given that handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
 
 ---
 

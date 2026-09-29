@@ -374,3 +374,81 @@ func TestToggleKeepsItsThirdState(t *testing.T) {
 		t.Fatal("an explicit false must be distinguishable from unset")
 	}
 }
+
+// A SETTING NAMES THE SEAT ITS HANDLE RESOLVES TO IN THE CHART IT IS ASKED
+// AGAINST — and says when that is only through an address the seat gave up.
+//
+// The settings are a document and the seats a log, so a rename there cannot
+// rewrite a key here. Resolved as every reference to a seat is (live handle,
+// then the handle it was created under, then the ones since), a key naming a
+// renamed seat still reaches it, and Retired is what says so before a later
+// hire given that handle makes it reach somebody else. A key naming nothing
+// is the one DanglingSettingsRefs reports; the fallback that dismisses, or is
+// not a handle at all, names no seat to resolve.
+func TestSeatReferencesResolveThroughTheChartTheyAreAskedAgainst(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, `
+name: Acme
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+    provisioning:
+      group: acme
+      access_levels:
+        ghost: developer
+        head: maintainer
+        swe: maintainer
+  datadog:
+    enabled: true
+    webhook_token: "EXAMPLEDATADOGTOKEN0000000"
+    route_to: oncall-old
+    provisioning:
+      site: datadoghq.com
+      api_key: "${DD_API_KEY}"
+      app_key: "${DD_APP_KEY}"
+`)
+	chart := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Head", DeclaredHandle: "head"},
+		{Name: "SWE", DeclaredHandle: "platform-swe", OriginHandle: "swe",
+			FormerHandles: []string{"swe"}},
+		{Name: "Oncall", DeclaredHandle: "oncall", OriginHandle: "oncall-old"},
+	}}
+	chart.Normalize()
+
+	type read struct {
+		setting, handle, seat string
+		retired               bool
+	}
+	var got []read
+	for _, ref := range cfg.SeatReferences(chart) {
+		seat := ""
+		if ref.Seat != nil {
+			seat = ref.Seat.Handle()
+		}
+		got = append(got, read{ref.Setting, ref.Handle, seat, ref.Retired()})
+	}
+	want := []read{
+		{accessLevelsPath, "ghost", "", false},
+		{accessLevelsPath, "head", "head", false},
+		{accessLevelsPath, "swe", "platform-swe", true},
+		{routeToPath, "oncall-old", "oncall", true},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("SeatReferences =\n%+v\nwant\n%+v", got, want)
+	}
+
+	dangling := cfg.DanglingSettingsRefs(chart)
+	if len(dangling) != 1 || dangling[0].To != "ghost" || dangling[0].Kind != org.RefGitLabAccessLevel {
+		t.Errorf("DanglingSettingsRefs = %+v, want only the key naming nobody", dangling)
+	}
+
+	// AND A FALLBACK THAT DISMISSES NAMES NOBODY TO RESOLVE.
+	cfg.Integrations.Datadog.RouteTo = DatadogIgnore
+	for _, ref := range cfg.SeatReferences(chart) {
+		if ref.Setting == routeToPath {
+			t.Errorf("route_to: none was resolved as a seat reference: %+v", ref)
+		}
+	}
+}

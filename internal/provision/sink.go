@@ -307,6 +307,17 @@ type Seat struct {
 	// something anybody can write down in advance because Atlassian invents
 	// it at creation time.
 	EmailVar string
+
+	// AccessLevel is the membership level the company's settings give THIS
+	// seat at an app that grades its members — GitLab's `developer` or
+	// `maintainer` — and empty for the app's own default.
+	//
+	// RESOLVED BY THE SCAN, which is the one step holding the org chart: a
+	// setting names a seat by a handle a rename can retire, and only the
+	// chart can say which seat a handle names now. Looked up later by the
+	// handle in hand, an override stopped applying the moment its seat was
+	// renamed and passed to whoever was next given the old handle.
+	AccessLevel string
 }
 
 // Plan is what a provisioning run intends to do, before it does any of it.

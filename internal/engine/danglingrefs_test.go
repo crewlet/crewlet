@@ -154,3 +154,41 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 		t.Errorf("a refused revision logged its references: %+v, want only %+v", got, want)
 	}
 }
+
+// A GITLAB ACCESS LEVEL NAMING NO SEAT IS LOGGED WITH THE REST, and one
+// naming a seat — by its current handle — is not.
+//
+// The key is in the SETTINGS and the seat it names in the CHART, so read from
+// either half alone it was never logged at all, while the documentation
+// promised a line per applied epoch. It is asked of the composed pair, like
+// every reference here.
+func TestADanglingAccessLevelIsLoggedWithTheChartsReferences(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	doc := danglingCompanyDoc + `integrations:
+  gitlab:
+    provisioning:
+      group: acme
+      access_levels:
+        dev: maintainer
+        former-dev: maintainer
+`
+	p := planeFor(t, newEngine(t, engine.Options{
+		Company: parsedCompany(t, doc),
+	}), func(o *engine.ReconcilerOptions) {
+		o.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	})
+	epoch := p.activate(t.Context(), t, doc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	want := []danglingLine{
+		{Epoch: epoch, Ref: "lead", From: "Engineering", To: "ghost"},
+		{Epoch: epoch, Ref: "manages", From: "CEO", To: "nobody"},
+		{Epoch: epoch, Ref: "gitlab_access_level",
+			From: "integrations.gitlab.provisioning.access_levels", To: "former-dev"},
+	}
+	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
+		t.Fatalf("logged %+v, want %+v", got, want)
+	}
+}

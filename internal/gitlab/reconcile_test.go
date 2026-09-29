@@ -3185,8 +3185,10 @@ func TestAChangedAccessLevelReachesAnExistingMembership(t *testing.T) {
 	}
 }
 
-// AND A PER-HANDLE OVERRIDE DOES TOO, which is the same drift reached from
-// the other config field.
+// AND A PER-SEAT OVERRIDE DOES TOO, which is the same drift reached from the
+// other config field. The plan carries it, resolved against the chart by
+// [gitlab.PlanFor], so the pass reads the seat's entry and nothing keyed on a
+// handle — a key in the config the plan did not resolve changes nothing.
 func TestAPerHandleAccessOverrideReachesAnExistingMembership(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
@@ -3196,8 +3198,10 @@ func TestAPerHandleAccessOverrideReachesAnExistingMembership(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
-		o.Config.Provisioning.AccessLevels = map[string]config.GitLabAccessLevel{
-			"cto": config.GitLabMaintainer,
+		for i := range o.Plan.Seats {
+			if o.Plan.Seats[i].Handle == "cto" {
+				o.Plan.Seats[i].AccessLevel = string(config.GitLabMaintainer)
+			}
 		}
 	}); err != nil {
 		t.Fatalf("second run: %v", err)

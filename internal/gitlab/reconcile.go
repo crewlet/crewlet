@@ -355,7 +355,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			})
 			continue
 		}
-		level := accessLevel(p, seat.Handle)
+		level := accessLevel(p, seat)
 		if err = have.ensureGroup(ctx, opts.Client, group.ID, user.ID, level); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: group membership: %w", seat.Handle, err))
@@ -1761,11 +1761,17 @@ func webhookTarget(base string) string {
 	return base + "/webhooks/gitlab"
 }
 
-// accessLevel is a seat's membership level, as GitLab's numbers.
-func accessLevel(p *config.GitLabProvisioning, handle string) int {
+// accessLevel is a seat's membership level, as GitLab's numbers: the override
+// its plan entry carries, or the company's default.
+//
+// NEVER LOOKED UP HERE BY HANDLE. An override names its seat by an address a
+// rename can retire, so [PlanFor] resolves it through the chart and the plan
+// carries the answer; keyed on the handle in hand, a renamed seat lost its
+// level and whoever took its old handle gained it.
+func accessLevel(p *config.GitLabProvisioning, seat provision.Seat) int {
 	level := p.AccessLevel
-	if override, ok := p.AccessLevels[handle]; ok {
-		level = override
+	if seat.AccessLevel != "" {
+		level = config.GitLabAccessLevel(seat.AccessLevel)
 	}
 	if level == config.GitLabMaintainer {
 		return gitlabMaintainer

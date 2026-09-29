@@ -88,12 +88,19 @@ func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
 			continue
 		}
 		// NO EMAIL, and that omission is the whole of the fix below.
-		plan.Add(provision.Seat{
+		entry := provision.Seat{
 			Handle:   handle,
 			Origin:   provision.Origin(seat.Origin()),
 			Role:     seat.Name,
 			TokenVar: name,
-		})
+		}
+		// THE OVERRIDE THAT NAMES THIS SEAT, followed through the chart
+		// here because this is the one step holding it — see
+		// [config.GitLabProvisioning.OverrideFor].
+		if level, found := cfg.Provisioning.OverrideFor(o, seat); found {
+			entry.AccessLevel = string(level)
+		}
+		plan.Add(entry)
 	}
 	return plan, nil
 }

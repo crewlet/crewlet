@@ -30,13 +30,22 @@ import (
 // bytes this reported nothing at all, on every company, for ever. The
 // composed company is where the two halves meet, so it is the only value that
 // can answer.
+//
+// AND THE SETTINGS' OWN — a GitLab access level whose key names no seat —
+// asked of that same pair ([config.Company.DanglingSettingsRefs]): the key is
+// in the revision and the seat it names in the chart, so read from either
+// half alone it was never logged at all.
 func reportDanglingRefs(ctx context.Context, logger *slog.Logger,
 	target coord.Activation, c *Company) {
 
 	if c == nil || c.Org == nil {
 		return
 	}
-	for _, ref := range c.Org.DanglingRefs() {
+	refs := c.Org.DanglingRefs()
+	if c.Config != nil {
+		refs = append(refs, c.Config.DanglingSettingsRefs(c.Org)...)
+	}
+	for _, ref := range refs {
 		logger.WarnContext(ctx, "org_dangling_reference",
 			"epoch", target.Epoch, "revision", target.RevisionID,
 			"ref", string(ref.Kind), "from", ref.From, "to", ref.To,

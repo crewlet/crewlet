@@ -1,6 +1,7 @@
 package gitlab_test
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -60,4 +61,47 @@ func gitlabPlanSeat(t *testing.T, role *org.Role, cfg *config.GitLab) provision.
 		t.Fatalf("planned %d seats, want 1: %+v", len(plan.Seats), plan)
 	}
 	return plan.Seats[0]
+}
+
+// AN ACCESS LEVEL OVERRIDE FOLLOWS THE SEAT IT NAMES, NOT THE HANDLE IT SPELLS.
+//
+// `access_levels` lives in the settings, and a rename in the chart cannot
+// rewrite it. Looked up by the handle in hand, the override stopped applying
+// the moment its seat was renamed — the seat dropped to the default at the
+// next pass — and whoever was later given the old handle inherited the grant.
+// Followed through the chart it stays with the seat; and a key that is
+// ANOTHER seat's live handle is that seat's, however this one used to be
+// called.
+func TestAnAccessLevelOverrideFollowsTheSeatItNames(t *testing.T) {
+	t.Parallel()
+	cfg := enabledGitLab()
+	cfg.Provisioning.AccessLevels = map[string]config.GitLabAccessLevel{
+		"swe": config.GitLabMaintainer,
+	}
+
+	// RENAMED FROM `swe`: the override still names it.
+	renamed := agentSeat("SWE", map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"})
+	renamed.DeclaredHandle, renamed.OriginHandle = "platform-swe", "swe"
+	if got := gitlabPlanSeat(t, renamed, cfg).AccessLevel; got != string(config.GitLabMaintainer) {
+		t.Errorf("the renamed seat's level = %q, want the maintainer override that names it", got)
+	}
+
+	// AND A SEAT NOW HOLDING THE HANDLE LIVE takes it from a seat that
+	// merely used to answer to it — the chart's own precedence.
+	holder := agentSeat("SWE Two", map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE_2}"})
+	holder.DeclaredHandle = "swe"
+	former := agentSeat("Platform SWE", map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_PSWE}"})
+	former.DeclaredHandle, former.OriginHandle = "platform-swe", "platform-swe-0"
+	former.FormerHandles = []string{"swe"}
+	plan, err := gitlab.PlanFor(provisioningOrg(t, former, holder), cfg)
+	if err != nil {
+		t.Fatalf("PlanFor: %v", err)
+	}
+	levels := map[string]string{}
+	for _, s := range plan.Seats {
+		levels[s.Handle] = s.AccessLevel
+	}
+	if want := map[string]string{"swe": "maintainer", "platform-swe": ""}; !maps.Equal(levels, want) {
+		t.Errorf("levels by seat = %v, want %v: the live holder of a handle is the seat it names", levels, want)
+	}
 }
