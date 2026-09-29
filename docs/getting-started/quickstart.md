@@ -372,13 +372,16 @@ whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
-Both of those write the file's **settings**. A company file also carries the
-org chart — its `roles:` and `units:` — and that is a domain of its own, with
-its own records and its own history (see
-[The org chart domain](../concepts/chart-domain.md)). A first deployment gets
-its chart from the file, seeded by `crewlet run -company` when the chart is
-empty; after that the chart belongs to whoever edits it, and `config import`
-says plainly that the file's units and seats were not published.
+The two `run` flags write the file's **settings**. A company file also carries
+the org chart — its `roles:` and `units:` — and that is a domain of its own,
+with its own records and its own history (see
+[The org chart domain](../concepts/chart-domain.md)). A node seeds its chart
+from the file only while the chart is empty; after that the chart belongs to
+whoever edits it, and a restart leaves it alone, `-import-company` included.
+`crewlet config import` is the one gesture that writes **both** halves:
+through a running node it stores the settings as a new revision and publishes
+the file's whole org chart over the one there, and against a stopped node's
+store it stages the chart for that node's next start.
 
 A running node always serves the store, not the file.
 
@@ -581,24 +584,31 @@ If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting:
 
 ```bash
-curl -X PUT http://localhost:8000/config \
-  -H "Authorization: Bearer $CREWLET_API_TOKEN_FOUNDER" \
-  -H "Content-Type: application/yaml" \
-  -H "X-Summary: initial bootstrap" \
-  --data-binary @company.yaml
+export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+crewlet config import company.yaml
 ```
+
+The engine holds its store, so the command goes through the node's API and
+divides the file there: the settings as the company's first revision, then the
+org chart through `/chart`. A `PUT /config` of the file itself is refused with
+`400 chart_not_writable_here`, because that surface writes the settings alone;
+a script driving the API directly sends it the file without `roles:` and
+`units:`, and writes the chart through the chart's own routes
+([Configure via the API](../guides/configure-via-api.md)).
 
 Or create the company from the dashboard: open **Company** and its
 **Builder** lens (`#/company?lens=builder`). With no configuration active it opens
-on a form that starts the company from a template, has the engine check it,
-and creates it with `PUT /config`. The builder reads and writes `/config`, so
-it needs a session whose grants reach it: the one you signed in with using
-`$CREWLET_API_TOKEN_FOUNDER` carries the `config:read` and `config:write` it
-needs, and a person you invite needs them among their grants. The
-dashboard writes no model provider, so one step stays outside it. Until it is
-done the company runs and no agent seat takes a turn; whatever is sent to a
-seat waits on its inbox. Add `providers.llm` afterwards with
-`crewlet config import` or `PATCH /config`, as the builder's next steps show
+on a form that starts the company from a template, checks it, and creates it:
+the settings with `PUT /config`, then the org chart through `/chart`. The
+builder reads and writes both, so it needs a session whose grants reach them:
+the one you signed in with using `$CREWLET_API_TOKEN_FOUNDER` carries the
+`state:read`, `config:read` and `config:write` it uses, and the
+`fleet:operate` a removal takes as well, and a person you invite needs them
+among their grants. The dashboard writes no model
+provider, so one step stays outside it. Until it is done the company runs and
+no agent seat takes a turn; whatever is sent to a seat waits on its inbox. Add
+`providers.llm` afterwards with a `PATCH /config` merge patch, as the
+builder's next steps show
 ([The Org Builder](../guides/org-builder.md#creating-the-company)), and the
 work that waited runs.
 
@@ -634,7 +644,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 
 ```bash
 crewlet validate                       # check both tiers in CI
-crewlet config import company.yaml     # write a new active revision (settings)
+crewlet config import company.yaml     # write the settings and the org chart
 crewlet run                            # start the node
 ```
 

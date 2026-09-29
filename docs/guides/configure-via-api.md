@@ -1,6 +1,6 @@
 # Configure Nimbus over the API
 
-End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot `PUT /config` (recommended), then the per-entity settings edits and the [org chart's own routes](#evolving-the-org-chart) you'd run afterwards to evolve the company live.
+End-to-end recipe for bootstrapping the [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) company against a running engine — first the one-shot import of the whole file (recommended), then the per-entity settings edits and the [org chart's own routes](#evolving-the-org-chart) you'd run afterwards to evolve the company live.
 
 A running company is **two things**: a settings revision (`/config`) and an org chart (`/chart`). They have different lifetimes, different write paths and different authority, and this guide covers both.
 
@@ -47,16 +47,47 @@ See the [Configuration concept doc](../concepts/configuration.md) for the two-ti
 
 ---
 
-## Option 1 — Single full-document PUT (recommended for bootstrap)
+## Option 1 — Import the whole file (recommended for bootstrap)
 
-The simplest path. Send the whole `company.yaml` in one request; the engine validates, persists as a new revision, appends an activation epoch, and spawns the whole company. Every node in the deployment converges on that epoch — see [Control Plane](../concepts/control-plane.md).
+The simplest path. `crewlet config import` validates the whole `company.yaml`,
+divides it, and writes both halves through the running node: the settings as a
+new revision, which the engine persists, activates and every node converges on
+(see [Control Plane](../concepts/control-plane.md)), then the org chart — its
+complete structure as one record (`POST /chart/import`) and each unit's and
+seat's content on its own. It authenticates the way every command that talks
+to a node does, with `CREWLET_API_TOKEN`:
+
+```bash
+export CREWLET_API_TOKEN="$TOKEN"
+crewlet config import examples/nimbus.company.yaml \
+  -config examples/nimbus.config.yaml -api "$CREWLET_URL" \
+  -summary "bootstrap Nimbus"
+```
+
+Verify:
+
+```bash
+curl -s $CREWLET_URL/health                                       # configured: true
+curl -s $CREWLET_URL/config -H "$AUTH" | jq '.name'               # "Nimbus"
+curl -s $CREWLET_URL/config/revisions -H "$AUTH" | jq '.[0]'      # newest first
+curl -s $CREWLET_URL/chart -H "$AUTH" | jq '.seats | length'      # every seat in the file
+curl -s $CREWLET_URL/agents -H "$AUTH" | jq 'length'              # 7 agent seats spawned
+```
+
+### The settings half, over the API alone
+
+`PUT /config` takes the **settings half** — everything in `company.yaml`
+except `roles:` and `units:`. A body carrying either is refused in full with
+`400 chart_not_writable_here`, so a script driving the API directly sends the
+file with those two keys removed (here `nimbus.settings.yaml`), then writes the
+chart through [its own routes](#evolving-the-org-chart):
 
 ```bash
 curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
-  --data-binary @examples/nimbus.company.yaml
+  --data-binary @nimbus.settings.yaml
 ```
 
 A revision summary is required on every write. It travels in the `X-Summary`
@@ -66,7 +97,7 @@ header, or as a top-level `_summary` key in the body:
 curl -X PUT http://localhost:8000/config \
   -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   -H "Content-Type: application/yaml" \
-  --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.company.yaml)"
+  --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.settings.yaml)"
 ```
 
 The body key exists because the body is often the only thing a caller
@@ -76,10 +107,6 @@ before the document is parsed**, so it never trips the unknown-field check
 that Tier B applies deliberately. When both are present the **header wins**:
 it is the more explicit channel, and a `_summary` can survive in a document
 somebody keeps in version control long after it stopped describing the write.
-
-The document you send here is the **settings half** — everything in
-`company.yaml` except `roles:` and `units:`. To load a whole authored file, use
-`crewlet config import`, which divides it and publishes both halves.
 
 Response is `201 Created` with the new `revision_id`, `epoch` and the
 `warnings` the engine has about the document. See
@@ -100,7 +127,7 @@ you what the save will do:
 ```bash
 curl -X PUT "$CREWLET_URL/config?dry_run=true" \
   -H "$AUTH" \
-  --data-binary @examples/nimbus.company.yaml
+  --data-binary @nimbus.settings.yaml
 ```
 
 A refusal names each failure in `detail` and again in `problems`, one located,
@@ -119,16 +146,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" \
   -H "Content-Type: application/json" \
   -H "X-Summary: bootstrap Nimbus" \
-  --data-binary @nimbus.company.json
-```
-
-Verify:
-
-```bash
-curl -s $CREWLET_URL/health $AUTH                                 # configured: true
-curl -s $CREWLET_URL/config -H "$AUTH" | jq '.name'               # "Nimbus"
-curl -s $CREWLET_URL/config/revisions -H "$AUTH" | jq '.[0]'      # newest first
-curl -s $CREWLET_URL/agents | jq 'length'                         # 7 agent seats spawned
+  --data-binary @nimbus.settings.json
 ```
 
 If anything else has touched `/config` since you last read it, supply `If-Match`:
@@ -139,7 +157,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" -H "If-Match: $REV" \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
-  --data-binary @examples/nimbus.company.yaml
+  --data-binary @nimbus.settings.yaml
 # 409 revision_advanced if the active revision moved past $REV between read + write
 ```
 
