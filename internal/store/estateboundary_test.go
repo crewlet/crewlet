@@ -33,9 +33,12 @@ import (
 // # What it walks
 //
 // Every non-test .go file under internal/ and cmd/, parsed with go/parser,
-// looking at *ast.BasicLit of kind STRING. A literal is a literal wherever it
-// sits, so a doc comment discussing `tracker_tasks` and `crewlet_events` in
-// one sentence — which several package docs legitimately do — is not one.
+// looking at every STRING the code composes — a literal, a concatenation, a
+// fmt.Sprintf format — rendered as the applier gate renders them
+// ([composedString]), with what it cannot resolve marked rather than dropped.
+// A comment is not a string, so a doc discussing `tracker_tasks` and
+// `crewlet_events` in one sentence — which several package docs legitimately
+// do — is not one.
 //
 // # What it looks for
 //
@@ -97,6 +100,17 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		`ATTACH DATABASE 'l1-tracker.008.db' AS other`,
 		`attach '/data/crewlet-replicated.db' as estate`,
 		`ATTACH ? AS peer`,
+		// THE SHAPES A PATH COMPUTED IN GO TAKES, which is the natural
+		// way to attach a sibling partition's file: a format string, the
+		// literal prefix of a concatenation, a double-quoted name and
+		// the other parameter spellings.
+		`ATTACH DATABASE %q AS peer`,
+		`ATTACH DATABASE `,
+		`ATTACH DATABASE "l1-tracker.008.db" AS other`,
+		`ATTACH $1 AS peer`,
+		`ATTACH @path AS peer`,
+		`ATTACH :path AS peer`,
+		`ATTACH %s AS peer`,
 	} {
 		if !attaches(positive) {
 			t.Errorf("control: %q attaches a second file and the matcher did "+
@@ -107,30 +121,50 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		`the artefact is attached to the manifest`,
 		`SELECT attachment FROM tracker_files`,
 		`ATTACHED files are refused`,
+		`attach it to the report`,
+		`attach a file to the task`,
 	} {
 		if attaches(negative) {
 			t.Errorf("control: %q attaches nothing but the matcher flagged it", negative)
 		}
 	}
+	// AND THROUGH THE RENDERER the walk reads the tree with, which is what
+	// turns a concatenation into one string: its variable operand renders
+	// as the rune the walk cannot resolve, and that is an attach too.
+	for _, src := range []string{
+		`"ATTACH " + quote(path) + " AS peer"`,
+		`fmt.Sprintf("ATTACH DATABASE %q AS peer", path)`,
+		`"ATTACH DATABASE " + quote(path) + " AS peer"`,
+	} {
+		text, ok := composedString(mustParse(t, src), map[string]string{})
+		if !ok || !attaches(text) {
+			t.Errorf("control: %s attaches a second file and the walk did not "+
+				"flag it (rendered %q)", src, text)
+		}
+	}
 
+	// COMPOSED STRINGS, not literals alone, for the reason the applier
+	// gate's renderer gives: a statement built by concatenation or by
+	// fmt.Sprintf names its file — or its second table — in no single
+	// literal, and an ATTACH of a path computed in Go is exactly that.
 	root := sourcetree.Root(t)
 	var crossings []string
 	for _, dir := range []string{"internal", "cmd"} {
 		walkGoFiles(t, filepath.Join(root, dir), func(fset *token.FileSet, file *ast.File) {
+			consts := stringConsts(file)
 			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					return true
-				}
-				text, err := strconv.Unquote(lit.Value)
-				if err != nil {
+				text, ok := composedString(n, consts)
+				if !ok {
 					return true
 				}
 				if bothEstates(text, node, partition) || attaches(text) {
-					crossings = append(crossings, shortPos(root, fset.Position(lit.Pos()).String())+
+					crossings = append(crossings, shortPos(root, fset.Position(n.Pos()).String())+
 						": "+strings.Join(strings.Fields(text), " "))
 				}
-				return true
+				// A composed string's own operands are literals the walk
+				// would otherwise report again, at a worse position.
+				_, isLit := n.(*ast.BasicLit)
+				return isLit
 			})
 		})
 	}
@@ -142,9 +176,18 @@ func TestNoStatementSpansTwoFiles(t *testing.T) {
 		len(node), len(partition))
 }
 
-// attachStatement is SQLite's ATTACH: the keyword, an optional DATABASE, and
-// the file — a string literal or a parameter.
-var attachStatement = regexp.MustCompile(`(?is)\bATTACH\s+(?:DATABASE\s+)?(?:'|\?|:)`)
+// attachStatement is SQLite's ATTACH: the keyword, then either DATABASE or
+// whatever can name the file — a quoted string, any parameter spelling, a
+// format verb, or the rune [composedString] renders an operand it cannot
+// resolve as.
+//
+// THE KEYWORD MUST BE FOLLOWED BY SPACE, which is what keeps prose out: no
+// English sentence puts "attach" before one of these, and "attached" and
+// "attachment" never match the keyword at all. What it must not require is a
+// literal path after DATABASE: the first version did, and every attach whose
+// path is computed in Go — `fmt.Sprintf("ATTACH DATABASE %q AS p", path)`,
+// `"ATTACH DATABASE " + quote(path)` — passed.
+var attachStatement = regexp.MustCompile(`(?is)\bATTACH\s+(?:DATABASE\b|['"?:$@%` + unresolved + `])`)
 
 // attaches reports whether a statement attaches a second database file.
 func attaches(text string) bool { return attachStatement.MatchString(text) }
