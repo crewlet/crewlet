@@ -184,6 +184,27 @@ const (
 	// ([schedule.StrandedIn]), so what this names is exactly what the tick
 	// skips. An error, because the work it describes is not happening.
 	KindScheduleUnrunnable FindingKind = "schedule_unrunnable"
+
+	// KindReferenceRetired is a SETTING naming a seat by an address the seat
+	// no longer answers to — a GitLab access level's key, Datadog's
+	// fallback. It still reaches the seat: a reference resolves through a
+	// seat's retired handles. But a rename in the chart cannot rewrite a
+	// settings key, and a retired handle other than the one a seat was
+	// created under may be given to a later hire, at which point the setting
+	// silently names the newcomer. A warning, because it works today and the
+	// remedy is to write the seat's current handle.
+	KindReferenceRetired FindingKind = "reference_retired"
+
+	// KindAlertFallbackUnrouted is Datadog's `route_to` naming no seat that
+	// can be woken — nobody at all, or a human seat, whose delivery is
+	// dropped as the person's own action. Every alert whose monitor names no
+	// owner is verified, counted and delivered to nobody.
+	//
+	// A company FILE is refused for one; a settings write cannot be, because
+	// the seat is the running chart's, and a chart write — removing the
+	// seat, making it a person's — cannot see the setting. An error, because
+	// the coverage the field exists to give is not there.
+	KindAlertFallbackUnrouted FindingKind = "alert_fallback_unrouted"
 )
 
 // FindingKinds is every kind, for the walks and for a surface rendering a
@@ -191,7 +212,8 @@ const (
 var FindingKinds = []FindingKind{
 	KindProviderUnknown, KindWorkerUnknown, KindSandboxUnconfigured,
 	KindReferenceDangling, KindSeatUnheld, KindSeatUnreachable,
-	KindIdentityShared, KindScheduleUnrunnable,
+	KindIdentityShared, KindScheduleUnrunnable, KindReferenceRetired,
+	KindAlertFallbackUnrouted,
 }
 
 // Resolve answers a `${VAR}` name through this node's own resolution chain —
@@ -305,6 +327,11 @@ func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company
 	}
 	for _, stranded := range schedule.StrandedIn(o) {
 		out.Findings = append(out.Findings, strandedFinding(stranded))
+	}
+	for _, ref := range settings.SeatReferences(o) {
+		if f, found := settingFinding(ref); found {
+			out.Findings = append(out.Findings, f)
+		}
 	}
 	if resolve != nil {
 		out.Findings = append(out.Findings, sharedIdentityFindings(o, resolve)...)
@@ -641,6 +668,56 @@ func danglingFinding(ref org.DanglingRef) Finding {
 		Remedy: "correct the reference, or create what it names — a retired " +
 			"address goes on resolving, so this one names nothing at all",
 	}
+}
+
+// settingFinding is what is wrong with one setting that names a seat, if
+// anything: a Datadog fallback nobody can be woken at, a key naming no seat,
+// or one naming its seat only by an address it has given up.
+//
+// THE SETTING'S PATH IS THE OBJECT, the seat's handle as written the name —
+// the thing an operator edits is the setting, and the seat it resolves to, if
+// any, is said in the detail.
+func settingFinding(ref config.SeatReference) (Finding, bool) {
+	fallback := ref.Setting == config.RouteToSetting
+	switch {
+	case fallback && (ref.Seat == nil || !ref.Seat.IsAgent()):
+		why := "no seat answers to it"
+		if ref.Seat != nil {
+			why = ref.Seat.Handle() + " is a human seat, and a delivery to a " +
+				"person is dropped as their own action"
+		}
+		return Finding{
+			Kind: KindAlertFallbackUnrouted, Severity: SeverityError,
+			Object: ref.Setting, Names: ref.Handle,
+			Detail: fmt.Sprintf("an alert whose monitor names no owner wakes "+
+				"%q, and %s — so every such alert is verified, counted and "+
+				"delivered to nobody", ref.Handle, why),
+			Remedy: "point route_to at an agent seat, or set it to `none` to " +
+				"leave unlabelled alerts with Datadog on purpose",
+		}, true
+	case ref.Seat == nil:
+		return Finding{
+			Kind: KindReferenceDangling, Severity: SeverityWarning,
+			Object: ref.Setting, Names: ref.Handle,
+			Detail: fmt.Sprintf("%s grades %q, and no seat answers to it, so it "+
+				"grants nothing today and grants its level to whichever seat "+
+				"is next given that handle", ref.Setting, ref.Handle),
+			Remedy: "remove the key, or correct it to the handle of the seat it " +
+				"was meant for",
+		}, true
+	case ref.Retired():
+		return Finding{
+			Kind: KindReferenceRetired, Severity: SeverityWarning,
+			Object: ref.Setting, Names: ref.Handle,
+			Detail: fmt.Sprintf("%s names %q, a handle %s no longer answers to. "+
+				"It still reaches that seat, and a rename cannot rewrite a "+
+				"setting — but a later seat given %q would take it over",
+				ref.Setting, ref.Handle, ref.Seat.Handle(), ref.Handle),
+			Remedy: fmt.Sprintf("write the seat's current handle, %q, in the "+
+				"setting", ref.Seat.Handle()),
+		}, true
+	}
+	return Finding{}, false
 }
 
 // strandedFinding renders one schedule nothing can run.

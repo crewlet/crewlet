@@ -430,10 +430,10 @@ integrations:
 		got = append(got, read{ref.Setting, ref.Handle, seat, ref.Retired()})
 	}
 	want := []read{
-		{accessLevelsPath, "ghost", "", false},
-		{accessLevelsPath, "head", "head", false},
-		{accessLevelsPath, "swe", "platform-swe", true},
-		{routeToPath, "oncall-old", "oncall", true},
+		{AccessLevelsSetting, "ghost", "", false},
+		{AccessLevelsSetting, "head", "head", false},
+		{AccessLevelsSetting, "swe", "platform-swe", true},
+		{RouteToSetting, "oncall-old", "oncall", true},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("SeatReferences =\n%+v\nwant\n%+v", got, want)
@@ -447,7 +447,7 @@ integrations:
 	// AND A FALLBACK THAT DISMISSES NAMES NOBODY TO RESOLVE.
 	cfg.Integrations.Datadog.RouteTo = DatadogIgnore
 	for _, ref := range cfg.SeatReferences(chart) {
-		if ref.Setting == routeToPath {
+		if ref.Setting == RouteToSetting {
 			t.Errorf("route_to: none was resolved as a seat reference: %+v", ref)
 		}
 	}

@@ -79,12 +79,12 @@ func (c *Company) DanglingRefs() []org.DanglingRef {
 	return append(o.DanglingRefs(), c.DanglingSettingsRefs(o)...)
 }
 
-// accessLevelsPath is where the per-handle GitLab overrides live in the
+// AccessLevelsSetting is where the per-handle GitLab overrides live in the
 // document, which is what a dangling key reports as its source.
-const accessLevelsPath = "integrations.gitlab.provisioning.access_levels"
+const AccessLevelsSetting = "integrations.gitlab.provisioning.access_levels"
 
-// routeToPath is where Datadog's fallback seat lives in the document.
-const routeToPath = "integrations.datadog.route_to"
+// RouteToSetting is where Datadog's fallback seat lives in the document.
+const RouteToSetting = "integrations.datadog.route_to"
 
 // SeatReference is one SETTING that names a seat by a handle, and what an org
 // chart makes of it.
@@ -139,7 +139,7 @@ func (c *Company) SeatReferences(o *org.Organization) []SeatReference {
 	if gitlab := c.Integrations.GitLab; gitlab != nil && gitlab.Provisioning != nil {
 		for _, handle := range sortedKeys(gitlab.Provisioning.AccessLevels) {
 			out = append(out, SeatReference{
-				Setting: accessLevelsPath, Handle: handle, Seat: o.Role(handle),
+				Setting: AccessLevelsSetting, Handle: handle, Seat: o.Role(handle),
 			})
 		}
 	}
@@ -147,7 +147,7 @@ func (c *Company) SeatReferences(o *org.Organization) []SeatReference {
 		fallback := strings.TrimSpace(dd.RouteTo)
 		if fallback != "" && fallback != DatadogIgnore && org.ValidHandle(fallback) {
 			out = append(out, SeatReference{
-				Setting: routeToPath, Handle: fallback, Seat: o.Role(fallback),
+				Setting: RouteToSetting, Handle: fallback, Seat: o.Role(fallback),
 			})
 		}
 	}
@@ -171,9 +171,9 @@ func (c *Company) SeatReferences(o *org.Organization) []SeatReference {
 func (c *Company) DanglingSettingsRefs(o *org.Organization) []org.DanglingRef {
 	var out []org.DanglingRef
 	for _, ref := range c.SeatReferences(o) {
-		if ref.Setting == accessLevelsPath && ref.Seat == nil {
+		if ref.Setting == AccessLevelsSetting && ref.Seat == nil {
 			out = append(out, org.DanglingRef{
-				Kind: org.RefGitLabAccessLevel, From: accessLevelsPath, To: ref.Handle,
+				Kind: org.RefGitLabAccessLevel, From: AccessLevelsSetting, To: ref.Handle,
 			})
 		}
 	}

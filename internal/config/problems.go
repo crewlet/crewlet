@@ -527,7 +527,7 @@ func (c *Company) ReferenceWarnings() []Warning {
 			}
 			w.Seat = ref.Seat.Handle()
 		case ref.Kind == org.RefGitLabAccessLevel:
-			path = entry(field(accessLevelsPath), ref.To)
+			path = entry(field(AccessLevelsSetting), ref.To)
 		}
 		w.Path, w.Segments = path.String(), segmentsOf(path)
 		out = append(out, w)

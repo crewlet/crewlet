@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/chartapi"
@@ -182,6 +183,81 @@ func TestADanglingReferenceIsNamedOnItsHoldersAddress(t *testing.T) {
 	}
 	if want := map[string]string{"ghost": "eng-platform", "phantom": "dev-two"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("dangling references by what they name = %v, want %v", got, want)
+	}
+}
+
+// A SETTING THAT NAMES A SEAT IS JUDGED AGAINST THE CHART THIS NODE RUNS.
+//
+// A GitLab access level and Datadog's fallback live in the settings and name
+// a seat of the chart, whose rename cannot rewrite them and whose removal
+// cannot see them. So the pair says what neither write could refuse: a key
+// naming no seat, a fallback that wakes nobody — no seat, or a person, whose
+// delivery is dropped as their own action — and a setting reaching its seat
+// only through a handle the seat gave up, which a later hire given that handle
+// would take over. Each on the setting's path, naming the handle as written;
+// the control is the same settings naming the seats by their current handles.
+func TestASettingNamingASeatIsJudgedAgainstTheRunningChart(t *testing.T) {
+	t.Parallel()
+	view := &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+		{Name: "SRE", DeclaredHandle: "sre", OriginHandle: "oncall",
+			FormerHandles: []string{"oncall"}},
+		{Name: "Founder", DeclaredHandle: "founder", Kind: org.KindHuman,
+			Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}},
+	}}
+	view.Normalize()
+	settings := func(routeTo string, levels map[string]config.GitLabAccessLevel) *config.Company {
+		return &config.Company{Name: "Nimbus", Integrations: config.Integrations{
+			GitLab:  &config.GitLab{Provisioning: &config.GitLabProvisioning{AccessLevels: levels}},
+			Datadog: &config.Datadog{Enabled: true, RouteTo: routeTo},
+		}}
+	}
+	type finding struct {
+		kind          chartapi.FindingKind
+		object, names string
+	}
+	judged := func(c *config.Company) []finding {
+		var out []finding
+		for _, f := range chartapi.Evaluate(t.Context(), view, c, nil, nil).Findings {
+			switch f.Kind {
+			case chartapi.KindReferenceDangling, chartapi.KindReferenceRetired,
+				chartapi.KindAlertFallbackUnrouted:
+				out = append(out, finding{f.Kind, f.Object, f.Names})
+			}
+		}
+		slices.SortFunc(out, func(a, b finding) int {
+			return strings.Compare(string(a.kind)+" "+a.names+" "+a.object,
+				string(b.kind)+" "+b.names+" "+b.object)
+		})
+		return out
+	}
+
+	if got := judged(settings("sre", map[string]config.GitLabAccessLevel{
+		"sre": config.GitLabMaintainer})); len(got) != 0 {
+		t.Fatalf("settings naming seats by their current handles report %+v", got)
+	}
+
+	levels := config.AccessLevelsSetting
+	got := judged(settings("oncall", map[string]config.GitLabAccessLevel{
+		"oncall": config.GitLabMaintainer, "ghost": config.GitLabDeveloper}))
+	want := []finding{
+		{chartapi.KindReferenceDangling, levels, "ghost"},
+		{chartapi.KindReferenceRetired, config.RouteToSetting, "oncall"},
+		{chartapi.KindReferenceRetired, levels, "oncall"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("findings = %+v\nwant %+v", got, want)
+	}
+
+	for _, fallback := range []string{"nobody", "founder"} {
+		got := judged(settings(fallback, nil))
+		if want := []finding{{chartapi.KindAlertFallbackUnrouted, config.RouteToSetting,
+			fallback}}; !slices.Equal(got, want) {
+			t.Errorf("route_to %s: findings = %+v, want %+v", fallback, got, want)
+		}
+	}
+	// AND A FALLBACK THAT DISMISSES ON PURPOSE IS AN ANSWER, NOT A FINDING.
+	if got := judged(settings(config.DatadogIgnore, nil)); len(got) != 0 {
+		t.Errorf("route_to: none reports %+v", got)
 	}
 }
 
