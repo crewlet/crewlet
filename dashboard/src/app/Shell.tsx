@@ -46,13 +46,14 @@ import {
   useKeptSections,
   useWorkSidebar,
 } from "./workspaces/sidebars.tsx";
-import { SegmentedControl, StatusDot } from "@crewlethq/ui";
+import { SegmentedControl, StatusDot, useToast } from "@crewlethq/ui";
 import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
-import { goSignIn } from "~/lib/session.ts";
+import { goSignIn, signOut } from "~/lib/session.ts";
+import { refusalText } from "~/lib/refusal.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
 import { FillRequest } from "./fill.tsx";
@@ -195,6 +196,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket } = useClient();
+  const toast = useToast();
   const { connected, authRejected, accessRefused, identityUnverifiable, health } = useConnection();
   const agents = useAgents();
   const viewer = useViewer();
@@ -368,6 +370,13 @@ export function Shell({ children }: { children: ReactNode }) {
     configured: engine?.configured,
     onSignIn: goSignIn,
     onRetry: () => socket.reconnect(),
+    // A FAILED SIGN-OUT IS SAID, as the identity menu says it: a sign-out
+    // nothing answered must not look like one that worked.
+    onSignOut: () => {
+      signOut().catch((err: unknown) =>
+        toast.failed(`Signing out did not go through. ${refusalText(err)}`),
+      );
+    },
     onConfig: () => nav.to(["admin", "config"]),
   });
 

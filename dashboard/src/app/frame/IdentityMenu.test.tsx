@@ -164,6 +164,31 @@ describe("what the menu offers", () => {
     ]);
   });
 
+  // THE VIEWER IS A SOCKET QUESTION, and a person the socket refuses — a seat
+  // taken out of the chart, a session without `state:read` — never has it
+  // answered. The menu drew nothing until it was, so those people had no way
+  // to end their own session; the session route still answers them.
+  test("a session the viewer never answers for is still offered both sign-outs", async () => {
+    engine({ "GET /auth/session": PERSON, "POST /auth/logout": { status: 200, body: {} } });
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: () => Promise<unknown> }).query = () => new Promise(() => {});
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <ToastProvider>
+            <LayerHost>
+              <IdentityMenu />
+            </LayerHost>
+          </ToastProvider>
+        </Router>
+      </ClientContext.Provider>,
+    );
+    expect(await openMenu("jane.doe")).toEqual(["Sign out", "Sign out everywhere"]);
+    choose("Sign out");
+    await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
+  });
+
   test("nobody at all is offered a way to sign in, back to where they are", async () => {
     engine({});
     mount({ ...JANE, login: "", handle: "", name: "", kind: "", owner: "", grants: [] });

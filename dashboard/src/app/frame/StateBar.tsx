@@ -39,6 +39,11 @@ export interface Degradation {
   icon: ReactNode;
   message: string;
   action?: { label: string; onClick: () => void };
+  /**
+   * A second way out, drawn beside [action] — the sign-out a refused person
+   * needs. See [degradationOf].
+   */
+  secondary?: { label: string; onClick: () => void };
 }
 
 /**
@@ -59,6 +64,7 @@ export function degradationOf({
   configured,
   onSignIn,
   onRetry,
+  onSignOut,
   onConfig,
 }: {
   authRejected: boolean;
@@ -71,6 +77,8 @@ export function degradationOf({
   onSignIn: () => void;
   /** Re-dial after a refusal an administrator has since repaired. */
   onRetry?: () => void;
+  /** End this browser's session — the way out of a refusal. */
+  onSignOut?: () => void;
   onConfig: () => void;
 }): Degradation | null {
   if (authRejected) {
@@ -85,11 +93,19 @@ export function degradationOf({
     // SECOND, beside nobody signed in: neither repairs itself. Unlike that
     // one, signing in again reaches the same person with the same access, so
     // the affordance is a retry for after an administrator has acted.
+    //
+    // AND A SIGN-OUT BESIDE IT, because the person refused is exactly the
+    // person who needs to leave: an offboarded seat or a missing `state:read`
+    // stops the socket, so nothing else on the page ever learns who they are
+    // — and the engine leaves `/auth/` open to such a session for precisely
+    // this. Without it a shared machine kept their cookie live until its own
+    // deadline.
     return {
       variant: "danger",
       icon: <KeyGlyph size="md" />,
       message: `The engine knows who you are but will not serve this dashboard to you (${accessRefused}). An administrator can restore your access.`,
       ...(onRetry ? { action: { label: "Try again", onClick: onRetry } } : {}),
+      ...(onSignOut ? { secondary: { label: "Sign out", onClick: onSignOut } } : {}),
     };
   }
   if (!connected) {
@@ -155,10 +171,19 @@ export function StateBar({
           icon={degraded.icon}
           layout="banner"
           action={
-            degraded.action && (
-              <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
-                {degraded.action.label}
-              </Button>
+            (degraded.action || degraded.secondary) && (
+              <span className="row gap-2">
+                {degraded.secondary && (
+                  <Button size="small" variant="tertiary" onClick={degraded.secondary.onClick}>
+                    {degraded.secondary.label}
+                  </Button>
+                )}
+                {degraded.action && (
+                  <Button size="small" variant="secondary" onClick={degraded.action.onClick}>
+                    {degraded.action.label}
+                  </Button>
+                )}
+              </span>
             )
           }
         >

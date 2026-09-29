@@ -708,7 +708,7 @@ none of it:
 | `AppRail` | the workspaces, the badges, the engine pill, theme and density. `--rail-w` wide with labels — composed from the foot rather than picked, because two segmented controls are three `--size-target-min` hit targets each and 80px of that is not negotiable; 48px of icons under 960, and a fixed BOTTOM BAR under 860 — an eighth of a phone's window spent permanently on a side column is the one column a phone cannot spare, and the side edge is where a thumb reaches worst. It stays the grid's first child in the markup either way: reordering it would put the navigation after the page for Tab and for a screen reader, which is the opposite of what a bottom bar is for |
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link. It SHRINKS rather than wraps — see [The page bar shrinks](#the-page-bar-shrinks-and-breaks-on-its-own-width) |
-| `IdentityMenu` | who is signed in, at the page bar's end: the seat they hold (or that they hold none), their second factor and a new set of recovery codes — offered to a person's session and to nothing else, since a machine holds no second factor — and both sign-outs. With nobody signed in it is a **Sign in** button back to the screen they are on. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
+| `IdentityMenu` | who is signed in, at the page bar's end: the seat they hold (or that they hold none), their second factor and a new set of recovery codes — offered to a person's session and to nothing else, since a machine holds no second factor — and both sign-outs, which need only `GET /auth/session` to answer: while the socket's `viewer` question has not (it never does for a person the socket refuses), a session is offered the two sign-outs under its own login. With nobody signed in it is a **Sign in** button back to the screen they are on. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title, state marks and up to six facts, in the same order on the page and in the peek. A fact may carry a `note` saying where its value came from — whether a duration was measured by the engine or derived from the events a page holds, what a token figure covers — for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has eight — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `@crewlethq/ui`'s `Tabs`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
@@ -905,6 +905,11 @@ socket's last snapshot in memory for whoever sits down next. The tab's
 `sessionStorage`, which holds the org builder's kept draft, is emptied first,
 because a reload keeps it. A sign-out nothing answered, or a revocation the
 engine could not confirm (`503` with an `op_id`), is said, and the page stays.
+Both sign-outs are drawn from `GET /auth/session` rather than from the socket's
+`viewer` question, so a person the socket refuses — a seat taken out of the
+chart, a session without `state:read` — still has them: the identity menu offers
+the two under the session's own login, and the refusal's strip carries a
+**Sign out** of its own.
 
 ### The Inbox is the landing screen
 
@@ -2733,7 +2738,9 @@ rendered idle from the first phase to the last.
   their seat is gone, or `state:read` was withdrawn: the socket STOPS (no
   reconnect, no REST fallback, both of which the same decision would refuse)
   and the state strip says why, with a *Try again* for after an administrator
-  has acted. A handshake refused `403` is the same state, read through the
+  has acted and a *Sign out* beside it — the person refused is the person who
+  needs to leave, and the engine keeps `/auth/` open to their session for
+  exactly that. A handshake refused `403` is the same state, read through the
   plain-HTTP re-ask. A re-check that cannot be answered is NOT a close: the tab receives an
   `identity: unverifiable` frame, the state strip says live updates are paused,
   and the engine's next successful check sends `identity: verified` with a

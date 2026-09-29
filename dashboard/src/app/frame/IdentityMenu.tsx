@@ -17,6 +17,19 @@
  * offering it a dialog the engine refuses would be a control that lies. And
  * signing out, here or everywhere: the two ways a session ends by its owner's
  * hand, both of which end in a reload at the sign-in (`lib/session.ts`).
+ *
+ * # Signing out does not wait for the socket
+ *
+ * The viewer is a SOCKET question, and a person the socket refuses — a seat
+ * taken out of the chart (`403 seat_unavailable`), a session without
+ * `state:read` — never has it answered: the socket stops dialling on a
+ * refusal. The menu used to draw nothing until it was, so exactly the people
+ * the engine had shut out were left with no way to end their own session;
+ * the engine leaves `/auth/` open to them for that reason. So `GET
+ * /auth/session` is asked whatever the viewer says, and while the viewer has
+ * not answered, a session it names gets a menu of the two sign-outs under its
+ * own login — nothing about a seat or a factor, which that answer does not
+ * settle.
  */
 
 import { useEffect, useState } from "react";
@@ -34,8 +47,9 @@ import { AuthenticatorDialog, RecoveryCodesDialog } from "~/routes/signin/Second
  * null until it has answered — or if it cannot, in which case nothing that
  * depends on it is offered.
  *
- * ASKED ONLY OF SOMEBODY THE ENGINE RESOLVED, and again when that changes:
- * the viewer's login moving is a different session.
+ * ASKED UNLESS THE VIEWER HAS ANSWERED NOBODY — before it has answered too,
+ * see the note above — and again when the viewer's login moves, which is a
+ * different session.
  */
 function useSessionAnswer(enabled: boolean, login: string): SessionAnswer | null {
   const [answer, setAnswer] = useState<SessionAnswer | null>(null);
@@ -58,17 +72,8 @@ export function IdentityMenu() {
   const viewer = useViewer();
   const nav = useNavigator();
   const toast = useToast();
-  const session = useSessionAnswer(!viewer.loading && !viewer.anonymous, viewer.login);
+  const session = useSessionAnswer(!viewer.anonymous, viewer.login);
   const [open, setOpen] = useState<"factor" | "codes" | null>(null);
-
-  if (viewer.loading) return null;
-  if (viewer.anonymous) {
-    return (
-      <Button size="small" variant="secondary" onClick={goSignIn}>
-        Sign in
-      </Button>
-    );
-  }
 
   // A FAILED SIGN-OUT IS SAID, and the page stays: see `signOut` for why a
   // sign-out that nothing answered must not look like one that worked.
@@ -77,6 +82,39 @@ export function IdentityMenu() {
       toast.failed(`${what} did not go through. ${refusalText(err)}`),
     );
   };
+  const signOuts: MenuEntry[] = [
+    { key: "sign-out", label: "Sign out", onSelect: run(signOut, "Signing out") },
+    {
+      key: "sign-out-everywhere",
+      label: "Sign out everywhere",
+      description: "Ends every session you hold, on every device",
+      onSelect: run(signOutEverywhere, "Signing out everywhere"),
+    },
+  ];
+
+  if (viewer.loading) {
+    // THE SESSION ANSWERED AND THE VIEWER HAS NOT — and the socket may never
+    // answer it, for a person it refuses — so the two ways out are drawn under
+    // the session's own login. Nothing answered at all is still nothing.
+    if (!session) return null;
+    return (
+      <Menu
+        label={`Signed in as ${session.login}`}
+        align="end"
+        triggerVariant="tertiary"
+        icon={<PersonGlyph size="sm" />}
+        trigger={<span className="viewer-name truncate mono">{session.login}</span>}
+        items={signOuts}
+      />
+    );
+  }
+  if (viewer.anonymous) {
+    return (
+      <Button size="small" variant="secondary" onClick={goSignIn}>
+        Sign in
+      </Button>
+    );
+  }
 
   const person = session?.kind === "person" && session.expires_at !== undefined;
   const items: MenuEntry[] = [];
@@ -120,15 +158,7 @@ export function IdentityMenu() {
       { kind: "separator", key: "after-proof" },
     );
   }
-  items.push(
-    { key: "sign-out", label: "Sign out", onSelect: run(signOut, "Signing out") },
-    {
-      key: "sign-out-everywhere",
-      label: "Sign out everywhere",
-      description: "Ends every session you hold, on every device",
-      onSelect: run(signOutEverywhere, "Signing out everywhere"),
-    },
-  );
+  items.push(...signOuts);
 
   const bound = viewer.handle !== "";
   return (

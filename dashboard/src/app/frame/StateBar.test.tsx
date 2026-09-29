@@ -81,6 +81,29 @@ describe("degradationOf", () => {
     expect(retried).toBe(true);
   });
 
+  // THE PERSON REFUSED IS THE PERSON WHO NEEDS TO LEAVE. The socket stops on
+  // a refusal, so nothing else on the page learns who they are, and the
+  // engine keeps `/auth/` open to their session for exactly this.
+  test("refused access offers a sign-out beside the retry", () => {
+    let signedOut = false;
+    const got = degradationOf({
+      authRejected: false,
+      accessRefused: "your seat is no longer in the chart",
+      connected: false,
+      configured: true,
+      onSignIn: noop,
+      onRetry: noop,
+      onSignOut: () => {
+        signedOut = true;
+      },
+      onConfig: noop,
+    });
+    expect(got?.secondary?.label).toBe("Sign out");
+    got?.secondary?.onClick();
+    expect(signedOut).toBe(true);
+    expect(got?.action?.label).toBe("Try again");
+  });
+
   test("a verified, connected, configured tab has nothing to report", () => {
     expect(
       degradationOf({
