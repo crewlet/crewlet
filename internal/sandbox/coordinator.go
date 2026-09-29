@@ -618,6 +618,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// the run goes on from here. A run that parks on a question is resumed
 	// by a person's answer, which collects nothing, so recorded any later
 	// than this its tokens would reach the task only when it did not ask.
+	// Read through [reported] first, so the task, the charge and the resumed
+	// phase all count the same thing.
+	result = reported(result)
 	if c.spent != nil {
 		c.spent.RunSpent(ctx, run, result)
 	}
@@ -656,6 +659,17 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 type runOutcome struct {
 	Usage         RunUsage
 	DeliveredRefs []string
+}
+
+// reported is a collected result with its usage made a count: a negative token
+// count or price off a coding agent's output is a bad payload rather than a
+// refund, and read as one it lowered the task's spend and cancelled the
+// charge of the tokens beside it.
+func reported(result Result) Result {
+	result.InputTokens = max(result.InputTokens, 0)
+	result.OutputTokens = max(result.OutputTokens, 0)
+	result.CostUSD = max(result.CostUSD, 0)
+	return result
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing

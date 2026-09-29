@@ -2199,6 +2199,40 @@ func TestEveryCollectOffersTheRunsSpendNamingItsLaunch(t *testing.T) {
 	}
 }
 
+// A BAD COUNT IS NOTHING, EVERYWHERE THE RUN'S SPEND GOES.
+//
+// A negative token count or price off a coding agent's output is a bad
+// payload. Read as a number it cancelled the tokens beside it at the charge
+// (the charge takes the sum), lowered the task's spend, and refunded the
+// resumed phase's figure in the Tokens view — three surfaces disagreeing about
+// one run.
+func TestABadUsageCountIsReportedAsNothing(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done",
+		InputTokens: -9000, OutputTokens: 700, CostUSD: -1})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.accountant.total(); got != 700 {
+		t.Errorf("charged %d, want the 700 the run did report", got)
+	}
+	if offered := rig.spent.runs(); len(offered) != 1 ||
+		offered[0].result.InputTokens != 0 || offered[0].result.OutputTokens != 700 ||
+		offered[0].result.CostUSD != 0 {
+		t.Errorf("the task was offered %+v, want 0 in, 700 out and no price", offered)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want 1", len(calls))
+	}
+	want := RunUsage{LaunchID: calls[0].Run.LaunchID, OutputTokens: 700}
+	if calls[0].Usage != want {
+		t.Errorf("the resumed phase carries %+v, want %+v", calls[0].Usage, want)
+	}
+}
+
 // THE RECORD IS THE FLEET'S, NOT THE COORDINATOR'S. A failed resume's retry
 // goes wherever the seat is, which after a lease move or a restart is a
 // coordinator that never saw the first charge. Only the run's own row can tell
