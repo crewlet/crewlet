@@ -205,6 +205,16 @@ func (v *LeaseView) Leases() ([]Lease, time.Time, error) {
 	return slices.Clone(v.leases), v.listedAt, nil
 }
 
+// ListedAt is when the last listing that answered was taken, whatever its age,
+// and the zero time if none has — for a reader that REPORTS how stale the view
+// is, which [LeaseView.Leases] cannot tell it once the listing is past its
+// trust. Nothing may act on a listing because of this; that is Leases' job.
+func (v *LeaseView) ListedAt() time.Time {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.listedAt
+}
+
 // Invalidate asks for a listing now, because a caller asked a node this view
 // named and got no answer. It does not wait, and it does not drop the answer
 // the view has — see the file's doc.

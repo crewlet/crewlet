@@ -179,9 +179,13 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 	if _, _, err := view.Leases(); !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("a view that has never listed answered %v, want unknown", err)
 	}
+	if at := view.ListedAt(); !at.IsZero() {
+		t.Fatalf("a view that has never listed says it listed at %v", at)
+	}
 
 	runView(t, view)
 	awaitAnswer(t, view, "its first listing", holding(1))
+	listed := clock.Now()
 
 	// THE STORE STOPS ANSWERING. Inside the trust the last listing is
 	// still the answer; past it, the answer is unknown and says why.
@@ -204,6 +208,11 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 	awaitAnswer(t, view, "unknown, naming why", func(_ []coord.Lease, err error) bool {
 		return errors.Is(err, coord.ErrUnavailable) && strings.Contains(err.Error(), why)
 	})
+	// WHEN IT LAST LISTED IS STILL SAID, past the trust, for a reader that
+	// reports the view's age rather than acting on its answer.
+	if at := view.ListedAt(); !at.Equal(listed) {
+		t.Fatalf("a view past its trust says it last listed at %v, want %v", at, listed)
+	}
 
 	// AND IT RECOVERS WITH THE STORE.
 	store.set(nil, node("a"), node("b"))
