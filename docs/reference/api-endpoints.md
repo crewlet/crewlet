@@ -3206,6 +3206,9 @@ Every gesture is **confirmed**. The four that move a node's copies repeat the
 node; a hold and a release name no node and act on the whole map, so they repeat
 the map's `generation` from `GET /estate` — the confirmation that says this is
 the map of the fleet you meant, not another's reached through the wrong node.
+The generation is judged against the **stored map**, inside the gesture's
+compare-and-set: only a map has one, so where there is none the refusal is the
+fleet's own — `estate_whole` or `no_estate_map` — whatever `?confirm=` says.
 
 - **out** takes a member out of every partition's target: each copy it holds is
   rebuilt on another member while it keeps serving, then released under the two
@@ -3267,7 +3270,7 @@ Every refusal carries `detail` and `hint`:
 
 | Status | `error` | When |
 |---|---|---|
-| `400` | `confirm_required` | `?confirm=` does not repeat the node — or, for a hold or a release, is not a generation |
+| `400` | `confirm_required` | `?confirm=` does not repeat the node — or, for a hold or a release under a map, is not a generation at all |
 | `400` | `partition_invalid` | The path names no partition: a space and a three-digit index, like `tracker.007` |
 | `400` | `invalid_hold` | `?for=` is missing, is not a duration, or is not more than nothing and at most `24h` |
 | `403` | `operator_required` | The request carries no operator identity |

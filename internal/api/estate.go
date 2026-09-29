@@ -37,11 +37,16 @@ import (
 //   - POST /estate/move/{partition}/cancel?from={node}&confirm={node} lifts it.
 //
 // EVERY GESTURE IS CONFIRMED. The four that move a node's copies repeat the
-// node, the shape every gesture here that moves data takes; a hold and a
-// release name no node and act on the whole map, so they repeat the map's
-// GENERATION, which GET /estate names — what says the operator looked at this
-// fleet's map rather than another's reached through the wrong node. That one
-// is checked inside the engine's compare-and-set ([engine.ErrEstateOtherMap]).
+// node, the shape every gesture here that moves data takes, and the route
+// checks it before anything is asked. A hold and a release name no node and
+// act on the whole map, so they repeat the map's GENERATION, which GET /estate
+// names — what says the operator looked at this fleet's map rather than
+// another's reached through the wrong node. That one is NOT checked here but
+// passed through as typed and judged inside the engine's compare-and-set
+// ([engine.ErrEstateUnconfirmed], [engine.ErrEstateOtherMap]): a generation is
+// something only a map has, so where there is none — every fleet at layout 0
+// — the answer has to be the fleet's own, which no confirmation could ever
+// reach if the route asked for one first.
 //
 // Each is a read, a pure gesture and a compare-and-set in the engine
 // ([engine.EstateControl]), answered with whether the map now says what was
@@ -65,8 +70,8 @@ type EstateControl interface {
 
 	Out(ctx context.Context, node, by, reason string) (engine.EstateGesture, error)
 	In(ctx context.Context, node, by string) (engine.EstateGesture, error)
-	Hold(ctx context.Context, generation uuid.UUID, d time.Duration, by, reason string) (engine.EstateGesture, error)
-	Release(ctx context.Context, generation uuid.UUID, by string) (engine.EstateGesture, error)
+	Hold(ctx context.Context, confirm string, d time.Duration, by, reason string) (engine.EstateGesture, error)
+	Release(ctx context.Context, confirm, by string) (engine.EstateGesture, error)
 	Move(ctx context.Context, p statelog.PartitionID, node, by, reason string) (engine.EstateGesture, error)
 	CancelMove(ctx context.Context, p statelog.PartitionID, node, by string) (engine.EstateGesture, error)
 }
@@ -192,9 +197,10 @@ type EstateRefusalBody struct {
 // code: a fleet at layout 0 has nothing to move and never will, a partitioned
 // fleet with no map yet waits for one, a name the map does not hold is a typo,
 // a move with nowhere to rebuild the copy needs a data node first, a node the
-// map removed is put back rather than taken out, a gesture confirmed for
-// another map was sent to the wrong fleet, and a store that did not answer is
-// asked again.
+// map removed is put back rather than taken out, a hold or a release confirmed
+// by no generation at all is made again with the one the map names, one
+// confirmed for another map was sent to the wrong fleet, and a store that did
+// not answer is asked again.
 func RenderEstateRefusal(err error) (EstateRefusal, bool) {
 	refuse := func(status int, code, hint string) (EstateRefusal, bool) {
 		return EstateRefusal{Status: status, Body: EstateRefusalBody{
@@ -246,6 +252,9 @@ func RenderEstateRefusal(err error) (EstateRefusal, bool) {
 		return refuse(http.StatusBadRequest, "invalid_hold",
 			"hold for more than nothing and at most "+maxHold+"; a longer maintenance is "+
 				"a hold renewed on purpose")
+	case errors.Is(err, engine.ErrEstateUnconfirmed):
+		return refuse(http.StatusBadRequest, "confirm_required",
+			"repeat the generation GET /estate names in ?confirm=")
 	case errors.Is(err, engine.ErrEstateOtherMap):
 		return refuse(http.StatusConflict, "other_estate_map",
 			"read the estate map through the node you mean to change and confirm with the "+
@@ -374,20 +383,6 @@ func (a *App) estateMove(cancel bool) http.HandlerFunc {
 	}
 }
 
-// estateGeneration is the map generation a hold or a release was confirmed
-// for, or false with the refusal written.
-func estateGeneration(w http.ResponseWriter, r *http.Request, gesture string) (uuid.UUID, bool) {
-	generation, err := uuid.Parse(r.URL.Query().Get("confirm"))
-	if err != nil {
-		refuseEstate(w, http.StatusBadRequest, "confirm_required",
-			"the estate map's generation was not repeated: "+gesture+" acts on the whole "+
-				"map, and the generation is what says it is this fleet's map",
-			"repeat the generation GET /estate names in ?confirm=")
-		return uuid.Nil, false
-	}
-	return generation, true
-}
-
 // serveEstateHold answers POST /estate/hold.
 func (a *App) serveEstateHold(w http.ResponseWriter, r *http.Request) {
 	d, err := time.ParseDuration(r.URL.Query().Get("for"))
@@ -400,29 +395,23 @@ func (a *App) serveEstateHold(w http.ResponseWriter, r *http.Request) {
 			"name how long to hold the map, as a duration like 30m or 2h — at most "+maxHold)
 		return
 	}
-	generation, ok := estateGeneration(w, r, "a hold")
-	if !ok {
-		return
-	}
 	operator, ok := estateOperator(w, r)
 	if !ok {
 		return
 	}
-	g, err := a.estate.Hold(r.Context(), generation, d, operator, reasonOf(r))
+	// ?confirm= AS TYPED: the engine judges it against the stored map —
+	// see the file's doc.
+	g, err := a.estate.Hold(r.Context(), r.URL.Query().Get("confirm"), d, operator, reasonOf(r))
 	a.answerEstate(w, "hold", operator, "", "", g, err)
 }
 
 // serveEstateRelease answers POST /estate/release.
 func (a *App) serveEstateRelease(w http.ResponseWriter, r *http.Request) {
-	generation, ok := estateGeneration(w, r, "a release")
-	if !ok {
-		return
-	}
 	operator, ok := estateOperator(w, r)
 	if !ok {
 		return
 	}
-	g, err := a.estate.Release(r.Context(), generation, operator)
+	g, err := a.estate.Release(r.Context(), r.URL.Query().Get("confirm"), operator)
 	a.answerEstate(w, "release", operator, "", "", g, err)
 }
 

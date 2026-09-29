@@ -34,9 +34,11 @@ import (
 // [partmap.ErrNoMap] (no estate map), [partmap.ErrUnknownPartition],
 // [partmap.ErrNotAHolder] and [partmap.ErrNowhereToMove] for a move, and
 // internal/membership's refusals for the rest — ErrRemovedMember tested
-// before ErrUnknownMember, which it wraps. A hold or a release confirmed for
-// another map is [ErrEstateOtherMap]; a store that did not answer is
-// [ErrEstateUnavailable], and a map this build cannot rewrite
+// before ErrUnknownMember, which it wraps. A hold or a release confirmed by
+// no generation at all is [ErrEstateUnconfirmed], and one confirmed for
+// another map [ErrEstateOtherMap] — both judged against the stored map, so
+// where there is none the refusal is the no-map one below; a store that did
+// not answer is [ErrEstateUnavailable], and a map this build cannot rewrite
 // [ErrEstateNewerMap].
 //
 // # Where there is no map
@@ -123,29 +125,45 @@ func (c *EstateControl) In(ctx context.Context, node, by string) (EstateGesture,
 }
 
 // Hold holds the map for d, at most internal/membership's MaxHold: no member
-// is removed for absence until it expires or is released. generation is the
-// map the operator confirmed it for ([ErrEstateOtherMap]).
-func (c *EstateControl) Hold(ctx context.Context, generation uuid.UUID, d time.Duration,
+// is removed for absence until it expires or is released. confirm is what the
+// operator repeated to confirm it — the map's generation, as they typed it
+// ([ErrEstateUnconfirmed], [ErrEstateOtherMap]).
+func (c *EstateControl) Hold(ctx context.Context, confirm string, d time.Duration,
 	by, reason string) (EstateGesture, error) {
 
 	return c.apply(ctx, "hold", func(s partmap.MapState) (partmap.MapState, error) {
-		if err := sameEstateMap(s, generation); err != nil {
+		if err := sameEstateMap(s, confirm); err != nil {
 			return s, err
 		}
 		return partmap.HoldFor(s, d, by, reason, c.now())
 	}, "for", d.String(), "by", by, "reason", reason)
 }
 
-// Release ends a hold. generation is the map the operator confirmed it for
-// ([ErrEstateOtherMap]).
-func (c *EstateControl) Release(ctx context.Context, generation uuid.UUID, by string) (EstateGesture, error) {
+// Release ends a hold. confirm is what the operator repeated to confirm it, as
+// [EstateControl.Hold]'s is.
+func (c *EstateControl) Release(ctx context.Context, confirm, by string) (EstateGesture, error) {
 	return c.apply(ctx, "release", func(s partmap.MapState) (partmap.MapState, error) {
-		if err := sameEstateMap(s, generation); err != nil {
+		if err := sameEstateMap(s, confirm); err != nil {
 			return s, err
 		}
 		return partmap.Release(s)
 	}, "by", by)
 }
+
+// ErrEstateUnconfirmed is a hold or a release whose confirmation is no map
+// generation at all — nothing repeated, or something that does not parse as
+// one.
+//
+// JUDGED INSIDE THE COMPARE-AND-SET, like [ErrEstateOtherMap], and never by a
+// caller before it: a generation is something only a map has, so whether one
+// was repeated is a question with no meaning until there is a map to have
+// repeated it from. Asked first, it put a refusal no operator could satisfy in
+// front of the one that says why — at layout 0 there is no map and no
+// generation to copy, so a hold went round in a circle asking for one and the
+// fleet's own answer ([ErrEstateWhole]) was never reached.
+var ErrEstateUnconfirmed = errors.New("engine: the estate map's generation was not repeated: " +
+	"a hold or a release acts on the whole map, and its generation is what says it is " +
+	"this fleet's map")
 
 // ErrEstateOtherMap is a hold or a release confirmed for a map other than the
 // stored one: another fleet's — a gesture sent through the wrong node — or this
@@ -161,10 +179,17 @@ func (c *EstateControl) Release(ctx context.Context, generation uuid.UUID, by st
 var ErrEstateOtherMap = errors.New("engine: the estate map is not the one the gesture was " +
 	"confirmed for")
 
-// sameEstateMap refuses a gesture confirmed for a generation the stored map is
-// not.
-func sameEstateMap(s partmap.MapState, generation uuid.UUID) error {
-	if s.Map.Generation != generation {
+// sameEstateMap refuses a gesture whose confirmation is not the stored map's
+// generation: [ErrEstateUnconfirmed] where it is no generation at all, and
+// [ErrEstateOtherMap] where it is another map's.
+func sameEstateMap(s partmap.MapState, confirm string) error {
+	generation, err := uuid.Parse(confirm)
+	switch {
+	case confirm == "":
+		return fmt.Errorf("%w: the confirmation was empty", ErrEstateUnconfirmed)
+	case err != nil:
+		return fmt.Errorf("%w: %q is not a map generation", ErrEstateUnconfirmed, confirm)
+	case s.Map.Generation != generation:
 		return fmt.Errorf("%w: it was confirmed for generation %s, and the stored map is "+
 			"generation %s", ErrEstateOtherMap, generation, s.Map.Generation)
 	}

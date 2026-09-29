@@ -826,6 +826,14 @@
     }
   },
   "refusals": {
+    "confirm_required": {
+      "status": 400,
+      "body": {
+        "error": "confirm_required",
+        "detail": "engine: the estate map's generation was not repeated: a hold or a release acts on the whole map, and its generation is what says it is this fleet's map: \"data-a\" is not a map generation",
+        "hint": "repeat the generation GET /estate names in ?confirm="
+      }
+    },
     "estate_newer_map": {
       "status": 409,
       "body": {

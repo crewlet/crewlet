@@ -875,7 +875,11 @@ Each acts on the whole map rather than on one node, so each is confirmed by the
 map's **generation**, which `map` prints on its first line: the gesture lands
 only on that map, and one confirmed for another — a `-url` pointing at another
 fleet, or a map written again from nothing since it was read — is refused
-(`other_estate_map`) with nothing written.
+(`other_estate_map`) with nothing written. The node judges the generation, not
+this command: only a map has one, so at layout 0 — where `map` prints none — a
+`hold` or a `release` needs no `-confirm` to be told, in the node's own
+`estate_whole` words, that there is nothing to hold; under a map, one without
+`-confirm` is refused and names the flag.
 
 Every gesture is a compare-and-set on the stored map, so what each prints is
 whether the map **now says** what was asked, and one the node never answered is

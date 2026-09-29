@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -159,11 +160,29 @@ func newFakeEstateNode(t *testing.T) *fakeEstateNode {
 	mux.HandleFunc("POST /estate/in/{node}", gesture(func(r *http.Request, s partmap.MapState) (partmap.MapState, error) {
 		return partmap.In(s, r.PathValue("node"))
 	}, pathNode, none))
+	// A HOLD AND A RELEASE ARE JUDGED AGAINST THE MAP, as the engine judges
+	// them — so a layout-0 node answers estate_whole whatever they repeat.
+	confirmed := func(r *http.Request, s partmap.MapState) error {
+		generation, err := uuid.Parse(r.URL.Query().Get("confirm"))
+		switch {
+		case err != nil:
+			return engine.ErrEstateUnconfirmed
+		case generation != s.Map.Generation:
+			return engine.ErrEstateOtherMap
+		}
+		return nil
+	}
 	mux.HandleFunc("POST /estate/hold", gesture(func(r *http.Request, s partmap.MapState) (partmap.MapState, error) {
+		if err := confirmed(r, s); err != nil {
+			return s, err
+		}
 		d, _ := time.ParseDuration(r.URL.Query().Get("for"))
 		return partmap.HoldFor(s, d, "ops", r.URL.Query().Get("reason"), objectsAt)
 	}, none, none))
-	mux.HandleFunc("POST /estate/release", gesture(func(_ *http.Request, s partmap.MapState) (partmap.MapState, error) {
+	mux.HandleFunc("POST /estate/release", gesture(func(r *http.Request, s partmap.MapState) (partmap.MapState, error) {
+		if err := confirmed(r, s); err != nil {
+			return s, err
+		}
 		return partmap.Release(s)
 	}, none, none))
 	mux.HandleFunc("POST /estate/move/{partition}", gesture(func(r *http.Request, s partmap.MapState) (partmap.MapState, error) {
@@ -252,8 +271,9 @@ func TestEstateMapSaysTheStatesWithNothingToShow(t *testing.T) {
 	}
 }
 
-// EVERY GESTURE IS CONFIRMED BEFORE IT IS SENT: a node repeated for the four
-// that move one, the map's generation for a hold and a release.
+// EVERY GESTURE THAT MOVES A NODE'S COPIES IS CONFIRMED BEFORE IT IS SENT, by
+// repeating the node — and a hold names its length before it is sent. (A hold's
+// and a release's generation is the node's to judge: the next test.)
 func TestEveryEstateGestureIsConfirmedBeforeItIsSent(t *testing.T) {
 	node := newFakeEstateNode(t)
 	cfg := bootstrapForURL(t, node.server.URL)
@@ -261,9 +281,7 @@ func TestEveryEstateGestureIsConfirmedBeforeItIsSent(t *testing.T) {
 		{"estate", "out", "data-a", cfg},
 		{"estate", "out", "data-a", cfg, "-confirm", "data-b"},
 		{"estate", "in", "data-a", cfg},
-		{"estate", "hold", cfg, "-for", "1h"},
 		{"estate", "hold", cfg, "-confirm", estateGen.String()},
-		{"estate", "release", cfg},
 		{"estate", "move", "tracker.001", cfg, "-from", "data-b"},
 		{"estate", "move", "tracker.001", cfg, "-from", "data-b", "-confirm", "data-a"},
 	} {
@@ -273,6 +291,48 @@ func TestEveryEstateGestureIsConfirmedBeforeItIsSent(t *testing.T) {
 	}
 	if asked := node.requests(); len(asked) != 0 {
 		t.Errorf("an unconfirmed gesture reached the node: %d requests", len(asked))
+	}
+}
+
+// A HOLD OR A RELEASE WITH NO GENERATION IS THE NODE'S TO JUDGE, since only a
+// map has one: where there is a map the command says, in its own words, to
+// repeat the generation `map` prints — and the map is unchanged — and at layout
+// 0, where `map` prints none, the node's own refusal says there is nothing to
+// hold.
+func TestAHoldOrAReleaseWithNoGenerationIsTheNodesToJudge(t *testing.T) {
+	node := newFakeEstateNode(t)
+	cfg := bootstrapForURL(t, node.server.URL)
+	for _, args := range [][]string{
+		{"estate", "hold", cfg, "-for", "1h"},
+		{"estate", "release", cfg},
+		{"estate", "release", cfg, "-confirm", "yes"},
+	} {
+		_, _, err := cli(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "-confirm") ||
+			!strings.Contains(err.Error(), "crewlet estate map") {
+			t.Errorf("%v under a map = %v, want this command's own words naming -confirm", args, err)
+		}
+	}
+	if len(node.requests()) != 3 {
+		t.Errorf("the node judged %d of the three, want all of them", len(node.requests()))
+	}
+	node.mu.Lock()
+	unchanged := reflect.DeepEqual(node.state, estateFixture())
+	node.whole = true
+	node.mu.Unlock()
+	if !unchanged {
+		t.Error("an unconfirmed gesture changed the map")
+	}
+
+	for _, args := range [][]string{
+		{"estate", "hold", cfg, "-for", "1h"},
+		{"estate", "release", cfg},
+	} {
+		_, _, err := cli(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "estate_whole") ||
+			!strings.Contains(err.Error(), partmap.WholeEstate) {
+			t.Errorf("%v at layout 0 = %v, want the node's estate_whole refusal", args, err)
+		}
 	}
 }
 

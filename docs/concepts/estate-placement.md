@@ -173,6 +173,9 @@ there is no map, so only `estate_view_stale` can fire.
 A hold and a release act on the whole map rather than on one node, so they
 repeat the map's **generation** — which `crewlet estate map` prints — and land
 only on that map: one confirmed for another fleet's, or for this one's before
-it was written again from nothing, is refused with nothing written. No gesture
+it was written again from nothing, is refused with nothing written. The
+generation is judged against the stored map, never before it: where there is
+no map there is no generation to repeat, and the refusal is the one that says
+why. No gesture
 moves the epoch; the maintainer's next tick moves the holders toward the new
 targets.

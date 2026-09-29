@@ -498,6 +498,26 @@ func estateMemberGesture(args []string, stdout, stderr io.Writer, out bool) erro
 	return nil
 }
 
+// unconfirmedByGeneration is err, unless it is the node's refusal of a hold or
+// a release confirmed by no map generation — which it says in this command's
+// own words, naming the flag.
+//
+// THE NODE JUDGES THE CONFIRMATION, and this command never does first: a
+// generation is something only a map has, so whether one was repeated means
+// nothing until the node has said there is a map. Checked here before sending,
+// an operator at layout 0 — where `crewlet estate map` prints no generation,
+// since there is no map — was sent to copy one that does not exist, and never
+// heard the node say there is nothing to hold.
+func unconfirmedByGeneration(err error, verb string) error {
+	var refusal *nodeRefusal
+	if !errors.As(err, &refusal) || refusal.Code != "confirm_required" {
+		return err
+	}
+	return fmt.Errorf("repeat the estate map's generation, which the first line of "+
+		"`crewlet estate map` prints, in -confirm to run %s: it acts on the whole map, and "+
+		"the generation is what says it is the map of the fleet you meant", verb)
+}
+
 // estateHold is `crewlet estate hold`.
 func estateHold(args []string, stdout, stderr io.Writer) error {
 	var length *time.Duration
@@ -506,27 +526,30 @@ func estateHold(args []string, stdout, stderr io.Writer) error {
 		length = fs.Duration("for", 0, "how long to hold the map, at most "+
 			shortDuration(membership.MaxHold)+"; required")
 		confirm = fs.String("confirm", "", "repeat the estate map's generation, which "+
-			"`crewlet estate map` prints — a hold acts on the whole map")
+			"`crewlet estate map` prints — a hold acts on the whole map; the node asks for "+
+			"it only where there is a map")
 		reason = fs.String("reason", "", "why, recorded on the map beside who held it")
 	})
 	if err != nil {
 		return err
 	}
-	if *length <= 0 || *confirm == "" {
+	if *length <= 0 {
 		fmt.Fprintln(stderr, "usage: crewlet estate hold -for DURATION -confirm GENERATION "+
 			"[-reason TEXT]")
 		return fmt.Errorf("name how long to hold the map in -for, like 30m or 2h (at most "+
-			"%s), and repeat the map's generation from `crewlet estate map` in -confirm: "+
-			"while it holds, a member that is gone keeps every partition it holds a copy "+
-			"short", shortDuration(membership.MaxHold))
+			"%s): while it holds, a member that is gone keeps every partition it holds a "+
+			"copy short", shortDuration(membership.MaxHold))
 	}
-	query := url.Values{"for": {length.String()}, "confirm": {*confirm}}
+	query := url.Values{"for": {length.String()}}
+	if *confirm != "" {
+		query.Set("confirm", *confirm)
+	}
 	if r := strings.TrimSpace(*reason); r != "" {
 		query.Set("reason", r)
 	}
 	answer, err := estateGesture(client, "/estate/hold?"+query.Encode(), true, stderr)
 	if err != nil {
-		return err
+		return unconfirmedByGeneration(err, "hold")
 	}
 	if answer.Hold == nil {
 		return errors.New("the node answered the hold as landed and names no hold in " +
@@ -543,20 +566,18 @@ func estateRelease(args []string, stdout, stderr io.Writer) error {
 	var confirm *string
 	client, err := nodeClientFor(args, "estate release", stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "", "repeat the estate map's generation, which "+
-			"`crewlet estate map` prints — a release acts on the whole map")
+			"`crewlet estate map` prints — a release acts on the whole map; the node asks "+
+			"for it only where there is a map")
 	})
 	if err != nil {
 		return err
 	}
-	if *confirm == "" {
-		fmt.Fprintln(stderr, "usage: crewlet estate release -confirm GENERATION")
-		return errors.New("repeat the estate map's generation from `crewlet estate map` in " +
-			"-confirm: released, a member gone past the grace is removed and its partitions " +
-			"rebuilt elsewhere")
+	path := "/estate/release"
+	if *confirm != "" {
+		path += "?" + url.Values{"confirm": {*confirm}}.Encode()
 	}
-	query := url.Values{"confirm": {*confirm}}
-	if _, err := estateGesture(client, "/estate/release?"+query.Encode(), false, stderr); err != nil {
-		return err
+	if _, err := estateGesture(client, path, false, stderr); err != nil {
+		return unconfirmedByGeneration(err, "release")
 	}
 	fmt.Fprintf(stdout, "The hold is released: a member gone for %d ticks or more is "+
 		"removed at the map maintainer's next tick.\n", membership.OutTicks)

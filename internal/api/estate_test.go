@@ -205,7 +205,10 @@ func (f *fakeEstate) EstateMap(context.Context) (coord.EstateMapRecord, bool, er
 	return coord.EstateMapRecord{Value: raw, Version: 3}, true, errors.Join(err, f.err)
 }
 
-func (f *fakeEstate) apply(asked string, generation *uuid.UUID,
+// apply is one gesture, judged in the engine's order: the map's existence
+// first, and only then a confirmation that names the map — confirm is nil for
+// a gesture confirmed by its node, which the route checked.
+func (f *fakeEstate) apply(asked string, confirm *string,
 	change func(partmap.MapState) (partmap.MapState, error)) (engine.EstateGesture, error) {
 
 	f.mu.Lock()
@@ -219,8 +222,15 @@ func (f *fakeEstate) apply(asked string, generation *uuid.UUID,
 	case !f.found:
 		return engine.EstateGesture{}, fmt.Errorf("%w: %s", partmap.ErrNoMap,
 			partmap.Unplaced(f.running.Number))
-	case generation != nil && *generation != f.state.Map.Generation:
-		return engine.EstateGesture{State: f.state}, engine.ErrEstateOtherMap
+	}
+	if confirm != nil {
+		generation, err := uuid.Parse(*confirm)
+		switch {
+		case err != nil:
+			return engine.EstateGesture{State: f.state}, engine.ErrEstateUnconfirmed
+		case generation != f.state.Map.Generation:
+			return engine.EstateGesture{State: f.state}, engine.ErrEstateOtherMap
+		}
 	}
 	next, err := change(f.state)
 	if err != nil {
@@ -245,16 +255,16 @@ func (f *fakeEstate) In(_ context.Context, node, by string) (engine.EstateGestur
 		func(s partmap.MapState) (partmap.MapState, error) { return partmap.In(s, node) })
 }
 
-func (f *fakeEstate) Hold(_ context.Context, generation uuid.UUID, d time.Duration,
+func (f *fakeEstate) Hold(_ context.Context, confirm string, d time.Duration,
 	by, reason string) (engine.EstateGesture, error) {
-	return f.apply(strings.Join([]string{"hold", d.String(), by, reason}, " "), &generation,
+	return f.apply(strings.Join([]string{"hold", d.String(), by, reason}, " "), &confirm,
 		func(s partmap.MapState) (partmap.MapState, error) {
 			return partmap.HoldFor(s, d, by, reason, clock)
 		})
 }
 
-func (f *fakeEstate) Release(_ context.Context, generation uuid.UUID, by string) (engine.EstateGesture, error) {
-	return f.apply("release "+by, &generation, partmap.Release)
+func (f *fakeEstate) Release(_ context.Context, confirm, by string) (engine.EstateGesture, error) {
+	return f.apply("release "+by, &confirm, partmap.Release)
 }
 
 func (f *fakeEstate) Move(_ context.Context, p statelog.PartitionID, node, by, reason string) (engine.EstateGesture, error) {
@@ -327,22 +337,26 @@ func TestTheEstateSurfacesAreAbsentWithoutAStore(t *testing.T) {
 	}
 }
 
-// EVERY GESTURE IS CONFIRMED, and nothing is asked of the map until it is: the
-// four that move a node's copies repeat the node, and the two that act on the
-// whole map repeat its generation.
+// EVERY GESTURE IS CONFIRMED, and none changes the map until it is: the four
+// that move a node's copies repeat the node, checked before the map is asked
+// at all, and the two that act on the whole map repeat its generation, judged
+// against the map itself.
 func TestEveryEstateGestureNeedsItsConfirmation(t *testing.T) {
 	t.Parallel()
 	f := newFakeEstate()
 	a := estateApp(t, f)
-	for _, path := range []string{
+	byNode := []string{
 		"/estate/out/data-a", "/estate/out/data-a?confirm=data-b",
 		"/estate/in/data-d?confirm=",
-		"/estate/hold?for=1h", "/estate/hold?for=1h&confirm=data-a",
-		"/estate/release", "/estate/release?confirm=release",
 		"/estate/move/tracker.002?from=data-c", "/estate/move/tracker.002?confirm=data-c",
 		"/estate/move/tracker.002?from=data-c&confirm=data-a",
 		"/estate/move/tracker.002/cancel?from=data-c",
-	} {
+	}
+	byMap := []string{
+		"/estate/hold?for=1h", "/estate/hold?for=1h&confirm=data-a",
+		"/estate/release", "/estate/release?confirm=release",
+	}
+	for _, path := range append(byNode, byMap...) {
 		status, body := postObjects(t, a, path)
 		if status != http.StatusBadRequest || body["error"] != "confirm_required" ||
 			body["detail"] == "" || body["hint"] == "" {
@@ -350,8 +364,13 @@ func TestEveryEstateGestureNeedsItsConfirmation(t *testing.T) {
 				path, status, body)
 		}
 	}
-	if asked := f.gestures(); len(asked) != 0 {
-		t.Errorf("an unconfirmed gesture still reached the map: %v", asked)
+	for _, asked := range f.gestures() {
+		if !strings.HasPrefix(asked, "hold ") && !strings.HasPrefix(asked, "release ") {
+			t.Errorf("a gesture unconfirmed by its node still reached the map: %q", asked)
+		}
+	}
+	if !reflect.DeepEqual(f.state, estateFleet()) {
+		t.Error("an unconfirmed gesture changed the map")
 	}
 }
 
@@ -437,16 +456,23 @@ func TestAnEstateGestureAnswersWhatTheMapNowSays(t *testing.T) {
 // UNDER LAYOUT 0 EVERY GESTURE IS REFUSED IN THE LAYOUT'S OWN WORDS, and not as
 // a map to wait for: `estate_whole`, 409, the sentence every surface gives it.
 // At a partitioned layout with no map yet the same gesture is a wait.
+//
+// A HOLD AND A RELEASE REACH IT WITH WHATEVER THEY WERE CONFIRMED BY — nothing,
+// or a word that is no generation — because a fleet with no map has no
+// generation to repeat: asked for one first, an operator at layout 0 could
+// never be told why there is nothing to hold.
 func TestUnderLayoutZeroEveryEstateGestureIsRefusedWhole(t *testing.T) {
 	t.Parallel()
 	f := newFakeEstate()
 	f.found = false
 	a := estateApp(t, f)
-	for _, path := range []string{"/estate/out/data-a?confirm=data-a",
+	unconfirmed := []string{"/estate/hold?for=1h", "/estate/hold?for=1h&confirm=whole",
+		"/estate/release", "/estate/release?confirm=whole"}
+	for _, path := range append([]string{"/estate/out/data-a?confirm=data-a",
 		"/estate/in/data-a?confirm=data-a", "/estate/hold?for=1h&" + generation,
 		"/estate/release?" + generation,
 		"/estate/move/tracker.002?from=data-a&confirm=data-a",
-		"/estate/move/tracker.002/cancel?from=data-a&confirm=data-a"} {
+		"/estate/move/tracker.002/cancel?from=data-a&confirm=data-a"}, unconfirmed...) {
 		status, body := postObjects(t, a, path)
 		if status != http.StatusConflict || body["error"] != "estate_whole" ||
 			!strings.Contains(body["detail"].(string), partmap.WholeEstate) {
@@ -454,9 +480,12 @@ func TestUnderLayoutZeroEveryEstateGestureIsRefusedWhole(t *testing.T) {
 		}
 	}
 	f.running = engine.DefaultLayoutOne()
-	status, body := postObjects(t, a, "/estate/out/data-a?confirm=data-a")
-	if status != http.StatusServiceUnavailable || body["error"] != "no_estate_map" {
-		t.Errorf("a partitioned fleet with no map answered %d %v, want 503 no_estate_map", status, body)
+	for _, path := range append([]string{"/estate/out/data-a?confirm=data-a"}, unconfirmed...) {
+		status, body := postObjects(t, a, path)
+		if status != http.StatusServiceUnavailable || body["error"] != "no_estate_map" {
+			t.Errorf("%s on a partitioned fleet with no map answered %d %v, want 503 "+
+				"no_estate_map", path, status, body)
+		}
 	}
 }
 
@@ -608,6 +637,7 @@ func renderEstateScenarios(t *testing.T) []byte {
 		}),
 		"estate_whole":       engine.ErrEstateWhole,
 		"no_estate_map":      fmt.Errorf("%w: %s", partmap.ErrNoMap, partmap.Unplaced(1)),
+		"confirm_required":   fmt.Errorf("%w: %q is not a map generation", engine.ErrEstateUnconfirmed, "data-a"),
 		"other_estate_map":   fmt.Errorf("%w: it was confirmed for generation %s", engine.ErrEstateOtherMap, uuid.Nil),
 		"estate_unavailable": fmt.Errorf("%w: nats: timeout", engine.ErrEstateUnavailable),
 		"estate_newer_map":   fmt.Errorf("%w: unknown field", engine.ErrEstateNewerMap),
