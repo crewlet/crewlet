@@ -85,6 +85,10 @@ var namedRoutes = []struct {
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.
 	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
+	// EVERY MODEL'S KEY BAG AND WHICH KEYS ARE COOLING. Not under
+	// /config/llm-providers either — the configuration names the keys, and
+	// this is what the pools and the fleet's ledger did with them.
+	{method: "GET", pattern: "/credential-pool", what: "credential_pool"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
 	// above, so /work/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather

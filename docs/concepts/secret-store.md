@@ -138,6 +138,16 @@ The API's own bearer tokens are NOT in this store: they are Tier A
 — beside the person each one acts as, read from
 [`GET /access`](../reference/api-endpoints.md#get-access).
 
+A model's keys are `${VAR}` pointers into this store too. Settings › **Models &
+keys** (`#/settings/models`) lists each model's keys by the variable they name
+and says, per key, whether it resolves on the node that answered (*Not set*
+when neither this store nor the environment holds it), whether a vendor is
+refusing it and until when, read from
+[`GET /credential-pool`](../reference/api-endpoints.md#get-credential-pool) —
+never a value. A model that names no `api_keys` reads its vendor's conventional
+variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) from this store first; one
+whose named keys resolve to nothing runs on no key rather than borrowing it.
+
 ### From a provisioner
 
 Every provisioning CLI takes `-secret-store` in place of `-env-file`:

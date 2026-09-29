@@ -510,6 +510,15 @@ export const WORKSPACES: WorkspaceRow[] = [
         // list they were looking at was closed to them.
       },
       {
+        key: "models",
+        label: "Models & keys",
+        icon: "cpu",
+        path: ["settings", "models"],
+        hint: "The models seats run on, the keys each rotates through, and which a vendor is refusing now",
+        group: "Connect",
+        guarded: true,
+      },
+      {
         key: "secrets",
         label: "Secrets",
         icon: "key",
@@ -618,6 +627,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "integrations",
   "tools",
   "servers",
+  "models",
   "secrets",
   "nodes",
   "config",

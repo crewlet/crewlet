@@ -1272,6 +1272,25 @@ a.prof-row:hover {
   align-items: center;
   gap: var(--spacing-1);
 }
+/* A MODEL KEY THAT IS A LINK reads as one: the chip in the link ink, and
+   underlined under the pointer — drawn as the plain chip it wraps, nothing
+   said it could be pressed. The size stays the chip's (not `.t-link`'s
+   caption step), because it sits in a fact beside other chips. */
+.prof-chain-model {
+  text-decoration: none;
+}
+.prof-chain-model code.inline {
+  color: var(--color-brand-accent-ink);
+}
+.prof-chain-model:hover code.inline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prof-chain-model:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
 .prof-chain-link {
   display: inline-flex;
   align-items: center;
@@ -9643,4 +9662,93 @@ a.live-row:focus-visible {
 }
 .mcp-failure-whole {
   color: var(--color-text-secondary);
+}
+
+/* ---- Settings › Models & keys ------------------------------------------ */
+
+/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the vendor id under it:
+   the key is what a seat's `llm:` names, the id is what the vendor bills. The
+   id line cuts at its end rather than wrapping a long gateway model name
+   across the row. */
+.model-name {
+  min-width: 0;
+  gap: 2px;
+}
+
+/* A key's mark: its variable in the mono face, and a cooling key's time left
+   beside it in the tag's own ink — one number, read at a glance down a list. */
+.model-key {
+  font-size: var(--font-size-xs);
+}
+.model-key-left {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One key per row in the edit form: the field (or, for a key written inline,
+   the locked sentence standing where the field would be) and its remove
+   button, which sits on the field's baseline. A slot is the row and, under
+   the last locked row, the one sentence about it — kept WITH the row, since
+   under Add key it read as a rule about the new key. */
+.model-key-slot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.model-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--spacing-2);
+  align-items: end;
+}
+/* THE INPUT'S OWN SIZE (the kit's `compact` step), not the body's: it stands
+   where a field would, and at the body step it read as a different component
+   among the inputs. */
+.model-key-locked {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: 2.25rem;
+  padding: var(--spacing-1) var(--spacing-1) var(--spacing-1) var(--spacing-3);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-normal);
+}
+.model-key-locked-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.model-key-locked > button {
+  flex: none;
+}
+
+/* A FACT IN PARTS, each kept whole — a model's two bench times, or its ready
+   keys and its duplicates. On a row they stay on one line; in a header fact
+   they stack, one per line with no separator, since a wrapped "·" dangled at
+   the end of the first line and a count split from its noun. */
+.model-parts {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  column-gap: 0.35em;
+}
+.model-parts.is-stacked {
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+/* AND A STACKED PART THAT STILL DOES NOT FIT ENDS IN AN ELLIPSIS, its whole
+   words on its title: a grid cell clips, and a clipped "auth 24h" read as
+   "auth 2" — a different value, with nothing to say it was cut. */
+.model-parts.is-stacked > .model-part {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-parts-sep {
+  color: var(--color-text-tertiary);
+}
+.model-part {
+  white-space: nowrap;
 }

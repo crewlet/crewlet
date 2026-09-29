@@ -122,11 +122,10 @@ func apiError(kind string) string {
 func newProvider(t *testing.T, baseURL string, mutate func(*Config)) *Provider {
 	t.Helper()
 	cfg := Config{
-		Model:     "claude-test",
-		APIKeys:   []string{"k1"},
-		BaseURL:   baseURL,
-		Timeout:   5 * time.Second,
-		LookupEnv: func(string) string { return "" },
+		Model:   "claude-test",
+		APIKeys: []string{"k1"},
+		BaseURL: baseURL,
+		Timeout: 5 * time.Second,
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -173,20 +172,24 @@ func TestNewRequiresAModel(t *testing.T) {
 	}
 }
 
-func TestKeysFallBackToTheConventionalVariable(t *testing.T) {
+// AN EMPTY BAG READS NO VARIABLE. Which key an entry that names none runs on
+// is a configuration rule (config.LLMProvider.Keys), decided where the secret
+// store is in reach; a provider that read the process environment itself
+// would also run an entry whose every reference resolved to nothing on the
+// conventional key — another account's credential, with nothing saying so.
+func TestAnEmptyBagSendsNoAmbientKey(t *testing.T) {
 	api, url := serve(t, func(w http.ResponseWriter, _ int) {
 		writeJSON(w, 200, okMessage("hi"))
 	})
-	t.Setenv(KeyEnv, "from-the-environment")
+	t.Setenv("ANTHROPIC_API_KEY", "from-the-environment")
 	p := newProvider(t, url, func(c *Config) {
 		c.APIKeys = nil
-		c.LookupEnv = nil // exercise the real os.Getenv path
 	})
 	if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if got := api.seen()[0].apiKey; got != "from-the-environment" {
-		t.Fatalf("wire key = %q, want the environment fallback", got)
+	if got := api.seen()[0].apiKey; got == "from-the-environment" {
+		t.Fatalf("wire key = %q: the ambient variable reached the wire", got)
 	}
 }
 
@@ -214,11 +217,10 @@ func TestAmbientEnvironmentDoesNotShadowTheConfiguredKey(t *testing.T) {
 			})
 			// An empty value reads as unset to the SDK's autoload, which
 			// tests `ok && v != ""`.
-			t.Setenv(KeyEnv, tc.key)
+			t.Setenv("ANTHROPIC_API_KEY", tc.key)
 			t.Setenv("ANTHROPIC_AUTH_TOKEN", tc.token)
 			p := newProvider(t, url, func(c *Config) {
 				c.APIKeys = []string{"configured"}
-				c.LookupEnv = nil
 			})
 			if _, err := p.Complete(context.Background(), userTurn("hello")); err != nil {
 				t.Fatalf("Complete: %v", err)

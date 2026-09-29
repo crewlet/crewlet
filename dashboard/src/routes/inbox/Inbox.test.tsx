@@ -136,7 +136,20 @@ const QUIET: Record<string, Answer> = {
 let asked: { kind: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
 
+/**
+ * Midday on the company's clock (the fixture org keeps UTC).
+ *
+ * THE DAY GROUPS CUT AT THE COMPANY'S MIDNIGHT, and every fixture notice is
+ * stamped a minute (an ask twelve) before `Date.now()`: on the real clock a run
+ * that reached the "Today" case in the first minute after midnight filed its
+ * notice under Yesterday and failed. Only `Date` is faked — the suite's own
+ * waits keep real timers.
+ */
+const PINNED_NOW = "2026-09-30T12:00:00Z";
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(PINNED_NOW));
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/inbox";
   asked = [];
@@ -162,6 +175,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   localStorage.clear();
   reloadForTest();

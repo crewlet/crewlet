@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 )
 
@@ -71,7 +72,7 @@ type cooldowns struct {
 // The scope is the CONFIG ENTRY'S KEY, which is what makes the ledger's
 // namespacing correct: every node in the fleet builds its pools from the same
 // company document, so "zulu" names the same (model, endpoint, key bag) triple
-// everywhere. See credential.fleetKey for why a bare key hint would be wrong.
+// everywhere. See credential.FleetKey for why a bare key hint would be wrong.
 //
 // Every node shares, a single node included: its fleet store rides its own
 // embedded broker, and [New] refuses backends without one. A ledger that
@@ -208,4 +209,136 @@ func (e *Engine) stopCooldownRefresh() {
 		close(e.cooldowns.stop)
 	})
 	<-e.cooldowns.done
+}
+
+// credentialSource is one configured key's provenance: what the document
+// names and a hint of what it resolved to on this node. Never the value.
+type credentialSource struct {
+	ref       string
+	inline    bool
+	isDefault bool
+	// hint is [credential.Hint] of the resolved value, "" when it resolved
+	// to nothing — the join to the pool's own [credential.Stat] and to the
+	// fleet's ledger, which both key on it.
+	hint string
+	// duplicate is a key that resolved to the same value as an earlier
+	// one: the pool holds it once, so it has no bench of its own.
+	duplicate bool
+}
+
+// credentialSources resolves every pooled provider's keys once, at epoch
+// build, into provenance and hints. A cli-agent entry holds a login rather
+// than a key bag and is not here.
+func credentialSources(c *config.Company, r *config.Resolver) map[string][]credentialSource {
+	out := make(map[string][]credentialSource, len(c.Providers.LLM))
+	for key, spec := range c.Providers.LLM {
+		if spec.Type == config.LLMCLIAgent {
+			continue
+		}
+		seen := map[string]bool{}
+		keys := spec.Keys(r)
+		sources := make([]credentialSource, 0, len(keys))
+		for _, k := range keys {
+			s := credentialSource{ref: k.Ref, inline: k.Inline, isDefault: k.Default}
+			if k.Value != "" {
+				s.hint = credential.Hint(k.Value)
+				s.duplicate = seen[s.hint]
+				seen[s.hint] = true
+			}
+			sources = append(sources, s)
+		}
+		out[key] = sources
+	}
+	return out
+}
+
+// CredentialPool is one provider entry's key bag as this node holds it: each
+// configured key's provenance beside its pool's own state. It carries a hint
+// per key and never a value.
+type CredentialPool struct {
+	// Provider is the entry's config key — also its SCOPE in the fleet's
+	// cooldown ledger (see shareCooldowns).
+	Provider string
+	Type     config.LLMProviderType
+	Model    string
+	// Pooled is false for an entry with no key bag: a cli-agent provider
+	// holds one login in a directory, so nothing rotates and nothing cools.
+	Pooled bool
+	// RateLimit and Auth are the bench times in force, defaults applied.
+	RateLimit time.Duration
+	Auth      time.Duration
+	// Keys in declaration order.
+	Keys []CredentialKey
+}
+
+// CredentialKey is one configured key.
+type CredentialKey struct {
+	// Ref is the variable a whole ${VAR} names, or the conventional one
+	// for a Default key; "" for an Inline value.
+	Ref     string
+	Inline  bool
+	Default bool
+	// Hint is [credential.Hint] of what it resolved to, "" when it
+	// resolved to nothing.
+	Hint string
+	// Duplicate is the same value as an earlier key: the pool holds it
+	// once, and its state is that key's.
+	Duplicate bool
+	// Uses, InFlight and Cooling are THIS NODE's pool's own state for the
+	// key — zero for one that resolved to nothing or duplicates another.
+	// Cooling already includes what the refresher pulled from peers.
+	Uses     int
+	InFlight int
+	Cooling  time.Duration
+}
+
+// CredentialPools reports every provider entry in the current epoch, in
+// config order, with each key's provenance and this node's pool state.
+//
+// THE PROVENANCE AND THE POOL ARE JOINED ON THE HINT, which is the only thing
+// both hold: the pool never learns which variable a key came from, and the
+// document never holds a value. Nil for a node with no epoch, or a company
+// with no providers.
+func (e *Engine) CredentialPools() []CredentialPool {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	order := c.Config.Providers.ProviderOrder()
+	out := make([]CredentialPool, 0, len(order))
+	for _, key := range order {
+		spec := c.Config.Providers.LLM[key]
+		row := CredentialPool{
+			Provider:  key,
+			Type:      spec.Type,
+			Model:     spec.Model,
+			RateLimit: time.Duration(spec.Cooldowns.RateLimit()) * time.Second,
+			Auth:      time.Duration(spec.Cooldowns.Auth()) * time.Second,
+			Keys:      []CredentialKey{},
+		}
+		if row.Type == "" {
+			row.Type = config.LLMOpenAI
+		}
+		stats := map[string]credential.Stat{}
+		if provider, ok := c.Models.Provider(key); ok {
+			if pooled, ok := provider.(interface{ Pool() *credential.Pool }); ok {
+				row.Pooled = true
+				for _, stat := range pooled.Pool().Stats() {
+					stats[stat.Hint] = stat
+				}
+			}
+		}
+		for _, s := range c.credentials[key] {
+			k := CredentialKey{
+				Ref: s.ref, Inline: s.inline, Default: s.isDefault,
+				Hint: s.hint, Duplicate: s.duplicate,
+			}
+			if stat, ok := stats[s.hint]; ok && s.hint != "" && !s.duplicate {
+				k.Uses, k.InFlight, k.Cooling = stat.UseCount, stat.InFlight, stat.Cooling
+			}
+			row.Keys = append(row.Keys, k)
+		}
+		out = append(out, row)
+	}
+	return out
 }

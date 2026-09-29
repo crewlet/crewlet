@@ -1732,7 +1732,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// under the answer and the other half is this node's own
 			// loops.
 			Retention: nativeRetention(ctx, e),
-			NodeID:    nodeID,
+			// EVERY MODEL'S KEY BAG: the provenance this node's epoch
+			// resolved and its pools' state, read per call because an
+			// apply replaces every pool — beside the fleet's cooldown
+			// ledger, so a key a peer benched reads cooling here before
+			// this node's refresher has pulled it.
+			CredentialPools: e.CredentialPools,
+			Cooldowns:       e.Backends().Fleet,
+			NodeID:          nodeID,
 		},
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an

@@ -110,6 +110,7 @@ export type Screen =
   | { screen: "people" }
   | { screen: "integrations"; kind?: string }
   | { screen: "tools"; server?: string; tool?: string }
+  | { screen: "models"; id?: string }
   | { screen: "secrets"; name?: string }
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
@@ -365,6 +366,11 @@ function settings(rest: string[], screen: Make, under: Under): Route {
       }
       return none();
     }
+    case "models":
+      // ONE SEGMENT UNDER IT, a provider entry's config key — what a seat's
+      // `llm:` names.
+      if (tail.length > 1) return none();
+      return screen(tail[0] ? { screen: "models", id: tail[0] } : { screen: "models" });
     case "secrets":
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "secrets", name: tail[0] } : { screen: "secrets" });

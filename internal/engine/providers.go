@@ -85,6 +85,13 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	// resolved secrets — so a backend handed spec.APIKeys directly would
 	// send the literal "${ANTHROPIC_API_KEY}" as its credential and get a
 	// 401 that names the vendor rather than the misconfiguration.
+	//
+	// The conventional variable too — ANTHROPIC_API_KEY or OPENAI_API_KEY,
+	// read when the entry names no api_keys — through the same resolver, so
+	// a key `crewlet secrets set` put in the store is found where os.Getenv
+	// could not see it. config.LLMProvider.Keys is that rule, and the one
+	// place it is written: an entry whose references all resolve to nothing
+	// runs on no key rather than on the conventional one.
 	keys := spec.ResolvedKeys(r)
 	// The SAME resolution the keys get, for the other two scalars a Tier B
 	// document is allowed to write a reference into. Tier B stores "${VAR}"
@@ -145,13 +152,6 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 			Model: model, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ThinkingBudget: spec.ReasoningBudgetTokens,
-			// The conventional-key fallback — ANTHROPIC_API_KEY, taken when
-			// the entry names no api_keys — reads a VARIABLE rather than
-			// expanding a reference, so it needs the resolver itself.
-			// os.Getenv cannot see what `crewlet secrets set` put in the
-			// store, and the fallback would answer "unset" for a credential
-			// the operator deliberately stored.
-			LookupEnv: r.Lookup,
 		})
 	case config.LLMOpenAI, config.LLMOpenAICompatible:
 		// Name labels errors, logs and the chain's telemetry. An
@@ -166,7 +166,6 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 			Model: model, Name: name, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
-			LookupEnv: r.Lookup,
 		})
 	case config.LLMCLIAgent:
 		return buildCLIAgent(key, spec, r, keys)

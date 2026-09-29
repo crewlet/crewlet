@@ -312,7 +312,13 @@ providers:
                                         # store, then the environment); with neither, the
                                         # provider still builds and sends no key, and a vendor
                                         # that needs one refuses its calls as unauthorized
-                                        # (401), each failure naming the provider
+                                        # (401), each failure naming the provider.
+                                        # A NAMED key that resolves to nothing stays
+                                        # nothing: the entry never borrows the
+                                        # conventional variable in its place.
+                                        # Settings › Models & keys shows each key by
+                                        # the variable it names, whether it resolves,
+                                        # and when a benched one comes back
       cooldowns:                        # optional — TTL when a key is marked exhausted
         rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
         auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;

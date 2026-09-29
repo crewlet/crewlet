@@ -46,6 +46,15 @@ type Company struct {
 	// is refused rather than crashed.
 	Models *phase.Registry
 
+	// credentials is where each pooled provider's keys came from, as this
+	// epoch resolved them — the variable each names and a hint of what it
+	// resolved to, never a value — for [Engine.CredentialPools]. Keyed on
+	// the provider's config key. Computed HERE because the resolver the
+	// providers were built through exists only while the epoch is being
+	// built, and a key's provenance read through any other resolver would
+	// describe credentials no pool holds.
+	credentials map[string][]credentialSource
+
 	// Tools is the catalogue every seat's surface is cut from: the
 	// builtins, plus the SHARED MCP servers, which one company-wide child
 	// serves for everyone.
@@ -118,10 +127,11 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 		return nil, err
 	}
 	return &Company{
-		Config: c,
-		Org:    organization,
-		Models: models,
-		Tools:  tools.NewRegistry(),
+		Config:      c,
+		Org:         organization,
+		Models:      models,
+		Tools:       tools.NewRegistry(),
+		credentials: credentialSources(c, env),
 	}, nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -268,6 +269,22 @@ type Sources struct {
 	// mounts.
 	Access *AccessPosture
 
+	// CredentialPools is every LLM provider entry in this node's current
+	// epoch, each configured key's provenance beside this node's pool state
+	// for it — hints, never values (see [engine.Engine.CredentialPools]).
+	// A FUNCTION for the reason [Sources.Company] is one: an apply replaces
+	// every pool. Nil leaves `credential_pool` unregistered.
+	CredentialPools func() []engine.CredentialPool
+
+	// Cooldowns is the fleet's credential cooldown ledger, read so a key a
+	// PEER benched is reported cooling here before this node's refresher
+	// has pulled it. Nil answers with this node's cooldowns alone and says
+	// so (`fleet: false`), rather than calling every key the fleet benched
+	// ready.
+	Cooldowns interface {
+		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
+	}
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to. The RESOLVED id
 	// (config.ResolveNodeID), which is also the name the node's presence
@@ -414,6 +431,12 @@ func Register(r *Registry, s Sources) {
 		// each is, is a map of which credential to take. See
 		// [Sources.access].
 		r.RegisterOperator("access", s.access)
+	}
+	if s.CredentialPools != nil {
+		// OPERATOR-ONLY: which variable holds each model's keys and which
+		// of them a vendor is refusing right now is a map of which
+		// credential to take, and of when. See [Sources.credentialPool].
+		r.RegisterOperator("credential_pool", s.credentialPool)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to

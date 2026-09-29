@@ -1322,7 +1322,7 @@ because each backend sends its vendor's native one:
 | Entry type | Credential arrives as |
 |---|---|
 | `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
-| `openai`, `openai-compatible` | `Authorization: Bearer` |
+| `openai`, `openai-compatible` | `Authorization: Bearer` — and nothing else from the engine's environment. The SDK would add `OpenAI-Organization`, `OpenAI-Project` and every `OPENAI_CUSTOM_HEADERS` line from the process it runs in; the backend undoes each, so a proxy never receives headers an operator exported for some other tool. The OpenAI embeddings provider builds its client the same way |
 
 The `api_keys` value is the credential for **the proxy**, not for the
 vendor: the vendor login lives inside the proxy. Rotation, cooldowns and

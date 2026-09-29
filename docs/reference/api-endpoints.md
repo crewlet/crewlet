@@ -98,6 +98,7 @@ node means nothing was done.
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
+| `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
@@ -1993,6 +1994,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
+| `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
@@ -3534,6 +3536,68 @@ attribution rather than an address.
   ]
 }
 ```
+
+### `GET /credential-pool`
+
+Backs **Settings › Models & keys**: every model the company configures, in
+config order (the order a seat that names no model falls back through), the
+keys each rotates through and which of them is benched. **It needs a token,
+reads included** — which variable holds each model's key and when each is
+refused is a map of which credential to take — and `api.allow_anonymous_read`
+does not open it.
+
+**Names, never values.** A key is `ref`, the variable a whole `${VAR}` names
+(or the vendor's conventional variable, `source: "default"`, for a model that
+names no `api_keys`), or its position alone for a value written into the
+document (`source: "inline"`, `ref: ""`). `hint` is the 12-character,
+non-reversible identifier the engine's `credential_cooled` log lines carry.
+
+**The pool and the fleet's ledger, the later deadline winning.** A bench is
+published to the fleet when a node takes it and pulled by every other node
+every 15 s; this answer reads the ledger directly, so a key a peer benched a
+second ago is `cooling` here before the answering node has pulled it, and a
+bench whose publish failed still reads `cooling` on the node that took it. A
+ledger that cannot be read does not fail the answer: `fleet` is `false`,
+`fleet_error` says why, and every deadline is the answering node's own.
+`uses` and `in_flight` are the answering node's leases of the key since it
+applied its configuration, and `unresolved` is what ITS environment and the
+company's secrets resolve.
+
+| key `state` | Means |
+|---|---|
+| `ready` | A call can lease it now |
+| `cooling` | Benched after a rate-limit or auth refusal until `cooling_until` |
+| `unresolved` | It resolved to nothing on the answering node and is not in the pool |
+| `duplicate` | The same value as the key at `same_as` (1-based), held once |
+
+| model `state` | Means |
+|---|---|
+| `ready` | Every key resolves and none is cooling |
+| `degraded` | Some keys can be leased and some cannot |
+| `exhausted` | Every key that resolves is cooling: each call falls through to the seat's next model |
+| `no_key` | No key resolves: every call is refused as unauthorised |
+| `login` | A `cli-agent` entry — one login held by the CLI, no key bag |
+
+```json
+{
+  "node": "node-1",
+  "fleet": true,
+  "fleet_error": "",
+  "providers": [
+    {"key": "smart", "type": "anthropic", "model": "claude-sonnet-5", "state": "degraded",
+     "ready": 1, "rate_limit_seconds": 3600, "auth_seconds": 300,
+     "keys": [
+       {"ref": "ANTHROPIC_KEY_A", "source": "reference", "hint": "3f9a1c0b7e2d", "state": "ready",
+        "cooling_until": null, "same_as": 0, "uses": 12, "in_flight": 1},
+       {"ref": "ANTHROPIC_KEY_B", "source": "reference", "hint": "8c41d2e9a0f7", "state": "cooling",
+        "cooling_until": "2026-09-29T12:40:00Z", "same_as": 0, "uses": 4, "in_flight": 0}
+     ]}
+  ]
+}
+```
+
+To change a model's keys, `PUT /config/llm-providers/{id}` — see
+[Per-entity read and write](#per-entity-read-and-write).
 
 ### `GET /mcp-servers`
 

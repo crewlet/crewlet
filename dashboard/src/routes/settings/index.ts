@@ -7,5 +7,6 @@ export { Fleet, NodePeek } from "./Fleet.tsx";
 export { General } from "./General.tsx";
 export { IntegrationPeek, Integrations } from "./Integrations.tsx";
 export { PeopleAndAccess } from "./Access.tsx";
+export { Models } from "./Models.tsx";
 export { CredentialPeek, Secrets } from "./Secrets.tsx";
 export { ToolPeek, Tools } from "./Tools.tsx";

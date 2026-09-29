@@ -746,6 +746,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/people` | **People & access** — every human seat, where agents reach them and whether they act here as themselves; every API token by label, the person it acts as and its scope. Never a value *(operator)*. No tail: a person's page is their seat | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry and who holds each tool are pushes every reader gets; only the servers' status (`mcp_servers_status`) is the operator's, and its section says so in its own place. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
+| `#/settings/models` · `#/settings/models/{id}` | **Models & keys** — every `providers.llm` entry, the keys it rotates through by variable name, which a vendor is refusing and when each comes back (`credential_pool`), and the seats whose chain names it; one model's keys whole and its seats, and its **Edit** *(operator)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties and config rollout *(operator)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
@@ -4879,7 +4880,7 @@ Settings is the one workspace that draws its sections as a **column** beside
 the screen rather than as tabs in the page bar, in three groups: **Company**
 (General, People & access, and Budgets as a cross-link — it lives once, under Spend, and its
 arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
-MCP, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
+MCP, Models & keys, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
 log). A guarded section draws a key and **is never hidden**: a section that
 vanished for a reader without an operator credential is one they cannot know
 exists. The landing page is one of the column's sections, so its trail reads
@@ -5023,6 +5024,49 @@ panel names the seats **granted** its server from the same pushed
 `tool_sources`, so opening a tool, or stepping through them with `[`/`]`,
 asks the engine nothing.
 
+**Models & keys** draws the engine's `credential_pool`: every model the
+company configures in config order (the order a seat that names no model falls
+back through), its **state** as the engine judged it (*Ready*, *Fewer keys*,
+*All keys cooling*, *No key*, *CLI login*) and **one mark per key** in
+declaration order — the variable it names (`ANTHROPIC_KEY_A`), the vendor's
+own variable marked *default* when the model names none, or *key n · inline*
+for a key written into the configuration itself — in its state's tone, a
+cooling key carrying how long it has left; several marks wrap two to a line
+where the column allows. The bench times sit one cause per line (*rate limit
+1h* over *auth 5m*), so neither is ever clipped to a different value, and a
+model no seat names reads *–* on its row and on its page alike. A key is **never a value**: the answer has no
+member one could travel in, and a key the document holds inline is drawn by its
+position. The deadline is the later of the answering node's own bench and the
+**fleet's cooldown ledger**, so a key a peer benched a second ago reads
+*Cooling* here before this node's refresher has pulled it; a node that could
+not read the ledger says its cooldowns are its own and why. Three tiles count
+the models (and how many need attention), the keys ready now, and when the next
+cooling key comes back. **Runs** is the seats whose resolved chain (the org
+projection's `llm`, the engine's own resolution) starts with the model, and
+how many fall back to it. A row opens the **model's page** (`models/{id}`):
+its facts, the state's sentence when it is not ready, every key with its
+state, when it comes back, why (*Nothing sets ACME_KEY on this node*, *The
+same key as key 1*, and its Back cell says *As key 1*, since the pool
+holds it once), this node's leases of it and the non-reversible **hint**
+the engine's `credential_cooled` log lines carry, then **Seats on it** — each
+seat and which phases run on it or fall back to it. A seat's model chain on
+its Settings tab links here. **Edit** (the page's action, and a row's pencil)
+is drawn for every reader and disabled with the reason for one who cannot
+change the configuration: it reads the entry (`GET
+/config/llm-providers/{id}`), edits its model id, its keys (secret fields —
+`$` offers the sealed entries; a key written inline is a locked row that can
+be kept, removed or replaced in its place, never shown — and while one is in
+the list the list neither grows nor shrinks and no removal moves it, because
+the engine puts an inline value back **by its position** and a moved mask
+would come back as its neighbour's key), its endpoint and its two bench times
+(named for what benches a key — *rate limit 1h · auth 5m* — rather than by
+status code), checks
+the whole company with the change in it and says only a warning the edit
+introduces, then stores it with `PUT /config/llm-providers/{id}` and
+`If-Match`, sending back every field it did not show exactly as read. The
+answer is polled every 15 s while the screen is open — the node's own
+cooldown refresher's cadence.
+
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.
 Every row is sealed in the fleet's store; **Source is provenance** — which path
@@ -5046,7 +5090,7 @@ and **Read by**, what would break if the name went, never does. Beside a peek
 at 1440 the name, Read by and Updated stay. See
 [the secret store](../concepts/secret-store.md).
 
-A node, a secret, an MCP server and a backup domain are each **titled
+A node, a secret, an MCP server, a model and a backup domain are each **titled
 by their own name**, so the trail draws that word as a name too, in the face
 the page's title uses — never the mono face kept for a key still waiting for
 the name a screen publishes. A tool's trail follows its title, as its header

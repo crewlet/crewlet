@@ -288,6 +288,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         ];
       }
       return where.tool ? inside("tools", named(labels, where.tool)) : sectionPage("tools");
+    case "models":
+      // THE ENTRY'S CONFIG KEY IS ITS NAME: the model's page is titled by it,
+      // in the body face, and so is its crumb — the key a seat's `llm:` writes
+      // is the only name the entry has.
+      return where.id ? inside("models", ownName(labels, where.id)) : sectionPage("models");
     case "secrets":
       return where.name ? inside("secrets", ownName(labels, where.name)) : sectionPage("secrets");
     case "nodes":

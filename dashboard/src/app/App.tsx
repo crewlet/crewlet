@@ -77,6 +77,7 @@ const General = lazyScreen("settings", (m) => m.General);
 const PeopleAndAccess = lazyScreen("settings", (m) => m.PeopleAndAccess);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Tools = lazyScreen("settings", (m) => m.Tools);
+const Models = lazyScreen("settings", (m) => m.Models);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
 const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
@@ -166,6 +167,8 @@ export function screenFor(route: Resolved): ReactNode {
           tool={route.tool}
         />
       );
+    case "models":
+      return <Models key={route.id ?? ""} id={route.id} />;
     case "secrets":
       return <Secrets key={route.name ?? ""} name={route.name} />;
     case "nodes":

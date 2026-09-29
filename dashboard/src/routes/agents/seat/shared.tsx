@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { EmptyState, InlineCode, Skeleton } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { href } from "~/app/router.tsx";
 import { configValueKind } from "~/lib/format.ts";
 import type { Seat, SeatSettings } from "~/lib/seats.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
@@ -99,7 +100,11 @@ export function ConfigValue({ value }: { value: string | undefined }) {
   }
 }
 
-/** A provider chain, in the order the fallback walks it. */
+/**
+ * A provider chain, in the order the fallback walks it. Each key opens its
+ * model under Settings › Models & keys, where its keys and their cooldowns
+ * say whether the seat can reach it right now.
+ */
 export function ModelChain({ keys }: { keys: readonly string[] }) {
   return (
     <span className="prof-chain">
@@ -110,7 +115,9 @@ export function ModelChain({ keys }: { keys: readonly string[] }) {
               →
             </span>
           )}
-          <code className="inline">{key}</code>
+          <a className="prof-chain-model" href={href(["settings", "models", key])}>
+            <code className="inline">{key}</code>
+          </a>
         </span>
       ))}
     </span>

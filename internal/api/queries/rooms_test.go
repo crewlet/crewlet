@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -109,6 +110,8 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE GUARD'S POSTURE, which the API always supplies from the
 		// guard it mounts.
 		Access: &queries.AccessPosture{},
+		// EVERY MODEL'S KEY BAG, which the engine always supplies.
+		CredentialPools: func() []engine.CredentialPool { return nil },
 	}
 }
 

@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -50,12 +49,6 @@ var log = logging.Get("llm.anthropic")
 // providerName labels errors and log lines. It is the config's type name.
 const providerName = "anthropic"
 
-// KeyEnv is the conventional variable consulted when a config names no key,
-// so a credential already exported in a shell works with no YAML change.
-// internal/config/providers.go documents the fallback; this is where it
-// happens.
-const KeyEnv = "ANTHROPIC_API_KEY"
-
 // Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
@@ -73,9 +66,12 @@ type Config struct {
 	Model string
 
 	// APIKeys are the credentials, in declaration order. Several rotate.
-	// Empty falls back to KeyEnv; failing that the provider still builds
-	// and every call comes back a clean 401, which is a far easier thing
-	// to diagnose than a constructor that refused to exist.
+	// These are THE WHOLE BAG: nothing here reads a variable. Which key an
+	// entry that names none runs on is a configuration rule
+	// (config.LLMProvider.Keys), decided where the document and the secret
+	// store are both in reach. Empty still builds, and every call comes
+	// back a clean 401, which is a far easier thing to diagnose than a
+	// constructor that refused to exist.
 	APIKeys []string
 
 	// BaseURL is the endpoint. Empty takes DefaultBaseURL. It is ALWAYS
@@ -112,10 +108,6 @@ type Config struct {
 
 	// Clock is the pool's monotonic time source. Nil takes the default.
 	Clock credential.Clock
-
-	// LookupEnv resolves KeyEnv. Nil takes os.Getenv; the engine passes a
-	// secret-store-aware resolver so a rotated secret beats a stale shell.
-	LookupEnv func(string) string
 }
 
 // Provider is an Anthropic Messages backend.
@@ -143,15 +135,6 @@ func New(cfg Config) (*Provider, error) {
 	}
 
 	keys := cfg.APIKeys
-	if len(keys) == 0 {
-		lookup := cfg.LookupEnv
-		if lookup == nil {
-			lookup = os.Getenv
-		}
-		if key := strings.TrimSpace(lookup(KeyEnv)); key != "" {
-			keys = []string{key}
-		}
-	}
 
 	baseURL := cfg.BaseURL
 	if strings.TrimSpace(baseURL) == "" {

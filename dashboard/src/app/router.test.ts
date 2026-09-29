@@ -454,12 +454,13 @@ describe("the breadcrumb", () => {
   // word in the body face; the trail fell back to the mono face meant for a
   // key still awaiting its name, and no screen ever supplies one — so the
   // crumb printed `harness-0` in one face over a title in another.
-  test("a node, a secret, a server and a domain are named in the trail as their pages title them", () => {
+  test("a node, a secret, a server, a domain and a model are named in the trail as their pages title them", () => {
     for (const path of [
       ["settings", "nodes", "harness-0"],
       ["settings", "secrets", "GITHUB_TOKEN"],
       ["settings", "tools", "servers", "github"],
       ["settings", "backups", "tracker"],
+      ["settings", "models", "claude-opus"],
     ]) {
       const crumbs = crumbsFor(path);
       const last = crumbs[crumbs.length - 1];
