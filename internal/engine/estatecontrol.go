@@ -59,14 +59,24 @@ var ErrEstateUnavailable = errors.New("engine: the estate map could not be read 
 var ErrEstateNewerMap = errors.New("engine: the estate map was written by a newer build; " +
 	"make this gesture from a node running it")
 
+// ErrEstateWhole is every gesture's refusal on a node running layout 0, where
+// the estate is not divided into partitions and no map will ever be written:
+// [partmap.ErrNoMap], in the words every surface gives that layout
+// ([partmap.WholeEstate]).
+//
+// A SENTINEL OF ITS OWN beside the no-map refusal it wraps, because the two
+// absences send an operator in opposite directions — see the file's doc — and a
+// surface answering them has to tell them apart without reading the sentence:
+// this one is a fact about the fleet, answered the same way for as long as it
+// runs this layout, and the other a map not written yet, which is a wait.
+var ErrEstateWhole = fmt.Errorf("%w: %s", partmap.ErrNoMap, partmap.WholeEstate)
+
 // noEstateMap is the refusal of a gesture where there is no estate map:
 // [partmap.ErrNoMap], saying what a fleet with none is on the layout this node
 // runs — see the file's doc.
 func noEstateMap(running statelog.Layout) error {
 	if running.Number == 0 {
-		return fmt.Errorf("%w: the estate is not divided into partitions — every data "+
-			"node holds the whole of it (layout 0) — so there is no partition to place, "+
-			"move or hold a node for", partmap.ErrNoMap)
+		return ErrEstateWhole
 	}
 	return fmt.Errorf("%w: this node runs layout %d and no estate map has been written yet, "+
 		"so no partition is placed; the estate-map duty writes the first once the layout's "+
@@ -139,6 +149,20 @@ func (c *EstateControl) CancelMove(ctx context.Context, p statelog.PartitionID, 
 	return c.apply(ctx, "cancel_move", func(s partmap.MapState) (partmap.MapState, error) {
 		return partmap.CancelMove(s, p, node)
 	}, "partition", p.String(), "node", node, "by", by)
+}
+
+// Running is the layout this node runs, which is what a fleet with no estate
+// map is read as: the single-file layout — every data node holding the whole
+// estate — where it is layout 0, and otherwise a partitioned layout whose map
+// has not been written yet.
+func (c *EstateControl) Running() statelog.Layout { return c.running }
+
+// EstateMap reads the stored record as it is now, undecoded, and false while
+// there is none — for a surface that renders the map as EVERY node reads it,
+// which must not refuse a newer build's field the way a gesture's rewrite
+// does ([partmap.DecodeMapState] against [partmap.DecodeMapStateForUpdate]).
+func (c *EstateControl) EstateMap(ctx context.Context) (coord.EstateMapRecord, bool, error) {
+	return c.store.EstateMap(ctx)
 }
 
 // State reads the stored map as it is now, and false while there is none —

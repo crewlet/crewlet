@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -79,6 +80,12 @@ func TestUnderLayoutZeroEveryEstateGestureSaysThereIsNoMap(t *testing.T) {
 			t.Errorf("%s = (landed %v, %v), want ErrNoMap", name, got.Landed, err)
 			continue
 		}
+		// AND BY THE SENTINEL a surface branches on, which the no-map
+		// refusal of a partitioned layout is not: the one is a fact
+		// about the fleet, the other a wait.
+		if !errors.Is(err, ErrEstateWhole) {
+			t.Errorf("%s's refusal = %v, want ErrEstateWhole", name, err)
+		}
 		if msg := err.Error(); !strings.Contains(msg, "layout 0") || !strings.Contains(msg, "whole") {
 			t.Errorf("%s's refusal does not say why there is no map: %v", name, err)
 		}
@@ -100,6 +107,38 @@ func TestAtAPartitionedLayoutAGestureSaysNoMapIsWrittenYet(t *testing.T) {
 	if !strings.Contains(msg, "layout 1") || !strings.Contains(msg, "written yet") ||
 		strings.Contains(msg, "whole") {
 		t.Errorf("a partitioned node's refusal reads %q", msg)
+	}
+	if errors.Is(err, ErrEstateWhole) {
+		t.Errorf("a partitioned node's refusal is ErrEstateWhole: %v", err)
+	}
+}
+
+// THE READ A SURFACE RENDERS IS THE RECORD AS STORED, a newer build's field and
+// all: the surface decodes it as every node reading the map does, ignoring what
+// it does not know, where a gesture — which REWRITES it — must refuse the same
+// record rather than drop the field.
+func TestTheEstateMapIsReadAsStoredWhereAGestureRefusesIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := storedEstateMap(t, "a", "b", "c")
+	rec, _, err := store.EstateMap(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := append(bytes.TrimSuffix(rec.Value, []byte("}")), []byte(`,"from_a_newer_build":1}`)...)
+	if _, ok, err := store.UpdateEstateMap(ctx, newer, rec.Version); err != nil || !ok {
+		t.Fatalf("setup: store the newer map: (%v, %v)", ok, err)
+	}
+	c := estateControlOver(store)
+	if _, _, _, err := c.State(ctx); !errors.Is(err, ErrEstateNewerMap) {
+		t.Fatalf("State of a newer build's map = %v, want ErrEstateNewerMap", err)
+	}
+	got, found, err := c.EstateMap(ctx)
+	if err != nil || !found || !bytes.Equal(got.Value, newer) {
+		t.Fatalf("EstateMap = (%s, %v, %v), want the record as stored", got.Value, found, err)
+	}
+	if c.Running().Number != 0 {
+		t.Errorf("Running = layout %d, want the layout this node runs, 0", c.Running().Number)
 	}
 }
 
