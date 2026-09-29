@@ -403,10 +403,9 @@ func TestARenamedScopeKeepsTheIdentityItsFiresAreKeyedOn(t *testing.T) {
 
 // TWO UNITS OF ONE NAME ARE TWO SCOPES.
 //
-// A unit's display name is unique only by an ADMISSION rule, so a stored
-// revision carrying two "Platform" teams is applied with a warning and runs —
-// and while the fire key was that name, one team's standup claimed the
-// other's minute and the other never fired at all.
+// A unit's display name is prose the org chart lets any two units share, and
+// while the fire key was that name, one team's standup claimed the other's
+// minute and the other never fired at all.
 func TestTwoUnitsOfOneNameDoNotShareAFireKey(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{
@@ -442,4 +441,86 @@ func scopeNames(t *testing.T, o *org.Organization) map[string]string {
 		out[e.Schedule.Name] = e.ScopeName
 	}
 	return out
+}
+
+// A STRANDED SCHEDULE IS EXACTLY ONE THE TICK WOULD SKIP, with the reason.
+//
+// Every way a chart can leave an enabled schedule with no runner, beside the
+// controls that keep each honest: the same unit's `each` given an agent, an
+// agent seat's own schedule, and a disabled one are not stranded. A disabled
+// schedule is config somebody is holding, and a runnable one is the tick's
+// business.
+func TestStrandedInNamesEveryScheduleWithNoRunnerAndWhy(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme",
+		Roles: []*org.Role{
+			{Name: "Founder", DeclaredHandle: "founder", Kind: org.KindHuman,
+				Schedules: []org.Schedule{
+					{Name: "weekly", Cron: "0 9 * * 1", Task: "review"},
+					{Name: "held", Cron: "0 9 * * 1", Task: "review", Enabled: org.Off()},
+				}},
+			{Name: "Ops", DeclaredHandle: "ops",
+				Schedules: []org.Schedule{{Name: "nightly", Cron: "0 2 * * *", Task: "rotate"}}},
+		},
+		Units: []*org.Unit{
+			// `each` over nobody who runs turns: a person, and a child's
+			// agent, which is never a runner of its parent's schedule.
+			{Name: "Design", ID: "design",
+				Roles: []*org.Role{{Name: "Sarah", DeclaredHandle: "sarah", Kind: org.KindHuman}},
+				Children: []*org.Unit{{Name: "Brand", ID: "brand",
+					Roles: []*org.Role{{Name: "Brand Agent", DeclaredHandle: "brand-agent"}}}},
+				Schedules: []org.Schedule{{Name: "standup", Cron: "0 9 * * *", Task: "t"}}},
+			// `lead` under a person.
+			{Name: "Sales", ID: "sales", Lead: "ana",
+				Roles: []*org.Role{{Name: "Ana", DeclaredHandle: "ana", Kind: org.KindHuman},
+					{Name: "Rep", DeclaredHandle: "rep"}},
+				Schedules: []org.Schedule{{Name: "pipeline", Cron: "0 9 * * *", Task: "t",
+					Target: org.TargetLead}}},
+			// `lead` under nobody at all.
+			{Name: "Ops Team", ID: "ops-team",
+				Roles: []*org.Role{{Name: "Oncall", DeclaredHandle: "oncall"}},
+				Schedules: []org.Schedule{
+					{Name: "handover", Cron: "0 9 * * *", Task: "t", Target: org.TargetLead},
+					{Name: "checks", Cron: "0 9 * * *", Task: "t"},
+				}},
+		},
+	}
+
+	type got struct {
+		scope, name string
+		reason      schedule.StrandedReason
+	}
+	var have []got
+	for _, s := range schedule.StrandedIn(o) {
+		if !s.Reason.Valid() {
+			t.Errorf("%s/%s carries reason %q, which this build does not report",
+				s.ScopeName, s.Schedule.Name, s.Reason)
+		}
+		have = append(have, got{s.ScopeName, s.Schedule.Name, s.Reason})
+	}
+	want := []got{
+		{"founder", "weekly", schedule.StrandedHumanSeat},
+		{"design", "standup", schedule.StrandedNoAgentMember},
+		{"sales", "pipeline", schedule.StrandedLeadHuman},
+		{"ops-team", "handover", schedule.StrandedNoLead},
+	}
+	if !slices.Equal(have, want) {
+		t.Fatalf("stranded = %+v\nwant %+v", have, want)
+	}
+
+	// AND EVERY ONE IS A SCHEDULE THE TICK WOULD SKIP: a unit entry this
+	// names resolves to no runner, every other resolves to one, and a human
+	// seat's is not an entry at all.
+	for _, e := range schedule.Entries(o) {
+		if !e.Schedule.IsEnabled() {
+			continue
+		}
+		stranded := slices.ContainsFunc(want, func(w got) bool {
+			return w.scope == e.ScopeName && w.name == e.Schedule.Name
+		})
+		if stranded != (len(e.Runners(o)) == 0) {
+			t.Errorf("%s/%s: stranded %v but the tick resolves runners %v",
+				e.ScopeName, e.Schedule.Name, stranded, e.Runners(o))
+		}
+	}
 }

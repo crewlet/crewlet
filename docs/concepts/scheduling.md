@@ -73,7 +73,7 @@ schedules:
 | `task` | — (required) | The task prompt handed to the runner agent. |
 | `timezone` | `scheduling.default_timezone` | IANA timezone the cron is evaluated in. |
 | `target` | `each` | **Unit schedules only.** Who runs it (see [Delivery](#delivery-who-runs-it)). Ignored for role schedules. [Human seats](humans-in-the-org.md) never run schedules: `each` fans out to direct agent roles only, an enabled `lead` schedule under a (possibly inherited) human lead is a config error, and human seats cannot define role schedules. |
-| `enabled` | `true` | `false` keeps the schedule in config but never fires it. |
+| `enabled` | `true` | `false` keeps the schedule in config but never fires it. An enabled schedule nothing can run — `each` on a unit with no direct agent member, `lead` under a person or nobody, or a schedule on a human seat — is refused in a company file, and one the chart comes to hold anyway (a member made a person's seat, a lead cleared) is skipped by the scheduler and reported by [`/chart/check`](../reference/api-endpoints.md#the-continuous-report) as `schedule_unrunnable` until it has a runner or is disabled. |
 | `timeout_seconds` | `180` | Hard wall-clock cap on the scheduled turn. |
 | `catchup` | `true` | Whether to fire a recent missed tick on (re)start. |
 

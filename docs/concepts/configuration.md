@@ -342,6 +342,7 @@ reachable through two writes that were each correct when they were made:
 | a `manages:` entry, a unit's lead or a seat's unit resolves to nothing | the edge manages nobody, or the seat sits at the org root above every team |
 | a human seat carries no contact identity | no agent can @-mention the person — legitimate for somebody who works only through the dashboard, which is why it is reported and never refused |
 | two seats declare one address or one chat identity | routing reaches one of them, so the other never hears what is addressed to it — two content writes on two seats, each arbitrated on its own object, and the address sealed under two different names |
+| an enabled schedule has nothing that can run it — a unit's `each` with no direct agent member, a unit's `lead` whose effective lead is a person or nobody, a schedule on a human seat | the scheduler skips it on every tick, so the standup or the report it describes never happens — the schedule and the member or lead that would run it are written on different objects, and a company file is the only place that refuses the pair |
 
 Refusing the second write is not an option: a revision that removes a provider
 is a perfectly valid revision, and refusing it would refuse an operator's edit

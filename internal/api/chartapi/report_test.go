@@ -141,6 +141,11 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 		{"a human seat nobody can be reached at", func(v *org.Organization, _ *config.Company) {
 			v.Role("cto").Kind = org.KindHuman
 		}, chartapi.KindSeatUnreachable},
+		{"a schedule nothing can run", func(v *org.Organization, _ *config.Company) {
+			v.Role("cto").Kind = org.KindHuman
+			v.Unit("engineering").Schedules = []org.Schedule{{Name: "retro",
+				Cron: "0 16 * * 5", Task: "run the retro", Target: org.TargetLead}}
+		}, chartapi.KindScheduleUnrunnable},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -151,6 +156,49 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 				t.Fatalf("counts = %v, want a %q", got.Counts, c.want)
 			}
 		})
+	}
+}
+
+// A SCHEDULE TWO CORRECT WRITES STRANDED IS NAMED, AS AN ERROR, ON ITS SCOPE.
+//
+// The unit's `each` standup was added while it had an agent; the agent's seat
+// was then made a person's. Each write was correct on its own subject and no
+// chart write can refuse the pair, so the scheduler skips the standup on every
+// tick and this report is the one place it is said — named on the unit's KEY,
+// the schedule by name, and an error, since the work is not happening. The
+// control: disabled, the same schedule is config somebody is holding.
+func TestAStrandedScheduleIsNamedOnItsScope(t *testing.T) {
+	t.Parallel()
+	view, settings := running()
+	view.Unit("engineering").Schedules = []org.Schedule{{Name: "standup",
+		Cron: "30 9 * * 1-5", Task: "post the standup"}}
+	if got := chartapi.Evaluate(t.Context(), view, settings, nil, nil); len(got.Findings) != 0 {
+		t.Fatalf("a unit with an agent member reports %+v", got.Findings)
+	}
+
+	view.Role("sre").Kind = org.KindHuman
+	view.Role("sre").LLM = nil
+	view.Role("cto").Kind = org.KindHuman
+	var stranded []chartapi.Finding
+	for _, f := range chartapi.Evaluate(t.Context(), view, settings, nil, nil).Findings {
+		if f.Kind == chartapi.KindScheduleUnrunnable {
+			stranded = append(stranded, f)
+		}
+	}
+	if len(stranded) != 1 {
+		t.Fatalf("stranded findings = %+v, want exactly the standup", stranded)
+	}
+	one := stranded[0]
+	if one.Object != "engineering" || one.Names != "standup" ||
+		one.Severity != chartapi.SeverityError {
+		t.Errorf("finding = %+v, want an error on unit engineering naming the standup", one)
+	}
+
+	view.Unit("engineering").Schedules[0].Enabled = org.Off()
+	for _, f := range chartapi.Evaluate(t.Context(), view, settings, nil, nil).Findings {
+		if f.Kind == chartapi.KindScheduleUnrunnable {
+			t.Errorf("a disabled schedule was reported stranded: %+v", f)
+		}
 	}
 }
 

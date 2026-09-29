@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/schedule"
 )
 
 // THE CONTINUOUS REPORT: one evaluation over the chart this node is running
@@ -168,6 +169,21 @@ const (
 	// only a node that resolves both can see they are one mailbox. An
 	// error, because one of the seats is unreachable today.
 	KindIdentityShared FindingKind = "identity_shared"
+
+	// KindScheduleUnrunnable is an ENABLED schedule nothing can run: a
+	// unit's `each` with no direct agent member, a unit's `lead` whose
+	// effective lead is a person or nobody, or a schedule on a human seat.
+	// The scheduler skips it on every tick, so it never fires.
+	//
+	// HERE BECAUSE NOTHING ELSE CAN SAY IT. A company file is refused for
+	// one, but a chart write cannot be: the schedule is its object's own
+	// content, while what makes it runnable — a member's kind, a lead
+	// inherited from an ancestor — is written on other objects' subjects,
+	// so two writes each correct when they were made strand it with nobody
+	// to refuse. Read through the scheduler's own runner resolution
+	// ([schedule.StrandedIn]), so what this names is exactly what the tick
+	// skips. An error, because the work it describes is not happening.
+	KindScheduleUnrunnable FindingKind = "schedule_unrunnable"
 )
 
 // FindingKinds is every kind, for the walks and for a surface rendering a
@@ -175,7 +191,7 @@ const (
 var FindingKinds = []FindingKind{
 	KindProviderUnknown, KindWorkerUnknown, KindSandboxUnconfigured,
 	KindReferenceDangling, KindSeatUnheld, KindSeatUnreachable,
-	KindIdentityShared,
+	KindIdentityShared, KindScheduleUnrunnable,
 }
 
 // Resolve answers a `${VAR}` name through this node's own resolution chain —
@@ -286,6 +302,9 @@ func Evaluate(ctx context.Context, o *org.Organization, settings *config.Company
 	}
 	for _, ref := range o.DanglingRefs() {
 		out.Findings = append(out.Findings, danglingFinding(ref))
+	}
+	for _, stranded := range schedule.StrandedIn(o) {
+		out.Findings = append(out.Findings, strandedFinding(stranded))
 	}
 	if resolve != nil {
 		out.Findings = append(out.Findings, sharedIdentityFindings(o, resolve)...)
@@ -608,6 +627,42 @@ func danglingFinding(ref org.DanglingRef) Finding {
 		Object: ref.From, Names: ref.To, Detail: detail,
 		Remedy: "correct the reference, or create what it names — a retired " +
 			"address goes on resolving, so this one names nothing at all",
+	}
+}
+
+// strandedFinding renders one schedule nothing can run.
+func strandedFinding(s schedule.Stranded) Finding {
+	var detail, remedy string
+	switch s.Reason {
+	case schedule.StrandedHumanSeat:
+		detail = fmt.Sprintf("%s is a human seat, and a person runs no turns, "+
+			"so its schedule %q never fires", s.ScopeName, s.Schedule.Name)
+		remedy = "move the schedule to an agent seat, or make this seat an " +
+			"agent's"
+	case schedule.StrandedNoAgentMember:
+		detail = fmt.Sprintf("unit %s's schedule %q fans out to each direct "+
+			"agent member, and the unit has none — a person and a child "+
+			"unit's seats are never runners — so it never fires",
+			s.ScopeName, s.Schedule.Name)
+		remedy = "place an agent seat directly in the unit, or target the " +
+			"schedule at the unit's lead"
+	case schedule.StrandedLeadHuman:
+		detail = fmt.Sprintf("unit %s's schedule %q is run by the unit's lead, "+
+			"and its effective lead is a human seat, who runs no turns — so "+
+			"it never fires", s.ScopeName, s.Schedule.Name)
+		remedy = "have an agent seat lead the unit, or target the schedule " +
+			"at each of its agent members"
+	default:
+		detail = fmt.Sprintf("unit %s's schedule %q is run by the unit's lead, "+
+			"and nothing leads the unit, itself or through an ancestor — so "+
+			"it never fires", s.ScopeName, s.Schedule.Name)
+		remedy = "give the unit or an ancestor a lead, or target the " +
+			"schedule at each of its agent members"
+	}
+	return Finding{
+		Kind: KindScheduleUnrunnable, Severity: SeverityError,
+		Object: s.ScopeName, Names: s.Schedule.Name,
+		Detail: detail, Remedy: remedy + " — or disable it while it waits",
 	}
 }
 
