@@ -110,8 +110,21 @@ func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, 
 }
 
 // Mount hands the surfaces to an API's options.
+//
+// THE ONE PLACE A NIL SURFACE BECOMES A NIL INTERFACE, and it is a method so
+// that no caller does the conversion for itself. An absent surface held as a
+// nil *T is a NON-NIL interface once it reaches [Options], so [New]'s own "is
+// there one" check passes and mounts every route over a nil service — which
+// answers each request with a nil dereference instead of the 404 an absent
+// surface is documented to be. The directory and the write surface were
+// converted where they were built; the sign-in surface was handed over as its
+// pointer, so on a node that started with no active company every /auth route
+// was mounted over nothing — `GET /auth/config`, the first thing the
+// dashboard reads, among them — and each request panicked inside its handler.
 func (h HumanSurfaces) Mount(o *Options) {
-	o.Auth = h.SignIn
+	if h.SignIn != nil {
+		o.Auth = h.SignIn
+	}
 	o.Sessions, o.Tokens = h.Sessions, h.Tokens
 	o.IAM, o.Work = h.Directory, h.Work
 }

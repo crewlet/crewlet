@@ -1932,7 +1932,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it
 	// mints, the tokens /iam/credentials mints, the company's identity
 	// directory and the human write surface — each absent on a node that
-	// serves none. See [api.HumanSurfaces].
+	// serves none, and handed over by the one method that keeps an absent
+	// surface absent rather than mounting its routes over a nil service.
+	// See [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
