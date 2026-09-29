@@ -169,9 +169,9 @@ func Move(state MapState, p statelog.PartitionID, node, by, reason string, now t
 	}
 	next.Map.Moves[p.String()][node] = membership.Gesture{By: by, Reason: reason, At: now.UTC()}
 	if moved, copies := next.Map.drawFor(p).Size(), state.Map.Size(); moved < copies {
-		return state, fmt.Errorf("%w: %s off %q: it keeps %d copies, and without %q only %d "+
-			"members can hold one — add a data node first, or lower estate.replicas if the "+
-			"company means to keep fewer", ErrNowhereToMove, p, node, copies, node, moved)
+		return state, fmt.Errorf("%w: %s off %q: without %q only %d of its %d copies would "+
+			"have a member to hold them — add a data node first, or lower estate.replicas if "+
+			"the company means to keep fewer", ErrNowhereToMove, p, node, node, moved, copies)
 	}
 	return next, nil
 }
