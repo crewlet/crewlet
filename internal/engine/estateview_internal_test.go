@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -370,5 +371,69 @@ func TestTheRetentionReadingCarriesTheEstateView(t *testing.T) {
 	}
 	if !firedKind(statelog.Evaluate(got), statelog.KindEstateUnserved) {
 		t.Error("an estate map nobody serves raised no estate_partition_unserved")
+	}
+}
+
+// AN ALARM'S LINE NAMES THE FIRST THREE FINDINGS AND COUNTS THE REST, so it
+// names enough to start from and stays one line however many partitions a lost
+// node held — and nothing at all where there is nothing to name.
+func TestAnEstateAlarmNamesThreeFindingsAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+	partitions := func(n int) []partmap.Finding {
+		out := make([]partmap.Finding, n)
+		for i := range out {
+			out[i] = partmap.Finding{Partition: fmt.Sprintf("tracker.%03d", i)}
+		}
+		return out
+	}
+	name := func(f partmap.Finding) string { return f.Partition }
+	for n, want := range map[int]string{
+		0: "",
+		1: "tracker.000",
+		3: "tracker.000, tracker.001, tracker.002",
+		4: "tracker.000, tracker.001, tracker.002 and 1 more",
+		5: "tracker.000, tracker.001, tracker.002 and 2 more",
+	} {
+		if got := findingNames(partitions(n), name); got != want {
+			t.Errorf("%d findings read %q, want %q", n, got, want)
+		}
+	}
+}
+
+// THE READING NAMES WHAT HAS HELD LONGEST, as the watch orders it: the partition
+// short of copies longest, with its copies, and the oldest join, with the node
+// joining — and the unserved partitions by name.
+func TestTheEstateReadingNamesWhatHasHeldLongest(t *testing.T) {
+	t.Parallel()
+	c := &viewClock{now: gestureNow}
+	leases := coordmemory.New()
+	claimLeases(t, leases, testLayoutOne.Number, "a", "b", "c", "d")
+	w := runningWatch(t, storedEstateMap(t, "a", "b", "c", "d"), leases, nil, testLayoutOne, c)
+	w.mu.Lock()
+	w.found = partmap.Findings{
+		Unserved: []partmap.Finding{{Partition: "tracker.003"}, {Partition: "company.000"}},
+		Short: []partmap.Finding{
+			{Partition: "tracker.002", Serving: 1, Wanted: 3, For: 12 * time.Minute},
+			{Partition: "tracker.000", Serving: 2, Wanted: 3, For: 3 * time.Minute},
+		},
+		Joining: []partmap.Finding{
+			{Partition: "tracker.001", Node: "c", For: 40 * time.Minute},
+			{Partition: "tracker.002", Node: "d", For: time.Minute},
+		},
+	}
+	w.mu.Unlock()
+	var r statelog.Reading
+	w.reading(c.Now(), &r)
+	if r.EstateUnserved != 2 || r.EstateUnservedWhich != "tracker.003, company.000" {
+		t.Errorf("unserved reads %d: %q", r.EstateUnserved, r.EstateUnservedWhich)
+	}
+	if r.EstateShort != 2 || r.EstateShortFor != 12*time.Minute ||
+		r.EstateShortWhich != "tracker.002 (1 of 3 copies)" {
+		t.Errorf("short reads %d for %v: %q, want tracker.002's twelve minutes", r.EstateShort,
+			r.EstateShortFor, r.EstateShortWhich)
+	}
+	if r.EstateJoiningFor != 40*time.Minute || r.EstateJoiningWhich != "tracker.001 on c" {
+		t.Errorf("joining reads %v: %q, want tracker.001 on c for forty minutes",
+			r.EstateJoiningFor, r.EstateJoiningWhich)
 	}
 }
