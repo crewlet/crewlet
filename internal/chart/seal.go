@@ -89,6 +89,13 @@ import (
 // exactly what expanding the original gave. Sealing such a value whole would
 // store the embedded reference as text nothing ever expands again, and the
 // header would send the words `${GITHUB_TOKEN}` to the vendor.
+//
+// CONTENT IS THE ONE EXCEPTION, and for the mirror of that reason: a setup
+// step's file is written into a box and never expanded by the engine, so a
+// `${…}` in a script or an .npmrc is the FILE's syntax. It is sealed whole
+// (the walk says which values are content, [secrets.Path.Content]) and read
+// whole at launch ([secrets.ReadContent]); cut into runs, it reached the box as
+// the chart's own references strung together.
 
 // Sealer turns a literal credential into a reference the record may carry.
 //
@@ -217,10 +224,17 @@ func varToken(in string) string {
 //     its own and keeps its references where they were, so the record holds
 //     references alone and expands to exactly what the value expanded to.
 //
+// CONTENT IS NEVER CUT: a value that is content rather than a setting
+// ([secrets.TagContent] — a setup step's file) is sealed WHOLE, `${…}` and
+// all, because the `${…}` inside a script or an .npmrc is the file's own
+// syntax and the only reading it ever gets is [secrets.ReadContent]'s, which
+// expands nothing inside a body. Cut into runs, a file reached the box as the
+// chart's own references strung together.
+//
 // OBJECT names the field in a refusal; SEALAS is the identity the names are
 // derived from.
 func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
-	path []string, value string) (string, error) {
+	path []string, content bool, value string) (string, error) {
 
 	if value == "" {
 		return "", nil
@@ -229,6 +243,9 @@ func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
 		return value, nil
 	}
 	parts := envref.Split(value)
+	if content {
+		parts = []envref.Part{{Text: value}}
+	}
 	literals := 0
 	for _, part := range parts {
 		if part.Name == "" {
@@ -285,7 +302,8 @@ func (w *Writer) sealRuntime(ctx context.Context, object, sealAs ObjectRef,
 	}
 	sealed, err := w.runtime.Credentials(object.Kind, runtime,
 		func(path secrets.Path, value string) (string, error) {
-			return w.sealValue(ctx, object, sealAs, runtimePath(path), value)
+			return w.sealValue(ctx, object, sealAs, runtimePath(path),
+				path.Content(), value)
 		})
 	if err != nil {
 		return nil, fmt.Errorf("chart: seal the runtime half of %s: %w", object, err)

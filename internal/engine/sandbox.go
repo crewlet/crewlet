@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -192,12 +194,6 @@ func localOptions(local *config.LocalSandbox, env *config.Resolver, placement co
 	}
 }
 
-// setupSteps maps the config shape onto the sandbox package's own.
-//
-// A translation rather than a shared type, so the sandbox package does not
-// import the config package: a setup step is a runtime instruction, and
-// keeping the two apart is what lets the sandbox layer be tested with a step
-// built in a test rather than a YAML document parsed into one.
 // resolvedOr reads a config value through this node's chain, falling back to
 // the literal when there is no resolver.
 //
@@ -213,6 +209,13 @@ func resolvedOr(env *config.Resolver, value string) string {
 
 // setupSteps converts the PROVIDER-WIDE steps a `providers.sandbox` block
 // declares, which are settings and therefore config's.
+//
+// A translation rather than a shared type, so the sandbox package does not
+// import the config package: a setup step is a runtime instruction, and
+// keeping the two apart is what lets the sandbox layer be tested with a step
+// built in a test rather than a YAML document parsed into one. The values are
+// carried VERBATIM — what a step's file and env become is decided at launch,
+// by [Engine.boxSetup] and [Engine.sandboxEnv].
 func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 	if len(steps) == 0 {
 		return nil
@@ -246,6 +249,79 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 		})
 	}
 	return out
+}
+
+// boxSetup is the provisioning one seat's box is given: the provider-wide
+// steps, then the seat's own, with every file's body read as the CONTENT it is
+// through this node's resolver ([setupFiles]).
+//
+// ONE PLACE FOR BOTH LAUNCH PATHS — the run_sandbox tool and an agent-mode
+// executor — because a file is read the same way whichever of them opens the
+// box. Nil-safe on the gate, since an agent-mode executor runs in a box
+// whether or not the seat has a sandbox block of its own.
+func (e *Engine) boxSetup(defaults []sandbox.SetupStep, seat string,
+	gate *org.RoleSandbox) []sandbox.SetupStep {
+
+	setup := slices.Clone(defaults)
+	if gate != nil {
+		setup = append(setup, seatSetupSteps(gate.Setup)...)
+	}
+	read, missing := setupFiles(e.resolver(), setup)
+	if len(missing) > 0 {
+		// PATHS ONLY, never a body: a file is written into a box because
+		// it is a credential more often than not.
+		log.Warn("sandbox_setup_file_unresolved", "seat", seat, "files", missing,
+			"hint", "each of these files is exactly one ${VAR} reference "+
+				"that nothing answered for, so it is written empty; put the "+
+				"name in the secret store, or write the field again through "+
+				"the chart if it is one the chart sealed")
+	}
+	return read
+}
+
+// setupFiles is steps with every file's body read the way a content credential
+// is read where it is used ([secrets.ReadContent]): a body that is exactly one
+// `${VAR}` becomes that variable's value, byte for byte, and any other body is
+// written as it is. Missing names each file — `<step>:<path>` — whose whole
+// reference nothing answered for.
+//
+// # Why a file is not expanded like the env beside it
+//
+// The env is a SETTING: a `${VAR}` in it is the engine's, and the run
+// environment gets the value. A file is CONTENT, written into a box the engine
+// does not run: a `${HOME}` in a script and a `${NPM_TOKEN}` in an .npmrc are
+// the box's own, expanded there from the run environment the step's env just
+// filled. Expanded here they were substituted from the engine HOST's
+// environment, or by nothing — and a seat's file the chart sealed whole is one
+// reference that has to become the body again before the box can read it,
+// which nothing on the way to the box did: it reached the box as the text
+// `${CHART_…}`.
+//
+// NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
+// shared by every launch on this node, and a body resolved into them would be
+// a credential cached past the snapshot it came from.
+func setupFiles(env *config.Resolver, steps []sandbox.SetupStep) (
+	[]sandbox.SetupStep, []string) {
+
+	var missing []string
+	out := make([]sandbox.SetupStep, len(steps))
+	for i, step := range steps {
+		out[i] = step
+		if len(step.Files) == 0 {
+			continue
+		}
+		files := make(map[string]string, len(step.Files))
+		for path, body := range step.Files {
+			read, unresolved := secrets.ReadContent(body, env.LookupOK)
+			if unresolved != "" {
+				missing = append(missing, step.Name+":"+path)
+			}
+			files[path] = read
+		}
+		out[i].Files = files
+	}
+	slices.Sort(missing)
+	return out, missing
 }
 
 func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
@@ -946,7 +1022,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		reuse = existing.SandboxID
 	}
 
-	setup := append(manager.DefaultSetup(), seatSetupSteps(gate.Setup)...)
+	setup := e.boxSetup(manager.DefaultSetup(), seat.Handle(), gate)
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work

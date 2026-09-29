@@ -79,7 +79,7 @@ So the chart makes its own trade, and states it rather than inheriting one:
   `mcp_env` value, the sandbox's `env` and each setup step's `files` and
   `env`, a seat's own Slack app token and signing secret, its Mattermost bot
   token, its GitHub App key and webhook secret — is found by the same
-  `secret:"true"` tags `GET /config` masks by, and a literal one is sealed into
+  `secret` tags `GET /config` masks by, and a literal one is sealed into
   this store before the record is published; the record carries a `${VAR}`
   **reference**. The value reaches the store and never the log, the rows, a
   snapshot or a backup of either. A write whose literal cannot be sealed is
@@ -90,6 +90,12 @@ So the chart makes its own trade, and states it rather than inheriting one:
   references beside literal text — `Bearer ${GITHUB_TOKEN}` — keeps its
   references where they are and has each literal run sealed under a name of
   its own, so it expands to exactly what it expanded to before.
+- **A file is sealed whole.** A setup step's `files` are *content* —
+  `secret:"content"` rather than `secret:"true"` — written into a sandbox box
+  where a `${…}` inside a script or an `.npmrc` is the file's own syntax, never
+  the engine's. So a file's body is sealed as one value under one name, and
+  at launch the box receives that value byte for byte ([how a file reaches the
+  box](code-sandbox.md#setup-steps--provisioning-the-box)).
 - **A sealed value's name is derived from who and where.** The object's
   **identity** — the handle or key it was created under, which no rename moves
   and the chart never issues twice — and the field's path inside it, ending in

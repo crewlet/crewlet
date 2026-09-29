@@ -222,33 +222,6 @@ func TestMapResolutionReportsPerKey(t *testing.T) {
 	}
 }
 
-// A setup step's env is left VERBATIM: it is resolved exactly once, with
-// the rest of the sandbox env at launch. Resolving here too would
-// double-resolve a secret whose real value contains a literal ${...}.
-func TestSetupStepResolvesFilesAndCommandsOnly(t *testing.T) {
-	t.Setenv("ACME_STEP_TOKEN", "tok")
-	step := SandboxSetupStep{
-		Name:     "git-auth",
-		Files:    map[string]string{"/tmp/creds": "password=${ACME_STEP_TOKEN}"},
-		Commands: []string{"echo ${ACME_STEP_TOKEN}"},
-		Env:      map[string]string{"GITLAB_TOKEN": "${ACME_STEP_TOKEN}"},
-		Brief:    "use ${ACME_STEP_TOKEN}",
-	}
-	out, missing := step.Resolve("providers.sandbox.setup[0]", EnvOnly())
-	if len(missing) != 0 {
-		t.Fatalf("missing = %#v", missing)
-	}
-	if out.Files["/tmp/creds"] != "password=tok" || out.Commands[0] != "echo tok" {
-		t.Fatalf("files/commands not resolved: %+v", out)
-	}
-	if out.Env["GITLAB_TOKEN"] != "${ACME_STEP_TOKEN}" {
-		t.Fatalf("env must stay verbatim, got %q", out.Env["GITLAB_TOKEN"])
-	}
-	if out.Brief != "use ${ACME_STEP_TOKEN}" {
-		t.Fatalf("brief must stay verbatim, got %q", out.Brief)
-	}
-}
-
 // The pre-launch presence check tests the REFERENCES, not the resolved
 // value: an embedded "Bearer ${TOKEN}" with TOKEN unset resolves to a
 // non-empty "Bearer ", so a caller checking the result would miss exactly

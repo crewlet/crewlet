@@ -663,7 +663,7 @@ func (w *Writer) resolveMasked(ctx context.Context, object, sealAs ObjectRef,
 	field, value, prior string) (string, error) {
 
 	if value != redact.FieldMask {
-		return w.sealValue(ctx, object, sealAs, []string{field}, value)
+		return w.sealValue(ctx, object, sealAs, []string{field}, false, value)
 	}
 	if prior == "" {
 		return "", fmt.Errorf("chart: %s on %s arrived as %q and there is no "+

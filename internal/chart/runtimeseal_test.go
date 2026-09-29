@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // THE RUNTIME HALF'S CREDENTIALS ARE SEALED LIKE THE ADDRESS IS.
@@ -137,6 +138,82 @@ func TestALiteralInAUnitsRuntimeHalfIsSealedAndNeverReachesTheLog(t *testing.T) 
 	if got := r.leaked("unit-LITERAL"); len(got) > 0 {
 		t.Errorf("a literal credential in a unit's runtime half reached the log "+
 			"or the rows: %v", got)
+	}
+}
+
+// A SETUP STEP'S FILE IS SEALED WHOLE, AND READS BACK AS THE BODY WRITTEN.
+//
+// A file is CONTENT: it is written into a box, and nothing on the way there
+// expands it, so a `${…}` inside a script or an .npmrc is the FILE's syntax.
+// Cut around it the way a header is, a body was stored as the chart's own
+// references strung together with the file's `${NPM_TOKEN}` between them, and
+// the box received exactly that. Each literal body is ONE reference to the
+// exact body; a body that is itself one `${VAR}` is a pointer and is kept; and
+// a SETTING beside it — the step's env — is still cut around its references,
+// because the engine expands those.
+func TestASetupStepsFileIsSealedWholeAndReadsBackAsWritten(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-seat", seatOp(chart.SeatAgent, "sarah-chen", ""))
+	const (
+		npmrc  = "registry=https://r.example.com\n//r.example.com/:_authToken=${NPM_TOKEN}\n"
+		helper = "#!/bin/sh\necho \"${HOME}\" npmrc-HELPER-LITERAL\n"
+	)
+	runtime, err := json.Marshal(map[string]any{"sandbox": map[string]any{
+		"enabled": true, "setup": []any{map[string]any{
+			"name": "registry",
+			"files": map[string]string{
+				"/root/.npmrc":     npmrc,
+				"/usr/local/bin/h": helper,
+				"/etc/pointer":     "${MY_FILE}",
+			},
+			"env": map[string]string{"AUTH": "Bearer ${GH_TOKEN} env-LITERAL"},
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.seat("op-runtime", chart.SeatContent{
+		Handle: "sarah-chen", Name: "Sarah Chen", Runtime: runtime,
+	}); err != nil {
+		t.Fatalf("write a seat whose setup step holds files: %v", err)
+	}
+	if got := r.leaked("npmrc-HELPER-LITERAL", "r.example.com", "env-LITERAL"); len(got) > 0 {
+		t.Errorf("a setup step's credential reached the log or the rows: %v", got)
+	}
+	var row struct {
+		Sandbox struct {
+			Setup []struct {
+				Files map[string]string `json:"files"`
+				Env   map[string]string `json:"env"`
+			} `json:"setup"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal([]byte(r.runtimeOf("sarah-chen")), &row); err != nil {
+		t.Fatal(err)
+	}
+	files := row.Sandbox.Setup[0].Files
+	lookup := func(name string) (string, bool) { return r.sealer.get(name) }
+	for path, want := range map[string]string{"/root/.npmrc": npmrc, "/usr/local/bin/h": helper} {
+		name, whole := envref.Whole(files[path])
+		if !whole || !chart.OwnsSecret(name) {
+			t.Errorf("%s is stored as %q, want ONE sealed reference — cut "+
+				"around the file's own ${…}, the box receives the chart's "+
+				"references strung together", path, files[path])
+			continue
+		}
+		if got, _ := secrets.ReadContent(files[path], lookup); got != want {
+			t.Errorf("%s reads back as %q, want the body written, %q", path, got, want)
+		}
+	}
+	if files["/etc/pointer"] != "${MY_FILE}" {
+		t.Errorf("a file that is one ${VAR} is stored as %q, want the pointer "+
+			"as written", files["/etc/pointer"])
+	}
+	if auth := row.Sandbox.Setup[0].Env["AUTH"]; !strings.Contains(auth, "${GH_TOKEN}") {
+		t.Errorf("the step's env, a SETTING, was sealed whole to %q — its "+
+			"${GH_TOKEN} is the engine's own and has to stay where the "+
+			"resolver finds it", auth)
 	}
 }
 

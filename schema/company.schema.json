@@ -1670,7 +1670,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Files written into the box before commands run.",
+          "description": "Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value.",
           "type": "object"
         },
         "name": {

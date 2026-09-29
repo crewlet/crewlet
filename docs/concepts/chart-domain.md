@@ -466,7 +466,7 @@ So a seat's model chain, tool credentials, sandbox cell, worker grants and sched
 
 **Opaque is not unread for a credential.** The writer is handed the one thing
 it needs from the organization model — where in the half its credentials sit,
-by the same `secret:"true"` tags `GET /config` masks by — and seals every
+by the same `secret` tags `GET /config` masks by — and seals every
 literal one into the [secret store](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not)
 before a record is published, so the log, the rows, a snapshot and a backup
 carry `${VAR}` references and never a value. A writer built without that is

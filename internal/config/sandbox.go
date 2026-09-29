@@ -629,13 +629,20 @@ type SandboxSetupStep struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Short identifier used in logs and failure messages."`
 
 	// Files are written into the box (path -> content) before Commands
-	// run. ${VAR} references here are resolved when the step is loaded.
+	// run.
 	//
 	// A CREDENTIAL FIELD, because provisioning is what these files are for:
 	// a registry's auth file, a git credential store, a cloud CLI's config.
 	// A file's content is shown on a config read only when it is exactly one
 	// ${VAR} reference, and masked otherwise.
-	Files map[string]string `secret:"true" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run."`
+	//
+	// AND CONTENT RATHER THAN A SETTING (`secret:"content"`, see
+	// internal/secrets): a body that is exactly one ${VAR} is read at launch
+	// as the value that variable holds, byte for byte, and any other body is
+	// written as it is — a `${HOME}` in a script or a `${NPM_TOKEN}` in an
+	// .npmrc is the box's own syntax, expanded there from the run
+	// environment and never from the engine host's.
+	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value."`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this
@@ -707,35 +714,4 @@ func (s *SandboxSetupStep) validate(path Path) error {
 		}
 	}
 	return p.err()
-}
-
-// Resolve returns a copy of the step with ${VAR} substituted in its FILES
-// and COMMANDS only, reporting what went unresolved.
-//
-// Env is deliberately left verbatim: it is resolved exactly once, together
-// with the rest of the sandbox env at launch, and resolving it here too
-// would double-resolve a secret whose real value contains a literal
-// ${...}. Brief and Name are never resolved — agent-facing text and an
-// identifier.
-//
-// path is rendered, like [Resolver.Map]'s: it only ever names a log line.
-func (s *SandboxSetupStep) Resolve(path string, r *Resolver) (SandboxSetupStep, []Unresolved) {
-	out := *s
-	var missing []Unresolved
-	if len(s.Files) > 0 {
-		files, m := r.Map(at(Path{path}, "files").String(), s.Files)
-		out.Files = files
-		missing = append(missing, m...)
-	}
-	if len(s.Commands) > 0 {
-		out.Commands = make([]string, len(s.Commands))
-		for i, cmd := range s.Commands {
-			expanded, names := r.Expand(cmd)
-			out.Commands[i] = expanded
-			if len(names) > 0 {
-				missing = append(missing, Unresolved{Path: idx(at(Path{path}, "commands"), i).String(), Names: names})
-			}
-		}
-	}
-	return out, missing
 }

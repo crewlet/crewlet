@@ -714,7 +714,7 @@ exactly like a caller who was silently stripped.
 `mcp_env` value, the sandbox's `env` and its setup steps' `files` and `env`, a
 seat's own Slack, Mattermost and GitHub App credentials — is served only as a
 whole `${VAR}` reference and anything else as `"__redacted__"`, found by the
-same `secret:"true"` tags `GET /config` masks by; a seat's `email` is served
+same `secret` tags `GET /config` masks by; a seat's `email` is served
 the same way. The writer seals every literal into the
 [secret store](../concepts/secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not)
 before a record is published, so what you normally see is the `${CHART_…}`

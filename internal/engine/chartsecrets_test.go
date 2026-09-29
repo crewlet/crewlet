@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A VALUE A CHART WRITE SEALS RESOLVES ON THE NODE THAT APPLIES IT — AND SO
@@ -80,4 +81,97 @@ func TestAValueAChartWriteSealsResolvesOnTheNodeThatAppliesIt(t *testing.T) {
 	// THE ROTATION: the same field, a new literal, the same sealed name.
 	give("test:content:cfo:2", "second-token")
 	waitFor("second-token")
+}
+
+// A SEAT'S SETUP FILE REACHES ITS BOX AS THE BODY SOMEBODY WROTE.
+//
+// A file is a credential the chart seals, and it is CONTENT: nothing on the
+// way to a box expands a file, so a seat's `.npmrc` sealed into references —
+// or sealed whole and never read back — reached the box as the text of the
+// chart's own `${CHART_…}` names, and the registry refused every install with
+// nothing anywhere saying why. What the launch hands over is the body as
+// written, its own `${NPM_TOKEN}` and `${HOME}` left for the box's npm and
+// shell; a provider-wide file is read by the same rule, and the manager's own
+// steps are never written through.
+func TestASeatsSetupFileReachesTheBoxAsWritten(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, seedCompanyDoc)})
+	readChart(t, e)
+	writer := e.ChartWriter()
+	if _, err := writer.WriteBatch(t.Context(), "test:hire:builder", chart.Batch{
+		Operations: []chart.Operation{{Kind: chart.OpCreateSeat,
+			Object:   chart.ObjectRef{Kind: chart.KindSeat, ID: "builder"},
+			SeatKind: chart.SeatAgent}},
+	}); err != nil {
+		t.Fatalf("hire: %v", err)
+	}
+	const (
+		npmrc  = "registry=https://r.example.com\n//r.example.com/:_authToken=${NPM_TOKEN}\n"
+		helper = "#!/bin/sh\n[ \"$1\" = get ] || exit 0\necho \"password=${GIT_TOKEN}\"\n"
+	)
+	runtime, err := json.Marshal(map[string]any{
+		"llm": []string{"zulu"},
+		"sandbox": map[string]any{"enabled": true, "setup": []any{map[string]any{
+			"name": "registry",
+			"files": map[string]string{
+				"/root/.npmrc":     npmrc,
+				"/usr/local/bin/h": helper,
+			},
+			"env": map[string]string{"NPM_TOKEN": "npm-literal-token"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteSeat(t.Context(), "test:content:builder", chart.SeatContent{
+		Handle: "builder", Name: "Builder", Runtime: runtime,
+	}); err != nil {
+		t.Fatalf("write the seat: %v", err)
+	}
+
+	provider := []sandbox.SetupStep{{Name: "shared", Files: map[string]string{
+		"/etc/plain":  "home is ${HOME}\n",
+		"/etc/sealed": "${SHARED_FILE_UNSET}",
+	}}}
+	var steps []sandbox.SetupStep
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if _, err := engine.RefreshChartForTest(t.Context(), e); err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
+		steps = engine.SeatBoxSetupForTest(e, provider, "builder")
+		if len(steps) == 2 && steps[1].Files["/root/.npmrc"] == npmrc {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the seat's box is given %+v, want the provider's step and "+
+				"then the seat's own, each file the body that was written — a "+
+				"file sealed by the chart must be read back before a box is "+
+				"provisioned with it", steps)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := steps[1].Files["/usr/local/bin/h"]; got != helper {
+		t.Errorf("the helper script reaches the box as %q, want %q", got, helper)
+	}
+	role := e.Company().Org.Role("builder")
+	for path, body := range role.Sandbox.Setup[0].Files {
+		if name, whole := envref.Whole(body); !whole || !chart.OwnsSecret(name) {
+			t.Errorf("%s reached the running seat as %q, want ONE sealed "+
+				"reference — a file cut around its own ${…} is the chart's "+
+				"references strung together", path, body)
+		}
+	}
+	if got := steps[0].Files["/etc/plain"]; got != "home is ${HOME}\n" {
+		t.Errorf("a provider-wide file was expanded to %q — a ${…} inside a "+
+			"body is the box's, never the engine host's", got)
+	}
+	if got, held := steps[0].Files["/etc/sealed"]; !held || got != "" {
+		t.Errorf("a file naming a variable nothing answers for reaches the "+
+			"box as (%q, %v), want present and empty", got, held)
+	}
+	if provider[0].Files["/etc/sealed"] != "${SHARED_FILE_UNSET}" {
+		t.Errorf("reading the provider's step wrote through to the manager's "+
+			"own copy: %v", provider[0].Files)
+	}
 }
