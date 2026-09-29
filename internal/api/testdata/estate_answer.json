@@ -261,7 +261,6 @@
             "layout": 1,
             "healthy": true,
             "able": true,
-            "map_epoch": 9,
             "free_bytes": 549755813888
           }
         }
@@ -604,7 +603,6 @@
             "layout": 1,
             "healthy": true,
             "able": true,
-            "map_epoch": 9,
             "free_bytes": 549755813888
           }
         }
@@ -955,7 +953,6 @@
             "layout": 1,
             "healthy": true,
             "able": true,
-            "map_epoch": 9,
             "free_bytes": 549755813888
           }
         }

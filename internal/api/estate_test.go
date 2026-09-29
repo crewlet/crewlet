@@ -115,17 +115,27 @@ func estateFleet() partmap.MapState {
 	}
 }
 
+// otherGeneration is another lineage of the estate map than the fixture's: one
+// written before the map was written again from nothing.
+var otherGeneration = uuid.MustParse("0b9f4c2e-6a1d-4f3b-8e7c-2d5a9f1b3c6e")
+
 // estateLeases are the live estate leases [estateFleet]'s members hold: data-b
 // holds none, data-d is draining what it was told to leave, data-c is still
 // catching up on the partition it joins, data-f is back and serving what it
-// kept — and data-g, a node the map does not hold yet, which the maintainer
-// adds at its next tick and the answer ignores.
+// kept, having last acted on epoch 14 of ANOTHER LINEAGE of the map — no proof
+// of having read this one, so its epoch is not this map's — and data-g, a node
+// the map does not hold yet, which the maintainer adds at its next tick and the
+// answer ignores.
 func estateLeases(t *testing.T) []coord.Lease {
 	t.Helper()
 	layout, healthy := estateLayout.Number, true
 	lease := func(node string, weight int, epoch uint64, parts map[string]partmap.PartitionState) coord.Lease {
+		generation := estateGeneration
+		if node == "data-f" {
+			generation = otherGeneration
+		}
 		meta, err := partmap.Meta{Weight: weight, Layout: &layout, Healthy: &healthy,
-			MapGeneration: estateGeneration, MapEpoch: epoch, Partitions: parts,
+			MapGeneration: generation, MapEpoch: epoch, Partitions: parts,
 			FreeBytes: 512 << 30}.Encode()
 		if err != nil {
 			t.Fatal(err)
@@ -142,7 +152,7 @@ func estateLeases(t *testing.T) []coord.Lease {
 			"tracker.001": partmap.PartCatchingUp, "tracker.002": partmap.PartServing}),
 		lease("data-d", 1, 8, map[string]partmap.PartitionState{
 			"tracker.000": partmap.PartDraining}),
-		lease("data-f", 1, 9, map[string]partmap.PartitionState{
+		lease("data-f", 1, 14, map[string]partmap.PartitionState{
 			"tracker.003": partmap.PartServing}),
 		lease("data-g", 1, 0, map[string]partmap.PartitionState{}),
 	}
@@ -151,6 +161,8 @@ func estateLeases(t *testing.T) []coord.Lease {
 // wholeLeases are a layout-0 fleet's presence and estate leases: two data nodes
 // — data-a claiming its estate lease and serving the whole estate, data-b a
 // build from before the lease — and a stateless node, which holds nothing.
+// data-a's lease still names a map epoch it once acted on, which layout 0 —
+// with no map to have acted on — never renders.
 func wholeLeases(t *testing.T) (presence, estate []coord.Lease) {
 	t.Helper()
 	node := func(id string, roles ...string) coord.Lease {
@@ -162,6 +174,7 @@ func wholeLeases(t *testing.T) (presence, estate []coord.Lease) {
 	}
 	zero, healthy := 0, true
 	meta, err := partmap.Meta{Weight: 1, Layout: &zero, Healthy: &healthy,
+		MapGeneration: otherGeneration, MapEpoch: 7,
 		Partitions: map[string]partmap.PartitionState{"estate.000": partmap.PartServing},
 		FreeBytes:  96 << 30}.Encode()
 	if err != nil {
