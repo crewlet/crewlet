@@ -215,7 +215,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	fence.Committed = r.waiter.Committed
 	lost := &lossyLog{Appender: r.log}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Log: lost, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: lost, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Identity: r.waiter,
 		NodeID: r.nodeID, Admission: r.reserve,
 		Generation:    func() uint32 { return 0 },

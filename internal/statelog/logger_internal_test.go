@@ -31,6 +31,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 
 	runner, err := NewRunner(RunnerDeps{
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
+		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
 		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
 		Node: nodeProbe{}, DB: struct{ Estate }{},
 	})
@@ -39,6 +40,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	}
 	publisher, err := NewPublisher(Deps{
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{}, Rows: struct{ Rows }{},
+		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
 		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
 		Waiter: struct{ Waiter }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },

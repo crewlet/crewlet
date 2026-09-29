@@ -29,6 +29,7 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	runner, err := NewRunner(RunnerDeps{
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
+		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
 		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
 		Node: nodeProbe{}, DB: struct{ Estate }{},
 		Logger: slog.New(slog.NewJSONHandler(&buf, nil)),

@@ -209,7 +209,7 @@ func runLog(t *testing.T, db *store.DB, domain statelog.Domain, payloads [][]byt
 		t.Fatal(err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Spec: statelog.EstateStream(domain), Applier: search.NewApplier(), Fetch: log, Log: log,
+		Domain: domain, Spec: statelog.EstateStream(domain), Layout: statelog.EstateLayout(domain.Name()), LogID: statelog.EstateLog(domain), Applier: search.NewApplier(), Fetch: log, Log: log,
 		Node: db, DB: storetest.EstateOf(db),
 		Checkpoint: statelog.Position{Generation: 1}, Metrics: recorder,
 	})

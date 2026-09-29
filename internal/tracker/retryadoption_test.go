@@ -285,7 +285,7 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	// THE SWEEP, with a cutoff past the row — the arithmetic of a month
 	// passing, done by the job that runs it.
 	sweep, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.node,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.node,
 		DB: r.db,
 	})
 	if err != nil {

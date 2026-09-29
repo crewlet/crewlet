@@ -851,3 +851,62 @@ func TestASpecOfAnotherShapeIsNotALogOfTheDomain(t *testing.T) {
 		}
 	}
 }
+
+// A RUNNER'S AND A PUBLISHER'S PLACE IS THE LAYOUT'S OWN LOG, NAMED AS THE
+// GRAMMAR NAMES IT.
+//
+// The two partition gates judge a record against the log's partition in the
+// layout, and every row the log writes is keyed by the spec's stream — so the
+// three must be one fact. A place the layout does not carry, a log of another
+// domain, or a stream the grammar gives another log each builds a runner whose
+// gate judges by one partition while it applies another's records.
+func TestAPlaceIsTheLayoutsOwnLogUnderItsOwnName(t *testing.T) {
+	t.Parallel()
+	d := trackerShaped(1 << 30)
+	seven := statelog.LogID{Domain: "tracker", Partition: mustParse(t, "tracker.007")}
+	eight := statelog.LogID{Domain: "tracker", Partition: mustParse(t, "tracker.008")}
+	zero := statelog.LogID{Domain: "tracker", Partition: statelog.EstatePartition}
+	sized := layoutOne().StreamSpec(d, seven)
+	sized.MaxBytes = 1 << 20 // a node's own share, which is not compared
+	for _, ok := range []struct {
+		name   string
+		layout statelog.Layout
+		log    statelog.LogID
+		spec   statelog.StreamSpec
+	}{
+		{"layout 0's log", layoutZero(), zero, layoutZero().StreamSpec(d, zero)},
+		{"a partitioned log", layoutOne(), seven, layoutOne().StreamSpec(d, seven)},
+		{"a partitioned log at a node's own ceiling", layoutOne(), seven, sized},
+	} {
+		if err := ok.layout.Places(d, ok.log, ok.spec); err != nil {
+			t.Errorf("%s is refused: %v", ok.name, err)
+		}
+	}
+	for _, bad := range []struct {
+		name   string
+		layout statelog.Layout
+		domain statelog.Domain
+		log    statelog.LogID
+		spec   statelog.StreamSpec
+	}{
+		{"the zero layout", statelog.Layout{}, d, seven, layoutOne().StreamSpec(d, seven)},
+		{"the zero log", layoutOne(), d, statelog.LogID{}, layoutOne().StreamSpec(d, seven)},
+		{"a partition the layout does not have", layoutOne(), d,
+			statelog.LogID{Domain: "tracker", Partition: mustParse(t, "tracker.064")},
+			layoutOne().StreamSpec(d, seven)},
+		{"a log of another domain", layoutOne(), d,
+			statelog.LogID{Domain: "vectors", Partition: seven.Partition},
+			layoutOne().StreamSpec(d, seven)},
+		{"a domain the space does not carry", layoutOne(), d,
+			statelog.LogID{Domain: "tracker", Partition: mustParse(t, "pages.003")},
+			layoutOne().StreamSpec(d, seven)},
+		{"another partition's stream", layoutOne(), d, seven, layoutOne().StreamSpec(d, eight)},
+		{"layout 0's stream for a partitioned log", layoutOne(), d, seven, layoutZero().StreamSpec(d, zero)},
+		{"no domain", layoutOne(), nil, seven, layoutOne().StreamSpec(d, seven)},
+	} {
+		if err := bad.layout.Places(bad.domain, bad.log, bad.spec); !errors.Is(err, statelog.ErrUnplacedLog) {
+			t.Errorf("%s is placed (%v); a runner built on it judges records by one "+
+				"partition while applying another's", bad.name, err)
+		}
+	}
+}

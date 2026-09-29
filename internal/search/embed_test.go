@@ -439,7 +439,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: search.Domain{}, Spec: statelog.EstateStream(search.Domain{}), Log: log, Rows: rows,
+		Domain: search.Domain{}, Spec: statelog.EstateStream(search.Domain{}), Layout: statelog.EstateLayout(search.Domain{}.Name()), LogID: statelog.EstateLog(search.Domain{}), Log: log, Rows: rows,
 		Fence: search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{},
 		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,

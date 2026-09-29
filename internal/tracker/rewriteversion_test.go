@@ -231,8 +231,8 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain:  olderTracker{reads: 3},
-		Spec:    statelog.EstateStream(olderTracker{reads: 3}),
+		Domain: olderTracker{reads: 3},
+		Spec:   statelog.EstateStream(olderTracker{reads: 3}), Layout: statelog.EstateLayout(olderTracker{reads: 3}.Name()), LogID: statelog.EstateLog(olderTracker{reads: 3}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,

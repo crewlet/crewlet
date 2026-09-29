@@ -481,7 +481,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: versionOneTracker{}, Spec: statelog.EstateStream(versionOneTracker{}),
+		Domain: versionOneTracker{}, Spec: statelog.EstateStream(versionOneTracker{}), Layout: statelog.EstateLayout(versionOneTracker{}.Name()), LogID: statelog.EstateLog(versionOneTracker{}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,

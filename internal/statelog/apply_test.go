@@ -329,7 +329,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		t.Fatalf("recorder: %v", err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Spec: specOf(domain),
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
 		Applier:    applier,
 		Fetch:      fetch,
 		Log:        fetch,
@@ -377,7 +377,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		checkpoint.At.Generation = 1
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: domain, Spec: specOf(domain),
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
 		Applier:            h.applier,
 		Fetch:              h.fetch,
 		Log:                h.fetch,
@@ -2197,7 +2197,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	h := newApplyHarness(t, probeDomain{})
 	flaky := &flakyEstate{inner: h.estate, refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,

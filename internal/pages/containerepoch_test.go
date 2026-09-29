@@ -254,7 +254,7 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: versionOneBuild{}, Spec: statelog.EstateStream(versionOneBuild{}),
+		Domain: versionOneBuild{}, Spec: statelog.EstateStream(versionOneBuild{}), Layout: statelog.EstateLayout(versionOneBuild{}.Name()), LogID: statelog.EstateLog(versionOneBuild{}),
 		Applier: pages.NewApplier("node-older", nil, nil),
 		Fetch:   &logFetch{log: r.log, next: 1},
 		Log:     r.log,

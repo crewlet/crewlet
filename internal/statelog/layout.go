@@ -458,7 +458,71 @@ func EstateLayout(domains ...string) Layout {
 // there, so its share is its whole budget however many domains the layout
 // carries beside it.
 func EstateStream(d Domain) StreamSpec {
-	return EstateLayout(d.Name()).StreamSpec(d, LogID{Domain: d.Name(), Partition: EstatePartition})
+	return EstateLayout(d.Name()).StreamSpec(d, EstateLog(d))
+}
+
+// EstateLog is domain d's one log in layout 0: its log of `estate.000`, keyed
+// by the domain's name alone ([LogID.String]). It is what [EstateStream] is
+// the stream of, and with [EstateLayout] over d it is where a runner or a
+// publisher on that stream sits ([Layout.Places]).
+func EstateLog(d Domain) LogID {
+	return LogID{Domain: d.Name(), Partition: EstatePartition}
+}
+
+// ErrUnplacedLog reports a runner or a publisher handed a log its layout does
+// not carry, or a stream that is not that log's.
+var ErrUnplacedLog = errors.New("statelog: the log is not the layout's")
+
+// Places refuses a log a runner or a publisher cannot be built on: one this
+// layout does not carry, one that is not domain d's, or a spec whose stream is
+// not the one the grammar names for it.
+//
+// # Why a runner and a publisher carry their place, and not only their stream
+//
+// Two of the gates that hold the floor theorem per log judge a record's
+// PARTITION — the applier drops a record whose domain places it in another
+// partition than its log's, and the publisher refuses a write whose record or
+// scope names one — and a partition is a question about the layout, which a
+// stream's name cannot answer. So each is built on the layout and the log as
+// well as the stream, and this is what makes the three one fact: a spec naming
+// another log's stream than the one its gates judge by would drop records that
+// are its own and apply records that are not, on every holder alike.
+//
+// ONLY THE NAMES ARE COMPARED, never the ceiling: the spec a node creates a log
+// with carries the byte share its own Tier A sized, which is the node's to
+// choose ([StreamSpec.Instantiates] holds every other setting to the domain's).
+//
+// NOT [Layout.Validate], which is asked where a layout is made — every layout
+// this build runs is validated before a log of it starts — while this is asked
+// once per log. A log of a valid layout always has a name, so the comparison
+// always runs where a node runs one; a layout that does not validate can carry
+// a log the grammar has no name for, and only a test's fake domain is ever
+// placed in one (layout 0's grammar names its three logs and nothing else), so
+// there the stream is the caller's to name and nothing is compared.
+func (l Layout) Places(d Domain, log LogID, spec StreamSpec) error {
+	fail := func(format string, args ...any) error {
+		return fmt.Errorf("%w: %s", ErrUnplacedLog, fmt.Sprintf(format, args...))
+	}
+	switch {
+	case d == nil:
+		return fail("no domain was named for %s", log)
+	case log.Domain != d.Name():
+		return fail("the log %s is not a log of the %s domain", log, d.Name())
+	case !slices.Contains(l.Logs(log.Partition), log):
+		return fail("layout %d carries no log %s — a zero layout, or a partition "+
+			"or a domain the layout does not have", l.Number, log)
+	}
+	want := l.StreamSpec(d, log)
+	if want.Name == "" {
+		return nil
+	}
+	if spec.Name != want.Name || spec.SubjectPrefix != want.SubjectPrefix ||
+		!slices.Equal(spec.Subjects, want.Subjects) {
+		return fail("the stream (%q, %q, %v) is not layout %d's %s, which the "+
+			"grammar names (%q, %q, %v)", spec.Name, spec.SubjectPrefix, spec.Subjects,
+			l.Number, log, want.Name, want.SubjectPrefix, want.Subjects)
+	}
+	return nil
 }
 
 // OnlyPartition is the one partition that carries the named domain's log, when

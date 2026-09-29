@@ -1328,6 +1328,10 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: spec, Applier: applier, Fetch: consumer,
+		// WHERE THE LOG SITS, which the applier's partition gate reads:
+		// a record its domain places in another partition than this log's
+		// applies nowhere.
+		Layout: s.layout, LogID: id,
 		// THE LOG'S PARTITION, not the node's own file. The applier PINS
 		// a connection for the life of its loop, and the pins live on the
 		// partition's pool — that is where the log's applier writes, and
@@ -1478,6 +1482,10 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 
 	deps := statelog.Deps{
 		Domain: domain, Spec: spec, Log: publishTo, Waiter: runner, NodeID: s.nodeID,
+		// WHERE THE LOG SITS, which the write authority's partition gates
+		// read: a record or a scope naming another partition is refused
+		// before anything is appended.
+		Layout: s.layout, LogID: id,
 		// THE RUNNER IS THE IDENTITY, for the reason it is the waiter:
 		// the positions a write forms its expectation from and resolves
 		// its record against are the runner's, so the answer to "are

@@ -762,7 +762,7 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	// instant loads the untouched checkpoint and does not stop.
 	secondFetch := newProbeFetch()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: secondProbeDomain{}, Spec: specOf(secondProbeDomain{}), Applier: newProbeApplier(),
+		Domain: secondProbeDomain{}, Spec: specOf(secondProbeDomain{}), Layout: layoutOf(secondProbeDomain{}), LogID: logOf(secondProbeDomain{}), Applier: newProbeApplier(),
 		Fetch: secondFetch, Log: secondFetch, Node: f.db, DB: f.estate,
 		Checkpoint:      statelog.Position{Generation: 1},
 		StreamCreatedAt: secondCreated,
@@ -1585,7 +1585,7 @@ func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
 		t.Helper()
 		h := newApplyHarness(t, probeDomain{})
 		runner, err := statelog.NewRunner(statelog.RunnerDeps{
-			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}), LogID: logOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
 			Node: h.db, DB: h.estate, Metrics: h.metrics,
 			Checkpoint: statelog.Position{Generation: 1},
 			NodeID:     self,

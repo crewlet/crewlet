@@ -398,6 +398,43 @@
 // always was, so a node running it holds exactly the records a fleet before
 // layouts held.
 //
+// # Who may write a log, and the gates that hold the proof per log
+//
+// The floor theorem above is stated over ONE STREAM, and a partitioned layout
+// keeps that literally true — every log is one stream — but it adds a way to
+// break each clause without breaking any number, so each clause is held per
+// log by a gate of its own. A runner and a publisher are therefore built on
+// their PLACE as well as their stream — the layout and which of its logs this
+// is ([RunnerDeps.LogID], [Deps.LogID]) — and [Layout.Places] holds the three
+// to one fact, since a gate judging by one partition while applying another's
+// stream would drop records that are its own.
+//
+//   - GATE 1, for clause (i): every record's scope lies inside its own
+//     partition. A deferral is filed and probed in one partition's file, so a
+//     path naming another partition's object is a deferral the partition it
+//     names never sees — the write it should have blocked there takes the
+//     retry at zero over it. The publisher asks [Domain.ScopePartition] of every
+//     path in the request's scope, which step 0 probes, and in its record's,
+//     which a holder that cannot decode the record files it under, and refuses
+//     one naming another partition before anything is appended
+//     ([ErrScopeCrossesPartitions], a programming error). An effect in another
+//     partition travels as a write decided there, under a scope of its own.
+//   - GATE 2, for clause (iii): a record belongs to its log's partition. The
+//     applier asks [Domain.PartitionOf] of every record's envelope — before its
+//     version, so one this build cannot read is judged too, and never retained
+//     under a scope only this partition probes — and drops one the domain
+//     places elsewhere on every holder, `wrong_partition`, counted by the
+//     records-gated instrument. Deterministic, because every holder asks the
+//     same function of the same bytes, so no copy diverges; it is the pages
+//     applier's refusal of a record whose address disagrees with its subject,
+//     for partitions. The publisher asks it first and never appends such a
+//     record ([ErrWrongPartition]), so one on a log is another writer's.
+//
+// Under layout 0 every record and every path a domain of this build writes is
+// in the one partition, `estate.000`, so neither gate refuses anything a fleet
+// before layouts wrote: they are the rules the partitioned layout's writes are
+// held to from its first record.
+//
 // # Which log a coordination record is about
 //
 // ONE RULE, for every record the fleet shares about a log — a node's row in

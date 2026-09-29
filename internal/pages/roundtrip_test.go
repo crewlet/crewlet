@@ -117,7 +117,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 		t.Fatalf("build the gate reserve: %v", err)
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Log: log, Rows: rows, Fence: fence,
+		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },

@@ -84,10 +84,13 @@ var sentinels = []sentinel{
 	{"statelog.ErrNoOffer", statelog.ErrNoOffer},
 	{"statelog.ErrPositionRange", statelog.ErrPositionRange},
 	{"statelog.ErrReanchorRefused", statelog.ErrReanchorRefused},
+	{"statelog.ErrScopeCrossesPartitions", statelog.ErrScopeCrossesPartitions},
 	{"statelog.ErrStopped", statelog.ErrStopped},
 	{"statelog.ErrStreamRecreated", statelog.ErrStreamRecreated},
 	{"statelog.ErrUnavailable", statelog.ErrUnavailable},
+	{"statelog.ErrUnplacedLog", statelog.ErrUnplacedLog},
 	{"statelog.ErrWaitAbandoned", statelog.ErrWaitAbandoned},
+	{"statelog.ErrWrongPartition", statelog.ErrWrongPartition},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},

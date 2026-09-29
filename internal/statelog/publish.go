@@ -418,6 +418,10 @@ type Publisher struct {
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
 
+	// layout and logID are where this publisher's log sits ([Deps.LogID]).
+	layout Layout
+	logID  LogID
+
 	// admission holds this log's ordinary appends out of its gate reserve,
 	// nil on a log that keeps none ([KeepsGateReserve]).
 	admission Admission
@@ -457,6 +461,14 @@ type Deps struct {
 	// every subject's, and its arbitration is against that stream's own
 	// sequences, which mean nothing on a sibling partition's log.
 	Spec StreamSpec
+
+	// Layout and LogID are where Spec's log sits: the layout this node runs
+	// and which of its logs this is. REQUIRED, and held to Spec
+	// ([Layout.Places]), because the publisher refuses a record its domain
+	// places in another partition than this log's, and a scope naming one —
+	// questions about the layout that the stream's name cannot answer.
+	Layout Layout
+	LogID  LogID
 
 	Log    Appender
 	Rows   Rows
@@ -530,6 +542,9 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	if err := spec.Instantiates(d.Domain); err != nil {
 		return nil, err
 	}
+	if err := d.Layout.Places(d.Domain, d.LogID, spec); err != nil {
+		return nil, fmt.Errorf("statelog: %s's publisher: %w", d.Domain.Name(), err)
+	}
 	logger := loggerOr(d.Logger)
 	budget := d.ResolveBudget
 	if budget <= 0 {
@@ -539,6 +554,8 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		domain:        d.Domain,
 		stream:        spec.Name,
 		prefix:        spec.SubjectPrefix,
+		layout:        d.Layout,
+		logID:         d.LogID,
 		log:           d.Log,
 		rows:          d.Rows,
 		fence:         d.Fence,
@@ -575,6 +592,14 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("statelog: write on %s declares no scope — an "+
 			"empty scope claims the record makes nothing stale, which is the one "+
 			"claim a record no build may be able to read cannot make", req.Subject)
+	}
+	// GATE 1, ON WHAT THE PROBE WILL BE ASKED: the request's scope is what
+	// step 0 probes this partition's deferrals with, so a path in another
+	// partition is a question this partition's file cannot answer. Before
+	// any fence, because it is the caller's mistake rather than this node's
+	// state, and no fence clearing changes it.
+	if err := p.withinPartition("the write", req.Subject, req.Scope); err != nil {
+		return Result{}, err
 	}
 
 	// FENCE 0, BEFORE ANYTHING ELSE AND ON EVERY APPEND. Its identity
@@ -867,6 +892,18 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"operation %q and the write is %q — the ledger an ambiguous publish "+
 			"is resolved by is keyed on the record's, so this write could never "+
 			"be answered for", p.domain.Name(), req.Subject, env.OpID, req.OpID)
+	case p.misplaced(env):
+		// GATE 2, AT ITS SOURCE. Every holder of this log would drop the
+		// record `wrong_partition`, so appending it buys a durable record
+		// that applies nowhere — and a resolution that finds no ledger
+		// row, asks gates that know nothing of partitions, reads the
+		// silence as a lost race and decides again, sixteen times, to a
+		// conflict about a colleague that does not exist.
+		at, _ := p.domain.PartitionOf(p.layout, env)
+		return fmt.Errorf("%w: the %s record decided for %s belongs to %s and "+
+			"this is %s — a write is decided and published in the partition its "+
+			"object is in", ErrWrongPartition, p.domain.Name(), req.Subject,
+			partitionOf(p.layout, at), p.logID)
 	case req.NodeGate && !p.domain.NodeGate(env):
 		// A NODE GATE IS JUDGED FROM THE RECORD ITSELF, because the flag
 		// excuses three fences — the passed generation, a peer's truncated
@@ -880,7 +917,68 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
+	// GATE 1, ON WHAT THE DEFERRAL WILL BE FILED UNDER: a holder that cannot
+	// decode this record indexes it by the RECORD's scope, not the request's,
+	// so both are held to this partition — a decision that widened its own
+	// record's scope past the request's is refused here, before the broker.
+	return p.withinPartition("the "+p.domain.Name()+" record decided", req.Subject, env.Scope)
+}
+
+// ErrScopeCrossesPartitions reports a write whose scope — the request's or
+// its record's — names an object in another partition than the log it is
+// published to: gate 1 of the three the floor theorem is held by per log (the
+// package doc's "who may write a log").
+//
+// A PROGRAMMING ERROR, never a refusal about this node: a scope is what a
+// deferral is filed under and what step 0 probes, and both run in one
+// partition's file, so a path naming another partition's object is a deferral
+// that partition's probe never sees. An effect in another partition travels as
+// a write decided there, under a scope of its own.
+var ErrScopeCrossesPartitions = errors.New("statelog: the write's scope names " +
+	"another partition's object")
+
+// ErrWrongPartition reports a record whose own domain places it in another
+// partition than the log it is published to — what every holder of that log
+// would gate `wrong_partition` ([ReasonWrongPartition]), refused before it is
+// appended rather than published to apply nowhere. A programming error, for
+// [ErrScopeCrossesPartitions]'s reason.
+var ErrWrongPartition = errors.New("statelog: the record belongs to another partition")
+
+// misplaced reports whether a record's own domain places it in another
+// partition than this publisher's log — the question the applier's partition
+// gate asks ([Runner.misplaced]), asked here first.
+func (p *Publisher) misplaced(env Envelope) bool {
+	at, placed := p.domain.PartitionOf(p.layout, env)
+	return placed && at != p.logID.Partition
+}
+
+// withinPartition refuses a scope with a path the domain places in another
+// partition than this publisher's log — gate 1, [ErrScopeCrossesPartitions].
+// A path that names the log itself (a domain or family term) lies wherever it
+// is written, and passes.
+func (p *Publisher) withinPartition(what string, subject Subject, scope ScopeSet) error {
+	for _, path := range scope.Paths {
+		at, placed := p.domain.ScopePartition(p.layout, path)
+		if placed && at != p.logID.Partition {
+			return fmt.Errorf("%w: %s on %s declares the path %q, which lies in "+
+				"%s, and it is published to %s — a deferral filed under that path "+
+				"here is one the partition it names never probes; decide the "+
+				"effect there, as a write of its own", ErrScopeCrossesPartitions,
+				what, subject, path, partitionOf(p.layout, at), p.logID)
+		}
+	}
 	return nil
+}
+
+// partitionOf names a partition for a refusal, or says the layout has none: a
+// domain that cannot place a path or a record under a layout answers a
+// partition no log carries — the zero one among them — and printing its empty
+// name would read as a missing word rather than an answer.
+func partitionOf(l Layout, at PartitionID) string {
+	if len(l.Logs(at)) == 0 {
+		return fmt.Sprintf("no partition of layout %d", l.Number)
+	}
+	return at.String()
 }
 
 // disposition is what one append attempt leaves the round loop to do, and

@@ -54,7 +54,16 @@ func (d probeDomain) ScopePartition(l statelog.Layout, _ string) (statelog.Parti
 // logOf is a fake domain's one log, in layout 0's estate — keyed, as every
 // such log is, by the domain's name alone.
 func logOf(d statelog.Domain) statelog.LogID {
-	return statelog.LogID{Domain: d.Name(), Partition: statelog.EstatePartition}
+	return statelog.EstateLog(d)
+}
+
+// layoutOf is the layout that log sits in: layout 0 carrying the one fake
+// domain. The grammar names no fake's log there, so a runner or a publisher
+// built on it takes the hand-named stream [specOf] gives rather than holding it
+// to a name ([statelog.Layout.Places]) — the partitioned names are certified by
+// statelogtest's control, whose logs the grammar does name.
+func layoutOf(d statelog.Domain) statelog.Layout {
+	return statelog.EstateLayout(d.Name())
 }
 
 // specOf is a fake domain's one log's stream: its shape under the name the cases here
@@ -695,7 +704,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	}
 
 	deps := statelog.Deps{
-		Domain: domain, Spec: specOf(domain),
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
 		Log:           h.appends,
 		Rows:          h.rows,
 		Fence:         h.fence,

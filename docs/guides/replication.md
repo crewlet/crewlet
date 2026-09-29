@@ -222,6 +222,30 @@ a purge mean something on a system where the log outlives the decision; the
 third is what lets the engine stop writing a kind without stranding the nodes
 that still have to read past one.
 
+### A record belongs to its log's partition
+
+The replicated estate is divided into **partitions**, and each domain has one
+log per partition that carries it. Two more rules hold every write to the
+partition it is in, and neither is a gate an ordinary write ever meets:
+
+- **A write's scope lies inside its own partition.** A record's scope is what a
+  node that cannot decode it files the record under, and what the next write's
+  deferral check probes — both in one partition's database. A write whose scope
+  named an object in another partition would file a deferral that partition
+  never sees, so the write path refuses it before anything is appended. An
+  effect in another partition is a write decided there.
+- **A record on the wrong log applies nowhere.** Every node that applies a log
+  asks the record's own domain which partition it belongs to, and drops one that
+  belongs to another — `wrong_partition`, on the `statelog_record_gated` line
+  and the `crewlet.statelog.records_gated` counter. Every node asks the same
+  question of the same bytes, so every copy drops it alike. The write path asks
+  the same question first and never appends such a record, so one on a log was
+  written by something else.
+
+Today's estate is one partition, `estate.000`, so every record and every scope
+lies in it and neither rule refuses anything; they are the rules a divided
+estate is held to from its first record.
+
 ### A record whose scope meets a deferred scope is deferred too
 
 A record this build cannot decode is **retained**, not dropped: the bytes are
@@ -621,7 +645,7 @@ replication:
 | `statelog_checkpoint_other_operation` | `WARN` | The same naming found this node's ledger naming, at its checkpoint, another operation (`applied_op_id`) than the log's record there carries (`log_op_id`): the log holds another record at the checkpoint, and the domain is refused as diverged from then on. |
 | `statelog_checkpoint_unnamed` | `WARN` | Nothing this node kept names the record its checkpoint stands on — the ledger's sweep took the row, or the record there wrote none (a read barrier, a repeated operation, a gated record). The applier carries on and its next batch names a record, but until then a broker restored from an older copy and written past these rows goes unnoticed. Written once per checkpoint. |
 | `statelog_adopted` | `INFO` | The node replaced its replicated database with a peer's snapshot, naming the donor, the artefact's `sha256` (the donor's `statelog_snapshot_sent` carries the same one) and when it was taken (`taken_at`), which is how old the history it installed is. |
-| `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate — `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), and `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)). |
+| `statelog_record_gated` | `WARN` | A durable record applied nowhere, naming the gate — `abandoned` for a record written in a generation a reanchor skipped because only an evicted peer held it ([retention](retention.md#a-node-a-peer-re-anchored-past)), `overtaken` for one a node wrote in the old generation after a restored reanchor's own record, before it learned of the move ([retention](retention.md#re-anchoring-a-recreated-or-restored-log)), and `wrong_partition` for one its own domain places in another partition than the log it is on, with the log and the partition it `belongs_to` ([above](#a-record-belongs-to-its-logs-partition)). |
 | `statelog_write_gated` | `WARN` | The same, seen by the write that published it. |
 | `statelog_publish_unknown` | `WARN` | A write could not tell whether its record landed. The operation id is in the line; retry under that id, never a fresh one. |
 | `statelog_write_unvouched` | `WARN` | A write was answered `unknown` rather than published or refused (a `refusal` field says what the decision refused), because its operation was minted (`minted_at`) before this node's operation ledger may have lost rows — to the ledger's thirty-day sweep, or to a snapshot adopted from a peer on an older build, which arrives without its ledger — and the ledger holds no row to say whether it already landed. Retrying on this node answers the same; a node whose ledger lost nothing that far back can answer it, and the operation's own record — if it landed — is on the log. |

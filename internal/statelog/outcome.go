@@ -197,6 +197,17 @@ const (
 	// reanchor's checkpoint is followed from — see [ReanchorPlan.StaleAfter].
 	ReasonOvertaken Reason = "overtaken"
 
+	// ReasonWrongPartition — the record's own domain places it in another
+	// partition than the log it is on ([Domain.PartitionOf]), so it is
+	// dropped on every holder of this log: applied here it would write rows
+	// this partition does not own, filed under a scope no probe of the
+	// partition it belongs to ever reads. Deterministic — every holder asks
+	// the same function of the same envelope — so no copy diverges. Only an
+	// applier's: the write authority refuses such a record before it is
+	// appended ([ErrWrongPartition]), so one on a log is another build's or
+	// another writer's, and nothing republishing it changes where it belongs.
+	ReasonWrongPartition Reason = "wrong_partition"
+
 	// ReasonLogFull — the log is at its byte ceiling and refuses
 	// appends rather than dropping records. An operator raises the
 	// ceiling or unblocks the trim. On a log that keeps a gate reserve
@@ -266,14 +277,15 @@ const (
 // is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
 //
 // A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
-// deleted, retired, abandoned or overtaken — rather than under a generic word,
-// because the gate is what says why: which is why there is no `gated` here.
+// deleted, retired, abandoned, overtaken or wrong_partition — rather than under
+// a generic word, because the gate is what says why: which is why there is no
+// `gated` here.
 func Reasons() []Reason {
 	return []Reason{
 		ReasonEvicted, ReasonDeferred, ReasonBehind, ReasonBelowFloor,
 		ReasonFloorUnknown, ReasonDeleted, ReasonRetired, ReasonAbandoned,
-		ReasonOvertaken, ReasonLogFull, ReasonSkew, ReasonOpReused,
-		ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
+		ReasonOvertaken, ReasonWrongPartition, ReasonLogFull, ReasonSkew,
+		ReasonOpReused, ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
 	}
 }
 

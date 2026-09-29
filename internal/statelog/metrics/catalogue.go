@@ -159,9 +159,12 @@ func Catalogue() []Instrument {
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
 				"`deleted`, `retired` (a kind this build no longer applies), " +
-				"`abandoned` (written in a generation a reanchor abandoned) or " +
+				"`abandoned` (written in a generation a reanchor abandoned), " +
 				"`overtaken` (written after a restored reanchor, below its " +
-				"generation) — and is never re-decided, because republishing " +
+				"generation) or `wrong_partition` (its own domain places it in " +
+				"another partition than the log it is on — another writer's, " +
+				"since this one refuses such a record before appending it) — " +
+				"and is never re-decided, because republishing " +
 				"makes another record nothing applies. Beside the refusals: " +
 				"`conflict` for a write that lost every round, `exists` for a " +
 				"create whose object already exists, and `error` for a write " +
@@ -313,9 +316,11 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"gate", "subject_kind"},
-			Shows: "Records an apply gate dropped. A dropped commit is " +
-				"recoverable by nothing, and this is the only place anyone " +
-				"would see that it happened.",
+			Shows: "Records an apply gate dropped, by the gate that dropped " +
+				"each — the domain's own (`evicted`, `deleted`, `retired`) or " +
+				"the framework's (`abandoned`, `overtaken`, `wrong_partition`). " +
+				"A dropped commit is recoverable by nothing, and this is the " +
+				"only place anyone would see that it happened.",
 		},
 		{
 			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
