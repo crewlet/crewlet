@@ -349,6 +349,10 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 		{ID: ringID, Material: ringMaterial},
 	}
 	withCredential(t, &boot)
+	// ONE ADDRESS AND ONE SIGN-IN FOR THE WHOLE FLEET, as behind a load
+	// balancer: a browser signs in on whichever member it reaches and
+	// presents that cookie to every other. See [withSignIn].
+	withSignIn(&boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	boot.Stream.Cluster.Name = jetstreamtest.RelayClusterName

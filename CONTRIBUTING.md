@@ -311,7 +311,17 @@ files sit beside what they cover, as Go expects.
 `internal/e2e` runs a real engine, a real broker and the real API, then
 replays the frames its socket produced through the dashboard's own
 `protocol.js`. Both halves of the wire protocol are checked against each other
-there and nowhere else, so it needs node too:
+there and nowhere else, so it needs node too.
+
+It is also where a FLEET signs a person in. On a clustered fleet, a Tier A
+token invites somebody, they redeem the link and sign in on one member, and the
+same cookie must then read, write as them and open the live socket on the
+other member — never `401` while it catches up — while a handshake from a
+foreign origin is refused and a sign-out everywhere on the second member is
+refused on the first. The sign-in surface, the identity directory and the
+human write surface it serves are built by `api.NewHumanSurfaces`, the
+constructor `crewlet run` calls, so a seam added to them reaches the suite with
+no copy to update:
 
 ```bash
 make test-solo   # internal/e2e, and every other package that runs alone
