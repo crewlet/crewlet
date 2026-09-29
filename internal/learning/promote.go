@@ -93,8 +93,14 @@ type PromotionUnit struct {
 	// has several.
 	Lead *org.Role
 
-	// Handles are the unit's agent seats, whose catalogues are pooled.
-	Handles []string
+	// Seats are the unit's agent seats, whose catalogues are pooled.
+	//
+	// ROLES rather than handles, because the pass needs both of a seat's
+	// names: its catalogue is keyed on the handle it was CREATED under (see
+	// the package doc), and the page a lead reviews names it by the address
+	// it answers to now. A handle list pooled nothing a renamed seat had
+	// drafted before its rename.
+	Seats []*org.Role
 
 	// Container is the unit's configured knowledge container (a Confluence
 	// space key). Empty when it has none.
@@ -106,6 +112,37 @@ type PromotionUnit struct {
 	// and not another is a supported state, and a hard failure would stop
 	// the configured team's promotions too.
 	Hint string
+}
+
+// origins are the handles the unit's seats were created under, which is what
+// their catalogues are keyed on.
+func (u PromotionUnit) origins() []string {
+	out := make([]string, 0, len(u.Seats))
+	for _, seat := range u.Seats {
+		if origin := seat.Origin(); origin != "" {
+			out = append(out, origin)
+		}
+	}
+	return out
+}
+
+// named returns skills with each owner shown by the handle its seat answers
+// to now, which is how a person reading the prompt or the page knows them.
+// The rows themselves are not written back: this is the rendering, and the
+// catalogue stays filed under the seat's origin.
+func (u PromotionUnit) named(skills []Skill) []Skill {
+	current := make(map[string]string, len(u.Seats))
+	for _, seat := range u.Seats {
+		current[seat.Origin()] = seat.Handle()
+	}
+	out := make([]Skill, len(skills))
+	for i, sk := range skills {
+		if handle, ok := current[sk.AgentHandle]; ok {
+			sk.AgentHandle = handle
+		}
+		out[i] = sk
+	}
+	return out
 }
 
 // PromotionWriter creates the draft in whichever knowledge base the company
@@ -261,7 +298,7 @@ func (p *Promoter) Pass(ctx context.Context) []events.Payload {
 
 // promoteUnit promotes one unit's strongest convergence, or reports why not.
 func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit PromotionUnit) (events.Payload, error) {
-	if len(unit.Handles) < p.minSiblings {
+	if len(unit.Seats) < p.minSiblings {
 		// Fewer seats than the threshold, so no cluster in this unit can
 		// ever reach it. Checked before the catalogue read because it is
 		// free and the read is not.
@@ -276,10 +313,16 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		return nil, nil
 	}
 
-	skills, err := p.skills.ListFor(ctx, unit.Handles, ListOptions{})
+	skills, err := p.skills.ListFor(ctx, unit.origins(), ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing %s's skills: %w", unit.ID, err)
 	}
+	// NAMED BY THE ADDRESS EACH SEAT ANSWERS TO NOW before anything renders
+	// them: a row holds the handle its seat was created under, and the
+	// prompt and the page a lead reviews would otherwise credit a renamed
+	// seat under a handle it has retired. DistinctAgents is unaffected —
+	// one seat is one name either way.
+	skills = unit.named(skills)
 	clusters := poolSiblings(skills, p.poolAt)
 	best, ok := strongest(clusters, p.minSiblings)
 	if !ok {

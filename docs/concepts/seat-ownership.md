@@ -161,12 +161,18 @@ subjects at once. The node that took the seat next replayed an empty prefix,
 reported a successful hydration of nothing, and everything the seat had learned
 sat on the stream under an address nothing would ask for again.
 
-Two of the tables still key a seat by the handle inside the row (`episodes`,
-`counterparty_profiles`, the two skill tables and the conversation ledger). Those
-rows travel and land — the subject is the id — but under the handle the seat had
-when it learned them, so a renamed seat reads them under a name it no longer
-answers to. Closing that needs those tables re-keyed on the id, which no
-statement can do: the id is a hash the database cannot compute.
+Five of the tables name a seat by a handle inside the row rather than by the id
+(`episodes`, `counterparty_profiles`, the two skill tables and the conversation
+ledger), and that handle is the one the seat was **created** under — the same
+origin the id is derived from, which the chart never issues to another seat —
+never the one it answers to now. Every writer and every reader uses it, so the
+rows travel under the id's subjects, land under the origin, and are read under
+the origin by the seat whatever it has been renamed to since. The column is
+still called `agent_handle` (`observer_handle` for a profile), because its value
+is still a handle: for a seat never renamed it is the handle it answers to, so
+no row written before needed re-keying — and a carried row travels by column
+name, so renaming the column would have changed the wire contract between peers
+in the middle of an upgrade.
 
 What travels: the diary, episodes, counterparty profiles, synthesized skills
 and their versions, onboarding markers, and the conversation ledger. What does
@@ -317,7 +323,7 @@ So the mailbox is **retired**: once the seat has been absent from the active rev
 |---|---|
 | Its mailbox (the inbox and the sandbox control subscription) | Kept, with its mail, for 24 hours after a sweep first sees the seat missing, then deleted |
 | Its [coding runs](code-sandbox.md) (running, parked on a question, re-seeding, or mid-resume) | Kept for the same 24 hours, then ended as part of the retirement and before the mailbox is deleted: each box is reclaimed, each loss is announced as a `sandbox_run_failed` event with reason `seat_removed`, and each run's record is deleted |
-| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept, not deleted. The half keyed by the agent id (the diary, onboarding markers) is reachable by no other seat, since the id is never derived again; the half keyed by the handle its rows were written under (episodes, synthesized skills, counterparty profiles) stays on that handle. A seat made a person's and an agent's again is the same seat and finds it where it left it |
+| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept, not deleted. The half keyed by the agent id (the diary, onboarding markers) is reachable by no other seat, since the id is never derived again; the half keyed by the handle the seat was created under (episodes, synthesized skills, counterparty profiles, thread history) stays under that handle, which the chart never issues to another seat, so no later seat reads it either. A seat made a person's and an agent's again is the same seat and finds it where it left it |
 | Its seat lease | Released by the node that held it, on that node's next placement sweep after it applies the revision (`seat_released_role_gone`) |
 
 **Why a grace period rather than deleting on the apply.** A delete is the one change here that cannot be undone, and one departure from the agent seats can be: a seat made a person's by mistake is made an agent's again, and it is the same seat, with the same id and the same mailbox. (A removal from the chart cannot be undone at all — its address and identity are retired for good — so for a removed seat the grace only delays a cleanup.) Twenty-four hours is long enough for a seat made an agent's again within a working day to come back to the mail it was sent while it was gone, and short enough that mail for a seat nobody runs is not kept for more than a day. The clock starts when a sweep first observes the absence, so a retirement is never early: at worst it is one maintenance tick (15 minutes) late, and later still while no node that runs worker duties has applied the current revision.

@@ -52,9 +52,10 @@ const MaxContentChars = 2000
 type DiaryEntry struct {
 	ID string
 
-	// AgentID is the DERIVED uuid (org name plus handle), not the handle.
-	// Renaming a handle then cleanly orphans the old rows rather than
-	// mixing them into the new identity's memory.
+	// AgentID is the DERIVED uuid over (org name, the handle the seat was
+	// CREATED under) — see ADR-0019 — not the handle it answers to. A
+	// rename therefore leaves it where it is, and the seat goes on reading
+	// every entry it wrote before the rename.
 	AgentID string
 
 	Kind    DiaryKind

@@ -21,7 +21,11 @@ import (
 // NULL here would make every such row distinct from every other, which is the
 // exact opposite of what the key is for.
 type Subject struct {
-	// Handle is the seat, when the counterparty resolved to one.
+	// Handle is the seat, when the counterparty resolved to one — STORED as
+	// the handle that seat was created under, like every seat this package
+	// keys on (see the package doc), so a colleague's rename does not start
+	// a second, empty profile of the same person. A caller rendering a
+	// stored profile resolves it back to the colleague's current handle.
 	Handle string
 	// ExternalID and Platform identify an unmapped external human.
 	ExternalID string
@@ -41,6 +45,8 @@ func (s Subject) Valid() bool {
 
 // Profile is what one observer has learned about one subject.
 type Profile struct {
+	// Observer is the observing seat's ORIGIN — the handle it was created
+	// under, not the one it answers to now. See the package doc.
 	Observer string
 	Subject  Subject
 
@@ -80,6 +86,8 @@ func NewCounterparties(db *store.DB) *Counterparties { return &Counterparties{db
 
 // Observation is one interaction's worth of what was learned.
 type Observation struct {
+	// Observer and Subject are keyed as [Profile]'s are: a seat by the
+	// handle it was created under.
 	Observer string
 	Subject  Subject
 

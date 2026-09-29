@@ -23,13 +23,16 @@ type table struct {
 	name string
 
 	// seatCol names the seat. Two spellings exist in this schema and both
-	// are stable across nodes: a handle, or the derived agent id.
+	// are stable across nodes and across a rename: the handle the seat was
+	// CREATED under, or the agent id derived from it. The handle columns
+	// keep the name `…_handle` although what they hold is the origin — see
+	// [seatRef] for why neither the column nor its value may move.
 	seatCol string
 
 	// byAgentID says seatCol holds the derived UUIDv5 rather than the
-	// handle. The derivation is a pure function of (org name, handle), so
-	// every node computes the same value — which is what makes a row
-	// written on one node addressable from another.
+	// origin handle. The derivation is a pure function of (org name, origin
+	// handle), so every node computes the same value — which is what makes
+	// a row written on one node addressable from another.
 	byAgentID bool
 
 	// key is the NATURAL key: the columns that identify this row the same

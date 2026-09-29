@@ -67,8 +67,11 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	if f.src.Episodes == nil || r.Seat == nil || strings.TrimSpace(r.Task) == "" {
 		return ""
 	}
-	handle := r.Seat.Handle()
-	if handle == "" {
+	// BY THE HANDLE THE SEAT WAS CREATED UNDER, which its episodes are
+	// filed under (see internal/learning's package doc) — by the one it
+	// answers to now, a renamed seat recalled none of its earlier work.
+	seat, handle := r.Seat.Origin(), r.Seat.Handle()
+	if seat == "" {
 		return ""
 	}
 	if r.RequiresRecon {
@@ -86,7 +89,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		return ""
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: recallHits,
+		Handle: seat, Embedding: vector, Limit: recallHits,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "episode_recall_failed", "seat", handle, "error", err.Error())
@@ -161,7 +164,12 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 	if f.src.Counterparties == nil || r.Seat == nil || len(r.Senders) == 0 {
 		return ""
 	}
-	observer := r.Seat.Handle()
+	// BOTH ENDS BY THE HANDLE THEY WERE CREATED UNDER, which is how the
+	// profiler files a profile (see internal/learning's package doc): the
+	// observer is this seat's origin, and a sender who is a colleague is
+	// looked up by theirs. By the addresses the two answer to now, a rename
+	// of either end hid every profile written before it.
+	observer := r.Seat.Origin()
 	if observer == "" {
 		return ""
 	}
@@ -170,13 +178,15 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 		seen   = map[learning.Subject]bool{}
 	)
 	for _, subject := range r.Senders {
-		if !subject.Valid() || seen[subject] {
+		key := subject
+		key.Handle = originOf(r.Org, subject.Handle)
+		if !key.Valid() || seen[key] {
 			continue
 		}
-		seen[subject] = true
-		profile, ok, err := f.src.Counterparties.Get(ctx, observer, subject)
+		seen[key] = true
+		profile, ok, err := f.src.Counterparties.Get(ctx, observer, key)
 		if err != nil {
-			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", observer,
+			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", r.Seat.Handle(),
 				"error", err.Error())
 			continue
 		}
@@ -185,6 +195,10 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 			// for a first interaction and not worth a line saying so.
 			continue
 		}
+		// SHOWN AS THE TURN NAMES THEM: the stored row holds the handle
+		// the colleague was created under, and the executor would
+		// otherwise read an address they have retired.
+		profile.Subject.Handle = subject.Handle
 		blocks = append(blocks, renderProfile(profile))
 	}
 	// "\n\n", not "\n": each element is a MULTI-LINE block, and a single
@@ -257,15 +271,17 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 	if f.src.Skills == nil || r.Seat == nil {
 		return "", nil
 	}
-	handle := r.Seat.Handle()
-	if handle == "" {
+	// The catalogue is filed under the handle the seat was CREATED under,
+	// like every memory table (see internal/learning's package doc).
+	seat, handle := r.Seat.Origin(), r.Seat.Handle()
+	if seat == "" {
 		return "", nil
 	}
 	// ARCHIVED EXCLUDED, STALE KEPT. Archived is "aged out of the
 	// catalogue" and bringing one back is an operator's decision; stale is
 	// a marker on a skill that still works and revives the moment it is
 	// used, so hiding it is how a useful skill starves.
-	skills, err := f.src.Skills.List(ctx, handle, learning.ListOptions{})
+	skills, err := f.src.Skills.List(ctx, seat, learning.ListOptions{})
 	if err != nil {
 		log.WarnContext(ctx, "skills_list_failed", "seat", handle, "error", err.Error())
 		return "", nil

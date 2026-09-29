@@ -711,11 +711,6 @@ func seatSecrets(company *config.Company, roster *org.Organization, kind string)
 
 func boolPtr(v bool) *bool { return &v }
 
-// agentMemory answers a seat's memory: its diary and its episodes.
-//
-// Both halves, because they answer different questions. The diary is what this
-// seat chose to remember; the episodes are what it did, summarised. A page
-// showing one without the other reads as a seat with half a history.
 // agentIDOf resolves a seat handle to the derived agent id the diary is keyed
 // by, passing anything else through — a caller that already holds an id is
 // unaffected.
@@ -744,6 +739,56 @@ func (s Sources) agentIDOf(handle string) string {
 	return handle
 }
 
+// memoryNames resolves a seat, by any handle it answers to, into the two names
+// its memory takes: the ORIGIN its episodes, skills and counterparty profiles
+// are filed under — the handle it was created under — and the handle it
+// answers to NOW, which is what the answer shows.
+//
+// RESOLVED THROUGH THE ROSTER, which answers a current handle, a creation
+// handle and a retired alias alike. The dashboard's one identifier for a seat
+// is its handle, and asked with it straight, a renamed seat's page showed none
+// of what it learned before the rename — while the diary beside it, keyed on
+// the id derived from the same origin, showed everything. A handle the roster
+// does not know is passed through as both, which answers the nothing a seat
+// with no memory has.
+func (s Sources) memoryNames(handle string) (origin, current string) {
+	roster := s.roster()
+	if roster == nil {
+		return handle, handle
+	}
+	role := roster.Role(handle)
+	if role == nil {
+		return handle, handle
+	}
+	return role.Origin(), role.Handle()
+}
+
+// displayHandle is the handle the seat filed under origin answers to now, or
+// origin itself for one the roster does not hold — a seat the company has
+// removed, whose rows name nobody else.
+func (s Sources) displayHandle(origin string) string {
+	roster := s.roster()
+	if origin == "" || roster == nil {
+		return origin
+	}
+	if role := roster.Role(origin); role != nil {
+		return role.Handle()
+	}
+	return origin
+}
+
+// roster is the company's own organization, or nil where this node has none.
+func (s Sources) roster() *org.Organization {
+	if s.Company == nil {
+		return nil
+	}
+	company, roster := s.Company()
+	if company == nil {
+		return nil
+	}
+	return roster
+}
+
 // agentMemory answers one seat's memory: its diary, its episodes, the skills
 // it drafted, who it has worked with.
 //
@@ -765,6 +810,11 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	if err := s.mayRead(ctx, principal, authz.ActionSeatTrailRead, id); err != nil {
 		return nil, err
 	}
+	// THE TWO NAMES A SEAT'S MEMORY TAKES: the handle it was created under,
+	// which its episodes, skills and profiles are filed under, and the one
+	// it answers to now, which is what this answer shows. See
+	// [Sources.memoryNames].
+	origin, current := s.memoryNames(id)
 	// EVERY key is present on every answer, as an empty list rather than an
 	// absent one. A client cannot tell "this seat has learned nothing" from
 	// "this node does not keep that half" if the key simply is not there, and
@@ -797,17 +847,18 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		out["diary"] = rows
 	}
 	if s.Episodes != nil {
-		// Episodes are keyed by HANDLE and the diary by agent id. The
-		// dashboard has one identifier for a seat, so both are asked with
-		// it and the one that does not recognise it answers nothing —
-		// which is correct rather than an error, and is what a seat with
-		// no episodes yet looks like anyway.
-		episodes, err := s.Episodes.Recent(ctx, id, MemoryPageLimit)
+		// Episodes are keyed by the ORIGIN handle and the diary by the
+		// agent id derived from it — both resolved from the dashboard's one
+		// identifier, so a renamed seat's page shows what it learned before
+		// the rename. Each row names the seat as it is called NOW rather
+		// than by the handle it is filed under.
+		episodes, err := s.Episodes.Recent(ctx, origin, MemoryPageLimit)
 		if err != nil {
 			return nil, err
 		}
 		rows := make([]map[string]any, 0, len(episodes))
 		for _, e := range episodes {
+			e.Handle = current
 			rows = append(rows, episodeRow(e))
 		}
 		out["episodes"] = rows
@@ -843,12 +894,12 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		// Every other cut in this tree says so: a config diff answers
 		// `changes_total` beside the listing it bounded, a trace answers
 		// `truncated`, a ledger line appends "+N more".
-		total, err := s.Skills.Count(ctx, id, opts)
+		total, err := s.Skills.Count(ctx, origin, opts)
 		if err != nil {
 			return nil, err
 		}
 		opts.Limit = MemoryPageLimit
-		skills, err := s.Skills.List(ctx, id, opts)
+		skills, err := s.Skills.List(ctx, origin, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -867,16 +918,17 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	// the answer existed, always as an empty list, because nothing read the
 	// store behind it.
 	//
-	// KEYED ON THE HANDLE, which is what `observer_handle` holds — unlike
-	// the diary, whose key is the derived agent id. Both are asked with the
-	// dashboard's one identifier and the one that does not recognise it
-	// answers nothing.
-	profiles, err := s.counterpartiesFor(ctx, id)
+	// KEYED ON THE ORIGIN HANDLE, which is what `observer_handle` holds —
+	// unlike the diary, whose key is the agent id derived from it. A subject
+	// who is a colleague is filed under THEIR origin too, and is shown by the
+	// handle they answer to now.
+	profiles, err := s.counterpartiesFor(ctx, origin)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]map[string]any, 0, len(profiles))
 	for _, profile := range profiles {
+		profile.Subject.Handle = s.displayHandle(profile.Subject.Handle)
 		rows = append(rows, counterpartyRow(profile))
 	}
 	out["counterparties"] = rows

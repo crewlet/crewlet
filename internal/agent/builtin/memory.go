@@ -21,9 +21,13 @@ import (
 // All four read or write THIS seat's own memory, and none of them takes a
 // handle. That is the point: an agent recalling another's episodes or writing
 // into another's diary would make the per-seat memory a shared one, and the
-// whole design of the learning subsystem — a diary keyed on the DERIVED agent
-// id so a renamed handle orphans its rows rather than inheriting somebody
-// else's — rests on the boundary holding.
+// whole design of the learning subsystem rests on the boundary holding.
+//
+// The seat is named by its IDENTITY, never its address: the diary and the
+// onboarding marker by the agent id derived from the handle the seat was
+// CREATED under (ADR-0019), and the episodes and skills by that handle itself
+// ([turnctx.Turn.Origin]). A rename therefore moves none of it, and the chart
+// never issues that handle to another seat, so nobody inherits it either.
 
 // The tool wire names.
 const (
@@ -123,8 +127,11 @@ func (t *useSkill) Call(ctx context.Context, args map[string]any) (tools.Result,
 }
 
 func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	handle := turn.Handle()
-	if handle == "" {
+	// THE HANDLE THE SEAT WAS CREATED UNDER, which is what its catalogue
+	// is keyed on — see [turnctx.Turn.Origin]. Asked by the handle the seat
+	// answers to now, a renamed seat had no skills at all.
+	seat := turn.Origin()
+	if seat == "" {
 		return failed("use_skill can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
@@ -135,14 +142,14 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return failed("use_skill needs a `skill_name`."), nil
 	}
 
-	// Keyed on THIS seat's handle, so a model naming another agent's skill
-	// gets "you have no skill called that" rather than that agent's skill.
-	sk, found, err := t.skills.Get(ctx, handle, name)
+	// Keyed on THIS seat, so a model naming another agent's skill gets
+	// "you have no skill called that" rather than that agent's skill.
+	sk, found, err := t.skills.Get(ctx, seat, name)
 	if err != nil {
 		return failed(fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
 	}
 	if !found {
-		return failed(t.suggest(ctx, handle, name)), nil
+		return failed(t.suggest(ctx, seat, name)), nil
 	}
 
 	// Recorded BEFORE the content goes out, and its failure ignored: the
@@ -169,8 +176,8 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 }
 
 // suggest turns "not found" into something the model can act on.
-func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
-	have, err := t.skills.List(ctx, handle, learning.ListOptions{ExcludeStale: true})
+func (t *useSkill) suggest(ctx context.Context, seat, name string) string {
+	have, err := t.skills.List(ctx, seat, learning.ListOptions{ExcludeStale: true})
 	if err != nil || len(have) == 0 {
 		return fmt.Sprintf("You have no synthesized skill called %q, and none at all yet. "+
 			"Skills are distilled from your own completed turns.", clip(name))
@@ -282,8 +289,11 @@ func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Re
 }
 
 func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	handle := turn.Handle()
-	if handle == "" {
+	// The seat's episodes are filed under the handle it was CREATED under
+	// — see [turnctx.Turn.Origin] — so a renamed seat still recalls the work
+	// it did before the rename.
+	seat := turn.Origin()
+	if seat == "" {
 		return failed("query_episodes can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
@@ -312,10 +322,10 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		scope = fmt.Sprintf(" like %s", clip(query))
 	case argString(args, "conversation") != "":
 		conversation := strings.TrimSpace(argString(args, "conversation"))
-		found, err = t.episodes.ForConversation(ctx, handle, conversation, limit)
+		found, err = t.episodes.ForConversation(ctx, seat, conversation, limit)
 		scope = fmt.Sprintf(" in %s", clip(conversation))
 	default:
-		found, err = t.episodes.Recent(ctx, handle, limit)
+		found, err = t.episodes.Recent(ctx, seat, limit)
 	}
 	if err != nil {
 		return failed(fmt.Sprintf("Could not recall your turns: %v", err)), nil
@@ -646,9 +656,10 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 
 // seatAgentID resolves the DERIVED agent id for the acting seat.
 //
-// The derived id, never the handle: the diary keys on it so that renaming a
-// handle cleanly ORPHANS the old rows rather than handing one seat's memory to
-// whoever takes the name next.
+// The derived id, never the handle: the diary keys on it, and it is derived
+// from the handle the seat was CREATED under (ADR-0019), so a rename leaves the
+// seat reading every entry it wrote before it — and a later seat given the
+// retired handle derives a different id, so it inherits none of them.
 func seatAgentID(turn *turnctx.Turn) (string, string) {
 	seat, err := turn.RequireSeat()
 	if err != nil {

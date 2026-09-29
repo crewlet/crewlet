@@ -336,12 +336,7 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	}
 	e.learning = learning.NewBackground(learning.BackgroundOptions{
 		Passes: e.learningPasses(ctx, e.Company()),
-		// FRESH through the epoch, like Seats below: a captured resolver
-		// would keep answering with the roles of the revision this call
-		// saw, and charge a renamed seat's clustering to a chain the
-		// company has replaced.
-		RoleFor: e.seatRole,
-		// Derived from the ROLE the pass resolved, not looked up again by
+		// Derived from the ROLE the roster listed, not looked up again by
 		// handle: the id and the role name land on one event, and a second
 		// epoch read could answer about a seat an apply renamed between
 		// the two.
@@ -349,8 +344,11 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		// READ FRESH through the epoch, never bound to the company this
 		// call sees: an apply replaces the roster, and a captured list
 		// would keep compacting a seat the revision removed and never
-		// touch one it added.
-		Seats:     func() []string { return e.seatHandles() },
+		// touch one it added — and would charge a renamed seat's
+		// clustering to a chain the company has replaced. ROLES, because
+		// every pass keys a seat's rows on the handle it was created under
+		// and names it by the one it answers to now (see learning.Seats).
+		Seats:     e.seatRoles,
 		Publish:   e.publishLearning,
 		ClaimDuty: e.workerDuty(skillCuratorDutyName, learningDutyTTL),
 	})
@@ -512,25 +510,32 @@ func (e *Engine) clusteringPass(c *Company) *learning.Synthesizer {
 // which is what a shared duty lease is for.
 const learningDutyTTL = 3 * learning.LifecycleInterval
 
-// seatHandles is the current epoch's agent seats.
-func (e *Engine) seatHandles() []string {
+// seatRoles is the current epoch's agent seats, as the roles every background
+// pass reads both of a seat's names off.
+//
+// The PLACED seats, resolved in the same epoch they were listed from: a seat
+// the organization carries but placement does not (one no content record has
+// filled yet) has no memory for a pass to tend.
+func (e *Engine) seatRoles() []*org.Role {
 	company := e.Company()
-	if company == nil {
+	if company == nil || company.Org == nil {
 		return nil
 	}
 	seats := company.Seats()
-	out := make([]string, 0, len(seats))
+	out := make([]*org.Role, 0, len(seats))
 	for _, s := range seats {
-		out = append(out, s.Handle)
+		if role := company.Org.AgentSeatByHandle(s.Handle); role != nil {
+			out = append(out, role)
+		}
 	}
 	return out
 }
 
 // seatRole resolves a seat handle against the CURRENT epoch.
 //
-// Read fresh, never captured: a background pass holding the roster it started
-// with would charge a renamed seat's auxiliary call to a chain the company
-// has replaced, and would answer nil for a seat an apply has just added.
+// Read fresh, never captured: a caller holding the roster it started with
+// would charge a renamed seat's work to a chain the company has replaced, and
+// would answer nil for a seat an apply has just added.
 func (e *Engine) seatRole(handle string) *org.Role {
 	company := e.Company()
 	if company == nil || company.Org == nil {
@@ -614,7 +619,9 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 		// what [learning.CompleteFunc] passes. It was the display name,
 		// and on any company whose seats declare a handle it resolved
 		// nobody: every compaction failed with the refusal below, and
-		// the memory it was meant to fold stayed whole.
+		// the memory it was meant to fold stayed whole. The handle passed
+		// is the one the episodes are keyed on — the one the seat was
+		// CREATED under — which Role resolves for a renamed seat too.
 		seat := c.Org.Role(handle)
 		if seat == nil {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has "+

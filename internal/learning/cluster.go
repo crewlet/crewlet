@@ -90,7 +90,14 @@ func (c SkillCluster) Size() int { return len(c.Episodes) }
 //
 // Returns the events to publish, empty when nothing qualified — which is the
 // ordinary answer for a seat whose work does not repeat, and is not an error.
-func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, agentID string,
+//
+// THE SEAT, not a handle beside it, because the pass needs two names for it
+// and both come from the one role: the episodes and the catalogue are keyed on
+// the handle the seat was CREATED under (see the package doc), and the log and
+// the event name it by the address it answers to now. A handle passed beside
+// the role was the current one, so a renamed seat clustered none of the work
+// it did before the rename and could redraft every skill it already had.
+func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, agentID string,
 ) ([]events.Payload, error) {
 	if s.episodes == nil {
 		// No episode store was wired, so there is nothing to cluster. A
@@ -98,11 +105,12 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 		// synthesizer built for the inline path alone takes.
 		return nil, nil
 	}
+	origin, handle := seat.Origin(), seat.Handle()
 
 	// THE CAP FIRST, because it is one indexed count and everything below
 	// it — a scan, a clustering, an auxiliary call — is thrown away for a
 	// seat that has no room for another skill.
-	count, err := s.skills.Count(ctx, handle, ListOptions{})
+	count, err := s.skills.Count(ctx, origin, ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("learning: counting %s's skills: %w", handle, err)
 	}
@@ -112,14 +120,14 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 		return nil, nil
 	}
 
-	recent, err := s.episodes.Recent(ctx, handle, s.fetchLimit)
+	recent, err := s.episodes.Recent(ctx, origin, s.fetchLimit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: reading %s's recent episodes: %w", handle, err)
 	}
 	clusters := clusterEpisodes(recent, s.minToolCalls, s.clusterAt,
 		s.now().Add(-s.clusterWindow))
 
-	existing, err := s.skills.ToolSequences(ctx, handle, ListOptions{})
+	existing, err := s.skills.ToolSequences(ctx, origin, ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("learning: reading %s's tool sequences: %w", handle, err)
 	}
@@ -137,7 +145,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 				"agent_handle", handle, "similar_to", name, "cluster_size", cluster.Size())
 			continue
 		}
-		return s.draftFromCluster(ctx, seat, handle, agentID, cluster)
+		return s.draftFromCluster(ctx, seat, agentID, cluster)
 	}
 	log.DebugContext(ctx, "skill_clustering_found_nothing", "agent_handle", handle,
 		"episodes", len(recent), "clusters", len(clusters), "min_size", s.clusterMin)
@@ -146,8 +154,9 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 
 // draftFromCluster asks the model for one skill and writes it.
 func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
-	handle, agentID string, cluster SkillCluster,
+	agentID string, cluster SkillCluster,
 ) ([]events.Payload, error) {
+	origin, handle := seat.Origin(), seat.Handle()
 	member, err := s.models.Head(seat, phase.Auxiliary)
 	if err != nil {
 		return nil, fmt.Errorf("learning: no auxiliary model for skill clustering: %w", err)
@@ -178,7 +187,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	at := s.now()
 	skill := Skill{
 		ID:          uuid.NewString(),
-		AgentHandle: handle,
+		AgentHandle: origin,
 		Name:        draft.Name,
 		Description: draft.Description,
 		Content:     draft.Content,
@@ -208,7 +217,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	return []events.Payload{types.SkillSynthesized{
 		// THE AGENT ID, unlike the turn id below. The cluster spans many
 		// turns but exactly one seat — it is that seat's own episodes,
-		// read by its handle — so there is a single right answer here,
+		// read by its origin — so there is a single right answer here,
 		// where there is none for a turn. Publishing without it left the
 		// promoted agent_id column empty on precisely the skills a seat
 		// learned by repetition, while the ones it learned from a single

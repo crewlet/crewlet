@@ -74,8 +74,17 @@ func promoter(t *testing.T, db *store.DB, w *fakeWriter, answer string,
 func unitOf(handles ...string) learning.PromotionUnit {
 	return learning.PromotionUnit{
 		ID: "Platform", Lead: &org.Role{Name: "Lead"},
-		Handles: handles, Container: "ENG",
+		Seats: seatsOf(handles...), Container: "ENG",
 	}
+}
+
+// seatsOf is one never-renamed agent seat per handle.
+func seatsOf(handles ...string) []*org.Role {
+	out := make([]*org.Role, 0, len(handles))
+	for _, h := range handles {
+		out = append(out, &org.Role{Name: h, DeclaredHandle: h})
+	}
+	return out
 }
 
 // seedSibling gives one seat a skill over the given tool run.
@@ -139,6 +148,43 @@ func TestThreeSeatsConvergingProduceAReviewableDraft(t *testing.T) {
 		if !strings.Contains(calls[0].body, want) {
 			t.Fatalf("the draft omits %q:\n%s", want, calls[0].body)
 		}
+	}
+}
+
+// A RENAMED SEAT'S SKILLS STILL POOL, AND THE PAGE CREDITS IT BY THE HANDLE
+// IT ANSWERS TO NOW.
+//
+// A catalogue is filed under the handle its seat was CREATED under, so a pass
+// that pooled by the unit's current handles found nothing a renamed seat had
+// drafted before its rename — here, one convergence short of the threshold —
+// and a page that rendered the row as stored would credit the seat under an
+// address it has retired.
+func TestARenamedSeatsSkillsPoolAndThePageNamesItAsItIsNow(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+	unit := unitOf("sre", "qa")
+	unit.Seats = append(unit.Seats, &org.Role{Name: "Dev Two", DeclaredHandle: "dev-two",
+		OriginHandle: "dev", FormerHandles: []string{"dev"}})
+	w := &fakeWriter{}
+	p, _ := promoter(t, db, w, promotionDraft, unit, learning.PromoterOptions{MinSiblings: 3})
+
+	out := p.Pass(t.Context())
+	if len(out) != 1 {
+		t.Fatalf("payloads = %d, want the promotion three seats converged on — "+
+			"the renamed seat's skill was not pooled", len(out))
+	}
+	calls := w.calls()
+	if len(calls) != 1 {
+		t.Fatalf("draft calls = %d, want 1", len(calls))
+	}
+	if !strings.Contains(calls[0].body, "`dev-two`") {
+		t.Errorf("the page does not credit the renamed seat by its handle:\n%s", calls[0].body)
+	}
+	if strings.Contains(calls[0].body, "`dev`") {
+		t.Errorf("the page credits the renamed seat by a handle it retired:\n%s", calls[0].body)
 	}
 }
 
@@ -249,7 +295,7 @@ func TestAFailedDraftCostsOneUnitNotThePass(t *testing.T) {
 	broken := unitOf("dev", "sre", "qa")
 	working := learning.PromotionUnit{
 		ID: "Infra", Lead: &org.Role{Name: "Lead"},
-		Handles: []string{"ops", "net", "sec"}, Container: "OPS",
+		Seats: seatsOf("ops", "net", "sec"), Container: "OPS",
 	}
 
 	failing := &fakeWriter{err: errors.New("the wiki is down")}

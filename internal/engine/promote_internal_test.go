@@ -53,8 +53,8 @@ func TestPromotionUnitsCarryTheirSeatsAndContainer(t *testing.T) {
 	if units[0].ID != "platform" || units[0].Container != "ENG" {
 		t.Fatalf("unit = %+v", units[0])
 	}
-	if len(units[0].Handles) != 2 {
-		t.Fatalf("handles = %v, want both of the unit's seats", units[0].Handles)
+	if len(units[0].Seats) != 2 {
+		t.Fatalf("seats = %v, want both of the unit's seats", units[0].Seats)
 	}
 }
 
@@ -111,9 +111,9 @@ func TestAParentUnitDoesNotPoolItsChildrensSeats(t *testing.T) {
 		if unit.ID != "Engineering" {
 			continue
 		}
-		if len(unit.Handles) != 1 || unit.Handles[0] != "vp" {
+		if len(unit.Seats) != 1 || unit.Seats[0].Handle() != "vp" {
 			t.Fatalf("the parent pooled %v, want only its own direct seat",
-				unit.Handles)
+				unit.Seats)
 		}
 	}
 }

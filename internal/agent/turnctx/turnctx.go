@@ -170,6 +170,22 @@ func (t *Turn) Handle() string {
 	return t.Seat.Handle()
 }
 
+// Origin is the handle the acting seat was CREATED under ([org.Role.Origin]),
+// or "" when there is no seat.
+//
+// It is what the seat's memory is keyed on — its episodes, its synthesized
+// skills, its counterparty profiles and its thread history — and [Turn.Handle]
+// is not: a handle is an address a founder retypes, and a tool that read the
+// seat's memory under it found nothing the seat learned before a rename. So a
+// tool reads and writes memory with this and speaks to people with Handle.
+// See internal/learning's package doc.
+func (t *Turn) Origin() string {
+	if t == nil {
+		return ""
+	}
+	return t.Seat.Origin()
+}
+
 // Role is the acting seat's role name, or "".
 func (t *Turn) Role() string {
 	if t == nil || t.Seat == nil {

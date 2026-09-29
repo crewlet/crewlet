@@ -19,6 +19,9 @@ type Hit struct {
 
 // RecallQuery bounds a similarity search.
 type RecallQuery struct {
+	// Handle is the seat's ORIGIN — the handle it was created under — which
+	// is what episodes.agent_handle holds. See the package doc. The diary
+	// ignores it: its rows are scoped by the agent id the caller passes.
 	Handle    string
 	Embedding []float32
 

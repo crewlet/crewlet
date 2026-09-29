@@ -150,7 +150,12 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	limit := conversationPage(p.Int("limit", 0))
-	threads, err := s.Conversations.Threads(ctx, handle, limit)
+	// THE LEDGER IS FILED UNDER THE HANDLE THE SEAT WAS CREATED UNDER, and
+	// the answer names the seat by the one it answers to now — see
+	// [Sources.memoryNames]. Asked with the handle as given, a renamed
+	// seat's page showed none of the threads it carried before the rename.
+	origin, current := s.memoryNames(handle)
+	threads, err := s.Conversations.Threads(ctx, origin, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -163,13 +168,13 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 		})
 	}
 	out := map[string]any{
-		"handle":        handle,
+		"handle":        current,
 		"conversations": rows,
 		"entries":       []ledger.Session{},
 		"available":     true,
 	}
 	if key := strings.TrimSpace(p.String("conversation")); key != "" {
-		entries, err := s.Conversations.History(ctx, handle, key, limit)
+		entries, err := s.Conversations.History(ctx, origin, key, limit)
 		if err != nil {
 			return nil, err
 		}

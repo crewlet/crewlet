@@ -16,8 +16,9 @@ as `origin_handle` and frozen there by the first rename — rather than the
 handle the seat answers to now.
 
 So a rename moves the seat's ADDRESS and nothing else. Its mailbox subject and
-consumer group, its seat lease, its memory changelog subjects, its learning
-rows and its schedule ledger all key on the id, and the id does not move. The
+consumer group, its seat lease, its memory changelog subjects, its diary and
+onboarding markers and its schedule ledger all key on the id, and the id does
+not move. The
 addresses a rename retires go on resolving through the row's alias list, which
 is a separate field with a separate job: an alias keeps a REFERENCE somebody
 wrote down working and is capped, while the origin is the seat's identity and
@@ -34,6 +35,20 @@ orphan, because the account is live in somebody else's system: a second bot
 created beside the first, the first still holding a sealed token, and
 `-decommission` deleting the one the agent is working as. `internal/provision`
 is the one place that can refuse a seat with no origin, and does.
+
+The rest of a seat's memory is in that second family too: its episodes, its
+synthesized skills and their versions, its counterparty profiles (and a
+colleague's, as their subject) and its conversation ledger name the seat by
+the origin handle, in columns that have always held a handle. Keying them on
+the id instead would have meant re-keying every row already written, which no
+statement can do — the id is a hash the database cannot compute — while the
+origin IS the handle every seat never renamed already answers to, so every
+existing row was already keyed correctly. What that asks of the code is that
+every writer and reader pass the origin and never the live handle, and that a
+surface showing a row resolve it back to the seat's current address;
+`internal/learning`'s package doc states the rule and
+`internal/engine.TestARenamedSeatKeepsItsEpisodesSkillsProfilesAndLedger` holds
+it end to end.
 
 ## Why the obvious alternative is wrong
 

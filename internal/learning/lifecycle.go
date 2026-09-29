@@ -1286,6 +1286,11 @@ func cleanStrings(in []string) []string {
 // memory stayed uncompacted and the failure was logged on a path whose whole
 // contract is best effort.
 //
+// It is the handle the rows are keyed on, which is the one the seat was
+// CREATED under (see the package doc) — and that handle resolves for ever,
+// ahead of any alias, so the org chart answers it for a renamed seat exactly
+// as it answers the handle the seat answers to now.
+//
 // It is an identifier rather than a resolved provider for the reason above:
 // resolving it is the engine's job, and a resolved chain here would put the
 // provider types back in this package's imports.

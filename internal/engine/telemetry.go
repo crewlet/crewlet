@@ -515,6 +515,21 @@ func seatIdentity(company *Company, handle string) (role, agentID string) {
 	return seat.Name, agentID
 }
 
+// seatOrigin names the handle the seat answering to handle was CREATED under
+// — the one every memory table keys it on (see internal/learning's package
+// doc) — or "" for a handle no seat in the company answers to, and for a node
+// with no active company.
+//
+// THROUGH [org.Organization.Role], which resolves a seat's current handle, the
+// handle it was created under and any alias it retired alike, so whichever
+// address a caller holds lands on the one identity.
+func seatOrigin(company *Company, handle string) string {
+	if company == nil || company.Org == nil {
+		return ""
+	}
+	return company.Org.Role(handle).Origin()
+}
+
 // skipDecision maps the turn's decision onto the one plan_decision value
 // anything still reads.
 //

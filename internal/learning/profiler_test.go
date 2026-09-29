@@ -197,7 +197,7 @@ func TestTheGatesThatKeepProfilesHonest(t *testing.T) {
 	}
 
 	turn := cpTurn()
-	turn.Event.AgentHandle = ""
+	turn.Role = nil
 	if got := w.Skip(turn); got != "no_observer" {
 		t.Errorf("a turn with no seat: skip = %q, want no_observer", got)
 	}

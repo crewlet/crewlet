@@ -19,8 +19,9 @@ import (
 //
 // cluster_test.go covers the pass. These cases are the loop around it: that
 // `scheduler_interval_seconds` is what sets its cadence — the knob validated
-// with a shipped 3600 and was read by nothing — and that a seat the epoch
-// cannot resolve is skipped rather than run with no role.
+// with a shipped 3600 and was read by nothing — and that each seat the roster
+// lists is clustered over the episodes filed under the handle it was CREATED
+// under, on its own role.
 
 // A CONFIGURED CADENCE IS THE ONE THE LOOP TICKS AT.
 func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
@@ -35,8 +36,9 @@ func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
 			Cluster:         &Synthesizer{},
 			ClusterInterval: 5 * time.Millisecond,
 		},
-		// never reached: RoleFor answers nil below
-		RoleFor: func(string) *org.Role {
+		// Every tick reads the roster once; an empty one runs nothing, so
+		// the count below is the loop's cadence and nothing else.
+		Seats: func() []*org.Role {
 			mu.Lock()
 			seen++
 			if seen <= 3 {
@@ -45,7 +47,6 @@ func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		Seats: func() []string { return []string{"dev"} },
 	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -63,19 +64,22 @@ func TestTheClusterLoopTicksAtTheConfiguredInterval(t *testing.T) {
 	}
 }
 
-// A SEAT THE EPOCH CANNOT RESOLVE IS SKIPPED, not run with no role: a pass
-// with no role resolves no model, and answering with whichever chain replied
-// would charge one seat's auxiliary call to another's.
+// A RENAMED SEAT IS CLUSTERED OVER THE WORK IT DID BEFORE THE RENAME, on its
+// own role.
 //
-// Proven by the MODEL LOOKUP, which is the first thing the pass does that a
-// missing role would corrupt — and by the resolvable seat in the same roster
-// reaching it, so the case is about the skip rather than about a pass that
-// never runs.
-func TestAnUnresolvableSeatIsSkippedRatherThanRun(t *testing.T) {
+// The roster lists roles, and the pass reads a seat's episodes by the handle
+// it was CREATED under. It used to be handed the seat's current handle, so a
+// seat renamed after a fortnight of the same procedure clustered nothing: its
+// episodes are filed under the handle it had when it did the work.
+//
+// Proven by the MODEL LOOKUP, which the pass reaches only once it has found a
+// qualifying cluster — and by the seat beside it with no episodes at all,
+// which must not reach it, so the case is about whose episodes were read
+// rather than about a pass that asks the model for everyone.
+func TestTheClusterLoopReadsARenamedSeatsEpisodesByItsOrigin(t *testing.T) {
 	t.Parallel()
 	db := openTestStore(t)
-	writeClusterableTurns(t, db, "known")
-	writeClusterableTurns(t, db, "ghost")
+	writeClusterableTurns(t, db, "dev")
 
 	models := &recordingModels{}
 	syn, err := NewSynthesizer(models, NewSkills(db), SynthesizerOptions{
@@ -84,39 +88,19 @@ func TestAnUnresolvableSeatIsSkippedRatherThanRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSynthesizer: %v", err)
 	}
+	renamed := &org.Role{Name: "Dev", DeclaredHandle: "dev-two",
+		OriginHandle: "dev", FormerHandles: []string{"dev"}}
+	idle := &org.Role{Name: "Ops", DeclaredHandle: "ops"}
 	b := NewBackground(BackgroundOptions{
-		Passes: BackgroundPasses{
-			Cluster: syn,
-		},
-		RoleFor: func(handle string) *org.Role {
-			if handle == "ghost" {
-				return nil
-			}
-			return &org.Role{Name: "Dev"}
-		},
-		Seats: func() []string { return []string{"ghost", "known"} },
+		Passes: BackgroundPasses{Cluster: syn},
+		Seats:  func() []*org.Role { return []*org.Role{idle, renamed} },
 	})
 	b.clusterPass(t.Context(), syn)
 
 	if got := models.roles(); len(got) != 1 || got[0] != "Dev" {
-		t.Fatalf("model lookups = %v, want exactly the resolvable seat's role — "+
-			"an unresolvable seat reached the model chain", got)
-	}
-}
-
-// A CLUSTERING PASS WITH NO ROLE RESOLVER IS REFUSED AT CONSTRUCTION. One
-// without it would fail per seat, per tick, forever — and the failure would
-// read as a broken model chain rather than as missing wiring.
-func TestAClusterPassWithoutARoleResolverIsNotArmed(t *testing.T) {
-	t.Parallel()
-	b := NewBackground(BackgroundOptions{
-		Passes: BackgroundPasses{
-			Cluster: &Synthesizer{},
-		},
-		Seats: func() []string { return []string{"dev"} },
-	})
-	if b.passes.Cluster != nil {
-		t.Fatal("a clustering pass was armed with no way to resolve a seat's role")
+		t.Fatalf("model lookups = %v, want exactly the renamed seat's role — its "+
+			"episodes are filed under the handle it was created under, and a "+
+			"pass that read them by its new handle found no cluster to draft", got)
 	}
 }
 

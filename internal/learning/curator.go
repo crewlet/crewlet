@@ -39,12 +39,21 @@ const CuratorInterval = 24 * time.Hour
 // is due.
 const LifecycleInterval = time.Hour
 
-// Seats lists the handles a background pass walks.
+// Seats lists the seats a background pass walks.
 //
 // A FUNCTION rather than a slice: an apply changes the roster, and a pass
 // holding the list it started with would keep compacting a seat the company
 // removed and never touch one it added.
-type Seats func() []string
+//
+// ROLES rather than handles, because every pass needs TWO names for a seat
+// and both have to come from one reading of the roster: the rows are keyed on
+// the handle the seat was CREATED under ([org.Role.Origin], see the package
+// doc) and every event and log line names it by the address it answers to now
+// ([org.Role.Handle]). A handle list gave the passes only the second, so a
+// renamed seat was compacted, clustered and announced under an address its
+// memory is not filed under — and a resolver consulted per pass could answer
+// about a seat an apply renamed between the listing and the lookup.
+type Seats func() []*org.Role
 
 // Background runs the passes no turn drives.
 //
@@ -59,7 +68,6 @@ type Seats func() []string
 // in the other direction: each apply would restart a daily clock, and a
 // company edited more often than a day would never curate at all.
 type Background struct {
-	roleFor    func(handle string) *org.Role
 	agentIDFor func(seat *org.Role) string
 	seats      Seats
 	publish    Announce
@@ -69,8 +77,7 @@ type Background struct {
 	// mu guards the passes and the wake channel.
 	mu sync.Mutex
 
-	// passes is what the loops run this tick, normalised: defaults
-	// applied, and a clustering pass dropped when nothing resolves a role.
+	// passes is what the loops run this tick, with the defaults applied.
 	passes BackgroundPasses
 
 	// wake is closed by every Reconfigure and replaced, which is how a
@@ -126,16 +133,10 @@ type BackgroundOptions struct {
 	// Passes is what the loops run until the first [Background.Reconfigure].
 	Passes BackgroundPasses
 
-	// RoleFor resolves a seat handle to the role whose auxiliary model the
-	// clustering pass runs on. Required alongside a clustering pass: a pass
-	// with no role cannot resolve a model, and answering with the first
-	// role in the org would charge one seat's work to another's chain.
-	RoleFor func(handle string) *org.Role
-
 	// AgentIDFor derives the seat's agent id, which the clustering pass
 	// stamps on the skill it publishes.
 	//
-	// It takes the ROLE the pass already resolved rather than the handle,
+	// It takes the ROLE the roster already carries rather than a handle,
 	// so the id and the role name on one event cannot name two seats: a
 	// second lookup would read the epoch again and could answer about a
 	// seat an apply renamed in between.
@@ -145,9 +146,11 @@ type BackgroundOptions struct {
 	// promoted agent_id column is empty rather than wrong.
 	AgentIDFor func(seat *org.Role) string
 
-	// Seats lists the handles to walk. Nil means no seats, which yields
-	// loops that tick and do nothing — the correct shape for a node with
-	// no active company.
+	// Seats lists the seats to walk — see [Seats]. Nil means no seats,
+	// which yields loops that tick and do nothing — the correct shape for a
+	// node with no active company. The clustering pass runs each seat's
+	// auxiliary call on the role listed here, so it needs no resolver of
+	// its own.
 	Seats Seats
 
 	// Publish announces what a pass did. Nil drops the announcements and
@@ -166,8 +169,7 @@ type BackgroundOptions struct {
 // NewBackground builds the loops.
 func NewBackground(opts BackgroundOptions) *Background {
 	b := &Background{
-		roleFor: opts.RoleFor, agentIDFor: opts.AgentIDFor,
-		seats: opts.Seats, publish: opts.Publish,
+		agentIDFor: opts.AgentIDFor, seats: opts.Seats, publish: opts.Publish,
 		claimDuty: opts.ClaimDuty, now: opts.Now,
 		wake: make(chan struct{}),
 	}
@@ -192,14 +194,8 @@ func (b *Background) Reconfigure(p BackgroundPasses) {
 	b.wake = make(chan struct{})
 }
 
-// normalise applies the defaults and the one pass rule the wiring can break.
+// normalise applies the defaults.
 func (b *Background) normalise(p BackgroundPasses) BackgroundPasses {
-	if b.roleFor == nil {
-		// A clustering pass without one resolves no model and would fail
-		// per seat, per tick, forever. Refusing the pass is the honest
-		// answer and it is logged where NewBackground's caller sees it.
-		p.Cluster = nil
-	}
 	if p.CuratorInterval <= 0 {
 		p.CuratorInterval = CuratorInterval
 	}
@@ -317,24 +313,15 @@ func (b *Background) promotePass(ctx context.Context, promoter *Promoter) {
 // running the roster concurrently would turn one tick into a company-wide
 // spike against the auxiliary model for work that has a day to happen in.
 func (b *Background) clusterPass(ctx context.Context, cluster *Synthesizer) {
-	for _, handle := range b.handles() {
-		role := b.roleFor(handle)
-		if role == nil {
-			// A seat in the roster the epoch cannot resolve — mid-apply,
-			// or a handle the org no longer carries. Skipped rather than
-			// run with no role, which would charge its auxiliary call to
-			// whichever chain answered.
-			log.DebugContext(ctx, "skill_clustering_skipped", "reason", "unknown_seat",
-				"agent_handle", handle)
-			continue
-		}
-		payloads, err := cluster.ClusterPass(ctx, role, handle, b.agentID(role))
+	for _, seat := range b.roster() {
+		payloads, err := cluster.ClusterPass(ctx, seat, b.agentID(seat))
 		if err != nil {
-			log.WarnContext(ctx, "skill_clustering_failed", "seat", handle, "error", err.Error())
+			log.WarnContext(ctx, "skill_clustering_failed", "seat", seat.Handle(),
+				"error", err.Error())
 		}
 		for _, payload := range payloads {
 			if b.publish != nil {
-				b.publish(ctx, handle, payload)
+				b.publish(ctx, seat.Handle(), payload)
 			}
 		}
 		if ctx.Err() != nil {
@@ -415,8 +402,11 @@ func (b *Background) holdsDuty(ctx context.Context, name string) bool {
 // to happen in.
 func (b *Background) compactPass(ctx context.Context, lifecycle *Lifecycle) {
 	now := b.now()
-	for _, handle := range b.handles() {
-		due, ok, err := lifecycle.RawCount(ctx, handle)
+	for _, seat := range b.roster() {
+		// The rows by the handle the seat was created under, everything
+		// said about them by the one it answers to — see [Seats].
+		origin, handle := seat.Origin(), seat.Handle()
+		due, ok, err := lifecycle.RawCount(ctx, origin)
 		if err != nil {
 			log.WarnContext(ctx, "episode_lifecycle_count_failed", "seat", handle, "error", err.Error())
 			continue
@@ -438,7 +428,7 @@ func (b *Background) compactPass(ctx context.Context, lifecycle *Lifecycle) {
 				Threshold: lifecycle.Options().Threshold,
 			})
 		}
-		res, err := lifecycle.Pass(ctx, handle, now)
+		res, err := lifecycle.Pass(ctx, origin, now)
 		if err != nil {
 			// The partial result is still published: the deletes that
 			// committed are real, and reporting nothing would claim a
@@ -472,13 +462,25 @@ func (b *Background) curatePass(ctx context.Context, skills *Skills, policy Cura
 		// racing the traffic it is meant to run behind.
 		log.DebugContext(ctx, "skill_curator_transitions_raced", "count", res.Raced)
 	}
+	if len(res.Applied) == 0 {
+		return
+	}
+	// ONE READING OF THE ROSTER for every change this pass announces. A
+	// skill row holds the handle its seat was created under, and an event
+	// names the seat by the address it answers to now — so a renamed seat's
+	// transitions are announced under its current handle rather than one it
+	// has retired.
+	current := map[string]string{}
+	for _, seat := range b.roster() {
+		current[seat.Origin()] = seat.Handle()
+	}
 	for _, change := range res.Applied {
-		b.announceChange(ctx, change)
+		b.announceChange(ctx, change, current)
 	}
 }
 
-// handles is this tick's roster.
-func (b *Background) handles() []string {
+// roster is this tick's seats.
+func (b *Background) roster() []*org.Role {
 	if b.seats == nil {
 		return nil
 	}
@@ -530,7 +532,11 @@ func (b *Background) announce(ctx context.Context, handle string, res PassResult
 // The state on the change is the state being LEFT — see [StateChange] — so
 // the destination decides the event and the snapshot supplies what it says
 // about where the row came from.
-func (b *Background) announceChange(ctx context.Context, c StateChange) {
+//
+// current maps a seat's origin to the handle it answers to now. A skill whose
+// seat the roster does not hold — a seat the company removed — is announced
+// under the handle it is filed under, which is the only name left for it.
+func (b *Background) announceChange(ctx context.Context, c StateChange, current map[string]string) {
 	if b.publish == nil {
 		return
 	}
@@ -539,20 +545,24 @@ func (b *Background) announceChange(ctx context.Context, c StateChange) {
 	if !c.Skill.LastUsedAt.IsZero() {
 		lastUsed = c.Skill.LastUsedAt.UTC().Format(time.RFC3339)
 	}
+	handle := c.Skill.AgentHandle
+	if now, ok := current[handle]; ok {
+		handle = now
+	}
 	switch c.To {
 	case SkillStale:
-		b.publish(ctx, c.Skill.AgentHandle, types.SkillStaled{
-			AgentHandle: c.Skill.AgentHandle, SkillID: c.Skill.ID,
+		b.publish(ctx, handle, types.SkillStaled{
+			AgentHandle: handle, SkillID: c.Skill.ID,
 			SkillName: c.Skill.Name, LastUsedAt: lastUsed, TransitionedAt: at,
 		})
 	case SkillArchived:
-		b.publish(ctx, c.Skill.AgentHandle, types.SkillArchived{
-			AgentHandle: c.Skill.AgentHandle, SkillID: c.Skill.ID,
+		b.publish(ctx, handle, types.SkillArchived{
+			AgentHandle: handle, SkillID: c.Skill.ID,
 			SkillName: c.Skill.Name, LastUsedAt: lastUsed, TransitionedAt: at,
 		})
 	case SkillActive:
-		b.publish(ctx, c.Skill.AgentHandle, types.SkillRevived{
-			AgentHandle: c.Skill.AgentHandle, SkillID: c.Skill.ID,
+		b.publish(ctx, handle, types.SkillRevived{
+			AgentHandle: handle, SkillID: c.Skill.ID,
 			SkillName:      c.Skill.Name,
 			PriorState:     types.SkillState(c.Skill.State),
 			TransitionedAt: at,

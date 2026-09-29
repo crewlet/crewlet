@@ -261,7 +261,7 @@ func TestTheGatesThatKeepEpisodesHonest(t *testing.T) {
 		},
 		{
 			name: "a turn with no seat", want: "no_handle",
-			mutate: func(tn *learning.Turn) { tn.Event.AgentHandle = "" },
+			mutate: func(tn *learning.Turn) { tn.Role = nil },
 		},
 	} {
 		turn := epTurn()

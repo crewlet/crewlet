@@ -799,7 +799,9 @@ func (r *Role) Handle() string {
 // reads as the current handle.
 //
 // EVERYTHING DURABLE IS KEYED ON WHAT THIS ANCHORS — the mailbox, the seat
-// lease, the diary, the schedule ledger — through [Organization.AgentIDFor].
+// lease, the diary, the schedule ledger — through [Organization.AgentIDFor],
+// and the rest of the seat's memory (its episodes, skills, counterparty
+// profiles and thread history, see internal/learning) on this handle itself.
 // A handle is prose a founder types and re-types, so it could never be that
 // anchor: keying on it made every rename a new seat with no memory, no
 // mailbox and no history.

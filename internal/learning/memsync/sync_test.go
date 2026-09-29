@@ -58,7 +58,7 @@ func broker(t *testing.T) *nats.Conn {
 
 func syncerOn(t *testing.T, db *store.DB, conn *nats.Conn) *Syncer {
 	t.Helper()
-	s, err := New(db, conn, func(string) string { return seat.AgentID })
+	s, err := New(db, conn, func(string) (string, string) { return seat.Handle, seat.AgentID })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestHydrationTakesOnlyTheSeatItAsksFor(t *testing.T) {
 	}
 	// Publish both seats. The peer's syncer resolves its own agent id.
 	syncerOn(t, db, conn).Publish(ctx, seat.Handle)
-	peer, err := New(db, conn, func(string) string { return "other-agent-id" })
+	peer, err := New(db, conn, func(string) (string, string) { return "ceo", "other-agent-id" })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
 
 	// A new node, with a JetStream whose Info call fails.
 	newOwner := openStore(t)
-	syncer, err := New(newOwner, conn, func(string) string { return seat.AgentID })
+	syncer, err := New(newOwner, conn, func(string) (string, string) { return seat.Handle, seat.AgentID })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -481,7 +481,9 @@ func TestIdentityTellsTheFourCasesApart(t *testing.T) {
 // the seat next replayed an empty prefix and reported success, and everything
 // the seat had learned sat on the stream under an address nothing would ask
 // for again. The id is anchored on the handle the seat was CREATED under
-// (ADR-0019), so it does not move.
+// (ADR-0019), so it does not move — and so is the handle the handle-keyed
+// tables are selected and read by, so neither half of a rename's memory is
+// left behind.
 func TestARenamedSeatHydratesItsOwnDiary(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -516,25 +518,44 @@ func TestARenamedSeatHydratesItsOwnDiary(t *testing.T) {
 		t.Errorf("the carried diary entry says %q", content)
 	}
 
-	// THE CONTROL, and it is the residue this change does NOT close: a
-	// table keyed on the HANDLE carries its rows under the name the seat
-	// had when it learned them. The rows travel and land — the subject is
-	// the id — but the seat reads them under an address it no longer
-	// answers to. See [seatRef]: closing that needs a rebuild of those
-	// five tables, because no statement can re-key a row on a hash the
-	// database cannot compute.
+	// THE HANDLE-KEYED TABLES LAND UNDER THE HANDLE THE SEAT WAS CREATED
+	// UNDER, which is the handle every reader in internal/learning and the
+	// conversation ledger asks with — so the renamed seat reads them. They
+	// used to land under the handle the seat had when it learned them, and
+	// a seat that had since changed it read none of them. See [seatRef].
 	var handled string
 	if err := newOwner.SQL().QueryRowContext(ctx,
 		"SELECT agent_handle FROM episodes WHERE id = 'e1'").Scan(&handled); err != nil {
 		t.Fatalf("the episode did not travel at all: %v", err)
 	}
-	if handled == renamed {
-		t.Fatalf("a handle-keyed row arrived under the seat's NEW handle, so " +
-			"the residue this control describes is gone — say so and delete it")
-	}
 	if handled != seat.Handle {
 		t.Errorf("a handle-keyed row arrived under %q, want the handle the seat "+
-			"had when it learned it", handled)
+			"was created under (%q), which is what its readers ask with", handled, seat.Handle)
+	}
+
+	// AND THE PUBLISH HALF SELECTS BY IT TOO. What the renamed seat learns
+	// on its new node is written under its origin; a publish that selected
+	// by the handle it was asked with (the seat's new one) carried none of
+	// it, and the next node to take the seat hydrated only what was learned
+	// before the rename.
+	if _, err := newOwner.SQL().ExecContext(ctx,
+		`INSERT INTO episodes (id, agent_handle, agent_role, turn_id, started_at,
+		 ended_at, plan_summary, task_summary, tool_sequence, review_outcome,
+		 duration_ms, kind)
+		 VALUES ('e2', ?, 'Engineer', 't2', 0, 0, 'p', 't', '[]', 'done', 1, 'raw')`,
+		seat.Handle); err != nil {
+		t.Fatalf("seed the episode learned after the rename: %v", err)
+	}
+	if _, err := syncerOn(t, newOwner, conn).Publish(ctx, renamed); err != nil {
+		t.Fatalf("publish the renamed seat: %v", err)
+	}
+	third := openStore(t)
+	if _, err := syncerOn(t, third, conn).Hydrate(ctx, renamed); err != nil {
+		t.Fatalf("hydrate the renamed seat on a third node: %v", err)
+	}
+	if got := countRows(t, third, "episodes"); got != 2 {
+		t.Fatalf("the third node holds %d episodes, want both — the one learned "+
+			"before the rename and the one learned after it", got)
 	}
 }
 
@@ -552,8 +573,8 @@ func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
 	}
 
 	newOwner := openStore(t)
-	moved, err := New(newOwner, conn, func(string) string {
-		return "11111111-2222-4333-8444-555555555555"
+	moved, err := New(newOwner, conn, func(string) (string, string) {
+		return seat.Handle, "11111111-2222-4333-8444-555555555555"
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

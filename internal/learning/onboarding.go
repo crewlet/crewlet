@@ -92,8 +92,9 @@ func hashChain(parts []string) string {
 // Marker is one seat's onboarding row: the org chain it has read itself
 // into, and the lease state of any pass running over it.
 type Marker struct {
-	// AgentID is the DERIVED uuid (org name plus handle) — the same
-	// identity the diary and episodes key on, not the handle.
+	// AgentID is the DERIVED uuid over (org name, the handle the seat was
+	// created under) — the same identity the diary keys on — so a rename
+	// leaves the marker where the seat looks for it.
 	AgentID string
 
 	// ChainHash is the chain the seat onboarded for, or empty on a row that
@@ -102,6 +103,9 @@ type Marker struct {
 	// correctly as "not onboarded".
 	ChainHash string
 
+	// Handle and Role are what the seat was called when it marked itself,
+	// for an operator reading the row. Nothing looks a marker up by them,
+	// which is why a rename that leaves them stale costs nothing.
 	Handle string
 	Role   string
 

@@ -128,7 +128,12 @@ const (
 // it drafts a knowledge-base page under the unit's auto-drafted parent for a
 // lead to review — so this store is single-scope and keyed by (seat, name).
 type Skill struct {
-	ID          string
+	ID string
+
+	// AgentHandle is the owning seat's ORIGIN — the handle it was created
+	// under — so a rename leaves the catalogue where the seat looks. A
+	// surface showing it resolves it to the seat's current handle first.
+	// See the package doc.
 	AgentHandle string
 	Name        string
 
@@ -202,6 +207,7 @@ type SkillVersion struct {
 	ID      string
 	SkillID string
 
+	// AgentHandle is the owning seat's origin, as on [Skill].
 	AgentHandle      string
 	Name             string
 	Description      string

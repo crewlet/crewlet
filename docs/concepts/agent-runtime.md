@@ -10,15 +10,15 @@ The agent runtime (`internal/agent`, wired together by `internal/engine`) runs a
 
 Each **agent seat** (`kind: agent`, the default) is one `roles:` entry, and there is no long-lived agent object behind it. The authored `config.Role` becomes an `org.Role` in the epoch's `Organization`, and every turn builds a fresh **runner** for that seat from the epoch it pinned. [Human seats](humans-in-the-org.md) are never run: they exist in the `Organization` and resolve through the party registry (`notify.Registry`).
 
-**Identity is deterministic, and it is not the handle.** A seat's agent id is `org.DeriveAgentID(company name, origin handle)`: a UUIDv5 over `"<company name>:<origin handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The **origin handle** is the handle the seat was created under, frozen on the seat's chart row by its first rename and never moved again — so the id is the same across processes, machines, restarts *and renames*, which is what lets any node address a seat another node is running and what lets a founder rename a colleague without retiring them. The seat's memory is keyed by that id or by the handle its rows were written under: `agent_diary` and `agent_onboarding_markers` rows by the agent id, `episodes` and `synthesized_skills` by the handle, and `counterparty_profiles` by the observing seat's handle. All of it survives engine restarts, and the id-keyed half survives a rename.
+**Identity is deterministic, and it is not the handle.** A seat's agent id is `org.DeriveAgentID(company name, origin handle)`: a UUIDv5 over `"<company name>:<origin handle>"` in a fixed namespace (`org.Organization.AgentIDFor` applies it to an agent seat). The **origin handle** is the handle the seat was created under, frozen on the seat's chart row by its first rename and never moved again — so the id is the same across processes, machines, restarts *and renames*, which is what lets any node address a seat another node is running and what lets a founder rename a colleague without retiring them. The seat's memory is keyed by that id or by the origin handle itself, and never by the handle it answers to now: `agent_diary` and `agent_onboarding_markers` rows by the agent id; `episodes`, `synthesized_skills` and their versions, and the conversation ledger by the origin handle (in a column still called `agent_handle`, because for a seat never renamed it *is* the handle it answers to); and `counterparty_profiles` by the observing seat's origin handle and, where the person observed is a colleague, theirs. All of it survives engine restarts and a rename of either end; a surface that shows a stored row names the seat by the handle it answers to now.
 
-> **Rename caveat.** *Both* inputs are part of the derived id: changing
-> a seat's handle **or the company's `name`** creates a new derived
-> id and orphans the prior per-agent rows (diary, onboarding markers,
-> counterparty profiles). The seat keeps working; it has simply lost
-> its memory. A company rename does this to *every* seat at once, so
-> settle `name` and each `handle` before the company runs. (An explicit
-> `handle` on each role pins half of it; nothing pins the company name.)
+> **Company-rename caveat.** A seat's handle is not an input to its id,
+> but the company's `name` is: changing it gives *every* agent seat a
+> new id at once, and what is keyed on the id — each seat's mailbox,
+> its diary, its onboarding markers and the memory changelog that
+> carries its rows between nodes — is left under the old one. The
+> seats keep working; they have simply lost that half of their memory,
+> so settle `name` before the company runs. Nothing pins it.
 
 ```mermaid
 flowchart LR

@@ -41,21 +41,28 @@ const consumerCleanupTimeout = 5 * time.Second
 // couple of pulls.
 const fetchBatch = 256
 
-// AgentIDFor resolves a seat's stable id from the handle it answers to.
+// Identify resolves a seat, by any handle it answers to, into the two
+// spellings its memory tables name it by: the handle it was CREATED under and
+// the id derived from that handle (ADR-0019). Both are empty for a handle no
+// seat answers to.
 //
 // Injected rather than imported, because the derivation belongs to the
 // organization model and this package needs exactly one function from it —
-// the same rule every other seam in this tree follows. What it must answer is
-// the id ANCHORED ON THE SEAT'S ORIGIN (ADR-0019), because that is what the
-// changelog's subjects are built from: an implementation deriving from the
-// live handle would move every one of a seat's subjects on a rename.
-type AgentIDFor func(handle string) string
+// the same rule every other seam in this tree follows. BOTH ANSWERS ARE
+// ANCHORED ON THE SEAT'S ORIGIN, never on the handle it was asked with: the
+// changelog's subjects are built from the id, and the handle-keyed tables
+// select a seat's rows by the origin, so an implementation answering the live
+// handle would move a seat's subjects on a rename and leave every row it
+// wrote before one behind on the node it last ran on. ONE function for both,
+// so the two cannot be answered from two readings of the roster and name two
+// seats.
+type Identify func(handle string) (origin, agentID string)
 
 // Syncer carries a seat's memory between the nodes that run it.
 type Syncer struct {
-	db      *store.DB
-	js      jetstream.JetStream
-	agentID AgentIDFor
+	db       *store.DB
+	js       jetstream.JetStream
+	identify Identify
 
 	// marks is the per-seat, per-table watermark: the highest rowid
 	// already published. In memory only, and deliberately: a restart
@@ -71,20 +78,21 @@ type Syncer struct {
 // Nil rather than a syncer that quietly does nothing: a node with no broker
 // has no way to publish or replay, and a caller that got a working-looking
 // object would believe its seats' memory was travelling when it was not.
-func New(db *store.DB, conn *nats.Conn, agentID AgentIDFor) (*Syncer, error) {
-	if db == nil || conn == nil || agentID == nil {
+func New(db *store.DB, conn *nats.Conn, identify Identify) (*Syncer, error) {
+	if db == nil || conn == nil || identify == nil {
 		return nil, nil
 	}
 	js, err := jetstream.New(conn)
 	if err != nil {
 		return nil, fmt.Errorf("memsync: reach the JetStream API: %w", err)
 	}
-	return &Syncer{db: db, js: js, agentID: agentID, marks: map[string]int64{}}, nil
+	return &Syncer{db: db, js: js, identify: identify, marks: map[string]int64{}}, nil
 }
 
 // seat resolves a handle into both spellings the schema uses.
 func (s *Syncer) seat(handle string) seatRef {
-	return seatRef{Handle: handle, AgentID: s.agentID(handle)}
+	origin, agentID := s.identify(handle)
+	return seatRef{Handle: origin, AgentID: agentID}
 }
 
 // Publish carries whatever is new in a seat's memory onto the changelog.

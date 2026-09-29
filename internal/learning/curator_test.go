@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -82,6 +83,95 @@ func TestTheCuratorStalesAnUnusedSkillOnItsOwn(t *testing.T) {
 	}
 }
 
+// A RENAMED SEAT'S SKILLS ARE CURATED AND ANNOUNCED UNDER THE HANDLE IT
+// ANSWERS TO NOW.
+//
+// A skill row holds the handle its seat was CREATED under, and an event names a
+// seat by the address a dashboard files it under — so an announcement read off
+// the row credited every transition of a renamed seat to a handle it retired.
+func TestACuratorTransitionIsAnnouncedUnderTheSeatsCurrentHandle(t *testing.T) {
+	t.Parallel()
+	store, _ := skillStore(t)
+	mustInsert(t, store, newSkill("dev", "triage", base))
+	renamed := &org.Role{Name: "Dev Two", DeclaredHandle: "dev-two",
+		OriginHandle: "dev", FormerHandles: []string{"dev"}}
+
+	var seen announced
+	now := base.Add(60 * 24 * time.Hour)
+	learning.NewBackground(learning.BackgroundOptions{
+		Passes: learning.BackgroundPasses{
+			Skills: store,
+			Policy: learning.CuratorPolicy{
+				StaleAfter: 30 * 24 * time.Hour, ArchiveAfter: 90 * 24 * time.Hour,
+			},
+			CuratorInterval: time.Millisecond,
+		},
+		Seats:   func() []*org.Role { return []*org.Role{renamed} },
+		Publish: seen.record,
+		Now:     func() time.Time { return now },
+	}).Start(t.Context())
+
+	ev, ok := seen.awaitEvents(t, 1)[0].(types.SkillStaled)
+	if !ok {
+		t.Fatal("the curator announced something other than the transition")
+	}
+	if ev.AgentHandle != "dev-two" {
+		t.Errorf("the transition names the seat %q, want the handle it answers "+
+			"to now", ev.AgentHandle)
+	}
+}
+
+// A RENAMED SEAT IS COMPACTED OVER THE EPISODES FILED UNDER THE HANDLE IT WAS
+// CREATED UNDER, and announced under the one it answers to now.
+//
+// Walked by its current handle, the seat counted no raw episodes at all — its
+// rows are filed under its origin — so a renamed seat was never due, and the
+// memory it had piled up before the rename was never folded.
+func TestARenamedSeatIsCompactedOverItsOriginAndAnnouncedByItsHandle(t *testing.T) {
+	t.Parallel()
+	life, eps, _ := lifecycle(t, learning.Options{
+		Threshold: 2, MinAge: time.Hour, MinClusterSize: 2,
+		JaccardThreshold: 0.5, BatchSize: 100,
+	})
+	for _, id := range []string{"a", "b", "c"} {
+		// ONE TOOL RUN, so the three fold into one cluster and the pass
+		// has something to do under the origin, not only to count.
+		turn := ep(id, "dev", base)
+		turn.ToolSequence = []string{"fetch", "build", "tag"}
+		mustAppend(t, eps, turn)
+	}
+	renamed := &org.Role{Name: "Dev Two", DeclaredHandle: "dev-two",
+		OriginHandle: "dev", FormerHandles: []string{"dev"}}
+
+	var seen announced
+	learning.NewBackground(learning.BackgroundOptions{
+		Passes: learning.BackgroundPasses{
+			Lifecycle:         life,
+			LifecycleInterval: time.Millisecond,
+		},
+		Seats:   func() []*org.Role { return []*org.Role{renamed} },
+		Publish: seen.record,
+		Now:     func() time.Time { return base.Add(90 * 24 * time.Hour) },
+	}).Start(t.Context())
+
+	got := seen.awaitEvents(t, 2)
+	req, ok := got[0].(types.CompactionRequested)
+	if !ok {
+		t.Fatalf("first event = %T, want CompactionRequested", got[0])
+	}
+	if req.AgentHandle != "dev-two" || req.RawCount < 3 {
+		t.Errorf("request = %+v, want the renamed seat, by its handle, due over "+
+			"the three episodes filed under its origin", req)
+	}
+	done, ok := got[1].(types.CompactionCompleted)
+	if !ok {
+		t.Fatalf("second event = %T, want CompactionCompleted", got[1])
+	}
+	if done.AgentHandle != "dev-two" || done.ClustersCompacted == 0 {
+		t.Errorf("completion = %+v, want the renamed seat's cluster folded", done)
+	}
+}
+
 // A SEAT UNDER THRESHOLD IS NOT COMPACTED, and the count is what gates it:
 // the check is one indexed query and "not yet" is the overwhelmingly common
 // answer, so the pass must not run to discover it.
@@ -96,7 +186,7 @@ func TestASeatUnderThresholdIsNotCompacted(t *testing.T) {
 			Lifecycle:         life,
 			LifecycleInterval: time.Millisecond,
 		},
-		Seats:   func() []string { return []string{"dev"} },
+		Seats:   func() []*org.Role { return []*org.Role{{Name: "Dev"}} },
 		Publish: seen.record,
 		Now:     func() time.Time { return base.Add(time.Hour) },
 	}).Start(t.Context())
@@ -465,7 +555,7 @@ func TestTheRosterIsReadEveryTick(t *testing.T) {
 			Lifecycle:         life,
 			LifecycleInterval: time.Millisecond,
 		},
-		Seats: func() []string {
+		Seats: func() []*org.Role {
 			mu.Lock()
 			defer mu.Unlock()
 			asked++
@@ -545,7 +635,7 @@ func TestASeatOverThresholdIsCompactedAndAnnounced(t *testing.T) {
 			Lifecycle:         life,
 			LifecycleInterval: time.Millisecond,
 		},
-		Seats:   func() []string { return []string{"dev"} },
+		Seats:   func() []*org.Role { return []*org.Role{{Name: "Dev"}} },
 		Publish: seen.record,
 		Now:     func() time.Time { return base.Add(90 * 24 * time.Hour) },
 	}).Start(t.Context())

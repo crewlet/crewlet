@@ -175,8 +175,9 @@ func (o *Organization) Unit(key string) *Unit {
 // ---- seat identity -------------------------------------------------- //
 //
 // An agent seat's runtime identity is DERIVED from the org, never looked up
-// in a process: a UUIDv5 over (org name, handle), so every node computes
-// the same id for the same seat with no database and no running instance.
+// in a process: a UUIDv5 over (org name, the handle the seat was created
+// under), so every node computes the same id for the same seat with no
+// database and no running instance.
 // These three are that derivation and its inverse, in one place, so routing
 // can answer "which seat is this event for?" without asking whether the
 // seat happens to be running locally.
@@ -192,10 +193,12 @@ func (o *Organization) AgentIDFor(r *Role) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	// FROM THE ORIGIN HANDLE, NEVER THE CURRENT ONE. Everything durable a
-	// seat owns is keyed on this id — its mailbox and consumer group, its
-	// seat lease, its diary and episodes, its schedule ledger — so deriving
-	// it from an address a founder retypes made every rename a brand-new
-	// seat standing in an empty office. See [Role.Origin].
+	// seat owns is keyed on this id or on the origin itself — its mailbox
+	// and consumer group, its seat lease, its diary and its schedule ledger
+	// on the id, its episodes, skills, profiles and thread history on the
+	// origin — so deriving it from an address a founder retypes made every
+	// rename a brand-new seat standing in an empty office. See
+	// [Role.Origin].
 	return DeriveAgentID(o.Name, r.Origin())
 }
 

@@ -89,8 +89,10 @@ func (t *refineSkill) Call(ctx context.Context, args map[string]any) (tools.Resu
 }
 
 func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	handle := turn.Handle()
-	if handle == "" {
+	// The catalogue by the handle the seat was CREATED under, the event by
+	// the one it answers to now — see [turnctx.Turn.Origin].
+	seat, handle := turn.Origin(), turn.Handle()
+	if seat == "" {
 		return failed("refine_skill can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
@@ -132,7 +134,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 
 	// This seat's own skills only. Editing a colleague's would let one
 	// agent rewrite another's learned procedure with nothing in the way.
-	sk, found, err := t.skills.Get(ctx, handle, name)
+	sk, found, err := t.skills.Get(ctx, seat, name)
 	if err != nil {
 		return failed(fmt.Sprintf("Could not load %q: %v", clip(name), err)), nil
 	}

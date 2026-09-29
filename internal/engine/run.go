@@ -981,19 +981,23 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
 	if e.memory, err = memsync.New(backends.Store, backends.Conn(),
-		func(handle string) string {
+		// BOTH OF A SEAT'S MEMORY KEYS FROM ONE LOOKUP, so the two cannot
+		// name two seats: the handle it was created under (what the
+		// handle-keyed tables hold) and the id derived from it (what the
+		// changelog's subjects and the diary are keyed on).
+		func(handle string) (string, string) {
 			c := e.Company()
-			if c == nil {
+			if c == nil || c.Org == nil {
 				// Unconfigured: no seat has an identity yet, and
 				// nothing has memory to carry.
-				return ""
+				return "", ""
 			}
 			role := c.Org.AgentSeatByHandle(handle)
 			id, ok := c.Org.AgentIDFor(role)
 			if !ok {
-				return ""
+				return "", ""
 			}
-			return id.String()
+			return role.Origin(), id.String()
 		}); err != nil {
 		return nil, fmt.Errorf("engine: seat memory: %w", err)
 	}
@@ -1193,6 +1197,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// rename or remove the seat after it.
 		d.Identify = func(handle string) (string, string) {
 			return seatIdentity(e.Company(), handle)
+		}
+	}
+	if d.Origin == nil {
+		// Off the LIVE epoch, for Identify's reason — and because a resumed
+		// detached run records its entry days after the delivery that
+		// started it, under whatever the seat is called by then.
+		d.Origin = func(handle string) string {
+			return seatOrigin(e.Company(), handle)
 		}
 	}
 	// THE TWO LEDGERS COME FROM DIFFERENT PLACES, and the split is the

@@ -362,7 +362,7 @@ half, which `crewlet config import` writes from a company file.
 | You can change | Notes |
 |---|---|
 | Name | Prose; two seats may share a name. An agent seat that is renamed keeps its handle, its memory and its mailbox. |
-| Handle | The address every lead, `manages` entry and mention names the seat by. A new handle on a saved seat is the chart's rename: the seat keeps its identity — the one its mailbox, diary and schedules are keyed on — and the old handle goes on reaching it until something else takes it. |
+| Handle | The address every lead, `manages` entry and mention names the seat by. A new handle on a saved seat is the chart's rename: the seat keeps its identity — the one its mailbox, schedules and everything it has learned (its diary, episodes, skills, profiles of colleagues and thread history) are keyed on — and the old handle goes on reaching it until something else takes it. |
 | Email | Sealed: the engine keeps a seat's address in the secret store and serves the reference it is sealed under, never the address, so the editor says "An address is set" and offers **Replace**. A replaced address is sent as typed and sealed by the engine; an address left as it was is sent back as it was read, which changes nothing. Changing it takes `config:write`. |
 | Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |

@@ -257,20 +257,27 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 
 // seatRef is one seat, in both spellings the schema uses for it.
 //
-// TWO SPELLINGS, BOTH STABLE ACROSS NODES, and only ONE of them is stable
-// across a RENAME. The id is a UUIDv5 over (org name, ORIGIN handle) — see
-// ADR-0019 — so it is the same value on every node and after every rename,
-// which is why the changelog's subjects are built from it. The handle is the
-// seat's current address, and the tables that key on it (episodes,
-// counterparty profiles, the two skill tables, the conversation ledger) carry
-// rows a rename leaves behind: they still travel, and they still land, under
-// the name the seat had when it learned them.
+// TWO SPELLINGS, BOTH STABLE ACROSS NODES AND ACROSS A RENAME, because both
+// are anchored on the handle the seat was CREATED under (ADR-0019). The id is
+// a UUIDv5 over (org name, that handle), which is why the changelog's subjects
+// are built from it. The handle is that ORIGIN itself — never the address the
+// seat answers to now — and it is what the handle-keyed tables (episodes,
+// counterparty profiles, the two skill tables, the conversation ledger) hold,
+// because every writer and reader in internal/learning and the ledger passes
+// the origin. So a rename moves neither: the rows the seat wrote before it
+// travel under the same subjects, land under the same handle, and are read by
+// the seat under the handle it still has.
 //
-// That residue is the remaining half of keying a seat's memory on its id, and
-// it cannot be closed by a rename of the column: the id is a hash the database
-// cannot compute, so no statement can re-key the rows already written. It
-// needs a rebuild of those five tables and every query over them.
+// THE COLUMN IS STILL CALLED agent_handle (observer_handle for a profile),
+// and that is deliberate. Its value IS a handle — the one the seat was created
+// under, which for every seat never renamed is the one it answers to — so
+// every row already written is keyed correctly and nothing re-keys it; and a
+// carried row is encoded BY COLUMN NAME, so renaming the column would change
+// this package's wire contract between peers mid-upgrade. Do not "fix" either
+// back: keyed on the current handle, a renamed seat hydrated and published
+// none of what it learned before the rename.
 type seatRef struct {
+	// Handle is the seat's ORIGIN handle — see above.
 	Handle string
 
 	// AgentID is the derived UUIDv5 over (org name, origin handle).

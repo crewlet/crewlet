@@ -41,8 +41,10 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 	if f == nil || f.src.Episodes == nil || seat == nil {
 		return nil, nil
 	}
-	handle := seat.Handle()
-	if handle == "" || strings.TrimSpace(text) == "" {
+	// By the handle the seat was CREATED under, which its episodes are filed
+	// under — the block's own key, so the pull and the push agree.
+	origin := seat.Origin()
+	if origin == "" || strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
 	vector, ok := f.embed(ctx, text)
@@ -50,10 +52,10 @@ func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text strin
 		return nil, ErrNoSimilarity
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
-		Handle: handle, Embedding: vector, Limit: limit,
+		Handle: origin, Embedding: vector, Limit: limit,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", handle, err)
+		return nil, fmt.Errorf("prefetch: recall episodes for %s: %w", seat.Handle(), err)
 	}
 	return hits, nil
 }

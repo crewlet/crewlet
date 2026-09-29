@@ -130,7 +130,7 @@ func (w *Episodist) Skip(t Turn) string {
 		// the seat did nothing.
 		return "no_engagement"
 	}
-	if t.Event.AgentHandle == "" {
+	if t.Seat() == "" {
 		// Episodes are keyed on the seat. An unkeyed row is one no
 		// recall can ever find, so it is not worth writing.
 		return "no_handle"
@@ -179,8 +179,11 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 		started = ended.Add(-time.Duration(t.Event.DurationMS) * time.Millisecond)
 	}
 	return Episode{
-		ID:     w.newID(),
-		Handle: t.Event.AgentHandle,
+		ID: w.newID(),
+		// THE HANDLE THE SEAT WAS CREATED UNDER, not the one on the event:
+		// keyed on the address, a rename left every episode before it
+		// where the seat's own recall no longer looks. See [Turn.Seat].
+		Handle: t.Seat(),
 		Role:   t.Event.RoleName,
 		TaskID: t.Event.TaskID,
 		// TWO DIFFERENT IDENTITIES, and they stopped being the same
