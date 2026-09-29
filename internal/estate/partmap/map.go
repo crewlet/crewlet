@@ -32,8 +32,12 @@ const (
 	Leaving HolderState = "leaving"
 )
 
+// HolderStates is every holder state, for the enum's own validation and for a
+// surface that declares its own copy of the set.
+var HolderStates = []HolderState{Joining, Serving, Leaving}
+
 // Valid reports whether s is a holder state this build knows.
-func (s HolderState) Valid() bool { return s == Joining || s == Serving || s == Leaving }
+func (s HolderState) Valid() bool { return slices.Contains(HolderStates, s) }
 
 // Holder is one node's place in a partition's holder table.
 type Holder struct {

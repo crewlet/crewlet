@@ -51,6 +51,7 @@ import { Spend } from "~/routes/cost/Spend.tsx";
 import { Budgets } from "~/routes/cost/Budgets.tsx";
 import { Fleet } from "~/routes/admin/Fleet.tsx";
 import { DomainScreen } from "~/routes/admin/Domain.tsx";
+import { Estate } from "~/routes/admin/Estate.tsx";
 import { Integrations } from "~/routes/admin/Integrations.tsx";
 import { Tools } from "~/routes/admin/Tools.tsx";
 import { ConfigScreen } from "~/routes/admin/Config.tsx";
@@ -150,6 +151,11 @@ function AdminRoutes({ rest }: { rest: string[] }) {
       }
       return <Fleet key={tail[0] ?? ""} node={tail[0]} />;
     }
+    case "estate":
+      // NO TAIL: a partition is a row of this screen, and a node has its
+      // own page under Infrastructure that the rows link to.
+      if (tail.length > 0) return <NotFound what={`“${tail.join("/")}” under Estate`} />;
+      return <Estate />;
     case "integrations":
       return <Integrations key={tail[0] ?? ""} kind={tail[0]} />;
     case "tools": {

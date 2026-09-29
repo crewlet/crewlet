@@ -194,6 +194,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "domains",
   "budgets",
   "fleet",
+  "estate",
   "integrations",
   "tools",
   "config",
@@ -385,6 +386,15 @@ export const DESTINATIONS: Destination[] = [
     icon: "dns",
     path: ["admin", "fleet"],
     hint: "Nodes, seat leases, domains and config rollout",
+    guarded: true,
+  },
+  {
+    key: "estate",
+    workspace: "admin",
+    label: "Estate",
+    icon: "account_tree",
+    path: ["admin", "estate"],
+    hint: "Which data nodes hold each partition of the estate, and moving them",
     guarded: true,
   },
   {

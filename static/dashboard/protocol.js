@@ -1195,4 +1195,37 @@ var BROKER_FINDING_KINDS = [
 */
 var BROKER_REMOVE_TIMEOUT_MS = 185e3;
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
+//#region src/protocol/estate.ts
+/**
+* Which of the five things the estate was when the question was asked —
+* `queries.EstateMapStates`. `whole` is layout 0, every fleet on this build:
+* every data node holds the whole estate and there is no map.
+*/
+var ESTATE_MAP_STATES = [
+	"unavailable",
+	"whole",
+	"no_map",
+	"unreadable",
+	"placed"
+];
+/** What the MAP says a holder is doing with a partition — `partmap.HolderStates`. */
+var HOLDER_STATES = [
+	"joining",
+	"serving",
+	"leaving"
+];
+/**
+* What a node's own estate lease says it is doing with a partition —
+* `partmap.PartitionStates`. Kept a string on the wire, so a state a newer
+* node reports is shown rather than dropped.
+*/
+var PARTITION_STATES = [
+	"adopting",
+	"catching_up",
+	"serving",
+	"faulted",
+	"draining",
+	"released"
+];
+//#endregion
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, ESTATE_MAP_STATES, GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, HOLDER_STATES, LiveSocket, MAX_EVENTS, PARTITION_STATES, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };

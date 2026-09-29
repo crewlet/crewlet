@@ -22,6 +22,7 @@
  */
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
+import type { FleetEstate } from "./estate.ts";
 
 // ---------------------------------------------------------------------------
 // Events
@@ -1163,6 +1164,14 @@ export interface FleetNode {
 /** Which of the four things the stored map was when the fleet view read it. */
 export type ObjectMapState = "unavailable" | "no_map" | "unreadable" | "placed";
 
+/*
+ * WHO IS IN A PLACEMENT MAP — `MapAbsence`, `MapProbation`, `MapMember`,
+ * `MapHold` and `MapRemoval` — is ONE lifecycle both maps run
+ * (`internal/membership`), rendered once for both by
+ * `internal/api/queries/membership.go`: the object store's placement map
+ * below and the estate map (`protocol/estate.ts`) alike.
+ */
+
 /**
  * A member's open run of absence, COUNTED IN THE MAINTAINER'S TICKS — never
  * timed, so a clock that moved cannot stretch or skip it. `ticks` of
@@ -1170,7 +1179,7 @@ export type ObjectMapState = "unavailable" | "no_map" | "unreadable" | "placed";
  * `clear_after_ticks` clears the run, and a member back for fewer keeps every
  * tick it counted, which is what eventually removes one that flaps.
  */
-export interface ObjectAbsence {
+export interface MapAbsence {
   ticks: number;
   out_after_ticks: number;
   present: number;
@@ -1189,7 +1198,7 @@ export interface ObjectAbsence {
  * `placed_after_ticks` ticks in a row (`present` so far); a tick that misses it
  * removes it again, however far it had got.
  */
-export interface ObjectProbation {
+export interface MapProbation {
   present: number;
   placed_after_ticks: number;
   /** When the map removed it — display only — and the absence that did. */
@@ -1199,7 +1208,7 @@ export interface ObjectProbation {
 }
 
 /** One member as the MAP alone describes it — what a gesture's answer carries. */
-export interface ObjectMapMember {
+export interface MapMember {
   node: string;
   weight: number;
   /** Its value of the map's failure-domain label; absent when it has none. */
@@ -1214,8 +1223,8 @@ export interface ObjectMapMember {
    * member, but the maintainer's to end rather than an operator's — a member
    * can be both.
    */
-  probation?: ObjectProbation;
-  absence?: ObjectAbsence;
+  probation?: MapProbation;
+  absence?: MapAbsence;
 }
 
 /** A member's store health, as its objects lease reports it. */
@@ -1265,7 +1274,7 @@ export interface ObjectScrub {
  * `strays` are ABSENT when the member reported none — never zero, which would
  * read as a reading.
  */
-export interface FleetObjectMember extends ObjectMapMember {
+export interface FleetObjectMember extends MapMember {
   /** Its measured share of every group copy the stored map places, 0..100. */
   share_percent: number;
   /** Whether it holds a live objects lease — what the maintainer counts presence by. */
@@ -1299,7 +1308,7 @@ export interface ObjectBalance {
 }
 
 /** An operator's hold: no member is removed however long it is gone, until `until`. */
-export interface ObjectHold {
+export interface MapHold {
   until: string;
   by: string;
   reason?: string;
@@ -1312,7 +1321,7 @@ export interface ObjectHold {
  * on after `placed_after_ticks` ticks in a row; gone `forget_after_ticks` ticks
  * in a row (`gone` so far), it is forgotten and joins as any new node would.
  */
-export interface ObjectRemoval {
+export interface MapRemoval {
   node: string;
   at: string;
   reason: string;
@@ -1337,14 +1346,14 @@ export interface PlacedObjects {
   /** Fewer failure domains than copies: some groups keep two copies in one. */
   domain_limited: boolean;
   /** A hold in force now; absent when there is none or it has expired. */
-  hold?: ObjectHold;
+  hold?: MapHold;
   /** Groups with a copy on a member that is absent or whose store has failed. */
   degraded_groups: number;
   /** Absent for a map nothing has measured — never a zero that reads as perfectly even. */
   balance?: ObjectBalance;
   members: FleetObjectMember[];
   /** Removed and not seen back — a node back on probation is on its member row instead. */
-  removed: ObjectRemoval[];
+  removed: MapRemoval[];
 }
 
 /**
@@ -1367,8 +1376,8 @@ export interface ObjectsGestureAnswer {
   epoch: number;
   node?: string;
   /** The member as the map now describes it; absent for a node it does not hold. */
-  member?: ObjectMapMember;
-  hold?: ObjectHold;
+  member?: MapMember;
+  hold?: MapHold;
   /** What to do next, where there is something — in no surface's vocabulary. */
   hint?: string;
 }
@@ -3820,6 +3829,7 @@ export interface QueryMap {
   stream: EngineHealth;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
+  estate: FleetEstate;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;

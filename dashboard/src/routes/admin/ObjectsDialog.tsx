@@ -5,17 +5,9 @@
  *
  * # One compare-and-set on the map, answered whole
  *
- * Each gesture is a read of the stored map, a pure change and a
- * compare-and-set in the engine (`internal/engine/objectscontrol.go`), so the
- * answer is not "done" but whether the map NOW SAYS what was asked — `landed`
- * — and the map as it stands. A gesture that lost every race to the map's
- * maintainer is not a refusal and not a fault: nothing it asked is in the map,
- * the answer's `hint` says so, and sending it again is the remedy. A request
- * nobody answered is safe to send again too, for a reason that is not the same
- * for every gesture: an out, an in and a release the map already says change
- * nothing — the record of who made the first included — and write nothing,
- * while a hold always writes, replacing the one in force with a length counted
- * from the resend. Each dialog says which of the two it is.
+ * What a gesture answers, and how a dialog reads it back — `landed`, a lost
+ * race, a refusal, a request nobody answered — is one rule for both placement
+ * maps, and lives in `mapGesture.tsx`. What is this map's own is below.
  *
  * # Taking a member out is typed out; putting it back is not
  *
@@ -44,95 +36,18 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, InlineCode, Input, Modal, Select } from "@crewlethq/ui";
+import { Button, InlineCode, Input, Modal, Select } from "@crewlethq/ui";
 import { DatabaseGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
-import { rest, RestError } from "~/protocol/index.ts";
-import type { ObjectHold, ObjectsGestureAnswer } from "~/protocol/index.ts";
+import type { MapHold, ObjectsGestureAnswer } from "~/protocol/index.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-
-/** What the last request came back with, rendered under the dialog's text. */
-type Heard =
-  | { kind: "answer"; answer: ObjectsGestureAnswer }
-  | { kind: "refused"; detail: string; hint: string }
-  | { kind: "unanswered"; why: string };
-
-/** Sends one gesture and reads back what it did. */
-async function gesture(path: string, query: Record<string, string>): Promise<Heard> {
-  try {
-    const answer = (await rest.request("POST", path, { body: {}, query }))
-      .body as ObjectsGestureAnswer | null;
-    if (!answer) return { kind: "unanswered", why: "the node answered with no body" };
-    return { kind: "answer", answer };
-  } catch (err) {
-    if (err instanceof RestError && err.unanswered) {
-      // NOT A REFUSAL: nothing here knows what the node did. Sending the
-      // same gesture again is how to find out, and the dialog says what
-      // that does — see the file's doc.
-      return {
-        kind: "unanswered",
-        why:
-          err.status === 0 || err.code === "unreadable_body"
-            ? err.message
-            : `a ${err.status} came back with no engine error code in it — something in front of the node answered`,
-      };
-    }
-    if (err instanceof RestError) return { kind: "refused", detail: err.message, hint: err.hint };
-    return { kind: "refused", detail: String(err), hint: "" };
-  }
-}
-
-/** Whether what came back is a gesture the map now says. */
-function landed(heard: Heard | null): boolean {
-  return heard?.kind === "answer" && heard.answer.landed;
-}
-
-/** What sending a gesture again does, for one the map already says changes nothing. */
-const RESEND_CHANGES_NOTHING =
-  "Sending the same gesture again is safe: one the map already says changes nothing and writes nothing.";
-
-/**
- * The outcome line under a gesture's text. `resend` says what sending the same
- * gesture again does, for a request nobody answered.
- */
-function Outcome({ heard, done, resend }: { heard: Heard; done: React.ReactNode; resend: string }) {
-  switch (heard.kind) {
-    case "answer":
-      return heard.answer.landed ? (
-        <Callout variant="success" role="status">
-          <span className="col" style={{ gap: 6 }}>
-            <span>{done}</span>
-            {heard.answer.hint && <span className="t-caption">{heard.answer.hint}</span>}
-            <span className="t-caption">Placement map epoch {heard.answer.epoch}</span>
-          </span>
-        </Callout>
-      ) : (
-        <Callout variant="warning" role="alert">
-          <span className="col" style={{ gap: 6 }}>
-            <span>
-              <strong>Not in the map.</strong> {heard.answer.hint}
-            </span>
-          </span>
-        </Callout>
-      );
-    case "unanswered":
-      return (
-        <Callout variant="warning" role="alert" icon={<ScheduleGlyph size="md" />}>
-          <span>
-            <strong>No answer.</strong> {heard.why}, so whether the map changed is unknown. {resend}
-          </span>
-        </Callout>
-      );
-    case "refused":
-      return (
-        <Callout variant="danger" role="alert">
-          <span className="col" style={{ gap: 6 }}>
-            <span>{heard.detail}</span>
-            {heard.hint && <span className="t-caption">{heard.hint}</span>}
-          </span>
-        </Callout>
-      );
-  }
-}
+import {
+  GestureOutcome,
+  landed,
+  RESEND_CHANGES_NOTHING,
+  RESEND_REPLACES_THE_HOLD,
+  sendGesture,
+  type Heard,
+} from "./mapGesture.tsx";
 
 /**
  * Taking a data node out of the placement map, or putting it back.
@@ -156,7 +71,7 @@ export function ObjectsMemberDialog({
   const [typed, setTyped] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [heard, setHeard] = useState<Heard | null>(null);
+  const [heard, setHeard] = useState<Heard<ObjectsGestureAnswer> | null>(null);
   const verb = out ? "Take out" : "Put back";
   const confirmed = !out || typed.trim() === node;
 
@@ -165,7 +80,10 @@ export function ObjectsMemberDialog({
     setBusy(true);
     const query: Record<string, string> = { confirm: node };
     if (out && reason.trim()) query.reason = reason.trim();
-    const next = await gesture(`/objects/${out ? "out" : "in"}/${encodeURIComponent(node)}`, query);
+    const next = await sendGesture<ObjectsGestureAnswer>(
+      `/objects/${out ? "out" : "in"}/${encodeURIComponent(node)}`,
+      query,
+    );
     setHeard(next);
     setBusy(false);
     onDone();
@@ -264,7 +182,14 @@ export function ObjectsMemberDialog({
           )}
         </>
       )}
-      {heard && <Outcome heard={heard} done={done} resend={RESEND_CHANGES_NOTHING} />}
+      {heard && (
+        <GestureOutcome
+          heard={heard}
+          done={done}
+          resend={RESEND_CHANGES_NOTHING}
+          map="Placement map"
+        />
+      )}
     </Modal>
   );
 }
@@ -289,7 +214,7 @@ export function ObjectsHoldDialog({
   onDone,
   onClose,
 }: {
-  hold?: ObjectHold;
+  hold?: MapHold;
   onDone: () => void;
   onClose: () => void;
 }) {
@@ -297,7 +222,7 @@ export function ObjectsHoldDialog({
   const [length, setLength] = useState<string>("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [heard, setHeard] = useState<Heard | null>(null);
+  const [heard, setHeard] = useState<Heard<ObjectsGestureAnswer> | null>(null);
   const release = held !== undefined;
   const ready = release || length !== "";
 
@@ -309,7 +234,10 @@ export function ObjectsHoldDialog({
       query.for = length;
       if (reason.trim()) query.reason = reason.trim();
     }
-    const next = await gesture(release ? "/objects/release" : "/objects/hold", query);
+    const next = await sendGesture<ObjectsGestureAnswer>(
+      release ? "/objects/release" : "/objects/hold",
+      query,
+    );
     setHeard(next);
     setBusy(false);
     onDone();
@@ -391,14 +319,11 @@ export function ObjectsHoldDialog({
           </>
         ))}
       {heard && (
-        <Outcome
+        <GestureOutcome
           heard={heard}
           done={done}
-          resend={
-            release
-              ? RESEND_CHANGES_NOTHING
-              : "Sending the hold again is safe, but it replaces the one in force: its length is counted from the resend."
-          }
+          resend={release ? RESEND_CHANGES_NOTHING : RESEND_REPLACES_THE_HOLD}
+          map="Placement map"
         />
       )}
     </Modal>

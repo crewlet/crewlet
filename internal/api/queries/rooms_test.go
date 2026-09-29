@@ -129,8 +129,20 @@ func everySeam(t *testing.T) queries.Sources {
 		Retention: func(context.Context) any { return nil },
 		// THE FLEET BROKER'S MEMBERSHIP, which every engine serves.
 		FleetBroker: emptyBroker{},
+		// THE ESTATE MAP, which every node with a coordination store
+		// serves: none stored, at the layout this build runs.
+		Estate: emptyEstate{},
 	}
 }
+
+// emptyEstate is a fleet with no estate map, at layout 0.
+type emptyEstate struct{}
+
+func (emptyEstate) EstateMap(context.Context) (coord.EstateMapRecord, bool, error) {
+	return coord.EstateMapRecord{}, false, nil
+}
+
+func (emptyEstate) Running() statelog.Layout { return engine.LayoutZero() }
 
 // emptyBroker is a fleet broker with nothing to list, on emptyWork's terms.
 type emptyBroker struct{}
