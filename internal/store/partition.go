@@ -98,37 +98,32 @@ func (f PartitionFile) Validate() error {
 	return nil
 }
 
-// PartitionPath is where one partition's file lives in estateDir:
-// `l<layout>-<name>.db` — `l1-tracker.007.db` — except layout 0's one
-// partition, estate.000, whose file keeps the name the replicated estate has
-// always had beside the node's own, so no layout-0 node's file ever moves.
+// partitionPath is where a node whose own file is nodePath keeps f, with
+// store.replicated_path configured as configured.
+//
+// LAYOUT 0's FILE IS [ReplicatedPath] — the configured path when one is set,
+// under whatever name it gives — so no layout-0 node's file ever moves. Every
+// partitioned layout's files are BESIDE IT, as `l<layout>-<name>.db`
+// (`l1-tracker.007.db`): an operator who moved the replicated estate to a
+// faster volume moved the estate, and a divided estate is still the estate.
+// An in-memory node's partitions are in memory too, each its own anonymous
+// database, exactly as two files are two files.
 //
 // THE LAYOUT IS IN THE NAME for the reason it is in every stream name: a
 // repartition creates a disjoint set of files, and one name never means two
 // histories.
-func PartitionPath(estateDir string, layout int, name string) string {
-	if layout == 0 {
-		return filepath.Join(estateDir, replicatedFileName)
-	}
-	return filepath.Join(estateDir, fmt.Sprintf("l%d-%s.db", layout, name))
-}
-
-// partitionPath is where a node whose own file is nodePath keeps f, with
-// store.replicated_path configured as configured.
 //
-// LAYOUT 0's FILE IS [ReplicatedPath] — the configured path when one is set —
-// and every partitioned layout's files are BESIDE IT: an operator who moved
-// the replicated estate to a faster volume moved the estate, and a divided
-// estate is still the estate. With nothing configured the two rules agree,
-// since [ReplicatedPath] then puts layout 0's file where [PartitionPath] names
-// it. An in-memory node's partitions are in memory too, each its own
-// anonymous database, exactly as two files are two files.
+// NOT EXPORTED, and no path is derived from a directory alone: layout 0's
+// file is wherever the node's configuration says, so an answer computed
+// without that configuration is right only while the configured name happens
+// to be the default — which is the bug `crewlet migrate` had while it derived
+// the path itself. [DB.PartitionPath] is the one answer, asked of the node.
 func partitionPath(nodePath, configured string, f PartitionFile) string {
 	zero := ReplicatedPath(nodePath, configured)
 	if zero == "" || strings.HasPrefix(zero, ":memory:") || f.Layout == 0 {
 		return zero
 	}
-	return PartitionPath(filepath.Dir(zero), f.Layout, f.Name)
+	return filepath.Join(filepath.Dir(zero), fmt.Sprintf("l%d-%s.db", f.Layout, f.Name))
 }
 
 // Pool and page-cache sizing for partition files.

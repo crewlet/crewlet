@@ -161,38 +161,34 @@ func TestEveryPartitionIsADifferentDatabase(t *testing.T) {
 // estate to a faster volume moved the estate.
 func TestAPartitionIsWhereItsLayoutPutsIt(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	nodePath := filepath.Join(dir, "node.db")
 	zero := storetest.LayoutZero(1)
 	one := store.PartitionFile{Layout: 1, Name: "tracker.007", Logs: 2}
-
-	if got, want := store.PartitionPath(dir, 0, "estate.000"), store.ReplicatedPath(nodePath, ""); got != want {
-		t.Errorf("layout 0's partition is at %q, and the replicated estate has always been at %q", got, want)
-	}
-	if got, want := store.PartitionPath(dir, 1, "tracker.007"), filepath.Join(dir, "l1-tracker.007.db"); got != want {
-		t.Errorf("tracker.007 of layout 1 is at %q, want %q", got, want)
-	}
-	if store.PartitionPath(dir, 1, "tracker.007") == store.PartitionPath(dir, 2, "tracker.007") {
-		t.Error("tracker.007 of two layouts is one file, so a repartition would reuse a name for a second history")
-	}
+	two := store.PartitionFile{Layout: 2, Name: "tracker.007", Logs: 2}
 
 	for _, c := range []struct {
 		name       string
 		configured bool
 	}{
 		{"derived beside the node's", false},
+		// UNDER A NAME OF ITS OWN, which is the case a path derived from
+		// a directory alone gets wrong: layout 0's file is wherever
+		// store.replicated_path says, called whatever it is called there.
 		{"named explicitly", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			nodeDir, elsewhere := t.TempDir(), t.TempDir()
 			var opts store.Options
+			nodePath := filepath.Join(nodeDir, "node.db")
 			wantZero := filepath.Join(nodeDir, "crewlet-replicated.db")
 			if c.configured {
 				opts.ReplicatedPath = filepath.Join(elsewhere, "estate.db")
 				wantZero = opts.ReplicatedPath
 			}
-			node, err := store.OpenNode(t.Context(), filepath.Join(nodeDir, "node.db"), opts)
+			if got := store.ReplicatedPath(nodePath, opts.ReplicatedPath); got != wantZero {
+				t.Errorf("the replicated estate is at %q, want %q", got, wantZero)
+			}
+			node, err := store.OpenNode(t.Context(), nodePath, opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}
@@ -203,6 +199,10 @@ func TestAPartitionIsWhereItsLayoutPutsIt(t *testing.T) {
 			wantOne := filepath.Join(filepath.Dir(wantZero), "l1-tracker.007.db")
 			if got := node.PartitionPath(one); got != wantOne {
 				t.Errorf("tracker.007 is at %q, want %q beside layout 0's", got, wantOne)
+			}
+			if node.PartitionPath(one) == node.PartitionPath(two) {
+				t.Error("tracker.007 of two layouts is one file, so a repartition " +
+					"would reuse a name for a second history")
 			}
 			part, err := node.OpenPartition(t.Context(), one)
 			if err != nil {

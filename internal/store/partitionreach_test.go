@@ -34,8 +34,8 @@ import (
 // partition methods — `OpenPartition`, `ClosePartition`, `DropPartition`,
 // `OpenPartitions`, `PartitionDB`, `PartitionHandle`, `PartitionPath` — on a
 // receiver that is not an imported package, and every call through the store
-// package itself that names a partition's file: `PartitionPath`,
-// `ReplicatedPath` (layout 0's), and `OpenEstate` of `EstatePartition`.
+// package itself that names a partition's file: `ReplicatedPath` (layout 0's)
+// and `OpenEstate` of `EstatePartition`.
 // Matching is on the name, as every gate in this package matches; the one name
 // it trusts is an import's.
 //
@@ -54,7 +54,6 @@ func TestOnlyTheRuntimeReachesAPartition(t *testing.T) {
 		`part, err := node.PartitionDB(name)`,
 		`r := node.PartitionHandle(name).Reader()`,
 		`path := node.PartitionPath(f)`,
-		`path := store.PartitionPath(dir, 1, name)`,
 		`path := store.ReplicatedPath(boot.Store.Path, "")`,
 		`db, err := store.OpenEstate(ctx, store.EstatePartition, path, store.Options{})`,
 	} {
@@ -192,7 +191,7 @@ func partitionReachAt(n ast.Node, f fileNames) (string, bool) {
 				return "", false
 			}
 			switch name {
-			case "PartitionPath", "ReplicatedPath":
+			case "ReplicatedPath":
 				return "store." + name + " names a partition's file", true
 			case "OpenEstate":
 				for _, arg := range call.Args {
