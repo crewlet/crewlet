@@ -471,6 +471,55 @@ func TestTheUnheldFilterAsksARenamedSeatByItsIdentity(t *testing.T) {
 	}
 }
 
+// A READ SERVES A RENAMED OBJECT'S IDENTITY BESIDE ITS ADDRESS.
+//
+// An address is not an identity: a retired alias may be claimed by a new
+// object, so a client keeping its own picture of the chart across renames —
+// the dashboard's org builder keys every node by it — has to be told which
+// object is which without the address. The capped former list cannot say it,
+// because enough renames push the origin off the end.
+func TestAReadServesARenamedObjectsIdentityBesideItsAddress(t *testing.T) {
+	t.Parallel()
+	company := chart.Chart{
+		Units: []chart.Unit{
+			{Key: "rnd", OriginKey: "engineering", FormerKeys: []string{"platform"}},
+			{Key: "sales"},
+		},
+		Seats: []chart.Seat{
+			{Handle: "chief-tech", OriginHandle: "cto", Kind: chart.SeatAgent,
+				FormerHandles: []string{"head-of-tech"}},
+			{Handle: "designer", Kind: chart.SeatAgent},
+		},
+	}
+	r := serve(t, &reader{chart: company}, leadOf(iam.GrantStateRead), leads())
+	body := getJSON(t, r.mux, "/chart", http.StatusOK)
+
+	origin := func(list, field, address string) any {
+		for _, raw := range body[list].([]any) {
+			row := raw.(map[string]any)
+			if row["handle"] == address || row["key"] == address {
+				return row[field]
+			}
+		}
+		t.Fatalf("no %s %q in %v", list, address, body[list])
+		return nil
+	}
+	if got := origin("seats", "origin_handle", "chief-tech"); got != "cto" {
+		t.Errorf("chief-tech's origin_handle = %v, want cto", got)
+	}
+	if got := origin("units", "origin_key", "rnd"); got != "engineering" {
+		t.Errorf("rnd's origin_key = %v, want engineering", got)
+	}
+	// THE CONTROL: an object never renamed answers to its identity, and
+	// serves none beside it — which is how the row holds it.
+	if got := origin("seats", "origin_handle", "designer"); got != nil {
+		t.Errorf("designer's origin_handle = %v, want none", got)
+	}
+	if got := origin("units", "origin_key", "sales"); got != nil {
+		t.Errorf("sales' origin_key = %v, want none", got)
+	}
+}
+
 // AND ASKING FOR IT WITHOUT THE GRANT IS STILL STRIPPED, NOT REFUSED.
 //
 // The rows a caller asked for are rows they may read; a 403 over a field they

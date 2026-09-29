@@ -852,7 +852,14 @@ resolving until something else claims it, and a reference somebody typed last
 year — a chat mention, a unit's `lead:` naming a handle the seat has since given
 up — still finds what it named. Every read carries `former_keys` /
 `former_handles` so a client rendering a stale reference can say **why** it
-still works rather than reporting it broken.
+still works rather than reporting it broken, and — once an object has been
+renamed — `origin_key` / `origin_handle`: the address it was **created**
+under, which is its identity. That one never moves and is never issued to
+anything else, while a retired alias may be claimed by a new object, so a
+client that keeps its own picture of the chart across renames matches objects
+by it rather than by their address. It is absent until the first rename,
+while the object still answers to it; the capped former list cannot stand in
+for it, because enough renames push the origin off its end.
 
 The **`manages:` entries** naming the object move with it: every entry that
 reached it before the rename names its new address after, so it does not hang

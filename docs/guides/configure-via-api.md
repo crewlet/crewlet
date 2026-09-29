@@ -377,7 +377,10 @@ curl -X POST $CREWLET_URL/chart/units/engineering/rename \
 The former address goes on resolving: a key is an ADDRESS and the row is the
 identity, so a reference somebody typed last year still finds what it named.
 Reads carry `former_keys` / `former_handles` so a client can say why a stale
-reference still works. The `manages:` entries naming the object move to its new
+reference still works, and a renamed object's `origin_key` / `origin_handle` —
+the address it was created under, which is its identity and is never issued
+again — so a client matching objects across renames matches on that rather than
+on an address a new object may one day take. The `manages:` entries naming the object move to its new
 address in the same record, so they never depend on the old one.
 
 A rename is structure — the route publishes a one-operation batch — so it can

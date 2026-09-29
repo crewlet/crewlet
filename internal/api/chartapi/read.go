@@ -63,6 +63,18 @@ type seatView struct {
 	// works rather than reporting it broken.
 	FormerHandles []string `json:"former_handles,omitempty"`
 
+	// OriginHandle is the handle this seat was CREATED under — its IDENTITY
+	// (ADR-0020), which no rename moves and the chart never issues to
+	// anything else — served as the row holds it: absent until the first
+	// rename, while the seat still answers to it. A client that keeps its own
+	// picture of the chart across renames has to be able to say "the same
+	// seat" without the address, because an address is not an identity: a
+	// retired alias may be claimed by a new seat, and a client that keyed on
+	// the address carried an edit of the renamed seat onto the newcomer.
+	// Nothing else serves it — the capped `former_handles` drops the origin
+	// after enough renames, so it cannot be read off them.
+	OriginHandle string `json:"origin_handle,omitempty"`
+
 	// Runtime is the opaque half, present only when the caller asked for
 	// it AND carried the grant that reads the company document.
 	Runtime any `json:"runtime,omitempty"`
@@ -83,6 +95,10 @@ type unitView struct {
 	KnowledgeRefs []string `json:"knowledge_refs,omitempty"`
 
 	FormerKeys []string `json:"former_keys,omitempty"`
+
+	// OriginKey is the key this unit was created under, as [seatView]'s
+	// OriginHandle is a seat's: absent until the first rename.
+	OriginKey string `json:"origin_key,omitempty"`
 
 	Runtime any `json:"runtime,omitempty"`
 }
@@ -303,6 +319,9 @@ func viewOfUnit(u chart.Unit, runtime bool) unitView {
 		Channel: u.Channel, Project: u.Project, Space: u.Space,
 		KnowledgeRefs: u.KnowledgeRefs, FormerKeys: u.FormerKeys,
 	}
+	if origin := u.Origin(); origin != u.Key {
+		out.OriginKey = origin
+	}
 	if runtime && len(u.Runtime) > 0 {
 		out.Runtime = maskedRuntime(chart.KindUnit, u.Runtime)
 	}
@@ -324,6 +343,9 @@ func viewOfSeat(seat chart.Seat, runtime bool) seatView {
 		BehavioralGuidelines: seat.BehavioralGuidelines,
 		Project:              seat.Project, Space: seat.Space,
 		FormerHandles: seat.FormerHandles,
+	}
+	if origin := seat.Origin(); origin != seat.Handle {
+		out.OriginHandle = origin
 	}
 	if runtime && len(seat.Runtime) > 0 {
 		out.Runtime = maskedRuntime(chart.KindSeat, seat.Runtime)
