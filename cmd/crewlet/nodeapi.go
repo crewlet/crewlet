@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -11,16 +10,9 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/chartapi"
-	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/iam/credential"
-	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -126,106 +118,6 @@ func nodeAPIToken(surface string) (string, error) {
 			"by `crewlet iam token`", surface, apiTokenEnv)
 }
 
-// signInSurface builds /auth, or reports that this node serves none.
-//
-// # One posture produces a nil, and it is not a fault
-//
-// THIS NODE STARTED WITH NO COMPANY. Every node runs the identity domain,
-// whatever its roles, but the state log it rides on is part of the native
-// runtime, and a node that booted before any revision was active opens none —
-// it serves its HTTP surface unconfigured until the first revision arrives.
-// Such a node has no directory to sign anybody in against, and the routes are
-// ABSENT rather than answering an error, as every other surface the native
-// runtime feeds is on that node.
-//
-// A keyring that cannot sign for the fleet USED TO BE a second such posture,
-// and it is not any more: Tier A refuses a file without a usable keyring and
-// the engine refuses to start without one, so a session signer this function
-// cannot build is a fault it returns rather than a node it quietly narrows.
-func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
-	*authapi.Service, *auth.Sessions, error) {
-
-	reader, writer := e.IAM(), e.IAMWriter()
-	if reader == nil || writer == nil {
-		log := logging.Get("cli")
-		log.Info("api_sign_in_absent",
-			"reason", "this node started with no active company, so it runs "+
-				"no native runtime and holds no identity directory",
-			"hint", "activate a company revision and restart the node")
-		return nil, nil, nil
-	}
-	signer, err := session.New(session.Options{
-		Material: boot.Secrets.TokenMaterial(),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("api: the session signer: %w", err)
-	}
-	// THIS NODE'S OWN CURVE, and nobody else's: a guessing run a load
-	// balancer rotates across the fleet meets each node's separately, which
-	// is the residual internal/iam/credential's throttle states and bounds.
-	throttle := credential.NewThrottle(credential.ThrottleDeps{})
-	// THE SEALER, checked here for the directory's reason: a typed nil in
-	// the surface's interface would pass its own refusal.
-	sealer := e.PersonSealer()
-	if sealer == nil {
-		return nil, nil, errors.New("api: the sign-in surface: this node " +
-			"holds no keyring to seal a second factor with")
-	}
-	surface, err := authapi.New(authapi.Options{
-		Bootstrap: boot,
-		Directory: reader,
-		// THE NODE'S OWN WRITER, which acts as the deployment. What the
-		// routes do with it is create people and open sessions, both of
-		// which are the deployment's to do on somebody's behalf — a
-		// person cannot author their own enrolment, because they do not
-		// exist until it lands.
-		Writer:   writer,
-		Signer:   signer,
-		Hasher:   credential.NewHasher(credential.Default(), credential.VerifyCap()),
-		Throttle: throttle,
-		Blinder:  e.PersonBlinder(),
-		Sealer:   sealer,
-		Sessions: reader,
-		// THE SAME PURE FUNCTION THE GUARD USES over the same Tier A,
-		// which is one PARSER rather than one instance — see
-		// [auth.Clients].
-		Clients: auth.NewClients(boot),
-		// THE NODE'S ONE AUDIT TRAIL, which the guard and the directory
-		// hand what they saw to as well: a failed sign-in and a refused
-		// bearer fold into one row per client per minute only because
-		// both reach the same tally.
-		Audit: e.AuthEvents(),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("api: the sign-in surface: %w", err)
-	}
-	// AND THE OTHER HALF, built from the SAME signer. A cookie minted
-	// under one key and validated against another is a sign-in that
-	// appears to work and then does not stick — and it would do so only
-	// on the requests that landed on a node whose signer was built
-	// separately, which is the shape nobody reproduces.
-	sessions, err := auth.NewSessions(auth.SessionsDeps{
-		Signer:    signer,
-		Directory: reader,
-		// THE SAME READER'S APPLIER, which a write presenting a session
-		// this node has not applied yet waits on — the sign-in above
-		// answers before it does.
-		Applier: reader,
-		// THE CHART VIEW, and the ZERO VALUE on a node with no chart
-		// domain — never nil, which internal/iam/session reads as the
-		// seatless arm. See [engine.SeatViewOf].
-		Chart:    engine.SeatViewOf(e),
-		External: boot.API.ExternalBase(),
-		// The same trail, whose once-per-lineage claim is what keeps a
-		// cookie presented past its deadline announcing that ending once.
-		Audit: e.AuthEvents(),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("api: the session arm: %w", err)
-	}
-	return surface, sessions, nil
-}
-
 // seatHeld reports whether a seat is one somebody in the identity directory is
 // bound to, or nil on a node with no directory to ask.
 //
@@ -250,86 +142,6 @@ func seatHeld(e *engine.Engine) chartapi.Held {
 	// made for a request — /chart/check, /health, the seat listing — so a
 	// read for one that has gone has nobody to answer.
 	return reader.HeldSeats
-}
-
-// directorySurface builds /iam, or reports that this node serves none.
-//
-// NIL IS A REAL POSTURE, exactly as [signInSurface]'s is and for the same
-// reason: a node that started with no active company holds no identity rows,
-// and a surface over it would serve an empty directory as though the company
-// had nobody in it. The routes are ABSENT rather than answering an error —
-// which takes returning an untyped nil; see [surfaceMounter] for what a typed
-// one did.
-func directorySurface(boot *config.Bootstrap, e *engine.Engine) (surfaceMounter, error) {
-
-	reader, writer := e.IAM(), e.IAMWriter()
-	if reader == nil || writer == nil {
-		logging.Get("cli").Info("api_directory_absent",
-			"reason", "this node started with no active company, so it runs "+
-				"no native runtime and holds no identity directory",
-			"hint", "activate a company revision and restart the node")
-		return nil, nil
-	}
-	// THE KEYRING'S OPENER, checked here rather than handed in as a typed
-	// nil: an interface holding a nil pointer is not nil, so the surface's
-	// own refusal would never see it and the first name it opened would
-	// panic.
-	sealer := e.PersonSealer()
-	if sealer == nil {
-		return nil, errors.New("api: the identity directory: this node holds " +
-			"no keyring to open anybody's name with")
-	}
-	surface, err := iamapi.New(iamapi.Options{
-		Directory: reader,
-		// ONE WRITER PER CALLER. The node's own writer acts as the
-		// DEPLOYMENT, which is right for a bootstrap and wrong for
-		// everything here: a directory whose author field is the node
-		// is not an audit trail. The party is the caller's principal,
-		// whole — its name, the credential beside it, its grants and its
-		// id, which a person's own mint is decided on.
-		Authority: func(principal iam.Principal) iamapi.Writer {
-			return writer.As(principal)
-		},
-		Opener:       sealer,
-		ExternalBase: boot.API.ExternalBase(),
-		// THIS NODE'S OWN CEILING, which the report compares a person's
-		// declared grants against: it is applied at decision time and
-		// never written, so a fleet mid-rollout legally disagrees and
-		// nothing else would say so.
-		Ceiling:  boot.API.Auth.MaxGrants,
-		Bindings: danglingBindings(e),
-		// What an administrator did — a token minted or revoked, a
-		// session ended, a person removed — on the node's audit feed.
-		Audit: e.AuthEvents(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("api: the identity directory: %w", err)
-	}
-	return surface, nil
-}
-
-// danglingBindings is the dangling-binding arm of the directory report, or nil
-// where this node cannot run it.
-//
-// THE ENGINE'S RULE, not one written here: [engine.Engine.DanglingBinding] is
-// the request path's own seat table applied to a person's row, and the
-// `iam_binding_dangling` alarm asks the same function — so the report and the
-// alarm cannot disagree about which binding dangles. The seam it replaced
-// asked only whether the chart held a row by that handle, which is how a
-// person bound to an AGENT seat went unreported while every request they made
-// was refused.
-//
-// NIL ON A NODE WITH NO CHART READER — one that started with no active
-// company — which is the same third value [seatHeld] answers with: there are
-// no rows to ask, so the arm is skipped rather than asked.
-func danglingBindings(e *engine.Engine) iamapi.Bindings {
-	if e.Chart() == nil {
-		return nil
-	}
-	return func(ctx context.Context, row iamdomain.PersonRow) (bool, string, error) {
-		residue, dangling, err := e.DanglingBinding(ctx, row)
-		return dangling, residue.Detail, err
-	}
 }
 
 // identityOf is what /health says about whether anybody is enrolled, or nil
