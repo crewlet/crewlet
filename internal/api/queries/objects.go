@@ -3,14 +3,12 @@ package queries
 import (
 	"context"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	objplacement "github.com/crewlet/crewlet/internal/objstore/placement"
@@ -127,7 +125,7 @@ type PlacedObjects struct {
 	// Hold is an operator's hold in force now, absent when there is none
 	// or it has expired — an expired hold the maintainer has not cleared
 	// yet removes members again, so it is not rendered as holding.
-	Hold *ObjectHold `json:"hold,omitempty"`
+	Hold *MapHold `json:"hold,omitempty"`
 
 	// DegradedGroups is how many groups place a copy on a member that is
 	// absent or whose store has failed right now — each is a group a copy
@@ -145,10 +143,10 @@ type PlacedObjects struct {
 	// Removed are the nodes the map removed for absence, still remembers,
 	// and has not seen back — the list `crewlet objects in` takes a name
 	// from to vouch for one. A removed node that IS seen back is a member
-	// again at once, on probation ([ObjectMapMember.Probation]), and is
+	// again at once, on probation ([MapMember.Probation]), and is
 	// listed there rather than here: it is one node, and two lists naming
 	// it would each say half of what it is.
-	Removed []ObjectRemoval `json:"removed"`
+	Removed []MapRemoval `json:"removed"`
 }
 
 // ObjectBalance is the map's last measurement of its members' copies against
@@ -204,93 +202,11 @@ func renderBalance(b objstore.Balance) *ObjectBalance {
 	}
 }
 
-// ObjectHold is an operator's hold on the map: no member is removed however
-// long it is gone, until Until.
-type ObjectHold struct {
-	Until  time.Time `json:"until"`
-	By     string    `json:"by"`
-	Reason string    `json:"reason,omitempty"`
-	At     time.Time `json:"at"`
-}
-
-// ObjectMapMember is one member as the MAP alone describes it — what a gesture
-// answer can say without reading the leases.
-type ObjectMapMember struct {
-	Node   string `json:"node"`
-	Weight int    `json:"weight"`
-
-	// Domain is the member's value of the map's failure-domain label,
-	// absent when the map names none or the node does not carry it.
-	Domain string `json:"domain,omitempty"`
-
-	// Out is a member taken out: placed on nothing, while it still serves
-	// what it holds. OutBy, OutReason and OutAt are the gesture that took
-	// it out.
-	Out       bool      `json:"out"`
-	OutBy     string    `json:"out_by,omitempty"`
-	OutReason string    `json:"out_reason,omitempty"`
-	OutAt     time.Time `json:"out_at,omitzero"`
-
-	// Probation is a node the map removed for absence and has seen back,
-	// absent while the member is not on it: read from and repaired from at
-	// once, placed on nothing until it has been present and healthy for
-	// long enough to be trusted. A member can be out AND on probation — an
-	// operator's decision and the maintainer's, each with its own end.
-	Probation *ObjectProbation `json:"probation,omitempty"`
-
-	// Absence is the member's open run of absence, absent while it has
-	// none.
-	Absence *ObjectAbsence `json:"absence,omitempty"`
-}
-
-// ObjectProbation is a member's probation, counted in the maintainer's ticks
-// as an absence is.
-type ObjectProbation struct {
-	// Present is how many consecutive ticks have seen it present and
-	// healthy since it came back, and PlacedAfterTicks how many place on
-	// it again. A tick that does not see it ends the probation at once —
-	// leaving is exactly what it was being watched for — and it is removed
-	// again, however far it had got.
-	Present          int `json:"present"`
-	PlacedAfterTicks int `json:"placed_after_ticks"`
-
-	// RemovedAt is when the map removed it, for display; Reason and Detail
-	// the absence that did.
-	RemovedAt time.Time                `json:"removed_at"`
-	Reason    membership.AbsenceReason `json:"reason"`
-	Detail    string                   `json:"detail,omitempty"`
-}
-
-// ObjectAbsence is a member's run of absence, counted in the maintainer's
-// ticks — never timed, so a clock that moved cannot stretch or skip it.
-type ObjectAbsence struct {
-	// Ticks is how many ticks have counted the member absent or unhealthy
-	// in this run, and OutAfterTicks how many remove it — while no hold is
-	// in force.
-	Ticks         int `json:"ticks"`
-	OutAfterTicks int `json:"out_after_ticks"`
-
-	// Present is how many consecutive ticks have seen it back, and
-	// ClearAfterTicks how many clear the run. A member back for fewer keeps
-	// every tick it has counted, which is what eventually removes one that
-	// flaps.
-	Present         int `json:"present"`
-	ClearAfterTicks int `json:"clear_after_ticks"`
-
-	// Since is when the run began, as the duty holder of the time read its
-	// own clock — for display, never compared.
-	Since time.Time `json:"since"`
-
-	// Reason is `absent` or `unhealthy`, and Detail what the member said.
-	Reason membership.AbsenceReason `json:"reason"`
-	Detail string                   `json:"detail,omitempty"`
-}
-
 // ObjectMember is one member as the fleet view renders it: the map's view of
 // it, the share of the copies it holds under the stored map, and what its own
 // objects lease reports.
 type ObjectMember struct {
-	ObjectMapMember
+	MapMember
 
 	// SharePercent is the member's measured share of every group copy the
 	// stored map places, 0..100 — what its weight bought once the balancer
@@ -350,76 +266,6 @@ type ObjectScrub struct {
 	Error        string    `json:"error,omitempty"`
 }
 
-// ObjectRemoval is a node the map removed for absence, remembers, and has not
-// seen back.
-type ObjectRemoval struct {
-	Node string `json:"node"`
-
-	// At is when it was removed, for display; Reason and Detail the
-	// absence that removed it.
-	At     time.Time                `json:"at"`
-	Reason membership.AbsenceReason `json:"reason"`
-	Detail string                   `json:"detail,omitempty"`
-
-	// Gone is how many consecutive ticks have not seen it present and
-	// healthy, and ForgetAfterTicks how many forget it — after which it
-	// joins as any new node would. Seen back before that, it is a member
-	// again at once, on probation, and placed on after PlacedAfterTicks
-	// ticks in a row.
-	Gone             int `json:"gone"`
-	ForgetAfterTicks int `json:"forget_after_ticks"`
-	PlacedAfterTicks int `json:"placed_after_ticks"`
-}
-
-// RenderMapMember is one member as the map describes it, and false when the
-// map has no such member.
-func RenderMapMember(state objstore.MapState, node string) (ObjectMapMember, bool) {
-	m, ok := state.Map.Member(node)
-	if !ok {
-		return ObjectMapMember{}, false
-	}
-	out := ObjectMapMember{Node: m.Node, Weight: m.Weight, Domain: m.Domain, Out: m.Out}
-	if m.Probation {
-		// THE FLAG IS WHAT NODES PLACE BY, and the removal the count that
-		// ends it: the maintainer derives the one from the other on every
-		// tick, and a write that set one without the other is refused, so
-		// a member on probation with no removal remembered is a record no
-		// build wrote — rendered on probation with nothing counted, since
-		// the flag is what it is placed by.
-		r := state.Removed[node]
-		out.Probation = &ObjectProbation{
-			Present: r.Present, PlacedAfterTicks: membership.StableTicks,
-			RemovedAt: r.At, Reason: r.Reason, Detail: r.Detail,
-		}
-	}
-	if m.Out {
-		// THE GESTURE BESIDE THE FLAG. The flag is what nodes place by
-		// and the gesture the operator's intent; the maintainer derives
-		// one from the other, so a member out with no gesture recorded is
-		// one whose record a tick has not reconciled yet.
-		if g, taken := state.TakenOut[node]; taken {
-			out.OutBy, out.OutReason, out.OutAt = g.By, g.Reason, g.At
-		}
-	}
-	if run, gone := state.Absence[node]; gone {
-		out.Absence = &ObjectAbsence{
-			Ticks: run.Ticks, OutAfterTicks: membership.OutTicks,
-			Present: run.Present, ClearAfterTicks: membership.StableTicks,
-			Since: run.Since, Reason: run.Reason, Detail: run.Detail,
-		}
-	}
-	return out, true
-}
-
-// RenderHold is the hold in force at now, or nil.
-func RenderHold(state objstore.MapState, now time.Time) *ObjectHold {
-	if !state.Hold.Active(now) {
-		return nil
-	}
-	h := state.Hold
-	return &ObjectHold{Until: h.Until, By: h.By, Reason: h.Reason, At: h.At}
-}
-
 // RenderObjects is a placed map as the fleet view renders it, joined with the
 // live objects leases.
 //
@@ -433,6 +279,7 @@ func RenderObjects(state objstore.MapState, layout *objplacement.Layout,
 	leases []coord.Lease, now time.Time) FleetObjects {
 
 	m := state.Map
+	d := m.Draw()
 	reports := objectReports(leases)
 	copies := layout.Copies()
 	total := 0
@@ -445,15 +292,15 @@ func RenderObjects(state objstore.MapState, layout *objplacement.Layout,
 		Replicas: m.Replicas, Copies: m.Size(), PGs: m.Groups(),
 		FailureDomain:   m.FailureDomain,
 		DistinctDomains: m.DistinctDomains(), DomainLimited: m.DomainLimited(),
-		Hold:    RenderHold(state, now),
+		Hold:    RenderHold(state.State, now),
 		Balance: renderBalance(state.Balance),
 		Members: make([]ObjectMember, 0, len(m.Members)),
-		Removed: make([]ObjectRemoval, 0, len(state.Removed)),
+		Removed: RenderRemoved(state.State, d),
 	}
 	down := map[string]bool{}
 	for _, member := range m.Members {
-		view, _ := RenderMapMember(state, member.Node)
-		row := ObjectMember{ObjectMapMember: view}
+		view, _ := RenderMember(state.State, d, member.Node)
+		row := ObjectMember{MapMember: view}
 		if total > 0 {
 			row.SharePercent = 100 * float64(copies[member.Node]) / float64(total)
 		}
@@ -470,20 +317,6 @@ func RenderObjects(state objstore.MapState, layout *objplacement.Layout,
 	}
 	placed.DegradedGroups = degradedGroups(layout, down)
 
-	for node, r := range state.Removed {
-		if _, member := m.Member(node); member {
-			// ON PROBATION: rendered on its member row.
-			continue
-		}
-		placed.Removed = append(placed.Removed, ObjectRemoval{
-			Node: node, At: r.At, Reason: r.Reason, Detail: r.Detail,
-			Gone: r.Gone, ForgetAfterTicks: membership.OutTicks,
-			PlacedAfterTicks: membership.StableTicks,
-		})
-	}
-	slices.SortFunc(placed.Removed, func(a, b ObjectRemoval) int {
-		return strings.Compare(a.Node, b.Node)
-	})
 	return FleetObjects{State: ObjectMapPlaced, PlacedObjects: placed}
 }
 

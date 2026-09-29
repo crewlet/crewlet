@@ -98,11 +98,11 @@ type ObjectsAnswer struct {
 	// the map now describes it — absent when the map does not hold it,
 	// which is what an in answers for a node the map had removed: it is
 	// placed on again the next time the maintainer sees it.
-	Node   string                   `json:"node,omitempty"`
-	Member *queries.ObjectMapMember `json:"member,omitempty"`
+	Node   string             `json:"node,omitempty"`
+	Member *queries.MapMember `json:"member,omitempty"`
 
 	// Hold is the hold in force now, absent when there is none.
-	Hold *queries.ObjectHold `json:"hold,omitempty"`
+	Hold *queries.MapHold `json:"hold,omitempty"`
 
 	// Hint is the sentence saying what to do next, where there is
 	// something to do — in no surface's vocabulary.
@@ -115,10 +115,10 @@ type ObjectsAnswer struct {
 func RenderObjectsGesture(g engine.ObjectsGesture, node string, now time.Time) ObjectsAnswer {
 	out := ObjectsAnswer{
 		Landed: g.Landed, Epoch: g.State.Map.Epoch, Node: node,
-		Hold: queries.RenderHold(g.State, now),
+		Hold: queries.RenderHold(g.State.State, now),
 	}
 	if node != "" {
-		if member, ok := queries.RenderMapMember(g.State, node); ok {
+		if member, ok := queries.RenderMember(g.State.State, g.State.Map.Draw(), node); ok {
 			out.Member = &member
 		}
 	}
