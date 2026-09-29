@@ -92,37 +92,52 @@ var Store = class {
 		if (snap.health) this.state.health = snap.health;
 		this.emit(...ALL_DATA_SLICES);
 	}
-	/** Changed seat overlays, keyed by role. */
+	/**
+	* Changed seat overlays, merged onto the roster rows by AGENT ID.
+	*
+	* By the id and nothing else. They were merged by ROLE NAME, which is prose:
+	* two seats sharing a name both took every overlay either of them moved, so
+	* each card rendered whatever the other was last doing. The handle is no
+	* better a key — a rename moves it while the overlays already in flight were
+	* cut before it — and the id, derived from the handle a seat was created
+	* under, is the one value a rename leaves where it was.
+	*
+	* An overlay for a seat the roster does not carry is DROPPED rather than
+	* appended as a row of its own. A seat reaches this list through the roster
+	* (the snapshot, or a `seats` push after every published company), and the
+	* server merges its live overlay into that roster row before sending it —
+	* so nothing dropped here is lost, while an appended row would be a card
+	* with no name, no handle and no page, for a seat the server may already
+	* have removed.
+	*/
 	applyAgents(rows) {
 		if (!Array.isArray(rows) || rows.length === 0) return;
-		const byRole = new Map(rows.map((r) => [r.role, r]));
+		const byID = /* @__PURE__ */ new Map();
+		for (const row of rows) if (row && typeof row.agent_id === "string" && row.agent_id !== "") byID.set(row.agent_id, row);
+		let moved = false;
 		this.state.agents = this.state.agents.map((a) => {
-			const patch = byRole.get(a.role);
+			const patch = byID.get(a.agent_id);
 			if (!patch) return a;
-			byRole.delete(a.role);
+			moved = true;
 			return {
 				...a,
 				...patch
 			};
 		});
-		for (const row of byRole.values()) this.state.agents = [...this.state.agents, {
-			id: row.role,
-			...row
-		}];
-		this.emit("agents");
+		if (moved) this.emit("agents");
 	}
 	/**
 	* The complete seat list, replacing what is on screen.
 	*
-	* Distinct from `applyAgents`, which merges changed overlays by role: a merge
-	* cannot express a deletion, so a revision that removes a role would leave
-	* its card rendered until the next reload.
+	* Distinct from `applyAgents`, which merges changed overlays: a merge cannot
+	* express a deletion, so a revision that removes a seat would leave its card
+	* rendered until the next reload.
 	*/
 	applySeats(rows) {
 		if (!Array.isArray(rows)) return;
-		const live = new Map(this.state.agents.map((a) => [a.role, a]));
+		const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
 		this.state.agents = rows.map((row) => {
-			const current = live.get(row.role);
+			const current = live.get(row.agent_id);
 			return current ? {
 				...current,
 				...row
@@ -212,124 +227,9 @@ var Store = class {
 			}
 		}
 	}
-	agentById(id) {
-		return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
-	}
-	/**
-	* Resolve a seat by whatever the URL carried.
-	*
-	* Seats are addressed by HANDLE — the canonical identity everywhere else in
-	* the system, and the one an operator can read off a chat mention. Runtime
-	* ids and role names still resolve, because links minted before the move
-	* used them and they are in people's history.
-	*/
-	agentByKey(key) {
-		if (!key) return null;
-		const wanted = String(key);
-		const lower = wanted.toLowerCase();
-		return this.state.agents.find((a) => a.handle === wanted || a.id === wanted || a.role === wanted || String(a.handle ?? "").toLowerCase() === lower || String(a.role ?? "").toLowerCase() === lower) ?? null;
-	}
 };
 //#endregion
-//#region src/protocol/authToken.ts
-/**
-* The API bearer token the auth-gated screens share.
-*
-* Configuration and Secrets sit behind the auth middleware, and the socket
-* carries the same credential on its handshake and on every query frame. One
-* token between them, so setting it anywhere unlocks everything.
-*
-* Asking for it is the shell's job, over a real dialog. This module only knows
-* how to read and write it: the prompting used to live here as a
-* `window.prompt`, which meant a request for a credential arrived in a
-* chrome-drawn box that could not say who was asking or why.
-*/
-var TOKEN_KEY = "crewlet_api_token";
-/** The stored token, or "". Never throws. */
-function apiToken() {
-	try {
-		return localStorage.getItem(TOKEN_KEY) ?? "";
-	} catch {
-		return "";
-	}
-}
-/**
-* Persist a token. Returns false if the browser refused the write.
-*
-* The caller has to know: a silently-unsaved token works until the next reload
-* and is then unauthenticated again, with nothing on screen to explain why.
-*/
-function storeToken(token) {
-	try {
-		localStorage.setItem(TOKEN_KEY, String(token ?? "").trim());
-	} catch {
-		return false;
-	}
-	announce();
-	return true;
-}
-var listeners = /* @__PURE__ */ new Set();
-/** Ask for the token dialog. A no-op when no shell is mounted. */
-function requestToken() {
-	for (const listener of listeners) listener();
-}
-/** Subscribe the shell. Returns the unsubscribe. */
-function onTokenRequested(listener) {
-	listeners.add(listener);
-	return () => listeners.delete(listener);
-}
-/**
-* The symmetric signal: the token CHANGED.
-*
-* The socket learns through `setToken` + `reconnect`, which the shell calls
-* from the dialog. Every REST-backed surface learned nothing at all: it had
-* fetched once on mount, so setting a token left `/setup` and `/secrets`
-* still showing the refusal that prompted the reader to set one. The screen
-* said "needs an operator token", the reader supplied it, and nothing moved.
-*
-* Fired from `storeToken` and `clearToken` themselves rather than from the
-* dialog, so a future writer cannot forget to announce it.
-*/
-var changed = /* @__PURE__ */ new Set();
-/** Subscribe to token changes. Returns the unsubscribe. */
-function onTokenChanged(listener) {
-	changed.add(listener);
-	return () => changed.delete(listener);
-}
-function announce() {
-	for (const listener of changed) listener();
-}
-/** Forget the stored token. Returns false if the browser refused the write. */
-function clearToken() {
-	try {
-		localStorage.removeItem(TOKEN_KEY);
-	} catch {
-		return false;
-	}
-	announce();
-	return true;
-}
-//#endregion
 //#region src/protocol/api.ts
-/**
-* The one HTTP read the dashboard still makes.
-*
-* Everything else goes over the WebSocket — state arrives as pushes and
-* anything on demand is a query on the same socket. This remains for exactly
-* one case: a browser that cannot upgrade to a WebSocket at all, usually a
-* corporate proxy. While the socket is down the client polls this snapshot so
-* the page keeps telling the truth, and it stops the moment the socket is back.
-*
-* It had a second entry once, and that one is why the Fleet screen shipped
-* dead: a screen reaching for its own transport takes its client from
-* somewhere, and the somewhere it chose was a context field the shell never
-* populated. There is one transport for reads, and only `socket.ts` imports
-* this file.
-*
-* The REST API itself is much larger than this — it is a public read surface
-* documented in docs/reference/api-endpoints.md. The dashboard simply does not
-* use it.
-*/
 var api = { 
 /**
 * The degraded-mode snapshot, or `null` if it could not be read.
@@ -343,14 +243,100 @@ var api = {
 */
 async snapshot() {
 	try {
-		const stored = apiToken();
-		const response = await fetch(location.origin + "/stream/snapshot", stored ? { headers: { Authorization: "Bearer " + stored } } : void 0);
+		const response = await fetch(location.origin + "/stream/snapshot", { credentials: "same-origin" });
 		if (!response.ok) return null;
 		return await response.json();
 	} catch {
 		return null;
 	}
 } };
+//#endregion
+//#region src/protocol/session.ts
+var need = null;
+var listeners = /* @__PURE__ */ new Set();
+function announce() {
+	for (const listener of listeners) listener();
+}
+/** The session's outstanding need, or null for one that needs nothing. */
+function currentSessionNeed() {
+	return need;
+}
+/**
+* Record what the session lacks. Called by the transports, never by a screen:
+* a screen that wants a person to sign in navigates there itself.
+*/
+function needSession(what) {
+	if (need === what) return;
+	need = what;
+	announce();
+}
+/**
+* The browser holds a whole session again — a sign-in, a redemption or an
+* enrolment finished — so whatever a transport recorded before it no longer
+* describes this browser.
+*/
+function sessionRestored() {
+	if (need === null) return;
+	need = null;
+	announce();
+}
+/**
+* The browser holds a session that may only enrol a second factor — a
+* sign-in or a redemption answered `second_factor_enrolment_required`.
+*
+* THE SIGN-IN'S OWN ANSWER REPLACES WHATEVER A TRANSPORT RECORDED BEFORE IT,
+* because it is the newest fact about this browser's session. The sign-in
+* screen's own `GET /auth/session` and the socket's refusal probe both record
+* `sign_in` for a browser holding nothing, which is the state every sign-in
+* starts from; left in place, it routed the enrolment straight back to the
+* sign-in form the moment the enrolment screen mounted.
+*/
+function sessionNeedsEnrolment() {
+	needSession("second_factor");
+}
+/**
+* Subscribe to a change of need. Returns the unsubscribe. The shape
+* `useSyncExternalStore` takes, which is what reads it.
+*/
+function onSessionNeed(listener) {
+	listeners.add(listener);
+	return () => {
+		listeners.delete(listener);
+	};
+}
+var confirmer = null;
+var confirming = null;
+/**
+* Install what confirms a step-up. Returns the uninstall, which leaves a
+* later installation in place.
+*
+* ONE AT A TIME, because there is one person at the keyboard: a second
+* installation replaces the first rather than queueing behind it.
+*/
+function setStepUpConfirmer(fn) {
+	confirmer = fn;
+	return () => {
+		if (confirmer === fn) confirmer = null;
+	};
+}
+/**
+* Ask for a step-up, or join the one already being asked.
+*
+* FALSE WITH NOBODY TO ASK, so a refused request is reported as the refusal it
+* was rather than waiting for a dialog that will never open; and false for a
+* confirmer that failed, which is not a proof.
+*
+* ANY CONFIRMATION COVERS EVERY WINDOW: the password the dialog asks for
+* proves inside both, so a request refused for the sensitive window joins one
+* opened for the ordinary one rather than asking twice.
+*/
+function confirmStepUp(window) {
+	if (!confirmer) return Promise.resolve(false);
+	if (!confirming) confirming = confirmer(window).catch(() => false).finally(() => {
+		confirming = null;
+	});
+	return confirming;
+}
 //#endregion
 //#region src/protocol/socket.ts
 /**
@@ -534,19 +520,8 @@ var LiveSocket = class {
 	*/
 	watched = "";
 	watchRetry = 0;
-	token = "";
-	/** Whether the shell has already been asked to collect a token. */
-	askedForToken = false;
-	authRejectedHandler = null;
 	constructor(store) {
 		this.store = store;
-	}
-	/** Operator bearer token, sent on the handshake and on the refusal probe — never
-	*  in a frame, since the engine decides every question by the principal the
-	*  handshake resolved. */
-	setToken(token) {
-		this.token = token || "";
-		if (this.token) this.askedForToken = false;
 	}
 	start() {
 		this.connect();
@@ -560,6 +535,7 @@ var LiveSocket = class {
 	*/
 	reconnect() {
 		this.refused = false;
+		this.store.setAuthRejected(false);
 		if (this.sock) this.sock.close();
 		else this.connect();
 	}
@@ -675,11 +651,9 @@ var LiveSocket = class {
 	connect() {
 		if (this.sock && (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING)) return;
 		const proto = location.protocol === "https:" ? "wss" : "ws";
-		const token = this.token || apiToken();
-		const qs = token ? `?token=${encodeURIComponent(token)}` : "";
 		let sock;
 		try {
-			sock = new WebSocket(`${proto}://${location.host}${PATH}${qs}`);
+			sock = new WebSocket(`${proto}://${location.host}${PATH}`);
 		} catch {
 			this.scheduleReconnect();
 			return;
@@ -731,52 +705,33 @@ var LiveSocket = class {
 	* that could read it could use a socket to scan ports it cannot otherwise
 	* reach).
 	*
-	* This client believed otherwise once, and the whole repair path — the
-	* banner, the dialog, "forget this token" — hung off a code that never
-	* arrived. A wrong token in `localStorage` therefore produced a dashboard
-	* that reconnected for ever, said "retrying", and offered no way to correct
-	* the one thing that was wrong.
+	* This client believed otherwise once, and the whole repair path hung off a
+	* code that never arrived: a refused credential produced a dashboard that
+	* reconnected for ever, said "retrying", and offered no way to correct the
+	* one thing that was wrong.
 	*
 	* So the status is fetched where a browser will hand it over. A plain GET of
-	* the same path runs the same guard and stops one line short of the upgrade:
-	* 401 is a refused credential, 426 (Upgrade Required) means it was accepted
-	* and only the missing header stopped it. A throw is the network, which is
-	* not an auth problem and must not raise a dialog.
-	*
-	* The credential goes in the HEADER here, not the query string the handshake
-	* is forced to use: a fetch can set one, and a token in a URL is a token in
-	* every proxy's access log.
+	* the same path runs the same guard, with the same cookie, and stops one line
+	* short of the upgrade: 401 is nobody signed in, 426 (Upgrade Required)
+	* means the session was accepted and only the missing header stopped it. A
+	* throw is the network, which is not an auth problem and must not send
+	* anybody to sign in.
 	*/
 	async probeRefusal() {
 		if (this.isClosed) return;
-		const token = this.token || apiToken();
 		try {
 			const res = await fetch(PATH, {
-				headers: token ? { Authorization: "Bearer " + token } : {},
+				credentials: "same-origin",
 				cache: "no-store"
 			});
 			if (res.status === 401) this.authRejected();
 			else if (res.status === 403) {
 				const body = await res.json().catch(() => null);
-				this.accessRefused(body?.detail ?? "");
+				if (body?.error === "second_factor_enrolment_required") this.enrolmentRequired();
+				else this.accessRefused(body?.detail ?? "");
 			}
 		} catch {}
 	}
-	/**
-	* The engine refused this browser's credential.
-	*
-	* Two things happen, and both are needed. Asking for a token is the repair —
-	* the dashboard is served unauthenticated by design (the page that asks for a
-	* token cannot itself require one), so the browser has no other moment to
-	* learn it needs one. The store flag is what happens when the reader
-	* dismisses that request: the ask fires once and only once, deliberately, so
-	* a 30-second reconnect backoff does not reopen a dialog forever — which
-	* leaves the page looking like an outage unless the chrome can say otherwise.
-	*
-	* The socket does not own the asking. It cannot: the dialog belongs to the
-	* shell, and a transport that reaches into the DOM to draw one is a transport
-	* that cannot be tested without a browser.
-	*/
 	/**
 	* The engine knows who this browser is and will not serve it this surface.
 	*
@@ -787,21 +742,43 @@ var LiveSocket = class {
 	* `reconnect()` is the way back, once an administrator has restored it.
 	*/
 	accessRefused(reason) {
+		this.stopDialling();
+		this.store.setAccessRefused(reason);
+	}
+	/**
+	* The engine accepts this browser's session for nothing but enrolling the
+	* second factor the deployment requires. Every dial would be refused the
+	* same way until it has, so the loop stops; the enrolment ends by calling
+	* `reconnect()` with the whole session it opened.
+	*/
+	enrolmentRequired() {
+		this.stopDialling();
+		needSession("second_factor");
+	}
+	/** Stops the reconnect loop and the REST fallback, until `reconnect()`. */
+	stopDialling() {
 		this.refused = true;
 		clearTimeout(this.reconnectTimer);
 		this.reconnectTimer = 0;
 		this.stopFallback();
-		this.store.setAccessRefused(reason);
 	}
+	/**
+	* The engine resolved nobody from this browser's cookie.
+	*
+	* Two things happen, and both are needed. Asking for a sign-in is the repair
+	* — the dashboard is served unauthenticated by design (the page that signs a
+	* person in cannot itself require them to be), so the browser has no other
+	* moment to learn it needs one. The store flag is what the chrome reads while
+	* the loop goes on dialling: a sign-in in another tab gives this one the
+	* cookie too, and the next dial is what notices.
+	*
+	* The socket does not own the screen. It cannot: the sign-in is a route, and
+	* a transport that reaches into the router is a transport that cannot be
+	* tested without one — so it raises the session need the app follows.
+	*/
 	authRejected() {
 		this.store.setAuthRejected(true);
-		if (this.askedForToken || !this.authRejectedHandler) return;
-		this.askedForToken = true;
-		this.authRejectedHandler();
-	}
-	/** Register what to do the first time the engine refuses a credential. */
-	onAuthRejected(fn) {
-		this.authRejectedHandler = fn;
+		needSession("sign_in");
 	}
 	/**
 	* The dispatch table.
@@ -929,11 +906,12 @@ var LiveSocket = class {
 *
 * The socket remains the data channel for state. This is not a second one: it
 * carries the requests that are not questions about state at all. Writes never
-* go over the socket, deliberately — its token rides the query string on the
-* handshake, and a channel whose credential appears in a proxy log is not
-* where a credential-bearing write belongs (see internal/api/auth's own note
-* on that). And a handful of reads exist only as REST, `GET /secrets` above
-* all, because no query in the registry answers them.
+* go over the socket, deliberately: a write is judged on its `Origin` by the
+* engine's cross-site check before its handler runs, answers the three write
+* outcomes as statuses with an op id to retry by, and may be refused for a
+* step-up this module confirms and replays — none of which a frame on an open
+* socket carries. And a handful of reads exist only as REST, `GET /secrets`
+* above all, because no query in the registry answers them.
 *
 * ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
 * for its own transport takes its client from somewhere, and the somewhere the
@@ -942,9 +920,12 @@ var LiveSocket = class {
 * `location.origin`, which is where the dashboard is served from and the only
 * origin the engine answers on (it writes no CORS header at all).
 *
-* Every call carries the operator bearer token. The engine guards `/config`,
-* `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
-* posture is, so a call with no token is refused rather than silently served.
+* THE CREDENTIAL IS THE SESSION COOKIE, which the browser attaches to every
+* same-origin request and this module never sees: it is `HttpOnly`, so no
+* script on the page can read it, and there is no token in storage for one to
+* take instead. A call that must present something else — the API token
+* exchange at `POST /auth/token` — sets its own `Authorization` header for
+* that one request, and nothing keeps it.
 */
 /**
 * What the engine said when it refused.
@@ -959,9 +940,25 @@ var RestError = class extends Error {
 	code;
 	detail;
 	hint;
+	/**
+	* The engine's own sentence for the code — the envelope's `message`, which
+	* every refusal it writes carries — or "" for an answer the engine did not
+	* write. What a person is shown when a screen has nothing more specific to
+	* say: the sign-in surface's one uniform refusal is exactly this sentence,
+	* and a screen that wrote its own would be a second copy of the engine's
+	* wording, the one that goes stale.
+	*/
+	sentence;
+	/**
+	* The `Retry-After` the answer carried, in whole seconds, or null for none.
+	* A `429` always carries one and says how long the curve makes the next
+	* attempt wait; a `503` carries one where waiting can clear the cause and
+	* none where it cannot, which is a difference a screen has to render.
+	*/
+	retryAfter;
 	/** Everything else the body carried, for a caller that needs a field. */
 	body;
-	constructor(status, body) {
+	constructor(status, body, retryAfter = null) {
 		const code = typeof body.error === "string" ? body.error : "";
 		const detail = typeof body.detail === "string" ? body.detail : "";
 		super(detail || code || `HTTP ${status}`);
@@ -970,6 +967,8 @@ var RestError = class extends Error {
 		this.code = code;
 		this.detail = detail;
 		this.hint = typeof body.hint === "string" ? body.hint : "";
+		this.sentence = typeof body.message === "string" ? body.message : "";
+		this.retryAfter = retryAfter;
 		this.body = body;
 	}
 	/**
@@ -978,11 +977,10 @@ var RestError = class extends Error {
 	* Both statuses, because a screen locks the same way for either and the
 	* distinction is not one it can act on: 401 is "present a credential" and
 	* 403 is "the one you presented does not carry this grant". What neither
-	* is, any more, is a reason to throw the stored token away — a reader
-	* holding a perfectly good credential meets 403 the moment they open a
-	* screen outside their grants, which is the ordinary case rather than the
-	* exceptional one. Discarding it is the socket probe's decision alone, on
-	* a 401 to the handshake.
+	* is, any more, is a reason to send the reader to sign in again — a reader
+	* holding a perfectly good session meets 403 the moment they open a screen
+	* outside their grants, which is the ordinary case rather than the
+	* exceptional one. Only a 401 says nobody is signed in (see [noteSession]).
 	*/
 	get unauthorized() {
 		return this.status === 401 || this.status === 403;
@@ -1008,6 +1006,38 @@ function refusedGrants(body) {
 	if (typeof body !== "object" || body === null) return [];
 	const grants = body.grants;
 	return Array.isArray(grants) ? grants.filter((g) => typeof g === "string") : [];
+}
+/**
+* The codes a `401` carries when it is an answer about WHAT WAS TYPED rather
+* than about the browser's credential: a sign-in whose details were not
+* accepted, and one whose password proved itself and now wants the second
+* factor. Every other `401` means this browser holds nothing the engine
+* accepts, and the session needs a sign-in.
+*/
+var TYPED_REFUSALS = /* @__PURE__ */ new Set(["sign_in_refused", "second_factor_required"]);
+/**
+* What a refusal says about the browser's SESSION, noted where every screen's
+* request passes — so no screen has to recognise a lost session itself, and
+* none can forget to.
+*
+* A `401` that is not an answer about typed details is a browser signed in as
+* nobody the engine accepts: never signed in, its session ended, expired or
+* revoked. A `403 second_factor_enrolment_required` is a session that may do
+* nothing but enrol the second factor the deployment requires. Every other
+* refusal is about the REQUEST, and the session is fine.
+*/
+function noteSession(refusal) {
+	if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
+	if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") needSession("second_factor");
+}
+/**
+* The seconds a `Retry-After` header names, or null for none. The engine
+* writes whole seconds and never an HTTP date; anything else is not its
+* answer and is read as none.
+*/
+function retryAfterOf(response) {
+	const raw = response.headers.get("Retry-After")?.trim() ?? "";
+	return /^\d+$/.test(raw) ? Number(raw) : null;
 }
 /**
 * A refusal that never reached the engine: DNS, a dropped connection, a proxy
@@ -1057,6 +1087,37 @@ function withQuery(path, query) {
 	return (at < 0 ? path : path.slice(0, at)) + (qs ? `?${qs}` : "");
 }
 /**
+* The route a step-up is given at. It answers `step_up_required` itself when
+* the caller is a credential nobody present can confirm — and asking to
+* confirm the confirmation would be a dialog that reopens for ever.
+*/
+var STEP_UP_PATH = "/auth/step-up";
+/** Which window a step-up refusal names, from the envelope's own key. */
+function windowOf(refusal) {
+	const window = refusal.body.window;
+	return typeof window === "string" && window !== "" ? window : "step_up";
+}
+/**
+* `waiting`, or the caller's own abort if that comes first. A person can sit
+* at the confirmation for as long as they like, and a screen that gave up on
+* its request meanwhile must not be held to an answer it no longer wants.
+*/
+function unlessAborted(waiting, signal) {
+	if (!signal) return waiting;
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise((resolve, reject) => {
+		const abort = () => reject(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
+		waiting.then((value) => {
+			signal.removeEventListener("abort", abort);
+			resolve(value);
+		}, (err) => {
+			signal.removeEventListener("abort", abort);
+			reject(err);
+		});
+	});
+}
+/**
 * The one request path, answering the status and entity-tag as well as the
 * body.
 *
@@ -1065,8 +1126,32 @@ function withQuery(path, query) {
 * sealed store's names, an integration's requirements), and a heuristic cache
 * hit on one of those is a screen showing the company as it was. A 304 still
 * reaches the caller, when the caller sent the precondition that asks for it.
+*
+* # A step-up is confirmed HERE, and the refused request sent again
+*
+* A gesture refused `403 step_up_required` is asked of the person once —
+* through whatever confirms a step-up (`session.ts`), however many requests
+* were refused together — and then REPLAYED: the same method, path, body and
+* headers, so a form that was being saved is saved, rather than lost to a
+* refusal its screen could only report. Once: a replay refused again is the
+* refusal. Every screen gets this by sending its writes through here, and no
+* screen implements it, which is what makes it one ceremony rather than a
+* dozen that disagree.
+*
+* The deadline is each ATTEMPT's, not the gesture's: the time a person spends
+* typing their password is not the engine taking too long.
 */
 async function request(method, path, options = {}) {
+	try {
+		return await attempt(method, path, options);
+	} catch (err) {
+		if (!(err instanceof RestError && err.status === 403 && err.code === "step_up_required") || path.split("?")[0] === STEP_UP_PATH) throw err;
+		if (!await unlessAborted(confirmStepUp(windowOf(err)), options.signal)) throw err;
+		return attempt(method, path, options);
+	}
+}
+/** One round trip — see [request] for what surrounds it. */
+async function attempt(method, path, options) {
 	const { body, headers = {}, query, signal, read = "json" } = options;
 	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
 	let encoded;
@@ -1077,12 +1162,11 @@ async function request(method, path, options = {}) {
 		} else encoded = JSON.stringify(body);
 	}
 	if (signal?.aborted) throw signal.reason;
-	const token = apiToken();
 	const init = {
 		method,
 		cache: "no-store",
+		credentials: "same-origin",
 		headers: {
-			...token ? { Authorization: "Bearer " + token } : {},
 			...contentType ? { "Content-Type": contentType } : {},
 			...headers
 		},
@@ -1138,8 +1222,10 @@ async function request(method, path, options = {}) {
 		});
 	}
 	if (!response.ok && response.status !== 304) {
-		const refusal = parsed && typeof parsed === "object" ? parsed : {};
-		throw new RestError(response.status, refusal);
+		const body = parsed && typeof parsed === "object" ? parsed : {};
+		const refusal = new RestError(response.status, body, retryAfterOf(response));
+		noteSession(refusal);
+		throw refusal;
 	}
 	return {
 		status: response.status,
@@ -1189,4 +1275,91 @@ var rest = {
 	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, apiToken, clearToken, isAbort, isLogRefusal, onTokenChanged, onTokenRequested, queryErrorCode, refusedGrants, requestToken, rest, storeToken };
+//#region src/protocol/auth.ts
+/**
+* The sign-in surface, `/auth`, as the functions the screens call.
+*
+* ONE MODULE over `rest.ts`, for the reason `rest.ts` gives about itself: a
+* screen that composed its own path, header and body for each of these would
+* be a second place for the invitation's secret to end up in a URL, and that
+* is the one mistake this surface exists to make impossible.
+*
+* WHAT NONE OF THESE DOES is keep a credential. Every answer that signs a
+* person in sets a cookie the browser holds and no script can read, and the
+* body carries no bearer at all; the one credential a function here is
+* handed — a Tier A token being exchanged — is sent once, in the header, and
+* dropped. There is nothing for this page to store, so it stores nothing.
+*/
+/**
+* The header an invitation's secret travels in to the view.
+*
+* A HEADER, because the view is a GET and a GET has no body — and never the
+* query string, which every access log between the browser and the engine
+* records. The link carries the secret in its FRAGMENT precisely so that no
+* server sees it on the way to this page.
+*/
+var INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+/** The invitation route for one id, its segment encoded. */
+function invitePath(id) {
+	return `/auth/invite/${encodeURIComponent(id)}`;
+}
+var auth = {
+	/** What a sign-in page may know before anybody has signed in. */
+	config: async () => await rest.get("/auth/config"),
+	/**
+	* Sign in with a login or an address and a password — and, once the engine
+	* has answered `second_factor_required`, the code.
+	*/
+	login: async (body) => await rest.post("/auth/login", body),
+	/**
+	* Exchange a Tier A token for a one-hour session.
+	*
+	* THE TOKEN IS THE BEARER OF THIS ONE REQUEST and nothing else: it goes in
+	* the `Authorization` header, which is how the engine takes it, and the
+	* session that comes back is a cookie. Nothing here holds it afterwards.
+	*/
+	exchangeToken: async (token) => await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` }),
+	/** Render an invitation without spending it. */
+	viewInvite: async (id, secret) => (await rest.request("GET", invitePath(id), { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
+	/** Redeem an invitation, which creates the person and signs them in. */
+	redeemInvite: async (id, body) => await rest.post(invitePath(id), body),
+	/**
+	* Enrolment's first leg: a seed, and nothing stored. A person who never
+	* completes the second leg has enrolled nothing.
+	*/
+	secondFactorSeed: async () => await rest.post("/auth/totp", {}),
+	/**
+	* Enrolment's second leg: the seed back, with a code derived from it — the
+	* only evidence the authenticator on the other side works.
+	*/
+	enrolSecondFactor: async (secret, code) => await rest.post("/auth/totp", {
+		secret,
+		code
+	}),
+	/** Ten fresh single-use codes, retiring the old set, shown this once. */
+	recoveryCodes: async () => await rest.post("/auth/totp/recovery", {}),
+	/**
+	* Confirm who you are on a session that is already valid: the password,
+	* and the code where a second factor is held. The engine answers a fresh
+	* session cookie and ends the one it replaces.
+	*/
+	stepUp: async (body) => await rest.post("/auth/step-up", body),
+	/** Who this browser is signed in as. */
+	session: async () => await rest.get("/auth/session"),
+	/**
+	* End this browser's session. The engine clears the cookie whatever its
+	* own write did, so an answer at all means this browser holds no session.
+	*/
+	logout: async () => {
+		await rest.post("/auth/logout", {});
+	},
+	/**
+	* End every session the caller holds, on every device, by moving their
+	* revocation epoch — this browser's included.
+	*/
+	logoutEverywhere: async () => {
+		await rest.post("/auth/logout/all", {});
+	}
+};
+//#endregion
+export { LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, needSession, onSessionNeed, queryErrorCode, refusedGrants, rest, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer };
