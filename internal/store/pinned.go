@@ -75,7 +75,7 @@ var ErrWriterClosed = errors.New("store: this pinned writer is closed")
 // is a reader's connection taken with nothing reporting the loss, and the
 // symptom (a dashboard that queues) appears nowhere near the cause.
 func (d *DB) Writer(ctx context.Context) (*Writer, error) {
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return nil, ErrNoEstate
 	}
 	d.pins.mu.Lock()
@@ -92,7 +92,7 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 	d.pins.held++
 	d.pins.mu.Unlock()
 
-	conn, err := d.sql.Conn(ctx)
+	conn, err := d.conn(ctx)
 	if err != nil {
 		d.pins.mu.Lock()
 		d.pins.held--
@@ -166,11 +166,11 @@ func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
 	if w == nil || w.closed {
 		return nil, ErrWriterClosed
 	}
-	if w.db == nil || w.db.sql == nil {
+	if !w.db.isOpen() {
 		return nil, ErrNoEstate
 	}
 	if w.conn == nil {
-		conn, err := w.db.sql.Conn(ctx)
+		conn, err := w.db.conn(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("store: re-pin a writer connection: %w", err)
 		}
@@ -257,11 +257,11 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	// first, dereferencing the nil handle the guard was put there to refuse.
 	// See [ErrNoEstate]: this is the second time a maintenance tick racing a
 	// shutdown has taken the engine down through this exact path.
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return ErrNoEstate
 	}
 	return retryTransient(ctx, budget(d.busy), func() (err error) {
-		conn, err := d.sql.Conn(ctx)
+		conn, err := d.conn(ctx)
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
 		}

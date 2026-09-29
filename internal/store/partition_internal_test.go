@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -302,5 +303,64 @@ func TestThePartitionCacheFloorIsTheEnginesMinimum(t *testing.T) {
 				"the engine's minimum, so re-derive it from what this reads",
 				c.askKiB, pageSize, got, c.wantKiB)
 		}
+	}
+}
+
+// CLOSING A HANDLE TWICE GIVES BACK ITS OWN CLAIM ONCE.
+//
+// The claim on a path is one refcount shared by every handle this process has
+// on the file, so a second Close that released it again would drop ANOTHER
+// handle's share — and the file would be unlocked while that handle still had
+// it open, for the next process to open beside it. A partition is closed by
+// its node and may be closed by whoever took it, which is how a second Close
+// arrives.
+func TestClosingAHandleTwiceGivesBackItsClaimOnce(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "node.db")
+	first, err := OpenNode(t.Context(), path, Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	second, err := OpenNode(t.Context(), path, Options{})
+	if err != nil {
+		t.Fatalf("open a second handle: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+	for range 2 {
+		if err := first.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}
+	locksHeld.mu.Lock()
+	held := locksHeld.by[path]
+	locksHeld.mu.Unlock()
+	if held == nil || held.holds != 1 {
+		holds := 0
+		if held != nil {
+			holds = held.holds
+		}
+		t.Errorf("after one handle closed twice, %s is claimed by %d handle(s), "+
+			"want the other handle's 1", path, holds)
+	}
+}
+
+// A CONNECTION DRAWN FROM A HANDLE CLOSED BETWEEN THE GUARD AND THE DRAW
+// answers ErrNoEstate too. Every entry point checks the handle is open before
+// it starts, and the close can land between that check and the draw; this is
+// that second half, taken deterministically by drawing after the close.
+func TestADrawOnAHandleClosedUnderItAnswersNoEstate(t *testing.T) {
+	t.Parallel()
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if conn, err := db.conn(t.Context()); !errors.Is(err, ErrNoEstate) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Errorf("a draw on a closed handle = %v, want ErrNoEstate", err)
 	}
 }

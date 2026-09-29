@@ -266,7 +266,7 @@ var ErrNotANode = errors.New("store: partitions are held by a node's own handle,
 // node refuses a handle that is not a node's own, naming the gesture.
 func (d *DB) node(gesture string) error {
 	switch {
-	case d == nil || d.sql == nil:
+	case !d.isOpen():
 		return fmt.Errorf("%w: %s: %w", ErrNotANode, gesture, ErrNoEstate)
 	case d.parts == nil:
 		return fmt.Errorf("%w: %s on the %s handle at %s", ErrNotANode, gesture, d.estate, d.path)

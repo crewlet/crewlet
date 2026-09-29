@@ -112,8 +112,8 @@ var ErrBadBackupPath = errors.New("store: unusable backup destination")
 // It does not stop the engine; see the file doc for what the resulting
 // snapshot is a snapshot OF.
 func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
-	if d == nil || d.sql == nil {
-		return BackupInfo{}, errors.New("store: backup: no open database")
+	if !d.isOpen() {
+		return BackupInfo{}, fmt.Errorf("store: backup: %w", ErrNoEstate)
 	}
 	if dest == "" {
 		return BackupInfo{}, errors.New("store: backup: no destination path")

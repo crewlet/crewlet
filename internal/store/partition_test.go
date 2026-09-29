@@ -535,3 +535,48 @@ func TestEveryPartitionLearnsTheNodesEmbeddingWidth(t *testing.T) {
 		t.Errorf("a partition opened after the node learned its width reports %d, want 64", got)
 	}
 }
+
+// A PARTITION CLOSED UNDER A CALLER ANSWERS ErrNoEstate, like one never open.
+//
+// A partition's database is taken for one operation, and a leave or an
+// adoption can close it while that operation is on its way in. The pool is
+// then closed rather than nil, and database/sql's own "database is closed"
+// would reach a caller whose branch for a partition that is not open never
+// sees it — a reader that reports an unreadable estate on every tick of a
+// normal shutdown, where it should report the state it is in.
+func TestAPartitionClosedUnderACallerAnswersNoEstate(t *testing.T) {
+	t.Parallel()
+	node, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+	file := store.PartitionFile{Layout: 1, Name: "tracker.000", Logs: 1}
+	part, err := node.OpenPartition(t.Context(), file)
+	if err != nil {
+		t.Fatalf("open %s: %v", file.Name, err)
+	}
+	if err := node.ClosePartition(file.Name); err != nil {
+		t.Fatalf("close %s: %v", file.Name, err)
+	}
+	for name, call := range map[string]func() error{
+		"Read": func() error { return part.Read(t.Context(), func(*sql.Tx) error { return nil }) },
+		"Tx":   func() error { return part.Tx(t.Context(), func(*sql.Tx) error { return nil }) },
+		"Writer": func() error {
+			_, err := part.Writer(t.Context())
+			return err
+		},
+		"AppliedMigrations": func() error {
+			_, err := part.AppliedMigrations(t.Context())
+			return err
+		},
+		"Backup": func() error {
+			_, err := part.Backup(t.Context(), filepath.Join(t.TempDir(), "copy.db"))
+			return err
+		},
+	} {
+		if err := call(); !errors.Is(err, store.ErrNoEstate) {
+			t.Errorf("%s on a partition closed under its caller = %v, want ErrNoEstate", name, err)
+		}
+	}
+}

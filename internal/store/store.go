@@ -324,6 +324,18 @@ type DB struct {
 	// on any other handle.
 	file PartitionFile
 
+	// closed is set by the first Close, and it is what makes a handle
+	// closed UNDER a caller answer [ErrNoEstate] like one that was never
+	// open: a partition's database is taken for one operation, and an
+	// adoption or a leave may close it while that operation runs — the pool
+	// is then closed but not nil, and database/sql's own "database is
+	// closed" would reach a caller whose branch for a partition that is not
+	// open never sees it. It also makes Close idempotent, which the shared
+	// lock depends on: a second release of one handle's claim would drop
+	// ANOTHER handle's share of it, and the file would be unlocked while
+	// that handle still had it open.
+	closed atomic.Bool
+
 	// cache is the page cache, in KiB, each of this handle's connections
 	// brings itself to at its next statement ([beginModeConn.sizeCache]).
 	// ATOMIC because a partition's share is re-divided while its
@@ -652,7 +664,7 @@ func engineVersion(ctx context.Context, pool *sql.DB) string {
 // process still had connections open would be the two-writer case the lock
 // exists to prevent, in the one window where it looked safe.
 func (d *DB) Close() error {
-	if d == nil || d.sql == nil {
+	if d == nil || d.sql == nil || !d.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	// THE PARTITIONS FIRST, and every one's error is reported even when
@@ -923,7 +935,7 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// was and where it could never run: `budget(d.busy)` is an ARGUMENT,
 	// evaluated before the call it guards, so a nil handle dereferenced on the
 	// way in and the guard three frames down never saw it. See [ErrNoEstate].
-	if d == nil || d.sql == nil {
+	if !d.isOpen() {
 		return ErrNoEstate
 	}
 	return retryTransient(ctx, budget(d.busy), func() error { return d.tx(ctx, fn) })
@@ -1174,11 +1186,12 @@ func sleepFor(ctx context.Context, d time.Duration) {
 
 // tx runs one attempt.
 //
-// A NIL HANDLE IS AN ERROR, NOT A CRASH, and it is a state a caller can
-// legitimately be holding: [DB.PartitionDB] answers none for a partition that
-// is not open — one an adoption holds closed between its rename and its
-// reopen, and every one after [DB.Close] — and a caller that did not check
-// reaches here with the nil. Both are documented and deliberate — so the honest answer to a read issued
+// A HANDLE THAT IS NOT OPEN IS AN ERROR, NOT A CRASH, and it is a state a
+// caller can legitimately be holding: [DB.PartitionDB] answers none for a
+// partition that is not open, and a partition's database taken for one
+// operation is closed under its taker when an adoption closes it between its
+// rename and its reopen, or when [DB.Close] or [DB.ClosePartition] runs. Both
+// are documented and deliberate — so the honest answer to a read issued
 // through one is the same shape every other late read already gets ("this
 // estate is not open"), rather than a segfault that takes the process with it.
 // Measured: a maintenance tick racing a shutdown panicked the whole engine.
@@ -1194,7 +1207,7 @@ func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// feedback loop [Writer] exists to break, rebuilt one layer up. A
 	// writer waiting here holds a pooled connection instead, which is
 	// exactly what one polling the driver's busy handler already held.
-	conn, err := d.sql.Conn(ctx)
+	conn, err := d.conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
@@ -1360,4 +1373,22 @@ func giveBack(conn *sql.Conn, retire func(), fit bool) {
 		retire()
 	}
 	_ = conn.Close()
+}
+
+// isOpen reports a handle a statement may be issued through: one that was
+// opened and has not been closed. See [ErrNoEstate] for why the other answer
+// is a state rather than a fault.
+func (d *DB) isOpen() bool { return d != nil && d.sql != nil && !d.closed.Load() }
+
+// conn draws one connection, and answers [ErrNoEstate] when the draw failed
+// because the handle was closed while the caller was on its way in — the race
+// [DB.closed] exists for, which the guard at the top of every entry point
+// cannot close by itself: the handle can be closed between that check and
+// this draw.
+func (d *DB) conn(ctx context.Context) (*sql.Conn, error) {
+	conn, err := d.sql.Conn(ctx)
+	if err != nil && d.closed.Load() {
+		return nil, fmt.Errorf("%w: %s was closed while this call was in flight", ErrNoEstate, d.path)
+	}
+	return conn, err
 }
