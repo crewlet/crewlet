@@ -320,6 +320,17 @@ stateDiagram-v2
     Out --> Member: objects in
 ```
 
+This lifecycle — absence counted in ticks, removal never onto nothing,
+probation, an operator's out and in, and the [hold](#holding-the-map) below —
+is not the object store's alone. It is written once, in `internal/membership`,
+and the [estate map](estate-placement.md#who-is-in-the-map), which places the
+replicated estate's partitions on data nodes, runs it unchanged: one rule
+written twice is two rules waiting to drift
+([ADR-0008](https://github.com/crewlet/crewlet/blob/main/adr/0008-a-shared-rule-gets-one-implementation.md)).
+So a change to how either map counts, removes or holds a member changes both.
+What differs is each map's own lease — `objects:{node}` here, `estate:{node}`
+there — and what each places.
+
 ### Holding the map
 
 For maintenance known to outlast ten minutes, **hold** the map
