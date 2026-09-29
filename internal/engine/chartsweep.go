@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
@@ -15,24 +16,33 @@ import (
 // THE VALUES NOTHING NAMES ANY MORE.
 //
 // A sealed value outlives the field that named it: clearing a seat's address,
-// replacing a literal token with the operator's own `${VAR}`, removing the
-// object — each leaves the value in the store, and the store has no retention
-// of its own, so every one of them outlived the company. The sweep collects
-// them, and where it belongs follows from what it has to prove:
+// rotating a credential (which seals the new one under the rotating write's
+// own name), replacing a literal token with the operator's own `${VAR}`,
+// removing the object, a write that sealed and then never landed — each
+// leaves a value in the store, and the store has no retention of its own, so
+// every one of them outlived the company. The sweep collects them, and where
+// it belongs follows from what it has to prove:
 //
 //   - NOT THE WRITER, after a landed removal or a clearing write. Other rows
-//     may name the value, a concurrent write on the same field re-seals under
-//     the same name, and the writer's post-publish step is exactly the window
-//     in which that write's seal lands — so the writer would destroy a value
-//     a row it cannot see is about to name.
+//     may name the value, a concurrent write may be about to name it again,
+//     and the writer's post-publish step is exactly the window in which that
+//     write's record lands — so the writer would destroy a value a row it
+//     cannot see is about to name.
 //   - NOT AN APPLIER HOOK on every node, which is N nodes deleting one shared
 //     row on N clocks, each proving nothing the others did not.
 //   - THE RETENTION SWEEP: one fleet singleton, deciding from rows PROVED to
 //     hold every record the chart log held ([chart.Reader.SealedNames]), only
-//     after [chart.SealGrace] and only rows this domain wrote
-//     ([chart.OrphanedSeals]), deleting each at the version it judged — so a
-//     re-seal between the listing and the delete is spared, and a second
-//     node running the same tick deletes nothing twice.
+//     once it has seen nothing name a value for [chart.SealGrace] and only
+//     rows this domain wrote ([chart.OrphanedSeals]), deleting each at the
+//     version it judged — so a value a writer held between the listing and
+//     the delete is spared, and a second node running the same tick deletes
+//     nothing twice.
+//
+// THE SIGHTINGS ARE THIS PROCESS'S ([Engine.chartSeals]), because they are the
+// sweep's own series of judgements and a duty that moves on a lease carries
+// no memory across the move: the node that takes the duty over starts with
+// none and waits a whole grace before it deletes anything, which is the safe
+// direction.
 
 // chartSealJob is the retention sweep's collection of sealed values nothing
 // names any more.
@@ -85,8 +95,12 @@ func (e *Engine) collectChartSeals(ctx context.Context, now time.Time) (int64, e
 	if err != nil {
 		return 0, err
 	}
+	e.chartSeals.mu.Lock()
+	orphans, seen := chart.OrphanedSeals(held, named, e.chartSeals.seen, now)
+	e.chartSeals.seen = seen
+	e.chartSeals.mu.Unlock()
 	var removed int64
-	for _, row := range chart.OrphanedSeals(held, named, now) {
+	for _, row := range orphans {
 		gone, err := store.UnsetAt(ctx, row.Name, row.Version)
 		if err != nil {
 			return removed, err
@@ -95,10 +109,17 @@ func (e *Engine) collectChartSeals(ctx context.Context, now time.Time) (int64, e
 			removed++
 			log.InfoContext(ctx, "chart_sealed_value_collected", "name", row.Name,
 				"detail", "no row of the org chart and nothing in the running "+
-					"settings names it any more")
+					"settings has named it for as long as the sweep's grace")
 		}
 	}
 	return removed, nil
+}
+
+// chartSealSightings is the orphan sweep's memory of which sealed values it
+// has seen nothing name, and since when — see [chart.SealSighting].
+type chartSealSightings struct {
+	mu   sync.Mutex
+	seen map[string]chart.SealSighting
 }
 
 // chartLogEnd is the chart log's last sequence, as the broker holds it now —

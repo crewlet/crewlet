@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -64,16 +65,45 @@ import (
 // as that was the one field it could name, and every credential beside it
 // went onto the log in the clear while this file said none ever would.
 //
-// # A sealed name is derived from WHO and WHERE
+// # A sealed name is derived from WHO, WHERE and WHICH WRITE
 //
 // A value is sealed under a name derived from the object's IDENTITY — the
 // address it was created under, which no rename moves and the chart never
-// issues twice — and the path of the field inside it ([SecretName]). Derived
-// rather than minted, so a second edit of one field overwrites the value
-// rather than leaving the first behind. The identity rather than the address,
-// because an address is reassigned: keyed on the handle a seat answers to, a
-// rename left the old name's value referenced by the renamed seat while a new
-// hire given the freed handle sealed their own over it.
+// issues twice — the path of the field inside it, and the OPERATION the write
+// is ([SecretName]). The identity rather than the address, because an address
+// is reassigned: keyed on the handle a seat answers to, a rename left the old
+// name's value referenced by the renamed seat while a new hire given the freed
+// handle sealed their own over it.
+//
+// THE OPERATION, because a seal happens INSIDE THE DECIDE — before the broker
+// arbitrates the write and before it is published — and a name derived from
+// the object and the field alone is the name the object's LIVE ROW already
+// references. So a seal over it rotated the credential every node resolves
+// whatever became of the write: lost to a concurrent writer, refused by a full
+// log, abandoned by a cancelled caller — the caller was told nothing changed,
+// the chart's history said nothing changed, and the working credential was
+// gone. Under the operation's own name, a seal writes a value nothing names
+// yet, and the one thing that moves a row onto it is the RECORD that carries
+// the reference: a write that never lands leaves only a value no row names,
+// which the orphan sweep collects ([OrphanedSeals]), and the value it would
+// have replaced goes on resolving until one that does land. A rotation is
+// therefore a new reference on the row, which is also what lets every node
+// see it without comparing anything but names. (What a decide can refuse on
+// its own — a mask with nothing behind it, a cap — it refuses BEFORE it seals,
+// so those write nothing at all.)
+//
+// DERIVED FROM THE OPERATION ID rather than minted, so every re-decide of one
+// write — a round the broker sent back, the retry an `unknown` outcome asks
+// for, two nodes seeding one file — derives the same name and finds its own
+// value there. And never from a digest of the VALUE: the name travels in the
+// clear on the log, and a short hash of a low-entropy credential is a guess
+// anybody can check offline.
+//
+// THE SEAL CREATES AND NEVER REPLACES ([Sealer]): a name already holding a
+// value is confirmed when it holds this one — the retry above — and refused
+// when it holds another, which only a caller reusing an operation id for a
+// different change can cause. A put there would be the rotation this section
+// exists to close, reached by the one path the name does not.
 //
 // # Why the predicate is envref.Whole everywhere, and envref.Split beside it
 //
@@ -103,10 +133,16 @@ import (
 // verb and it is not the secret store's whole surface. What satisfies
 // it is [internal/fleetsecrets], wired by the engine.
 type Sealer interface {
-	// Seal stores value under name and returns nothing but an error. The
-	// NAME is the caller's, derived deterministically from the object and
-	// the field, so a re-seal of one field overwrites rather than
-	// accumulating a key per edit.
+	// Seal stores value under name, which is the caller's — derived from the
+	// object, the field and the operation ([SecretName]) — and returns
+	// nothing but an error.
+	//
+	// IT CREATES AND NEVER REPLACES. Where name holds nothing it writes the
+	// value; where name already holds exactly this value — the same write,
+	// decided again — it succeeds and moves the row's version, so an orphan
+	// sweep that judged the value before is refused its delete; and where
+	// name holds a DIFFERENT value it answers [ErrSealTaken] and writes
+	// nothing. See seal.go's header for what a replacing put cost.
 	//
 	// BY IS THE PARTY WRITING THE SEAT — the person who typed the
 	// credential into it, and the credential they typed it through — which
@@ -115,6 +151,13 @@ type Sealer interface {
 	// into a seat read as set by a machine nobody chose.
 	Seal(ctx context.Context, name, value string, by secrets.Author) error
 }
+
+// ErrSealTaken is a [Sealer]'s answer to a seal whose name already holds a
+// different value: the operation id the name is derived from was used for
+// another change of the same field, and the value stored under it is left as
+// it was.
+var ErrSealTaken = errors.New("chart: the sealed name already holds a " +
+	"different value")
 
 // Runtime is where an object's runtime half keeps its credentials — the one
 // thing this domain needs to know about a half it cannot read.
@@ -134,30 +177,35 @@ type Runtime interface {
 // secretPrefix opens every name this domain seals under.
 const secretPrefix = "CHART_"
 
-// digestHex is how many hex digits of the path digest end a derived name.
+// digestHex is how many hex digits of the digest end a derived name.
 //
 // FORTY BITS, because the readable half of a name is a FOLD — `a-b` and `a_b`,
 // `token` and `TOKEN`, a unit key and a map key holding the separator all fold
-// to one spelling — and two fields folding to one name would seal one
-// credential over another's. The digest is over the unfolded identity and
-// path, and a collision needs the readable halves to collide as well, so forty
-// bits put it past anything a company's few thousand sealed values reach while
-// keeping the name short enough to read in a listing.
+// to one spelling — and it names no operation at all, so every write of one
+// field shares it. The digest is over the unfolded identity, path and
+// operation, and a collision needs the readable halves to collide as well: one
+// field's next write lands on the name its row holds now with a chance of one
+// in 2^40, and even then the seal is refused ([ErrSealTaken]) rather than
+// written over it. Forty bits keep the name short enough to read in a
+// listing.
 const digestHex = 10
 
-// SecretName is the name a sealed value is stored under: the object's IDENTITY
-// and the path of the field inside it, folded into a variable name and ended
-// with a digest of both unfolded.
+// SecretName is the name a sealed value is stored under: the object's
+// IDENTITY and the path of the field inside it, folded into a variable name
+// and ended with a digest of both unfolded and of the OPERATION that sealed
+// it — see seal.go's header for why the operation.
 //
 // The shape is `CHART_<KIND>_<IDENTITY>_<PATH…>_<DIGEST>`. The readable half
 // is for the operator listing their secrets; what makes a name belong to one
-// field of one object and nothing else is the digest.
-func SecretName(object ObjectRef, path ...string) string {
+// write of one field of one object and nothing else is the digest.
+func SecretName(object ObjectRef, opID string, path ...string) string {
 	id := NormalizeKey(object.ID)
 	sum := sha256.New()
 	sum.Write([]byte(object.Kind))
 	sum.Write([]byte{0})
 	sum.Write([]byte(id))
+	sum.Write([]byte{0})
+	sum.Write([]byte(opID))
 	for _, step := range path {
 		sum.Write([]byte{0})
 		sum.Write([]byte(step))
@@ -177,8 +225,8 @@ func SecretName(object ObjectRef, path ...string) string {
 }
 
 // SecretRef is [SecretName] as the reference a record carries.
-func SecretRef(object ObjectRef, path ...string) string {
-	return "${" + SecretName(object, path...) + "}"
+func SecretRef(object ObjectRef, opID string, path ...string) string {
+	return "${" + SecretName(object, opID, path...) + "}"
 }
 
 // derivedName is the shape [SecretName] produces and nothing else can.
@@ -217,9 +265,9 @@ func varToken(in string) string {
 //     operator who deliberately cleared a credential has said something, and
 //     sealing "" would store an empty secret and hand back a reference that
 //     resolves to nothing.
-//   - A LITERAL is sealed under the field's own derived name and the record
-//     carries the reference — so the value reaches the store and never the
-//     log, the rows, a snapshot or a backup of any of them.
+//   - A LITERAL is sealed under the name this write derives for the field,
+//     and the record carries the reference — so the value reaches the store
+//     and never the log, the rows, a snapshot or a backup of any of them.
 //   - A VALUE EMBEDDING REFERENCES has each LITERAL RUN sealed under a name of
 //     its own and keeps its references where they were, so the record holds
 //     references alone and expands to exactly what the value expanded to.
@@ -232,9 +280,9 @@ func varToken(in string) string {
 // chart's own references strung together.
 //
 // OBJECT names the field in a refusal; SEALAS is the identity the names are
-// derived from.
+// derived from, and OPID the write's operation.
 func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
-	path []string, content bool, value string) (string, error) {
+	opID string, path []string, content bool, value string) (string, error) {
 
 	if value == "" {
 		return "", nil
@@ -276,15 +324,23 @@ func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
 		}
 		// ONE NAME PER RUN, numbered in the value's own order: a pure
 		// literal is the field's own name, and each run of a composite is
-		// that name's own step, so a re-seal of the same value overwrites
-		// every run it wrote.
+		// that name's own step, so the same write decided again derives
+		// every name it sealed under and finds its own value there.
 		at := path
 		if len(parts) > 1 {
 			run++
 			at = append(slices.Clone(path), "#"+strconv.Itoa(run))
 		}
-		name := SecretName(sealAs, at...)
-		if err := w.seal.Seal(ctx, name, part.Text, by); err != nil {
+		name := SecretName(sealAs, opID, at...)
+		err := w.seal.Seal(ctx, name, part.Text, by)
+		if errors.Is(err, ErrSealTaken) {
+			return "", fmt.Errorf("chart: %s on %s: operation %q already sealed "+
+				"a different value for this field — an operation id names one "+
+				"write, and its retry must carry what the first attempt did. "+
+				"Send this change under a new one: %w", field, object, opID,
+				ErrRefused)
+		}
+		if err != nil {
 			return "", fmt.Errorf("chart: seal %s on %s: %w", field, object, err)
 		}
 		out.WriteString("${" + name + "}")
@@ -295,14 +351,14 @@ func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
 // sealRuntime seals every literal credential in an object's runtime half and
 // answers the half carrying references in their place.
 func (w *Writer) sealRuntime(ctx context.Context, object, sealAs ObjectRef,
-	runtime json.RawMessage) (json.RawMessage, error) {
+	opID string, runtime json.RawMessage) (json.RawMessage, error) {
 
 	if len(runtime) == 0 {
 		return runtime, nil
 	}
 	sealed, err := w.runtime.Credentials(object.Kind, runtime,
 		func(path secrets.Path, value string) (string, error) {
-			return w.sealValue(ctx, object, sealAs, runtimePath(path),
+			return w.sealValue(ctx, object, sealAs, opID, runtimePath(path),
 				path.Content(), value)
 		})
 	if err != nil {

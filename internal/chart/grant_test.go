@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -404,10 +405,10 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 	}
 	// EVERY CASE STARTS FROM THIS, put back by the company's grant once the
 	// case's own admitted write has landed.
-	restore := func(opID string) {
+	restore := func(opID string, seat chart.SeatContent) {
 		t.Helper()
 		r.whileDraining(func() {
-			if _, err := r.writer.WriteSeat(t.Context(), opID+"-seat", authored); err != nil {
+			if _, err := r.writer.WriteSeat(t.Context(), opID+"-seat", seat); err != nil {
 				t.Errorf("write the seat: %v", err)
 			}
 			if _, err := r.writer.WriteUnit(t.Context(), opID+"-unit", unit); err != nil {
@@ -415,12 +416,13 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 			}
 		})
 	}
-	restore("op-seed")
+	restore("op-seed", authored)
 	// WHAT A READ SERVES, which is what a lead sends back: the sealed
-	// email's reference.
+	// email's reference — and what every case is put back to, since a
+	// literal restated seals under the restoring write's own name.
 	seat := authored
 	seat.Email = r.mustSeat("report").Email
-	sealed := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "report"}, "email")
+	sealed, _ := envref.Whole(seat.Email)
 
 	lead := r.writer.As("mira", chart.AuthorHuman, nil, chart.Provenance{})
 	admin := r.writer.As("ops", chart.AuthorHuman,
@@ -509,7 +511,7 @@ func TestTheFieldsLeadershipIsDerivedFromTakeTheCompanysGrant(t *testing.T) {
 					t.Errorf("the company's grant making the same change: %v", err)
 				}
 			})
-			restore("op-restore-" + c.name)
+			restore("op-restore-"+c.name, seat)
 		})
 	}
 }

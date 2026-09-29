@@ -3,6 +3,7 @@ package chart_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -28,9 +29,9 @@ func TestTheRowsNameEverySealedValueTheyReference(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	email := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, "email")
-	token := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"},
-		"mcp_env", "tracker", "TOKEN")
+	sarah := chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}
+	email := chart.SecretName(sarah, "op-one", "email")
+	token := chart.SecretName(sarah, "op-one", "mcp_env", "tracker", "TOKEN")
 	named := r.sealedNames()
 	if !named[email] || !named[token] {
 		t.Fatalf("the census names %v, want both %s and %s", named, email, token)
@@ -75,32 +76,73 @@ func TestACensusFromRowsBehindTheLogIsRefused(t *testing.T) {
 	}
 }
 
-// ONLY THIS DOMAIN'S OWN, UNNAMED AND PAST THE GRACE, IS AN ORPHAN.
-func TestAnOrphanIsOursUnnamedAndPastTheGrace(t *testing.T) {
+// ONLY THIS DOMAIN'S OWN, UNNAMED FOR THE WHOLE GRACE, IS AN ORPHAN.
+//
+// The grace runs from when the sweep first SAW nothing name a value, at the
+// version it holds — never from when the value was written, which for a
+// credential rotated after months is months ago, so a grace read off it let
+// the old value go the moment the rotation applied on the sweep's node, under
+// every peer still resolving it. And a value a writer HELD since the sighting
+// (its version moved) has been named again by somebody, so its grace starts
+// over.
+func TestAnOrphanIsOursAndUnnamedForTheWholeGrace(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	old := now.Add(-2 * chart.SealGrace)
-	ours := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "ana"}, "email")
-	named := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "bo"}, "email")
-	young := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "cy"}, "email")
-	handSet := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "di"}, "email")
-	held := []secrets.Record{
-		{Name: ours, Source: chart.SealSource, UpdatedAt: old, Version: 1},
-		{Name: named, Source: chart.SealSource, UpdatedAt: old, Version: 2},
-		{Name: young, Source: chart.SealSource, UpdatedAt: now.Add(-time.Minute), Version: 3},
+	longAgo := now.Add(-30 * 24 * time.Hour)
+	name := func(id string) string {
+		return chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: id}, "op", "email")
+	}
+	ours, named, fresh, held := name("ana"), name("bo"), name("cy"), name("ed")
+	handSet, gone := name("di"), name("fi")
+	rows := []secrets.Record{
+		{Name: ours, Source: chart.SealSource, UpdatedAt: longAgo, Version: 1},
+		{Name: named, Source: chart.SealSource, UpdatedAt: longAgo, Version: 2},
+		// WRITTEN A MONTH AGO AND FIRST SEEN UNNAMED NOW: a rotation just
+		// stopped naming it, so it waits its whole grace from here.
+		{Name: fresh, Source: chart.SealSource, UpdatedAt: longAgo, Version: 3},
+		// HELD SINCE IT WAS SEEN: somebody is naming it again.
+		{Name: held, Source: chart.SealSource, UpdatedAt: longAgo, Version: 9},
 		// A ROW SOMEBODY SET BY HAND under a name of this domain's shape:
 		// theirs, and never this sweep's to delete.
-		{Name: handSet, Source: "cli", UpdatedAt: old, Version: 4},
+		{Name: handSet, Source: "cli", UpdatedAt: longAgo, Version: 4},
 		// AN OPERATOR'S OWN NAME that merely starts like this domain's.
-		{Name: "CHART_API_KEY", Source: chart.SealSource, UpdatedAt: old, Version: 5},
-		{Name: "GITHUB_TOKEN", Source: "cli", UpdatedAt: old, Version: 6},
+		{Name: "CHART_API_KEY", Source: chart.SealSource, UpdatedAt: longAgo, Version: 5},
+		{Name: "GITHUB_TOKEN", Source: "cli", UpdatedAt: longAgo, Version: 6},
 	}
+	seen := map[string]chart.SealSighting{
+		ours:  {Version: 1, Since: now.Add(-chart.SealGrace)},
+		named: {Version: 2, Since: now.Add(-2 * chart.SealGrace)},
+		held:  {Version: 8, Since: now.Add(-2 * chart.SealGrace)},
+		gone:  {Version: 7, Since: now.Add(-2 * chart.SealGrace)},
+	}
+	orphans, next := chart.OrphanedSeals(rows, map[string]bool{named: true}, seen, now)
 	var got []string
-	for _, row := range chart.OrphanedSeals(held, map[string]bool{named: true}, now) {
+	for _, row := range orphans {
 		got = append(got, row.Name)
 	}
 	if !slices.Equal(got, []string{ours}) {
 		t.Errorf("the orphans are %v, want only %s", got, ours)
+	}
+	want := map[string]chart.SealSighting{
+		ours:  {Version: 1, Since: now.Add(-chart.SealGrace)},
+		fresh: {Version: 3, Since: now},
+		held:  {Version: 9, Since: now},
+	}
+	if !maps.Equal(next, want) {
+		t.Errorf("the next sightings are %v, want %v — a named value, one "+
+			"that is gone and one that is not this domain's are forgotten, and "+
+			"a value held since it was seen is seen afresh", next, want)
+	}
+	// AND THE NEXT JUDGEMENT, a grace later, takes the value it first saw now.
+	orphans, _ = chart.OrphanedSeals(rows, map[string]bool{named: true}, next,
+		now.Add(chart.SealGrace))
+	got = got[:0]
+	for _, row := range orphans {
+		got = append(got, row.Name)
+	}
+	if !slices.Equal(got, []string{ours, fresh, held}) {
+		t.Errorf("a grace later the orphans are %v, want %v", got,
+			[]string{ours, fresh, held})
 	}
 }
 

@@ -17,20 +17,22 @@ import (
 // WHICH SEALED VALUES THE ROWS STILL NAME.
 //
 // A value this domain seals lives in the company's secret store under a name
-// derived from its object and field ([SecretName]), and a row carries the
-// reference. Two readers need the other direction — from the rows to the names
-// they reference:
+// derived from its object, its field and the write that sealed it
+// ([SecretName]), and a row carries the reference. Two readers need the other
+// direction — from the rows to the names they reference:
 //
 //   - A NODE'S RESOLVER, which takes a snapshot of the store and must hold
 //     every value its rows name the moment it builds a seat from them. A
 //     value sealed by a chart write after the snapshot was taken is one no
-//     apply picked up, so the node re-reads what its rows name when they move
-//     (internal/engine).
+//     apply picked up, so the node re-reads what its rows name when they name
+//     something its snapshot does not hold (internal/engine) — and since no
+//     seal ever writes over a name, a new value is always a new name.
 //   - THE ORPHAN SWEEP, which deletes a sealed value nothing names any more —
-//     a field cleared, a credential replaced by the operator's own reference,
-//     an object removed. The store has no retention of its own, so without it
-//     every such value outlived the company. Its absence answer has to be
-//     PROVED, which is what [Reader.SealedNames] is for.
+//     a field cleared, a credential rotated or replaced by the operator's own
+//     reference, an object removed, a write that sealed and never landed.
+//     The store has no retention of its own, so without it every such value
+//     outlived the company. Its absence answer has to be PROVED, which is
+//     what [Reader.SealedNames] is for.
 
 // Sealed is every name this domain derived that the seat's row references — in
 // its address and anywhere in its runtime half — each once, in order.
@@ -156,39 +158,72 @@ func (r *Reader) SealedNames(ctx context.Context, end uint64) (map[string]bool, 
 // chart-shaped name is theirs, whatever its name looks like.
 const SealSource = "chart"
 
-// SealGrace is how long a sealed value nothing names is kept before the sweep
-// may delete it.
+// SealGrace is how long the sweep must have seen nothing name a sealed value,
+// at the version it holds, before it may delete it.
 //
-// A VALUE IS SEALED BEFORE ITS RECORD IS PUBLISHED — inside the decide — so for
-// the seconds between the two, and across a retry the broker sent back to
-// decide again, a value exists that no row names yet. An hour is two orders of
-// magnitude past the longest of those (the publisher's own resolve budget is
-// seconds). A re-seal re-dates the row, so a value being written is never an
-// hour old.
+// TWO GAPS, and an hour is two orders of magnitude past the longer. A value is
+// sealed INSIDE THE DECIDE, before its record is published, so for the seconds
+// between the two — and across a retry the broker sent back to decide again —
+// a value exists that no row names yet. And a value a rotation or a clear
+// stops naming stops being named on the sweep's node the instant that record
+// applies there, while a peer still behind it resolves the old reference: a
+// node that far behind the log is one the framework's own alarms have named
+// long before an hour (see internal/statelog's stall grace).
 const SealGrace = time.Hour
 
+// SealSighting is when the sweep first saw one sealed value that nothing named,
+// at the version the store held it at then.
+//
+// # Why a sighting and not the value's own write time
+//
+// Because what the grace protects is the gap after a value STOPPED being
+// named, and nothing records when that was: the value's write time is when it
+// was SEALED, which for a credential rotated after months is months ago — so a
+// grace read off it made the old value deletable the moment the rotation
+// applied on the sweep's node, under every peer still resolving it. The
+// sweep's own series of judgements is the only witness, so it keeps one. It is
+// kept per VERSION, because a writer about to name a value again holds it
+// first ([Sealer]), which moves the version: a sighting of the old version
+// says nothing about the value now, and the grace starts again. A sweep that
+// moves to another node starts with none, which only ever waits longer.
+type SealSighting struct {
+	Version uint64
+	Since   time.Time
+}
+
 // OrphanedSeals is every value this domain sealed that nothing names and that
-// has not been written for [SealGrace] — what the sweep may delete, each at
-// the version it was listed at.
+// the sweep has seen nothing name, at the version it holds, for [SealGrace] —
+// what may be deleted, each at the version it was listed at — and the
+// sightings the next judgement starts from.
 //
 // PURE OVER VALUES, for the reason every judgement a duty acts on is: named is
-// read by [Reader.SealedNames] from rows proved current, and held is one
-// listing of the store, and a rule exercised only through both is a rule
-// nobody re-reads. A row is judged only if it has this domain's SHAPE and its
-// SOURCE: a name somebody set by hand is not this domain's to delete, however
-// it is spelled.
-func OrphanedSeals(held []secrets.Record, named map[string]bool, now time.Time) []secrets.Record {
+// read by [Reader.SealedNames] from rows proved current, held is one listing
+// of the store and seen is what the previous judgements concluded, and a rule
+// exercised only through all three is a rule nobody re-reads. A row is judged
+// only if it has this domain's SHAPE and its SOURCE: a name somebody set by
+// hand is not this domain's to delete, however it is spelled. The sightings
+// handed back hold exactly the unnamed values this listing held, so a value
+// that was named again, or is gone, is forgotten.
+func OrphanedSeals(held []secrets.Record, named map[string]bool,
+	seen map[string]SealSighting, now time.Time) ([]secrets.Record, map[string]SealSighting) {
+
 	var out []secrets.Record
+	next := map[string]SealSighting{}
 	for _, row := range held {
 		if !OwnsSecret(row.Name) || row.Source != SealSource || named[row.Name] {
 			continue
 		}
-		if now.Sub(row.UpdatedAt) < SealGrace {
+		sighting, sighted := seen[row.Name]
+		if !sighted || sighting.Version != row.Version {
+			sighting = SealSighting{Version: row.Version, Since: now}
+		}
+		next[row.Name] = sighting
+		if now.Sub(sighting.Since) < SealGrace {
 			continue
 		}
 		out = append(out, row)
 	}
-	return out
+	return out, next
 }
 
 // coversLog proves from one snapshot's prefix and the log's last sequence read

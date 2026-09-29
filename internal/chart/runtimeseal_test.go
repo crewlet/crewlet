@@ -1,6 +1,7 @@
 package chart_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE RUNTIME HALF'S CREDENTIALS ARE SEALED LIKE THE ADDRESS IS.
@@ -316,9 +318,11 @@ func TestAMaskInTheRuntimeHalfWithNoStoredValueIsRefused(t *testing.T) {
 //
 // A handle is an address a rename reassigns, and a retired one can be handed
 // to a later hire. Named by the handle a seat answers to, a renamed seat's
-// next edit sealed under a second name and left the first referenced by
-// nothing — and the seat created on the freed handle sealed its own
-// credential under the name the renamed seat's row still pointed at.
+// values were filed under whichever address it held when each was written,
+// and a hire given the freed handle derived names in the renamed seat's space
+// — so a write of the same field under a reused operation id sealed over the
+// renamed seat's value. Under the IDENTITY the seat was created under, a
+// renamed seat's every write derives its names where its first did.
 func TestASealedValueIsNamedByTheSeatsIdentity(t *testing.T) {
 	t.Parallel()
 	r := newWriteRig(t)
@@ -333,16 +337,15 @@ func TestASealedValueIsNamedByTheSeatsIdentity(t *testing.T) {
 		}
 	}
 	write("op-one", "sarah-chen", "first")
-	before := r.runtimeOf("sarah-chen")
 
 	r.applySeatRekey("op-rename", "sarah-okoro", "sarah-chen")
 	write("op-two", "sarah-okoro", "second")
-	after := r.runtimeOf("sarah-okoro")
-	if after != before {
-		t.Errorf("the renamed seat's credential is sealed under a new name: "+
-			"%s, then %s — the name is the seat's identity, which no rename "+
-			"moves, so a re-seal overwrites the value its row already names",
-			before, after)
+	identity := chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}
+	want := chart.SecretRef(identity, "op-two", "mcp_env", "tracker", "TOKEN")
+	if after := r.runtimeOf("sarah-okoro"); !strings.Contains(after, want) {
+		t.Errorf("the renamed seat's credential is sealed as %s, want under its "+
+			"identity, %s — the address it answers to now is one a rename "+
+			"reassigns and a later hire may be given", after, want)
 	}
 	if got := r.resolvedRuntime("sarah-okoro")["mcp_env.tracker.TOKEN"]; got != "second" {
 		t.Errorf("the renamed seat resolves %q, want the value it was just given", got)
@@ -401,4 +404,115 @@ func (r *writeRig) resolvedRuntime(handle string) map[string]string {
 	}
 	walk(doc, "")
 	return out
+}
+
+// A WRITE THAT DOES NOT LAND CHANGES NO CREDENTIAL ANY ROW NAMES.
+//
+// A seal happens inside the decide, before the write is arbitrated or
+// published — and under a name derived from the object and the field alone it
+// wrote over the value the live row already named. So a write refused for an
+// over-long name, one whose caller went away after the seal, one lost to a
+// concurrent writer, all left the store holding a credential the caller was
+// told had been rejected, and every node installed it at its next re-read. A
+// refusal the decide can make on its own now comes before any seal and writes
+// nothing at all; one it cannot — the record never reaching the log — leaves a
+// value only its own write's name holds, which no row names and the orphan
+// sweep collects. Either way the credential the row names is the one it named.
+func TestAWriteThatDoesNotLandChangesNoCredentialARowNames(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-seats", seatOp(chart.SeatAgent, "sarah-chen", ""),
+		seatOp(chart.SeatAgent, "bo-lee", ""))
+	token := func(value string) json.RawMessage {
+		return json.RawMessage(`{"mcp_env": {"github": {"GITHUB_TOKEN": "` + value + `"}}}`)
+	}
+	for _, handle := range []string{"sarah-chen", "bo-lee"} {
+		email := ""
+		if handle == "sarah-chen" {
+			email = "sarah@example.com"
+		}
+		if _, err := r.seat("op-one-"+handle, chart.SeatContent{
+			Handle: handle, Name: handle, Email: email, Runtime: token("OLD-token"),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", handle, err)
+		}
+	}
+	unchanged := func(t *testing.T, handle, row string) {
+		t.Helper()
+		r.drain()
+		if got := r.runtimeOf(handle); got != row {
+			t.Errorf("the row moved to %s, want %s — the write did not land", got, row)
+		}
+		if got := r.resolvedRuntime(handle)["mcp_env.github.GITHUB_TOKEN"]; got != "OLD-token" {
+			t.Errorf("the credential %s's row names resolves to %q after a write "+
+				"that did not land, want the one it named, OLD-token", handle, got)
+		}
+	}
+
+	t.Run("refused by the decide on its own, before anything is sealed", func(t *testing.T) {
+		row := r.runtimeOf("sarah-chen")
+		sealed := len(r.sealer.sealed)
+		for _, c := range []struct {
+			name    string
+			content chart.SeatContent
+		}{
+			{"a name past its cap", chart.SeatContent{Handle: "sarah-chen",
+				Name: strings.Repeat("n", chart.MaxName+1), Runtime: token("NEW-token")}},
+			{"a masked address with nothing behind it", chart.SeatContent{
+				Handle: "bo-lee", Name: "bo-lee", Email: redacted(),
+				Runtime: token("NEW-token")}},
+		} {
+			if _, err := r.writer.WriteSeat(t.Context(), "op-refused-"+c.name,
+				c.content); !errors.Is(err, chart.ErrRefused) {
+				t.Fatalf("%s: err = %v, want a refusal", c.name, err)
+			}
+		}
+		if got := len(r.sealer.sealed); got != sealed {
+			t.Errorf("a write the decide refused on its own sealed %d values on "+
+				"the way to the refusal", got-sealed)
+		}
+		unchanged(t, "sarah-chen", row)
+	})
+
+	t.Run("sealed, and its caller gone before the publish", func(t *testing.T) {
+		row := r.runtimeOf("sarah-chen")
+		ctx, cancel := context.WithCancel(t.Context())
+		r.sealer.mu.Lock()
+		r.sealer.afterSeal = cancel
+		r.sealer.mu.Unlock()
+		defer func() {
+			r.sealer.mu.Lock()
+			r.sealer.afterSeal = nil
+			r.sealer.mu.Unlock()
+		}()
+		if result, err := r.writer.WriteSeat(ctx, "op-abandoned", chart.SeatContent{
+			Handle: "sarah-chen", Name: "sarah-chen", Email: redacted(),
+			Runtime: token("NEW-token"),
+		}); err == nil && result.Outcome == statelog.OutcomeApplied {
+			t.Fatalf("a write whose caller went away before its publish applied")
+		}
+		unchanged(t, "sarah-chen", row)
+		// WHAT IT SEALED IS NAMED BY NOTHING, which is what the sweep takes.
+		orphan := chart.SecretName(chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"},
+			"op-abandoned", "mcp_env", "github", "GITHUB_TOKEN")
+		if got, _ := r.sealer.get(orphan); got != "NEW-token" {
+			t.Fatalf("the abandoned write's value is not under its own name: %q", got)
+		}
+		if r.sealedNames()[orphan] {
+			t.Errorf("a row names %s, a value whose write never landed", orphan)
+		}
+	})
+
+	t.Run("an operation id reused for another value", func(t *testing.T) {
+		row := r.runtimeOf("sarah-chen")
+		if _, err := r.writer.WriteSeat(t.Context(), "op-one-sarah-chen", chart.SeatContent{
+			Handle: "sarah-chen", Name: "sarah-chen", Email: redacted(),
+			Runtime: token("NEW-token"),
+		}); !errors.Is(err, chart.ErrRefused) || !strings.Contains(err.Error(),
+			"mcp_env.github.GITHUB_TOKEN") {
+			t.Fatalf("a reused operation id with another value: err = %v, want a "+
+				"refusal naming the field", err)
+		}
+		unchanged(t, "sarah-chen", row)
+	})
 }

@@ -12,15 +12,16 @@ import (
 )
 
 // A VALUE A CHART WRITE SEALS RESOLVES ON THE NODE THAT APPLIES IT — AND SO
-// DOES THE NEXT ONE SEALED OVER IT.
+// DOES THE ONE A ROTATION SEALS AFTER IT.
 //
 // A node resolves `${VAR}` from a snapshot of the secret store taken at boot,
 // at an apply and after a provisioning pass, and a chart write is none of
 // those. Before the view rebuild re-read what its rows name, a seat hired with
 // an address and a token resolved both to nothing until somebody re-activated
 // a config, and a token rotated through the chart kept resolving to the old
-// one — the re-seal writes the same name, so the reference on the row never
-// changed and nothing compared could see it.
+// one. A rotation seals under the rotating write's own name, so the row names
+// something this node's snapshot does not hold, and that is what the rebuild
+// re-reads on.
 func TestAValueAChartWriteSealsResolvesOnTheNodeThatAppliesIt(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seedCompanyDoc)})
@@ -78,7 +79,7 @@ func TestAValueAChartWriteSealsResolvesOnTheNodeThatAppliesIt(t *testing.T) {
 	}
 	waitFor("first-token")
 
-	// THE ROTATION: the same field, a new literal, the same sealed name.
+	// THE ROTATION: the same field, a new literal, a new sealed name.
 	give("test:content:cfo:2", "second-token")
 	waitFor("second-token")
 }
