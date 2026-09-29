@@ -556,19 +556,25 @@ func Register(r *Registry, s Sources) {
 
 // agent answers one seat's live state.
 func (s Sources) agent(ctx context.Context, p Params) (any, error) {
-	// EITHER NAME, and the seat may be addressed by handle or by role.
+	// BY HANDLE, the dashboard's one address for a seat — `query("agent",
+	// {id})` from the seat page and /agents/{id} from the REST table — and
+	// resolved to the seat's AGENT ID, which is what both halves of the
+	// answer are keyed by: the projection holds a seat's live state under it,
+	// and the event store promotes it on every phase row.
 	//
-	// The dashboard sends `id`, carrying the handle — `query("agent", {id})`
-	// from the seat page, and /agents/{id} from the REST table — while the
-	// projection keys its overlays by ROLE NAME, which is what the engine's
-	// `agents` push carries. Reading only `role` meant every seat page
-	// answered 400 and rendered its error state; the client is the
-	// compatibility reference for a frame's shape, so the answer
-	// takes what the client sends and resolves it.
-	seat := firstOf(p.String("id"), p.String("role"))
-	role := s.roleOf(seat)
-	if role == "" {
-		return nil, fmt.Errorf("%w: agent needs a handle or a role", ErrBadParams)
+	// It used to accept a ROLE NAME as well and answer by name, from a
+	// projection keyed by name and a history matched on `agent_role`. A
+	// name is prose two seats may share, so two "Engineer"s answered each
+	// other's live call and read each other's transcript. A retired handle
+	// still resolves, through the chart's own aliases, so a link somebody
+	// kept names the seat it named when they kept it.
+	handle := p.String("id")
+	if handle == "" {
+		return nil, fmt.Errorf("%w: agent needs the seat's handle as id", ErrBadParams)
+	}
+	seat, agentID := s.agentSeat(handle)
+	if seat == nil {
+		return nil, fmt.Errorf("%w: no agent seat answers to the handle %q", ErrNotFound, handle)
 	}
 	// LIVE STATE AND HISTORY, which are two different sources and always
 	// were: the projection holds the call in flight, the event store holds
@@ -578,14 +584,16 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// the turn had already completed. Two panels on one screen disagreeing
 	// about whether a seat had done anything.
 	//
-	// A seat the projection has never seen is NOT an error: a role
+	// A seat the projection has never seen is NOT an error: a seat
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
-	history, next := s.phaseHistory(ctx, seat, role, p)
+	history, next := s.phaseHistory(ctx, agentID, p)
 	answer := map[string]any{
-		"role": role,
-		"live": nil,
+		"handle":   seat.Handle(),
+		"agent_id": agentID,
+		"role":     seat.Name,
+		"live":     nil,
 		// The rows are `store.EventRecord`s, PAYLOAD NESTED — the same
 		// shape `event`, `trace` and `turn` answer with. They used to be
 		// the payload flattened with an id and a timestamp merged in,
@@ -604,10 +612,36 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// a seat that has never run as one that has. It marshals to null either
 	// way, so the client never saw it and only a Go caller would — which is
 	// exactly the kind of trap that survives until something depends on it.
-	if overlay := s.State.AgentOverlay(role); overlay != nil {
+	if overlay := s.State.AgentOverlay(agentID); overlay != nil {
 		answer["live"] = overlay
 	}
 	return answer, nil
+}
+
+// agentSeat resolves a handle — current, created-under or retired — to the
+// AGENT seat answering to it on this node's chart, and that seat's agent id.
+// Nil for a handle no agent seat answers to, and on a node with no chart view
+// to ask.
+func (s Sources) agentSeat(handle string) (*org.Role, string) {
+	if handle == "" || s.Company == nil {
+		return nil, ""
+	}
+	company, roster := s.Company()
+	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
+	// than re-resolved from the document: a stored revision carries no
+	// seats at all.
+	if company == nil || roster == nil {
+		return nil, ""
+	}
+	seat := roster.AgentSeatByHandle(handle)
+	if seat == nil {
+		return nil, ""
+	}
+	id, ok := roster.AgentIDFor(seat)
+	if !ok {
+		return nil, ""
+	}
+	return seat, id.String()
 }
 
 // phaseHistory is the seat's finished calls, newest first, as the rows the
@@ -624,7 +658,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // model, response, tool_executions, total_tokens, cost_usd — because the same
 // shape drives the live row, and the timestamp is the one field that lives on
 // the envelope rather than inside it.
-func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string) {
+func (s Sources) phaseHistory(ctx context.Context, agentID string, p Params) ([]store.EventRecord, string) {
 	if s.Events == nil {
 		return []store.EventRecord{}, ""
 	}
@@ -639,9 +673,9 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) 
 		// over a bad query parameter would turn a paging bug into no
 		// screen at all.
 	}
-	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
+	records, err := s.Events.AgentPhases(ctx, agentID, before)
 	if err != nil {
-		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
+		log.WarnContext(ctx, "agent_history_unavailable", "agent_id", agentID, "error", err)
 		return []store.EventRecord{}, ""
 	}
 	if len(records) == 0 {
@@ -675,34 +709,6 @@ func firstOf(values ...string) string {
 	return ""
 }
 
-// roleOf resolves a seat identifier to the ROLE NAME the projection keys on.
-//
-// A handle resolves through the org; anything else is passed through as a role
-// name, so a caller that already had one is unaffected. An unknown identifier
-// comes back unchanged rather than empty: the answer for a seat the projection
-// has never seen is a live-state-free row, not an error, and a company that
-// renamed a role should not turn a bookmarked page into a failure.
-func (s Sources) roleOf(id string) string {
-	if id == "" || s.Company == nil {
-		return id
-	}
-	company, roster := s.Company()
-	if company == nil {
-		return id
-	}
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, so the derivation this replaced answered an EMPTY
-	// organization for every running company.
-	if roster == nil {
-		return id
-	}
-	if role := roster.AgentSeatByHandle(id); role != nil {
-		return role.Name
-	}
-	return id
-}
-
 // tokens answers the live spend window.
 // tokens answers the spend breakdown.
 //
@@ -718,8 +724,10 @@ func (s Sources) roleOf(id string) string {
 // every tab, for an answer already in memory.
 func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	opts := tokens.Options{
-		Handles:     s.RoleHandles(),
-		AgentRole:   p.String("agent_role"),
+		Seats: s.Seats(),
+		// ONE SEAT BY ITS AGENT ID, never by its name: a rollup narrowed to
+		// "Engineer" was every Engineer's spend under one heading.
+		AgentID:     strings.TrimSpace(p.String("agent_id")),
 		RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
 	}
 	// THE WINDOW AS TWO INSTANTS, which `since_days` cannot name: a
@@ -746,7 +754,7 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		SinceDays: days,
 		Since:     since,
 		Until:     until,
-		AgentRole: opts.AgentRole,
+		AgentID:   opts.AgentID,
 	}
 	// LABELLED WITH WHAT THE STORE WILL ACTUALLY COVER, never with what was
 	// asked for: `since` is floored at the retention window, so a request
@@ -757,7 +765,7 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	// The live window, unfiltered, is the one the projection can answer —
 	// and only when the caller named no instants of their own, since the
 	// projection holds one rolling window and cannot look behind it.
-	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
+	if since.IsZero() && until.IsZero() && days == live && opts.AgentID == "" {
 		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
 	}
 	if s.Events == nil {
@@ -775,15 +783,22 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	return tokens.Aggregate(records, opts), nil
 }
 
-// RoleHandles maps each seat's role name to its handle, for the per-agent
-// rollup's cross-links. Empty when no revision is active, which links to
-// nothing rather than guessing a handle.
+// Seats is this node's chart as the spend rollups name seats: every agent seat
+// by its agent id, with its handle, its name and the unit it sits in directly.
+// Empty when there is no chart view, which names and links nothing rather than
+// guessing.
 //
-// Exported because the live stream needs the same map for the rollup it
-// pushes: two derivations of "which handle is this role" is how a pushed row
-// and a queried one come to link to different pages.
-func (s Sources) RoleHandles() map[string]string {
-	out := map[string]string{}
+// KEYED BY AGENT ID, the one identifier a spend record carries that neither a
+// rename nor a namesake can move. It was keyed by role name, which two seats
+// may share: both of their rows linked to whichever seat the map was built
+// from last, and a per-unit band keyed on a unit's NAME pooled two teams that
+// shared one.
+//
+// Exported because the live stream needs the same directory for the rollup it
+// pushes: two derivations of it is how a pushed row and a queried one come to
+// link to different pages.
+func (s Sources) Seats() tokens.Seats {
+	out := tokens.Seats{}
 	if s.Company == nil {
 		return out
 	}
@@ -791,20 +806,23 @@ func (s Sources) RoleHandles() map[string]string {
 	if roster == nil {
 		return out
 	}
-	// EVERY SEAT THE COMPANY RUNS. This walked `company.Roles` — the
-	// document's TOP-LEVEL list — so a seat inside a unit had no
-	// cross-link in the rollup at all, which in a company with an org
-	// chart is most of them; and once a stored revision stopped carrying
-	// seats the map was empty for every company, so every per-agent row
-	// linked nowhere.
+	// EVERY SEAT THE COMPANY RUNS, from the chart's own rows: a walk of
+	// the document's top-level list missed every seat inside a unit, and a
+	// stored revision carries no seats at all.
 	for role := range roster.AllRoles() {
-		if role.Name == "" {
+		id, ok := roster.AgentIDFor(role)
+		if !ok {
 			continue
 		}
-		// THE SEAT'S OWN HANDLE, not a re-spelling of the derivation: a
-		// handle that differs from the seat's real one is a cross-link
-		// to a page that does not exist.
-		out[role.Name] = role.Handle()
+		seat := tokens.Seat{Handle: role.Handle(), Name: role.Name}
+		// Only the DIRECT unit, not the chain: a band per nesting level
+		// would count the same spend once for the team and again for the
+		// department above it, and a stacked chart whose bands sum to more
+		// than the total is unreadable.
+		if unit := roster.UnitFor(role); unit != nil {
+			seat.UnitKey, seat.UnitName = unit.Key(), unit.Name
+		}
+		out[id.String()] = seat
 	}
 	return out
 }

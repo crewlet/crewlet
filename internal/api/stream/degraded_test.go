@@ -89,7 +89,7 @@ func TestTheDegradedEnvelopeHoldsTheSocketOpen(t *testing.T) {
 	// `agents` on a serving node.
 	f.svc.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "system", Payload: map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"},
 	})
 
 	// THE KEEPALIVES CONTINUE: the ping is answered, and nothing derived
@@ -169,7 +169,7 @@ func TestAServingNodeAnswersTheSameSocket(t *testing.T) {
 
 	f.svc.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "system", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "system", Payload: map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"},
 	})
 	if got, _ := readUntil(t, conn, stream.KindEvent); got["kind"] != stream.KindEvent {
 		t.Fatalf("a serving node withheld its pushes: %v", got)

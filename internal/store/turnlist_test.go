@@ -28,6 +28,7 @@ func seedTurn(t *testing.T, log *store.EventLog, id string, at time.Time,
 			// phase record carries it.
 			Tags: map[string]string{
 				"turn_id": id, "trigger": "chat", "agent_role": role,
+				"agent_id": "id-" + role,
 			},
 		}
 		if mutate != nil {
@@ -225,7 +226,7 @@ func TestTheTurnListNarrowsBySeatModelAndFailure(t *testing.T) {
 		return out
 	}
 
-	if got := ids(store.TurnQuery{AgentRole: "PM"}); !slices.Equal(got, []string{"t-pm"}) {
+	if got := ids(store.TurnQuery{AgentID: "id-PM"}); !slices.Equal(got, []string{"t-pm"}) {
 		t.Errorf("PM's turns = %v", got)
 	}
 	if got := ids(store.TurnQuery{Model: "claude-haiku-4-5"}); !slices.Equal(got,
@@ -295,11 +296,10 @@ func splitModels(s string) []string {
 // answered every non-agent event in the window.
 //
 // The clause was `(agent_id = ? OR agent_role = ?)` with both bound
-// unconditionally, so a caller holding only a role — which is every caller
-// that got its handle from a URL the roster could not resolve — matched every
-// row whose `agent_id` is empty. The guard only caught the case where BOTH
-// were empty.
-func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
+// unconditionally, so a caller holding only a role matched every row whose
+// `agent_id` is empty. The seat filter is the agent id alone now, and a seat
+// read with it still must not reach a seatless row.
+func TestASeatFilterDoesNotMatchASeatlessRow(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
 	base := time.Now().UTC().Add(-time.Hour)
@@ -313,7 +313,7 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "PM"})
+	got, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-PM"})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -322,10 +322,9 @@ func TestASeatFilterWithOneIdentifierDoesNotMatchEverything(t *testing.T) {
 			"matched the seatless turn", got)
 	}
 
-	// AND THE SAME TRAP ONE FUNCTION OVER. `AgentPhases` bound both
-	// identifiers the same way, so a handle that resolved to no role was
-	// answered every seatless phase in the window.
-	phases, err := log.AgentPhases(t.Context(), "", "PM", nil)
+	// AND THE SAME TRAP ONE FUNCTION OVER, where `AgentPhases` bound both
+	// identifiers the same way.
+	phases, err := log.AgentPhases(t.Context(), "id-PM", nil)
 	if err != nil {
 		t.Fatalf("AgentPhases: %v", err)
 	}
@@ -485,20 +484,20 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: id + "-p0", Type: "agent_phase_completed", Time: at,
 			Category: "lifecycle", Actor: "CEO",
-			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO", "agent_id": "id-CEO"},
 		}); err != nil {
 			t.Fatalf("append the phase: %v", err)
 		}
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: id + "-x", Type: eventType, Time: at.Add(time.Second),
 			Category: "system", Actor: "CEO",
-			Tags: map[string]string{"turn_id": id, "agent_role": "CEO"},
+			Tags: map[string]string{"turn_id": id, "agent_role": "CEO", "agent_id": "id-CEO"},
 		}); err != nil {
 			t.Fatalf("append the %s: %v", eventType, err)
 		}
 	}
 
-	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO"})
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-CEO"})
 	if err != nil {
 		t.Fatalf("Turns: %v", err)
 	}
@@ -513,7 +512,7 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 	}
 
 	yes, no := true, false
-	selected, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO", Failed: &yes})
+	selected, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-CEO", Failed: &yes})
 	if err != nil {
 		t.Fatalf("Turns(failed=true): %v", err)
 	}
@@ -521,7 +520,7 @@ func TestATurnThatDiedOnAFailureTypeReportsFailed(t *testing.T) {
 		t.Errorf("failed=true selected %d of %d — the filter and the column "+
 			"must answer the same question", len(selected), len(failures))
 	}
-	clean, err := log.Turns(t.Context(), store.TurnQuery{AgentRole: "CEO", Failed: &no})
+	clean, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-CEO", Failed: &no})
 	if err != nil {
 		t.Fatalf("Turns(failed=false): %v", err)
 	}

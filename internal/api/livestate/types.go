@@ -158,12 +158,18 @@ type Meter struct {
 	Max  int `json:"max"`
 }
 
-// Overlay is the live half of an agent row, merged onto its static config row.
+// Overlay is the live half of an agent row, merged onto its static config row
+// by the seat's agent id.
+//
+// THERE IS NO `runtime_id`. It named "the running instance" and carried
+// whatever the last event put under `agent_id` — the seat's derived id from a
+// turn, its handle from a spawn — so one field read two things on one seat;
+// and the one it usually read is the id the row is keyed by, which the roster
+// row already carries.
 type Overlay struct {
 	// State is empty, and OMITTED on the wire, until an event says whether
 	// the seat is running: see ensureAgent for what claiming one cost.
 	State            string    `json:"state,omitempty"`
-	RuntimeID        string    `json:"runtime_id"`
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
 	LiveCall         *LiveCall `json:"live_call"`
@@ -187,6 +193,10 @@ type Overlay struct {
 }
 
 // SandboxEntry is one in-flight detached coding run.
+//
+// AgentID is what pairs a run with its seat's row. Role and AgentHandle are
+// what the seat was called when the run started, for a reader with no roster
+// row to name it from — never a key, since a name is shared and a handle moves.
 type SandboxEntry struct {
 	TurnID      string `json:"turn_id"`
 	Role        string `json:"role"`
@@ -218,6 +228,7 @@ type OrgBudget struct {
 // named here did not move and is not re-sent — which is the whole point, since
 // a dashboard should mirror this projection rather than re-implement it.
 type Change struct {
+	// Agents are the agent ids of the seats that moved.
 	Agents    map[string]struct{}
 	Sandboxes bool
 	Tokens    bool
@@ -230,11 +241,11 @@ func (c Change) Moved() bool {
 	return len(c.Agents) > 0 || c.Sandboxes || c.Tokens || c.Events || c.Budget
 }
 
-func (c *Change) agentMoved(role string) {
+func (c *Change) agentMoved(agentID string) {
 	if c.Agents == nil {
 		c.Agents = map[string]struct{}{}
 	}
-	c.Agents[role] = struct{}{}
+	c.Agents[agentID] = struct{}{}
 }
 
 // --- payload accessors ------------------------------------------------- //

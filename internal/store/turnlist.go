@@ -157,10 +157,9 @@ type TurnQuery struct {
 	// [DefaultTurnDays].
 	SinceDays int
 
-	// AgentRole and AgentID each narrow to one seat; a caller passes
-	// whichever it holds, for [EventLog.AgentPhases]' own reason.
-	AgentRole string
-	AgentID   string
+	// AgentID narrows to one seat, by the agent id every row of its turns
+	// carries — never by its name, for [EventLog.AgentPhases]' reason.
+	AgentID string
 
 	// Model narrows to turns that used one.
 	Model string
@@ -232,12 +231,11 @@ func (l *EventLog) Turns(ctx context.Context, q TurnQuery) ([]Turn, error) {
 
 	where := []string{"turn_id != ''", "event_time >= ?"}
 	args := []any{EncodeTime(floor)}
-	// ONLY THE IDENTIFIERS THE CALLER HOLDS — binding an empty one matches
-	// every row that carries none, which is every non-agent event in the
-	// window. See [seatClause].
-	if clause, ids := seatClause(q.AgentID, q.AgentRole); clause != "" {
-		where = append(where, strings.TrimPrefix(clause, " AND "))
-		args = append(args, ids...)
+	// ONLY AN ID THE CALLER HOLDS — binding an empty one matches every row
+	// that carries none, which is every non-agent event in the window.
+	if q.AgentID != "" {
+		where = append(where, "agent_id = ?")
+		args = append(args, q.AgentID)
 	}
 	if q.WorkKey != "" {
 		where = append(where, "work_key = ?")

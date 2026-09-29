@@ -148,7 +148,7 @@ func TestSeedingDoesNotCountWhatTheStreamAlreadyApplied(t *testing.T) {
 	s := seededState(t)
 	live := phaseSpend("p1", "2026-06-14T11:45:00Z", 40)
 	s.Apply(live)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		id("e1"), at("2026-06-14T11:45:00Z")))
 
 	s.Seed(livestate.History{
@@ -216,7 +216,7 @@ func TestAnEventTheSeedAlreadyListedIsListedOnceWhenItStreams(t *testing.T) {
 func TestSeededRowsAreOrderedAgainstLiveOnes(t *testing.T) {
 	t.Parallel()
 	s := seededState(t)
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		id("live"), at("2026-06-14T11:59:00Z")))
 	s.Seed(livestate.History{Events: []livestate.FeedRow{
 		storedRow("old", "2026-06-14T09:00:00Z"),

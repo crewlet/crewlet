@@ -2,11 +2,20 @@
 // is doing right now.
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
-// reads — and maintains, per agent role: the seat's live state, its current
-// task, phase and iteration, its live token meter, and the IN-FLIGHT LLM call.
-// What a seat has SPENT is not held per seat: it is the per-agent row of the
-// spend rollup, folded from the same records by internal/tokens, so a seat
-// card and the Spend screen cannot disagree about one seat.
+// reads — and maintains, per seat: the seat's live state, its current task,
+// phase and iteration, its live token meter, and the IN-FLIGHT LLM call. What a
+// seat has SPENT is not held per seat: it is the per-agent row of the spend
+// rollup, folded from the same records by internal/tokens, so a seat card and
+// the Spend screen cannot disagree about one seat.
+//
+// KEYED BY THE SEAT'S AGENT ID, the `agent_id` every seat-level event carries
+// and the one the roster row it is merged onto carries too. It was the ROLE
+// NAME, which is prose: two seats may share one, so two "Engineer"s shared one
+// overlay and each rendered whatever the other was last doing. The handle is
+// not the answer either, because a rename moves it — events already in flight
+// would land under an address the roster no longer carries. The id is derived
+// from the handle the seat was CREATED under (ADR-0019), so it is unique and a
+// rename does not move it.
 //
 // It solves two problems, and both are worth stating because they are why this
 // exists at all rather than the dashboard querying the store.
@@ -150,9 +159,10 @@ var sandboxEvents = map[string]struct{}{
 
 // agentLive is the incrementally-maintained state of one seat.
 type agentLive struct {
-	role      string
-	runtimeID string
-	state     string
+	// agentID is the seat's derived agent id, and the key it is held
+	// under — see the package doc.
+	agentID string
+	state   string
 
 	currentPhase     string
 	currentIteration int
@@ -170,7 +180,6 @@ type agentLive struct {
 func (a *agentLive) overlay() Overlay {
 	return Overlay{
 		State:            a.state,
-		RuntimeID:        a.runtimeID,
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
 		LiveCall:         a.liveCall.clone(),
@@ -297,9 +306,10 @@ func (s *LiveState) clock() time.Time {
 
 // --- read side ---------------------------------------------------------- //
 
-// MergeAgents overlays live state onto each static config row.
+// MergeAgents overlays live state onto each static config row, matched on the
+// row's `agent_id`.
 //
-// Roles with no live entry are returned as-is, which the dashboard renders
+// Seats with no live entry are returned as-is, which the dashboard renders
 // offline. Order follows the input.
 func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 	s.mu.Lock()
@@ -311,8 +321,8 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 		for k, v := range row {
 			merged[k] = v
 		}
-		role, _ := row["role"].(string)
-		if live := s.agents[role]; live != nil {
+		id, _ := row["agent_id"].(string)
+		if live := s.agents[id]; id != "" && live != nil {
 			mergeOverlay(merged, live.overlay())
 		}
 		out = append(out, merged)
@@ -320,59 +330,56 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 	return out
 }
 
-// OverlayRows renders the live overlays for the named roles as the wire rows
-// the `agents` push carries: one object per seat, with its role INSIDE it.
+// OverlayRows renders the live overlays for the named seats as the wire rows
+// the `agents` push carries: one object per seat, with its `agent_id` INSIDE
+// it.
 //
-// A LIST, and the role in the row, because that is what the client reads —
-// store.js does `rows.map(r => [r.role, r])` behind an `Array.isArray` guard,
-// so a map keyed by role is not merely a different spelling of the same thing:
-// it fails the guard and the push is DISCARDED, silently, every time. Measured
-// end to end (internal/e2e): a full turn ran, four agents pushes went out per
-// phase, and the seat stayed idle on the dashboard from start to finish.
+// A LIST, and the id in the row, because that is what the client reads — the
+// store keys the rows by `agent_id` behind an `Array.isArray` guard, so a map
+// keyed by seat is not merely a different spelling of the same thing: it fails
+// the guard and the push is DISCARDED, silently, every time. Measured end to
+// end (internal/e2e): a full turn ran, four agents pushes went out per phase,
+// and the seat stayed idle on the dashboard from start to finish.
+//
+// THE ID AND NOTHING ELSE THAT NAMES THE SEAT: the row is merged over a roster
+// row that already carries the seat's handle and name as they are NOW, and a
+// name or handle copied off the event that moved the seat would be the one it
+// had when the event was published — a rename's worth out of date.
 //
 // The client is the compatibility reference and wins any disagreement about a
 // frame's shape. This is that rule applied.
 //
-// A role with no live state is SKIPPED rather than sent as an empty overlay:
+// A seat with no live state is SKIPPED rather than sent as an empty overlay:
 // the client merges these onto its existing rows, so a blank one would erase
 // the state of a seat that simply had not changed.
-func (s *LiveState) OverlayRows(roles []string) []map[string]any {
+func (s *LiveState) OverlayRows(agentIDs []string) []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	out := make([]map[string]any, 0, len(roles))
-	for _, role := range roles {
-		live := s.agents[role]
+	out := make([]map[string]any, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		live := s.agents[id]
 		if live == nil {
 			continue
 		}
-		row := map[string]any{"role": role}
+		row := map[string]any{"agent_id": id}
 		mergeOverlay(row, live.overlay())
 		out = append(out, row)
 	}
 	return out
 }
 
-// AgentOverlay returns the live overlay for one role, or nil.
-func (s *LiveState) AgentOverlay(role string) *Overlay {
+// AgentOverlay returns the live overlay for the seat with this agent id, or
+// nil.
+func (s *LiveState) AgentOverlay(agentID string) *Overlay {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	live := s.agents[role]
+	live := s.agents[agentID]
 	if live == nil {
 		return nil
 	}
 	o := live.overlay()
 	return &o
-}
-
-// RuntimeIDFor returns the running instance id for a role, or "".
-func (s *LiveState) RuntimeIDFor(role string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if live := s.agents[role]; live != nil {
-		return live.runtimeID
-	}
-	return ""
 }
 
 // RecentEvents returns feed rows newest-first, capped at limit.
@@ -481,8 +488,8 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	// The in-flight call is stream-only: update it, but never let it into
 	// the persisted-event buffer.
 	if env.Type == "agent_turn_progress" {
-		if role := s.applyProgress(*env, payload); role != "" {
-			change.agentMoved(role)
+		if id := s.applyProgress(*env, payload); id != "" {
+			change.agentMoved(id)
 		}
 		return change
 	}
@@ -511,27 +518,31 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		change.Tokens = s.foldSpend(*env, payload)
 	}
 
-	role := str(payload, "role", "agent_role")
-	if role == "" {
+	// A seat-level event names its seat by agent id. One that names none is
+	// about no seat — a human seat has no id, and the projection holds only
+	// what runs — and the role name beside it cannot stand in, because two
+	// seats may share it.
+	id := str(payload, "agent_id")
+	if id == "" {
 		return change
 	}
-	agent := s.ensureAgent(role)
-	if id := str(payload, "agent_id"); id != "" {
-		agent.runtimeID = id
-	}
-
-	if s.applyState(agent, *env, payload) {
-		change.agentMoved(role)
+	if s.applyState(id, *env, payload) {
+		change.agentMoved(id)
 	}
 	return change
 }
 
-// applyState applies a state-affecting event, gated on the reorder guard, and
-// reports whether the seat moved.
-func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[string]any) bool {
+// applyState applies a state-affecting event to the seat with this agent id,
+// gated on the reorder guard, and reports whether the seat moved.
+//
+// The entry is made only for an event that can move it: a seat named by a
+// prompt measurement or a skill load has no state to report, and an entry made
+// for it would claim the projection knows something about the seat.
+func (s *LiveState) applyState(agentID string, env Envelope, payload map[string]any) bool {
 	if _, ok := eventState[env.Type]; !ok {
 		return false
 	}
+	agent := s.ensureAgent(agentID)
 	ts := newStamp(env.Timestamp)
 
 	// Reorder guard: a strictly-older event must not clobber newer state.
@@ -669,21 +680,20 @@ func endTurn(agent *agentLive, turnID string) {
 	agent.liveCall = nil
 }
 
-// ensureAgent returns the live entry for a role, creating one that claims NO
-// state.
+// ensureAgent returns the live entry for the seat with this agent id,
+// creating one that claims NO state.
 //
-// UNKNOWN, not offline, is what a new entry knows. Several things create one
-// without saying anything about whether the seat is running: a meter report
-// names every capped seat, and a spend record names the seat it billed. The
-// overlay used to start at "offline", and a merged overlay OVERWRITES the
-// roster's own state, so the first meter report after a boot turned every
-// capped seat this node was serving from idle to offline on every open
-// dashboard, and it stayed that way until the seat next took a turn.
-func (s *LiveState) ensureAgent(role string) *agentLive {
-	agent := s.agents[role]
+// UNKNOWN, not offline, is what a new entry knows. A meter report creates one
+// without saying anything about whether the seat is running — it names every
+// capped seat. The overlay used to start at "offline", and a merged overlay
+// OVERWRITES the roster's own state, so the first meter report after a boot
+// turned every capped seat this node was serving from idle to offline on every
+// open dashboard, and it stayed that way until the seat next took a turn.
+func (s *LiveState) ensureAgent(agentID string) *agentLive {
+	agent := s.agents[agentID]
 	if agent == nil {
-		agent = &agentLive{role: role}
-		s.agents[role] = agent
+		agent = &agentLive{agentID: agentID}
+		s.agents[agentID] = agent
 	}
 	return agent
 }

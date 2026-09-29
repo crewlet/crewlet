@@ -8,7 +8,7 @@ import (
 
 // planCall is the coordinates most of these tests share.
 func planCall() map[string]any {
-	return map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
+	return map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
 }
 
 func liveCallOf(t *testing.T, s *livestate.LiveState, role string) *livestate.LiveCall {
@@ -317,7 +317,7 @@ func TestAProgressRoundWakesASeatThatWasNotWorking(t *testing.T) {
 	// seat idle while its call streamed would put a live row on a seat the
 	// roster shows as doing nothing.
 	s := livestate.New()
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead"}))
+	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead"}))
 	s.Apply(env("agent_turn_progress",
 		with(planCall(), map[string]any{"round_num": 0}),
 		streamOnly, at("2026-06-14T12:00:10+00:00")))
@@ -418,7 +418,7 @@ func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
 	s.Apply(env("agent_phase_completed", planCall(), at("2026-06-14T12:00:05+00:00")))
-	s.Apply(env("reflection_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("reflection_completed", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:00:06+00:00")))
 
 	if got := overlayOf(t, s, "Lead"); got.State != "idle" {

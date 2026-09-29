@@ -302,7 +302,7 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID: string(rune('a' + i)), Type: "agent_phase_completed",
 			Time: base.Add(time.Duration(i) * time.Second), Category: "lifecycle",
-			Actor: role, Tags: map[string]string{"agent_role": role},
+			Actor: role, Tags: map[string]string{"agent_role": role, "agent_id": "id-" + role},
 			Payload: payload,
 		}); err != nil {
 			t.Fatal(err)
@@ -340,12 +340,12 @@ func TestPhasesCarryPayloadsAndPage(t *testing.T) {
 		t.Errorf("a short page does not report the end of the record: %v", last)
 	}
 
-	// The role filter narrows server-side, so a busy company's other seats are
-	// never fetched and thrown away.
+	// The seat filter narrows server-side, by agent id, so a busy company's
+	// other seats are never fetched and thrown away.
 	mine := asMap(t, answer(t, queries.Sources{Events: log}, "phases",
-		map[string]any{"role": "Engineer"}))
+		map[string]any{"agent_id": "id-Engineer"}))
 	if got := rows(t, mine["phases"]); len(got) != 1 {
-		t.Errorf("role filter returned %d rows, want 1", len(got))
+		t.Errorf("seat filter returned %d rows, want 1", len(got))
 	}
 }
 

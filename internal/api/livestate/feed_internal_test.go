@@ -23,7 +23,7 @@ func TestTheFeedIndexForgetsWhatTheRingDrops(t *testing.T) {
 		s.Apply(&Envelope{
 			ID: fmt.Sprint("e", i), Type: "agent_turn_completed", Category: "agent",
 			Timestamp: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339Nano),
-			Payload:   map[string]any{"role": "Lead"},
+			Payload:   map[string]any{"agent_id": "Lead"},
 		})
 	}
 	s.Seed(History{Events: []FeedRow{{

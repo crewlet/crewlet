@@ -294,7 +294,7 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 		before = &store.Cursor{Time: at, ID: id}
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultPhasePage, store.MaxPhasePage)
-	records, err := s.Events.Phases(ctx, p.String("role"), limit, before)
+	records, err := s.Events.Phases(ctx, strings.TrimSpace(p.String("agent_id")), limit, before)
 	if err != nil {
 		return nil, err
 	}

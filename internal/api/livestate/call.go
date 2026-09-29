@@ -87,15 +87,18 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 const openingRound = -1
 
 // applyProgress folds one progress round into the in-flight call, returning the
-// role whose call moved or "" when the round was stale.
+// agent id of the seat whose call moved, or "" when the round was stale or
+// named no seat.
 func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
-	role := str(payload, "role", "agent_role")
-	if role == "" {
+	id := str(payload, "agent_id")
+	if id == "" {
 		return ""
 	}
-	agent := s.ensureAgent(role)
-	if id := str(payload, "agent_id"); id != "" {
-		agent.runtimeID = id
+	// LOOKED UP, not created: a round the guards below discard moves nothing,
+	// and an entry made for it would claim the projection knows the seat.
+	var cur *LiveCall
+	if agent := s.agents[id]; agent != nil {
+		cur = agent.liveCall
 	}
 
 	turnID := str(payload, "turn_id")
@@ -118,7 +121,6 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		}
 	}
 
-	cur := agent.liveCall
 	switch {
 	case cur.sameCall(turnID, phase, iteration):
 		// THE OPENING FRAME IS THE ONLY CARRIER OF THE PROMPT, and it
@@ -135,7 +137,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 			if len(cur.PromptMessages) == 0 {
 				cur.PromptMessages = list(payload, "prompt_messages")
 			}
-			return role
+			return id
 		}
 		// A stale earlier round of the SAME call is ignored.
 		if roundNum < cur.RoundNum {
@@ -153,6 +155,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// corrected it: the seat sat rendering as working, with no live call to
 	// show, until the next real round. A round this function is about to
 	// discard must not move the seat either.
+	agent := s.ensureAgent(id)
 	if agent.state != "working" {
 		agent.state = "working"
 		agent.afkReason = ""
@@ -230,7 +233,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		StartedAt:      startedAt,
 		UpdatedAt:      env.Timestamp,
 	}
-	return role
+	return id
 }
 
 // recordPhaseFailure remembers a failed phase and FREEZES its call rather than

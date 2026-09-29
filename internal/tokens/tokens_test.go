@@ -23,7 +23,7 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
 		rec("CEO", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10),
-	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
+	}, tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "ceo", Name: "CEO"}}, Since: since, Until: until})
 
 	if got.Totals.TotalTokens != 250 || got.Totals.Calls != 3 {
 		t.Errorf("totals = %+v", got.Totals)
@@ -89,6 +89,36 @@ func TestTiesBreakOnANameRatherThanOnMapOrder(t *testing.T) {
 		if string(next) != string(first) {
 			t.Fatalf("unstable ordering:\n%s\n%s", first, next)
 		}
+	}
+}
+
+// A SEAT IS PRINTED AS THE CHART CALLS IT NOW. Its records carry the name it
+// had when each phase ran, so a rename is a row whose phases disagree about
+// what it is called; the chart settles it, and without the chart the NEWEST
+// record does, whatever order the records arrived in.
+func TestASeatIsNamedAsItIsNowNotAsItsRecordsWere(t *testing.T) {
+	t.Parallel()
+	before := rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0)
+	after := rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:05:00Z", 10, 0)
+	after.AgentRole = "Chief Executive"
+	after.EventID = "renamed"
+
+	for _, records := range [][]tokens.Record{{before, after}, {after, before}} {
+		got := tokens.Aggregate(records, tokens.Options{})
+		if len(got.ByAgent) != 1 || got.ByAgent[0].Role != "Chief Executive" {
+			t.Errorf("by_agent = %+v, want one row under the newest name", got.ByAgent)
+		}
+		if got.ByTurn[0].Role != "Chief Executive" {
+			t.Errorf("by_turn = %+v, want the newest name", got.ByTurn)
+		}
+	}
+
+	got := tokens.Aggregate([]tokens.Record{before, after},
+		tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "boss", Name: "Founder"}}})
+	if got.ByAgent[0].Role != "Founder" || got.ByAgent[0].Handle != "boss" ||
+		got.ByTurn[0].Role != "Founder" || got.ByTurn[0].Handle != "boss" {
+		t.Errorf("by_agent = %+v, by_turn = %+v, want the chart's name and handle",
+			got.ByAgent, got.ByTurn)
 	}
 }
 
@@ -255,14 +285,14 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 	// a renamed field here is a blank panel there, with no error anywhere.
 	raw, _ := json.Marshal(tokens.Aggregate([]tokens.Record{
 		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
-	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until}))
+	}, tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "ceo", Name: "CEO"}}, Since: since, Until: until}))
 
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, key := range []string{
-		"since", "until", "agent_role", "totals", "by_phase", "by_model",
+		"since", "until", "agent_id", "totals", "by_phase", "by_model",
 		"by_worker", "by_agent", "by_turn", "aggregated_through",
 	} {
 		if _, ok := body[key]; !ok {
@@ -370,7 +400,7 @@ func TestTwoRunsOfOneTriggerAreTwoLinkableRows(t *testing.T) {
 	second.WorkKey = "wk-1"
 
 	got := tokens.Aggregate([]tokens.Record{first, second},
-		tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
+		tokens.Options{Seats: tokens.Seats{"id-CEO": {Handle: "ceo", Name: "CEO"}}, Since: since, Until: until})
 
 	if len(got.ByTurn) != 2 {
 		t.Fatalf("by_turn = %d rows, want one per run: %+v", len(got.ByTurn), got.ByTurn)

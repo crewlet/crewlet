@@ -549,11 +549,11 @@ func New(opts Options) (*App, error) {
 		Posture: framePosture,
 		// Read through the SOURCES rather than captured, for the same
 		// reason every other read here is: a config apply replaces the
-		// company, and a map captured at boot would keep cross-linking a
+		// company, and a directory captured at boot would keep linking a
 		// renamed seat to the handle it used to have.
-		Handles: opts.Sources.RoleHandles,
+		Seats: opts.Sources.Seats,
 		// The three config-derived surfaces, read live for the same
-		// reason Handles is: an apply replaces the company.
+		// reason Seats is: an apply replaces the company.
 		Roster: func() []map[string]any { return rosterTick(opts.Sources.Company, opts.Runtime) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },

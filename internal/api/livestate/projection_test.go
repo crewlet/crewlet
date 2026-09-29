@@ -19,15 +19,15 @@ func TestATurnCompletionCarriesNoSecondSpendTotal(t *testing.T) {
 	// spend, over whatever turns this process happened to have seen, that
 	// no store read could ever reproduce. The turn still moves the seat.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute"}))
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute"}))
 	change := s.Apply(env("agent_turn_completed", map[string]any{
-		"role": "Lead", "turn_id": "tn-1", "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+		"agent_id": "Lead", "turn_id": "tn-1", "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
 	}, id("turn"), at("2026-06-14T12:00:05Z")))
 
 	if _, moved := change.Agents["Lead"]; !moved {
 		t.Error("a turn ending did not move its seat")
 	}
-	rows := s.MergeAgents([]map[string]any{{"role": "Lead"}})
+	rows := s.MergeAgents([]map[string]any{{"agent_id": "Lead"}})
 	for _, key := range []string{"input_tokens", "output_tokens", "total_tokens"} {
 		if v, present := rows[0][key]; present {
 			t.Errorf("the merged seat row carries %s = %v, a total no rollup agrees with", key, v)
@@ -46,7 +46,7 @@ func TestPersistedEventsAreReturnedNewestFirst(t *testing.T) {
 	for i, kind := range []string{
 		"agent_phase_started", "agent_phase_completed", "agent_turn_completed",
 	} {
-		s.Apply(env(kind, map[string]any{"role": "Lead"}, id(string(rune('a'+i)))))
+		s.Apply(env(kind, map[string]any{"agent_id": "Lead"}, id(string(rune('a'+i)))))
 	}
 	feed := s.RecentEvents(0)
 	if len(feed) != 3 {
@@ -64,7 +64,7 @@ func TestTheFeedIsBoundedAndDropsTheOldest(t *testing.T) {
 	t.Parallel()
 	s := livestate.New(livestate.WithFeedLimit(3))
 	for i := range 6 {
-		s.Apply(env("agent_phase_started", map[string]any{"role": "Lead"},
+		s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead"},
 			id(string(rune('a'+i))), at(time.Date(2026, 6, 14, 12, i, 0, 0, time.UTC).Format(time.RFC3339))))
 	}
 	feed := s.RecentEvents(0)
@@ -79,7 +79,7 @@ func TestTheFeedIsBoundedAndDropsTheOldest(t *testing.T) {
 func TestUncategorizedEventsAreNotBuffered(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead"}, streamOnly))
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead"}, streamOnly))
 	if got := s.RecentEvents(0); len(got) != 0 {
 		t.Errorf("feed = %v, want empty", got)
 	}
@@ -88,7 +88,7 @@ func TestUncategorizedEventsAreNotBuffered(t *testing.T) {
 func TestAFeedRowCarriesTheFailureFlag(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_phase_completed", map[string]any{"role": "Lead", "failed": true}))
+	s.Apply(env("agent_phase_completed", map[string]any{"agent_id": "Lead", "failed": true}))
 	feed := s.RecentEvents(0)
 	if len(feed) != 1 || !feed[0].Failed {
 		t.Errorf("feed = %+v, want one failed row", feed)
@@ -103,7 +103,7 @@ func TestFailureByEventTypeNeedsNoPayloadFlag(t *testing.T) {
 		"sandbox_run_failed", "llm_unavailable", "budget_exhausted", "turn.guard_breach",
 	} {
 		s := livestate.New()
-		s.Apply(env(kind, map[string]any{"role": "Lead"}))
+		s.Apply(env(kind, map[string]any{"agent_id": "Lead"}))
 		feed := s.RecentEvents(0)
 		if len(feed) != 1 || !feed[0].Failed {
 			t.Errorf("%s: feed = %+v, want a failed row", kind, feed)
@@ -114,7 +114,7 @@ func TestFailureByEventTypeNeedsNoPayloadFlag(t *testing.T) {
 func TestAnOrdinaryEventIsNotMarkedFailed(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"}))
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"}))
 	if feed := s.RecentEvents(0); len(feed) != 1 || feed[0].Failed {
 		t.Errorf("feed = %+v, want an unfailed row", feed)
 	}
@@ -126,12 +126,12 @@ func TestTheOverlayIsMergedOntoStaticRows(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+		"agent_id": "Lead", "phase": "execute", "turn_id": "t-1",
 	}))
 
 	rows := s.MergeAgents([]map[string]any{
-		{"role": "Lead", "handle": "lead", "unit": "Eng"},
-		{"role": "Quiet", "handle": "quiet"},
+		{"agent_id": "Lead", "handle": "lead", "unit": "Eng"},
+		{"agent_id": "Quiet", "handle": "quiet"},
 	})
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
@@ -153,10 +153,10 @@ func TestMergingDoesNotMutateTheCallersRows(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+		"agent_id": "Lead", "phase": "execute", "turn_id": "t-1",
 	}))
 
-	static := map[string]any{"role": "Lead", "handle": "lead"}
+	static := map[string]any{"agent_id": "Lead", "handle": "lead"}
 	s.MergeAgents([]map[string]any{static})
 	if _, ok := static["state"]; ok {
 		t.Error("MergeAgents wrote into the caller's own row")
@@ -267,7 +267,7 @@ func TestActiveSandboxesAreOldestFirst(t *testing.T) {
 func TestASandboxEventWithNoTurnIDIsIgnored(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", map[string]any{"role": "Coder"}))
+	s.Apply(env("sandbox_run_started", map[string]any{"agent_id": "Coder"}))
 	if runs := s.ActiveSandboxes(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want none: the entry is keyed by turn id", runs)
 	}
@@ -331,37 +331,32 @@ func TestASandboxEventDoesNotCreateASeat(t *testing.T) {
 	if len(change.Agents) != 0 {
 		t.Errorf("a sandbox event moved seats: %v", change.Agents)
 	}
-	if got := s.AgentOverlay("Coder"); got != nil {
+	if got := s.AgentOverlay("a-9"); got != nil {
 		t.Errorf("a sandbox event created a seat entry: %+v", got)
 	}
 }
 
-func TestAnEventWithNoAgentIDKeepsTheKnownRuntimeID(t *testing.T) {
+func TestADiscardedProgressRoundMakesNoEntry(t *testing.T) {
 	t.Parallel()
-	// Only some events carry the running instance's id. An unconditional
-	// write would blank it on the next one that does not, and the seat
-	// page would lose the link to the instance mid-turn.
+	// A straggler round the guards discard moves nothing, so it must not
+	// leave an entry behind either: an entry is the projection claiming it
+	// knows something about the seat.
 	s := livestate.New()
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"},
-		at("2026-06-14T12:01:00Z")))
-
-	if got := s.RuntimeIDFor("Lead"); got != "a-1" {
-		t.Errorf("runtime id = %q, want it kept across an event that carries none", got)
-	}
-}
-
-func TestAProgressRoundWithNoAgentIDKeepsTheKnownOne(t *testing.T) {
-	t.Parallel()
-	// The same rule on the progress path, which records it separately.
-	s := livestate.New()
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
-	s.Apply(env("agent_turn_progress",
-		map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0},
+	// The phase has completed; its last round arrives after, on another
+	// subject, and is older than the completion — the cross-topic
+	// straggler [livestate] drops. Named to a seat nothing else has named.
+	s.Apply(env("agent_phase_completed",
+		map[string]any{"agent_id": "Other", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
+		at("2026-06-14T12:05:00Z")))
+	change := s.Apply(env("agent_turn_progress",
+		map[string]any{"agent_id": "Late", "turn_id": "tn-1", "phase": "plan", "iteration": 0, "round_num": 0},
 		streamOnly, at("2026-06-14T12:01:00Z")))
 
-	if got := s.RuntimeIDFor("Lead"); got != "a-1" {
-		t.Errorf("runtime id = %q, want it kept", got)
+	if len(change.Agents) != 0 {
+		t.Errorf("a discarded round moved %v", change.Agents)
+	}
+	if s.AgentOverlay("Late") != nil {
+		t.Error("a discarded round made an entry for its seat")
 	}
 }
 
@@ -375,7 +370,7 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 	raw := []byte(`{
 		"id": "e1", "type": "agent_phase_completed", "timestamp": "2026-06-14T12:00:00Z",
 		"category": "system",
-		"payload": {"role": "Lead", "turn_id": "tn-1", "phase": "execute",
+		"payload": {"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute",
 			"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}
 	}`)
 	var e livestate.Envelope
@@ -398,7 +393,7 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 	// projection down.
 	s := livestate.New()
 	s.Apply(env("agent_phase_completed", map[string]any{
-		"role": "Lead", "turn_id": "tn-1", "phase": "execute", "total_tokens": "lots",
+		"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "total_tokens": "lots",
 	}))
 	if got := s.SpendRecords(); len(got) != 1 || got[0].TotalTokens != 0 {
 		t.Errorf("records = %+v, want one at 0 tokens", got)
@@ -410,22 +405,19 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	// Several payloads name the same thing two ways. The fallback only
 	// helps if an EMPTY first value falls through to it.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "", "agent_role": "Lead", "task_id": "t-1",
-	}))
-	if s.AgentOverlay("Lead") == nil {
-		t.Fatal("an empty role did not fall through to agent_role")
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"agent_id": "a-1", "role": "", "agent_role": "Lead", "turn_id": "tn-1",
+	}, id("p1")))
+	if got := s.SpendRecords(); len(got) != 1 || got[0].AgentRole != "Lead" {
+		t.Fatalf("records = %+v, want an empty role to fall through to agent_role", got)
 	}
 
 	s2 := livestate.New()
-	s2.Apply(env("agent_phase_started", map[string]any{
-		"role": "Primary", "agent_role": "Fallback", "task_id": "t-1",
-	}))
-	if s2.AgentOverlay("Primary") == nil {
-		t.Error("the first name lost to its fallback")
-	}
-	if s2.AgentOverlay("Fallback") != nil {
-		t.Error("both names created a seat")
+	s2.Apply(env("agent_phase_completed", map[string]any{
+		"agent_id": "a-1", "role": "Primary", "agent_role": "Fallback", "turn_id": "tn-1",
+	}, id("p1")))
+	if got := s2.SpendRecords(); len(got) != 1 || got[0].AgentRole != "Primary" {
+		t.Errorf("records = %+v, want the first name to win over its fallback", got)
 	}
 }
 
@@ -444,7 +436,7 @@ func TestAFailureIsStampedOnTheFrameAndOnTheFeedRow(t *testing.T) {
 	e := &livestate.Envelope{
 		ID: "e1", Type: "agent_phase_completed", Timestamp: defaultTS,
 		Category: "system", Actor: "Lead",
-		Payload: map[string]any{"role": "Lead", "phase": "plan", "failed": true},
+		Payload: map[string]any{"agent_id": "Lead", "phase": "plan", "failed": true},
 	}
 	s.Apply(e)
 
@@ -461,7 +453,7 @@ func TestAFailureIsStampedOnTheFrameAndOnTheFeedRow(t *testing.T) {
 	ok := &livestate.Envelope{
 		ID: "e2", Type: "agent_phase_completed", Timestamp: defaultTS,
 		Category: "system", Actor: "Lead",
-		Payload: map[string]any{"role": "Lead", "phase": "plan"},
+		Payload: map[string]any{"agent_id": "Lead", "phase": "plan"},
 	}
 	s.Apply(ok)
 	if ok.Failed {

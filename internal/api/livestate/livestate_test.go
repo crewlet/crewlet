@@ -50,34 +50,92 @@ func with(base map[string]any, over map[string]any) map[string]any {
 	return out
 }
 
-func overlayOf(t *testing.T, s *livestate.LiveState, role string) livestate.Overlay {
+func overlayOf(t *testing.T, s *livestate.LiveState, agentID string) livestate.Overlay {
 	t.Helper()
-	o := s.AgentOverlay(role)
+	o := s.AgentOverlay(agentID)
 	if o == nil {
-		t.Fatalf("no live entry for %q", role)
+		t.Fatalf("no live entry for %q", agentID)
 	}
 	return *o
 }
 
 // --- state transitions -------------------------------------------------- //
 
-func TestASpawnMarksIdleAndRecordsTheRuntimeID(t *testing.T) {
+func TestASpawnMarksIdle(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "Lead"}))
 
-	got := overlayOf(t, s, "Lead")
-	if got.State != "idle" {
+	if got := overlayOf(t, s, "Lead"); got.State != "idle" {
 		t.Errorf("state = %q, want idle", got.State)
 	}
-	if got.RuntimeID != "a-1" {
-		t.Errorf("runtime id = %q, want a-1", got.RuntimeID)
+	if s.AgentOverlay("Nobody") != nil {
+		t.Error("a seat no event named has a live entry")
 	}
-	if s.RuntimeIDFor("Lead") != "a-1" {
-		t.Error("RuntimeIDFor disagrees with the overlay")
+}
+
+// TWO SEATS THAT SHARE A NAME ARE TWO SEATS.
+//
+// A name is prose — nothing holds it unique, and two "Engineer"s is an
+// ordinary company — so the projection holds a seat under its agent id. It
+// used to hold it under the role name, and the second Engineer's turn moved the
+// first one's card: one overlay, two seats, each rendering whatever the other
+// was last doing.
+func TestTwoSeatsSharingANameKeepSeparateLiveState(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "id-ada", "role": "Engineer"}, id("s1")))
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "id-bob", "role": "Engineer"}, id("s2")))
+
+	change := s.Apply(env("agent_phase_started", map[string]any{
+		"agent_id": "id-ada", "role": "Engineer",
+		"turn_id": "tn-1", "phase": "execute", "iteration": 1,
+	}, id("p1"), at("2026-06-14T12:01:00Z")))
+
+	if _, moved := change.Agents["id-ada"]; !moved || len(change.Agents) != 1 {
+		t.Errorf("moved = %v, want exactly the seat the event named", change.Agents)
 	}
-	if s.RuntimeIDFor("Nobody") != "" {
-		t.Error("a role with no live entry reported a runtime id")
+	if got := overlayOf(t, s, "id-ada"); got.State != "working" || got.LiveCall == nil {
+		t.Errorf("the working seat = %+v, want working with a live call", got)
+	}
+	if got := overlayOf(t, s, "id-bob"); got.State != "idle" || got.LiveCall != nil {
+		t.Errorf("its namesake = %+v, want idle with no call: one seat's turn moved the other", got)
+	}
+	if s.AgentOverlay("Engineer") != nil {
+		t.Error("the shared name holds an entry of its own")
+	}
+
+	// And on the rows a dashboard is handed: each roster row takes its own
+	// seat's overlay, matched on the id the roster carries.
+	rows := s.MergeAgents([]map[string]any{
+		{"agent_id": "id-ada", "role": "Engineer", "handle": "ada"},
+		{"agent_id": "id-bob", "role": "Engineer", "handle": "bob"},
+	})
+	if rows[0]["state"] != "working" || rows[1]["state"] != "idle" {
+		t.Errorf("merged states = %v / %v, want working / idle", rows[0]["state"], rows[1]["state"])
+	}
+	pushed := s.OverlayRows([]string{"id-ada"})
+	if len(pushed) != 1 || pushed[0]["agent_id"] != "id-ada" {
+		t.Fatalf("pushed = %v, want the one seat, carrying its agent id", pushed)
+	}
+	if _, named := pushed[0]["role"]; named {
+		t.Error("the push carried the event's role name, which the client would merge over the roster's current one")
+	}
+}
+
+func TestAnEventNamingOnlyARoleMovesNothing(t *testing.T) {
+	t.Parallel()
+	// A role name cannot stand in for the id: whichever of two seats
+	// sharing it the event meant, the projection cannot tell.
+	s := livestate.New()
+	change := s.Apply(env("agent_phase_started", map[string]any{
+		"role": "Engineer", "agent_role": "Engineer", "turn_id": "tn-1", "phase": "execute",
+	}))
+	if len(change.Agents) != 0 {
+		t.Errorf("moved = %v, want nothing", change.Agents)
+	}
+	if s.AgentOverlay("Engineer") != nil {
+		t.Error("a role name became a seat")
 	}
 }
 
@@ -91,7 +149,7 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+		"agent_id": "Lead", "phase": "execute", "turn_id": "t-1",
 	}))
 
 	got := overlayOf(t, s, "Lead")
@@ -100,7 +158,7 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 	}
 
 	s.Apply(env("agent_turn_completed", map[string]any{
-		"role": "Lead", "turn_id": "t-1",
+		"agent_id": "Lead", "turn_id": "t-1",
 	}, at("2026-06-14T12:01:00+00:00")))
 	got = overlayOf(t, s, "Lead")
 	if got.State != "idle" {
@@ -111,7 +169,7 @@ func TestATurnRunsAndFinishes(t *testing.T) {
 func TestAnAFKReasonComesFromTheEventsOwnKind(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("turn.guard_breach", map[string]any{"role": "Lead", "kind": "delegation_loop"}))
+	s.Apply(env("turn.guard_breach", map[string]any{"agent_id": "Lead", "kind": "delegation_loop"}))
 
 	got := overlayOf(t, s, "Lead")
 	if got.State != "afk" {
@@ -125,7 +183,7 @@ func TestAnAFKReasonComesFromTheEventsOwnKind(t *testing.T) {
 func TestAnAFKReasonFallsBackToTheEventType(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead"}))
+	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead"}))
 	if got := overlayOf(t, s, "Lead").AFKReason; got != "llm_unavailable" {
 		t.Errorf("afk reason = %q, want the event type", got)
 	}
@@ -134,9 +192,9 @@ func TestAnAFKReasonFallsBackToTheEventType(t *testing.T) {
 func TestReflectionReturnsTheSeatToIdle(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
+	base := map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0}
 	s.Apply(env("agent_phase_started", base))
-	s.Apply(env("reflection_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("reflection_completed", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:01:00+00:00")))
 
 	got := overlayOf(t, s, "Lead")
@@ -154,7 +212,7 @@ func TestReflectionReturnsTheSeatToIdle(t *testing.T) {
 func TestTerminationIsRecorded(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("agent_terminated", map[string]any{"role": "Lead"}))
+	s.Apply(env("agent_terminated", map[string]any{"agent_id": "Lead"}))
 	if got := overlayOf(t, s, "Lead").State; got != "terminated" {
 		t.Errorf("state = %q, want terminated", got)
 	}
@@ -166,9 +224,9 @@ func TestAnOlderStateEventCannotClobberNewerState(t *testing.T) {
 	// topic, and different event types are different topics — so a
 	// state-affecting event can arrive out of order relative to another.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"},
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "phase": "execute"},
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:01:00+00:00")))
 
 	if got := overlayOf(t, s, "Lead").State; got != "working" {
@@ -183,8 +241,8 @@ func TestSameInstantEventsAreBothApplied(t *testing.T) {
 	// equal timestamps pass, and the later-applied wins.
 	s := livestate.New()
 	ts := at("2026-06-14T12:05:00+00:00")
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}, ts))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"}, ts))
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "phase": "execute"}, ts))
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"}, ts))
 
 	if got := overlayOf(t, s, "Lead").State; got != "idle" {
 		t.Errorf("state = %q: a same-instant event was refused as stale", got)
@@ -197,9 +255,9 @@ func TestTheReorderGuardComparesInstantsNotStrings(t *testing.T) {
 	// a Z reads as newer than a "+00:00" one and walks the state
 	// backwards.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"},
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "phase": "execute"},
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:01:00Z")))
 
 	if got := overlayOf(t, s, "Lead").State; got != "working" {
@@ -210,7 +268,7 @@ func TestTheReorderGuardComparesInstantsNotStrings(t *testing.T) {
 func TestAnUnknownEventTypeMovesNothing(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	change := s.Apply(env("something_else", map[string]any{"role": "Lead"}))
+	change := s.Apply(env("something_else", map[string]any{"agent_id": "Lead"}))
 	// It still lands in the feed — it carries a category — but the seat
 	// state machine does not know it.
 	if _, moved := change.Agents["Lead"]; moved {
@@ -243,11 +301,11 @@ func TestATurnCompletingReturnsTheSeatToIdle(t *testing.T) {
 	// turn and stayed there for the life of the process, rendering mid-phase
 	// in a phase that had ended.
 	s := livestate.New()
-	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "review", "iteration": 1}
+	base := map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "review", "iteration": 1}
 	s.Apply(env("agent_phase_started", base))
 	s.Apply(env("agent_phase_completed", base, at("2026-06-14T12:00:05+00:00")))
 	s.Apply(env("agent_turn_completed",
-		map[string]any{"role": "Lead", "turn_id": "tn-1", "total_tokens": 10},
+		map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "total_tokens": 10},
 		at("2026-06-14T12:00:06+00:00")))
 
 	got := overlayOf(t, s, "Lead")
@@ -280,7 +338,7 @@ func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
 			t.Parallel()
 			s := livestate.New()
 			next := map[string]any{
-				"role": "Lead", "turn_id": "tn-2", "phase": "execute", "iteration": 1,
+				"agent_id": "Lead", "turn_id": "tn-2", "phase": "execute", "iteration": 1,
 			}
 			s.Apply(env("agent_phase_started", next, at("2026-06-14T12:00:10+00:00")))
 			s.Apply(env("agent_turn_progress",
@@ -288,7 +346,7 @@ func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
 				streamOnly, at("2026-06-14T12:00:11+00:00")))
 
 			// The previous turn's ending, arriving late.
-			s.Apply(env(ending, map[string]any{"role": "Lead", "turn_id": "tn-1"},
+			s.Apply(env(ending, map[string]any{"agent_id": "Lead", "turn_id": "tn-1"},
 				at("2026-06-14T12:00:12+00:00")))
 
 			got := overlayOf(t, s, "Lead")

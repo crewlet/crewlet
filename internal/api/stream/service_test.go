@@ -35,8 +35,8 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 	if opts.Posture == nil {
 		opts.Posture = func(stream.Health) stream.FramePosture { return stream.FrameLive }
 	}
-	if opts.Handles == nil {
-		opts.Handles = func() map[string]string { return map[string]string{} }
+	if opts.Seats == nil {
+		opts.Seats = func() tokens.Seats { return tokens.Seats{} }
 	}
 	if opts.Roster == nil {
 		opts.Roster = func() []map[string]any { return nil }
@@ -82,7 +82,7 @@ func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 		t.Fatal("a service with no surface functions was built")
 	}
 	for _, field := range []string{
-		"Health", "Posture", "Handles", "Roster", "Org", "Tools", "Schedules", "Chart",
+		"Health", "Posture", "Seats", "Roster", "Org", "Tools", "Schedules", "Chart",
 		"Holders",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
@@ -121,7 +121,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	// the raw event stream. Every tab used to keep its own copy of the
 	// projection, and each drifted its own way.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
 
 	got := drain(c)
 	var agents *stream.Frame
@@ -133,7 +133,7 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	if agents == nil {
 		t.Fatalf("no agents push: %v", kindsOf(c))
 	}
-	// A LIST of rows, each carrying its own role. This test asserted a
+	// A LIST of rows, each carrying its own agent id. This test asserted a
 	// map keyed by role and passed for it — while store.js guards
 	// applyAgents with Array.isArray and DISCARDED every push, so a full
 	// turn ran with the seat rendered idle from start to finish. The
@@ -147,8 +147,8 @@ func TestIngestPushesTheResultOfApplyingAnEvent(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want the one seat that moved", len(rows))
 	}
-	if got := rows[0]["role"]; got != "Lead" {
-		t.Errorf("row role = %v; the client keys on this field and drops a "+
+	if got := rows[0]["agent_id"]; got != "a-lead" {
+		t.Errorf("row agent_id = %v; the client keys on this field and drops a "+
 			"row without it", got)
 	}
 	if got := rows[0]["state"]; got != "working" {
@@ -161,7 +161,7 @@ func TestTheEventArrivesBeforeItsConsequences(t *testing.T) {
 	// A derived push arriving before the event that caused it would
 	// briefly show a consequence with no cause in the feed beside it.
 	s, c := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
 
 	kinds := kindsOf(c)
 	if len(kinds) < 2 {
@@ -181,7 +181,7 @@ func TestAStreamOnlyEventPushesNoFeedRow(t *testing.T) {
 	s.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z",
 		Payload: map[string]any{
-			"role": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0,
+			"agent_id": "a-lead", "role": "Lead", "turn_id": "tn-1", "phase": "plan", "round_num": 0,
 		},
 	})
 	kinds := kindsOf(c)
@@ -201,7 +201,7 @@ func TestAnEventThatMovesNothingPushesNothing(t *testing.T) {
 	s, c := newService(t, stream.Options{})
 	s.Ingest(livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z",
-		// No role: the round is dropped.
+		// No agent id: the round names no seat and is dropped.
 		Payload: map[string]any{"turn_id": "tn-1"},
 	})
 	if kinds := kindsOf(c); len(kinds) != 0 {
@@ -239,7 +239,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	// per phase instead of one every tick.
 	s, c := newService(t, stream.Options{HealthInterval: 10 * time.Millisecond})
 	s.Ingest(envelope("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "plan", "model": "m-1",
+		"agent_id": "a-lead", "role": "Lead", "phase": "plan", "model": "m-1",
 		"input_tokens": 6, "output_tokens": 4, "total_tokens": 10,
 	}))
 	if kinds := kindsOf(c); contains(kinds, stream.KindTokens) {
@@ -298,7 +298,7 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	// thirty-day scan per tab, and would lose any call mid-flight while it
 	// did.
 	s, _ := newService(t, stream.Options{})
-	s.Ingest(envelope("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
 
 	snap := s.Snapshot(reader)
 	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {

@@ -15,7 +15,6 @@ func mergeOverlay(row map[string]any, o Overlay) {
 	if o.State != "" {
 		row["state"] = o.State
 	}
-	row["runtime_id"] = o.RuntimeID
 	row["current_phase"] = o.CurrentPhase
 	row["current_iteration"] = o.CurrentIteration
 	row["live_call"] = o.LiveCall

@@ -21,9 +21,9 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 
 	for w := range 4 {
 		wg.Go(func() {
-			role := fmt.Sprintf("Seat-%d", w)
+			seat := fmt.Sprintf("Seat-%d", w)
 			base := map[string]any{
-				"role": role, "turn_id": "tn-1", "phase": "plan", "iteration": 0,
+				"agent_id": seat, "turn_id": "tn-1", "phase": "plan", "iteration": 0,
 			}
 			for i := range 50 {
 				s.Apply(env("agent_phase_started", base, id(fmt.Sprint(w, i))))
@@ -33,9 +33,9 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.Apply(env("agent_turn_completed",
 					with(base, map[string]any{"total_tokens": 1}), id(fmt.Sprint("t", w, i))))
 				s.Apply(env("sandbox_run_started",
-					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "role": role}))
+					map[string]any{"turn_id": fmt.Sprint("sb", w, i), "agent_id": seat}))
 				s.Apply(env("budget_reported",
-					meterReport("m-1", w*100+i, seatMeter(role, i, 100)), streamOnly))
+					meterReport("m-1", w*100+i, seatMeter(seat, i, 100)), streamOnly))
 			}
 		})
 	}
@@ -48,8 +48,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.SpendRecords()
 				s.Budget()
 				s.AgentOverlay("Seat-0")
-				s.RuntimeIDFor("Seat-1")
-				s.MergeAgents([]map[string]any{{"role": "Seat-2"}, {"role": "Seat-3"}})
+				s.MergeAgents([]map[string]any{{"agent_id": "Seat-2"}, {"agent_id": "Seat-3"}})
 			}
 		})
 	}

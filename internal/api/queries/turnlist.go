@@ -26,9 +26,11 @@ import (
 func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	q := store.TurnQuery{
 		SinceDays: p.Int("days", 0),
-		AgentRole: strings.TrimSpace(p.String("role")),
-		AgentID:   strings.TrimSpace(p.String("agent_id")),
-		Model:     strings.TrimSpace(p.String("model")),
+		// ONE SEAT BY ITS AGENT ID. There was a `role` beside it, matched
+		// on the name, which two seats may share — a seat's own turn list
+		// asked by name listed its namesake's turns as its own.
+		AgentID: strings.TrimSpace(p.String("agent_id")),
+		Model:   strings.TrimSpace(p.String("model")),
 		// EVERY ATTEMPT AT ONE TRIGGER. A turn id names one run now, so
 		// a redelivered trigger is several rows here — and this is how a
 		// reader asks for the others. See ADR-0017.

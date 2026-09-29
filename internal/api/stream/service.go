@@ -83,10 +83,10 @@ type Service struct {
 	// [PostureFunc].
 	posture PostureFunc
 
-	// handles maps a role to its agent handle, for the per-agent rollup's
-	// cross-links. It answers an empty map while no company is active,
-	// which leaves them blank.
-	handles HandleFunc
+	// seats is the chart's seats by agent id, for the per-agent rollup's
+	// names and cross-links. It answers an empty directory while no
+	// company is active, which leaves them blank.
+	seats SeatsFunc
 
 	// roster, org and tools are the config-derived surfaces. See Options.
 	roster    func() []map[string]any
@@ -117,12 +117,13 @@ type Service struct {
 	done    chan struct{}
 }
 
-// HandleFunc answers the role-to-handle map the per-agent rollup links with.
-type HandleFunc func() map[string]string
+// SeatsFunc answers the chart's seats by agent id, which the per-agent rollup
+// names and links its rows with. See [tokens.Seats].
+type SeatsFunc func() tokens.Seats
 
 // Options configure a service.
 //
-// Health, Posture, Handles, Roster, Org, Tools, Schedules, Chart and Holders
+// Health, Posture, Seats, Roster, Org, Tools, Schedules, Chart and Holders
 // are REQUIRED, and [NewService] refuses a missing one by name. Each is something
 // the engine beside the API always answers, so a missing one is a wiring
 // mistake, and serving around it would push a confident answer where there is
@@ -135,10 +136,10 @@ type Options struct {
 	// the same Health the tick just read. See [PostureFunc].
 	Posture PostureFunc
 
-	// Handles supplies the role-to-handle map. An empty map leaves each
-	// row's handle blank rather than guessing one: a wrong link is worse
-	// than no link.
-	Handles HandleFunc
+	// Seats supplies the chart's seats by agent id. A seat absent from it
+	// leaves its row's handle blank rather than guessing one: a wrong link
+	// is worse than no link.
+	Seats SeatsFunc
 
 	// Roster, Org and Tools are the three surfaces the dashboard renders
 	// from CONFIGURATION rather than from anything that has happened.
@@ -149,7 +150,7 @@ type Options struct {
 	// the live overlay onto a static roster of nil — an empty list, every
 	// connect, for ever on a company whose model was not answering.
 	//
-	// Functions, not values, for the same reason Handles is one: an apply
+	// Functions, not values, for the same reason Seats is one: an apply
 	// replaces the company, and a roster captured at boot would keep
 	// showing a role a revision deleted.
 	//
@@ -212,7 +213,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 	}{
 		{"Health", opts.Health == nil},
 		{"Posture", opts.Posture == nil},
-		{"Handles", opts.Handles == nil},
+		{"Seats", opts.Seats == nil},
 		{"Roster", opts.Roster == nil},
 		{"Org", opts.Org == nil},
 		{"Tools", opts.Tools == nil},
@@ -235,7 +236,7 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		state:     state,
 		health:    opts.Health,
 		posture:   opts.Posture,
-		handles:   opts.Handles,
+		seats:     opts.Seats,
 		roster:    opts.Roster,
 		org:       opts.Org,
 		tools:     opts.Tools,
@@ -305,8 +306,8 @@ func (s *Service) Ingest(env livestate.Envelope) {
 		// runs — Go map iteration is randomised, and a frame whose row
 		// order changes for no reason makes a diff of two captures
 		// unreadable.
-		roles := slices.Sorted(maps.Keys(change.Agents))
-		if rows := s.state.OverlayRows(roles); len(rows) > 0 {
+		seats := slices.Sorted(maps.Keys(change.Agents))
+		if rows := s.state.OverlayRows(seats); len(rows) > 0 {
 			s.hub.Broadcast(Push(KindAgents, rows, now))
 		}
 	}
@@ -550,9 +551,9 @@ func (s *Service) TokenRollup() tokens.Rollup {
 	// evicts on a rolling window, so its top edge is this instant.
 	now := time.Now()
 	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
-		Handles: s.handles(),
-		Since:   now.Add(-livestate.LiveSpendWindow),
-		Until:   now,
+		Seats: s.seats(),
+		Since: now.Add(-livestate.LiveSpendWindow),
+		Until: now,
 	})
 }
 

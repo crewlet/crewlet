@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // EVERY KIND SAYS WHO MAY READ IT, exactly once.
@@ -88,7 +89,7 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 	svc, err := NewService(livestate.New(), Options{
 		Health:    func() Health { return Health{Status: "ok"} },
 		Posture:   func(Health) FramePosture { return FrameLive },
-		Handles:   func() map[string]string { return map[string]string{} },
+		Seats:     func() tokens.Seats { return tokens.Seats{} },
 		Roster:    func() []map[string]any { return nil },
 		Org:       func() any { return map[string]any{} },
 		Tools:     func() []map[string]any { return nil },

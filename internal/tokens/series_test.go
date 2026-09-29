@@ -186,13 +186,13 @@ func TestASeatWithNoUnitIsPlacedRatherThanPooledWithTheUnknown(t *testing.T) {
 	}, tokens.SeriesOptions{
 		Group: tokens.GroupUnit, Interval: tokens.IntervalHour,
 		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
-		Units: map[string]string{"ENG": "Engineering"},
+		Seats: tokens.Seats{"id-ENG": {Name: "ENG", UnitKey: "engineering", UnitName: "Engineering"}},
 	})
 	names := map[string]int{}
 	for _, row := range got.ByGroup {
 		names[row.Group] = row.TotalTokens
 	}
-	if names["Engineering"] != 20 {
+	if names["engineering"] != 20 {
 		t.Errorf("by_group = %+v, want the mapped unit", got.ByGroup)
 	}
 	if names["no unit"] != 10 {
@@ -235,7 +235,7 @@ func TestOrderOfArrivalDoesNotChangeTheSeries(t *testing.T) {
 	opts := tokens.SeriesOptions{
 		Group: tokens.GroupSeat, Interval: tokens.IntervalHour,
 		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T15:00:00Z"),
-		Handles: map[string]string{"CEO": "ceo"},
+		Seats: tokens.Seats{"id-CEO": {Handle: "ceo", Name: "Chief Executive"}},
 	}
 	a, _ := json.Marshal(tokens.Bucketed(forward, opts))
 	b, _ := json.Marshal(tokens.Bucketed(backward, opts))
@@ -243,12 +243,53 @@ func TestOrderOfArrivalDoesNotChangeTheSeries(t *testing.T) {
 		t.Errorf("the same records in two orders gave two series:\n%s\n%s", a, b)
 	}
 	got := tokens.Bucketed(forward, opts)
-	if got.ByGroup[0].Group != "CEO" || got.ByGroup[0].Handle != "ceo" {
-		t.Errorf("by_group[0] = %+v, want the seat and its handle", got.ByGroup[0])
+	if got.ByGroup[0].Group != "id-CEO" || got.ByGroup[0].Handle != "ceo" ||
+		got.ByGroup[0].Label != "Chief Executive" {
+		t.Errorf("by_group[0] = %+v, want the seat by id, named and linked as the chart has it now",
+			got.ByGroup[0])
 	}
-	if got.ByGroup[1].Handle != "" {
-		t.Errorf("an unmapped role got the handle %q rather than none",
-			got.ByGroup[1].Handle)
+	if got.ByGroup[1].Handle != "" || got.ByGroup[1].Label != "ENG" {
+		t.Errorf("an unmapped seat = %+v, want the name its records carry and no handle",
+			got.ByGroup[1])
+	}
+}
+
+// TWO SEATS THAT SHARE A NAME ARE TWO BANDS, and two units that share a name
+// are two bands: the band is the identity and the label is only the words. A
+// band keyed on the name was both of them, under whichever handle came last.
+func TestSeatsAndUnitsSharingANameAreSeparateBands(t *testing.T) {
+	t.Parallel()
+	ada := rec("Engineer", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 10, 0)
+	ada.AgentID = "id-ada"
+	bob := rec("Engineer", "plan", "sonnet", "t2", "2026-06-14T12:00:00Z", 30, 0)
+	bob.AgentID = "id-bob"
+	seats := tokens.Seats{
+		"id-ada": {Handle: "ada", Name: "Engineer", UnitKey: "platform", UnitName: "Core"},
+		"id-bob": {Handle: "bob", Name: "Engineer", UnitKey: "product", UnitName: "Core"},
+	}
+	window := tokens.SeriesOptions{
+		Interval: tokens.IntervalHour, Seats: seats,
+		Since: at("2026-06-14T12:00:00Z"), Until: at("2026-06-14T13:00:00Z"),
+	}
+	for _, group := range []tokens.Group{tokens.GroupSeat, tokens.GroupUnit} {
+		opts := window
+		opts.Group = group
+		got := tokens.Bucketed([]tokens.Record{ada, bob}, opts)
+		if len(got.ByGroup) != 2 {
+			t.Fatalf("by %s: bands = %+v, want two", group, got.ByGroup)
+		}
+		if got.ByGroup[0].TotalTokens != 30 || got.ByGroup[1].TotalTokens != 10 {
+			t.Errorf("by %s: bands = %+v, want each identity's own spend", group, got.ByGroup)
+		}
+		if got.ByGroup[0].Label != got.ByGroup[1].Label {
+			t.Errorf("by %s: labels = %q / %q, want the shared name on both",
+				group, got.ByGroup[0].Label, got.ByGroup[1].Label)
+		}
+	}
+
+	rollup := tokens.Aggregate([]tokens.Record{ada, bob}, tokens.Options{Seats: seats})
+	if len(rollup.ByAgent) != 2 || rollup.ByAgent[0].Handle != "bob" || rollup.ByAgent[1].Handle != "ada" {
+		t.Errorf("by_agent = %+v, want one row per seat, each linked to its own", rollup.ByAgent)
 	}
 }
 

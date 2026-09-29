@@ -133,6 +133,13 @@ type WorkerRow struct {
 
 // AgentRow is one seat's spend, split by phase.
 //
+// ONE ROW PER AGENT ID, and Role and Handle are what that seat is called. The
+// row was keyed on the role name, which is prose two seats may share, so two
+// "Engineer"s were one row carrying both seats' spend under whichever id was
+// folded last. A record carrying no id — nothing this engine publishes today
+// — keeps a row under the name it does carry, which is the most a record like
+// that can be attributed to.
+//
 // ByPhase is a MAP here and a list at the top level, and the difference is the
 // consumers': the top-level list is rendered in token order as a bar, while
 // this one is indexed per column of a matrix — `a.by_phase[p]` — so a list
@@ -154,6 +161,9 @@ type TurnRow struct {
 	// them; see ADR-0017.
 	TurnID  string `json:"turn_id"`
 	WorkKey string `json:"work_key,omitempty"`
+	// Role and Handle name the seat the run belongs to — its CURRENT name
+	// and handle where [Options.Seats] knows its id, and otherwise the name
+	// its records carry — for the reason [AgentRow] gives.
 	Role    string `json:"role"`
 	Handle  string `json:"handle"`
 	AgentID string `json:"agent_id"`
@@ -186,7 +196,9 @@ type Rollup struct {
 	Since string `json:"since"`
 	Until string `json:"until"`
 
-	AgentRole string `json:"agent_role"`
+	// AgentID is the one seat this covers, by its agent id, or empty for
+	// the whole company.
+	AgentID string `json:"agent_id"`
 
 	Totals   Bucket      `json:"totals"`
 	ByPhase  []PhaseRow  `json:"by_phase"`
@@ -206,15 +218,40 @@ type Rollup struct {
 	AggregatedThrough string `json:"aggregated_through"`
 }
 
+// Seat is what the org chart says about one agent seat NOW, for the rows that
+// name it: the handle a row links to, the name it prints, and the unit a
+// per-unit band files it under.
+//
+// It is handed in rather than read off the records because a record carries
+// what the seat was called when the phase ran — a rename's worth out of date
+// — and this package is a leaf that has never seen a chart.
+type Seat struct {
+	Handle string
+	Name   string
+
+	// UnitKey and UnitName are the unit the seat sits in DIRECTLY, and empty
+	// for a seat at the root of the chart. The key is the band; the name is
+	// what the band is called, and never its key, since two units may share
+	// one.
+	UnitKey  string
+	UnitName string
+}
+
+// Seats is the chart's seats by agent id — the key every record names its
+// seat by.
+type Seats map[string]Seat
+
 // Options tune one aggregation.
 type Options struct {
-	// Handles maps a role name to its agent handle, so a per-agent row can
-	// link back to that seat. Absent leaves the handle blank rather than
-	// guessing one — a wrong link is worse than no link.
-	Handles map[string]string
+	// Seats is the chart this node holds, by agent id, so a per-agent row
+	// links to and prints the seat as it is now. A seat absent from it
+	// keeps the name its records carry and no handle, rather than a guessed
+	// one — a wrong link is worse than no link.
+	Seats Seats
 
-	// Since, Until and AgentRole are recorded on the rollup as the window
-	// it describes. The caller does the filtering; this only reports it.
+	// Since, Until and AgentID are recorded on the rollup as the window
+	// and the seat it describes. The caller does the filtering; this only
+	// reports it.
 	//
 	// Each is rendered as it is given, and a zero one renders EMPTY —
 	// unbounded on that side. Aggregate never reads the clock to fill one
@@ -225,10 +262,51 @@ type Options struct {
 	Since time.Time
 	Until time.Time
 
-	AgentRole string
+	AgentID string
 
 	// RecentTurns caps the per-turn list. Zero takes DefaultRecentTurns.
 	RecentTurns int
+}
+
+// seatKey is the seat a record's spend is filed under: its agent id, or —
+// for a record carrying none — its role name, marked so that it can never
+// equal an id.
+func seatKey(r Record) string {
+	if r.AgentID != "" {
+		return r.AgentID
+	}
+	return unnamedSeatPrefix + orUnknown(r.AgentRole)
+}
+
+// unnamedSeatPrefix marks a seat key that is a role name rather than an agent
+// id. A colon is in no id this engine derives, which is a uuid.
+const unnamedSeatPrefix = "role:"
+
+// label picks a seat's printed name from the records filed under it: the
+// chart's current name when the chart knows the seat, and otherwise the name on
+// the NEWEST record — the one closest to what the seat is called now, whatever
+// order the records arrived in.
+type label struct{ name, at string }
+
+// fold takes one record's name into account and reports the name to print.
+func (l *label) fold(r Record, seat Seat, known bool) string {
+	switch {
+	case known && seat.Name != "":
+		l.name = seat.Name
+	case l.name == "" || laterStamp(r.Timestamp, l.at):
+		l.name, l.at = orUnknown(r.AgentRole), r.Timestamp
+	}
+	return l.name
+}
+
+// labelFor is the label kept for key, made on first use.
+func labelFor(m map[string]*label, key string) *label {
+	l := m[key]
+	if l == nil {
+		l = &label{}
+		m[key] = l
+	}
+	return l
 }
 
 // Aggregate folds records into the breakdown.
@@ -247,9 +325,9 @@ func Aggregate(records []Record, opts Options) Rollup {
 	}
 
 	out := Rollup{
-		Since:     stamp(opts.Since),
-		Until:     stamp(opts.Until),
-		AgentRole: opts.AgentRole,
+		Since:   stamp(opts.Since),
+		Until:   stamp(opts.Until),
+		AgentID: opts.AgentID,
 		// Never nil. A nil slice marshals to `null`, and the client does
 		// `d.by_phase.length` — so an empty window would throw in the
 		// browser rather than rendering an empty table.
@@ -265,11 +343,15 @@ func Aggregate(records []Record, opts Options) Rollup {
 	byWorker := map[string]*Bucket{}
 	byAgent := map[string]*AgentRow{}
 	byTurn := map[string]*TurnRow{}
+	agentNames := map[string]*label{}
+	turnNames := map[string]*label{}
 
 	for _, r := range records {
 		phase := orUnknown(r.Phase)
 		model := orUnknown(r.Model)
-		role := orUnknown(r.AgentRole)
+		key := seatKey(r)
+		seat, known := opts.Seats[r.AgentID]
+		known = known && r.AgentID != ""
 
 		if laterStamp(r.Timestamp, out.AggregatedThrough) {
 			out.AggregatedThrough = r.Timestamp
@@ -285,16 +367,12 @@ func Aggregate(records []Record, opts Options) Rollup {
 			bucketFor(byWorker, r.Worker).add(r)
 		}
 
-		agent := byAgent[role]
+		agent := byAgent[key]
 		if agent == nil {
-			agent = &AgentRow{Role: role, Handle: opts.Handles[role], ByPhase: map[string]*Bucket{}}
-			byAgent[role] = agent
+			agent = &AgentRow{AgentID: r.AgentID, Handle: seat.Handle, ByPhase: map[string]*Bucket{}}
+			byAgent[key] = agent
 		}
-		// The LATEST id seen wins: a seat's runtime id changes across
-		// sessions, and the current one is what a cross-link must use.
-		if r.AgentID != "" {
-			agent.AgentID = r.AgentID
-		}
+		agent.Role = labelFor(agentNames, key).fold(r, seat, known)
 		agent.Bucket.add(r)
 		bucketFor(agent.ByPhase, phase).add(r)
 
@@ -308,15 +386,17 @@ func Aggregate(records []Record, opts Options) Rollup {
 		if turn == nil {
 			turn = &TurnRow{
 				TurnID: r.TurnID, WorkKey: r.WorkKey,
-				Role: role, Handle: opts.Handles[role],
 				StartedAt: r.Timestamp, EndedAt: r.Timestamp,
 				ByPhase: map[string]*Bucket{},
 			}
 			byTurn[r.TurnID] = turn
 		}
-		if r.AgentID != "" {
-			turn.AgentID = r.AgentID
+		// A run is one seat's, so every record of it names the same id; the
+		// first that carries one settles the row's seat.
+		if turn.AgentID == "" && r.AgentID != "" {
+			turn.AgentID, turn.Handle = r.AgentID, seat.Handle
 		}
+		turn.Role = labelFor(turnNames, r.TurnID).fold(r, seat, known)
 		if r.Timestamp != "" {
 			if turn.StartedAt == "" || laterStamp(turn.StartedAt, r.Timestamp) {
 				turn.StartedAt = r.Timestamp
@@ -353,7 +433,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 	byTokensThen(out.ByPhase, func(r PhaseRow) (int, string) { return r.TotalTokens, r.Phase })
 	byTokensThen(out.ByModel, func(r ModelRow) (int, string) { return r.TotalTokens, r.Model })
 	byTokensThen(out.ByWorker, func(r WorkerRow) (int, string) { return r.TotalTokens, r.Worker })
-	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, r.Role })
+	// Ties on the name and then the id, since two seats may share a name.
+	byTokensThen(out.ByAgent, func(r AgentRow) (int, string) { return r.TotalTokens, r.Role + "\x00" + r.AgentID })
 
 	// Turns are NEWEST FIRST, not biggest first: the table is a tail of
 	// recent activity, and ordering it by size would pin one expensive

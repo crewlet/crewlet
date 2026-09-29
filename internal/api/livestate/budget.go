@@ -72,26 +72,26 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) Change {
 		if !ok {
 			continue
 		}
-		role := str(fields, "role")
-		if role == "" {
+		// BY AGENT ID, the key every other event moves a seat under: a
+		// meter keyed by the role name beside it drew one seat's bar on
+		// every seat sharing its name.
+		id := str(fields, "agent_id")
+		if id == "" {
 			continue
 		}
-		reported[role] = struct{}{}
-		agent := s.ensureAgent(role)
-		if agent.runtimeID == "" {
-			agent.runtimeID = str(fields, "agent_id")
-		}
+		reported[id] = struct{}{}
+		agent := s.ensureAgent(id)
 		agent.budget = &Meter{
 			Used: num(fields, "used_tokens"),
 			Max:  num(fields, "max_tokens"),
 		}
-		change.agentMoved(role)
+		change.agentMoved(id)
 	}
 	for _, agent := range s.agents {
 		if agent.budget != nil {
-			if _, ok := reported[agent.role]; !ok {
+			if _, ok := reported[agent.agentID]; !ok {
 				agent.budget = nil
-				change.agentMoved(agent.role)
+				change.agentMoved(agent.agentID)
 			}
 		}
 	}

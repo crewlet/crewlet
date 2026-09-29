@@ -17,9 +17,9 @@ func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 	// seat, and why a reload showed the same.
 	s := livestate.New()
 	s.Apply(env("llm_unavailable", map[string]any{
-		"role": "Lead", "kind": "provider_down", "detail": "429 forever",
+		"agent_id": "Lead", "kind": "provider_down", "detail": "429 forever",
 	}, at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:00:01Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -35,10 +35,10 @@ func TestRealWorkClearsTheAFKHold(t *testing.T) {
 	t.Parallel()
 	// A seat leaves AFK only when it does real work again.
 	s := livestate.New()
-	s.Apply(env("budget_exhausted", map[string]any{"role": "Lead", "kind": "budget"},
+	s.Apply(env("budget_exhausted", map[string]any{"agent_id": "Lead", "kind": "budget"},
 		at("2026-06-14T12:00:00Z")))
 	s.Apply(env("agent_phase_started",
-		map[string]any{"role": "Lead", "turn_id": "tn-2", "phase": "plan", "iteration": 0},
+		map[string]any{"agent_id": "Lead", "turn_id": "tn-2", "phase": "plan", "iteration": 0},
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -60,9 +60,9 @@ func TestARespawnClearsTheAFKHold(t *testing.T) {
 	// engine restart and a healthy seat renders as broken until it happens
 	// to do some work.
 	s := livestate.New()
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "kind": "provider_down"},
+	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead", "kind": "provider_down"},
 		at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-2"},
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -80,9 +80,9 @@ func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 	// reset by a spawn. Resetting a working one would blank a live turn.
 	s := livestate.New()
 	s.Apply(env("agent_phase_started",
-		map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
+		map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0},
 		at("2026-06-14T12:00:00Z")))
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-2"},
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "Lead"},
 		at("2026-06-14T12:05:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -98,7 +98,7 @@ func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 
 func failedPhase(ts string) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
-		"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0,
+		"agent_id": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0,
 		"failed": true, "error_kind": "provider_error", "error": "429 from anthropic",
 	}, at(ts))
 }
@@ -153,7 +153,7 @@ func TestAFollowingAFKEventDoesNotWipeTheFailedCall(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
 	s.Apply(failedPhase("2026-06-14T12:00:05Z"))
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "kind": "provider_down"},
+	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead", "kind": "provider_down"},
 		at("2026-06-14T12:00:06Z")))
 
 	if call := liveCallOf(t, s, "Lead"); call == nil || !call.Failed {
@@ -168,7 +168,7 @@ func TestAnAFKEventClearsAHealthyCall(t *testing.T) {
 	// answer.
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", planCall()))
-	s.Apply(env("llm_unavailable", map[string]any{"role": "Lead", "kind": "provider_down"},
+	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead", "kind": "provider_down"},
 		at("2026-06-14T12:00:06Z")))
 
 	if call := liveCallOf(t, s, "Lead"); call != nil {
@@ -195,11 +195,11 @@ func TestTheNextTurnClearsTheFailure(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_completed", map[string]any{
-		"role": "Lead", "phase": "execute", "turn_id": "tn-8", "failed": true,
+		"agent_id": "Lead", "phase": "execute", "turn_id": "tn-8", "failed": true,
 		"error": "boom",
 	}, at("2026-06-14T12:00:05Z")))
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "Lead", "phase": "plan", "turn_id": "tn-9",
+		"agent_id": "Lead", "phase": "plan", "turn_id": "tn-9",
 	}, at("2026-06-14T12:01:00Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -224,11 +224,11 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 	s := livestate.New()
 	// Attempt one: the executor died on an auth failure and its call froze.
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 	}, at("2026-06-14T12:00:00Z")))
 	s.Apply(env("agent_phase_completed", map[string]any{
-		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 		"failed": true, "error_kind": "auth", "error": "not authenticated",
 	}, at("2026-06-14T12:00:01Z"), id("e2")))
@@ -241,7 +241,7 @@ func TestARetryOpensItsOwnCallRatherThanReusingTheFailedOnes(t *testing.T) {
 	// Attempt two: the broker redelivered the trigger, so the SAME work key
 	// runs again — under a run id of its own.
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CEO", "turn_id": "run-2", "work_key": "wk-1",
+		"agent_id": "CEO", "turn_id": "run-2", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 	}, at("2026-06-14T12:02:00Z"), id("e3")))
 
@@ -269,13 +269,13 @@ func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", map[string]any{
-		"role": "CEO", "turn_id": "run-1", "work_key": "wk-1",
+		"agent_id": "CEO", "turn_id": "run-1", "work_key": "wk-1",
 		"phase": "execute", "iteration": 1,
 	}, at("2026-06-14T12:00:00Z")))
 	// A round from a node that predates the field carries no work key. It
 	// must not blank what the opening frame established.
 	s.Apply(env("agent_turn_progress", map[string]any{
-		"role": "CEO", "turn_id": "run-1",
+		"agent_id": "CEO", "turn_id": "run-1",
 		"phase": "execute", "iteration": 1, "round_num": 0,
 	}, at("2026-06-14T12:00:02Z"), id("e2"), streamOnly))
 

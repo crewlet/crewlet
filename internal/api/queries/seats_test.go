@@ -5,23 +5,25 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
-// A SEAT IN A UNIT HAS A CROSS-LINK IN THE TOKEN ROLLUP.
+// EVERY AGENT SEAT IS IN THE SPEND ROLLUP'S DIRECTORY, BY AGENT ID.
 //
 // # What this is guarding
 //
-// The per-agent spend rollup is keyed on a seat's role NAME — that is what a
-// phase record carries — and every row in it links to that seat's page, which
-// is addressed by its HANDLE. The map from one to the other is this.
+// The per-agent spend rollup files a seat's records under its agent id — the
+// one identifier a phase record carries that neither a rename nor a namesake
+// can move — and every row links to that seat's page, which is addressed by
+// its HANDLE, under the name the chart gives it now. The directory from one to
+// the others is this.
 //
-// It walked `company.Roles`, which is the seats belonging to NO unit. A
-// company of any size puts its agents in units instead, so the map was short
-// by exactly those seats and their rows linked nowhere — and once a stored
-// revision stopped carrying seats at all it was short by every one of them,
-// for every company, with nothing failing: an absent cross-link renders as a
-// row you cannot click.
-func TestEverySeatHasACrossLinkInTheTokenRollup(t *testing.T) {
+// It was a map from role NAME to handle, which two seats sharing a name folded
+// into one entry. And before that it walked `company.Roles`, the seats
+// belonging to NO unit: a company of any size puts its agents in units, so the
+// map was short by exactly those seats and their rows linked nowhere, with
+// nothing failing — an absent cross-link renders as a row you cannot click.
+func TestEveryAgentSeatIsInTheRollupDirectory(t *testing.T) {
 	t.Parallel()
 	cfg := parse(t, `
 name: Acme
@@ -34,35 +36,49 @@ providers:
 roles:
   - name: Chief Executive
     llm: zulu
+  - name: Founder
+    kind: human
+    contact: {slack_user_id: U0F}
 units:
   - name: Engineering
     id: eng
     roles:
-      - name: Staff Engineer
+      - name: Engineer
         handle: staff-eng
         llm: zulu
-      - name: Site Reliability
+      - name: Engineer
+        handle: site-reliability
         llm: zulu
 `)
-	handles := queries.Sources{Company: companySource(t, cfg)}.RoleHandles()
+	seats := queries.Sources{Company: companySource(t, cfg)}.Seats()
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
 
-	for name, want := range map[string]string{
-		// The seat at the root, whose handle is derived from its name.
-		"Chief Executive": "chief-executive",
-		// A seat in a unit that DECLARED a handle, and one that did not:
-		// both are seats, and a map that held only the root would have
-		// neither.
-		"Staff Engineer":   "staff-eng",
-		"Site Reliability": "site-reliability",
+	for handle, want := range map[string]tokens.Seat{
+		// The seat at the root, whose handle is derived from its name and
+		// which sits in no unit.
+		"chief-executive": {Handle: "chief-executive", Name: "Chief Executive"},
+		// Two seats in a unit that SHARE A NAME: two entries, each linked to
+		// its own page, where a map keyed by name held one.
+		"staff-eng":        {Handle: "staff-eng", Name: "Engineer", UnitKey: "eng", UnitName: "Engineering"},
+		"site-reliability": {Handle: "site-reliability", Name: "Engineer", UnitKey: "eng", UnitName: "Engineering"},
 	} {
-		if got := handles[name]; got != want {
-			t.Errorf("%q links to %q, want %q — a row whose handle is missing "+
-				"renders as one a reader cannot click", name, got, want)
+		id, ok := organization.AgentIDFor(organization.AgentSeatByHandle(handle))
+		if !ok {
+			t.Fatalf("%s is no agent seat in this fixture", handle)
+		}
+		if got := seats[id.String()]; got != want {
+			t.Errorf("%s = %+v, want %+v — a row missing from this renders as one "+
+				"a reader cannot click", handle, got, want)
 		}
 	}
-	if len(handles) != 3 {
-		t.Errorf("the map holds %d seats, want every seat in the company: %v",
-			len(handles), handles)
+	// THE HUMAN IS NOT HERE: a person runs no turn and bills nothing, and an
+	// entry for them would be a directory row no record can ever name.
+	if len(seats) != 3 {
+		t.Errorf("the directory holds %d seats, want every agent seat and no person: %v",
+			len(seats), seats)
 	}
 }
 

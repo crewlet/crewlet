@@ -3,6 +3,7 @@ package queries
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -75,7 +76,9 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	q := store.PhaseTokenQuery{
 		SinceDays: p.Int("since_days", 0),
 		Since:     since, Until: until,
-		AgentRole: s.roleOf(p.String("agent_role")),
+		// One seat by its agent id, as `tokens` narrows: a name is
+		// shared by every seat that carries it.
+		AgentID: strings.TrimSpace(p.String("agent_id")),
 	}
 	// The window the STORE will serve, which is what the answer is labelled
 	// with: a request further back than the table's retention is floored,
@@ -90,43 +93,9 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	return tokens.Bucketed(records, tokens.SeriesOptions{
 		Group: group, Interval: interval,
 		Since: covered, Until: coveredUntil,
-		Groups:  Clamp(p.Int("groups", 0), tokens.DefaultSeriesGroups, tokens.MaxSeriesGroups),
-		Handles: s.RoleHandles(),
-		Units:   s.RoleUnits(),
+		Groups: Clamp(p.Int("groups", 0), tokens.DefaultSeriesGroups, tokens.MaxSeriesGroups),
+		// The seat and unit bands are keyed by identity and named from
+		// this: see [Sources.Seats].
+		Seats: s.Seats(),
 	}), nil
-}
-
-// RoleUnits maps each seat's role name to the unit holding it, for the
-// per-unit band of a series.
-//
-// Only the DIRECT unit, not the chain: a band per nesting level would count
-// the same spend once for the team and again for the department above it, and
-// a stacked chart whose bands sum to more than the total is unreadable. A seat
-// at the root of the chart is absent, which [tokens.Group] places in its own
-// band rather than pooling with the records that carried no role at all.
-//
-// Exported for the reason [Sources.RoleHandles] is: two derivations of "which
-// unit is this seat in" is how a chart and a filter come to disagree.
-func (s Sources) RoleUnits() map[string]string {
-	out := map[string]string{}
-	if s.Company == nil {
-		return out
-	}
-	company, roster := s.Company()
-	if company == nil {
-		return out
-	}
-	// THE COMPANY'S OWN ORG, derived from this node's chart rows rather
-	// than re-resolved from the document: a stored revision carries no
-	// seats at all, so the derivation this replaced answered an EMPTY
-	// organization for every running company.
-	if roster == nil {
-		return out
-	}
-	for role := range roster.AllRoles() {
-		if unit := roster.UnitFor(role); unit != nil {
-			out[role.Name] = unit.Name
-		}
-	}
-	return out
 }

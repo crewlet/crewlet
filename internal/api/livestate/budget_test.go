@@ -21,9 +21,13 @@ func meterReport(meterID string, seq int, agents ...map[string]any) map[string]a
 	}
 }
 
-func seatMeter(role string, used, max int) map[string]any {
+// seatMeter is one seat's row of a meter report, named by its agent id. Every
+// row carries the SAME role name, which is what a report looks like for a
+// company whose seats share one — and what a meter keyed by name folded into
+// one bar.
+func seatMeter(agentID string, used, max int) map[string]any {
 	return map[string]any{
-		"role": role, "agent_id": "a-1",
+		"agent_id": agentID, "role": "Engineer",
 		"used_tokens": used, "max_tokens": max,
 	}
 }
@@ -130,7 +134,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 	// reporting at all. Either way a bar drawn without one would be a
 	// claim nobody measured.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}))
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "phase": "execute"}))
 
 	if got := overlayOf(t, s, "Lead").Budget; got != nil {
 		t.Errorf("budget = %+v, want none", got)
@@ -144,7 +148,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 
 func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
-		"role": "Lead", "agent_id": "a-1", "phase": "plan",
+		"agent_id": "Lead", "role": "Lead", "phase": "plan",
 		"model": "claude-sonnet-5", "turn_id": "tn-1",
 		"input_tokens": total / 2, "output_tokens": total / 2, "total_tokens": total,
 	}, id(eventID), at(ts))
@@ -160,7 +164,7 @@ func TestRecordsInsideTheWindowAreKept(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2", len(records))
 	}
-	if records[0].Model != "claude-sonnet-5" || records[0].AgentRole != "Lead" {
+	if records[0].Model != "claude-sonnet-5" || records[0].AgentID != "Lead" || records[0].AgentRole != "Lead" {
 		t.Errorf("record = %+v", records[0])
 	}
 }
@@ -448,7 +452,7 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("budget_reported", meterReport("m-1", 1, seatMeter("Lead", 100, 400)), streamOnly))
 
-	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "lead", "state": "idle"}})
+	rows := s.MergeAgents([]map[string]any{{"agent_id": "Lead", "handle": "lead", "state": "idle"}})
 	if got := rows[0]["state"]; got != "idle" {
 		t.Errorf("merged state = %v, want the roster's idle kept", got)
 	}
@@ -467,7 +471,7 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	}
 
 	// A spawn is the first thing that says the seat runs.
-	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "Lead"}))
 	if got := overlayOf(t, s, "Lead").State; got != "idle" {
 		t.Errorf("state after a spawn = %q, want idle", got)
 	}

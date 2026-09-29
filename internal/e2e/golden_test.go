@@ -122,7 +122,8 @@ func (c *capture) liveCalls(t *testing.T) []map[string]any {
 	return out
 }
 
-// seatStates reports every state an `agents` push put a seat in, by role.
+// seatStates reports every state an `agents` push put a seat in, by the agent
+// id the client merges the row onto its roster by.
 func (c *capture) seatStates(t *testing.T) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
@@ -135,14 +136,52 @@ func (c *capture) seatStates(t *testing.T) map[string][]string {
 			continue
 		}
 		for _, row := range env.Data {
-			role, _ := row["role"].(string)
+			id, _ := row["agent_id"].(string)
 			state, _ := row["state"].(string)
-			if role != "" && state != "" {
-				out[role] = append(out[role], state)
+			if id != "" && state != "" {
+				out[id] = append(out[id], state)
 			}
 		}
 	}
 	return out
+}
+
+// rosterIDs reports the agent ids the snapshot's roster carries — the rows an
+// `agents` push is merged onto.
+func (c *capture) rosterIDs(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Agents []map[string]any `json:"agents"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != "snapshot" {
+			continue
+		}
+		for _, row := range env.Data.Agents {
+			if id, _ := row["agent_id"].(string); id != "" {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+// seatAgentID is a seat's agent id on the running company.
+func seatAgentID(t *testing.T, n *node, handle string) string {
+	t.Helper()
+	c := n.engine.Company()
+	if c == nil || c.Org == nil {
+		t.Fatalf("the node runs no company, so seat %q has no agent id", handle)
+	}
+	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle(handle))
+	if !ok {
+		t.Fatalf("seat %q is no agent seat in the running company", handle)
+	}
+	return id.String()
 }
 
 // lastRollup returns the most recent `tokens` frame's payload, or nil.
@@ -380,9 +419,25 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// The point of the gate. Not "an event arrived" but "the seat's row
 	// moved": the projection put CEO into `working` and hung an in-flight
 	// call off it naming the phase and the model.
+	ceo := seatAgentID(t, n, "ceo")
 	states := frames.seatStates(t)
-	if !slices.Contains(states["CEO"], "working") {
-		t.Errorf("the seat never showed as working; states = %v", states["CEO"])
+	if !slices.Contains(states[ceo], "working") {
+		t.Errorf("the seat never showed as working; states = %v", states)
+	}
+	// AND EVERY PUSHED ROW NAMES A SEAT THE ROSTER CARRIES, by the one key
+	// the client merges on. A push keyed by anything the roster row does not
+	// also carry — the role name it used to be — reaches no row: two seats
+	// sharing a name share one, and a renamed seat's in-flight rows reach
+	// none, while every assertion above still passes.
+	roster := frames.rosterIDs(t)
+	if !slices.Contains(roster, ceo) {
+		t.Errorf("the snapshot's roster does not carry the CEO's agent id; roster = %v", roster)
+	}
+	for id := range states {
+		if !slices.Contains(roster, id) {
+			t.Errorf("an agents push moved %q, which no roster row carries — "+
+				"the client has nothing to merge it onto", id)
+		}
 	}
 	calls := frames.liveCalls(t)
 	if len(calls) == 0 {

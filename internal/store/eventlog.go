@@ -983,8 +983,10 @@ type PhaseTokenQuery struct {
 	Since time.Time
 	Until time.Time
 
-	// AgentRole restricts the rollup to one seat. Empty is the whole org.
-	AgentRole string
+	// AgentID restricts the rollup to one seat, by the agent id every phase
+	// row promotes. Empty is the whole org. Never the role name beside it,
+	// which two seats may share.
+	AgentID string
 
 	// Limit keeps only the newest Limit records of the window. Zero or less
 	// is the WHOLE window, and that is what a rollup must ask for: see the
@@ -1123,29 +1125,22 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // is the query that makes an activity screen slow — and a boolean on the
 // shared query type would put that mistake one keystroke away.
 //
-// Matched on EITHER identifier, because a caller holds whichever the seat page
-// gave it: the roster carries the handle-derived agent id and the projection
-// keys on the role name. Both are promoted columns, so neither is a scan.
+// Matched on the seat's AGENT ID alone, the promoted column every phase row
+// carries. It was matched on the id OR the role name, because the projection
+// once keyed seats by name — and a name is prose two seats may share, so a
+// seat's page listed its namesake's calls among its own.
 //
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) ([]EventRecord, error) {
-	if agentID == "" && agentRole == "" {
+func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor) ([]EventRecord, error) {
+	// An EMPTY id names no seat, and bound as one it would match every row
+	// that carries none — every non-agent event in the window.
+	if agentID == "" {
 		return nil, nil
 	}
-	query := agentPhaseSQL
-	args := []any{EncodeTime(now().Add(-EventHistory))}
-	// ONLY THE IDENTIFIERS THE CALLER ACTUALLY HAS.
-	//
-	// It was `(agent_id = ? OR agent_role = ?)` with both bound
-	// unconditionally, so an EMPTY one matched every row that carries
-	// none: a handle the roster could not resolve to a role asked for that
-	// seat's phases and was answered every non-agent event in the window.
-	// The guard above catches only the case where BOTH are empty.
-	clause, ids := seatClause(agentID, agentRole)
-	query += clause
-	args = append(args, ids...)
+	query := agentPhaseSQL + ` AND agent_id = ?`
+	args := []any{EncodeTime(now().Add(-EventHistory)), agentID}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
@@ -1153,30 +1148,6 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 	query += agentPhaseOrderSQL
 	args = append(args, AgentPhaseLimit)
 	return l.scanPayloads(ctx, query, args...)
-}
-
-// seatClause narrows to a seat by whichever identifier the caller holds.
-//
-// A caller passes the handle-derived agent id, the role name, or both — the
-// roster carries one and the projection keys on the other — and binding an
-// EMPTY one is how a filter turns into a match on every row that has none.
-// Returns an empty clause when the caller holds neither, which its own callers
-// treat as "no seat named" rather than "every seat".
-func seatClause(agentID, agentRole string) (string, []any) {
-	var terms []string
-	var args []any
-	if agentID != "" {
-		terms = append(terms, "agent_id = ?")
-		args = append(args, agentID)
-	}
-	if agentRole != "" {
-		terms = append(terms, "agent_role = ?")
-		args = append(args, agentRole)
-	}
-	if len(terms) == 0 {
-		return "", nil
-	}
-	return " AND (" + strings.Join(terms, " OR ") + ")", args
 }
 
 // phasesSQL is AgentPhases without the seat filter.
@@ -1199,13 +1170,14 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // makes an activity screen slow. A boolean on the shared type would put that
 // one keystroke away.
 //
-// `role` narrows to one seat when a caller wants it; empty means the company.
-func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) ([]EventRecord, error) {
+// `agentID` narrows to one seat when a caller wants it — by its agent id, for
+// [EventLog.AgentPhases]' reason; empty means the company.
+func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor) ([]EventRecord, error) {
 	query := phasesSQL
 	args := []any{EncodeTime(now().Add(-EventHistory))}
-	if role != "" {
-		query += ` AND agent_role = ?`
-		args = append(args, role)
+	if agentID != "" {
+		query += ` AND agent_id = ?`
+		args = append(args, agentID)
 	}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
@@ -1250,9 +1222,9 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// window headed "counted through now" is a number with no window.
 	sql := phaseTokenSQL + " AND event_time < ?"
 	args := []any{EncodeTime(since), EncodeTime(until)}
-	if q.AgentRole != "" {
-		sql += " AND agent_role = ?"
-		args = append(args, q.AgentRole)
+	if q.AgentID != "" {
+		sql += " AND agent_id = ?"
+		args = append(args, q.AgentID)
 	}
 	// Newest first, which is the order the breakdown renders in, and the
 	// order a Limit keeps the head of. No LIMIT unless the caller asked for

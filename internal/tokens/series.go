@@ -67,7 +67,7 @@ func (i Interval) Start(t time.Time) time.Time {
 // Group names the dimension a series is split on.
 //
 // The five a spend record can answer for ITSELF, plus the one it cannot:
-// GroupUnit is resolved through [SeriesOptions.Units], because which unit a
+// GroupUnit is resolved through [SeriesOptions.Seats], because which unit a
 // seat sits in is a fact about the org chart and this package is a leaf that
 // has never seen one. A record carries no project and no work item at all —
 // that attribution is the tracker's own per-item counters, a different read
@@ -99,22 +99,27 @@ func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 // nothing to do with this grouping and belongs in no band of the chart. Every
 // other dimension is present on every record, so the empty ones become
 // "unknown" the way the rollup's do.
-func (g Group) key(r Record, units map[string]string) (string, bool) {
+//
+// A SEAT AND A UNIT ARE BANDED BY IDENTITY — the seat's agent id, the unit's
+// key — and never by name, because two seats or two units may share a name and
+// a band keyed on it was both of them. [GroupRow.Label] is what a band is
+// called.
+func (g Group) key(r Record, seats Seats) (string, bool) {
 	switch g {
 	case GroupPhase:
 		return orUnknown(r.Phase), true
 	case GroupModel:
 		return orUnknown(r.Model), true
 	case GroupSeat:
-		return orUnknown(r.AgentRole), true
+		return seatKey(r), true
 	case GroupUnit:
 		// A seat at the root of the chart is in no unit, and that is a
 		// real placement rather than a missing one — so it groups under
-		// its own name rather than under "unknown", which would pool
-		// every root seat with every seat whose role the caller's map
-		// happened not to carry.
-		if unit := units[r.AgentRole]; unit != "" {
-			return unit, true
+		// its own band rather than under "unknown", which would pool
+		// every root seat with every seat the caller's chart happened not
+		// to carry.
+		if seat, ok := seats[r.AgentID]; ok && r.AgentID != "" && seat.UnitKey != "" {
+			return seat.UnitKey, true
 		}
 		return unattachedUnit, true
 	case GroupWorker:
@@ -141,7 +146,10 @@ func (g Group) key(r Record, units map[string]string) (string, bool) {
 // the chart rather than inside a unit.
 //
 // Not "unknown", which this package already spends on a dimension the event
-// failed to carry: a root seat's unit is not missing, there is none.
+// failed to carry: a root seat's unit is not missing, there is none. And it is
+// a key no unit can hold: a unit's key on the chart is an address, which
+// `chart.NormalizeKey` folds to carry no whitespace, and this has a space in
+// it.
 const unattachedUnit = "no unit"
 
 // DefaultSeriesGroups is how many bands a stacked chart carries before the
@@ -171,11 +179,19 @@ type GroupRow struct {
 	// Group is the band's key in each point's map. Empty on — and only on
 	// — the residual row, which is what makes the fold unambiguous without
 	// reserving a name a real phase or model might carry.
+	//
+	// By seat it is the seat's agent id and by unit the unit's key — see
+	// [Group.key] — which no reader should print: Label is the words.
 	Group string `json:"group"`
+
+	// Label is what the band is called when its key is an identity rather
+	// than a name: a seat's name, a unit's name. Absent where the key is
+	// already the words (a phase, a model, a worker, a turn id).
+	Label string `json:"label,omitempty"`
 
 	// Handle is the seat's handle when the grouping is by seat, so a row
 	// can link to the page it names. Absent leaves it blank rather than
-	// guessing, which is [Options.Handles]' own rule.
+	// guessing, which is [Options.Seats]' own rule.
 	Handle string `json:"handle,omitempty"`
 
 	// Other marks the residual row, and Folded counts the distinct groups
@@ -262,12 +278,11 @@ type SeriesOptions struct {
 	// Groups caps the bands. Zero takes DefaultSeriesGroups.
 	Groups int
 
-	// Handles maps a role name to its handle, as [Options.Handles] does.
-	Handles map[string]string
-
-	// Units maps a role name to the unit holding it, for GroupUnit. Absent
-	// puts every seat in the unattached band rather than inventing one.
-	Units map[string]string
+	// Seats is the chart by agent id, as [Options.Seats] is: a seat band's
+	// name and handle, and the unit a GroupUnit band files the seat under.
+	// A seat it does not carry lands in the unattached band rather than an
+	// invented one.
+	Seats Seats
 }
 
 // Bucketed folds records into a time series.
@@ -387,25 +402,40 @@ func Bucketed(records []Record, opts SeriesOptions) Series {
 	// bucket-at-a-time decision would put a band in the chart for the hours
 	// it happened to lead and in the residual for the rest.
 	total := map[string]*Bucket{}
+	named := map[string]*label{}
+	handles := map[string]string{}
 	for _, d := range inside {
 		out.Totals.add(d.Record)
-		key, ok := opts.Group.key(d.Record, opts.Units)
+		key, ok := opts.Group.key(d.Record, opts.Seats)
 		if !ok {
 			continue
 		}
 		out.Grouped.add(d.Record)
 		bucketFor(total, key).add(d.Record)
+		seat, known := opts.Seats[d.AgentID]
+		known = known && d.AgentID != ""
+		switch opts.Group {
+		case GroupSeat:
+			labelFor(named, key).fold(d.Record, seat, known)
+			handles[key] = seat.Handle
+		case GroupUnit:
+			if known && seat.UnitKey == key {
+				labelFor(named, key).name = seat.UnitName
+			}
+		}
 	}
 
 	ranked := make([]GroupRow, 0, len(total))
 	for key, b := range total {
-		row := GroupRow{Group: key, Bucket: *b}
-		if opts.Group == GroupSeat {
-			row.Handle = opts.Handles[key]
+		row := GroupRow{Group: key, Handle: handles[key], Bucket: *b}
+		if l := named[key]; l != nil {
+			row.Label = l.name
 		}
 		ranked = append(ranked, row)
 	}
-	byTokensThen(ranked, func(r GroupRow) (int, string) { return r.TotalTokens, r.Group })
+	// Ties on the words a reader sees and then the key, since two bands may
+	// carry the same label.
+	byTokensThen(ranked, func(r GroupRow) (int, string) { return r.TotalTokens, r.Label + "\x00" + r.Group })
 
 	kept := map[string]bool{}
 	if len(ranked) > limit {
@@ -451,7 +481,7 @@ func Bucketed(records []Record, opts SeriesOptions) Series {
 		}
 		point := &out.Points[i]
 		point.Bucket.add(d.Record)
-		key, grouped := opts.Group.key(d.Record, opts.Units)
+		key, grouped := opts.Group.key(d.Record, opts.Seats)
 		switch {
 		case !grouped:
 		case kept[key]:

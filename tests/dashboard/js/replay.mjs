@@ -85,6 +85,51 @@ if (!state.events.length) {
   problems.push("no events: the activity feed is empty");
 }
 
+// A SEAT IS PAIRED BY ITS AGENT ID, never by its name: the store merges an
+// overlay onto the roster row carrying the same `agent_id` and drops one for
+// a seat the roster does not carry. So both halves of the pairing are the
+// server's to send — every roster row and every overlay must carry the id —
+// and a push that stopped sending it would leave every seat idle with each
+// overlay silently dropped, which the `working` check below reports only as a
+// symptom.
+const anonymousRows = state.agents.filter((a) => typeof a.agent_id !== "string" || a.agent_id === "");
+if (anonymousRows.length) {
+  problems.push(
+    `${anonymousRows.length} of ${state.agents.length} roster rows carry no \`agent_id\`: ` +
+      "no overlay can ever reach them",
+  );
+}
+const rosterIDs = new Set(state.agents.map((a) => a.agent_id));
+let overlays = 0;
+let unkeyed = 0;
+const strangers = new Set();
+for (const raw of frames) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    continue;
+  }
+  if (msg.kind !== "agents" || !Array.isArray(msg.data)) continue;
+  for (const row of msg.data) {
+    overlays++;
+    if (typeof row.agent_id !== "string" || row.agent_id === "") unkeyed++;
+    else if (!rosterIDs.has(row.agent_id)) strangers.add(row.agent_id);
+  }
+}
+if (overlays === 0) {
+  problems.push("no `agents` overlay was pushed: no seat's live state could ever move");
+}
+if (unkeyed) {
+  problems.push(`${unkeyed} of ${overlays} \`agents\` overlays carry no \`agent_id\`: the store drops them`);
+}
+if (strangers.size) {
+  problems.push(
+    `\`agents\` overlays name ${[...strangers].join(", ")}, which no roster row carries: ` +
+      "the store drops them",
+  );
+}
+
 // Somewhere in the run a seat must have been working with a live call — that
 // is what "the UI showing a live turn" means. The store holds only the LATEST
 // state, so this is re-derived from the frames rather than read off the end:

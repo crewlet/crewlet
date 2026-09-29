@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -48,16 +49,36 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 		}
 	}
 
+	// A COMPANY, so a seat question has a seat to resolve: `agent` is asked
+	// by handle and answered from the projection by the agent id it
+	// resolves to.
+	company, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	organization, err := company.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	ceo, ok := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	if !ok {
+		t.Fatal("the fixture's CEO is no agent seat")
+	}
+
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "task", Payload: map[string]any{
+			"agent_id": ceo.String(), "role": "CEO", "task_id": "t-1",
+		},
 	})
 
 	opts := api.Options{
-		State:   state,
-		Sources: queries.Sources{State: state, Events: db.Events()},
-		Now:     func() time.Time { return clock },
+		State: state,
+		Sources: queries.Sources{
+			State: state, Events: db.Events(), Company: companySource(t, company),
+		},
+		Now: func() time.Time { return clock },
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -147,7 +168,7 @@ func TestBothTransportsAnswerTheSameQuestionIdentically(t *testing.T) {
 		rest   url.Values
 		socket map[string]any
 	}{
-		{"agent", url.Values{"role": {"Lead"}}, map[string]any{"role": "Lead"}},
+		{"agent", url.Values{"id": {"ceo"}}, map[string]any{"id": "ceo"}},
 		{"events", url.Values{"limit": {"3"}}, map[string]any{"limit": float64(3)}},
 		{"events", url.Values{"actor": {"Lead"}}, map[string]any{"actor": "Lead"}},
 		{"trace", url.Values{"trace_id": {"tr-1"}}, map[string]any{"trace_id": "tr-1"}},

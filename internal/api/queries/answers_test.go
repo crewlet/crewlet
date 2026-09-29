@@ -168,34 +168,95 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 
 // --- the projection questions -------------------------------------------- //
 
+// namesakes is a company whose two agent seats share the NAME "Engineer" —
+// legal, since a name is prose — and the agent id each one's events carry.
+func namesakes(t *testing.T) (*config.Company, map[string]string) {
+	t.Helper()
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: Engineer
+    handle: ada
+    llm: p
+  - name: Engineer
+    handle: bob
+    llm: p
+`)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	ids := map[string]string{}
+	for _, handle := range []string{"ada", "bob"} {
+		id, ok := organization.AgentIDFor(organization.AgentSeatByHandle(handle))
+		if !ok {
+			t.Fatalf("%s is no agent seat in this fixture", handle)
+		}
+		ids[handle] = id.String()
+	}
+	return cfg, ids
+}
+
+// ONE SEAT'S LIVE STATE, and never its namesake's. The answer is asked by
+// handle and read from the projection by agent id; it used to be read by the
+// role name, so bob's page showed ada's turn.
 func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
+		Category: "task", Payload: map[string]any{
+			"agent_id": ids["ada"], "role": "Engineer", "task_id": "t-1",
+		},
 	})
-	r := registryOver(t, queries.Sources{State: state})
+	r := registryOver(t, queries.Sources{State: state, Company: companySource(t, cfg)})
 
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
 	live, _ := got["live"].(*livestate.Overlay)
 	if live == nil || live.State != "working" {
 		t.Fatalf("answer = %+v", got)
+	}
+	if got["agent_id"] != ids["ada"] || got["handle"] != "ada" || got["role"] != "Engineer" {
+		t.Errorf("answer names %v / %v / %v, want the seat asked about",
+			got["agent_id"], got["handle"], got["role"])
+	}
+	if other := ask(t, r, "agent", map[string]any{"id": "bob"}); other["live"] != nil {
+		t.Errorf("bob's answer carries %+v, which is ada's turn", other["live"])
 	}
 }
 
 func TestAgentAnswersASeatItHasNeverSeen(t *testing.T) {
 	t.Parallel()
-	// A role configured and never spawned is exactly this, and a 404 there
+	// A seat configured and never spawned is exactly this, and a 404 there
 	// would make a healthy new company look broken.
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := ask(t, r, "agent", map[string]any{"role": "Nobody"})
-	if got["role"] != "Nobody" || got["live"] != nil {
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Company: companySource(t, cfg)})
+	got := ask(t, r, "agent", map[string]any{"id": "bob"})
+	if got["role"] != "Engineer" || got["live"] != nil {
 		t.Errorf("answer = %+v", got)
 	}
 }
 
-func TestAgentNeedsARole(t *testing.T) {
+func TestAgentRefusesAHandleNoSeatAnswersTo(t *testing.T) {
+	t.Parallel()
+	// A dead link, which the client shows as one — not an empty seat
+	// wearing whatever name was typed, which is what reading the id as a
+	// role name answered.
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Company: companySource(t, cfg)})
+	for _, id := range []string{"nobody", "Engineer"} {
+		_, err := r.Answer(everyGrant(t), "agent", map[string]any{"id": id})
+		if !errors.Is(err, queries.ErrNotFound) {
+			t.Errorf("agent %q: err = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
+func TestAgentNeedsAHandle(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	if _, err := r.Answer(everyGrant(t), "agent", nil); !errors.Is(err, queries.ErrBadParams) {
@@ -289,30 +350,53 @@ func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
 	}
 }
 
-func TestOneRoleCanBeAskedForAlone(t *testing.T) {
+func TestOneSeatCanBeAskedForAlone(t *testing.T) {
 	t.Parallel()
 	// A per-seat window is a store read even when it IS the live window:
 	// the projection holds the whole org, and filtering it here would be a
 	// second implementation of the store's own filter.
+	//
+	// BY AGENT ID, and the two seats here share a NAME: narrowed by name,
+	// one seat's cost tab billed it for both.
+	cfg, ids := namesakes(t)
 	db := openStore(t)
 	log := db.Events()
-	for _, seat := range []struct{ id, role string }{{"a", "Lead"}, {"b", "Coder"}} {
+	for _, handle := range []string{"ada", "bob"} {
 		payload, _ := json.Marshal(map[string]any{
-			"role": seat.role, "phase": "plan", "total_tokens": 5,
+			"role": "Engineer", "agent_id": ids[handle], "phase": "plan", "total_tokens": 5,
 		})
 		if err := log.Append(t.Context(), store.EventRecord{
-			ID: seat.id, Type: "agent_phase_completed", Time: time.Now().UTC(),
-			Category: "system", Tags: map[string]string{"agent_role": seat.role},
-			Payload: payload,
+			ID: "p-" + handle, Type: "agent_phase_completed", Time: time.Now().UTC(),
+			Category: "system",
+			Tags:     map[string]string{"agent_role": "Engineer", "agent_id": ids[handle]},
+			Payload:  payload,
 		}); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
-	got := askRaw(t, r, "tokens", map[string]any{"agent_role": "Lead"}).(tokens.Rollup)
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: log, Company: companySource(t, cfg),
+	})
+	got := askRaw(t, r, "tokens", map[string]any{"agent_id": ids["ada"]}).(tokens.Rollup)
 
-	if got.Totals.Calls != 1 || got.AgentRole != "Lead" {
+	if got.Totals.Calls != 1 || got.AgentID != ids["ada"] {
 		t.Errorf("rollup = %+v", got)
+	}
+	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "ada" {
+		t.Errorf("by_agent = %+v, want ada's row, linked to ada", got.ByAgent)
+	}
+
+	// And unfiltered, the two namesakes are two rows, each linked to its
+	// own page — a row per NAME was one row linked to whichever seat the
+	// name map was built from last.
+	all := askRaw(t, r, "tokens", map[string]any{"since_days": 2}).(tokens.Rollup)
+	handles := []string{}
+	for _, row := range all.ByAgent {
+		handles = append(handles, row.Handle)
+	}
+	slices.Sort(handles)
+	if !slices.Equal(handles, []string{"ada", "bob"}) {
+		t.Errorf("by_agent handles = %v, want one row per seat", handles)
 	}
 }
 
@@ -766,12 +850,15 @@ func parsed(t *testing.T, doc string) *config.Company {
 // anything.
 func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	db := openStore(t)
 	log := db.Events()
-	seedPhases(t, log, "Lead", "agent-lead")
+	seedPhases(t, log, ids["ada"], ids["bob"])
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: log, Company: companySource(t, cfg),
+	})
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
 
 	history, _ := got["llm_history"].([]store.EventRecord)
 	if len(history) != 2 {
@@ -808,18 +895,30 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	}
 }
 
-// A SEAT ADDRESSED BY HANDLE FINDS THE SAME HISTORY. The dashboard holds the
-// handle; the store rows are keyed by the derived agent id and the role.
+// A SEAT ADDRESSED BY HANDLE FINDS ITS OWN HISTORY AND NOT ITS NAMESAKE'S. The
+// dashboard holds the handle; the store rows are matched on the derived agent
+// id, and the namesake's row beside them carries the same role name.
 func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	db := openStore(t)
 	log := db.Events()
-	seedPhases(t, log, "Lead", "agent-lead")
+	seedPhases(t, log, ids["ada"], ids["bob"])
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
-	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 2 {
-		t.Fatalf("asking by role found %v", got["llm_history"])
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: log, Company: companySource(t, cfg),
+	})
+	history, _ := ask(t, r, "agent", map[string]any{"id": "ada"})["llm_history"].([]store.EventRecord)
+	if len(history) != 2 {
+		t.Fatalf("ada's history = %v, want her two phases", history)
+	}
+	for _, row := range history {
+		if row.ID == "p3" {
+			t.Error("ada's history carries bob's phase, which shares her role name")
+		}
+	}
+	if theirs, _ := ask(t, r, "agent", map[string]any{"id": "bob"})["llm_history"].([]store.EventRecord); len(theirs) != 1 {
+		t.Errorf("bob's history = %v, want his one phase", theirs)
 	}
 }
 
@@ -828,10 +927,11 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 // because the event log is missing would turn a degraded panel into no screen.
 func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
 	t.Parallel()
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Company: companySource(t, cfg)})
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
 
-	if got["role"] != "Lead" {
+	if got["role"] != "Engineer" {
 		t.Fatalf("answer = %v", got)
 	}
 	history, ok := got["llm_history"].([]store.EventRecord)
@@ -841,18 +941,19 @@ func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
 	}
 }
 
-// seedPhases writes two finished phases for one seat, plus one for another so
-// the filter has something to exclude.
-func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
+// seedPhases writes two finished phases for one seat, plus one for its
+// namesake — another seat with the SAME role name — so the filter has
+// something to exclude that a match on the name would not.
+func seedPhases(t *testing.T, log *store.EventLog, agentID, namesakeID string) {
 	t.Helper()
 	base := time.Now().UTC().Add(-time.Hour)
 	rows := []struct {
-		id, phase, role, agent string
-		at                     time.Time
+		id, phase, agent string
+		at               time.Time
 	}{
-		{"p1", "plan", role, agentID, base},
-		{"p2", "execute", role, agentID, base.Add(time.Second)},
-		{"p3", "plan", "Someone Else", "agent-other", base.Add(2 * time.Second)},
+		{"p1", "plan", agentID, base},
+		{"p2", "execute", agentID, base.Add(time.Second)},
+		{"p3", "plan", namesakeID, base.Add(2 * time.Second)},
 	}
 	for _, row := range rows {
 		payload := `{"turn_id":"t-1","phase":"` + row.phase + `","iteration":1,` +
@@ -862,8 +963,8 @@ func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
 			Type:    "agent_phase_completed",
 			Source:  "engine",
 			Time:    row.at,
-			Actor:   row.role,
-			Tags:    map[string]string{"agent_role": row.role, "agent_id": row.agent},
+			Actor:   "Engineer",
+			Tags:    map[string]string{"agent_role": "Engineer", "agent_id": row.agent},
 			Payload: json.RawMessage(payload),
 		}); err != nil {
 			t.Fatalf("append %s: %v", row.id, err)
@@ -944,15 +1045,18 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	// Seeded, so the log is readable and non-empty — the empty result has to
 	// come from this seat having no phases, not from an empty table.
 	seedEvents(t, db.Events(), 3, nil)
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: db.Events()})
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: db.Events(), Company: companySource(t, cfg),
+	})
 
-	got := ask(t, r, "agent", map[string]any{"role": "NobodyHasThisRole"})
+	got := ask(t, r, "agent", map[string]any{"id": "bob"})
 	rows, ok := got["llm_history"].([]store.EventRecord)
 	if !ok {
 		t.Fatalf("llm_history = %#v, want a slice", got["llm_history"])
 	}
 	if len(rows) != 0 {
-		t.Errorf("llm_history = %d rows, want none for a role nothing published under", len(rows))
+		t.Errorf("llm_history = %d rows, want none for a seat nothing published under", len(rows))
 	}
 	// And the cursor is withheld rather than pointing at a row that is not
 	// there, which is what makes a client stop paging.
