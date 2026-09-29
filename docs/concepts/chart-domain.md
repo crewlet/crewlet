@@ -466,15 +466,19 @@ So a seat's model chain, tool credentials, sandbox cell, worker grants and sched
 
 **Opaque is not unread for a credential.** The writer is handed the one thing
 it needs from the organization model — where in the half its credentials sit,
-by the same `secret:"true"` tags `GET /config` masks by — and seals every
+by the same `secret` tags `GET /config` masks by — and seals every
 literal one into the [secret store](secret-store.md#what-the-org-chart-puts-here-and-what-it-deliberately-does-not)
 before a record is published, so the log, the rows, a snapshot and a backup
 carry `${VAR}` references and never a value. A writer built without that is
 refused rather than left to publish a half it cannot see into. The name a
-value is sealed under is derived from the object's **identity** and the
-field's path, so a rename keeps it and a later hire on a freed address never
-seals over it; every node re-reads those values as it applies the record that
-names them, and the retention sweep deletes one once no row does. What is in the *rows* is everything the chart has a column, an edge table or a subject for — and nothing is in both halves. A field in both would be two copies of one fact, of which the copy inside an opaque blob is the one nothing validates, nothing indexes and nothing can arbitrate: a rename that moved the row would leave the old name inside the document, and a reader would get whichever half it unpacked last. A build-time check walks the seat and unit types and fails on a field that is in neither half or in both.
+value is sealed under is derived from the object's **identity**, the field's
+path and the write's own operation, so a rename keeps deriving it where the
+object's first write did, a later hire on a freed address never derives it,
+and — because a value is sealed before its write is arbitrated — a write that
+never lands leaves only a value nothing names rather than a credential
+changed under the row that names the old one; every node re-reads those values
+as it applies the record that names them, and the retention sweep deletes one
+once no row has named it for an hour. What is in the *rows* is everything the chart has a column, an edge table or a subject for — and nothing is in both halves. A field in both would be two copies of one fact, of which the copy inside an opaque blob is the one nothing validates, nothing indexes and nothing can arbitrate: a rename that moved the row would leave the old name inside the document, and a reader would get whichever half it unpacked last. A build-time check walks the seat and unit types and fails on a field that is in neither half or in both.
 
 **Nothing here is derived.** There is no table of effective leads, no expanded
 `manages:` set, no "who manages whom" the applier computes. Every one of those

@@ -787,8 +787,22 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	rec, err := w.record(subject, OpClaim, personID, PeopleScope(personID),
-		nil, "")
+	// A SEAT'S BIND ALSO WRITES IN ITS LEAVERS' BUCKETS: it stamps the
+	// tombstone of every removal that released the seat ([reboundRemovals]),
+	// and a tombstone is filed under the person who left. So their buckets
+	// are in the scope, read here and confirmed in the decide, for
+	// [Writer.Remove]'s reason.
+	var leavers []string
+	if kind == KindSeat {
+		if err = w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+			leavers, err = leaversOf(ctx, tx, token)
+			return err
+		}); err != nil {
+			return statelog.Result{}, err
+		}
+	}
+	scope := PeopleScope(append([]string{personID}, leavers...)...)
+	rec, err := w.record(subject, OpClaim, personID, scope, nil, "")
 	if err != nil {
 		return statelog.Result{}, err
 	}
@@ -836,6 +850,15 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 			// chose this subject and this snapshot.
 			if err := confirmSeat(ctx, tx, named, token); err != nil {
 				return err
+			}
+			now, err := leaversOf(ctx, tx, token)
+			if err != nil {
+				return err
+			}
+			if !scope.Covers(PeopleScope(append([]string{personID}, now...)...)) {
+				return fmt.Errorf("%w: iamdomain: somebody who held seat %q was "+
+					"removed between reading whose removals this bind ends and "+
+					"deciding it — bind again", statelog.ErrConflict, named)
 			}
 		}
 		holder, held, err := holderOf(ctx, tx, kind, token)
@@ -1313,36 +1336,110 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		return statelog.Result{}, errors.New("iamdomain: a removal needs a " +
 			"person and an operation id")
 	}
-	rec, err := w.record(PersonSubject(personID), OpRemove, personID,
-		PeopleScope(personID), nil, reason)
+	// THE SCOPE IS READ BEFORE THE SNAPSHOT AND CONFIRMED INSIDE IT, for
+	// [Writer.seatIdentity]'s reason: a record's scope is stated before the
+	// framework takes the snapshot its decide runs in, and a removal's apply
+	// erases rows filed under the buckets of the person's ADDRESSES as well
+	// as their own ([erasedBlinds]). A round whose snapshot names an address
+	// the scope does not cover publishes nothing and is read again.
+	for attempt := 1; ; attempt++ {
+		result, err := w.remove(ctx, personID, opID, reason)
+		if !errors.Is(err, errRemovalScopeMoved) || attempt == removalScopeAttempts {
+			return result, err
+		}
+	}
+}
+
+// errRemovalScopeMoved is a removal whose snapshot named an address its scope,
+// read a moment before, did not cover. [Writer.Remove] reads it again.
+var errRemovalScopeMoved = fmt.Errorf("iamdomain: the addresses a removal "+
+	"erases moved between reading its scope and deciding it: %w",
+	statelog.ErrConflict)
+
+// removalScopeAttempts bounds how often a removal re-reads a scope its
+// snapshot overtook.
+//
+// THREE, for the reason every bounded re-read here gives: what moves the set
+// is an invitation redeemed or an address claimed for the person between two
+// reads a few milliseconds apart, each of which lands once, and a set still
+// moving after two re-reads is being rewritten in a loop — worth the conflict
+// it answers rather than a removal that spins on it.
+const removalScopeAttempts = 3
+
+// removalClaims reads the claims a person holds in one snapshot — nothing, for
+// a person this snapshot does not hold.
+func removalClaims(ctx context.Context, tx *sql.Tx, personID string) (Claims, error) {
+	var claims Claims
+	err := tx.QueryRowContext(ctx, `
+		SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
+		personID).Scan(&claims.EmailBlind, &claims.Login, &claims.SeatID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Claims{}, nil
+	}
+	if err != nil {
+		return Claims{}, fmt.Errorf("iamdomain: read person %s's claims: %w",
+			personID, err)
+	}
+	return claims, nil
+}
+
+// removalScope is every bucket a removal of personID writes: theirs, and each
+// address's their erasure clears ([erasedBlinds]).
+func removalScope(personID string, blinds []string) ScopeSet {
+	buckets := []Bucket{BucketOf(personID)}
+	for _, blind := range blinds {
+		buckets = append(buckets, BucketOf(blind))
+	}
+	return BucketScope(buckets...)
+}
+
+// remove is one attempt of [Writer.Remove], at the scope this node's rows give
+// now.
+func (w *Writer) remove(ctx context.Context, personID, opID, reason string) (
+	statelog.Result, error) {
+
+	var blinds []string
+	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		claims, err := removalClaims(ctx, tx, personID)
+		if err != nil {
+			return err
+		}
+		blinds, err = erasedBlinds(ctx, tx, personID, claims.EmailBlind)
+		return err
+	}); err != nil {
+		return statelog.Result{}, err
+	}
+	scope := removalScope(personID, blinds)
+	rec, err := w.record(PersonSubject(personID), OpRemove, personID, scope,
+		nil, reason)
 	if err != nil {
 		return statelog.Result{}, err
 	}
 	decide := func(tx *sql.Tx) (err error) {
-		var claims Claims
-		err = tx.QueryRowContext(ctx, `
-			SELECT email_blind, login, seat_id FROM iam_people WHERE id = ?`,
-			personID).Scan(&claims.EmailBlind, &claims.Login, &claims.SeatID)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			// NO ROW IS NOT A REASON TO PUBLISH NOTHING, and this arm
-			// used to be one. A person can be missing from THIS node's
-			// rows for two opposite reasons — they were already
-			// removed, or this node has not applied their enrolment yet
-			// — and a decide that quietly published nothing turned the
-			// second into a removal that silently did not happen. So it
-			// publishes, carrying an EMPTY released set, which is the
-			// truth: this snapshot knows of no claims to give back.
-			//
-			// The cost when they really were already removed is one
-			// record every node's own gate drops, which is what the
-			// removal gate is for — and a removal is the rarest write
-			// in this domain.
-			claims = Claims{}
-		case err != nil:
-			return fmt.Errorf("iamdomain: read person %s's claims: %w",
-				personID, err)
+		claims, err := removalClaims(ctx, tx, personID)
+		if err != nil {
+			return err
 		}
+		now, err := erasedBlinds(ctx, tx, personID, claims.EmailBlind)
+		if err != nil {
+			return err
+		}
+		if !scope.Covers(removalScope(personID, now)) {
+			return errRemovalScopeMoved
+		}
+		// NO ROW IS NOT A REASON TO PUBLISH NOTHING, and it used to be
+		// one. A person can be missing from THIS node's rows for two
+		// opposite reasons — they were already removed, or this node has
+		// not applied their enrolment yet — and a decide that quietly
+		// published nothing turned the second into a removal that
+		// silently did not happen. So a person this snapshot does not hold
+		// is removed carrying an EMPTY released set ([removalClaims]),
+		// which is the truth: this snapshot knows of no claims to give
+		// back.
+		//
+		// The cost when they really were already removed is one record
+		// every node's own gate drops, which is what the removal gate is
+		// for — and a removal is the rarest write in this domain.
 		rec.Mutation, err = EncodeRemoval(Removal{
 			V: GateRecordVersion, Released: claims,
 		})
@@ -2784,8 +2881,14 @@ func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
 	// does, which is what makes an invite and an enrolment for one
 	// address contend — and what makes two nodes redeeming one link
 	// contend with each other.
+	// THE SCOPE IS BOTH BUCKETS, because the apply writes in both: the
+	// invitation row it marks spent is filed under its ADDRESS's bucket, and
+	// the claim it takes and the trail row it writes under the person's. A
+	// scope of the person's alone let a node that had deferred the
+	// invitation's own record apply the spend first — marking nothing — and
+	// then write the invitation back unredeemed when it reprocessed it.
 	rec, err := w.record(EmailSubject(in.Blind), OpRedeem, in.Person,
-		PeopleScope(in.Person), mutation, in.Reason)
+		BucketScope(BucketOf(in.Person), BucketOf(in.Blind)), mutation, in.Reason)
 	if err != nil {
 		return statelog.Result{}, err
 	}

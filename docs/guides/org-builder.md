@@ -683,9 +683,14 @@ rather than undoing it. Credentials in the copies read as `__redacted__`, or
 as the whole `${NAME}` reference they are stored under — a seat's address
 included, which the engine seals into the secret store as a `${CHART_…}`
 reference — and importing the file back into the same deployment restores
-each masked value from what is stored. Another deployment holds nothing under
-those names, which is one more reason a file kept in a repository should hold
-`${NAME}` references rather than values.
+each masked value from what is stored. A `${CHART_…}` reference stays good
+only while a row of the chart names it: clear or rotate that credential in the
+builder and the value it named is collected an hour later, so an older copy of
+the file that still names it is **refused** on import, naming the field, rather
+than written back as a credential that resolves to nothing — copy the chart
+again after a change like that. Another deployment holds nothing under those
+names and refuses them the same way, which is one more reason a file kept in a
+repository should hold `${NAME}` references of your own rather than values.
 
 ## A draft survives a reload
 

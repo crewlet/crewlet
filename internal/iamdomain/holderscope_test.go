@@ -2,6 +2,7 @@ package iamdomain_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -161,5 +162,112 @@ func TestASessionCloseIsFiledUnderItsPersonsBucket(t *testing.T) {
 	}
 	if named != person {
 		t.Errorf("the close names person %q, want %s", named, person)
+	}
+}
+
+// scopeOf is the declared scope of the newest record on the rig's log carrying
+// op.
+func (r *writeRig) scopeOf(op iamdomain.OpKind) statelog.ScopeSet {
+	r.t.Helper()
+	last, err := r.log.End(r.t.Context())
+	if err != nil {
+		r.t.Fatalf("read the log's end: %v", err)
+	}
+	for seq := last; seq > 0; seq-- {
+		_, payload, _, ok, err := r.log.At(r.t.Context(), seq)
+		if err != nil || !ok {
+			continue
+		}
+		body, verdict := r.verifier.Open(payload)
+		if verdict != statelog.Verified {
+			continue
+		}
+		env, err := iamdomain.DecodeEnvelope(body)
+		if err != nil || env.Op != op {
+			continue
+		}
+		return env.Scope.Resolve(env.Subject)
+	}
+	r.t.Fatalf("no %s record on the log", op)
+	return statelog.ScopeSet{}
+}
+
+// A SPEND AND A REMOVAL ARE FILED UNDER EVERY BUCKET THEIR APPLY WRITES.
+//
+// An invitation — and the trail row its record writes — is filed under its
+// ADDRESS's bucket, since it has no person until it is redeemed. Spending it
+// marks that row, and removing the person who redeemed it erases it; both
+// records declared the person's bucket alone. So a node holding back the
+// invitation's own record — one signed under a keyring key it was not
+// restarted with, or a newer build's — applied the spend or the removal ahead
+// of it, found no row to mark or to erase, and wrote the invitation back
+// unspent, or with the removed person's address sealed in it, when it
+// reprocessed the invitation: a copy of the estate differing from every
+// peer's, and the removed person's address surviving on one node. Each record
+// now declares both buckets, which is what makes that node wait for the
+// invitation first. (The rig's apply asks every record it applies whether
+// what it wrote is inside what it declared; this is the case that names the
+// two records it caught.)
+func TestASpendAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	blinder, err := iamdomain.NewBlinder(testBlindKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// AN ADDRESS FILED APART FROM ITS REDEEMER, so a scope of either bucket
+	// cannot pass for the other by coincidence.
+	var issued iamdomain.InviteIssued
+	var person, blind, address string
+	for i := 0; ; i++ {
+		address = fmt.Sprintf("sarah.%d@example.com", i)
+		if blind, err = blinder.Email(address); err != nil {
+			t.Fatal(err)
+		}
+		if issued, err = inviteFor(t, rig, address, ""); err != nil {
+			t.Fatalf("invite %s: %v", address, err)
+		}
+		if person, err = iamdomain.InvitedPersonID(issued.ID); err != nil {
+			t.Fatal(err)
+		}
+		if iamdomain.BucketOf(person) != iamdomain.BucketOf(blind) {
+			break
+		}
+	}
+	if _, err := redeemAs(t, rig, issued, address, issued.Secret, ""); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	// AND SPENT, as the sign-in surface spends it once the redemption lands.
+	if err := rig.during(func() error {
+		_, err := nodeWriter(rig).SpendInvitation(t.Context(), iamdomain.InvitationSpend{
+			ID: issued.ID, Blind: blind, Person: person,
+			OpID: "op-spend", Reason: "redeemed",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("spend: %v", err)
+	}
+	both := []string{iamdomain.BucketOf(person).Path(), iamdomain.BucketOf(blind).Path()}
+	covers := func(scope statelog.ScopeSet) bool {
+		for _, path := range both {
+			if !slices.Contains(scope.Paths, path) {
+				return false
+			}
+		}
+		return true
+	}
+	if scope := rig.scopeOf(iamdomain.OpRedeem); !covers(scope) {
+		t.Errorf("the spend declares %v, want the person's and the address's "+
+			"buckets, %v", scope.Paths, both)
+	}
+	if err := rig.during(func() error {
+		_, err := rig.writer.Remove(t.Context(), person, "op-remove", "left")
+		return err
+	}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if scope := rig.scopeOf(iamdomain.OpRemove); !covers(scope) {
+		t.Errorf("the removal declares %v, want the person's and the address's "+
+			"buckets, %v", scope.Paths, both)
 	}
 }

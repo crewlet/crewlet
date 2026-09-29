@@ -204,3 +204,81 @@ func TestMaskShowsOnlyAWholeReference(t *testing.T) {
 		}
 	}
 }
+
+// A CONTENT FIELD IS A CREDENTIAL, AND THE WALK SAYS WHICH VALUES ARE CONTENT.
+//
+// A setup step's file and its env are both credentials, and they are read
+// differently where they are used — a `${…}` in an env value is the engine's,
+// one in a file's body belongs to whatever reads the file. The walk hands the
+// visitor one string at a time, so the only place that difference can reach
+// it is the path: a value beneath a `secret:"content"` field reports Content,
+// every other credential does not.
+func TestAWalkSaysWhichCredentialsAreContent(t *testing.T) {
+	t.Parallel()
+	type box struct {
+		Files map[string]string `json:"files,omitempty" secret:"content"`
+		Env   map[string]string `json:"env,omitempty" secret:"true"`
+	}
+	type doc struct {
+		Setup []box `json:"setup"`
+		box
+	}
+	content := map[string]bool{}
+	if _, err := Walk(reflect.TypeOf(doc{}), json.RawMessage(`{
+		"setup": [{"files": {"/a": "script ${HOME}"}, "env": {"K": "v"}}],
+		"files": {"/b": "rc"}, "env": {"E": "e"}
+	}`), func(p Path, v string) (string, error) {
+		content[p.String()] = p.Content()
+		return v, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"setup[0].files./a": true, "setup[0].env.K": false,
+		"files./b": true, "env.E": false,
+	}
+	if !reflect.DeepEqual(content, want) {
+		t.Errorf("the walk reported content %v, want %v — a file read as a "+
+			"setting is cut around its own shell syntax, and a setting read "+
+			"as content never expands the reference it carries", content, want)
+	}
+	f, _ := reflect.TypeOf(box{}).FieldByName("Files")
+	if !Field(f) || !ContentField(f) {
+		t.Errorf("a content field reads as Field %v, ContentField %v — it is a "+
+			"credential of the content kind, and a surface that masked by the "+
+			"one and not the other would serve a registry's auth file",
+			Field(f), ContentField(f))
+	}
+}
+
+// CONTENT IS A POINTER ONLY WHEN IT IS EXACTLY ONE REFERENCE, and then it reads
+// as what the reference names, byte for byte and expanded no further.
+func TestContentIsReadWholeOrAsItIs(t *testing.T) {
+	t.Parallel()
+	held := map[string]string{
+		"SEALED": "registry=https://r.example.com\n//r.example.com/:_authToken=${NPM_TOKEN}\n",
+		"EMPTY":  "",
+	}
+	lookup := func(name string) (string, bool) {
+		v, ok := held[name]
+		return v, ok
+	}
+	for _, c := range []struct {
+		value, want, unresolved string
+	}{
+		{"${SEALED}", held["SEALED"], ""},
+		{"  ${SEALED}\n", held["SEALED"], ""},
+		{"${EMPTY}", "", ""},
+		{"${GONE}", "", "GONE"},
+		{"#!/bin/sh\necho ${HOME}\n", "#!/bin/sh\necho ${HOME}\n", ""},
+		{"${SEALED}${SEALED}", "${SEALED}${SEALED}", ""},
+		{"plain", "plain", ""},
+		{"", "", ""},
+	} {
+		got, unresolved := ReadContent(c.value, lookup)
+		if got != c.want || unresolved != c.unresolved {
+			t.Errorf("ReadContent(%q) = (%q, %q), want (%q, %q)",
+				c.value, got, unresolved, c.want, c.unresolved)
+		}
+	}
+}

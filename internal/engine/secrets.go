@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"maps"
 	"time"
@@ -287,19 +288,60 @@ type chartSealer struct {
 	now   func() time.Time
 }
 
+// sealAttempts bounds how many times a seal re-tries a name that was there when
+// it tried to create it and gone when it went to confirm it.
+//
+// TWO, because only the orphan sweep deletes a chart name, and it deletes one
+// only after a grace of seeing nothing name it: a seal that meets that delete
+// once creates the name afresh on the next attempt, and one that meets it
+// twice is meeting something that is not the sweep.
+const sealAttempts = 2
+
 // Seal stores one value under the name the chart derived, recording the party
-// writing the seat as its author.
+// writing the seat as its author — creating it, or confirming the value the
+// same write already stored there, and never replacing another ([chart.Sealer]).
 func (c *chartSealer) Seal(ctx context.Context, name, value string,
 	by secrets.Author) error {
 
-	// SOURCE "chart", which is what an operator listing their secrets reads
-	// to tell a credential a founder typed into a seat from one a
-	// provisioner minted. The two have different remedies when they stop
-	// working, and a listing that called both "api" would send somebody to
-	// the wrong place. It is also what the orphan sweep asks before it
-	// deletes a value nothing names ([chart.OrphanedSeals]), so it is the
-	// chart's own constant rather than a literal here.
-	return c.store.Set(ctx, name, value, by, chart.SealSource, c.now())
+	for range sealAttempts {
+		// SOURCE "chart", which is what an operator listing their secrets
+		// reads to tell a credential a founder typed into a seat from one a
+		// provisioner minted. The two have different remedies when they
+		// stop working, and a listing that called both "api" would send
+		// somebody to the wrong place. It is also what the orphan sweep
+		// asks before it deletes a value nothing names
+		// ([chart.OrphanedSeals]), so it is the chart's own constant rather
+		// than a literal here.
+		created, err := c.store.Create(ctx, name, value, by, chart.SealSource, c.now())
+		if err != nil || created {
+			return err
+		}
+		// THE NAME IS THIS WRITE'S — a round the broker sent back, or the
+		// retry an unknown outcome asked for — or a reused operation id's.
+		// HELD rather than read, so a sweep that judged the value before
+		// this write names it again loses its delete.
+		held, found, err := c.store.Hold(ctx, name)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(held), []byte(value)) != 1 {
+			return fmt.Errorf("engine: seal %s: %w", name, chart.ErrSealTaken)
+		}
+		return nil
+	}
+	return fmt.Errorf("engine: seal %s: the name was there to create and gone "+
+		"to confirm %d times over; write the field again", name, sealAttempts)
+}
+
+// Hold confirms a value the chart sealed is still stored, moving its row's
+// version so an orphan sweep that judged it nobody's loses its delete
+// ([chart.Sealer]).
+func (c *chartSealer) Hold(ctx context.Context, name string) (bool, error) {
+	_, held, err := c.store.Hold(ctx, name)
+	return held, err
 }
 
 // PersonSealer is what this node seals and opens a person's own values with:

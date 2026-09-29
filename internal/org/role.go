@@ -408,18 +408,28 @@ type RoleSandboxMCP struct {
 
 // SandboxSetupStep is one provisioning step as the running seat holds it.
 //
-// THE VALUES ARE VERBATIM, `${VAR}` references included: they are resolved
-// once, with the rest of the sandbox environment, at LAUNCH. Resolving them
-// here as well would double-resolve and silently mangle any secret whose real
-// value contains a literal `${...}`. The exception is Brief, which is never
-// resolved at all — it is agent-facing prose, and substituting engine-host
-// environment into it would be surprising at best.
+// THE VALUES ARE VERBATIM, `${VAR}` references included, and each is read
+// where it is used, at LAUNCH: the env is expanded with the rest of the
+// sandbox environment, and a file's body is read as CONTENT
+// ([secrets.ReadContent]) — the value a whole `${VAR}` names, or the body as
+// written. Resolving them here as well would double-resolve and silently
+// mangle any secret whose real value contains a literal `${...}`. Commands and
+// Brief are never resolved by the engine: a command runs through the box's own
+// shell, which expands its `$VAR`s from the run environment, and a brief is
+// agent-facing prose, into which substituting engine-host environment would
+// be surprising at best.
 type SandboxSetupStep struct {
 	// Name identifies the step in logs and in setup-failure errors.
 	Name string `yaml:"name" json:"name"`
 
 	// Files are written into the box before Commands run.
-	Files map[string]string `secret:"true" yaml:"files,omitempty" json:"files,omitempty"`
+	//
+	// CONTENT, not a setting (`secret:"content"`): a body is sealed whole by
+	// the chart and read whole at launch, because a `${…}` inside a script
+	// or an .npmrc is that file's own syntax and nothing on the way to the
+	// box ever expands it — cut around it like a header, a body reached the
+	// box as a string of the chart's own references.
+	Files map[string]string `secret:"content" yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this

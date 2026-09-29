@@ -412,9 +412,11 @@ anonymous: the absence of an answer is not evidence of absence.
 A fresh deployment's identity estate is **empty**, and the one credential it
 has is a **Tier A token** — `api.auth.tokens`, which configuration requires on
 every node that serves the API for exactly this reason. A Tier A token is an
-operator: it carries every grant the node's `max_grants` ceiling permits,
-`people:manage` included. So the first person is **invited, like everybody
-after them**, by whoever holds that token:
+operator, and it carries the `grants` its own `api.auth.tokens` entry declares,
+cut on every request to the node's `max_grants` ceiling — never the whole
+ceiling by default (see [Tier A](../getting-started/configuration.md#tier-a)).
+So the first person is **invited, like everybody after them**, by whoever holds
+a token declaring `people:manage`:
 
 ```sh
 export CREWLET_API_TOKEN=...   # the value of one of api.auth.tokens
@@ -429,8 +431,13 @@ password, and redeems it exactly as the next section describes. Nothing about
 the first redemption is special:
 
 - **An invitation confers only what its writer holds**, and a Tier A token holds
-  whatever the ceiling permits — so the first person can be given every grant,
-  and the operator issuing the link decides which. Give the first person
+  its own declared `grants` within the ceiling — so the token that issues the
+  first invitation must itself list `people:manage` and every grant the first
+  person is to receive (the quickstart's token lists all eleven), and the
+  operator issuing the link decides which of those to give. A grant the token
+  does not hold is refused `403`, naming the grants that would have admitted
+  it; add it to the token's entry and restart, as [Tier
+  A](../getting-started/configuration.md#tier-a) states. Give the first person
   `people:manage`, or nobody after them can be invited except through the token
   again; `crewlet iam check` names a company in that state as
   `no_people_manage_holder`.
@@ -2195,10 +2202,20 @@ both in the same transaction:
   address and any seed they enrolled. Every sealed value in it is cleared; the
   ids, the logins, the actors, the operations and the instants stay.
 
+An invitation and its trail row name nobody — they are about an **address** —
+so the removal finds them by every address that was theirs: the one it
+releases, and the one any invitation they redeemed was sent to, which is not
+the same address once another has been claimed for them since.
+
 After the removal applies, **no row on any node holds a value of theirs that
 opens** under any keyring, and every snapshot a node donates from then on is a
 copy of those rows. Every node erases the same bytes, so the fleet's
-byte-for-byte identity claim holds across it.
+byte-for-byte identity claim holds across it — including a node that held back
+an invitation to one of those addresses (one signed under a keyring key it was
+not restarted with, or a newer build's): an invitation is filed under its
+address's bucket rather than a person's, so the removal's record names those
+buckets as well as the person's, and that node applies the invitation first
+and erases it, exactly as its peers did.
 
 **What a removal cannot reach, and when each copy goes.** Everything below is
 sealed under the fleet keyring, so it is readable only by whoever holds the

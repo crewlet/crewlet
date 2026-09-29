@@ -5,7 +5,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -33,11 +32,13 @@ import (
 // company composed from those rows is published — everything built from that
 // company, a seat's tool children included, then resolves against values as
 // current as the rows. It re-reads when a row names a sealed value the
-// snapshot does not hold (a new seal), or when a row that names any has been
-// rewritten since the last read (a re-seal under the same name, which no
-// comparison of references could see). The seal lands in the store before its
-// record is published, so a node that has applied the record reads a store
-// that holds the value.
+// snapshot does not hold, and that is the whole of the test: a chart write
+// seals under a name no other write derives and never writes over a name
+// (internal/chart's seal.go), so a new value — a hire's address, a rotated
+// token — is always a NEW NAME on the row, and a name this node already holds
+// never means anything else. The seal lands in the store before its record is
+// published, so a node that has applied the record reads a store that holds
+// the value.
 //
 // # Only the chart's own names, and why the rest stay as they were
 //
@@ -51,7 +52,7 @@ import (
 // rows name, re-reading them from the store when the rows say it must.
 //
 // THE VIEW REBUILD'S, called under its claim with the rows it is about to
-// publish, and only there — which is what lets [Engine.chartSealedAt] go
+// publish, and only there — which is what lets [Engine.chartSecretsGap] go
 // unlocked.
 //
 // A FAILED READ IS REMEMBERED ([Engine.chartSecretsStale]), and the rebuild does
@@ -66,7 +67,7 @@ func (e *Engine) coverChartSecrets(ctx context.Context, rows chart.Chart) {
 		// alone, which holds no chart value to re-read.
 		return
 	}
-	stamps, named, err := sealedInRows(rows)
+	named, err := sealedInRows(rows)
 	if err != nil {
 		// A ROW WHOSE RUNTIME HALF DOES NOT DECODE names nothing this can
 		// read, and the view builds the object with no runtime either; the
@@ -74,11 +75,7 @@ func (e *Engine) coverChartSecrets(ctx context.Context, rows chart.Chart) {
 		log.WarnContext(ctx, "chart_secrets_unreadable_row", "error", err)
 	}
 	stale := e.chartSecretsStale.Load()
-	for object, names := range named {
-		if at, seen := e.chartSealedAt[object]; !seen || !at.Equal(stamps[object]) {
-			stale = true
-			break
-		}
+	for _, names := range named {
 		if slices.ContainsFunc(names, func(name string) bool {
 			_, held := view.values[name]
 			return !held
@@ -88,7 +85,6 @@ func (e *Engine) coverChartSecrets(ctx context.Context, rows chart.Chart) {
 		}
 	}
 	if !stale {
-		e.chartSealedAt = stamps
 		return
 	}
 	sealed, err := e.chartSealedValues(ctx)
@@ -109,7 +105,6 @@ func (e *Engine) coverChartSecrets(ctx context.Context, rows chart.Chart) {
 	maps.Copy(merged, sealed)
 	e.installSecrets(merged)
 	e.chartSecretsStale.Store(false)
-	e.chartSealedAt = stamps
 
 	// A NAME A ROW REFERENCES AND THE STORE DOES NOT HOLD resolves to
 	// nothing on every node: a value an operator removed by hand, or one a
@@ -156,18 +151,13 @@ func (e *Engine) chartSealedValues(ctx context.Context) (map[string]string, erro
 	return out, nil
 }
 
-// sealedInRows is, per chart object, the instant its row last applied a record
-// and the sealed names it references — the objects that reference none left
-// out of the second.
-func sealedInRows(rows chart.Chart) (map[chart.ObjectRef]time.Time,
-	map[chart.ObjectRef][]string, error) {
-
-	stamps := make(map[chart.ObjectRef]time.Time, len(rows.Seats)+len(rows.Units))
+// sealedInRows is, per chart object, the sealed names its row references — the
+// objects that reference none left out.
+func sealedInRows(rows chart.Chart) (map[chart.ObjectRef][]string, error) {
 	named := map[chart.ObjectRef][]string{}
 	var failed error
 	for _, seat := range rows.Seats {
 		object := chart.ObjectRef{Kind: chart.KindSeat, ID: seat.Handle}
-		stamps[object] = seat.UpdatedAt
 		names, err := seat.Sealed()
 		if err != nil {
 			failed = err
@@ -179,7 +169,6 @@ func sealedInRows(rows chart.Chart) (map[chart.ObjectRef]time.Time,
 	}
 	for _, unit := range rows.Units {
 		object := chart.ObjectRef{Kind: chart.KindUnit, ID: unit.Key}
-		stamps[object] = unit.UpdatedAt
 		names, err := unit.Sealed()
 		if err != nil {
 			failed = err
@@ -189,5 +178,5 @@ func sealedInRows(rows chart.Chart) (map[chart.ObjectRef]time.Time,
 			named[object] = names
 		}
 	}
-	return stamps, named, failed
+	return named, failed
 }

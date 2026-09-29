@@ -96,10 +96,9 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 
 	company := e.Company()
 	gate := seatSandbox(company, l.seat.Handle())
-	setup := manager.DefaultSetup()
+	setup := e.boxSetup(manager.DefaultSetup(), l.seat.Handle(), gate)
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
-		setup = append(setup, seatSetupSteps(gate.Setup)...)
 		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
 	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer

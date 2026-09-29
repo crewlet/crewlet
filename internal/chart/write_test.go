@@ -455,8 +455,8 @@ func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write a seat with a literal address: %v", err)
 	}
-	name := chart.SecretName(
-		chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, "email")
+	object := chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}
+	name := chart.SecretName(object, "op-literal", "email")
 	if got, sealed := r.sealer.get(name); !sealed || got != "sarah.chen@example.com" {
 		t.Errorf("the literal reached the store as (%q, %v), want the address",
 			got, sealed)
@@ -477,14 +477,14 @@ func TestALiteralInASecretFieldIsSealedAndAReferenceIsNot(t *testing.T) {
 		t.Fatalf("write through a token: %v", err)
 	}
 	r.drain()
+	name = chart.SecretName(object, "op-literal-token", "email")
 	if got := r.sealer.author(name); got != (secrets.Author{Name: "jane.doe",
 		Kind: string(chart.AuthorOperator), OperatorID: pat}) {
 		t.Errorf("a value sealed through a token records %+v, want jane.doe "+
 			"through %s", got, pat)
 	}
 	stored := r.column(`SELECT email FROM chart_seats WHERE handle = 'sarah-chen'`)
-	if len(stored) != 1 || stored[0] != chart.SecretRef(
-		chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}, "email") {
+	if len(stored) != 1 || stored[0] != chart.SecretRef(object, "op-literal-token", "email") {
 		t.Errorf("the row holds %v, want the reference — a literal in the row "+
 			"is a literal in the log every node applies and in every snapshot "+
 			"and backup of it", stored)

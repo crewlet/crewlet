@@ -79,7 +79,7 @@ So the chart makes its own trade, and states it rather than inheriting one:
   `mcp_env` value, the sandbox's `env` and each setup step's `files` and
   `env`, a seat's own Slack app token and signing secret, its Mattermost bot
   token, its GitHub App key and webhook secret — is found by the same
-  `secret:"true"` tags `GET /config` masks by, and a literal one is sealed into
+  `secret` tags `GET /config` masks by, and a literal one is sealed into
   this store before the record is published; the record carries a `${VAR}`
   **reference**. The value reaches the store and never the log, the rows, a
   snapshot or a backup of either. A write whose literal cannot be sealed is
@@ -90,15 +90,31 @@ So the chart makes its own trade, and states it rather than inheriting one:
   references beside literal text — `Bearer ${GITHUB_TOKEN}` — keeps its
   references where they are and has each literal run sealed under a name of
   its own, so it expands to exactly what it expanded to before.
-- **A sealed value's name is derived from who and where.** The object's
-  **identity** — the handle or key it was created under, which no rename moves
-  and the chart never issues twice — and the field's path inside it, ending in
-  a digest of both: `CHART_SEAT_SARAH_CHEN_EMAIL_<10 hex>` for `sarah-chen`'s
-  address, `CHART_SEAT_DEV_MCP_ENV_TRACKER_SEAT_TOKEN_<10 hex>` for the
-  `SEAT_TOKEN` in `dev`'s `tracker` server. A second edit of one field
-  overwrites its value rather than leaving the first behind; a renamed seat
-  keeps its names; and a new hire given a freed handle never seals over the
-  previous holder's.
+- **A file is sealed whole.** A setup step's `files` are *content* —
+  `secret:"content"` rather than `secret:"true"` — written into a sandbox box
+  where a `${…}` inside a script or an `.npmrc` is the file's own syntax, never
+  the engine's. So a file's body is sealed as one value under one name, and
+  at launch the box receives that value byte for byte ([how a file reaches the
+  box](code-sandbox.md#setup-steps--provisioning-the-box)).
+- **A sealed value's name is derived from who, where and which write.** The
+  object's **identity** — the handle or key it was created under, which no
+  rename moves and the chart never issues twice — and the field's path inside
+  it, ending in a digest of both and of the write's operation id:
+  `CHART_SEAT_SARAH_CHEN_EMAIL_<10 hex>` for `sarah-chen`'s address,
+  `CHART_SEAT_DEV_MCP_ENV_TRACKER_SEAT_TOKEN_<10 hex>` for the `SEAT_TOKEN` in
+  `dev`'s `tracker` server. A value is sealed *before* its write is
+  arbitrated and published, so it goes under a name no row references yet, and
+  **nothing is ever sealed over a name that holds a value**: the only thing
+  that moves a seat onto a new credential is the record that carries the new
+  reference. A write that never lands — refused, lost to a concurrent writer,
+  abandoned by its caller — therefore changes no credential anybody resolves;
+  it leaves a value nothing names, which the sweep collects. Rotating a
+  credential is a new name on the row, and the previous value is collected
+  the same way. A retry of the same write (the same `Idempotency-Key`) derives
+  the same name and finds its own value there; the same key sent with a
+  *different* value for the field is refused `422`, naming the field. A
+  renamed seat keeps deriving its names from its identity, and a new hire given
+  a freed handle never derives a previous holder's.
 - **A read serves the mask, and a write restores it.** Every surface that
   serves the runtime half (`/chart?runtime=true`, `/company/export`) shows a
   credential only as a whole `${VAR}` reference and anything else as
@@ -124,16 +140,29 @@ So the chart makes its own trade, and states it rather than inheriting one:
   ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
   A leaver's seat still names them until the seat's own `name` is cleared.
 - **A value nothing names any more is collected.** Clearing an address,
-  replacing a credential with your own `${VAR}`, or removing a seat leaves its
-  sealed value unreferenced, and the store has no retention of its own. The
-  retention sweep (`chart_sealed_values`, a fleet singleton) deletes a value
-  the chart wrote once no row names it — judged only on a node whose rows hold
-  the whole chart log, since a row not applied yet reads exactly like a row
-  naming nothing, after an hour's grace that covers a write between its seal
-  and its record, and only at the version it judged, so a value re-sealed in
-  between survives. A value you stored yourself is never touched: the sweep
-  deletes only what the chart wrote (source `chart`), under a name of the
-  shape it derives.
+  rotating a credential, replacing one with your own `${VAR}`, removing a seat
+  or a write that sealed and never landed leaves a sealed value unreferenced,
+  and the store has no retention of its own. The retention sweep
+  (`chart_sealed_values`, a fleet singleton) deletes a value the chart wrote
+  once no row names it — judged only on a node whose rows hold the whole chart
+  log, since a row not applied yet reads exactly like a row naming nothing;
+  only once the sweep has seen nothing name the value for an hour, counted from
+  its **first sighting** rather than from when the value was written, so a
+  credential rotated after months stays resolvable for an hour for a node that
+  has not applied the rotation yet (a sweep that moves to another node starts
+  counting again); and only at the version it judged, so a value a write names
+  again in between survives. A value you stored yourself is never touched: the
+  sweep deletes only what the chart wrote (source `chart`), under a name of
+  the shape it derives.
+- **A `${CHART_…}` reference is good while a row names it.** A read or an
+  export hands the reference out, and nothing stops a file holding it longer
+  than the value lives. So a chart write stating a `${CHART_…}` reference its
+  row does not already name confirms it first: a value still stored is
+  accepted and its row's version moved, so no sweep that judged it nobody's
+  can delete it under the record about to name it; a value already collected
+  — or never stored on this deployment — is **refused**, naming the field,
+  rather than written as a reference that resolves to nothing. Send the
+  credential itself, or `crewlet secrets set` the name first.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 

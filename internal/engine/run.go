@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
-	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -327,13 +326,16 @@ type Engine struct {
 	// superseded would put the rotation that apply picked up back.
 	secretsMu sync.Mutex
 
-	// chartSealedAt is, per chart object, the instant of the last record
-	// its row had applied when this node last read the values it seals,
-	// and chartSecretsStale says the last re-read failed. Both are the
-	// view rebuild's, touched only under its claim; see chartsecrets.go.
-	chartSealedAt     map[chart.ObjectRef]time.Time
+	// chartSecretsStale says the last re-read of the chart's sealed values
+	// failed, and chartSecretsGap is the set of names the rows reference
+	// and the store does not hold, as last logged. Both are the view
+	// rebuild's, touched only under its claim; see chartsecrets.go.
 	chartSecretsStale atomic.Bool
 	chartSecretsGap   string
+
+	// chartSeals is the orphan sweep's memory of what it has seen nothing
+	// name; see chartsweep.go.
+	chartSeals chartSealSightings
 
 	// republish coalesces the re-activations a provisioning pass asks for
 	// when it seals a credential. See republish.go.
