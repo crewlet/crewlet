@@ -229,11 +229,28 @@ when you touch it:
   for the length of the rewrite. Ecosystem names must match whole: as a
   substring, `docker` is satisfied by the `docker-compose` entry.
 - **`.github/workflows/dependabot-merge.yml`'s guard and its merge flags.** The
-  job holds `contents: write` and `pull-requests: write` and runs `gh pr review
-  --approve`; its `if:` is the only thing stopping it approving a commit a
-  person pushed onto a Dependabot branch, and `--auto` is the only thing holding
-  the merge until the checks `main` requires have reported. Weakening either
-  makes the workflow run *more*, never fail.
+  job holds `contents: write` and `pull-requests: write` and approves through
+  the reviews API; its `if:` is the only thing stopping it approving a commit a
+  person pushed onto a Dependabot branch, the `commit_id` it names is the only
+  thing stopping a late or re-run job approving whatever the head has become
+  (`gh pr review --approve` names none), and `--auto` is the only thing holding
+  the merge until the checks `main` requires have reported. Weakening any of
+  them makes the workflow run *more*, never fail.
+- **`.github/workflows/dependabot-dashboard.yml`'s guard, its two-job split, its
+  pins and the App's scope.** The `push` job holds a GitHub App key that can
+  write to a branch, and its `if:` (author AND actor both Dependabot, repeated
+  on the job that holds the key and not only the one that builds) is what stops
+  a run a person triggered from reaching it. The `build` job runs a
+  dependency's install scripts, so it has to keep `contents: read`, no secrets
+  and no persisted checkout credential — whatever it holds is whatever that
+  dependency can take. The `push` job's three actions stay pinned to full
+  commit SHAs (a major tag is re-pointed at each release) and its allowlist of
+  file names stays an allowlist: `static/dashboard` is inside the Go module, so
+  a `.go` file in it would run on every contributor's machine. The App has to
+  stay at Contents: read and write — add Workflows and the key can rewrite the
+  workflows themselves — and `v*` needs a tag ruleset it cannot bypass, since
+  Contents: write can create a tag and an App push starts workflows. Weakening
+  any of these makes the workflow reach *more*, never fail.
 
 ---
 

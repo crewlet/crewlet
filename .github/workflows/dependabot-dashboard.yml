@@ -1,0 +1,372 @@
+name: dependabot-dashboard
+
+# Dependabot edits `dashboard/package.json` and the lockfile and nothing else:
+# it cannot run a bundler. But `static/dashboard` is COMMITTED, and ci.yml's
+# `dashboard` job rebuilds it and diffs, so a bump that changes the emitted
+# bytes (react, react-dom, vite, the @crewlethq design system) sat red on that
+# gate until a person ran `make dashboard` and pushed the result. This workflow
+# is that person: it runs the same rebuild on Dependabot's pull request and, if
+# the tree changed, commits the output back onto Dependabot's branch.
+#
+# It does the remediation ci.yml prints ("make dashboard && git add -A --
+# static/dashboard") and nothing more. It does not approve, does not queue a
+# merge and does not decide whether the bump lands: dependabot-merge.yml does
+# the first two and `main`'s protection rule does the third. See
+# CONTRIBUTING.md, "A dashboard bump brings its own bundle".
+#
+# TWO THINGS OUTSIDE THIS FILE HAVE TO EXIST:
+#
+#   - A GitHub App installed on this repository with ONE permission, Contents:
+#     read and write. Not Workflows (which is what stops this credential
+#     rewriting a workflow file), not Pull requests, not Administration. Even
+#     so, Contents: write can create a tag, and a push made as an App starts
+#     workflows: keep `v*` behind a tag ruleset this App is not on the bypass
+#     list of, or a leaked key can cut a release.
+#   - Its client ID and private key as DEPENDABOT secrets (Settings -> Secrets
+#     and variables -> Dependabot): DASHBOARD_BUNDLE_CLIENT_ID and
+#     DASHBOARD_BUNDLE_PRIVATE_KEY. NOT Actions secrets: a run Dependabot
+#     triggers reads its own store and cannot see the Actions one, so a secret
+#     put on the wrong tab is simply empty here.
+#
+# The push job checks the second and says so in its own words when a secret is
+# empty. It cannot check the first: an App that is not installed here, or lacks
+# Contents: write, fails inside create-github-app-token with that action's own
+# error.
+#
+# WHY AN APP AND NOT `GITHUB_TOKEN`. A push made with the workflow's own token
+# does start the pull request's `synchronize` runs, but GitHub holds them in an
+# approval-required state until someone with write access clicks "Approve
+# workflows to run" — on purpose, so that automation cannot recurse without a
+# person. Every bundle commit would then wait for that click before `ci` ran on
+# it, and the auto-merge queued behind those checks would wait with it. A push
+# made as an App starts them at once. That is also why nothing here loops: the
+# run that push starts is skipped by the actor half of the guard below.
+#
+# `main`'s protection rule needs nothing new, but it decides more than it did.
+# The push moves the head, and dependabot-merge.yml approves only the commit
+# Dependabot wrote, so the bundle commit is never approved by the repository. A
+# rule that dismisses stale approvals, or requires approval of the most recent
+# reviewable push, therefore sends a bump that changed the bundle to a person;
+# with both off it merges itself once CI is green. See CONTRIBUTING.md.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    # EXACT rather than approximate, unlike ci.yml, which runs on everything so
+    # that no path list can skip the build for the change nobody thought of.
+    # The build below reads `dashboard/` and nothing outside it: neither Vite
+    # config nor anything under `src/` opens a path above its own directory
+    # (the one `..` in them is where the output is WRITTEN), and the design
+    # system's files come from `dashboard/node_modules`. So a change that
+    # touches none of `dashboard/` cannot move the bundle, and a Go, action or
+    # image bump has no business paying for an npm install.
+    #
+    # It is also a boundary, but a narrow one. A pull request runs the workflow
+    # files of ITS OWN merge commit, and Dependabot's secrets are in scope for
+    # the ones it opens. A bump of a GitHub Action edits `.github/workflows/`,
+    # touches nothing under `dashboard/` and never starts this workflow, so the
+    # release it proposes does not run beside the App's key while it is still
+    # an unmerged pull request. Once such a bump has merged it is simply the
+    # action the push job runs, which is why that job pins its actions to SHAs.
+    paths:
+      - dashboard/**
+    # `synchronize` earns its place as it does in dependabot-merge.yml.
+    # Dependabot force-pushes when it rebases a bump onto `main` (it does so
+    # when the bump conflicts after a push to `main`, when its schedule runs,
+    # and on `@dependabot rebase` or `recreate`), and that rewrite starts from
+    # its own commit alone, so the bundle commit is gone. Without this trigger
+    # such a bump goes back to red on the drift gate and stays there.
+    #
+    # Dependabot only does that over the bundle commit because the commit says
+    # it may: see `[dependabot skip]` in the message below. Without the marker
+    # it stops rebasing a branch the moment it holds a commit it did not write.
+
+# Nothing by default; each job asks for exactly what it uses.
+permissions: {}
+
+# One run per pull request at a time. A rebase mid-run makes the head this run
+# started from stale, and the push at the end of it would be refused as a
+# non-fast-forward anyway — cancelling it is the tidy way to lose that race.
+#
+# THE ACTOR IS IN THE KEY, and that is not decoration. The push this workflow
+# makes starts a run of its own (skipped, by the guard below), and without the
+# actor it would share this group and cancel the run that made it — a green
+# push reported as a cancellation. Runs by anyone but Dependabot do nothing, so
+# they have nothing to protect or to cancel.
+concurrency:
+  group: >-
+    dependabot-dashboard-${{ github.event.pull_request.number }}-${{
+    github.actor }}
+  cancel-in-progress: true
+
+jobs:
+  # THE UNTRUSTED HALF. This runs `npm ci` and a bundler over whatever a
+  # dependency published this week, which makes it the one place in the
+  # workflow where somebody else's code executes. So it holds nothing worth
+  # stealing: a read-only token that is not even left in the checkout, no
+  # secrets, and no way to write. All it is allowed to produce is a directory
+  # of files, handed to the next job as DATA.
+  build:
+    name: rebuild the bundle
+    runs-on: ubuntu-latest
+
+    # The same two halves as dependabot-merge.yml, for the same reasons, and
+    # both are load-bearing. The author check limits this to a bump. The ACTOR
+    # check limits it to a run Dependabot itself triggered, which is the only
+    # kind GitHub gives Dependabot's secrets to — a maintainer's own "Update
+    # branch" click, or a commit a person pushed onto the branch, runs as that
+    # person and is skipped here.
+    #
+    # The second job repeats it, because that is the job holding the key.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
+
+    permissions:
+      contents: read
+
+    # A hang detector rather than a budget, the way ci.yml's 30m test timeout
+    # is. The whole rebuild is `npm ci` and two Vite builds — about 15 seconds
+    # from a warm cache — while GitHub's own default is six hours, and a
+    # dependency that stalls an install script is exactly what this job has to
+    # survive.
+    timeout-minutes: 10
+
+    outputs:
+      changed: ${{ steps.drift.outputs.changed }}
+
+    steps:
+      # The pull request's merge ref, which is checkout's default and is what
+      # ci.yml's `dashboard` job builds too. The bundle this produces is
+      # therefore the one that job will demand.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # `latest`, for the reason ci.yml's `dashboard` job states at length, and
+      # it must stay the SAME as that job: this rebuild is only worth anything
+      # if it is byte-for-byte the one the gate runs. If ci.yml ever moves to
+      # `lts/*`, so does this, in the same commit.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      # `npm ci` and the two builds, through the Makefile's own target so the
+      # command is the one CONTRIBUTING.md tells a person to run.
+      - run: make dashboard
+
+      # The question ci.yml's drift gate asks, answered with `git status`: a
+      # file the rebuild ADDED or dropped counts as much as one it changed,
+      # and `git diff` alone cannot see the first kind. The commit made from
+      # this tree has to carry all three.
+      - name: has the rebuild changed the committed bundle
+        id: drift
+        run: |
+          changes="$(git status --porcelain -- static/dashboard)"
+          if [ -z "$changes" ]; then
+            echo "static/dashboard already is what dashboard/ builds."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$changes"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # FIDELITY, not security: this job is the untrusted one and nothing it
+      # says about itself is to be believed. The artifact is a zip of file
+      # contents. A symlink is stored as a copy of its target, a file loses its
+      # mode, and the download extracts every file as plain 0644. A tree
+      # holding a symlink, a special file or an executable would therefore be
+      # committed as something other than what ci.yml's `dashboard` job
+      # rebuilds, and the gate would stay red on the new head. Better to stop
+      # here, while the types and modes can still be seen, than to push a
+      # commit that cannot pass.
+      - name: the rebuild survives being zipped
+        if: steps.drift.outputs.changed == 'true'
+        run: |
+          bad="$(find static/dashboard -mindepth 1 \
+            \( \( ! -type f ! -type d \) -o \( -type f -perm /111 \) \))"
+          if [ -n "$bad" ]; then
+            echo "$bad"
+            echo "::error::the rebuild wrote a symlink, a special file or an executable. An artifact would deliver each of them as a plain file, so the commit could not match what ci.yml rebuilds."
+            exit 1
+          fi
+
+      # The whole directory, not a patch: the app build empties its output
+      # directory first (`emptyOutDir`), so this tree is exactly what should
+      # be committed, deletions included. Hidden files are included on
+      # purpose. The default would drop one silently, and the next job refuses
+      # a hidden file loudly instead — a bundle that gained one should stop
+      # this workflow, not be committed a file short.
+      - if: steps.drift.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-bundle
+          path: static/dashboard
+          include-hidden-files: true
+          if-no-files-found: error
+          # The next job takes it within minutes; one day is the least GitHub
+          # keeps an artifact.
+          retention-days: 1
+
+  # THE PRIVILEGED HALF. It holds an App key and runs nothing the bump brought
+  # in: the runner's own git, gh, find, cp and rm, and three actions pinned to
+  # commits. What it copies in is checked before it is committed. Splitting the
+  # jobs is what makes that true — a compromised package can do whatever it
+  # likes to the runner it ran on, and this is a different one.
+  push:
+    name: commit the bundle
+    needs: build
+    if: >-
+      needs.build.outputs.changed == 'true' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+
+    # The built-in token is not used at all: every call below is made with the
+    # App's, which the first steps mint.
+    permissions: {}
+
+    # Checkout, a download and a push. Anything slower is a network that has
+    # stopped answering.
+    timeout-minutes: 5
+
+    steps:
+      # Missing credentials are the one failure this job is expected to meet on
+      # its first run, and the action's own message for it ("The 'client-id'
+      # (or deprecated 'app-id') input must be set to a non-empty string")
+      # names neither the secret nor the tab it lives on.
+      - name: the App credentials are configured
+        env:
+          CLIENT_ID: ${{ secrets.DASHBOARD_BUNDLE_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.DASHBOARD_BUNDLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::DASHBOARD_BUNDLE_CLIENT_ID and DASHBOARD_BUNDLE_PRIVATE_KEY must both be set as DEPENDABOT secrets."
+            echo "Settings -> Secrets and variables -> Dependabot. The Actions tab is the wrong one:"
+            echo "a run Dependabot triggers cannot read Actions secrets, so a secret put there is empty here."
+            echo "The App they belong to needs Contents: read and write on this repository, and nothing else."
+            echo "See the header of .github/workflows/dependabot-dashboard.yml."
+            exit 1
+          fi
+
+      # THE THREE ACTIONS IN THIS JOB ARE PINNED TO FULL COMMIT SHAS, unlike
+      # the major tags the rest of the repository uses, because this is the job
+      # with the key in its environment. A major tag is re-pointed at every
+      # release (`v3` of this action now sits where v3.2.0 does, and v3.0.0,
+      # v3.1.0 and v3.1.1 are three other commits), so on a tag this job would
+      # run whatever the newest release is, with the key, and no pull request
+      # would ever have shown it. On a SHA the change arrives as a Dependabot
+      # pull request, which is at least somewhere to look; the trailing comment
+      # is what lets Dependabot read the version.
+      # It does not stop a compromised release that is then merged, which is a
+      # risk this repository takes for every action it runs.
+      #
+      # One repository, one permission. The token is scoped to the repository
+      # this runs in by default, and `permission-contents` narrows it to the
+      # one thing the App is used for even if the App itself is later granted
+      # more. It is revoked when the job ends.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.DASHBOARD_BUNDLE_CLIENT_ID }}
+          private-key: ${{ secrets.DASHBOARD_BUNDLE_PRIVATE_KEY }}
+          permission-contents: write
+
+      # The commit is attributed to the App that made it, not to Dependabot
+      # and not to a person: a history that says who wrote a change is only
+      # worth having if it is true. A bot account's noreply address carries its
+      # user id, which the API is the only source of.
+      - name: the App's identity
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          id="$(gh api "/users/${SLUG}[bot]" --jq .id)"
+          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${id}+${SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      # The EXACT commit the rebuild ran against, not the branch. If Dependabot
+      # has force-pushed since, this commit is no longer the branch's tip, the
+      # push at the end is refused as a non-fast-forward, and nothing is
+      # overwritten — the rebase's own run then does this properly.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dashboard-bundle
+          path: ${{ runner.temp }}/dashboard-bundle
+
+      - name: commit and push
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          GIT_USER: ${{ steps.bot.outputs.name }}
+          GIT_EMAIL: ${{ steps.bot.outputs.email }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/dashboard-bundle"
+
+          # This directory was produced next to a dependency's install
+          # scripts, so it is data until proved otherwise, and what is checked
+          # is its NAMES: an allowlist of the kinds of file the bundle is made
+          # of, not a list of what is known to be bad. `static/dashboard` is
+          # embedded into the binary and sits inside a Go module, so a stray
+          # `zz_test.go` there would be compiled and run by every `go test
+          # ./...` on every contributor's machine. A new kind of file in the
+          # bundle has to be added here on purpose. Hidden names are refused at
+          # any depth. After the zip round trip everything is a regular file,
+          # so the type test is belt and braces.
+          bad="$(find "$bundle" -mindepth 1 \
+            \( -name '.*' -o \( ! -type d ! \( -type f \( \
+              -name '*.html' -o -name '*.js' -o -name '*.css' -o \
+              -name '*.woff2' -o -name '*.txt' -o -name '*.svg' -o \
+              -name '*.ico' \) \) \) \))"
+          if [ -n "$bad" ]; then
+            echo "$bad"
+            echo "::error::the rebuilt bundle holds a file that is not one of the bundle's own kinds (.html .js .css .woff2 .txt .svg .ico, no hidden names). Refusing to commit it."
+            exit 1
+          fi
+
+          # Replaced wholesale, so a file the rebuild dropped is dropped here.
+          rm -rf static/dashboard
+          cp -R "$bundle" static/dashboard
+          git add -A -- static/dashboard
+
+          if git diff --cached --quiet; then
+            echo "The branch already carries this bundle; nothing to commit."
+            exit 0
+          fi
+
+          git config user.name "$GIT_USER"
+          git config user.email "$GIT_EMAIL"
+
+          # `-s` because the sign-off gate (scripts/check-signoff.sh) judges
+          # every commit a pull request adds and this is one of them.
+          #
+          # `[dependabot skip]` is GitHub's documented marker for "Dependabot
+          # may force-push over this commit". Without it Dependabot stops
+          # rebasing the branch, answers `@dependabot rebase` with "edited by
+          # someone other than Dependabot" and leaves a conflicted bump stuck
+          # (a conflicted pull request runs no workflows at all). It is not one
+          # of the words Actions reads as "skip this run".
+          git commit -s -F - <<'EOF'
+          build(dashboard): rebuild the bundle for this dependency bump
+
+          Dependabot edits package.json and the lockfile and cannot run a
+          bundler, so static/dashboard no longer matched what dashboard/
+          builds (make dashboard-check). This is that rebuild, made by
+          .github/workflows/dependabot-dashboard.yml.
+
+          [dependabot skip] lets Dependabot force-push over this commit, so
+          it keeps rebasing this branch. When it does the commit is gone,
+          and the workflow runs again and pushes a fresh one.
+          EOF
+
+          # A plain push, never forced: it succeeds only if the branch is still
+          # at the commit this run started from.
+          git push origin "HEAD:refs/heads/${BRANCH}"

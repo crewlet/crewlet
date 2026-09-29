@@ -286,12 +286,16 @@ What follows are the prerequisites that legitimately vary by machine.
   bundle that has drifted from its source
   compiles, embeds, serves and passes every Go test while running code nobody
   wrote — the same failure mode `go mod tidy -diff` and the generated
-  `schema/` are gated against.
+  `schema/` are gated against. A Dependabot bump is the one change that does
+  not make you do it; see [A dashboard bump brings its own
+  bundle](#a-dashboard-bump-brings-its-own-bundle).
 
   **Which node.** CI installs `latest` — the newest Node release, resolved by
-  setup-node when the job runs — in both the `dashboard` job and the `gates`
-  job, which must always answer this the same way because what `gates` runs
-  under plain node is what `dashboard` built.
+  setup-node when the job runs — in the `dashboard` job, the `gates` job and
+  [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
+  `build` job. The last must always answer this the same way as `dashboard`,
+  because it rebuilds the bundle that job diffs. `gates` need not match either:
+  what it runs under plain node is the committed bundle, not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -304,9 +308,10 @@ What follows are the prerequisites that legitimately vary by machine.
 
   The cost is worth knowing before you hit it: a new Node major reaches CI
   with no commit behind it, so the `dashboard` job can go red on a day nobody
-  changed anything. If that happens, the fix is `lts/*` in `ci.yml` — the
-  current LTS, which lags the newest major and is the same zero-maintenance
-  trade — not a hand-maintained number.
+  changed anything. If that happens, the fix is `lts/*` in `ci.yml`'s
+  `dashboard` job and in `dependabot-dashboard.yml`'s `build` job, in the same
+  commit — the current LTS, which lags the newest major and is the same
+  zero-maintenance trade — not a hand-maintained number.
 
   **Do not add `engines` or `devEngines` to `dashboard/package.json`**, however
   reasonable it looks. Those fields also apply inside **Dependabot's** sandbox,
@@ -521,13 +526,16 @@ worth knowing:
   any package in it — so it costs a vaguer subject on every bump, and it puts
   one member's bad release in front of the rest. Pay that where a split bump is
   genuinely broken — not for neatness, and not to batch unrelated noise.
-- **A dashboard runtime bump needs a rebuilt bundle, so it will not auto-merge.**
-  `static/dashboard` is committed and the `dashboard` job rebuilds and diffs it,
-  but Dependabot edits only `package.json` and the lockfile — it cannot run a
-  bundler. A bump that changes the emitted bytes therefore sits red on that gate
-  until someone runs `make dashboard` and commits the output with it. Bumps that
-  do not touch the output — `@types/*`, `prettier`, a build tool whose result is
-  byte-identical — pass it untouched and land on their own.
+- **A dashboard bump that changes the emitted bytes needs a rebuilt bundle, and
+  gets one.** `static/dashboard` is committed and the `dashboard` job rebuilds
+  and diffs it, but Dependabot edits only `package.json` and the lockfile — it
+  cannot run a bundler — so such a bump used to sit red on that gate until
+  someone ran `make dashboard` and pushed the output onto its branch.
+  [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml) is
+  that someone: see [A dashboard bump brings its own
+  bundle](#a-dashboard-bump-brings-its-own-bundle). Bumps that do not touch the
+  output — `@types/*`, `prettier`, a build tool whose result is byte-identical —
+  pass the gate untouched and get no commit.
 - **A Compose image can be held back on purpose**, with the reason in a
   comment beside the pin — `mattermost-db` holds its Postgres major because an
   existing `mattermost-pgdata` volume will not open under a newer one without a
@@ -576,8 +584,17 @@ actor that triggered the run. That second condition is what stops the workflow
 approving a commit a person pushed onto a Dependabot branch — anyone with write
 access can push one. Its visible cost is that clicking **Update branch**
 yourself leaves the pull request unapproved, because the run your click
-triggered is skipped; `@dependabot rebase` re-pushes as Dependabot and recovers
-it.
+triggered is skipped; `@dependabot recreate` re-pushes as Dependabot and
+recovers it. (Not `rebase`: the merge commit your click made is one Dependabot
+did not write, and it will not rebase a branch that holds one.)
+
+The approval names the commit the run was started for. `gh pr review --approve`
+sends no commit, and GitHub then attaches the review to whatever the head is at
+that moment — so a run whose approve step executes after a push has landed, or
+a maintainer re-running an old one (a re-run keeps its actor, so it passes the
+guard), would approve a commit no event named. Named explicitly, an approval of a commit that
+is no longer the head is stale from the moment it is made, which is how a rule
+that dismisses stale approvals is meant to see it.
 
 Because nothing retitles a bump before it becomes a permanent subject line, each
 entry in `.github/dependabot.yml` pins the prefix its commits carry, and every
@@ -595,9 +612,100 @@ halves of the author/actor guard and the `--auto --squash` flags; those tests
 were dropped, and no linter in this repository reads a workflow file. Every one
 of them fails silently — the workflow keeps running, it just starts running on
 the wrong pull requests or merging before a check has reported — and the job
-holds `contents: write` and `pull-requests: write`. Read the `if:` and the merge
-command on any diff that touches
+holds `contents: write` and `pull-requests: write`. Read the `if:`, the commit
+the approval names and the merge command on any diff that touches
 [`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
+
+### A dashboard bump brings its own bundle
+
+[`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
+runs when Dependabot opens or updates a pull request that touches `dashboard/`.
+It does what the failing `dashboard` job tells a person to do — `make dashboard`
+— and, if `static/dashboard` came out different (a changed file, a dropped one
+or a new one), commits the result onto Dependabot's branch as `build(dashboard):
+rebuild the bundle for this dependency bump`, signed off like every other
+commit. ci.yml then runs on that new head as it runs on anything else, and the
+drift gate that failed on the first commit passes on the second. A bump that
+leaves the output as it was pushes nothing.
+
+It is two jobs because one of them runs somebody else's code. `npm ci` and the
+bundler execute whatever a dependency published this week, so that job holds a
+read-only token that is not left in the checkout and no secrets, and passes the
+next job nothing but a directory of files. The second job holds the credential
+and runs nothing the bump brought in: the runner's own `git`, `gh`, `find`, `cp`
+and `rm`, and three actions pinned to full commit SHAs — unlike the major tags
+used everywhere else, because a tag is re-pointed at each release and this is
+the job with the key in its environment. It checks the bundle's file *names*
+against an allowlist of the kinds of file the bundle is made of (`static/dashboard`
+sits inside the Go module and is embedded, so a stray `zz_test.go` would be run
+by every `go test ./...`), refuses hidden names, replaces `static/dashboard`
+wholesale and pushes without `--force`, so a branch Dependabot has moved since
+the run began is refused rather than overwritten. A new kind of file in the
+bundle has to be added to that allowlist on purpose. The untrusted job checks
+the other half — that nothing in the tree is a symlink, a special file or
+executable, none of which survives being zipped into an artifact — because a
+commit that could not match what ci.yml rebuilds would leave the gate red.
+
+A pull request that touches nothing under `dashboard/` never starts the workflow.
+That keeps the release an *open* GitHub Action bump proposes from running beside
+the credential; it does not stop one that has already merged, which is what the
+SHA pins are for and which they narrow rather than remove.
+
+**The push is made by a GitHub App, not by `GITHUB_TOKEN`**, and that is where
+the setup cost is. A push made with the workflow's own token does start the
+pull request's runs, but GitHub holds them in an approval-required state until
+someone with write access clicks *Approve workflows to run* — deliberately, so
+that automation cannot recurse without a person. Every bundle commit would wait
+for that click before `ci` ran on it, and the auto-merge queued behind those
+checks would wait with it. A push made as an App starts them at once. Two things
+outside this repository's files have to exist:
+
+- **A GitHub App installed on this repository with one permission: Contents,
+  read and write.** Not Workflows — its absence is what stops this credential
+  rewriting a workflow file — and not Pull requests or Administration. Contents:
+  write can still create a tag, and a push made as an App starts workflows, so
+  keep `v*` behind a tag ruleset this App is not on the bypass list of: without
+  one, a leaked key can push a tag and run the release pipeline.
+- **Its client ID and private key as Dependabot secrets**,
+  `DASHBOARD_BUNDLE_CLIENT_ID` and `DASHBOARD_BUNDLE_PRIVATE_KEY`, under
+  Settings → Secrets and variables → **Dependabot**. Not Actions secrets: a run
+  Dependabot triggers reads its own store and cannot see the Actions one, so a
+  secret put on the wrong tab is empty there.
+
+The job fails naming both secrets when either is empty. It cannot check the
+App: one that is not installed here, or lacks Contents: write, fails inside
+`actions/create-github-app-token` with that action's own error.
+
+What the workflow does not do is decide anything. It approves nothing and queues
+no merge: [`dependabot-merge.yml`](.github/workflows/dependabot-merge.yml) queued
+the auto-merge when the pull request opened, approved the commit Dependabot
+wrote, and `main`'s protection rule still decides whether it lands. Two settings
+there matter more than they did, because the bundle commit is a push nobody has
+approved. If the rule **dismisses stale approvals when new commits are pushed**,
+or **requires approval of the most recent reviewable push**, a bump that changed
+the bundle waits for a person; with both off it merges itself once CI is green.
+Which you want is a choice about how much a bump that changes the JavaScript the
+binary embeds needs a human look, and this workflow leaves it where the other
+gates already are.
+
+Dependabot stops rebasing a branch that holds a commit it did not write and
+answers `@dependabot rebase` with "edited by someone other than Dependabot" —
+which would leave a bump that later conflicts with `main` stuck, since a
+conflicted pull request runs no workflows. The bundle commit therefore carries
+`[dependabot skip]`, GitHub's documented marker for "Dependabot may force-push
+over this commit". Dependabot keeps rebasing on conflict, on its schedule and on
+`@dependabot rebase`; each rebase starts from its own commit alone, the bundle
+commit is gone, the workflow runs again and pushes a fresh one. That is also how
+two bumps that both changed the bundle stop colliding — rebuild, never merge —
+since a rebase is a rebuild. A commit *without* the marker, such as the merge
+commit **Update branch** makes, still blocks it, and `@dependabot recreate` is
+the way out.
+
+Nothing checks any of this for you, and the workflow holds a credential that can
+write to a branch. Read the `if:` on both jobs, each job's `permissions:`, the
+pins on the actions in the second one and the App's scope on any diff that
+touches
+[`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml).
 
 ## Releasing
 
