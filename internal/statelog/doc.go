@@ -458,6 +458,9 @@
 //     nobody judged — and the node's own write fence does not read one as an
 //     eviction: it left a partition, and the fleet did not remove it.
 //
+// statelogtest's partitioned family, statelogtest.RunPartitioned, certifies
+// all three and the release gate on real logs of a divided layout.
+//
 // Under layout 0 every record and every path a domain of this build writes is
 // in the one partition, `estate.000`, which every data node serves from boot
 // and which no node joins or leaves while it runs — and a node without `data`
