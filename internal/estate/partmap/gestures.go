@@ -18,9 +18,16 @@ import (
 // this map's name ([refused]), so the detail every surface shows says which
 // map refused.
 var (
-	// ErrNoMap is a gesture on a fleet that has no estate map yet — which
-	// is every fleet whose estate is still whole on every data node.
-	ErrNoMap = errors.New("estate/partmap: there is no estate map yet")
+	// ErrNoMap is a gesture on a fleet that has no estate map.
+	//
+	// IT SAYS THAT THERE IS NONE AND NOTHING ABOUT WHETHER ONE IS COMING,
+	// because that depends on the layout, and the two answers send an
+	// operator in opposite directions: at layout 0 there never is one —
+	// every data node holds the whole estate ([WholeEstate]) — and at a
+	// partitioned layout none has been written yet ([Unplaced]). Whoever
+	// refuses a gesture with it says which, after it; a "yet" here put a
+	// wait in front of layout 0's fact.
+	ErrNoMap = errors.New("estate/partmap: there is no estate map")
 
 	// ErrUnknownPartition is a move naming a partition the map's layout
 	// does not have.

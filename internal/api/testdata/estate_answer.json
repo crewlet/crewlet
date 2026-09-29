@@ -854,7 +854,7 @@
       "status": 409,
       "body": {
         "error": "estate_whole",
-        "detail": "estate/partmap: there is no estate map yet: layout 0: every data node holds the whole estate, so there is no partition to place, move or hold a node for",
+        "detail": "estate/partmap: there is no estate map: layout 0: every data node holds the whole estate, so there is no partition to place, move or hold a node for",
         "hint": "nothing to move: a data node is added by starting it and taken away by stopping it, and every other data node goes on holding the whole estate"
       }
     },
@@ -870,7 +870,7 @@
       "status": 503,
       "body": {
         "error": "no_estate_map",
-        "detail": "estate/partmap: there is no estate map yet: layout 1: no estate map has been written yet, so no partition is placed — the estate-map duty writes the first once the layout's logs exist and a company and a data node are there to place them on",
+        "detail": "estate/partmap: there is no estate map: layout 1: no estate map has been written yet, so no partition is placed — the estate-map duty writes the first once the layout's logs exist and a company and a data node are there to place them on",
         "hint": "the estate-map duty writes the first map within a tick of the layout's logs existing and a data node holding a live estate lease: ask again then"
       }
     },

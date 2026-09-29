@@ -91,6 +91,11 @@ func TestUnderLayoutZeroEveryEstateGestureSaysThereIsNoMap(t *testing.T) {
 		if msg := err.Error(); !strings.Contains(msg, "layout 0") || !strings.Contains(msg, "whole") {
 			t.Errorf("%s's refusal does not say why there is no map: %v", name, err)
 		}
+		// NOTHING IN IT READS AS A WAIT: layout 0 never has a map, and a
+		// "yet" anywhere in the sentence tells an operator one is coming.
+		if strings.Contains(err.Error(), "yet") {
+			t.Errorf("%s's refusal reads as a map still to come: %v", name, err)
+		}
 	}
 }
 
