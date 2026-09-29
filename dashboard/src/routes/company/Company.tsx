@@ -55,6 +55,8 @@ import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hook
 import {
   indexOrg,
   seatPath,
+  unitByKey,
+  unitPath,
   unitSeatsLabel,
   unitTally,
   UNIT_TOTAL_HINT,
@@ -146,7 +148,7 @@ function SubUnitLinks({ units }: { units: Unit[] }) {
   return (
     <div className="list">
       {units.map((child) => (
-        <a key={child.name} className="thread-entry" href={href(["company", "units", child.name])}>
+        <a key={child.key} className="thread-entry" href={href(unitPath(child))}>
           <FolderGlyph size="sm" />
           <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
             <strong className="t-cell truncate">{child.name}</strong>
@@ -216,7 +218,7 @@ function unitView(index: OrgIndex, unit: Unit): { seats: Seat[]; facts: Fact[] }
 
 /** The hint under every "no such unit", on the page and in the rail alike. */
 const NO_UNIT_HINT =
-  "A unit is addressed by name here. Its stable id is part of the guarded configuration rather than the public org projection, so no link this screen can build carries one.";
+  "A unit is addressed by its key — its id, or its name where it declares none. One renamed since this link was made answers to its new key.";
 
 /** And what an empty one costs, which is the part a reader acts on. */
 const NO_SEATS_HINT =
@@ -432,22 +434,23 @@ export function CompanyScreen() {
  * routing consequence that makes a unit more than a label: knowledge,
  * delegation and escalation all follow this tree.
  *
- * Addressed by `id` where a unit declares one and by NAME where it does not,
- * which is the same rule the engine's own `Unit.Key` follows — so a link from
- * a project's owning unit and a link from the chart reach the same page.
+ * Addressed by its KEY ([Unit.id]) — `id` where a unit declares one and its
+ * name where it does not, which is the engine's own `Unit.Key` carried on the
+ * projection — so a link from the chart, a schedule's scope and a report's
+ * finding reach the same page, and two units sharing a name reach their own.
  */
 export function UnitScreen({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
 
-  const unit = index.units.find((u) => u.name === id);
+  const unit = unitByKey(index, id);
   usePageLabels(unit ? { [id]: unit.name } : {});
 
   if (!unit) {
     return (
       <EmptyState
         icon={<AccountTreeGlyph size={32} />}
-        title={`No unit called “${id}”`}
+        title={`No unit “${id}”`}
         description={NO_UNIT_HINT}
       />
     );
@@ -550,7 +553,7 @@ export function UnitPeek({ id }: { id: string }) {
   const org = useOrg();
   const { connected } = useConnection();
   const index = useMemo(() => indexOrg(org), [org]);
-  const unit = index.units.find((u) => u.name === id);
+  const unit = unitByKey(index, id);
 
   if (!unit) {
     if (!connected) return <Skeleton variant="text" rows={6} label="Loading the org tree" />;
@@ -558,7 +561,7 @@ export function UnitPeek({ id }: { id: string }) {
       <EmptyState
         size="compact"
         icon={<AccountTreeGlyph size={32} />}
-        title={`No unit called “${id}”`}
+        title={`No unit “${id}”`}
         description={NO_UNIT_HINT}
       />
     );

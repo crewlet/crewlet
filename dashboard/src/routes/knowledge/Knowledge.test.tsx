@@ -100,6 +100,16 @@ test("the units whose space names the container are read from the chart", async 
   expect(screen.queryByText(/Sales/)).toBeNull();
 });
 
+// THE LINK CARRIES THE UNIT'S KEY. It was built from the unit's NAME, which is
+// prose: here the unit is `engineering` and is called "Engineering Unit", so
+// the link reached a page that answered "no unit" — and where two units share
+// a name it reached whichever the page found first.
+test("the one unit filing here links to its page by its key", async () => {
+  mount(() => json(chart));
+  const name = await screen.findByText("Engineering Unit");
+  expect(name.closest("a")?.getAttribute("href")).toBe("#/company/units/engineering");
+});
+
 test("a refused chart read names the grant the refusal named", async () => {
   mount(() => json({ error: "unauthorized", reason: "no_grant", grants: ["state:read"] }, 403));
   expect(

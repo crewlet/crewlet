@@ -62,6 +62,7 @@ const projection: OrgProjection = {
   ],
   units: [
     {
+      id: "backend",
       name: "Backend",
       type: "team",
       lead: "VP Eng",

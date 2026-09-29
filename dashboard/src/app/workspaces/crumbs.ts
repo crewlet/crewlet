@@ -127,10 +127,6 @@ function companyCrumbs(rest: string[], labels: Labels): Crumb[] {
     // or where the handle resolves to no seat at all, the crumb is the raw
     // address and has to LOOK like one; drawn in the proportional face it is
     // indistinguishable from somebody's name.
-    //
-    // THE UNIT BRANCH BELOW IS DELIBERATELY NOT MONO: a unit's segment IS its
-    // name (`UnitScreen` resolves `units.find((u) => u.name === id)`), so there
-    // is no identifier there to mark.
     return second
       ? [
           { label: "People", path: ["company", "people"] },
@@ -139,7 +135,12 @@ function companyCrumbs(rest: string[], labels: Labels): Crumb[] {
       : [{ label: "People" }];
   }
   if (first === "units") {
-    return second ? [{ label: "Units" }, { label: named(labels, second) }] : [{ label: "Units" }];
+    // THE SAME RULE, for the same reason: a unit's segment is its KEY
+    // (`UnitScreen` resolves it with `unitByKey`), which is an address and
+    // not the name the screen publishes once it has found the unit.
+    return second
+      ? [{ label: "Units" }, { label: named(labels, second), mono: !labels[second] }]
+      : [{ label: "Units" }];
   }
   return [{ label: named(labels, first) }];
 }

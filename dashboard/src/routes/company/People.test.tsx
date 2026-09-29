@@ -132,8 +132,8 @@ const ORG = {
   name: "Acme",
   roles: [],
   units: [
-    { name: "Engineering", roles: [{ name: "Dev A" }, { name: "Dev B" }] },
-    { name: "Design", roles: [{ name: "Dee" }] },
+    { id: "engineering", name: "Engineering", roles: [{ name: "Dev A" }, { name: "Dev B" }] },
+    { id: "design", name: "Design", roles: [{ name: "Dee" }] },
   ],
   derived: {
     seats: [
@@ -142,8 +142,8 @@ const ORG = {
       { handle: "dee", name: "Dee", kind: "agent" },
     ],
     units: [
-      { name: "Engineering", seats: ["dev-a", "dev-b"] },
-      { name: "Design", seats: ["dee"] },
+      { id: "engineering", name: "Engineering", seats: ["dev-a", "dev-b"] },
+      { id: "design", name: "Design", seats: ["dee"] },
     ],
   },
 } as unknown as OrgProjection;
@@ -180,4 +180,44 @@ test("a filtered group head counts what matched, not what the unit holds", async
 
   expect(screen.getByText("1 seat matching")).toBeTruthy();
   expect(screen.queryByText(/directly in it/)).toBeNull();
+});
+
+// A UNIT GROUP IS ONE UNIT, NOT ONE NAME. The roster grouped by the unit's
+// name, so two teams called Platform were drawn as one team of three under one
+// head — and a name is prose nothing holds unique. Each group is keyed on the
+// unit's key, and a name two heads share carries each one's key so a reader
+// can tell them apart.
+const NAMESAKES = {
+  name: "Acme",
+  roles: [],
+  units: [
+    { id: "platform", name: "Platform", roles: [{ name: "Web A" }, { name: "Web B" }] },
+    { id: "infra", name: "Platform", roles: [{ name: "Metal" }] },
+  ],
+  derived: {
+    seats: [
+      { handle: "web-a", name: "Web A", kind: "agent" },
+      { handle: "web-b", name: "Web B", kind: "agent" },
+      { handle: "metal", name: "Metal", kind: "agent" },
+    ],
+    units: [
+      { id: "platform", name: "Platform", seats: ["web-a", "web-b"] },
+      { id: "infra", name: "Platform", seats: ["metal"] },
+    ],
+  },
+} as unknown as OrgProjection;
+
+test("two units sharing a name are two groups, each head naming its key", async () => {
+  mount(NAMESAKES);
+  await settle();
+  await act(async () => {
+    location.hash = "#/company/people?group=unit";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  await settle();
+
+  expect(screen.getByText("Platform (platform)")).toBeTruthy();
+  expect(screen.getByText("Platform (infra)")).toBeTruthy();
+  expect(screen.getByText("2 seats directly in it")).toBeTruthy();
+  expect(screen.getByText("1 seat directly in it")).toBeTruthy();
 });

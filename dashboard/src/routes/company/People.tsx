@@ -27,7 +27,14 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { QueryState } from "~/components/common.tsx";
-import { awaitingPerson, indexOrg, runState, unitDirectLabel, type Seat } from "~/lib/seats.ts";
+import {
+  awaitingPerson,
+  indexOrg,
+  runState,
+  unitDirectLabel,
+  type Seat,
+  type Unit,
+} from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -239,14 +246,32 @@ export function People() {
   const groups = useMemo(() => {
     if (group === "flat") return [{ key: "all", label: "", rows }];
     if (group === "unit") {
-      const byUnit = new Map<string, typeof rows>();
+      // BY THE UNIT'S KEY, never its name: two units may share a name, and
+      // grouped by it their people were drawn as one team under one count.
+      // The key "" is the root, which no unit's key can be.
+      const byUnit = new Map<string, { unit: Unit | null; rows: typeof rows }>();
       for (const row of rows) {
-        const key = row.seat.unit?.name ?? "No unit — org-wide";
-        byUnit.set(key, [...(byUnit.get(key) ?? []), row]);
+        const unit = row.seat.unit;
+        const key = unit?.id ?? "";
+        const entry = byUnit.get(key) ?? { unit, rows: [] };
+        entry.rows.push(row);
+        byUnit.set(key, entry);
       }
+      // A NAME TWO GROUPS SHARE carries each one's key, so the heads a reader
+      // tells them apart by are not two identical words.
+      const names = new Map<string, number>();
+      for (const { unit } of byUnit.values()) {
+        if (unit) names.set(unit.name, (names.get(unit.name) ?? 0) + 1);
+      }
+      const labelOf = (unit: Unit | null) =>
+        !unit
+          ? "No unit — org-wide"
+          : (names.get(unit.name) ?? 0) > 1
+            ? `${unit.name} (${unit.id})`
+            : unit.name;
       return [...byUnit.entries()]
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([key, list]) => ({ key, label: key, rows: list }));
+        .map(([key, { unit, rows: list }]) => ({ key, label: labelOf(unit), rows: list }))
+        .sort((a, b) => a.label.localeCompare(b.label));
     }
     return STATE_ORDER.map((b) => ({
       key: b.key,

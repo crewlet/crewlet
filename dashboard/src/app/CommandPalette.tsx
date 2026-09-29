@@ -20,7 +20,7 @@ import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { indexOrg, unitPath } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
 // `MarkName` `typeIcon` returns.
 import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
@@ -390,15 +390,16 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       if (s < 0) continue;
       push(
         {
-          id: `unit-${unit.name}`,
+          // BY KEY, which is what tells two units sharing a name apart — as
+          // a row id, in the hint a reader picks between them by, and in the
+          // route. Keyed on the name, the second such unit was a duplicate
+          // row id and both rows opened the first one's page.
+          id: `unit-${unit.id}`,
           group: "Units",
           icon: "account_tree",
           label: unit.name,
-          hint: `${unit.type || "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          // BY NAME. A unit's stable `id:` is part of the guarded
-          // configuration rather than the anonymous org projection, so no
-          // link this palette can build carries one.
-          go: () => nav.to(["company", "units", unit.name]),
+          hint: `${unit.type || "unit"} · ${unit.id}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
+          go: () => nav.to(unitPath(unit)),
         },
         s + 2,
       );

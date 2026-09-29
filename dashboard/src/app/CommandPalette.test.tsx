@@ -94,6 +94,7 @@ describe("the people scope", () => {
     roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
     units: [
       {
+        id: "platform",
         name: "Platform",
         type: "team",
         roles: [{ name: "SRE", handle: "sre", goal: "Keep it up" }],

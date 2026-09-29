@@ -94,6 +94,7 @@ import {
   seatPath,
   seatReading,
   statusLine,
+  unitPath,
   afkReason,
   runState,
   type OrgIndex,
@@ -348,7 +349,7 @@ function seatFacts({
     {
       label: "Unit",
       value: seat.unitChain.length > 0 ? seat.unitChain.map((u) => u.name).join(" › ") : "org-wide",
-      path: unit ? ["company", "units", unit.name] : undefined,
+      path: unit ? unitPath(unit) : undefined,
     },
     {
       // NOBODY AND NOT REPORTED ARE DIFFERENT FACTS. An engine that sends no
@@ -1154,9 +1155,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                         {
                           label: "Unit lead",
                           value: seat.unitLead ? (
+                            // THE LEAD THE ENGINE RESOLVED, not the first
+                            // seat carrying its name: two seats may share a
+                            // name, and looked up by it the chip linked to
+                            // whichever the roster listed first.
                             <SeatChip
                               name={seat.unitLead}
-                              handle={index.byName.get(seat.unitLead)?.handle}
+                              handle={seat.unit?.effectiveLead?.handle}
                             />
                           ) : index.hierarchy ? (
                             <span className="muted">none</span>

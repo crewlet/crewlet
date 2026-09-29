@@ -15,7 +15,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
-import { UnitBlock } from "./Company.tsx";
+import { UnitBlock, UnitScreen } from "./Company.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -96,4 +96,60 @@ test("a leaf unit says one number, not the same number twice", () => {
   block("Backend");
   expect(screen.getByText("2 seats")).toBeTruthy();
   expect(screen.queryByText(/directly/)).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// A unit's page is found by its KEY
+// ---------------------------------------------------------------------------
+
+/**
+ * Two teams called Platform, one declaring the id `infra`.
+ *
+ * Both halves are legal: a name is prose nothing holds unique, and a unit's
+ * key is its id where it declares one. The page was looked up by NAME, so
+ * `#/company/units/infra` answered "no unit" and the second Platform had no
+ * page at all.
+ */
+const TWINS = {
+  name: "Acme",
+  roles: [],
+  units: [
+    { id: "platform", name: "Platform", purpose: "Runs the web tier", roles: [{ name: "Web" }] },
+    { id: "infra", name: "Platform", purpose: "Runs the metal", roles: [{ name: "Metal" }] },
+  ],
+  derived: {
+    seats: [
+      { handle: "web", name: "Web", kind: "agent" },
+      { handle: "metal", name: "Metal", kind: "agent" },
+    ],
+    units: [
+      { id: "platform", name: "Platform", type: "team", seats: ["web"] },
+      { id: "infra", name: "Platform", type: "team", seats: ["metal"] },
+    ],
+  },
+} as unknown as OrgProjection;
+
+function unitPage(id: string) {
+  const store = new Store();
+  store.applyOrg(TWINS);
+  const socket = new LiveSocket(store);
+  return render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <UnitScreen id={id} />
+      </Router>
+    </ClientContext.Provider>,
+  );
+}
+
+test("a unit's page is the unit its key names, not the first sharing its name", () => {
+  unitPage("infra");
+  expect(screen.getByText("Runs the metal")).toBeTruthy();
+  expect(screen.queryByText("Runs the web tier")).toBeNull();
+});
+
+test("the other unit of that name is reached by its own key", () => {
+  unitPage("platform");
+  expect(screen.getByText("Runs the web tier")).toBeTruthy();
+  expect(screen.queryByText("Runs the metal")).toBeNull();
 });

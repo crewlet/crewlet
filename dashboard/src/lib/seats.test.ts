@@ -29,7 +29,9 @@ import {
   staleness,
   STALE_MS,
   STALLED_MS,
+  unitByKey,
   unitDirectLabel,
+  unitPath,
   unitSeatsLabel,
   unitTally,
   UNIT_TOTAL_HINT,
@@ -69,12 +71,14 @@ const org: OrgProjection = {
   ],
   units: [
     {
+      id: "engineering",
       name: "Engineering",
       type: "department",
       lead: "VP Engineering",
       roles: [{ name: "VP Engineering", handle: "vpe" }],
       children: [
         {
+          id: "backend",
           name: "Backend",
           type: "team",
           // No lead: it inherits VP Engineering from the parent.
@@ -252,6 +256,20 @@ describe("the engine's hierarchy", () => {
       },
     });
     expect(phantom.hierarchy).toBe(false);
+
+    // AND A UNIT PAIRS BY ITS KEY as well as its name: two units may share a
+    // name, so a block naming another unit in this one's place is not this
+    // unit's hierarchy however it is spelled.
+    const swapped = indexOrg({
+      ...org,
+      derived: {
+        ...org.derived!,
+        units: (org.derived!.units ?? []).map((u) =>
+          u.name === "Backend" ? { ...u, id: "backend-2" } : u,
+        ),
+      },
+    });
+    expect(swapped.hierarchy).toBe(false);
   });
 
   test("a human seat holds a place in the hierarchy", () => {
@@ -302,6 +320,69 @@ const seatRead = (row: ChartSeat, runtime = true): ChartReading<ChartSeatRead> =
 const unitRead = (row: ChartUnit): ChartReading<ChartUnitRead> => ({
   state: "read",
   value: { unit: row, children: [], seats: [], answer, runtime: true },
+});
+
+// A UNIT IS ADDRESSED BY ITS KEY. Every route to one was built from its NAME,
+// which is prose: two units may share one, and a unit that declares an `id:`
+// is named by that id wherever the engine names it — a schedule's scope, the
+// org chart's findings — so a page looked up by name opened the first unit of
+// that name, and a link carrying the id opened none.
+describe("addressing a unit", () => {
+  /** Two teams called Platform, one of them declaring an id. */
+  const twins: OrgProjection = {
+    name: "Acme",
+    roles: [],
+    units: [
+      { id: "platform", name: "Platform", purpose: "the web", roles: [{ name: "Web" }] },
+      { id: "infra", name: "Platform", purpose: "the metal", roles: [{ name: "Metal" }] },
+    ],
+    derived: {
+      seats: [seat({ handle: "web", name: "Web" }), seat({ handle: "metal", name: "Metal" })],
+      units: [
+        {
+          id: "platform",
+          name: "Platform",
+          type: "team",
+          lead: "",
+          lead_inherited: false,
+          channel: "",
+          channel_inherited: false,
+          seats: ["web"],
+        },
+        {
+          id: "infra",
+          name: "Platform",
+          type: "team",
+          lead: "",
+          lead_inherited: false,
+          channel: "",
+          channel_inherited: false,
+          seats: ["metal"],
+        },
+      ],
+    },
+  };
+  const twinIndex = indexOrg(twins);
+
+  test("each unit's path carries its own key", () => {
+    expect(twinIndex.hierarchy).toBe(true);
+    expect(twinIndex.units.map(unitPath)).toEqual([
+      ["company", "units", "platform"],
+      ["company", "units", "infra"],
+    ]);
+  });
+
+  test("a key opens its own unit, whatever name it shares", () => {
+    expect(unitByKey(twinIndex, "infra")?.purpose).toBe("the metal");
+    expect(unitByKey(twinIndex, "platform")?.purpose).toBe("the web");
+  });
+
+  test("a name is not an address", () => {
+    // "Platform" is the key of the first unit and the name of both; the id
+    // one declares is not reachable under the name it shares.
+    expect(unitByKey(twinIndex, "Platform")).toBeNull();
+    expect(unitByKey(twinIndex, "")).toBeNull();
+  });
 });
 
 describe("what only the org chart's own read says", () => {

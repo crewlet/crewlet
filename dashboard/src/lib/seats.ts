@@ -61,16 +61,18 @@ export interface Unit {
   /** Stable React key and DOM id suffix: the unit's depth-first position. */
   key: string;
   /**
-   * A unit is ADDRESSED BY NAME, here and in every route.
+   * The unit's KEY, and what ADDRESSES it — here and in every route
+   * ([unitPath]).
    *
-   * `org.Unit.Key` prefers the declared `id:`, and this client cannot: the id
-   * is GUARDED — `internal/api/orgprojection_test.go` classifies it as "a
-   * durable key rather than a name: everything filed against the unit keys on
-   * it and nobody reads it, while the chart draws Name" — so the anonymous
-   * projection carries no id at all, and a link built from one would be a
-   * link built from a value this screen was never given. Read it through the
-   * chart (`lib/chartReads.ts`) where a reader may and something needs the key.
+   * The engine's own `Unit.Key`, carried on the projection: the declared `id:`
+   * where the unit has one and its name where it does not. Never the name
+   * alone. A name is prose, two units may share one, and a unit that declares
+   * an id is addressed by the chart, a schedule's scope and a report's finding
+   * under that id — so a page looked up by name opened the first unit of that
+   * name, or "no unit called" for a link carrying the id.
    */
+  id: string;
+  /** What a person reads. Display only: nothing resolves a unit by it. */
   name: string;
   /** The EFFECTIVE type where the hierarchy is reported, else as written. */
   type: string;
@@ -189,6 +191,32 @@ export function seatPath(seat: Pick<Seat, "handle" | "name">): string[] {
   return ["company", "people", seat.handle || seat.name];
 }
 
+/**
+ * The route segments that open a unit's page: its KEY, never its name.
+ *
+ * ONE HELPER for the reason [seatPath] is one: five screens built this path
+ * for themselves, every one of them out of the unit's name, so two units
+ * sharing a name opened the same page and a unit that declares an id was
+ * unreachable from the chart's own findings and a schedule's scope, which
+ * both name it by key.
+ */
+export function unitPath(unit: Pick<Unit, "id">): string[] {
+  return ["company", "units", unit.id];
+}
+
+/**
+ * The unit a route's segment addresses: the one whose KEY it is, or null.
+ *
+ * Exactly the key the projection carried, which is the engine's own
+ * `Unit.Key` and so the value every link this product builds — [unitPath], a
+ * schedule's scope, a report's finding — already holds. Never the name: two
+ * units may share one, and a lookup by name opened whichever came first.
+ */
+export function unitByKey(index: Pick<OrgIndex, "units">, key: string): Unit | null {
+  if (!key) return null;
+  return index.units.find((u) => u.id === key) ?? null;
+}
+
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
 
 interface Authored {
@@ -214,6 +242,7 @@ function walk(org: OrgProjection | null | undefined): Authored {
 function newUnit(raw: OrgUnit, at: number): Unit {
   return {
     key: `u${at}`,
+    id: raw.id ?? "",
     name: raw.name ?? "",
     type: raw.type ?? "",
     purpose: raw.purpose ?? "",
@@ -274,8 +303,8 @@ function link(authored: Authored): Unit[] {
  * cannot be.
  *
  * The block names units in depth-first order and seats by name, so the pairing
- * is CHECKED rather than assumed: the same number of units with the same names
- * in the same order, every seat accounted for exactly once, and every handle
+ * is CHECKED rather than assumed: the same number of units with the same keys
+ * and names in the same order, every seat accounted for exactly once, and every handle
  * it mentions belonging to one of them. Anything else returns null and the
  * caller falls back to the authored tree, because half a hierarchy drawn as a
  * whole one is worse than an honest "the engine did not say".
@@ -292,15 +321,17 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
   for (let i = 0; i < units.length; i++) {
     const d = dUnits[i];
     const unit = units[i]!;
-    if (!d || d.name !== unit.name) return null;
+    // BY KEY AND NAME, in position: the key is what tells two units sharing a
+    // name apart, and the name is what the tree draws.
+    if (!d || (d.id ?? "") !== unit.id || d.name !== unit.name) return null;
     unit.type = d.type || unit.type;
     unit.channel = d.channel ?? "";
     unit.channelInherited = !!d.channel_inherited;
     unit.leadInherited = !!d.lead_inherited;
   }
 
-  // Seats pair by NAME, and a name that repeats (only possible in a revision
-  // stored before names had to be unique) is not paired by position. The
+  // Seats pair by NAME, and a name that repeats (legal: a name is prose and
+  // nothing holds it unique) is not paired by position. The
   // engine's order is not the document's — a root seat moved into a unit comes
   // after that unit's own seats — so the first "Designer" the engine lists can
   // be the second one the document wrote, and pairing them in turn would draw

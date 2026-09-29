@@ -274,8 +274,20 @@ describe("the breadcrumb", () => {
     });
     expect(named[named.length - 1]?.label).toBe("Chief Technology Officer");
     expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
-    const unit = crumbsFor(["company", "units", "Platform"]);
-    expect(unit[unit.length - 1]?.mono, "a unit is addressed by its own name").toBeFalsy();
+  });
+
+  // A UNIT'S SEGMENT IS ITS KEY, so it follows the seat's rule rather than
+  // being drawn as prose: `platform-eng` is an address until the screen
+  // publishes the name it resolved it to.
+  test("a unit's crumb is its name, and an unnamed key is an identifier", () => {
+    const raw = crumbsFor(["company", "units", "platform-eng"]);
+    expect(raw[raw.length - 1]?.label).toBe("platform-eng");
+    expect(raw[raw.length - 1]?.mono, "a key drawn as prose reads as a name").toBe(true);
+    const named = crumbsFor(["company", "units", "platform-eng"], {
+      "platform-eng": "Platform",
+    });
+    expect(named[named.length - 1]?.label).toBe("Platform");
+    expect(named[named.length - 1]?.mono, "a name is not an identifier").toBeFalsy();
   });
 
   // THE TAB TITLE COMES FROM THE SAME TRAIL, so a reader with four tabs open

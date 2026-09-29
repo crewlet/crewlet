@@ -900,15 +900,21 @@ export interface OrgSeat {
 }
 
 /**
- * One unit on the anonymous org projection, as `internal/api`'s `OrgUnit`
- * writes it.
+ * One unit on the org projection, as `internal/api`'s `OrgUnit` writes it.
  *
- * `id`, `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not
- * here: `internal/api/orgprojection_test.go` classifies every field of
- * `config.Unit` and fails the build over an unclassified one. A screen that
- * needs one of them reads the company document through the `config` query.
+ * `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not here:
+ * `internal/api/orgprojection_test.go` classifies every field of `config.Unit`
+ * and fails the build over an unclassified one. A screen that needs one of
+ * them reads the org chart (`lib/chartReads.ts`).
  */
 export interface OrgUnit {
+  /**
+   * The unit's KEY — its declared `id`, or its name where it declares none —
+   * which is what the org chart addresses it by, what a `manages:` entry and a
+   * seat's `unit:` resolve, and what every route to a unit carries. `name` is
+   * prose and two units may share one, so nothing addresses a unit by it.
+   */
+  id: string;
   name: string;
   type?: string;
   purpose?: string;

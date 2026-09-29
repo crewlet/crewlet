@@ -33,7 +33,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { indexOrg, unitPath, type OrgIndex } from "~/lib/seats.ts";
 import { useChartRead } from "~/lib/chartReads.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -393,12 +393,12 @@ function containerFacts({
    * could not be read: `space` is guarded, so an anonymous reader does not
    * know who files here, and an empty list would say nobody does.
    */
-  units: { name: string }[] | null;
+  units: { name: string; key: string }[] | null;
   /** Why [units] is null, as the sentence the fact shows in its place. */
   unitsWithheld: string;
   now: number;
 }): Fact[] {
-  const lead = units?.[0];
+  const only = units?.length === 1 ? units[0] : undefined;
   return [
     // A COUNT, and ZERO IS A REAL ONE: a container exists from the first write
     // into it, so one whose pages have all been trashed is a state an operator
@@ -442,7 +442,9 @@ function containerFacts({
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO. Two units filing into one
       // container is legal and happens — a shared space — and a fact line that
       // linked the first of them would be a link that is right half the time.
-      path: units?.length === 1 && lead ? ["company", "units", lead.name] : undefined,
+      // BY ITS KEY: the name is prose two units may share, and a unit that
+      // declares an id has no page under its name at all.
+      path: only ? unitPath({ id: only.key }) : undefined,
     },
     { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
   ];
@@ -517,7 +519,7 @@ export function ContainerPeek({ id }: { id: string }) {
     if (chart.state !== "read") return null;
     return (chart.value.units ?? [])
       .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
-      .map((u) => ({ name: u.name || u.key }));
+      .map((u) => ({ name: u.name || u.key, key: u.key }));
   }, [chart, id]);
   // WHY THERE IS NO ANSWER, said three ways because they are three facts. It
   // printed "Needs an operator token to read" for all of them: to a reader

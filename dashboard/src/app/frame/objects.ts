@@ -87,7 +87,8 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
   seat: { label: "Seat", pathOf: (id) => ["company", "people", id], mono: true },
-  unit: { label: "Unit", pathOf: (id) => ["company", "units", id] },
+  // A unit's id is its KEY (`lib/seats.ts`'s `unitPath`), never its name.
+  unit: { label: "Unit", pathOf: (id) => ["company", "units", id], mono: true },
   page: {
     // `ENG/Deploy runbook` → `#/knowledge/ENG/Deploy runbook`, each segment
     // encoded by the router.

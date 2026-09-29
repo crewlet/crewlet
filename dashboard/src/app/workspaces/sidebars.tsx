@@ -27,7 +27,14 @@ import { destinationsOf } from "../nav.ts";
 import type { SidebarSection, SidebarRow } from "../frame/WorkspaceSidebar.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, seatTone, unitTally, UNIT_TOTAL_HINT, type Unit } from "~/lib/seats.ts";
+import {
+  indexOrg,
+  seatTone,
+  unitPath,
+  unitTally,
+  UNIT_TOTAL_HINT,
+  type Unit,
+} from "~/lib/seats.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useRecents } from "~/lib/recents.ts";
@@ -110,13 +117,12 @@ export function useCompanySidebar(): SidebarSection[] {
     // lead, which answers nothing for a unit with no seats of its own.
     function rowsFor(units: Unit[] | undefined): SidebarRow[] {
       return (units ?? []).map((unit) => {
-        // BY NAME. A unit's stable `id:` is guarded and the anonymous org
-        // projection does not carry it, so every route to a unit is its name.
-        const key = unit.name;
+        // BY KEY, never by name: two units may share a name, and keyed on it
+        // they shared one row key and one page.
         return {
-          key,
+          key: unit.id,
           label: unit.name,
-          path: ["company", "units", key],
+          path: unitPath(unit),
           // THE EFFECTIVE LEAD, which is the nearest ancestor's where a unit
           // declares none: it behaves identically everywhere in the engine,
           // and hiding the difference is how somebody concludes a team is
