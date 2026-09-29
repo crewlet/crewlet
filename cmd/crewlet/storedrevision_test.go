@@ -34,7 +34,7 @@ const storedRevisionDoc = `{"name":"Nimbus",` +
 // revision lands there, and returns its id.
 func activateStored(t *testing.T, cfg, payload string) string {
 	t.Helper()
-	cs, closeStore, err := openConfigStore(t.Context(), cfg)
+	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}

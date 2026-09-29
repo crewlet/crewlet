@@ -353,28 +353,81 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // so a command run while the engine is stopped genuinely cannot reach it.
 // Saying so is the whole value — an operator who activated a revision and saw
 // nothing change would reasonably conclude the command failed, and neither
-// remedy (restart, or PUT /config) is guessable.
+// remedy (restart, or the running node's own route) is guessable.
+//
+// EACH COMMAND NAMES ITS OWN ROUTE to a running fleet. One note served them
+// all and named `PUT /config`, which refuses a whole company file by name,
+// moves no pointer to a stored revision and re-seals nothing — so it was the
+// wrong answer for every command that printed it.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
 // TestANodeWithNoPointerPublishesItsActiveRevision in reconcile_test.go.
 func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
+	imported, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil))
+	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	id := activeRevisionID(t, cfg)
-	out, _, err := configCmd(t, cfg, "activate", id)
+	activated, _, err := configCmd(t, cfg, "activate", id)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	if !strings.Contains(out, id) {
-		t.Errorf("the output does not name the revision: %q", out)
+	if !strings.Contains(activated, id) {
+		t.Errorf("the output does not name the revision: %q", activated)
 	}
-	for _, want := range []string{"next start", "PUT /config"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the output does not mention %q, so an operator cannot tell "+
-				"how to reach a running fleet: %q", want, out)
+	for _, c := range []struct {
+		command, out string
+		want         []string
+	}{
+		{"import", imported, []string{"next start", "run `crewlet config import` again"}},
+		{"activate", activated, []string{"next start", "POST /config/revisions/" + id + "/revert"}},
+	} {
+		for _, want := range c.want {
+			if !strings.Contains(c.out, want) {
+				t.Errorf("config %s does not mention %q, so an operator cannot "+
+					"tell how to reach a running fleet: %q", c.command, want, c.out)
+			}
+		}
+		if strings.Contains(c.out, "PUT /config") {
+			t.Errorf("config %s sends an operator to PUT /config, which cannot "+
+				"do what it did: %q", c.command, c.out)
+		}
+	}
+}
+
+// A LOCKED STORE IS ANSWERED WITH EACH SUBCOMMAND'S OWN ROUTE AROUND IT.
+//
+// The sentence used to be one — "PUT /config stores the revision AND activates
+// it fleet-wide" — for a listing, a diff, an activation and a rekey alike, none
+// of which a PUT does. Every subcommand that opens the store names its own, and
+// the two with no route through the API say so rather than inventing one.
+func TestALockedConfigStoreNamesEachSubcommandsOwnRoute(t *testing.T) {
+	t.Parallel()
+	for sub, want := range map[string]string{
+		"show":      "GET /config",
+		"export":    "GET /config",
+		"revisions": "GET /config/revisions",
+		"diff":      "/diff?against=",
+		"activate":  "/revert",
+		"rekey":     "POST /config/reload",
+		"seal":      "no route through the API",
+		"scrub":     "no route through the API",
+	} {
+		remedy := lockedStoreRemedy(sub)
+		if !strings.Contains(remedy, want) {
+			t.Errorf("config %s on a locked store says %q, want it to name %q", sub, remedy, want)
+		}
+		if strings.Contains(remedy, "PUT /config") {
+			t.Errorf("config %s on a locked store names PUT /config: %q", sub, remedy)
+		}
+	}
+	// AND EVERY SUBCOMMAND THAT OPENS THE STORE HAS ONE: import alone routes
+	// around the lock by itself.
+	for _, sub := range configSubcommands {
+		if sub != "import" && lockedStoreRemedy(sub) == "" {
+			t.Errorf("config %s has no remedy for a locked store", sub)
 		}
 	}
 }

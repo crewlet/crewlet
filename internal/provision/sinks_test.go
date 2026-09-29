@@ -529,3 +529,18 @@ func TestForgettingReportsWhatItCouldNotDelete(t *testing.T) {
 		}
 	}
 }
+
+// THE SECRET STORE'S NEXT STEP IS ONE A RUNNING ENGINE TAKES.
+//
+// A value sealed here reaches a running engine at its next apply, and the
+// gesture is a re-activation — through the running node, since that is the
+// engine there is to rebuild. `crewlet config activate` opens the node's own
+// store, which a running engine holds, so naming it sent an operator to a
+// command refused for exactly the case the step is about.
+func TestTheSecretStoresNextStepIsTakenThroughTheRunningNode(t *testing.T) {
+	t.Parallel()
+	step := provision.NewSecretStoreSink(refusingValues{}, runFor).NextStep()
+	if !strings.Contains(step, "POST /config/reload") || strings.Contains(step, "config activate") {
+		t.Errorf("NextStep = %q, want the running node's reload", step)
+	}
+}

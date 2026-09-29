@@ -346,7 +346,9 @@ const seedAuthor = "node"
 // an already-migrated file; a split lifetime costs a leaked store on every
 // error path that does not know it now has one.
 func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Company, error) {
-	cs, closeStore, err := openConfigStore(ctx, bootstrapPath)
+	cs, closeStore, err := openConfigStore(ctx, bootstrapPath,
+		"Another `crewlet run` holds this node's store: stop it before "+
+			"starting a second, since one store belongs to one process.")
 	if err != nil {
 		return nil, err
 	}

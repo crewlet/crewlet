@@ -55,7 +55,7 @@ Usage:
                                    List revisions, newest first
   crewlet config diff ID [-against ID|active]
                                    Compare two revisions
-  crewlet config activate ID       Re-point the fleet at a revision
+  crewlet config activate ID       Mark a revision active here; published at the next start
   crewlet config seal              Encrypt a plaintext active revision under the keyring
   crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
   crewlet config scrub [ID] [-dry-run]
@@ -187,7 +187,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		}, stdout)
 	}
 
-	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath)
+	cs, closeStore, err := openConfigStore(ctx, *bootstrapPath, lockedStoreRemedy(sub))
 	if err != nil {
 		return err
 	}
@@ -248,7 +248,13 @@ type configStore struct {
 	activeKeyID string
 }
 
-func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, func(), error) {
+// openConfigStore opens this node's store under the keyring Tier A names.
+//
+// remedy is what the caller's operator should do when a running engine holds
+// the file ([engineHoldsTheStore]): every command has its own route around
+// the lock, and one sentence for all of them named a route most of them do not
+// have.
+func openConfigStore(ctx context.Context, bootstrapPath, remedy string) (*configStore, func(), error) {
 	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 	if err != nil {
 		return nil, nil, err
@@ -266,15 +272,11 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
 	if err != nil {
-		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the
-		// difference between "you are blocked" and "do this instead": the
-		// API writes the same revision and activates it on every node,
-		// which is what an operator wanted from `config import` anyway.
+		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it is the
+		// difference between "you are blocked" and "do this instead" — but
+		// the route is the caller's to name ([lockedStoreRemedy]).
 		return nil, nil, engineHoldsTheStore(fmt.Errorf("open store: %w", err),
-			bootstrapPath, "Use the API against the running node instead — "+
-				"PUT /config stores the revision AND activates it fleet-wide, "+
-				"which this offline path cannot do; or stop `crewlet run` on "+
-				"this node and re-run.")
+			bootstrapPath, remedy)
 	}
 	return &configStore{
 		configs: db.Configs(), cipher: cipher, events: db.Events(),
@@ -339,11 +341,12 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	if err := stageTheChart(ctx, cs, path, company, stdout); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, publishNote)
+	fmt.Fprintln(stdout, importPublishNote)
 	return nil
 }
 
-// publishNote is what an OFFLINE import or activation can and cannot do.
+// offlinePublish is what an OFFLINE write that marks a revision active can
+// and cannot do, and every such note opens with it.
 //
 // The fleet's activation pointer lives in the coordination store, and on the
 // default embedded topology that store is inside the engine's own process —
@@ -353,10 +356,74 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 //
 // Said out loud rather than left to be discovered: an operator who imported a
 // revision and saw nothing change would reasonably conclude the import
-// failed, and the fix — restart, or use the API — is not guessable.
-const publishNote = "This node will publish it to the fleet at its next start. " +
-	"To activate it on a RUNNING fleet without a restart, use the API: " +
-	"PUT /config to a node that is up."
+// failed, and the fix — restart, or reach a running node — is not guessable.
+//
+// WHAT REACHES A RUNNING FLEET IS EACH COMMAND'S OWN, which is why the notes
+// below are four rather than one. There was one, and it sent every command to
+// `PUT /config` — which refuses a whole company file by name (it carries the
+// org chart, a log of its own), activates nothing that is already stored, and
+// re-seals nothing.
+const offlinePublish = "This node will publish it to the fleet at its next start."
+
+// importPublishNote is an offline import's: the route to a running fleet is
+// this same command against a running node, which divides the file between
+// the settings and the chart — the one thing `PUT /config` cannot do.
+const importPublishNote = offlinePublish + " To make the file the running " +
+	"fleet's company without a restart, run `crewlet config import` again " +
+	"while a node is up: with the engine holding this store it goes through " +
+	"that node's API, and -api names any node."
+
+// activatePublishNote is an offline activation's: a running node activates a
+// stored revision by storing its document again as a new one, which is the
+// append-only history's way of moving the pointer back.
+func activatePublishNote(revisionID string) string {
+	return offlinePublish + " To activate it on a running fleet without a " +
+		"restart, POST /config/revisions/" + revisionID + "/revert to the node " +
+		"holding this store while it is up."
+}
+
+// rekeyPublishNote is an offline rekey's: a running node re-seals the active
+// document under its own active key whenever it stores it again, which is
+// what a reload does.
+const rekeyPublishNote = offlinePublish + " On a running fleet, POST " +
+	"/config/reload to a node that is up stores the active document again, " +
+	"sealed under that node's active key, and activates it."
+
+// lockedStoreRemedy is what a `crewlet config` subcommand tells an operator
+// whose engine holds the store: the route to the same answer through a
+// running node, where there is one.
+//
+// `import` is absent because it never asks: it goes through the node's API on
+// a locked store by itself ([importCompany]).
+func lockedStoreRemedy(sub string) string {
+	const stop = "stop `crewlet run` on this node and re-run."
+	switch sub {
+	case "show", "export":
+		return "Read it through the running node instead — GET /config " +
+			"serves the active revision with its credentials masked, and " +
+			"GET /config/revisions/<id> any other — or " + stop
+	case "revisions":
+		return "Read them through the running node instead — GET " +
+			"/config/revisions — or " + stop
+	case "diff":
+		return "Compare them through the running node instead — GET " +
+			"/config/revisions/<id>/diff?against=<id|active> — or " + stop
+	case "activate":
+		return "Activate it through the running node instead — POST " +
+			"/config/revisions/<id>/revert stores that revision's document " +
+			"again and activates it fleet-wide — or " + stop
+	case "rekey":
+		return "Re-seal through the running node instead — POST " +
+			"/config/reload stores the active document again under that " +
+			"node's active key — or " + stop
+	default:
+		// seal and scrub rewrite the store's own rows and have no route
+		// through the API: a running node refuses a plaintext revision,
+		// and an erasure is this command's alone.
+		return "This rewrites the store's own rows and has no route through " +
+			"the API: " + stop
+	}
+}
 
 // exportConfig prints one revision as YAML.
 func exportConfig(ctx context.Context, cs *configStore, revisionID string,
@@ -591,7 +658,7 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	// watching, which is how a rotated secret reaches a running fleet
 	// without a restart.
 	fmt.Fprintf(stdout, "marked %s active on this node\n", revisionID)
-	fmt.Fprintln(stdout, publishNote)
+	fmt.Fprintln(stdout, activatePublishNote(revisionID))
 	return nil
 }
 
@@ -688,7 +755,7 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		return importThroughNode(ctx, boot, t, company, summary, stdout)
 	}
 
-	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath)
+	cs, closeStore, err := openConfigStore(ctx, t.bootstrapPath, "")
 	if err != nil {
 		if !errors.Is(err, store.ErrLocked) {
 			return err

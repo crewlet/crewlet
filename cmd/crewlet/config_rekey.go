@@ -61,7 +61,9 @@ func sealConfig(ctx context.Context, cs *configStore, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "sealed revision %s as %s under %s\n", rev.ID, id, activeKeyID(cs))
-	fmt.Fprintln(stdout, publishNote)
+	// THE NEXT START ALONE: no running node can be on a plaintext revision,
+	// which every reader but this one refuses.
+	fmt.Fprintln(stdout, offlinePublish)
 	return nil
 }
 
@@ -112,7 +114,7 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 	}
 	fmt.Fprintf(stdout, "re-sealed revision %s as %s under %s (was %s)\n",
 		rev.ID, id, active, sealedUnder)
-	fmt.Fprintln(stdout, publishNote)
+	fmt.Fprintln(stdout, rekeyPublishNote)
 	return nil
 }
 

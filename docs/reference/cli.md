@@ -35,7 +35,7 @@ subcommand below is served by it.
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
-| `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
+| `crewlet config activate <UUID>` | Mark a revision active in this node's store, published to the fleet at its next start; re-activating the current one mints a new epoch, which is how a rotated secret takes effect. A running fleet does the same through `POST /config/revisions/<UUID>/revert` or `POST /config/reload` |
 | `crewlet config seal` | Encrypt a plaintext active revision an older build left as one document under the Tier A keyring — every other reader refuses it — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet config scrub [<UUID>] [-dry-run]` | Erase personal data from superseded revisions — the one-time cleanup of an archive written before the org chart left the document |
@@ -315,7 +315,10 @@ you and none is settable from the command line. (`PUT /config` takes an
 `X-Summary` header; the CLI has no equivalent.)
 
 Like `seal` and `activate`, this writes the revision to **this node's** store;
-the note it prints says what publishes it to a running fleet.
+the note it prints says what publishes it to a running fleet — for an import,
+the same command run again while a node is up. (`PUT /config` takes the
+settings half alone and refuses a file carrying `roles:` or `units:`, so it is
+not a way to import a company file.)
 
 ### `crewlet config export`
 
@@ -392,9 +395,9 @@ to read a long diff was the one a shared cap kept it from.
 crewlet config activate <UUID> [-config PATH]
 ```
 
-Re-points the fleet at a revision. Every node applies it on its next reconcile.
+Marks a revision active in **this node's** store, which the node publishes to the fleet at its next start; every node then applies it on its next reconcile. It opens the store, so it runs while the engine is stopped. On a **running** fleet, `POST /config/revisions/<UUID>/revert` to a node that is up does the same without a restart — it stores that revision's document again and activates it — and the note this command prints names it.
 
-**Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect on a running fleet.
+**Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect; on a running fleet the same gesture is `POST /config/reload`.
 
 ### `crewlet config seal`
 
@@ -1455,8 +1458,8 @@ run uses, so the two cannot disagree.
 went and what still has to happen are different questions, and only one of the
 three sinks answers "source a file": `-env-file` needs sourcing and a restart,
 `-print` needs the values moved before the terminal closes, and `-secret-store`
-needs the current revision re-activated ([`crewlet config activate`](#crewlet-config-activate))
-so the running engine rebuilds its secret snapshot — it needs no file, which is
+needs the current revision re-activated on the running node (`POST /config/reload`)
+so the engine rebuilds its secret snapshot — it needs no file, which is
 exactly why a report that stopped at "recorded in the encrypted secret store"
 read as finished. A run that changed nothing prints no follow-up.
 

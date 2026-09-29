@@ -69,6 +69,12 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 	if !strings.Contains(out, "k2") || !strings.Contains(out, "k1") {
 		t.Errorf("the output does not say what moved where: %q", out)
 	}
+	// AND WHAT RE-SEALS A RUNNING FLEET: a reload stores the active document
+	// again under the node's active key. PUT /config, which this used to
+	// name, stores whatever document it is sent.
+	if !strings.Contains(out, "POST /config/reload") || strings.Contains(out, "PUT /config") {
+		t.Errorf("the output does not name the running fleet's re-seal: %q", out)
+	}
 	if got, _ := activeKeyOf(t, rotated); got != "k2" {
 		t.Fatalf("after the rekey the document is under %q, want k2", got)
 	}
@@ -317,7 +323,7 @@ func TestEveryConfigCommandWithoutAKeyringNamesTheRemedy(t *testing.T) {
 func activeKeyOf(t *testing.T, cfg string) (string, bool) {
 	t.Helper()
 	ctx := t.Context()
-	cs, closeStore, err := openConfigStore(ctx, cfg)
+	cs, closeStore, err := openConfigStore(ctx, cfg, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

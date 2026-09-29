@@ -498,9 +498,23 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	fmt.Fprintf(stdout, "written to %s\n", sv.where)
 	if !sv.fleet {
 		fmt.Fprintln(stdout, secretsLocalNote)
+	} else {
+		fmt.Fprintln(stdout, secretsFleetNote)
 	}
 	return nil
 }
+
+// secretsFleetNote is what a write to the FLEET's store does not do yet.
+//
+// The engine resolves a `${VAR}` through a snapshot of the store taken at each
+// configuration apply, so a value written to a running fleet is read at its
+// next apply and not before — and an operator who rotated a key and saw the
+// old one still in use would conclude the write failed. Re-activating the
+// current revision is the gesture, and on a running fleet it is the node's
+// reload.
+const secretsFleetNote = "The running fleet reads it at its next configuration " +
+	"apply; POST /config/reload to a node that is up re-activates the current " +
+	"revision now."
 
 // secretsLocalNote is what a write to the node-local table did and did not do.
 //

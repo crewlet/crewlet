@@ -485,6 +485,12 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	if strings.Contains(out.String(), "next start") {
 		t.Errorf("a fleet write was reported as a node-local one: %q", out.String())
 	}
+	// AND WHEN THE RUNNING FLEET READS IT: at its next apply, which a reload
+	// brings forward. Said by nothing, a rotated key the engine went on
+	// using read as a write that failed.
+	if !strings.Contains(out.String(), "POST /config/reload") {
+		t.Errorf("a fleet write does not say when the running fleet reads it: %q", out.String())
+	}
 	// The local database beside the Tier A file must not have been created.
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(cfg), "index.db")); statErr == nil {
 		t.Error("a database was created on a machine writing through a remote node")
