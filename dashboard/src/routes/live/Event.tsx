@@ -306,8 +306,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
               {data.payload ? (
                 // Same treatment as the Turn record: this screen's whole
                 // point is one JSON record, so the record owns select-all
-                // rather than the page taking it.
-                <div className="col gap-1">
+                // rather than the page taking it. The caption keeps the step
+                // every note under a block takes, clear of the block's edge.
+                <div className="col gap-2">
                   {/* `plain` is THEIR word for no header; ours was "no wrap",
                       which is `wrap={false}`. The copy control is the panel's
                       own, so the block's is off — two of them over one record
@@ -342,7 +343,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     {
                       properties: Object.entries(data.tags).map(([k, v]) => ({
                         label: k,
-                        code: true,
+                        identifierLabel: true,
                         value: <code className="inline">{v}</code>,
                       })),
                     },
@@ -434,7 +435,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
                             name: "Tags",
                             properties: Object.entries(data.tags).map(([k, v]) => ({
                               label: k,
-                              code: true,
+                              identifierLabel: true,
                               value: <code className="inline">{v}</code>,
                             })),
                           },

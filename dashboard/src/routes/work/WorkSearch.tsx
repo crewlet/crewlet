@@ -67,7 +67,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
-import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -121,8 +121,8 @@ export function WorkSearch() {
   const index = useMemo(() => indexOrg(org), [org]);
 
   // THE PEEK IS THE FRAME'S: the shell mounts one rail for every screen, so
-  // this one opens peeks and renders none.
-  const peek = usePeek();
+  // this one opens peeks and renders none — and the grid marks the row whose
+  // link is the peek's page, so the open hit is drawn from the same `itemId`.
   const { open: openPeek } = usePeekControls();
 
   const rows = useMemo(() => hits.data?.hits ?? [], [hits.data]);
@@ -236,7 +236,6 @@ export function WorkSearch() {
               }
               rowPeekHandler(go)?.(e);
             }}
-            isSelected={(r) => peek?.kind === "item" && peek.id === itemId(r)}
             // NO DEFAULT SORT. The answer's own order IS the result, and a
             // grid that re-sorted it by title would throw away the only
             // thing this question produces.

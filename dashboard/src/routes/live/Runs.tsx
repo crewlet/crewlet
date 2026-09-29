@@ -50,7 +50,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatLabel, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
   CircleQuestionMarkGlyph,
@@ -485,9 +485,6 @@ export function Runs() {
   );
 
   const { open: openPeek } = usePeekControls();
-  const peek = usePeek();
-  // WHICH ROW IS THE ONE IN FOCUS: the run in the rail.
-  const focused = peek?.kind === "run" ? peek.id : "";
 
   const openRun = useCallback(
     (r: SandboxRun, e: React.MouseEvent | React.KeyboardEvent) => {
@@ -578,7 +575,6 @@ export function Runs() {
             rowKey={(r) => r.turn_id}
             onRowActivate={openRun}
             rowHref={(r) => peekHref({ kind: "run", id: r.turn_id })}
-            isSelected={(r) => r.turn_id === focused}
             defaultSort="-updated"
             columns={[
               {

@@ -267,7 +267,7 @@ export function Settings({
                         {
                           properties: Object.entries(vars).map(([name, value]) => ({
                             label: name,
-                            code: true,
+                            identifierLabel: true,
                             value: <span className="muted">{credentialState(value)}</span>,
                           })),
                         },

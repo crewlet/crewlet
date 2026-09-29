@@ -57,6 +57,9 @@ const OWNERS: Record<string, string> = {
   // A turn's calls on a seat's profile (`routes/agents/seat/Overview.tsx`):
   // each `li.prof-feed-row` is a direct child of the `ol.prof-feed`.
   ".prof-feed-row": ".prof-feed",
+  // One change of a configuration diff (`routes/settings/Config.tsx`): each
+  // `li.config-diff-line` is a direct child of the `ul.config-diff`.
+  ".config-diff-line": ".config-diff",
 };
 
 /** Every rule in every sheet, as `[selector, declarations]`. */

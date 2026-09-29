@@ -36,6 +36,7 @@ import {
   type ReactNode,
 } from "react";
 import { useParam } from "../router.tsx";
+import { peekHref, usePeek } from "./DetailRail.tsx";
 import { Button, EmptyState, cx } from "@crewlethq/ui";
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
@@ -506,7 +507,9 @@ export function DataGrid<T>({
   rowKey: (row: T) => string;
   /** A plain click. The row is still an anchor when `rowHref` is given. */
   onRowActivate?: (row: T, e: React.MouseEvent | React.KeyboardEvent) => void;
+  /** The row's object's page. A row whose link is the open peek's page is marked. */
   rowHref?: (row: T) => string;
+  /** A mark that is not the peek — the object a path addresses, a lens's subject. */
   isSelected?: (row: T) => boolean;
   isFailed?: (row: T) => boolean;
   defaultSort?: string;
@@ -611,6 +614,19 @@ export function DataGrid<T>({
   // measure, and the observer below has to attach when the rows arrive.
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+
+  // THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing
+  // ADDRESSES: a row's link is its object's page, and the peek names an object
+  // whose page is `peekHref` of it — the one function every row link to a
+  // peekable object is already built with. So the mark cannot name a
+  // different row from the one the rail shows, which is what four
+  // per-screen spellings of "which row is open" risked, and a grid that never
+  // wrote one (Nodes, Secrets, a seat's turns, the spend tables, the page
+  // list, most of Settings) no longer leaves the reader to find the row a
+  // peek beside it describes. `isSelected` stays for a mark that is not the
+  // peek — the credential a path addresses, the revision the Diff lens reads.
+  const peek = usePeek();
+  const peeked = peek ? peekHref(peek) : "";
   const shownKeys = shownColumns.map((c) => c.key).join(",");
   const [fit, setFit] = useState<Fit>(NO_FIT);
   const dropped = !phone && fit.set === shownKeys ? fit.dropped : NO_DROPS;
@@ -801,6 +817,7 @@ export function DataGrid<T>({
     index += 1;
     const at = index;
     const key = rowKey(row);
+    const link = rowHref?.(row);
     // THE CELL CARRIES ITS COLUMN'S OWN NAME.
     //
     // Below the drawer breakpoint a row is not a row: the column heads go and
@@ -845,9 +862,10 @@ export function DataGrid<T>({
         {column.cell(row)}
       </span>
     ));
+    const marked = Boolean(isSelected?.(row)) || (peeked !== "" && link === peeked);
     const className = cx(
       "grid-row",
-      isSelected?.(row) && "selected",
+      marked && "selected",
       isFailed?.(row) && "failed",
       cursor === at && "cursor",
     );
@@ -873,18 +891,23 @@ export function DataGrid<T>({
     return (
       <div
         key={key}
-        id={rowHref ? rowId : undefined}
+        id={link !== undefined ? rowId : undefined}
         className={className}
         data-row-index={at}
-        role={!rowHref && onRowActivate ? "button" : undefined}
-        tabIndex={!rowHref && onRowActivate ? 0 : undefined}
-        onClick={!rowHref && onRowActivate ? (e) => onRowActivate(row, e) : undefined}
+        role={link === undefined && onRowActivate ? "button" : undefined}
+        tabIndex={link === undefined && onRowActivate ? 0 : undefined}
+        aria-current={link === undefined && marked ? "true" : undefined}
+        onClick={link === undefined && onRowActivate ? (e) => onRowActivate(row, e) : undefined}
       >
-        {rowHref && (
+        {link !== undefined && (
           <a
             className="row-link"
-            href={rowHref(row)}
+            href={link}
             aria-labelledby={rowId}
+            // THE MARK IS SAID, NOT ONLY PAINTED: the tint is the one cue a
+            // sighted reader gets, and a screen reader walking the rows hears
+            // which one is the open one.
+            aria-current={marked ? "true" : undefined}
             onClick={(e) => onRowActivate?.(row, e)}
           />
         )}

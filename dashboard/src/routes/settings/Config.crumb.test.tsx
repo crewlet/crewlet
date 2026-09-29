@@ -49,6 +49,7 @@ const revisions = [
     source: "api",
     summary: "connect datadog",
     is_active: true,
+    parent_revision_id: UNNAMED,
   },
   {
     revision_id: UNNAMED,
@@ -81,17 +82,25 @@ async function settle() {
   });
 }
 
-function mount(revision: string) {
-  location.hash = `#/settings/config/revisions/${revision}`;
+let asked: string[] = [];
+
+function mount(revision?: string) {
+  location.hash =
+    revision === undefined
+      ? "#/settings/config/revisions"
+      : `#/settings/config/revisions/${revision}`;
+  asked = [];
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    Promise.resolve(what === "config_audit" ? revisions : {});
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
+    return Promise.resolve(what === "config_audit" ? revisions : {});
+  };
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
         <Shell>
-          <ConfigScreen revision={revision} />
+          <ConfigScreen revision={revision} revisions />
         </Shell>
       </Router>
     </ClientContext.Provider>,
@@ -128,4 +137,49 @@ test("a revision with no summary keeps its id, in the mono face", async () => {
   expect(recents(), "the header's placeholder reached the palette").not.toContain(
     "No summary was written",
   );
+});
+
+// THE ADDRESS THE TRAIL CALLS "Revisions" IS THE HISTORY. It showed the Active
+// lens — the running document — under a crumb reading Configuration ›
+// Revisions, and a revision's own "Revisions" crumb led to that same page.
+test("the bare revisions address lands on the history", async () => {
+  mount();
+  await settle();
+
+  expect(here()?.textContent).toBe("Revisions");
+  const lens = screen.getByRole("radiogroup", { name: "Configuration view" });
+  expect(lens.querySelector("[aria-checked='true']")?.textContent).toBe("History");
+  expect(await screen.findByText("connect datadog")).toBeDefined();
+  expect(asked, "the running document asked for on the history's address").not.toContain("config");
+  expect(location.hash, "the landing lens is the one the URL need not spell").not.toContain(
+    "lens=",
+  );
+});
+
+// ONE REVISION'S PAGE IS AN OBJECT. It drew the lens bar with Active pressed
+// and the whole running document under the revision's header, so the one
+// pressed control on the screen said the reader was looking at what is running
+// now. And what one save changed is that revision against its PARENT: against
+// the active one, the active revision's own "See its changes" was empty.
+test("a revision's page draws no lens and reads its changes against its parent", async () => {
+  mount(NAMED);
+  await settle();
+
+  expect(screen.queryByRole("radiogroup", { name: "Configuration view" })).toBeNull();
+  expect(asked).not.toContain("config");
+  const changes = screen.getByRole("link", { name: "See its changes" });
+  const target = new URLSearchParams(changes.getAttribute("href")!.split("?")[1]);
+  expect(target.get("lens")).toBe("diff");
+  expect(target.get("revision")).toBe(NAMED);
+  expect(target.get("against")).toBe(UNNAMED);
+});
+
+// THE FIRST REVISION HAS NO PARENT, and a comparison against the active one
+// would answer a question nobody asked, so it offers none.
+test("a revision with no parent offers no comparison", async () => {
+  mount(UNNAMED);
+  await settle();
+
+  expect(here()?.textContent).toBe(UNNAMED);
+  expect(screen.queryByRole("link", { name: "See its changes" })).toBeNull();
 });

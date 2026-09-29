@@ -616,8 +616,8 @@ title alone, as the kit's sheet head (the page bar's height) is sized for.
 **Settings is never hidden.** A section that vanishes without a credential is
 indistinguishable from one that does not exist, so an operator on a fresh
 browser would conclude the product has no configuration screen. General — the
-charter — and Tools — the registry every reader is pushed — are readable by
-anybody; the key mark says the rest needs an operator. It is a KEY rather than
+charter — and Tools & MCP — the registry every reader is pushed — are readable
+by anybody; the key mark says the rest needs an operator. It is a KEY rather than
 a padlock because the kit's glyph set carries no padlock, and a key names what
 is missing: a credential.
 
@@ -744,10 +744,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
-| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools** — every tool a seat can call, by origin. Not guarded: the registry is the push every reader gets, and only an MCP server's template reads the guarded configuration, which its panel says itself. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` |
+| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every tool a seat can call, by origin. Not guarded: the registry is the push every reader gets, and only an MCP server's template reads the guarded configuration, which its panel says itself. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
-| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases, duties and config rollout *(operator)* | |
-| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|entities\|audit\|diff` |
+| `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties and config rollout *(operator)* | |
+| `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
 | `#/settings/audit` | **Audit log** — every write a person or a token made, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
 
@@ -905,6 +905,17 @@ flexible column among five sized to their content, so a run gives up its Scope
 first (a role schedule's scope is the seat it woke), then the tick it was for,
 then whom it woke. None of it happens on a
 phone, where a row is a card that shows every value.
+
+**The row a peek is open on is marked, in every grid.** The grid compares
+ADDRESSES: a row's link is its object's page, and the open peek names an
+object whose page is the same `peekHref` every such link is built with — so
+the tint lands on exactly the row the rail describes and cannot name a
+different one, and the row's link carries `aria-current` so the mark is said
+as well as painted. Four screens once spelled the mark for themselves and the
+rest never did, so beside a peek on Nodes, Secrets, a seat's turns or a spend
+table nothing said which row the rail was about. A mark that is not the peek —
+the credential a path addresses, the revision the Diff lens reads — is the
+screen's own (`isSelected`).
 
 **A band may hold bands.** A second grouping is a heading under a heading,
 which is what a second axis means where every row is a line, and a band
@@ -1091,6 +1102,20 @@ recipient — and the rule is written here rather than at any one of them becaus
 the whole point is that the same person looks the same on every screen they
 appear on. `components/work.test.tsx` and `routes/work/shapes/Grid.test.tsx`
 hold the outline over the pieces and over the grid's two column sets.
+
+### A row of numbers shares its lines
+
+A stat row's tiles are one grid's columns, and **every figure in a row stands
+at one height whatever its label does**. Each tile is a subgrid over the row's
+three lines — label, number, sub — so a line is as tall as the tallest of it
+across the row: a label that wraps makes the label line two lines tall for
+every tile, and each other label sits at its foot, one gap above its own
+number. Stacked per tile, a wrapped label pushed its own number down and no
+other — beside a node's peek at 1440, "Behind on config" broke over two lines
+and its figure sat 18px below the other three. Where the kit folds a row to
+two columns (below 1024px) an odd last tile takes the whole row, and a sub
+wraps rather than ending in an ellipsis. `styles/stats.test.tsx` holds the
+span to the lines the kit's tile renders.
 
 ### A dropdown's list sizes to its options
 
@@ -1363,7 +1388,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
-| `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
+| `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
 | `DetailRail` | the peek's chrome — resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column, 1416 beside Knowledge's tree), a drawer under that |
@@ -1372,7 +1397,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
 | `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
 | `TimeRangePicker` | the one control for `window=` |
-| `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation |
+| `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation, wrapped so its last line never holds a word alone |
 
 **Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
 sidebar is the drawer. Below 640 px (`breakpoint.phone`) a layout is single
@@ -3680,6 +3705,17 @@ rhythm (a stack of cards, a footer strip), and that is a claim about height.
 It is vertical-only in `Card.Body`, on the inset the header sets, and all four
 tight bodies in the product align with their own titles.
 
+### A card's head keeps its title whole
+
+A head is one line: a title, a subtitle beside it and the card's actions at
+its end. Beside actions the kit shrinks the title and the subtitle together, so
+on a phone a plain title lost a fraction of a pixel and broke over two lines —
+*Active* over *revision* — while its subtitle was cut beside the Copy button.
+So **on a narrow screen a head holding both a subtitle and actions puts the
+subtitle on a line of its own**, under the title and the actions, where it has
+the head's whole width. It is one rule for every head of that shape, not a
+screen's own.
+
 ### A fact that moves is a fact nobody can scan
 
 The turn card's source chip took four positions before landing. Beside the
@@ -4836,6 +4872,153 @@ when it turns over, or now by raising its ceiling. Home's and the Inbox's
 (`RaiseBudgetDialog`), each field captioned with what that window has spent and
 when it resets.
 
+## Settings: the frame, secrets, nodes and configuration
+
+Settings is the one workspace that draws its sections as a **column** beside
+the screen rather than as tabs in the page bar, in three groups: **Company**
+(General, and Budgets as a cross-link — it lives once, under Spend, and its
+arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
+MCP, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
+log). A guarded section draws a key and **is never hidden**: a section that
+vanished for a reader without an operator credential is one they cannot know
+exists. The landing page is one of the column's sections, so its trail reads
+**Settings › General** rather than "Settings" alone. **On a phone the column
+folds to one row naming the section** the reader is on, which opens the list
+and closes again once a section is picked: stacked whole above the section it
+took about 520px, and a section's own content began below the fold. **Beside a
+section the column stays put**: it is the scroller's height rather than the
+section's, so it sticks while the section scrolls, its hairline runs the height
+of the window, and a list longer than a short window scrolls inside itself. On a
+phone the folded picker is its own height and the section takes the rest, so a
+short section starts right under it. An address that names no screen is in no
+section, so a mistyped one is never drawn beside a column claiming General.
+
+**A section's name is its trail, not a heading over the section — the one
+place the approved Settings artboard is deliberately not followed.** The
+artboard sets the section's name again as a 24px heading above its lede, 36px
+in from the column. On every screen of this product the page bar's last crumb
+IS the page's `h1` (see `header/PageHeader` under [The frame](#the-frame)),
+so a second heading a line under it would give the page two titles — two
+level-one headings to a screen reader, one of them saying the other again —
+and a screen's lede (`PageNote`) opens its body at the content padding every
+screen shares rather than at an inset of its own.
+
+**The figures beside a section are the engine's, and absent is never zero.**
+
+| Row | Figure | From |
+|---|---|---|
+| Integrations | a **pill in the warning tone** — the tools the engine's roll-up says need a person (`tools[].state = attention`), the one figure here that is waiting on the reader. It is a *state*, so it wears the warning pair the artboard draws it in, never the accent the inbox's unread badge fills with | `integrations` |
+| Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node has applied an older epoch than the fleet activated (the Nodes screen's own "Behind on config" count) | the health push, and `fleet` |
+| Configuration | "epoch *n*" — the epoch this node applied, in words rather than a code | the health push |
+| Backups & retention | how many state-log domains have a trim something is holding, drawn only when one is | `retention` |
+
+`fleet`, `retention` and `integrations` are operator answers with no push
+behind them, so those figures are a poll — and **they are asked only while the
+Settings column is on screen, and only for an operator** (`useSettingsSidebar`,
+at 30 s, 60 s and 120 s). The frame outlives every screen, so a figure hook
+that asked unconditionally would put three operator questions on a timer
+behind every screen of every tab, and three refusals behind a reader who holds
+no credential. On Nodes the column asks no `fleet` of its own: the screen
+hands the frame the reading it already polls every 15 s (`usePublishFleet`),
+so "*n* behind on config" and the screen's "Behind on config" tile are one
+reading rather than two polls on two clocks that disagreed for up to 30 s.
+
+**General** is the company's charter — mission, vision and the standing
+policies every executor is given verbatim — read from the org projection, so a
+reader without a credential can open it, as they can Tools & MCP. It is
+edited in the org builder (**Edit in org**).
+
+**Secrets** lists the names the fleet holds, their key ids and provenance, and
+can store, rotate and remove one over the same guarded routes the CLI uses.
+Every row is sealed in the fleet's store; **Source is provenance** — which path
+last wrote the row (`api` for this page or `PUT /secrets`, `cli`, `setup`,
+`provision`, `rekey`, `migrated`) — and the credential's peek says what its
+word means rather than leaving it to a pointer. Three tiles count the
+credentials, the names **read by nothing** (no field in the active
+configuration points at them: a forgotten `${VAR}`, or a credential nothing
+needs any more — not known, and never 0, when the reference check did not
+answer) and the distinct key ids. The peek says each property once: its
+header carries the name, and **Where it came from** carries Source, Key id,
+Set by and Updated.
+**It never asks for a value**: there is no reveal, and a rotation asks for the
+new credential rather than showing the old one. **The name is the table's one
+flexible column and is never cut** — it is what a reader matches against the
+`${VAR}` in their configuration — and every fact beside it is its content's
+width. Where the row cannot hold them all, whole columns give way in this
+order: **Key id** (one id covers every row until a rekey), **Set by**,
+**Source**, then **Updated** — each a fact the credential's peek carries —
+and **Read by**, what would break if the name went, never does. Beside a peek
+at 1440 the name, Read by and Updated stay. See
+[the secret store](../concepts/secret-store.md).
+
+A node, a secret, an MCP server and a backup domain are each **titled
+by their own name**, so the trail draws that word as a name too, in the face
+the page's title uses — never the mono face kept for a key still waiting for
+the name a screen publishes. A tool's trail follows its title, as its header
+does.
+
+**Nodes** is every live node's lease, posture, config epoch and uptime. **The
+node is the table's one flexible column and every fact beside it is its content's
+width** — the role chips on one line, a count as wide as its head — so no column
+is a share of the row: three shared columns once put a single digit in 150px of
+air while the chips wrapped onto three lines, and under a peek fell to a letter
+("R.", "S.", "I.") with the chips as empty pills. Where the row cannot hold every
+fact, whole columns give way, in this order: **Lease** (every listed node's is
+unexpired by definition), **Up since**, **Roles**, then **In flight** — each one
+a fact the node's peek carries, **Roles** among its header facts — and the grid
+names what it hid. At 1280 only Lease gives way; beside a peek at 1440, Node,
+Seats, In flight, Posture and Config stay. Then
+**Seat placement** — each seat, the node holding it, its lease and **Since**:
+the tenure's start (`acquired_at`), stamped when the epoch is minted and
+carried through every renewal, so "since 2h ago" means the seat has not moved
+node in two hours. A lease an older build wrote carries no stamp and reads
+**Not recorded**, never "Never". A node's own page draws the same column for
+the seats it holds. The seat (and, beside it, the duty) is each lease table's
+one flexible column and **Held by**, **Since** and **Lease** size to their
+content, so the name the row exists to show is the value that keeps its width;
+Seat placement and Company-wide duties sit side by side only where each panel
+is at least 480px wide and stack below that (about a 1520px window). **Held by**
+is the same link to the node's page in both tables, at the body's weight, so
+the seat or the duty stays the strongest text in its row. A node's build
+version is one token in its header, on one line with the whole string in its
+title. Neither screen repeats a count in its page bar that a tile below
+already shows. See [seat ownership](../concepts/seat-ownership.md).
+
+**Configuration** reads the company document through four lenses — the
+active revision, its entities (the kinds declared once, `ENTITY_KINDS`, and
+held against the engine's by `entities_client_test.go`, drawn as a list of
+handles read down its left edge beside the one it opened), the revision history
+and a diff. **The Diff lens draws the changes first** and the revisions they
+are picked from under them — beneath fifteen rows of history the changes began
+off the screen, so **See its changes** landed on a list — and a revision
+pressed further down brings the changes back on screen (only when they are off
+it; focus stays in the list). **A change is drawn whole**: its mark (`+`, `−`,
+`~`, said as a word to a screen reader), its path wrapping rather than cut, and
+its value as JSON — an object or a list in the document's own indented shape —
+in tracks the whole list shares, so the values start at one edge; on a phone
+the value takes the line under its path. A revision's peek and its page say
+each property once: the header carries its id, summary and state, and **Where
+it came from** its full id and parent (both in the mono face), Source, who
+created it, when, and when it was activated. In the history (and the Diff
+lens's list of revisions) **Summary is the one flexible column**: the revision id and its *active* pill are exactly
+their own width, and When and By size to theirs, so the id is never cut and the
+summary takes what is left — never less than 12rem: **beside a peek, When
+gives way** (the revision's peek draws Created) rather than the summary. **By puts the name before its kind**: where the
+column is narrow — beside a peek — the kind's chip leaves the line before the
+name gives up a character, and the name's title keeps both. A picked handle is a **list selection**, drawn as the column's
+current row is (the raised neutral surface and its hairline), never as the
+primary button: the accent belongs to the one primary action, and a violet
+fill under a handle in its own grey ink was 1.5:1. `#/settings/config/revisions`
+is the history, so it lands on the History lens. **A revision's own page is the
+revision** — its header, where it came from and which nodes report it — with
+no lens bar and no running document under it, and **See its changes** opens
+the Diff lens against the revision's *parent*, which is what that save
+changed (against the active revision, the active revision's own changes were
+empty). **It is read-only for the document**: a revision is written by
+`PUT /config`, `crewlet config import`, or a screen's own scoped write (a
+budget ceiling, the org builder), each of which validates against the schema
+before anything is stored.
+
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
@@ -5694,7 +5877,7 @@ while the screen binds the real chart, table, editor and dialogs, and
   (`savedRevision.ts`), reads this node's `applied_epoch` off the health push
   (which carries it every five seconds, so there is nothing to poll) and the
   `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
-  N of M nodes, or the node that refused it with a link to the Fleet screen.
+  N of M nodes, or the node that refused it with a link to Settings › Nodes.
   Its View changes opens the saved revision against its parent
   (`against=`), since against the active revision a save that is active now
   differs from nothing; the conflict banner's Show what changed is the newer

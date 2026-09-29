@@ -96,6 +96,21 @@ function named(labels: Labels, key: string): Crumb {
   return label ? { label } : { label: key, mono: true };
 }
 
+/**
+ * A segment that IS the object's name — a unit, a node, a secret, a server, a
+ * model's config key, a backup domain — drawn as a name, never as an
+ * identifier awaiting one.
+ *
+ * NOT `named`: its fallback is the mono face, which says "a key, until the
+ * screen supplies the name", and no screen ever will for these — the page
+ * titles itself with this same word, in the body face. Drawn mono, the trail
+ * printed `harness-0` in one face over a title printing it in another, which
+ * reads as two different values for one node.
+ */
+function ownName(labels: Labels, key: string): Crumb {
+  return { label: labels[key] ?? key };
+}
+
 /** A project: its name with its key as a chip, or the key alone until the name arrives. */
 function projectCrumb(labels: Labels, key: string): Crumb {
   const crumb = named(labels, key);
@@ -134,8 +149,14 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "live":
     case "knowledge":
     case "spend":
-    case "general":
       return [root(row, false)];
+    case "general":
+      // SETTINGS' LANDING IS ONE OF ITS SECTIONS, unlike every other
+      // workspace's: the column beside it lists General as a row like any
+      // other, so the trail names it. "Settings" alone was the page's `h1`
+      // over the company's charter, and nothing on screen but the selected
+      // row said which section it was.
+      return [root(row, true), { label: section("general")?.label ?? "General" }];
     case "me":
       return sectionPage(where.section);
     case "work-projects":
@@ -161,9 +182,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return sectionPage("roster");
     case "teams":
       // A UNIT'S SEGMENT IS ITS NAME, so there is no identifier to mark.
-      return where.unit
-        ? inside("teams", { label: labels[where.unit] ?? where.unit })
-        : sectionPage("teams");
+      return where.unit ? inside("teams", ownName(labels, where.unit)) : sectionPage("teams");
     case "schedules": {
       if (where.scope.length === 0) return sectionPage("schedules");
       // A SCHEDULE IS THREE SEGMENTS, joined rather than crumbed: `role / ceo
@@ -261,16 +280,16 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       if (where.server) {
         return [
           root(row, true),
-          { label: section("tools")?.label ?? "Tools", path: ["settings", "tools"] },
+          { label: section("tools")?.label ?? "Tools & MCP", path: ["settings", "tools"] },
           { label: "Servers" },
-          { label: where.server, mono: true },
+          ownName(labels, where.server),
         ];
       }
       return where.tool ? inside("tools", named(labels, where.tool)) : sectionPage("tools");
     case "secrets":
-      return where.name ? inside("secrets", named(labels, where.name)) : sectionPage("secrets");
+      return where.name ? inside("secrets", ownName(labels, where.name)) : sectionPage("secrets");
     case "nodes":
-      return where.node ? inside("nodes", named(labels, where.node)) : sectionPage("nodes");
+      return where.node ? inside("nodes", ownName(labels, where.node)) : sectionPage("nodes");
     case "config": {
       if (!where.revisions) return sectionPage("config");
       const config: Crumb = {
@@ -290,7 +309,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     }
     case "backups":
       return where.domain
-        ? inside("backups", { label: where.domain, mono: true })
+        ? inside("backups", ownName(labels, where.domain))
         : sectionPage("backups");
     case "audit":
       return sectionPage("audit");

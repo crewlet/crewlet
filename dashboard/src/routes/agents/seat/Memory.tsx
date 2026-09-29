@@ -30,7 +30,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { screenScroller } from "~/lib/scroller.ts";
+import { reveal } from "~/lib/scroller.ts";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
 import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
@@ -148,7 +148,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
  * under the page's top, so a thread chosen near the list's end opens beside
  * the row that was pressed rather than a screen above it. Stacked (a phone),
  * the detail is below the whole list, so choosing a thread SCROLLS the detail
- * into view and moves focus to its heading ([revealDetail]) — the row's
+ * into view and moves focus to its heading ([reveal]) — the row's
  * highlight was the only feedback, 1,900px above what it had opened. The rule
  * is width-free on purpose: the detail is revealed whenever it is not on
  * screen, which is never on a wide column and always on a phone.
@@ -169,7 +169,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
     if (box && row) keepInView(box, row);
     if (!chose.current) return;
     chose.current = false;
-    revealDetail(document.getElementById(THREAD_DETAIL_ID));
+    reveal(document.getElementById(THREAD_DETAIL_ID), { focus: true });
   }, [thread]);
   const threads = useQuery(
     "conversations",
@@ -279,7 +279,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
   );
 }
 
-/** The open thread's heading, which [revealDetail] scrolls to and focuses. */
+/** The open thread's heading, which a press [reveal]s and focuses. */
 const THREAD_DETAIL_ID = "prof-thread-turns";
 
 /**
@@ -294,27 +294,6 @@ export function keepInView(box: HTMLElement, row: HTMLElement): void {
   const bottom = top + row.offsetHeight;
   if (top < box.scrollTop) box.scrollTop = top;
   else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
-}
-
-/**
- * Bring a chosen thread's heading on screen and put focus on it — when it is
- * not on screen already.
- *
- * On a wide column the sticky detail is always in view and this does nothing,
- * focus included: the reader is still in the list, arrowing to the next
- * thread. Stacked, the detail is below every thread and the heading is where a
- * keyboard or a screen reader has to land for the press to have done anything
- * they can perceive.
- */
-export function revealDetail(heading: HTMLElement | null): void {
-  if (!heading) return;
-  const box = heading.getBoundingClientRect();
-  const view = screenScroller()?.getBoundingClientRect();
-  const top = view ? view.top : 0;
-  const bottom = view ? view.bottom : window.innerHeight;
-  if (box.top >= top && box.bottom <= bottom) return;
-  heading.scrollIntoView({ block: "start" });
-  heading.focus({ preventScroll: true });
 }
 
 /** A counterparty's stable identity, for a key and for a link.

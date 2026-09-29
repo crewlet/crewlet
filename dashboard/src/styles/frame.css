@@ -430,6 +430,18 @@
   min-width: 0;
 }
 
+/* A STATE WAITING ON THE READER — the tools the engine says need a person —
+   is the kit's badge in the WARNING tone, as the approved Settings artboard
+   draws Integrations' figure ("pill need"). The kit fills its badge with the
+   accent because its one badge is an unread count; this figure is a state,
+   and colour is state, so in the accent it read as a second inbox. The soft
+   fill and its ink are the feedback pair every warning tag wears, on the
+   rail and on the raised current row alike. */
+.section-row-attention .crewlet-nav-item__badge {
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
+}
+
 /* THE ENGINE'S STATE, the design's status block: its words over one detail
    line, on the card rung inside the hairline — the one row in the foot that
    reports rather than goes somewhere. A link to the nodes, or the button that
@@ -1089,6 +1101,18 @@ a.user-block-who:focus-visible {
   padding: 0;
 }
 
+/* THE SCROLLER IS THE COLUMN'S MEASURE, so it is made one. What the column
+   has to be as tall as is the scroller's VIEW — the window less the page bar,
+   the sheet's inset and whatever banner is showing, none of which the column
+   can count — and a size container is the one thing CSS lets a descendant ask
+   that of. Scoped to the frame that needs it: size containment reads the
+   scroller's height from the shell's flex column rather than from what it
+   holds, which is already how the kit sizes it (`flex: 1 1 auto;
+   min-height: 0`), but no other screen has a reason to be asked. */
+.app .crewlet-app-shell__main:has(> .crewlet-app-shell__content > .section-frame) {
+  container: scroller / size;
+}
+
 .section-frame {
   display: grid;
   flex: 1 1 auto;
@@ -1099,14 +1123,23 @@ a.user-block-who:focus-visible {
   min-height: 100%;
 }
 
+/* AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves only inside its
+   containing block, which here is its grid area — the row the section beside
+   it makes as tall as its content. `min-height: 100%` resolved against that
+   area and made the column exactly as tall as the section, so it had nowhere
+   to stick to and a wheel over Nodes carried Company and Connect off the top.
+   At the view's height it sticks for the whole scroll, its hairline runs the
+   height of the window at every scroll position, and a list longer than a
+   short window scrolls inside itself rather than below the fold. */
 .section-column {
   position: sticky;
   top: 0;
   align-self: start;
-  max-height: 100%;
+  height: 100cqb;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--spacing-4) 0;
   border-right: 1px solid var(--color-border-default);
-  min-height: 100%;
 }
 
 .section-body {
@@ -1115,6 +1148,14 @@ a.user-block-who:focus-visible {
   gap: var(--spacing-5);
   min-width: 0;
   padding: var(--spacing-5) var(--spacing-5) var(--spacing-10);
+}
+
+/* THE PHONE'S PICKER (`SectionColumn`): one row naming the section the reader
+   is on, which unfolds the column's list. Beside the section there is room
+   for the whole list, so at every width above the phone breakpoint the toggle
+   is not drawn and the list always is. */
+.section-picker-toggle {
+  display: none;
 }
 
 /* ---- The state bar ------------------------------------------------------ */
@@ -1196,7 +1237,7 @@ a.user-block-who:focus-visible {
    label and a two-line value. */
 .fact-line {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(7.5rem, 100%), 1fr));
   column-gap: var(--spacing-4);
   row-gap: var(--spacing-3);
   padding-top: var(--spacing-1);
@@ -1240,11 +1281,15 @@ a.user-block-who:focus-visible {
   white-space: normal;
 }
 
-/* ONE TOKEN, ONE LINE (`Fact.token`): two tracks, never wrapped, and cut with
+/* A SET OF CHIPS (`Fact.set`) takes the same two tracks, so a node's three
+   roles sit on one line; it wraps between chips where two are too narrow.
+
+   ONE TOKEN, ONE LINE (`Fact.token`): two tracks, never wrapped, and cut with
    an ellipsis only where two tracks are still too narrow — its title carries
    the whole of it. The link inside keeps the line too, which is the opposite
    of the rule above and the point: an id is not prose. */
-.fact.is-token {
+.fact.is-token,
+.fact.is-set {
   grid-column: span 2;
 }
 .fact-token {
@@ -1779,11 +1824,16 @@ a.cell-seat:hover {
 
 /* ---- The page's own one-line explanation --------------------------------- */
 
+/* NO WORD ALONE ON THE LAST LINE: at the measure, Secrets' note broke to a
+   second line holding "value." and nothing else, which reads as a sentence
+   that stopped rather than one that ended. `pretty` reflows the last lines
+   of every screen's note so its tail carries more than one word. */
 .page-note {
   margin: 0 0 var(--spacing-3);
   font-size: var(--font-size-compact);
   color: var(--color-text-tertiary);
   max-width: var(--size-measure);
+  text-wrap: pretty;
 }
 
 /* ---- An object's own facts ------------------------------------------------
@@ -2101,16 +2151,74 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   }
 
   /* ONE PANE: the Settings column stacks above the section rather than
-     taking a third of the phone beside it. */
+     taking a third of the phone beside it.
+
+     AND THE SECTION TAKES WHAT IS LEFT. The frame is at least the view's
+     height, and two `auto` rows split a short section's spare height between
+     them — so the folded picker's row grew by half of it and opened a band
+     of nothing (230px on Nodes at 390 × 2400) between the picker and the
+     section it names. The picker's row is its own height; the rest is the
+     section's. */
   .section-frame {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
   }
 
+  /* IN THE FLOW, as tall as it is: a phone scrolls the page past the picker,
+     and the list it unfolds is part of that page rather than a pane of its
+     own. */
   .section-column {
     position: static;
-    min-height: 0;
+    height: auto;
+    overflow-y: visible;
     border-right: none;
     border-bottom: 1px solid var(--color-border-default);
+  }
+
+  /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
+     Settings column pushed every section's own content about 520px down —
+     below the fold on Nodes and Secrets. */
+  .section-picker {
+    padding: var(--spacing-2) var(--spacing-3);
+  }
+  .section-picker-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    width: 100%;
+    min-height: var(--size-target-min);
+    padding: 0 var(--spacing-2);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-weight: var(--font-weight-medium);
+    text-align: left;
+    cursor: pointer;
+  }
+  .section-picker-toggle:hover {
+    background: var(--color-surface-hover);
+  }
+  .section-picker-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .section-picker-chevron {
+    flex: none;
+    color: var(--color-text-tertiary);
+  }
+  .section-picker[data-open] .section-picker-chevron {
+    transform: rotate(180deg);
+  }
+  .section-picker:not([data-open]) .section-picker-list {
+    display: none;
+  }
+  .section-picker[data-open] .section-picker-list {
+    padding-top: var(--spacing-2);
   }
 
   .section-body {

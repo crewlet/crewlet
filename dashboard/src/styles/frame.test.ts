@@ -451,6 +451,157 @@ describe("the frame's layout", () => {
   // scroller its content box is the viewport, the `max-content` columns alone
   // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
   // to make room for a due date.
+  // THE SETTINGS COLUMN IS ONE ROW ON A PHONE. Stacked whole above the section
+  // it took about 520px, and Nodes' and Secrets' own content began below the
+  // fold. Below the breakpoint the list folds behind the toggle naming the
+  // section; at every other width the toggle is not drawn at all, so the
+  // column beside a section is never a second, collapsed copy of itself.
+  test("the Settings column folds to a picker below the phone breakpoint, and only there", () => {
+    const css = sheet("frame.css");
+    const wide = css.split(PHONE)[0]!;
+    const narrow = css.slice(css.indexOf(PHONE));
+    expect(block(wide, ".section-picker-toggle")).toMatch(/display:\s*none/);
+    expect(wide).not.toMatch(/\.section-picker:not\(\[data-open\]\)/);
+    expect(block(narrow, ".section-picker-toggle")).toMatch(/display:\s*flex/);
+    expect(block(narrow, ".section-picker:not([data-open]) .section-picker-list")).toMatch(
+      /display:\s*none/,
+    );
+  });
+
+  // THE COLUMN IS AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves
+  // only inside its grid area, the row the section beside it makes as tall as
+  // its content; sized against that area (`min-height: 100%` beside the sticky
+  // rule) the column was exactly as tall as the section, so it never stuck and
+  // a wheel over Nodes carried Company and Connect off the top. Its measure is
+  // the scroller's view, which only a size container can hand a descendant.
+  test("the Settings column is the scroller's height, so it stays put while the section scrolls", () => {
+    const css = sheet("frame.css");
+    const wide = css.split(PHONE)[0]!;
+    const column = block(wide, ".section-column");
+    expect(column).toMatch(/position:\s*sticky/);
+    expect(column).toMatch(/height:\s*100cqb/);
+    expect(column).toMatch(/overflow-y:\s*auto/);
+    expect(column, "a percentage height resolves against the grid area").not.toMatch(
+      /(^|[;\s])(min-|max-)?height:\s*100%/,
+    );
+    // …and the query container it measures is the SCROLLER, sized by the
+    // shell rather than by what it holds. The page container on the content
+    // column is `inline-size` and so answers no block-axis unit, which is what
+    // lets `cqb` reach past it.
+    expect(
+      block(
+        wide,
+        ".app .crewlet-app-shell__main:has(> .crewlet-app-shell__content > .section-frame)",
+      ),
+    ).toMatch(/container:\s*scroller\s*\/\s*size/);
+
+    // ON A PHONE the column is back in the flow, and the frame's spare height
+    // goes to the section: two `auto` rows split it and opened a band of
+    // nothing between the folded picker and the section it names.
+    const narrow = css.slice(css.indexOf(PHONE));
+    expect(block(narrow, ".section-frame")).toMatch(/grid-template-rows:\s*auto 1fr/);
+    const stacked = block(narrow, ".section-column");
+    expect(stacked).toMatch(/position:\s*static/);
+    expect(stacked).toMatch(/height:\s*auto/);
+  });
+
+  // A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS OWN on a narrow
+  // screen. Beside actions the kit's shrink is proportional, so a phone gave a
+  // plain title a fraction of a pixel and it broke over two lines ("Active"
+  // over "revision") while the subtitle was cut beside the Copy button. The
+  // rule is the head's SHAPE, not one screen's — the agent profile had
+  // written it for its own card alone.
+  test("a card head holding a subtitle and actions stacks the subtitle on a narrow screen", () => {
+    const css = sheet("screens.css");
+    const narrow = [...css.matchAll(/@container page \(width < 640px\)\s*\{/g)].map((m) =>
+      atRuleBody(css.slice(m.index), "@container page (width < 640px)"),
+    );
+    const head = narrow.find((b) =>
+      b.includes(
+        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
+      ),
+    );
+    expect(head, "the narrow-screen card head rule is declared").toBeDefined();
+    expect(
+      block(
+        head!,
+        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
+      ),
+    ).toMatch(/flex-wrap:\s*wrap/);
+    const subtitle = block(
+      head!,
+      ".crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle",
+    );
+    expect(subtitle).toMatch(/order:\s*9/);
+    expect(subtitle).toMatch(/flex:\s*1 1 100%/);
+    // AND NO SCREEN KEEPS A PRIVATE COPY of the one rule.
+    expect(css).not.toMatch(/\.prof-turn \.crewlet-card__subtitle/);
+  });
+
+  // AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
+  // columns: three tiles stood 2 + 1 on a phone — Secrets' among them — the
+  // last beside an empty half-row, its top hairline stopping mid-panel, which
+  // reads as a tile that failed to load. The fold is the kit's `width <
+  // 1024px` step, so the rule has to sit at exactly that width to meet it.
+  test("a stat row's odd last tile spans the row wherever the kit folds it to two", () => {
+    const at = (css: string, needle: string) =>
+      mediaBodies(css).filter(
+        (m) => m.prelude.includes("(width < 1024px)") && m.body.includes(needle),
+      );
+    const folds = at(kitSheet(), ".crewlet-stat-group");
+    expect(folds.map((m) => m.body).join("\n")).toMatch(
+      /\.crewlet-stat-group\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
+    );
+    const ours = at(sheet("screens.css"), ":last-child:nth-child(odd)");
+    expect(ours, "the odd-tile rule sits at the kit's fold").toHaveLength(1);
+    expect(block(ours[0]!.body, ".crewlet-stat-group > :last-child:nth-child(odd)")).toMatch(
+      /grid-column:\s*1 \/ -1/,
+    );
+  });
+
+  // A SEGMENTED CONTROL HUGS ITS OPTIONS. As a flex column's or a grid's child
+  // an `auto` width is stretched, and Configuration's collection picker drew
+  // as a full-width band with its options at the left, beside a lens control
+  // that hugged its own. A width that is not `auto` is never stretched.
+  test("a segmented control is its options' width wherever it sits", () => {
+    const own = block(sheet("components.css"), ".segmented");
+    expect(own).toMatch(/(^|[\s;])width:\s*fit-content/);
+    // And nothing sets it back to the container's width.
+    for (const name of ["base.css", "frame.css", "screens.css"]) {
+      if (!sheet(name).includes(".segmented")) continue;
+      for (const { sel, body } of mentioning(sheet(name), ".segmented")) {
+        expect(body, `${sel} stretches the control`).not.toMatch(/(^|[\s;])width:\s*100%/);
+      }
+    }
+  });
+
+  // NO WORD ALONE ON A NOTE'S LAST LINE. At the measure, Secrets' note broke
+  // to a second line holding "value." and nothing else — a sentence that
+  // stopped rather than one that ended. Every screen's note reflows its tail,
+  // and no rule anywhere takes that back from one screen's note.
+  test("every screen's page note balances its last line", () => {
+    expect(block(sheet("frame.css"), ".page-note")).toMatch(/text-wrap:\s*pretty/);
+    const elsewhere = ["base.css", "components.css", "screens.css"].flatMap((name) =>
+      sheet(name).includes(".page-note") ? mentioning(sheet(name), ".page-note") : [],
+    );
+    for (const { sel, body } of elsewhere) {
+      expect(body, `${sel} takes the note's wrap back`).not.toMatch(/text-wrap/);
+    }
+  });
+
+  // A STATE WAITING ON THE READER IS THE WARNING PILL, as the approved
+  // Settings artboard draws Integrations' figure; the kit fills its one badge
+  // with the accent because its badge is an unread count, and a state in that
+  // fill read as a second inbox. The repaint has to reach the kit's own pill.
+  test("the Settings column's attention figure is the kit's pill in the warning pair", () => {
+    expect(kitSheet()).toMatch(
+      /\.crewlet-nav-item__badge\s*\{[^}]*background:\s*var\(--color-brand-accent\)/,
+    );
+    const pill = block(sheet("frame.css"), ".section-row-attention .crewlet-nav-item__badge");
+    expect(pill).toMatch(/background:\s*var\(--color-feedback-warning-soft\)/);
+    expect(pill).toMatch(/(^|[\s;])color:\s*var\(--color-feedback-warning-ink\)/);
+  });
+
   test("a grid becomes labelled cards below the phone breakpoint", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf(PHONE));
@@ -1013,7 +1164,7 @@ describe("the frame's layout", () => {
     expect(line).toMatch(/grid-template-columns:\s*repeat\(/);
     // AND A TURN'S SEVEN FACTS FIT ONE LINE AT 1280, where the fact line is
     // 984px wide (measured): at an 8rem floor "Wall clock" took a row alone.
-    const floor = Number(/minmax\(([\d.]+)rem/.exec(line)?.[1]) * 16;
+    const floor = Number(/minmax\((?:min\()?([\d.]+)rem/.exec(line)?.[1]) * 16;
     const gap = /column-gap:\s*var\(--spacing-4\)/.test(line) ? 16 : NaN;
     expect(7 * floor + 6 * gap).toBeLessThanOrEqual(984);
 
@@ -1527,4 +1678,28 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   expect(block(sheet("screens.css"), ".spend-chart-head .spend-caption")).toMatch(
     /contain:\s*inline-size/,
   );
+});
+
+/**
+ * A REPEATING TRACK'S FLOOR NEVER EXCEEDS ITS CONTAINER.
+ *
+ * `repeat(auto-fit, minmax(420px, 1fr))` on a 390px phone (a ~358px content
+ * box) is one track 62px wider than its card, and the shell's main is
+ * `overflow-x: hidden`, so that overhang is clipped rather than scrolled: on
+ * Settings › Nodes it was the Since and Lease columns of both lease tables.
+ * jsdom computes no layout, so the only place this can be held is the text:
+ * every `auto-fit`/`auto-fill` floor in our sheets is `min(<floor>, 100%)`.
+ */
+test("every auto-fit and auto-fill track floor is clamped to its container", () => {
+  const found: string[] = [];
+  const bare: string[] = [];
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    const tracks = /repeat\(\s*auto-(?:fit|fill)\s*,\s*minmax\(\s*(\w+\([^)]*\)|[^,()]+?)\s*,/g;
+    for (const m of sheet(name).matchAll(tracks)) {
+      found.push(`${name}: ${m[0]}`);
+      if (!/^min\([^,()]+,\s*100%\s*\)$/.test(m[1] ?? "")) bare.push(`${name}: ${m[0]}`);
+    }
+  }
+  expect(found.length).toBeGreaterThan(0);
+  expect(bare).toEqual([]);
 });

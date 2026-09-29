@@ -33,8 +33,10 @@ _secrets (a coordination KV bucket, no TTL)
   key_id      which keyring entry sealed it
   updated_at
   updated_by
-  source      "cli" | "api" | "gitlab-provision" | "rekey" | "migrated"
+  source      which path last wrote it — "api" | "cli" | "setup" | "provision" | "rekey" | "migrated"
 ```
+
+**`source` is provenance, never location**: every record is sealed in this bucket whichever path wrote it. `PUT /secrets/{name}` stamps `api` unless its `?source=` names another word, `crewlet secrets set` stamps `cli` unless its `--source` does, an integration's setup stamps `setup`, a vendor's `provision` command `provision`, a rekey `rekey` and the boot-time move off a node's own table `migrated`. Each write replaces the word, so it names the LAST writer.
 
 **The name is the reference grammar's, and a write that is not one is refused.** A record is keyed by the name a `${VAR}` resolves through, so the two rules are one rule: letters, digits and underscores, starting with a letter or an underscore. A store that accepted `gitlab-token` would seal the value, list it, report the write as done, and resolve it from nowhere: the operator's only evidence a provider failing to authenticate hours later, far from the name they chose. Every write path checks: `PUT /secrets/{name}` answers `400 invalid_name`, and `crewlet secrets set` refuses against a running node and a stopped one alike. Reading and removing take the name as given, so nothing becomes unremovable.
 

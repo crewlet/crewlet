@@ -98,7 +98,7 @@ Each node **re-stamps its key every tick**, not only when it converges, and the 
 A node's **coordination record** of a failure is truncated at 2 000 bytes (not
 characters — the cut is applied to bytes, on a rune boundary). That record is
 re-read by every peer on every posture decision and rendered on the dashboard's
-**Fleet** screen, so one node returning a megabyte of Go error would be paid for
+**Settings › Nodes** screen, so one node returning a megabyte of Go error would be paid for
 by every reader on every tick.
 
 The **`config_revision_applied` event** carries up to 64 KiB of it — thirty
@@ -259,7 +259,7 @@ Both probes say *why*, because "draining" and "cannot apply epoch 41" call for o
 
 ### Reading a stuck node
 
-Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the **Fleet** screen, which calls out every node whose applied epoch is behind the target and prints the error it failed with. It is also one request:
+Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the **Settings › Nodes** screen, which calls out every node whose applied epoch is behind the target and prints the error it failed with. It is also one request:
 
 ```bash
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \

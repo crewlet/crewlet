@@ -613,13 +613,18 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-nav-item__badge",
+    why: "uilet's SidebarNav writes it on a row's filled figure, which the kit fills with the accent because its one badge is an unread count. styles/frame.css repaints it in the warning pair on a Settings row whose figure is a STATE waiting on the reader (`.section-row-attention` — Integrations' tools needing a person), as the approved Settings artboard draws that figure; in the accent it read as a second inbox. The kit's pill keeps its size, its place and its spoken figure. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card__header",
-    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. A seat's Current turn card (`.prof-turn`) wraps the same way, for its subtitle. Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on a card's head. styles/screens.css lets Home's Recent activity head WRAP on a phone (`.home-feed`), so the title and its four filters take the whole width and 'Full event log' the line under them; unwrapped, the filter was squeezed into what the link left and its last option sat behind a scroll. And on a narrow screen every head holding both a subtitle and actions wraps, so the subtitle takes a line of its own (Configuration's Active revision drew 'Active' over 'revision' beside a cut subtitle). Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-card__subtitle",
-    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a phone inside a seat's Current turn card (`.prof-turn`), where the task the turn is on sat beside the title and cut it to 'Current tu…'. Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a narrow screen in every head that also holds actions, where it sat between the title and the actions and cut both — a seat's Current turn to 'Current tu…', Configuration's Active revision to 'Active' over 'revision'. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -666,12 +671,22 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__header-actions",
-    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Where a head DOES hold actions and a subtitle, a narrow screen moves the subtitle to a line of its own instead (see crewlet-card__subtitle). Another rule about OUR composition of the package\'s component.',
     pkg: "@crewlethq/ui/styles.css",
   },
   {
     name: "crewlet-card__header-chrome",
     why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-stat-group",
+    why: "uilet's StatGroup writes it on the tile row. Below 1024px the kit folds any row into two columns, so an ODD count leaves its last tile beside an empty half-row that reads as a tile failing to load (Secrets' three tiles stood 2 + 1 on a phone, the third tile's hairline stopping mid-panel). styles/screens.css lets that last tile take the whole row, restating the kit's own step because a media query cannot be borrowed — and makes each tile in the row a subgrid over its lines (see crewlet-statcard). Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-statcard",
+    why: "uilet's StatCard writes it on each tile. Inside a StatGroup, styles/screens.css makes the tile a subgrid over the group's rows, one per line the tile draws: the kit stacks label, number and sub in a flex column per tile, so a label that wrapped pushed its own number down and no other (\"Behind on config\" beside a node's peek at 1440, its figure 18px below the other three). styles/stats.test.tsx holds the span to the lines the kit renders. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

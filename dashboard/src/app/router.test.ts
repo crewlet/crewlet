@@ -406,6 +406,15 @@ describe("the breadcrumb", () => {
     ]);
   });
 
+  // EXCEPT SETTINGS', whose landing is one of the column's sections: the
+  // charter's page said only "Settings", and nothing but the column's selected
+  // row said it was General.
+  test("Settings' landing is named General in the trail", () => {
+    const crumbs = crumbsFor(["settings"]);
+    expect(crumbs.map((c) => c.label)).toEqual(["Settings", "General"]);
+    expect(titleOf(crumbs)).toBe("General");
+  });
+
   test("a path the table does not have is named Not Found, under its workspace if any", () => {
     expect(crumbsFor(["live", "traces"]).map((c) => c.label)).toEqual(["Live", "Not found"]);
     expect(crumbsFor(["company"]).map((c) => c.label)).toEqual(["Not found"]);
@@ -440,6 +449,25 @@ describe("the breadcrumb", () => {
     expect(unit[unit.length - 1]?.mono, "a unit is addressed by its own name").toBeFalsy();
   });
 
+  // A SEGMENT THAT IS ITS OBJECT'S NAME IS DRAWN AS ONE. A node, a secret, a
+  // server and a backup domain are each titled on their page by this same
+  // word in the body face; the trail fell back to the mono face meant for a
+  // key still awaiting its name, and no screen ever supplies one — so the
+  // crumb printed `harness-0` in one face over a title in another.
+  test("a node, a secret, a server and a domain are named in the trail as their pages title them", () => {
+    for (const path of [
+      ["settings", "nodes", "harness-0"],
+      ["settings", "secrets", "GITHUB_TOKEN"],
+      ["settings", "tools", "servers", "github"],
+      ["settings", "backups", "tracker"],
+    ]) {
+      const crumbs = crumbsFor(path);
+      const last = crumbs[crumbs.length - 1];
+      expect(last?.label, path.join("/")).toBe(path[path.length - 1]);
+      expect(last?.mono, `${path.join("/")} is its own name, not a key`).toBeFalsy();
+    }
+  });
+
   // THE TAB TITLE COMES FROM THE SAME TRAIL, so a reader with four tabs open
   // can tell them apart.
   test("the tab title is the last crumb", () => {
@@ -453,11 +481,20 @@ describe("the breadcrumb", () => {
 // EVERY FIXED DESTINATION NAMES ITSELF IN THE TRAIL, from the one table — a
 // section that fell through to an object branch read as "Work / Item /
 // search", a trail naming a page that does not exist.
+//
+// A COLUMN'S LANDING NAMES ITS SECTION: Settings draws General as a row of its
+// column like any other, so its page is "Settings › General" while the
+// palette's destination is still the workspace.
 test("every fixed destination names itself rather than reading as a key", () => {
   for (const dest of DESTINATIONS) {
     const crumbs = crumbsFor(dest.path);
     const last = crumbs[crumbs.length - 1];
-    expect(last?.label, `#/${dest.path.join("/")}`).toBe(dest.label);
+    const row = workspaceRow(dest.workspace)!;
+    const landing =
+      row.renderer === "column" && samePath(dest.path, row.path)
+        ? row.sections.find((s) => samePath(s.path, row.path))
+        : undefined;
+    expect(last?.label, `#/${dest.path.join("/")}`).toBe(landing?.label ?? dest.label);
     expect(last?.path, `#/${dest.path.join("/")} links to itself`).toBeUndefined();
   }
 });
@@ -476,7 +513,7 @@ test("three fixed ancestors is the deepest trail the route table produces", () =
     ],
     [
       ["settings", "tools", "servers", "github"],
-      ["Settings", "Tools", "Servers"],
+      ["Settings", "Tools & MCP", "Servers"],
     ],
   ];
   for (const [path, ancestry] of three) {

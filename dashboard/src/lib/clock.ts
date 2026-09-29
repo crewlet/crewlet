@@ -15,6 +15,9 @@
 
 import { useSyncExternalStore } from "react";
 
+/** How often the clock ticks, and so how stale a read of it may be. */
+const TICK_MS = 1000;
+
 let now = Date.now();
 const listeners = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | 0 = 0;
@@ -28,7 +31,7 @@ function start(): void {
   if (timer) return;
   timer = setInterval(() => {
     if (document.visibilityState === "visible") tick();
-  }, 1000);
+  }, TICK_MS);
   // A tab coming back from the background is exactly when the clock is most
   // wrong, so re-read it immediately rather than waiting out the interval.
   document.addEventListener("visibilitychange", onVisible);
@@ -62,9 +65,31 @@ function subscribe(fn: () => void): () => void {
  * "3m ago" ends up next to "2m ago" for the same row.
  */
 export function useNow(): number {
-  return useSyncExternalStore(
-    subscribe,
-    () => now,
-    () => now,
-  );
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+/**
+ * The shared instant, as a render reads it.
+ *
+ * A STOPPED CLOCK IS NOT A CLOCK. The instant is refreshed only by the ticker,
+ * and the ticker runs only while something is subscribed — so the first
+ * component to mount after every subscriber had gone rendered with the
+ * instant of the LAST tick, however long ago that was: minutes after a reader
+ * left every screen with a relative time, or, in a test that sets the system
+ * time, the moment the module was imported. Spend's "last 30 days" was cut at
+ * that stale instant, and on a day whose company date differed from the
+ * import's it opened the custom window a day short.
+ *
+ * So a read while stopped re-reads the wall clock — but only when it has
+ * moved by a tick or more (either way: a clock set back is as stale as one
+ * left behind). Within a tick the value is the same number, which is what
+ * `useSyncExternalStore` requires of two reads in one render, and it is no
+ * staler than a running clock ever is.
+ */
+function read(): number {
+  if (!timer) {
+    const t = Date.now();
+    if (Math.abs(t - now) >= TICK_MS) now = t;
+  }
+  return now;
 }

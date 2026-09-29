@@ -35,7 +35,7 @@ import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { href } from "~/app/router.tsx";
 import { MessageSquareGlyph, UsersGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
@@ -386,8 +386,6 @@ export function Conversations() {
   );
 
   const { open: openPeek } = usePeekControls();
-  const peek = usePeek();
-  const focused = peek?.kind === "channel" ? peek.id : "";
 
   const openChannel = useCallback(
     (c: A2AChannel, e: React.MouseEvent | React.KeyboardEvent) => {
@@ -472,7 +470,6 @@ export function Conversations() {
               rowKey={(c) => c.id}
               onRowActivate={openChannel}
               rowHref={(c) => peekHref({ kind: "channel", id: c.id })}
-              isSelected={(c) => c.id === focused}
               defaultSort="-last"
               columns={[
                 {

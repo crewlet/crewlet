@@ -3478,7 +3478,7 @@ shared knowledge backend, reachable by all members via query-time search.
 
 ### `GET /fleet`
 
-Backs the dashboard's **Fleet** view — the questions `/health` cannot
+Backs the dashboard's **Settings › Nodes** screen — the questions `/health` cannot
 answer, because it answers about the node that served it and a load
 balancer sends the next refresh somewhere else.
 

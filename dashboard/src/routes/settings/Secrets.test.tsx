@@ -16,8 +16,8 @@
  */
 
 import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { Secrets } from "./Secrets.tsx";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { CredentialPeek, provenance, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
 import { storeToken } from "~/protocol/index.ts";
@@ -50,7 +50,7 @@ const body = {
       key_id: "k1",
       updated_at: "2026-08-22T15:00:00Z",
       updated_by: "ops",
-      source: "store",
+      source: "api",
     },
   ],
 };
@@ -406,4 +406,218 @@ test("a read that answers after a newer one began does not overwrite it", async 
   expect(reads).toBe(2);
   expect(screen.queryByText("STALE_ANSWER")).toBeNull();
   expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
+});
+
+// A COMMAND IS CODE. The info card above the list sets `crewlet secrets get`
+// in the code face, and the empty state under it wrote `crewlet secrets set`
+// as three words of its sentence — the one a reader is being told to type.
+test("an empty store names the command that fills it as code", async () => {
+  stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
+  render(<Secrets />);
+  expect(await screen.findByText("No secrets are stored")).toBeDefined();
+  const command = screen.getByText("crewlet secrets set");
+  expect(command.tagName).toBe("CODE");
+});
+
+// THE NAME IS THE TABLE'S ONE FLEXIBLE TRACK. Name and Set by were both `1fr`,
+// so they split the spare width: at a 1280 window "DATADOG_WEBHOOK_TOK…" sat
+// cut beside "founder" in ~120px of air, and beside a peek at 1440 every name
+// fell to "DAT…". The name is what a reader matches against the `${VAR}` in
+// their configuration, so it takes the spare width and never gives up a
+// character; every fact beside it sizes to its content.
+// THE TILES CLAIM NOTHING ABOUT WHERE A VALUE LIVES. One counted rows whose
+// source read "store", a word no writer stamps — `source` is which path wrote
+// a row, and every row listed is sealed in the store — so six sealed
+// credentials read "0, the rest resolve from this process's environment".
+// The tile is what a name's readers say: the names no field points at.
+test("the tiles count what the answers say, never where a value lives", async () => {
+  stubLoaded();
+  render(<Secrets />);
+  await screen.findByText("DATADOG_WEBHOOK_TOKEN");
+  expect(screen.queryByText(/resolve from this process's environment/)).toBeNull();
+  expect(screen.queryByText("In the secret store")).toBeNull();
+  const tile = screen.getByText("Read by nothing").closest(".crewlet-statcard")!;
+  // DATADOG_WEBHOOK_TOKEN has no reader in the fixture; GITHUB_TOKEN has two.
+  expect(tile.textContent).toContain("1");
+  expect(tile.textContent).toContain("no config field names them");
+});
+
+// AND AN UNANSWERED CHECK IS NOT A COUNT: every name would read as unread.
+test("a reference check that failed counts nothing as unread", async () => {
+  stubFetch((path) => {
+    if (path === "/secrets") return ok(body);
+    if (path === "/config/references") {
+      return new Response(JSON.stringify({ error: "internal_error" }), { status: 500 });
+    }
+    return ok({});
+  });
+  render(<Secrets />);
+  await screen.findByText("DATADOG_WEBHOOK_TOKEN");
+  const tile = screen.getByText("Read by nothing").closest(".crewlet-statcard")!;
+  expect(tile.textContent).not.toMatch(/\d/);
+  expect(tile.textContent).toContain("the reference check did not answer");
+});
+
+// WHICH PATH WROTE A CREDENTIAL, in words: `source` is provenance, and each
+// writer's word is said as what it means. A word no writer in this build
+// stamps is said as the writer's own, never guessed at.
+test("a credential's provenance is said as the path that wrote it", async () => {
+  stubLoaded();
+  render(<CredentialPeek name="DATADOG_WEBHOOK_TOKEN" />);
+  expect(await screen.findByText("written by an integration's setup")).toBeDefined();
+  expect(provenance("api")).toBe("stored over the API — this page or PUT /secrets");
+  expect(provenance("cli")).toBe("set with crewlet secrets set");
+  expect(provenance("migrated")).toBe("moved onto the fleet from a node's own table");
+  expect(provenance("gitlab-provision")).toBe("its writer named itself “gitlab-provision”");
+  for (const word of ["api", "cli", "setup", "provision", "rekey", "migrated"]) {
+    expect(provenance(word)).not.toMatch(/environment|named itself/);
+  }
+});
+
+// EACH PROPERTY ONCE. The peek's header carried Key id, Set by and Updated as
+// facts and the provenance group said all three again a hundred pixels down;
+// stacked in one column they are one reading, so the group states them.
+test("the credential's peek says each property once", async () => {
+  stubLoaded();
+  render(<CredentialPeek name="GITHUB_TOKEN" />);
+  expect(await screen.findByText("Where it came from")).toBeDefined();
+  const said = (label: string) =>
+    [...document.querySelectorAll(".fact-label, dt")].filter((el) => el.textContent === label);
+  for (const label of ["Source", "Key id", "Set by", "Updated"]) {
+    expect(said(label), label).toHaveLength(1);
+  }
+  // The key id is a VALUE in the mono face; its label is a word.
+  const key = screen.getByText("k1");
+  expect(key.classList.contains("mono")).toBe(true);
+  expect(said("Key id")[0]!.classList.contains("mono")).toBe(false);
+});
+
+describe("the credentials table", () => {
+  /** The table's track list, one entry per column. */
+  const tracks = (grid: HTMLElement) =>
+    grid.style.gridTemplateColumns.match(/minmax\([^)]*\)|fit-content\([^)]*\)|\S+/g) ?? [];
+
+  test("the name is the one flexible track, and it is never narrower than itself", async () => {
+    stubLoaded();
+    const { container } = render(<Secrets />);
+    expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
+    const all = tracks(container.querySelector<HTMLElement>(".grid-wrap")!);
+    expect(all).toHaveLength(7);
+    expect(all[0]).toBe("minmax(max-content, 1fr)");
+    for (const track of all.slice(1)) expect(track).toMatch(/^fit-content\(/);
+    expect(all.filter((t) => t.includes("1fr"))).toHaveLength(1);
+  });
+
+  // THE ROW THE RAIL IS OPEN ON IS MARKED, as the work list marks its peeked
+  // item: six look-alike names, and nothing said which one the rail was about.
+  test("the credential the peek is open on is the marked row", async () => {
+    stubLoaded();
+    location.hash = "#/settings/secrets?peek=credential:GITHUB_TOKEN";
+    try {
+      render(<Secrets />);
+      const name = await screen.findByText("GITHUB_TOKEN");
+      expect(name.closest(".grid-row")?.classList.contains("selected")).toBe(true);
+      const other = screen.getByText("DATADOG_WEBHOOK_TOKEN");
+      expect(other.closest(".grid-row")?.classList.contains("selected")).toBe(false);
+    } finally {
+      location.hash = "#/";
+    }
+  });
+
+  // LAID OUT, as the browser measured each column at its content in the
+  // harness: the longest name (MATTERMOST_ADMIN_TOKEN) with its padding, every
+  // other column at its head or its value. A peek at 1440 leaves the table
+  // 486px, a 1280 window 746px.
+  describe("laid out", () => {
+    const NATURAL: Record<string, number> = {
+      Name: 196,
+      "Read by": 77,
+      Source: 76,
+      "Key id": 63,
+      "Set by": 70,
+      Updated: 76,
+      "": 80,
+    };
+    let box = 486;
+    const real = globalThis.ResizeObserver;
+    beforeEach(() => {
+      globalThis.ResizeObserver = class {
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      } as unknown as typeof ResizeObserver;
+      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        return this.classList.contains("grid-wrap") ? box : 0;
+      });
+      // Each head is its column's natural width, laid end to end.
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        const width = (el: Element) => NATURAL[el.textContent?.trim() ?? ""] ?? 60;
+        if (this.classList.contains("grid-th")) {
+          const siblings = [...this.parentElement!.children];
+          const left = siblings.slice(0, siblings.indexOf(this)).reduce((n, h) => n + width(h), 0);
+          return {
+            left,
+            right: left + width(this),
+            width: width(this),
+            top: 0,
+            bottom: 0,
+            height: 0,
+          } as DOMRect;
+        }
+        const right = this.classList.contains("grid-wrap") ? box : 0;
+        return { left: 0, right, width: right, top: 0, bottom: 0, height: 0 } as DOMRect;
+      });
+    });
+    afterEach(() => {
+      globalThis.ResizeObserver = real;
+      box = 486;
+    });
+
+    async function drawn(width: number) {
+      box = width;
+      stubLoaded();
+      const { container } = render(<Secrets />);
+      expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
+      const grid = container.querySelector<HTMLElement>(".grid-wrap")!;
+      return {
+        heads: [...grid.querySelectorAll(".grid-head > .grid-th")].map((h) =>
+          h.textContent?.trim(),
+        ),
+        hidden: grid.parentElement?.querySelector(".grid-foot")?.textContent ?? "",
+      };
+    }
+
+    test("beside a peek it gives way whole facts, and never cuts the name", async () => {
+      const at = await drawn(486);
+      expect(at.heads).toEqual(["Name", "Read by", "Updated", ""]);
+      expect(at.hidden).toContain("Hidden to fit: Key id, Set by and Source");
+    });
+
+    test("at a 1280 window it draws every column", async () => {
+      const at = await drawn(746);
+      expect(at.heads).toEqual(Object.keys(NATURAL));
+      expect(at.hidden).not.toContain("Hidden to fit");
+    });
+
+    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed to
+    // nothing, every column that can give way does — and each is a fact the
+    // credential's own peek draws. What reads it never gives way.
+    test("every column it can give way is one the credential's peek carries", async () => {
+      const at = await drawn(160);
+      const hidden = at.hidden.replace(/^.*Hidden to fit:\s*/, "").split(/,\s*|\s+and\s+/);
+      expect(hidden.sort()).toEqual(["Key id", "Set by", "Source", "Updated"]);
+      expect(at.heads).toContain("Read by");
+      cleanup();
+      stubLoaded();
+      render(<CredentialPeek name="DATADOG_WEBHOOK_TOKEN" />);
+      expect(await screen.findByText("Where it came from")).toBeDefined();
+      for (const column of hidden) {
+        expect(screen.getAllByText(column).length, column).toBeGreaterThan(0);
+      }
+    });
+  });
 });

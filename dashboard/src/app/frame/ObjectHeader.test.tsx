@@ -9,6 +9,8 @@
  * draws exactly what it was handed.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
@@ -125,6 +127,24 @@ test("a token fact takes two tracks on one line rather than wrapping mid-token",
   const value = container.querySelector(".fact-value")!;
   expect(value.classList.contains("fact-token")).toBe(true);
   expect(value.classList.contains("clamp")).toBe(false);
+});
+
+// A SET OF CHIPS TAKES TWO TRACKS AND IS NEVER CLAMPED. A node's three roles in
+// one `7.5rem` track stood two over one, a fact taller than every fact beside
+// it; clamped, a chip would be cut in half.
+//
+// Mutation: drop `set` from `FactLine`'s class choice, and the fact is one
+// track and clamped.
+test("a set fact takes two tracks and wraps between its chips, never inside one", () => {
+  const { container } = render(
+    <FactLine facts={[{ label: "Roles", value: <span>ingress seats workers</span>, set: true }]} />,
+  );
+  expect(container.querySelector(".fact")!.classList.contains("is-set")).toBe(true);
+  const value = container.querySelector(".fact-value")!;
+  expect(value.classList.contains("clamp")).toBe(false);
+  expect(value.classList.contains("fact-token")).toBe(false);
+  const css = readFileSync(join(process.cwd(), "src/styles/frame.css"), "utf8");
+  expect(css).toMatch(/\.fact\.is-set\s*\{\s*grid-column:\s*span 2;/);
 });
 
 // A NOTE IS ITS VALUE'S. On a band of its own, a neighbour's value wrapping to

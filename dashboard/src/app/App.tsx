@@ -172,6 +172,7 @@ export function screenFor(route: Resolved): ReactNode {
         <ConfigScreen
           key={`${route.revisions}/${route.revision ?? ""}`}
           revision={route.revision}
+          revisions={route.revisions}
         />
       );
     case "backups":

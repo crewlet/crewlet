@@ -116,7 +116,10 @@ export function SecretDialog({
           value={name}
           onChange={setName}
           autoFocus
-          placeholder="GITLAB_TOKEN_SWE"
+          // "e.g." so the example reads as a hint rather than as a value
+          // already typed: an upper-case identifier in the tertiary tone
+          // still looked like a pre-filled field at a glance.
+          placeholder="e.g. GITLAB_TOKEN_SWE"
           help="The name a ${VAR} in the company configuration points at. Letters, digits and underscores, starting with a letter or an underscore."
         />
       )}

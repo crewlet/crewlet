@@ -202,6 +202,12 @@ samp,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* WHERE A LEASE IS, beside what it is for (`HeldBy`): the body's weight, so it
+   never outweighs the seat or the duty the row is about. Two classes, because
+   `.t-link` below sets the medium weight every other card link carries. */
+.t-link.held-by {
+  font-weight: var(--font-weight-regular);
+}
 
 /* A TURN'S "WHAT IT DID" (`TurnWhatCell`): the summary keeps the width and the
    key beside it keeps at most a bit under half of it. The key's `flex: none`
@@ -600,14 +606,28 @@ button.t-link {
 }
 /* A grid that lays cards out at a minimum readable width and stops. `auto-fit`
    with `minmax` is what makes every screen in the product respond without a
-   single breakpoint of its own. */
+   single breakpoint of its own — and the floor is `min(<floor>, 100%)`
+   because a single track wider than its container is not scrolled here: the
+   shell's main is `overflow-x: hidden`, so the right side of every card is
+   CLIPPED, a table's last columns with it. The clamp is what lets a floor be
+   chosen for a desktop frame without breaking a phone (frame.test.ts holds
+   every repeating track in these sheets to it). */
 .grid {
   display: grid;
   gap: var(--spacing-4);
 }
 .grid-auto {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
 }
+/* THE FLOOR IS A FOUR-COLUMN LEASE TABLE'S (Settings › Nodes: seat, held by,
+   since, lease), and it is set so the panels STACK rather than cut the seat.
+   The seat is the table's one flexible track; the other three size to their
+   content (a node id of about 95px, a relative time of about 70, a duration
+   of about 60), so a panel needs roughly 225px + 225px of seat name before a
+   name like "Agent AI Systems Engineer" is drawn whole. At 420 the two panels
+   still sat side by side at a 1440 frame, 442px each, and the node id or the
+   seat had to give way; at 480 they stack below about 1520 and sit side by
+   side above it. On a phone the clamp gives the one track the container. */
 .grid-auto-lg {
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(480px, 100%), 1fr));
 }

@@ -493,11 +493,19 @@ a.seat-chip:hover {
    wider than its container ran off the edge: on a phone the spend chart's
    "Split by" ended at "Worke", clipped by the card with no way to reach the
    rest. Wrapped, every option stays visible, clickable and inside the
-   focus ring's room — which a horizontal scroll strip would clip. */
+   focus ring's room — which a horizontal scroll strip would clip.
+
+   IT HUGS ITS OPTIONS WHEREVER IT SITS. `inline-flex` is its outside only in
+   a line box: as the child of a flex column or a grid the item is stretched,
+   and Configuration's collection picker drew as a full-width grey band with
+   its four options at the left, beside a lens control in the page bar that
+   hugged its own. A `width` that is not `auto` is never stretched, and
+   `fit-content` still wraps inside a narrower container. */
 .segmented {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
+  width: fit-content;
   gap: 2px;
   padding: 2px;
   /* THE TRACK IS DRAWN, border and raised ground, as the approved artboards

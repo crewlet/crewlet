@@ -38,6 +38,7 @@
 
 import {
   useCallback,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -68,6 +69,7 @@ import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
 import { sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
+import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
@@ -411,8 +413,9 @@ function useTabFit(
  * Settings row does: a section that vanished for a reader without an operator
  * credential is one they cannot know exists. A CROSS-LINK (Budgets, which
  * lives once, under Spend) draws an arrow, because pressing it leaves
- * Settings. A figure beside a section is the health push's — the fleet's size,
- * the epoch this node applied — so the column polls nothing.
+ * Settings. A figure beside a section is handed in whole, in the rail's own
+ * two shapes (`settingsFigures.tsx` decides them and asks for what they need),
+ * so the column itself asks nothing.
  */
 export function SectionColumn({
   row,
@@ -423,9 +426,13 @@ export function SectionColumn({
   row: WorkspaceRow;
   path: string[];
   operator: boolean;
-  figures: Record<string, string>;
+  figures: Record<string, SectionFigure>;
 }) {
-  const current = sectionOf(path);
+  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. The landing's path is
+  // the workspace root, which prefixes every Settings address, so without this
+  // a mistyped `#/settings/general` drew "Not found" under a column (and a
+  // phone picker) saying the reader was on General.
+  const current = resolves(path) ? sectionOf(path) : undefined;
   const groups: { name: string; sections: Section[] }[] = [];
   for (const s of row.sections) {
     const name = s.group ?? "";
@@ -433,58 +440,93 @@ export function SectionColumn({
     if (last && last.name === name) last.sections.push(s);
     else groups.push({ name, sections: [s] });
   }
+  // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION. Stacked whole above
+  // the section it took about 520px, so on Nodes and Secrets the section's own
+  // content began below the fold on every visit. Below the phone breakpoint
+  // the list is folded behind one row saying where the reader is, and it folds
+  // again once they pick a section (the path moves); at every other width the
+  // toggle is not drawn and the list always is (frame.css).
+  const [open, setOpen] = useState(false);
+  const [openedAt, setOpenedAt] = useState(path.join("/"));
+  if (openedAt !== path.join("/")) {
+    setOpenedAt(path.join("/"));
+    setOpen(false);
+  }
+  const listID = useId();
+  const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
   // groups of rows, one of which is where the reader is — raised with a
   // hairline and no hue, the same mark the sidebar beside it uses, so "where
   // am I" reads one way in both columns.
   return (
-    <div className="section-column">
-      <SidebarNav label={`${row.label} sections`}>
-        {groups.map((g) => (
-          <SidebarNav.Group key={g.name} label={g.name}>
-            {g.sections.map((s) => {
-              const Glyph = glyphFor(s.icon);
-              const locked = s.guarded && !operator;
-              const figure = figures[s.key];
-              return (
-                <SidebarNav.Item
-                  key={s.key}
-                  href={href(s.path)}
-                  current={!s.elsewhere && current?.key === s.key}
-                  icon={<Glyph size="sm" />}
-                  label={
-                    <span className="section-column-label">
-                      {s.label}
-                      {locked && (
-                        <>
-                          <KeyGlyph size="xs" aria-hidden="true" />
-                          <span className="sr-only">, needs an operator credential</span>
-                        </>
-                      )}
-                      {s.elsewhere && (
-                        <>
-                          <ArrowUpRightGlyph size="xs" aria-hidden="true" />
-                          <span className="sr-only">, under {s.path[0]}</span>
-                        </>
-                      )}
-                    </span>
-                  }
-                  count={figure ? { value: figure, label: FIGURE_WORDS[s.key] ?? "" } : undefined}
-                />
-              );
-            })}
-          </SidebarNav.Group>
-        ))}
-      </SidebarNav>
+    <div className="section-column section-picker" data-open={open || undefined}>
+      <button
+        type="button"
+        className="section-picker-toggle"
+        aria-expanded={open}
+        aria-controls={listID}
+        onClick={() => setOpen((was) => !was)}
+      >
+        {CurrentGlyph && <CurrentGlyph size="sm" aria-hidden="true" />}
+        <span className="section-picker-name">
+          {current ? (
+            <>
+              <span className="sr-only">{row.label} section: </span>
+              {current.label}
+            </>
+          ) : (
+            `${row.label} sections`
+          )}
+        </span>
+        <ChevronDownGlyph size="xs" aria-hidden="true" className="section-picker-chevron" />
+      </button>
+      <div id={listID} className="section-picker-list">
+        <SidebarNav label={`${row.label} sections`}>
+          {groups.map((g) => (
+            <SidebarNav.Group key={g.name} label={g.name}>
+              {g.sections.map((s) => {
+                const Glyph = glyphFor(s.icon);
+                const locked = s.guarded && !operator;
+                const figure = figures[s.key];
+                return (
+                  <SidebarNav.Item
+                    key={s.key}
+                    href={href(s.path)}
+                    current={!s.elsewhere && current?.key === s.key}
+                    icon={<Glyph size="sm" />}
+                    label={
+                      <span className="section-column-label">
+                        {s.label}
+                        {locked && (
+                          <>
+                            <KeyGlyph size="xs" aria-hidden="true" />
+                            <span className="sr-only">, needs an operator credential</span>
+                          </>
+                        )}
+                        {s.elsewhere && (
+                          <>
+                            <ArrowUpRightGlyph size="xs" aria-hidden="true" />
+                            <span className="sr-only">, under {s.path[0]}</span>
+                          </>
+                        )}
+                      </span>
+                    }
+                    badge={figure?.badge ?? figure?.attention}
+                    count={figure?.count}
+                    // A STATE WAITING ON THE READER is the kit's pill — its
+                    // size, its place and its spoken figure — repainted in
+                    // the warning tone (see `SectionFigure.attention`).
+                    className={figure?.attention ? "section-row-attention" : undefined}
+                  />
+                );
+              })}
+            </SidebarNav.Group>
+          ))}
+        </SidebarNav>
+      </div>
     </div>
   );
 }
-
-/** What each column figure counts, read after it as part of the row's name. */
-const FIGURE_WORDS: Record<string, string> = {
-  nodes: "nodes live",
-  config: "the configuration this node applied",
-};
 
 /**
  * The trail, and it is a SCROLLPORT — so while it overflows it is a tab stop.

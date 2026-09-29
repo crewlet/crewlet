@@ -18,9 +18,10 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import {
   Button,
+  ButtonLink,
   Callout,
   Card,
   CodeBlock,
@@ -51,14 +52,15 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
-import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
+import type { ConfigChange, FleetNode, RevisionMeta } from "~/protocol/index.ts";
+import { reveal } from "~/lib/scroller.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -101,8 +103,17 @@ const FLEET_POLL_MS = 15_000;
  */
 const NO_REVISION = {
   title: "No company configuration is active",
-  hint: "The engine is running with nothing to run: no seats are spawned, and every inbound webhook is refused with a 503 its sender will retry. Import one with crewlet config import, or PUT /config.",
-} as const;
+  // A COMMAND IS CODE, in a sentence as anywhere: the info card on this
+  // screen sets `PUT /config` and `crewlet config import` as code, and the
+  // same two in prose here read as words rather than as something to type.
+  hint: (
+    <>
+      The engine is running with nothing to run: no seats are spawned, and every inbound webhook is
+      refused with a 503 its sender will retry. Import one with{" "}
+      <InlineCode>crewlet config import</InlineCode>, or <InlineCode>PUT /config</InlineCode>.
+    </>
+  ),
+};
 
 /**
  * Who wrote a revision: the label it was recorded under, and WHAT that label
@@ -119,34 +130,19 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   const kind = revision.created_by_kind;
   if (!name && !kind) return <EmptyValue label="Not recorded" />;
   return (
-    <span className="row gap-1">
+    // THE NAME OUTRANKS ITS KIND. In a narrow By column the name was cut to
+    // "n…" beside a whole `operator` chip, which is the half of the fact a
+    // reader can least do without. In a revisions table (`.grid-cell >
+    // .revision-author`) the chip wraps onto a line the cell does not draw
+    // before the name gives up a character; the title keeps both.
+    <span
+      className="row gap-1 revision-author"
+      title={kind && name ? `${name} · ${kind}` : undefined}
+    >
       {name ? <TextCell>{name}</TextCell> : <EmptyValue label="No name recorded" />}
       {kind && <Tag appearance="outline">{kind}</Tag>}
     </span>
   );
-}
-
-/**
- * The facts a revision is recognised by, in the history table's own order.
- *
- * ONE FUNCTION for the page and the rail, so a reader who peeks a revision and
- * then opens it reads the same things in the same places. Whether it is ACTIVE
- * is not among them — that is the header's own pill, and a state spelled in
- * colour and again in a list reads as two facts about one revision.
- */
-function revisionFacts(revision: RevisionMeta, now: number): Fact[] {
-  return [
-    { label: "Created", value: <DateCell at={revision.created_at} now={now} /> },
-    { label: "By", value: <RevisionAuthor revision={revision} /> },
-    { label: "Source", value: revision.source },
-    {
-      label: "Activated",
-      // ABSENT IS NOT A DATE. A revision that was stored and never activated
-      // has no activation, and the fact line drops a fact with no value
-      // rather than claiming one.
-      value: revision.activated_at ? <DateCell at={revision.activated_at} now={now} /> : "",
-    },
-  ];
 }
 
 /**
@@ -163,6 +159,71 @@ function RevisionState({ revision }: { revision: RevisionMeta }) {
   if (revision.activated_at) return <Tag appearance="outline">superseded</Tag>;
   return <Tag appearance="outline">never activated</Tag>;
 }
+
+/**
+ * A value as a diff draws it: JSON, so `"true"` and `true` stay two different
+ * settings (the CLI's `renderValue` rule), and an object or a list in the
+ * document's own indented shape rather than as one run-on line.
+ *
+ * ABSENT IS `null`. `configapi.Change` omits an empty side, and Go's
+ * `omitempty` on an `any` drops a JSON null with it — so a setting changed
+ * from null arrives with no `from` at all, and `JSON.stringify` of that is
+ * `undefined`, which the line would print as the word.
+ */
+function shownValue(value: unknown): string {
+  if (value !== null && typeof value === "object") return JSON.stringify(value, null, 2);
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * What one change says about its value: the side that exists, or both.
+ *
+ * A change whose values are objects puts the arrow at the head of its own line
+ * — after the old block, before the new one — because trailing a closing
+ * brace it reads as part of it.
+ */
+export function changeValue(change: ConfigChange): string {
+  if (change.kind === "added") return shownValue(change.to);
+  if (change.kind === "removed") return shownValue(change.from);
+  const from = shownValue(change.from);
+  const to = shownValue(change.to);
+  return from.includes("\n") || to.includes("\n") ? `${from}\n→ ${to}` : `${from} → ${to}`;
+}
+
+/** The mark each kind of change is drawn with, beside its tint. */
+const CHANGE_MARK: Record<ConfigChange["kind"], string> = {
+  added: "+",
+  removed: "−",
+  changed: "~",
+};
+
+/**
+ * A comparison, one change a row: its mark, the path and the value, WHOLE.
+ *
+ * The tracks are `.config-diff`'s (see there): the path wraps rather than
+ * cutting, and so does the value. The mark is a glyph as well as a tint,
+ * because colour alone is not a signal, and the kind is said in words to a
+ * reader who hears the list rather than seeing it.
+ */
+function ConfigChanges({ changes }: { changes: ConfigChange[] }) {
+  return (
+    <ul className="config-diff">
+      {changes.map((change, i) => (
+        <li key={i} className="config-diff-line" data-kind={change.kind}>
+          <span className="config-diff-mark">
+            <span aria-hidden="true">{CHANGE_MARK[change.kind]}</span>
+            <span className="sr-only">{change.kind}</span>
+          </span>
+          <span className="config-diff-path">{change.path}</span>
+          <span className="config-diff-value">{changeValue(change)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The Diff lens's head, which a row pressed below it brings back on screen. */
+const CHANGES_HEAD_ID = "config-changes";
 
 /**
  * Which nodes are on this revision, which are on another, and which have not
@@ -295,16 +356,23 @@ function RevisionBody({
   loading?: boolean;
   flush?: boolean;
 }) {
+  // EVERY PROPERTY ONCE, here and nowhere else. The header above carries the
+  // revision's identity and its state and passes no facts: stacked in one
+  // column — the peek's, and the page's, whose cards run under the header
+  // rather than beside it — a fact line and this group said Created, By,
+  // Source and Activated twice within a hundred pixels. The ids are VALUES
+  // in the mono face; the labels are words.
   const provenance = (
     <PropertiesRail
       groups={[
         {
           properties: [
-            { label: "Revision", value: revision.revision_id, code: true },
+            { label: "Revision", value: <span className="mono">{revision.revision_id}</span> },
             {
               label: "Parent",
-              value: revision.parent_revision_id,
-              code: true,
+              value: revision.parent_revision_id ? (
+                <span className="mono">{revision.parent_revision_id}</span>
+              ) : undefined,
               title: "the revision this one was written against",
             },
             { label: "Source", value: revision.source },
@@ -364,7 +432,6 @@ function RevisionBody({
  * to be active and each node writes its own apply status beside it.
  */
 export function RevisionPeek({ id }: { id: string }) {
-  const now = useNow();
   const audit = useQuery("config_audit", { limit: HISTORY_LIMIT }, { enabled: id !== "" });
   const fleet = useQuery("fleet", undefined, { enabled: id !== "", pollMs: FLEET_POLL_MS });
 
@@ -398,7 +465,6 @@ export function RevisionPeek({ id }: { id: string }) {
               identifier={revision.revision_id.slice(0, 10)}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
-              facts={revisionFacts(revision, now)}
             />
             <div className="col gap-3">
               <RevisionBody
@@ -416,9 +482,33 @@ export function RevisionPeek({ id }: { id: string }) {
   );
 }
 
-export function ConfigScreen({ revision: revisionPath }: { revision?: string }) {
+export function ConfigScreen({
+  revision: revisionPath,
+  revisions = false,
+}: {
+  revision?: string;
+  /** The address is `#/settings/config/revisions[/{id}]`. */
+  revisions?: boolean;
+}) {
   const now = useNow();
-  const [lens, setLens] = useTab("lens", LENSES);
+  // ONE REVISION'S PAGE IS AN OBJECT, NOT A LENS. It drew the lens bar with
+  // Active pressed and the whole active document under the revision's own
+  // header, so a reader looking at last week's save was told, by the one
+  // pressed control on the screen, that they were looking at what is running
+  // now. On that page the lenses are not drawn and not asked for, and the
+  // digits are left alone ("filter"), because there is no strip for them to
+  // move.
+  const onRevision = revisionPath !== undefined;
+  // `#/settings/config/revisions` IS THE HISTORY. The trail names that address
+  // "Revisions" and a revision's page links back to it, so it lands on the
+  // History lens — as the Active lens it showed the running document under a
+  // crumb that said something else.
+  const [lens, setLens] = useTab(
+    "lens",
+    LENSES,
+    onRevision ? "filter" : "section",
+    revisions && !onRevision ? "audit" : "active",
+  );
   const [chosen, setRevision] = useParam("revision", "");
   // THE SIDE A DIFF IS READ AGAINST. Empty is the active revision, which is
   // what the engine's own `against: "active"` means, so the parameter is
@@ -438,16 +528,20 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
   // landing rather than a lock.
   const revision = chosen || revisionPath || "";
 
-  const active = useQuery("config", undefined, { enabled: lens === "active" });
+  const active = useQuery("config", undefined, { enabled: !onRevision && lens === "active" });
   // ONE COLLECTION AT A TIME, which is what makes this different from the
   // Active lens rather than a second copy of it: the whole document is one
   // unreadable block of JSON, and the question a reader actually has is
   // "what does THIS seat's configuration say".
-  const ids = useQuery("config_entities", { kind }, { enabled: lens === "entities" });
+  const ids = useQuery(
+    "config_entities",
+    { kind },
+    { enabled: !onRevision && lens === "entities" },
+  );
   const one = useQuery(
     "config_entities",
     { kind, id: entity },
-    { enabled: lens === "entities" && entity !== "" },
+    { enabled: !onRevision && lens === "entities" && entity !== "" },
   );
   const audit = useQuery(
     "config_audit",
@@ -456,16 +550,16 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
       // THE HISTORY IS ALSO WHAT THE ADDRESSED REVISION IS READ FROM, so the
       // block below has something to render on the lens a link lands on
       // rather than only on the two that show the table.
-      enabled: lens === "audit" || lens === "diff" || revisionPath !== undefined,
+      enabled: onRevision || lens === "audit" || lens === "diff",
     },
   );
   const diff = useQuery(
     "config_diff",
     { revision_id: revision, against: against || "active" },
-    { enabled: lens === "diff" && !!revision },
+    { enabled: !onRevision && lens === "diff" && !!revision },
   );
   const fleet = useQuery("fleet", undefined, {
-    enabled: revisionPath !== undefined,
+    enabled: onRevision,
     pollMs: FLEET_POLL_MS,
   });
 
@@ -486,6 +580,13 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
   );
 
   const { open: openPeek } = usePeekControls();
+  // THE ROW THE RAIL IS OPEN ON IS MARKED, as the work list marks its peeked
+  // item. A row's click sets `revision=` and opens the peek together, but `[`
+  // and `]` move the peek alone, so a mark keyed on `revision=` stayed on the
+  // row the reader had stepped away from; with no revision peeked, the picked
+  // revision (the Diff lens's subject, or the addressed one) is the mark.
+  const peek = usePeek();
+  const marked = peek?.kind === "revision" ? peek.id : revision;
 
   /**
    * A row's click.
@@ -509,6 +610,12 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
         // into it would answer a question this reader did not ask.
         setAgainst("");
         openPeek({ kind: "revision", id: row.revision_id });
+        // ON THE DIFF LENS THE PRESS IS A QUESTION ABOUT THE CHANGES, which
+        // sit above the table: a row pressed forty revisions down changed a
+        // card the reader could not see. Brought on screen only when it is
+        // off it, and focus stays on the row, where `[` and `]` and the
+        // arrows keep stepping through the history.
+        if (lens === "diff") reveal(document.getElementById(CHANGES_HEAD_ID));
       };
       if (!("button" in e)) {
         go();
@@ -516,7 +623,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
       }
       rowPeekHandler(go)?.(e);
     },
-    [openPeek, setRevision, setAgainst],
+    [openPeek, setRevision, setAgainst, lens],
   );
 
   const pretty = useMemo(
@@ -537,8 +644,8 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
 
   return (
     <>
-      <PageActions>
-        {
+      {!onRevision && (
+        <PageActions>
           <Segmented<Lens>
             ariaLabel="Configuration view"
             value={lens}
@@ -550,8 +657,8 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               { value: "diff", label: "Diff", icon: "split" },
             ]}
           />
-        }
-      </PageActions>
+        </PageActions>
+      )}
       <PageNote>
         The founder-owned company document, versioned in the store and applied live. Secrets are
         redacted by the engine before it leaves the process.
@@ -580,19 +687,26 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   identifier={addressed.revision_id.slice(0, 10)}
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
-                  facts={revisionFacts(addressed, now)}
                   actions={
-                    <Button
-                      size="small"
-                      leadingIcon={<SplitGlyph size="sm" />}
-                      onClick={() => {
-                        setRevision(addressed.revision_id);
-                        setAgainst("");
-                        setLens("diff");
-                      }}
-                    >
-                      See its changes
-                    </Button>
+                    // WHAT THIS SAVE CHANGED is the revision against its
+                    // PARENT (see the file's head): against the active one,
+                    // the active revision's own "See its changes" opened
+                    // "No differences". The company's first revision has no
+                    // parent, and all of it is what that save wrote, which the
+                    // provenance below already says.
+                    addressed.parent_revision_id ? (
+                      <ButtonLink
+                        size="small"
+                        leadingIcon={<SplitGlyph size="sm" />}
+                        href={href(["settings", "config"], {
+                          lens: "diff",
+                          revision: addressed.revision_id,
+                          against: addressed.parent_revision_id,
+                        })}
+                      >
+                        See its changes
+                      </ButtonLink>
+                    ) : undefined
                   }
                 />
                 <RevisionBody
@@ -607,7 +721,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
         </>
       )}
 
-      {lens === "active" && (
+      {!onRevision && lens === "active" && (
         <>
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
           <QueryState error={active.error} loading={active.loading}>
@@ -620,7 +734,10 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 >
                   Active revision
                 </Card.Header>
-                <div className="col gap-1">
+                {/* THE CAPTION'S STEP IS THE ONE EVERY NOTE UNDER A BLOCK TAKES
+                    (`gap-2`): at `gap-1` it sat almost flush on the code
+                    block's edge and read as part of the record. */}
+                <div className="col gap-2">
                   {/* BOUNDED, like every other record block. A whole company
                       configuration runs to hundreds of lines, and it is one of
                       the two records `RECORD_MAX_HEIGHT` is written down for
@@ -649,7 +766,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
         </>
       )}
 
-      {lens === "entities" && (
+      {!onRevision && lens === "entities" && (
         <>
           <Segmented<string>
             ariaLabel="Which collection"
@@ -678,21 +795,38 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                     }
             }
           >
-            <div className="row gap-3 wrap" style={{ alignItems: "flex-start" }}>
+            {/* A LIST AND ITS DETAIL, as one grid: a fixed list track and a
+                `1fr` detail, so the detail card fills the row like every other
+                full-width card on this screen. As a wrapping row both were
+                sized to their content, and the detail ended wherever its empty
+                state's sentence did. */}
+            <div className="entity-pick">
               <Card padding="none">
                 <Card.Header icon={<LayersGlyph size="sm" />} count={(ids.data?.ids ?? []).length}>
                   {ENTITY_KINDS.find((k) => k.kind === kind)?.label ?? kind}
                 </Card.Header>
-                <div className="col">
+                <div className="col entity-pick-list">
                   {(ids.data?.ids ?? []).map((id) => (
-                    <Button
+                    // A LIST SELECTION, NOT AN ACTION, so it is drawn as the
+                    // Settings column draws its current row — the neutral
+                    // raised surface and its hairline, the handle in the
+                    // primary ink — and never as the kit's primary button.
+                    // As one it filled solid violet under the pointer the
+                    // moment it was picked, over a code chip that kept its
+                    // own grey ink: 1.5:1 in the light theme. The accent is
+                    // for the one primary action, which a picked row is not.
+                    <button
                       key={id}
-                      variant={id === entity ? "primary" : "ghost"}
-                      size="small"
+                      type="button"
+                      className="entity-pick-row"
+                      aria-pressed={id === entity}
+                      // The list track is fixed, so a handle longer than it is
+                      // cut; the whole handle is still one hover away.
+                      title={id}
                       onClick={() => setEntity(id === entity ? "" : id)}
                     >
-                      <InlineCode>{id}</InlineCode>
-                    </Button>
+                      {id}
+                    </button>
                   ))}
                 </div>
               </Card>
@@ -751,7 +885,69 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
         </>
       )}
 
-      {(lens === "audit" || lens === "diff") && (
+      {/* THE LENS'S SUBJECT FIRST, and the revisions it is picked from under
+          it. Drawn under the table, the changes began below fifteen rows of
+          history — off the screen at 1440 × 900 — so "See its changes" on a
+          revision's page landed on a list and showed no change at all. */}
+      {!onRevision && lens === "diff" && (
+        <Card>
+          <Card.Header
+            id={CHANGES_HEAD_ID}
+            icon={<SplitGlyph size="sm" />}
+            subtitle={
+              against ? `against revision ${against.slice(0, 10)}` : "against the active revision"
+            }
+          >
+            {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
+          </Card.Header>
+          {!revision ? (
+            <EmptyState
+              size="compact"
+              icon={<SplitGlyph size="xl" />}
+              title="Pick a revision below"
+              description="Its differences against the currently active document are shown here."
+            />
+          ) : diff.loading ? (
+            <Skeleton variant="text" rows={4} label="Loading" />
+          ) : (
+            <QueryState
+              error={diff.error}
+              loading={diff.loading}
+              empty={
+                diff.data?.changes?.length
+                  ? undefined
+                  : {
+                      title: "No differences",
+                      hint: "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
+                    }
+              }
+            >
+              <div className="col" style={{ gap: 6 }}>
+                <ConfigChanges changes={diff.data?.changes ?? []} />
+                {/* Both `?? 0` guard the ANSWER, not the fields: `changes`
+                    and `changes_total` are always sent together, but
+                    `diff.data` is null until the query lands, and an
+                    unanswered comparison must render nothing rather than
+                    compare two undefineds. */}
+                {(diff.data?.changes_total ?? 0) > (diff.data?.changes.length ?? 0) && (
+                  // THE CUT, SAID. The answer is bounded by its response
+                  // budget, so this list is a page of the comparison —
+                  // without a line here a short diff reads as "that is
+                  // all that changed". The server used to report it as a
+                  // pathless CHANGE, which this screen drew as a blank
+                  // path turning undefined into a sentence.
+                  <div className="t-caption">
+                    {diff.data?.changes.length} of {diff.data?.changes_total} shown —{" "}
+                    <InlineCode>crewlet config diff</InlineCode> prints them all
+                  </div>
+                )}
+              </div>
+            </QueryState>
+          )}
+        </Card>
+      )}
+
+      {!onRevision && (lens === "audit" || lens === "diff") && (
         <>
           {audit.loading && <Skeleton variant="text" rows={5} label="Loading" />}
           <QueryState
@@ -780,18 +976,30 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                 // different pages.
                 rowHref={(r) => peekHref({ kind: "revision", id: r.revision_id })}
                 onRowActivate={openRevision}
-                isSelected={(r) => r.revision_id === revision}
+                isSelected={(r) => r.revision_id === marked}
                 columns={[
                   {
                     key: "at",
                     header: "When",
                     shrink: true,
+                    // THE ONE COLUMN THAT GIVES WAY, and it is the revision
+                    // peek's own "Created". Beside a peek at 1440 the table is
+                    // ~486px, and with When drawn the summary kept ~128px —
+                    // "Add the MCP server…" — while When, the id and its pill
+                    // held the rest.
+                    drop: 1,
                     sortValue: (r) => tsKey(r.created_at),
                     cell: (r) => <DateCell at={r.created_at} now={now} />,
                   },
                   {
                     key: "id",
                     header: "Revision",
+                    // ITS OWN WIDTH, EXACTLY. Ten characters of id and an
+                    // `active` pill are bounded, and as a second `1fr` this
+                    // column took ~340px at 1440 while Summary was cut — and
+                    // under a peek it cut the active id itself ("cebf4afb…").
+                    // Summary is the one flexible track.
+                    width: "max-content",
                     cell: (r) => (
                       <span className="row gap-1">
                         <KeyCell value={r.revision_id.slice(0, 10)} />
@@ -802,6 +1010,14 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   {
                     key: "summary",
                     header: "Summary",
+                    // THE ONE FLEXIBLE TRACK, floored so it cannot be the
+                    // column that gives way: at a floor of zero every
+                    // content-sized column beside it was drawn whole and the
+                    // summary took what was left, so the grid never had a
+                    // reason to hide When. At 12rem a row that cannot hold
+                    // When, the id and the author beside it drops When
+                    // instead ("Hidden to fit: When").
+                    floor: "12rem",
                     sortValue: (r) => r.summary,
                     // NOT `value || "—"`. A revision imported without a
                     // message has no summary, and the dash says so rather
@@ -824,77 +1040,6 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
               />
             </Card>
           </QueryState>
-
-          {lens === "diff" && (
-            <Card>
-              <Card.Header
-                icon={<SplitGlyph size="sm" />}
-                subtitle={
-                  against
-                    ? `against revision ${against.slice(0, 10)}`
-                    : "against the active revision"
-                }
-              >
-                {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
-              </Card.Header>
-              {!revision ? (
-                <EmptyState
-                  size="compact"
-                  icon={<SplitGlyph size="xl" />}
-                  title="Pick a revision above"
-                  description="Its differences against the currently active document are shown here."
-                />
-              ) : diff.loading ? (
-                <Skeleton variant="text" rows={4} label="Loading" />
-              ) : (
-                <QueryState
-                  error={diff.error}
-                  loading={diff.loading}
-                  empty={
-                    diff.data?.changes?.length
-                      ? undefined
-                      : {
-                          title: "No differences",
-                          hint: "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
-                        }
-                  }
-                >
-                  <div className="col" style={{ gap: 2 }}>
-                    {(diff.data?.changes ?? []).map((c, i) => (
-                      <div key={i} className="diff-line" data-kind={c.kind}>
-                        <span>{c.kind === "added" ? "+" : c.kind === "removed" ? "−" : "~"}</span>
-                        <span className="truncate">{c.path}</span>
-                        <span className="truncate">
-                          {c.kind === "added"
-                            ? JSON.stringify(c.to)
-                            : c.kind === "removed"
-                              ? JSON.stringify(c.from)
-                              : `${JSON.stringify(c.from)} → ${JSON.stringify(c.to)}`}
-                        </span>
-                      </div>
-                    ))}
-                    {/* Both `?? 0` guard the ANSWER, not the fields: `changes`
-                        and `changes_total` are always sent together, but
-                        `diff.data` is null until the query lands, and an
-                        unanswered comparison must render nothing rather than
-                        compare two undefineds. */}
-                    {(diff.data?.changes_total ?? 0) > (diff.data?.changes.length ?? 0) && (
-                      // THE CUT, SAID. The answer is bounded by its response
-                      // budget, so this list is a page of the comparison —
-                      // without a line here a short diff reads as "that is
-                      // all that changed". The server used to report it as a
-                      // pathless CHANGE, which this screen drew as a blank
-                      // path turning undefined into a sentence.
-                      <div className="t-caption" style={{ paddingTop: 6 }}>
-                        {diff.data?.changes.length} of {diff.data?.changes_total} shown —{" "}
-                        <InlineCode>crewlet config diff</InlineCode> prints them all
-                      </div>
-                    )}
-                  </div>
-                </QueryState>
-              )}
-            </Card>
-          )}
         </>
       )}
 

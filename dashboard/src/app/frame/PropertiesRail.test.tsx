@@ -226,7 +226,7 @@ describe("the rail's shape", () => {
         groups={[
           {
             properties: [
-              { label: "GITHUB_TOKEN", value: "${GH}", code: true },
+              { label: "GITHUB_TOKEN", value: "${GH}", identifierLabel: true },
               { label: "Reports to", value: "ada" },
             ],
           },

@@ -16,7 +16,7 @@
  * where they were by the crumb and shown everywhere by the screen.
  *
  * A node is an object like any other, so it wears an [ObjectHeader] carrying
- * the same five facts its peek does, and then answers the three questions the
+ * the same facts its peek does, and then answers the three questions the
  * lease table is the only place to answer: what it holds, which duties landed
  * on it, and whether it has applied the revision the fleet activated.
  *
@@ -71,6 +71,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
@@ -108,6 +109,8 @@ function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const { data, loading, error } = useQuery("fleet", undefined, { pollMs: POLL_MS });
+  // THE COLUMN'S "n behind on config" IS THIS READING, not a second poll.
+  usePublishFleet(data);
   const { open: openPeek } = usePeekControls();
 
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
@@ -128,16 +131,11 @@ function FleetScreen() {
 
   return (
     <>
+      {/* NO COUNT OF NODES HERE: the Live nodes tile below says it, and the
+          bar's chip repeated the same figure an inch above it. Where the
+          reader is, is a fact no tile carries. */}
       <PageActions>
-        {
-          <>
-            {/* A FIGURE FROM A READING ONLY: a refused or failed poll is
-                not "0 nodes", and the Settings column beside this screen
-                counts the fleet from the health push regardless. */}
-            {data && <Tag appearance="outline">{plural(nodes.length, "node")}</Tag>}
-            {data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}
-          </>
-        }
+        {data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}
       </PageActions>
       <PageNote>
         Seat ownership is a lease with a fencing epoch, so no two nodes ever run one seat. A node
@@ -239,11 +237,21 @@ function FleetScreen() {
                 {
                   key: "id",
                   header: "Node",
-                  // A NODE ID NEVER WRAPS. It is one identifier, and without
-                  // this the grid gave the column a share of the width and
-                  // broke `demo-node` down the page one character at a time —
-                  // four lines of a name that is one word.
-                  shrink: true,
+                  // THE ONE FLEXIBLE TRACK, as the seat is in the lease tables
+                  // below: the row exists to name a node, so the node takes
+                  // whatever width is spare and every fact beside it sizes to
+                  // its content. Three `1fr` columns (Roles, Seats, In flight)
+                  // split the spare width three ways — 150px of air around a
+                  // single digit at 1440 while the role chips wrapped onto
+                  // three lines, and under a peek each fell to a letter ("R.",
+                  // "S.", "I.") and the chips to empty pills.
+                  //
+                  // AND IT NEVER WRAPS OR CUTS: the floor is its content. An id
+                  // is one identifier — given a share, the grid once broke
+                  // `demo-node` down the page one character at a time — so
+                  // where the row cannot hold every fact, facts give way
+                  // (`drop`) rather than the name.
+                  floor: "max-content",
                   sortValue: (n) => n.id,
                   cell: (n) => (
                     <span className="row gap-1">
@@ -264,12 +272,23 @@ function FleetScreen() {
                   // hold — so a node reading "duties: seats, workers" beside a
                   // duties panel naming a different node was one word describing
                   // two things.
+                  //
+                  // ON ONE LINE, OR NOT AT ALL. A chip is a word, and a track
+                  // narrower than its chips either stacks them — a row two or
+                  // three times its neighbours' height — or squeezes them into
+                  // pills with no word in them. So the track is the chips'
+                  // own width, and under a peek the column gives way whole:
+                  // the node's peek names its roles among its facts.
+                  width: "max-content",
+                  drop: 3,
                   cell: (n) => <TagsCell tags={n.roles} />,
                 },
                 {
                   key: "seats",
                   header: "Seats",
                   align: "right",
+                  // A COUNT IS AS WIDE AS ITS HEAD, never a share of the row.
+                  shrink: true,
                   sortValue: (n) => n.seats,
                   // A COUNT on the node row; WHICH seats is the placement table
                   // below, and the node's own page, which can name them.
@@ -279,6 +298,10 @@ function FleetScreen() {
                   key: "inflight",
                   header: "In flight",
                   align: "right",
+                  shrink: true,
+                  // The node's peek says it too ("Running"), so it may give way
+                  // — last of the four, being the load an operator scans for.
+                  drop: 4,
                   // ABSENT IS NOT ZERO, and the engine is careful to send it
                   // absent: the presence heartbeat carries it only for a node
                   // that publishes one at all. `?? 0` drew a confident idle row
@@ -328,6 +351,14 @@ function FleetScreen() {
                   key: "lease",
                   header: "Lease",
                   shrink: true,
+                  // FIRST TO GIVE WAY. Every row here holds an unexpired lease
+                  // — a node is listed exactly as long as it does — so this
+                  // column is a countdown that reads "healthy" by construction
+                  // until the moment the row leaves; the node's own page and
+                  // peek carry it as "Its own lease". At 1280 the eight
+                  // columns want about 770px of a 746px grid, and this is the
+                  // one whose absence costs the scan least.
+                  drop: 1,
                   sortValue: (n) => n.expires_in ?? null,
                   cell: (n) => (
                     <span title="time until this node's lease expires">
@@ -339,6 +370,8 @@ function FleetScreen() {
                   key: "up",
                   header: "Up since",
                   shrink: true,
+                  // The node's peek carries it beside In flight ("Running").
+                  drop: 2,
                   sortValue: (n) => n.started_at ?? "",
                   cell: (n) => <DateCell at={n.started_at} now={now} />,
                 },
@@ -391,16 +424,28 @@ function FleetScreen() {
                   {
                     key: "node",
                     header: "Held by",
+                    // CONTENT-SIZED, so the SEAT is the one flexible track. As
+                    // a second `1fr` this column took half of what the fixed
+                    // columns left — about 155px for a nine-character node id —
+                    // and the seat name the row exists to show was the value
+                    // cut ("Agent Frontend …") at a 1440 frame.
+                    shrink: true,
                     sortValue: (s) => s.node,
                     // The NODE, not the lease's `owner` — that is the fencing
                     // token (a node id plus a per-process suffix), and showing
                     // it here would make one node look like several across a
                     // restart.
-                    //
-                    // UNLINKED, for the same reason the seat above is: the row is
-                    // an anchor. The node is a row in the table above, which is
-                    // where this screen sends a reader who wants it.
-                    cell: (s) => <KeyCell value={s.node} />,
+                    cell: (s) => <HeldBy node={s.node} />,
+                  },
+                  {
+                    key: "since",
+                    header: "Since",
+                    align: "right",
+                    shrink: true,
+                    // OLDEST FIRST WHEN ASCENDING, and an unrecorded tenure
+                    // sorts as unknown rather than as the epoch of time.
+                    sortValue: (s) => s.acquired_at ?? null,
+                    cell: (s) => <HeldSince lease={s} now={now} />,
                   },
                   {
                     key: "ttl",
@@ -437,11 +482,13 @@ function FleetScreen() {
                   {
                     key: "node",
                     header: "Held by",
+                    // Content-sized for the reason the seat table's is: the
+                    // duty's name is the flexible track, and as a second `1fr`
+                    // this column left "integration-reconci…" cut beside
+                    // spare space of its own.
+                    shrink: true,
                     sortValue: (d) => d.node,
-                    // A LINK, unlike the seat table beside it: a duty is not an
-                    // object the frame can address, so this row is not an anchor
-                    // and the node it names is the only thing in it to open.
-                    cell: (d) => <KeyCell value={d.node} path={["settings", "nodes", d.node]} />,
+                    cell: (d) => <HeldBy node={d.node} />,
                   },
                   {
                     key: "ttl",
@@ -514,6 +561,49 @@ function FleetScreen() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Which node holds a lease, in both lease tables alike: a link to that node's
+ * page, at the body's weight.
+ *
+ * ONE TREATMENT. The seat table drew the id as unlinked primary ink, which in
+ * the mono face outweighed the seat's own name, and the duty table beside it
+ * drew the same id as a link — one value, two looks, on one page. The seat
+ * table's excuse was that its row is an anchor and a link inside one is
+ * invalid markup; it is not any more — the row's link is an overlay the
+ * cells' own links sit above (`DataGrid`), which is how a seat chip inside a
+ * peeking row already works — so the node is one click away from either row.
+ */
+export function HeldBy({ node }: { node: string }) {
+  if (!node) return <EmptyValue label="Not set" />;
+  return (
+    <a
+      className="mono t-link key-cell held-by"
+      href={href(["settings", "nodes", node])}
+      title={node}
+    >
+      {node}
+    </a>
+  );
+}
+
+/**
+ * Since when a seat's holder has held it — the tenure's start, which a renewal
+ * does not move, so "since 08:02" means the seat has not changed node since
+ * 08:02 (`coord.Lease.AcquiredAt`, on the coordination store's clock).
+ *
+ * NOT `DateCell`: its empty value reads "Never", and an absent stamp is not a
+ * lease that never began — it is one written by a build older than the stamp,
+ * whose start nobody recorded. Unknown is said as unknown.
+ */
+export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }) {
+  if (!lease.acquired_at) {
+    return (
+      <EmptyValue label="Not recorded: this lease was written by a build older than the stamp" />
+    );
+  }
+  return <DateCell at={lease.acquired_at} now={now} />;
+}
+
+/**
  * The two tags a node wears beside its title, or NOTHING AT ALL.
  *
  * An empty element would still take a gap in the header row, so a healthy node
@@ -547,6 +637,7 @@ export function NodeScreen({ id }: { id: string }) {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
+  usePublishFleet(data);
   const node = data?.nodes.find((n) => n.id === id);
   const version = useNodeVersion(id, data?.this_node);
 
@@ -579,12 +670,8 @@ export function NodeScreen({ id }: { id: string }) {
               <Card>
                 <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>Placement</Card.Header>
                 <div className="col gap-2">
-                  <div className="row wrap gap-2">
-                    <span className="t-label">Roles</span>
-                    {/* WHAT THIS NODE MAY RUN — `ingress`, `seats`, `workers` —
-                        which is a different fact from the duties it holds. */}
-                    <TagsCell tags={node.roles} max={8} />
-                  </div>
+                  {/* ITS ROLES ARE A HEADER FACT (`nodeFacts`), which the peek
+                      shares; this card keeps what only the page draws. */}
                   <div className="row wrap gap-2">
                     <span className="t-label">Labels</span>
                     <TagsCell
@@ -677,7 +764,7 @@ function useNodeVersion(id: string, thisNode?: string): string | undefined {
 }
 
 /**
- * The five facts a node is read by, in one order, on its page and in the rail.
+ * The facts a node is read by, in one order, on its page and in the rail.
  *
  * ONE FUNCTION rather than two lists that happen to agree today: a reader
  * scans the same facts in the same order wherever the object appears, and a
@@ -754,11 +841,40 @@ export function nodeFacts({
     // the one a `||` turns into a dash.
     { label: "Seats", value: <NumberCell value={node.seats} /> },
     {
-      label: "Version",
-      value: version ?? (
-        <EmptyValue label="Only the node serving this dashboard reports its build version" />
+      // WHAT THIS NODE MAY RUN — `ingress`, `seats`, `workers` — which is a
+      // different fact from the duties it holds. A FACT rather than a line of
+      // the page's Placement card, because the Nodes table gives its Roles
+      // column way under an open peek and the peek is then where a reader
+      // finds them: a column hidden in favour of the peek has to be in it.
+      // A SET, so the chips take two tracks and one line (`Fact.set`).
+      label: "Roles",
+      value: node.roles.length ? (
+        <TagsCell tags={node.roles} max={8} />
+      ) : (
+        <EmptyValue label="This node advertises no roles" />
       ),
+      set: true,
     },
+    version
+      ? {
+          label: "Version",
+          // ONE TOKEN (`Fact.token`): a build string is read whole or not at
+          // all, and in one fact track the clamp broke a pseudo-version as
+          // "v0.0.0-" over "20260929172955-…". Two tracks on one line, the
+          // whole string in the title where even two are too narrow.
+          value: (
+            <code className="inline" title={version}>
+              {version}
+            </code>
+          ),
+          token: true,
+        }
+      : {
+          label: "Version",
+          value: (
+            <EmptyValue label="Only the node serving this dashboard reports its build version" />
+          ),
+        },
   ];
 }
 
@@ -831,7 +947,10 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           <p className="t-caption">
             A node reports the epoch it has applied; the activation pointer names the one the fleet
             agreed on. The two differ for as long as a node takes to rebuild — and for ever if it
-            cannot, which is what the apply error above is.
+            cannot
+            {/* ONLY WHEN THERE IS ONE ABOVE: the sentence pointed at an apply
+                error on every healthy node, where none is drawn. */}
+            {node.config_error ? ", which is what the apply error above is." : "."}
           </p>
         </div>
       </Card>
@@ -870,6 +989,14 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               sortValue: (s) => s.handle,
               // NOT `SeatCell`: it is a link and this row is one already.
               cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+            },
+            {
+              key: "since",
+              header: "Since",
+              align: "right",
+              shrink: true,
+              sortValue: (s) => s.acquired_at ?? null,
+              cell: (s) => <HeldSince lease={s} now={now} />,
             },
             {
               key: "ttl",

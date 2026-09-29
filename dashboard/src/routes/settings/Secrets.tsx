@@ -43,7 +43,7 @@ import {
 import {
   PlusGlyph,
   XGlyph,
-  DatabaseGlyph,
+  LinkGlyph,
   PencilGlyph,
   KeyGlyph,
   ShieldGlyph,
@@ -51,7 +51,7 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
-import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -202,19 +202,30 @@ async function readReferences(
 }
 
 /**
- * The facts a credential is recognised by, in the table's own column order.
+ * What each provenance means, in the words of the path that writes it.
  *
- * ONE FUNCTION for the page and the rail. The SOURCE is not among them — it is
- * the header's own pill — and neither is the value, which this surface does
- * not hold at all.
+ * `source` IS WHO LAST WROTE THE ROW, never where the value lives: every row
+ * `/secrets` lists is sealed in the fleet's store whatever wrote it. Each
+ * writer stamps its own word — `PUT /secrets/{name}` defaults to `api`
+ * (secretsapi), `crewlet secrets set` to `cli`, an integration's setup to
+ * `setup` (internal/setup), a vendor's provision command to `provision`
+ * (internal/provision), a rekey to `rekey` and the move off a node's own table
+ * to `migrated` (fleetsecrets). `?source=` and `--source` take any word, so a
+ * value this table does not know is said as the writer's own rather than
+ * guessed at.
  */
-function credentialFacts(row: SecretRow, paths: string[] | null, now: number): Fact[] {
-  return [
-    { label: "Read by", value: <Readers paths={paths} /> },
-    { label: "Key id", value: <span className="mono">{row.key_id}</span> },
-    { label: "Set by", value: row.updated_by || "nobody recorded" },
-    { label: "Updated", value: <DateCell at={row.updated_at} now={now} /> },
-  ];
+const PROVENANCE: Record<string, string> = {
+  api: "stored over the API — this page or PUT /secrets",
+  cli: "set with crewlet secrets set",
+  setup: "written by an integration's setup",
+  provision: "minted by a vendor's provision command",
+  rekey: "sealed again under a new key by a rekey",
+  migrated: "moved onto the fleet from a node's own table",
+};
+
+/** What a row's provenance says, as a sentence a reader can act on. */
+export function provenance(source: string): string {
+  return PROVENANCE[source] ?? `its writer named itself “${source}”`;
 }
 
 /**
@@ -289,6 +300,9 @@ function CredentialBody({
         )}
       </Wrap>
 
+      {/* EVERY PROPERTY ONCE. The header above passes no facts: stacked in
+          one column, a fact line and this group were the same four answers
+          twice before the reader reached the value's note. */}
       <Wrap title="Where it came from">
         <PropertiesRail
           groups={[
@@ -296,11 +310,20 @@ function CredentialBody({
               properties: [
                 {
                   label: "Source",
-                  value: row.source,
-                  title:
-                    "store: sealed in the fleet's coordination store. Anything else resolves from this process's environment.",
+                  // THE WORD AND WHAT IT MEANS, in the body rather than a
+                  // title: which path wrote a credential is the question this
+                  // row answers, and a hover is not a place a keyboard or a
+                  // phone reaches.
+                  value: (
+                    <span className="col" style={{ gap: 2 }}>
+                      <span>
+                        <Tag appearance="outline">{row.source}</Tag>
+                      </span>
+                      <span className="t-caption">{provenance(row.source)}</span>
+                    </span>
+                  ),
                 },
-                { label: "Key id", value: row.key_id, code: true },
+                { label: "Key id", value: <span className="mono">{row.key_id}</span> },
                 { label: "Set by", value: row.updated_by || undefined },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },
               ],
@@ -335,7 +358,6 @@ function CredentialBody({
  * is what somebody deciding about a name actually reads.
  */
 export function CredentialPeek({ name }: { name: string }) {
-  const now = useNow();
   const { rows, loading, error, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
@@ -356,14 +378,7 @@ export function CredentialPeek({ name }: { name: string }) {
         )}
         {row && (
           <>
-            <ObjectHeader
-              size="peek"
-              kind="Credential"
-              icon="key"
-              title={row.name}
-              status={<Tag appearance="outline">{row.source}</Tag>}
-              facts={credentialFacts(row, readersOf(row.name), now)}
-            />
+            <ObjectHeader size="peek" kind="Credential" icon="key" title={row.name} />
             <div className="col gap-3">
               <CredentialBody row={row} paths={readersOf(row.name)} unknown={unknown} flush />
             </div>
@@ -383,7 +398,12 @@ export function Secrets({ name }: { name?: string }) {
   const [removing, setRemoving] = useState<string | null>(null);
 
   const list = useMemo(() => rows ?? [], [rows]);
-  const fromStore = list.filter((r) => r.source === "store").length;
+  // THE NAMES NO FIELD POINTS AT, or null where the reference check did not
+  // answer — a count of "nothing reads these" from a check that never ran
+  // would be the one figure on this screen that is a guess.
+  const unread = list.some((r) => readersOf(r.name) === null)
+    ? null
+    : list.filter((r) => readersOf(r.name)?.length === 0).length;
 
   // THE ORDER `[` AND `]` WALK, published from the rows this screen holds so
   // the stepper walks the list as the reader sorted it.
@@ -439,18 +459,15 @@ export function Secrets({ name }: { name?: string }) {
   return (
     <>
       <PageActions>
-        {/* A FIGURE FROM A READING ONLY: a refused or failed read is not
-            "0 credentials held". */}
-        {rows !== null && <Tag appearance="outline">{plural(list.length, "credential")} held</Tag>}
-        {
-          <Button
-            leadingIcon={<PlusGlyph size="sm" />}
-            variant="primary"
-            onClick={() => setWriting({ editing: "" })}
-          >
-            Store a secret
-          </Button>
-        }
+        {/* NO COUNT HERE: the Credentials tile below says how many are held,
+            and a chip in the bar repeated it an inch above. */}
+        <Button
+          leadingIcon={<PlusGlyph size="sm" />}
+          variant="primary"
+          onClick={() => setWriting({ editing: "" })}
+        >
+          Store a secret
+        </Button>
       </PageActions>
       <PageNote>
         The company's sealed credentials. Names, key ids and provenance — this screen never asks for
@@ -484,11 +501,24 @@ export function Secrets({ name }: { name?: string }) {
               value={list.length}
               sub="names the fleet holds"
             />
+            {/* NOT WHERE THE VALUES LIVE. This tile once counted rows whose
+                source read "store" — a word no writer stamps, since `source`
+                is which path wrote a row and every row listed here is sealed
+                in the store — so six sealed credentials read "0, the rest
+                resolve from this process's environment" under a banner
+                saying they live in the store. What reads a name is the fact
+                this screen is scanned for, so its tile is the names nothing
+                reads: each one is either a forgotten `${VAR}` or a
+                credential nothing needs any more. */}
             <StatCard
-              icon={<DatabaseGlyph size="xs" />}
-              label="In the secret store"
-              value={fromStore}
-              sub="the rest resolve from this process's environment"
+              icon={<LinkGlyph size="xs" />}
+              label="Read by nothing"
+              value={unread ?? <EmptyValue label="Not known" />}
+              sub={
+                unread === null
+                  ? "the reference check did not answer"
+                  : "no config field names them"
+              }
             />
             <StatCard
               icon={<ShieldGlyph size="xs" />}
@@ -509,7 +539,14 @@ export function Secrets({ name }: { name?: string }) {
             ? undefined
             : {
                 title: "No secrets are stored",
-                hint: "Store one here, set one with crewlet secrets set, or let a provisioning command hand one straight to the engine.",
+                // A COMMAND IS CODE, as the card above sets `crewlet secrets
+                // get`; in prose it read as three words of the sentence.
+                hint: (
+                  <>
+                    Store one here, set one with <InlineCode>crewlet secrets set</InlineCode>, or
+                    let a provisioning command hand one straight to the engine.
+                  </>
+                ),
               }
         }
       >
@@ -528,10 +565,26 @@ export function Secrets({ name }: { name?: string }) {
               {
                 key: "name",
                 header: "Name",
+                // THE ONE FLEXIBLE TRACK, as the node is on Nodes and the seat
+                // in each lease table: the row exists to name a credential,
+                // so the name takes whatever width is spare and every fact
+                // beside it sizes to its content. As one of two `1fr` columns
+                // it split the spare width with Set by — at a 1280 window
+                // "DATADOG_WEBHOOK_TOK…" sat beside "founder" in ~120px of
+                // air, and beside a peek at 1440 every name fell to "DAT…".
+                //
+                // AND IT NEVER CUTS: the floor is its content. A credential's
+                // name is the one thing a reader matches against the `${VAR}`
+                // in their configuration, so where the row cannot hold every
+                // fact, facts give way (`drop`) rather than the name — each
+                // one a fact the credential's peek carries.
+                floor: "max-content",
                 sortValue: (s) => s.name,
                 cell: (s) => <KeyCell value={s.name} />,
               },
               {
+                // NEVER GIVES WAY: what reads a name is what breaks when it
+                // goes, which is the question this list is scanned for.
                 key: "read",
                 header: "Read by",
                 shrink: true,
@@ -545,19 +598,32 @@ export function Secrets({ name }: { name?: string }) {
                 key: "source",
                 header: "Source",
                 shrink: true,
+                // The peek's own pill.
+                drop: 3,
                 sortValue: (s) => s.source,
-                cell: (s) => <Tag appearance="outline">{s.source}</Tag>,
+                // Which path wrote it, said in full on the pointer; the peek
+                // says it in words.
+                cell: (s) => (
+                  <Tag appearance="outline" title={provenance(s.source)}>
+                    {s.source}
+                  </Tag>
+                ),
               },
               {
                 key: "key",
                 header: "Key id",
                 shrink: true,
+                // First to go: one id covers every row until a rekey, so the
+                // column repeats itself down the list.
+                drop: 1,
                 sortValue: (s) => s.key_id,
                 cell: (s) => <KeyCell value={s.key_id} />,
               },
               {
                 key: "by",
                 header: "Set by",
+                shrink: true,
+                drop: 2,
                 sortValue: (s) => s.updated_by,
                 // NOT `value || "—"`. An operator name is either recorded or
                 // it is not, and the dash says which rather than standing in
@@ -573,6 +639,7 @@ export function Secrets({ name }: { name?: string }) {
                 key: "at",
                 header: "Updated",
                 shrink: true,
+                drop: 4,
                 sortValue: (s) => tsKey(s.updated_at),
                 cell: (s) => <DateCell at={s.updated_at} now={now} />,
               },
@@ -614,13 +681,7 @@ export function Secrets({ name }: { name?: string }) {
           like an ordinary listing. */}
       {addressed && addressedRow && (
         <>
-          <ObjectHeader
-            kind="Credential"
-            icon="key"
-            title={addressedRow.name}
-            status={<Tag appearance="outline">{addressedRow.source}</Tag>}
-            facts={credentialFacts(addressedRow, readersOf(addressedRow.name), now)}
-          />
+          <ObjectHeader kind="Credential" icon="key" title={addressedRow.name} />
           <CredentialBody
             row={addressedRow}
             paths={readersOf(addressedRow.name)}

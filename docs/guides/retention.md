@@ -851,7 +851,7 @@ are missing, any unresolved write attempt, and any admission still blocking
 activation.
 
 **You do not have to go looking for it.** While an operation is open, both
-`crewlet retention status` and the Fleet screen lead with it — the stream, the
+`crewlet retention status` and Settings › Backups & retention lead with it — the stream, the
 phase, the attempt, how long it has been open, who ran the verb, and who is
 still outstanding — because every number underneath describes a fleet in which
 nothing is running, and a blocked trim read without knowing that sends you

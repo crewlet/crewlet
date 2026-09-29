@@ -112,6 +112,43 @@ test("a plain click on the row still activates it", () => {
   expect(seen).toEqual(["one"]);
 });
 
+// THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing the row's
+// link with the peek's page. Four screens spelled the mark for themselves and
+// the rest never did, so beside a peek on Nodes, Secrets, a seat's turns or a
+// spend table nothing said which row the rail described. The mark is said as
+// well as painted: the row's link carries `aria-current`.
+describe("the peeked row", () => {
+  afterEach(() => {
+    location.hash = "#/";
+  });
+
+  const marked = (container: HTMLElement) =>
+    [...container.querySelectorAll(".grid-row.selected")].map((row) =>
+      row.querySelector("a.row-link")?.getAttribute("href"),
+    );
+
+  test("is the row whose link is the peek's page, and it is announced as current", () => {
+    location.hash = "#/live/turns?peek=turn:two";
+    const { container } = grid();
+    expect(marked(container)).toEqual(["#/live/turns/two"]);
+    const links = [...container.querySelectorAll("a.row-link")];
+    expect(links.map((a) => a.getAttribute("aria-current"))).toEqual([null, "true"]);
+  });
+
+  test("is no row when the peek is an object no row links to", () => {
+    location.hash = "#/live/turns?peek=seat:two";
+    const { container } = grid();
+    expect(marked(container)).toEqual([]);
+    expect(container.querySelector("[aria-current]")).toBeNull();
+  });
+
+  test("is no row when no peek is open", () => {
+    location.hash = "#/live/turns";
+    const { container } = grid();
+    expect(marked(container)).toEqual([]);
+  });
+});
+
 test("a grid with no row link renders no overlay at all", () => {
   // `rowHref` is what mints it. A grid whose rows are not addressable must
   // not get a transparent anchor over every row swallowing its clicks.

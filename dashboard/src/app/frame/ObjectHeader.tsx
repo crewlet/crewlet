@@ -28,9 +28,11 @@
  * case.
  *
  * THE CALLER DECIDES, and this component does not drop `facts` on `size`.
- * Plenty of peeks here have no rail under them at all — a unit, a revision, a
- * schedule — and for those the fact line is the only place the object's own
- * values are ever stated. A component that swallowed them by size would take
+ * Plenty of peeks here have no rail under them at all — a unit, a schedule —
+ * and for those the fact line is the only place the object's own values are
+ * ever stated. A revision and a credential do have one, in their peek and on
+ * their page alike (the cards run under the header there, not beside it), so
+ * both pass no facts and their rail states every property. A component that swallowed them by size would take
  * a rule about one frame's BODY and apply it to every frame's header.
  */
 
@@ -166,6 +168,14 @@ export interface Fact {
    * narrow; the caller puts the whole value in the element's `title`.
    */
   token?: boolean;
+  /**
+   * A value that is a SET OF CHIPS — a node's roles — which takes two tracks
+   * so its chips sit on one line, and wraps between chips (never inside one)
+   * only where two tracks are still too narrow. In one `7.5rem` track the
+   * three roles stood two over one at 1440, a header fact taller than every
+   * fact beside it. Never clamped: a clamp cuts a chip in half.
+   */
+  set?: boolean;
 }
 
 export function FactLine({ facts }: { facts: Fact[] }) {
@@ -174,7 +184,10 @@ export function FactLine({ facts }: { facts: Fact[] }) {
   return (
     <div className="fact-line">
       {shown.map((fact) => (
-        <span key={fact.label} className={cx("fact", fact.token && "is-token")}>
+        <span
+          key={fact.label}
+          className={cx("fact", fact.token && "is-token", fact.set && "is-set")}
+        >
           <span className="fact-label">{fact.label}</span>
           {/* THE VALUE AND ITS FOOTNOTES ARE ONE CELL. The labels share a
               band across the row and so do the values' first lines; a note
@@ -187,7 +200,12 @@ export function FactLine({ facts }: { facts: Fact[] }) {
                 in a track as narrow as `7.5rem`, and cut to one line an agent's
                 "not running on this node" read "not running on this no…" at
                 1440, which says nothing about where it IS running. */}
-            <span className={cx("fact-value", fact.token ? "fact-token" : !fact.whole && "clamp")}>
+            <span
+              className={cx(
+                "fact-value",
+                fact.token ? "fact-token" : !fact.whole && !fact.set && "clamp",
+              )}
+            >
               {fact.path ? (
                 <a className="t-link" href={href(fact.path, fact.query)}>
                   {fact.value}

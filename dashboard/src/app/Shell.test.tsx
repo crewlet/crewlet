@@ -14,10 +14,10 @@ import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { Shell, usePageCoverage, useSectionCounts } from "./Shell.tsx";
+import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { setDensity } from "~/lib/prefs.ts";
 import { Home } from "~/routes/home/Home.tsx";
@@ -181,6 +181,9 @@ const EMPTY: Record<string, unknown> = {
   work_views: { complete: true, views: [] },
   work_saved_views: { complete: true, views: [] },
   work_projects: { projects: [] },
+  fleet: { nodes: [], seats: [], duties: [], target_epoch: 0 },
+  retention: { domains: [], nodes: [], snapshots: [], alarms: [], register_readable: true },
+  integrations: { integrations: [], tools: [], traffic_known: true, traffic_since: null },
 };
 
 /** A socket answering a bound viewer and whatever else a case supplies. */
@@ -639,6 +642,120 @@ describe("the page header", () => {
     expect(general?.textContent).not.toContain("operator credential");
   });
 
+  // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
+  // every section's own content ~520px down. The toggle names where the
+  // reader is and says whether the list is open, and picking a section (the
+  // path moving) folds it again. The folding itself is the phone block's
+  // (frame.test.ts holds it); this holds the control a reader operates.
+  test("the Settings column folds behind a toggle naming the section", async () => {
+    location.hash = "#/settings/secrets";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
+    // toggle is not drawn — the fold is the phone block's, held by frame.test.
+    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    expect(toggle.textContent).toBe("Settings section: Secrets");
+    const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(false);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
+
+    await act(async () => {
+      location.hash = "#/settings/nodes";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await settle();
+    const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    expect(moved.textContent).toBe("Settings section: Nodes");
+    expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
+      "false",
+    );
+  });
+
+  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. General's path is the
+  // workspace root and so a prefix of every Settings address: a mistyped one
+  // drew "Not found" beside a column, and a phone picker, marking General.
+  test("a Settings address that names no screen marks no section", async () => {
+    location.hash = "#/settings/general";
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    expect(toggle.textContent).toBe("Settings sections");
+    expect(document.querySelector(".section-picker-list [aria-current]")).toBeNull();
+  });
+
+  // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
+  // the tab, so a figure hook that asked unconditionally would put three
+  // operator questions on a timer behind every screen of every tab.
+  const OPERATOR_ANSWERS = ["fleet", "retention", "integrations"];
+  test("the operator answers are asked only while the Settings column is drawn", async () => {
+    for (const where of ["#/home", "#/work", "#/spend/budgets", "#/knowledge"]) {
+      location.hash = where;
+      const asked: { what: string }[] = [];
+      const { store, socket } = answering({}, asked);
+      mountShell(store, socket);
+      await settle();
+      expect(
+        asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w)),
+        `${where} asked an operator answer`,
+      ).toEqual([]);
+      cleanup();
+    }
+    location.hash = "#/settings";
+    const asked: { what: string }[] = [];
+    const { store, socket } = answering({}, asked);
+    mountShell(store, socket);
+    await settle();
+    expect(new Set(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w)))).toEqual(
+      new Set(OPERATOR_ANSWERS),
+    );
+  });
+
+  test("a reader without an operator credential is asked nothing, even in Settings", async () => {
+    location.hash = "#/settings";
+    const asked: { what: string }[] = [];
+    const { store, socket } = answering(
+      { viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } },
+      asked,
+    );
+    mountShell(store, socket);
+    await settle();
+    expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
+  });
+
+  // THE PILL IS THE ENGINE'S ROLL-UP, read in the row's name — and painted
+  // as the state it is, not as the accent's unread badge.
+  test("the Integrations row carries the roll-up's attention count as its pill", async () => {
+    location.hash = "#/settings";
+    const { store, socket } = answering({
+      integrations: {
+        integrations: [],
+        traffic_known: true,
+        traffic_since: null,
+        tools: [
+          { key: "slack", surfaces: [], state: "attention", label: "Needs attention", reason: "" },
+          { key: "gitlab", surfaces: [], state: "connected", label: "Connected", reason: "" },
+        ],
+      },
+    });
+    mountShell(store, socket);
+    await settle();
+    const column = screen.getByRole("navigation", { name: "Settings sections" });
+    const row = Array.from(column.querySelectorAll("a")).find((a) =>
+      a.textContent?.startsWith("Integrations"),
+    );
+    expect(row?.textContent).toContain("1");
+    expect(row?.textContent).toContain("1 needs attention");
+    expect(row?.closest(".section-row-attention")).not.toBeNull();
+    expect(row?.querySelector(".crewlet-nav-item__badge")?.textContent).toBe("1");
+  });
+
   // A FIGURE SAYS WHAT IT COUNTS: the applied epoch read "e2", a code.
   test("the Configuration row names the epoch this node applied in words", async () => {
     location.hash = "#/settings";
@@ -652,6 +769,41 @@ describe("the page header", () => {
     );
     expect(config?.textContent).toContain("epoch 2");
     expect(config?.textContent).not.toMatch(/\be2\b/);
+  });
+
+  // ONE READING OF THE FLEET, NOT TWO. On Nodes the column's "n behind on
+  // config" mirrors the screen's own "Behind on config" tile; polling beside
+  // the screen on another clock let the two disagree for up to a poll and
+  // asked the engine the same question twice a tick.
+  test("while a screen publishes the fleet answer the column draws it and asks none", async () => {
+    const answer: FleetAnswer = {
+      nodes: [
+        { id: "n1", roles: [], seats: 1, config_epoch: 3 },
+        { id: "n2", roles: [], seats: 1, config_epoch: 2 },
+      ],
+      seats: [],
+      duties: [],
+      unplaceable: [],
+      unmanned_roles: [],
+      this_node: "n1",
+      target_epoch: 3,
+    };
+    function Publishing() {
+      usePublishFleet(answer);
+      return null;
+    }
+    location.hash = "#/settings/nodes";
+    const asked: { what: string }[] = [];
+    const { store, socket } = answering({}, asked);
+    mountShell(store, socket, <Publishing />);
+    act(() => store.applyHealth({ status: "ok", applied_epoch: 3, nodes: 2 }));
+    await settle();
+    expect(asked.filter((a) => a.what === "fleet")).toEqual([]);
+    const column = screen.getByRole("navigation", { name: "Settings sections" });
+    const nodes = Array.from(column.querySelectorAll("a")).find((a) =>
+      a.textContent?.startsWith("Nodes"),
+    );
+    expect(nodes?.textContent).toContain("1 behind on config");
   });
 });
 

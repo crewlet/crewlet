@@ -54,6 +54,7 @@ import {
 import type { ConfigUnit, ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 
 /**
  * What a capability is drawn as.
@@ -434,7 +435,7 @@ function ToolBody({ name }: { name: string }) {
                 {
                   properties: fields.map((f) => ({
                     label: f.name,
-                    code: true,
+                    identifierLabel: true,
                     // A WORD FOR AN ABSENCE. "type not stated" is what the
                     // server failing to advertise a type actually means; a
                     // dash is read as "dash" or skipped, and here it sat in
@@ -525,6 +526,10 @@ function ToolBody({ name }: { name: string }) {
  */
 function ToolHeader({ name }: { name: string }) {
   const { tool } = useTool(name);
+  // THE TRAIL NAMES THE TOOL AS ITS TITLE DOES — the tool's own title where it
+  // has one, its name where it has none — rather than the address's raw name
+  // in the mono face over a header saying something else in another.
+  usePageLabels(tool ? { [name]: tool.title || tool.name } : {});
   if (!tool) return null;
   const capability = capabilityOf(tool.annotations);
   return (

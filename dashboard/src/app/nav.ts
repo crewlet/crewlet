@@ -490,10 +490,10 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
       {
         key: "tools",
-        label: "Tools",
+        label: "Tools & MCP",
         icon: "wrench",
         path: ["settings", "tools"],
-        hint: "Every tool a seat can call, by origin",
+        hint: "Every tool a seat can call, by origin, and the MCP servers behind them",
         group: "Connect",
         // NOT GUARDED: the registry is the `tools` push every reader gets. Only
         // an MCP server's template reads the guarded configuration, and that

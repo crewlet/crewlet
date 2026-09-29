@@ -437,7 +437,7 @@
 
 .seat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
   gap: var(--spacing-3);
 }
 .seat-card {
@@ -1366,7 +1366,7 @@ a.prof-row:hover {
 /* The Turns tab's spend, by phase beside by model. */
 .prof-spend {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: var(--spacing-5);
   padding: var(--spacing-4);
 }
@@ -1406,7 +1406,7 @@ a.prof-row:hover {
   }
   .prof-side {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
     align-items: start;
   }
 }
@@ -1433,18 +1433,6 @@ a.prof-row:hover {
   .prof-feed-words {
     grid-column: 2 / -1;
     grid-row: 2;
-  }
-  /* THE TITLE KEEPS ITS WORDS: "Current turn" and Watch live hold the first
-     line and the task the turn is on takes the line under them, where it
-     sat beside them and cut the title to "Current tu…". */
-  .prof-turn .crewlet-card__header {
-    flex-wrap: wrap;
-    row-gap: var(--spacing-1);
-  }
-  .prof-turn .crewlet-card__subtitle {
-    order: 9;
-    flex: 1 1 100%;
-    min-width: 0;
   }
 }
 
@@ -2051,7 +2039,7 @@ a.prof-row:hover {
    view (the viewport less the page bar, and a gap above and below) and scrolls
    inside itself, and the detail STICKS under the scroller's top, below
    whatever band already sticks there (`--sticky-top`). Stacked, neither
-   applies: the detail is revealed by scrolling to it instead (`revealDetail`),
+   applies: the detail is revealed by scrolling to it instead (`reveal`),
    because a sticky box as tall as a phone's screen would cover the list. */
 @media (width >= 640px) {
   .thread-split .thread-list {
@@ -2642,7 +2630,7 @@ textarea.kpage-editor-body {
 }
 .kpage-resolve-sides {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: var(--spacing-2);
 }
 .kpage-resolve-side {
@@ -3022,30 +3010,81 @@ textarea.kpage-editor-body {
 
 /* ---- Config ------------------------------------------------------------- */
 
-.diff-line {
+/* A CONFIGURATION DIFF, ONE CHANGE A ROW: its mark, the path it changed and
+   the value, in three tracks every row shares. Each row is a SUBGRID of the
+   list, so the values start at one edge all the way down rather than wherever
+   each row's own path happened to end.
+
+   ITS OWN CLASS NAMES. The knowledge page's line diff is `.diff-line`, later
+   in this sheet, and while this list spelled the same class that rule won the
+   cascade and laid every change out in its line-number tracks (`3.5ch 3.5ch
+   2ch`): at 1440 a 92px path got 23px and a 931px value 13px, and each change
+   read "− mc… {…". Two components never share a class here.
+
+   NOTHING IS CUT. The path is what a reader looks for in their YAML and the
+   value is the change itself, so both wrap — a path breaks anywhere rather
+   than running under the value, and an object or a list keeps the document's
+   own indented shape (`changeValue`). The path track is its content up to 40%
+   of the row, so a short path leaves the value the rest.
+
+   THE MARK'S TRACK CARRIES THE ROW'S INSET. A subgrid row's own padding comes
+   out of the first and last tracks it spans (styles/subgrid.test.ts), and a
+   bare `2ch` less the row's `--spacing-2` left the mark about five pixels. */
+.config-diff {
   display: grid;
-  grid-template-columns: 18px minmax(0, 200px) minmax(0, 1fr);
-  gap: var(--spacing-2);
-  padding: 2px var(--spacing-2);
+  grid-template-columns: calc(2ch + var(--spacing-2)) fit-content(40%) minmax(0, 1fr);
+  column-gap: var(--spacing-2);
+  row-gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
-  border-radius: var(--radius-xs);
+}
+.config-diff-line {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: baseline;
+  padding: 2px var(--spacing-2);
+  border-radius: var(--radius-xs);
+}
+.config-diff-mark {
+  text-align: center;
+  user-select: none;
+}
+.config-diff-path {
+  overflow-wrap: anywhere;
+}
+.config-diff-value {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
-   These selectors read add / remove / replace, which no answer has ever
+   These selectors once read add / remove / replace, which no answer has ever
    carried, so every diff line rendered unstyled. */
-.diff-line[data-kind="added"] {
+.config-diff-line[data-kind="added"] {
   background: var(--color-feedback-success-soft);
   color: var(--color-feedback-success-ink);
 }
-.diff-line[data-kind="removed"] {
+.config-diff-line[data-kind="removed"] {
   background: var(--color-feedback-danger-soft);
   color: var(--color-feedback-danger-ink);
 }
-.diff-line[data-kind="changed"] {
+.config-diff-line[data-kind="changed"] {
   background: var(--color-feedback-warning-soft);
   color: var(--color-feedback-warning-ink);
+}
+/* ON A PHONE THE VALUE TAKES THE ROW UNDER ITS PATH: 40% of a 340px card is
+   a path broken over three lines beside a value squeezed into the rest. */
+@container page (width < 640px) {
+  .config-diff {
+    grid-template-columns: calc(2ch + var(--spacing-2)) minmax(0, 1fr);
+  }
+  .config-diff-value {
+    grid-column: 2;
+  }
 }
 
 /* ---- A live screen that stays readable ---------------------------------- */
@@ -3191,6 +3230,27 @@ textarea.kpage-editor-body {
   max-width: 100%;
 }
 
+/* ON A NARROW SCREEN A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS
+   OWN, under the title and the actions. Beside actions the kit's shrink is
+   proportional (above), so a phone's head gave a title a fraction of a pixel
+   and a plain title broke over two lines — "Active" over "revision" — while
+   its subtitle was cut beside the Copy button to "as the engine resolv…".
+   On its own line the subtitle has the head's whole width and the title and
+   its actions have the first. One rule for every head of that shape: a
+   seat's Current turn card had it written for itself alone, after the same
+   squeeze cut its title to "Current tu…". */
+@container page (width < 640px) {
+  .crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions) {
+    flex-wrap: wrap;
+    row-gap: var(--spacing-1);
+  }
+  .crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle {
+    order: 9;
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
 /* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
    `nowrap` and reserves exactly one line, so that a row of tiles where only
    some carry one still stands at one height — but inside a StatGroup the grid
@@ -3204,6 +3264,41 @@ textarea.kpage-editor-body {
 .crewlet-statcard__sub {
   white-space: normal;
   text-wrap: balance;
+}
+
+/* A ROW OF TILES SHARES ITS LINES, so every figure in a row stands at one
+   height whatever its label does. uilet stacks a tile's three lines — label,
+   number, sub — in a flex column of its own, so a label that wraps pushed its
+   number down by a line and no other: beside a node's peek at 1440, "Behind on
+   config" broke over two lines and its figure sat 18px below the other three.
+   As a subgrid over the group's rows, each line of every tile in a row takes
+   the tallest of that line across the row: a two-line label makes the label
+   row two lines tall for all four, and the numbers stay on one line. The span
+   is the three children uilet's StatCard always renders — a sub it was not
+   given is still an element, holding the reserve. */
+.crewlet-stat-group > .crewlet-statcard {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 3;
+}
+
+/* A LABEL SITS ON ITS NUMBER. Where one label in the row takes two lines, the
+   others end at the foot of the label row rather than floating in its middle,
+   so every label stands the kit's one gap above its own figure and the
+   wrapped label's first line is the one that rises. The label is the first
+   of the tile's three lines. */
+.crewlet-stat-group > .crewlet-statcard > :first-child {
+  align-self: end;
+}
+
+/* AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
+   columns (its `width < 1024px` step): three tiles on a phone stood 2 + 1,
+   the last beside an empty half-row that read as a tile failing to load. The
+   step is the kit's own, restated because a media query cannot be borrowed. */
+@media (width < 1024px) {
+  .crewlet-stat-group > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
@@ -8018,7 +8113,7 @@ a.live-row:focus-visible {
    primary; every other is the card rung with its hairline. */
 .inbox-options {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
   gap: 10px;
 }
 .inbox-options > .write-button {
@@ -9271,4 +9366,88 @@ a.live-row:focus-visible {
 .ceiling-warnings {
   margin: 0 0 var(--spacing-2);
   padding-left: 1.1em;
+}
+
+/* SETTINGS › CONFIGURATION › ENTITIES: a list and the one it opened. A fixed
+   list track (the longest handle a company is likely to write, in mono, and
+   no wider) beside a `1fr` detail, so the detail fills the row the way every
+   other full-width card on the screen does. Below the phone breakpoint the
+   two stack and each takes the width. */
+.entity-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 17rem) minmax(0, 1fr);
+  gap: var(--spacing-3);
+  align-items: start;
+}
+@media (width < 640px) {
+  .entity-pick {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* A LIST, READ DOWN ITS LEFT EDGE: the kit's button centres its label, and a
+   column of centred handles of different lengths is a ragged column a reader
+   cannot scan. Full width so the whole row is the target. */
+.entity-pick-list {
+  padding: var(--spacing-1);
+}
+/* ONE ROW PER HANDLE, drawn as the Settings column draws its rows: no ground
+   at rest, the hover overlay under the pointer, and the picked row on the
+   neutral raised surface with its hairline and the primary ink — declared
+   after `:hover`, at the same weight, so a picked row keeps its lift under
+   the pointer rather than flickering to the overlay. The handle is mono ink
+   in the row's own colour rather than a code chip, whose fixed ink is what
+   left a picked handle grey on violet. */
+.entity-pick-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--size-target-min);
+  padding: 0 var(--spacing-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.entity-pick-row:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.entity-pick-row[aria-pressed="true"] {
+  background: var(--color-surface-elevated);
+  outline: 1px solid var(--color-border-default);
+  outline-offset: -1px;
+  color: var(--color-text-primary);
+}
+/* The picked row's hairline is an outline, so a focused row takes the ring by
+   name after it — or tabbing onto the picked handle would draw no ring. */
+.entity-pick-row:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* SETTINGS › CONFIGURATION › HISTORY: WHO WROTE A REVISION, THE NAME FIRST
+   (`RevisionAuthor` in a revisions table). The By column is content-sized up
+   to a fifth of the table, and beside a peek that fifth is under 100px: one
+   line of two shrinking items cut the name to "n…" beside a whole `operator`
+   chip. So the row WRAPS and draws one line. A flex line takes items while
+   they fit at their full width, so the chip moves to a second line — which
+   this box does not draw — before the name gives up a character, and a name
+   longer than the whole cell is the only thing that is ever cut. The line is
+   a small control's height, which holds the chip at every density, and the
+   name is set on it, so the line is that tall with or without the chip and
+   the name sits where it does in every other cell. The title says both. */
+.grid-cell > .revision-author {
+  flex-wrap: wrap;
+  row-gap: var(--spacing-1);
+  height: var(--size-control-sm);
+  line-height: var(--size-control-sm);
+  overflow: hidden;
 }

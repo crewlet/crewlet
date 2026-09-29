@@ -150,7 +150,7 @@ schema, same call signature. With nothing recorded, a tool missing because its
 server failed to start reads as a missing builtin, which sends an operator to
 debug the wrong subsystem.
 
-`GET /tools` reports it as each tool's `source`, and the dashboard's **Tools** screen
+`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › Tools & MCP** screen
 groups on it:
 
 | `source` | Where the tool came from |

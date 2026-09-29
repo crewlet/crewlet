@@ -373,7 +373,7 @@ The consequences worth stating plainly:
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.
 - **`/health`** carries this node's seats, its in-flight count and its
-  config posture; the dashboard's **Fleet** screen puts every node's
+  config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
 - **Each node's heartbeat** also carries what its build can carry out and
   how each of its MCP servers started — one row per server, counting the

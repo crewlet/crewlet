@@ -57,6 +57,7 @@ import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
+import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
 import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
@@ -71,6 +72,7 @@ import { useMediaQuery } from "~/lib/media.ts";
 import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
+import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
@@ -97,6 +99,18 @@ export interface PageContext {
   setCounts: (counts: Record<string, string>) => void;
   setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
+  setFleet: (fleet: PublishedFleet | null) => void;
+}
+
+/**
+ * The `fleet` answer a screen is already holding, handed to the frame — or
+ * null when no screen on the page reads it. `answer` is null while that
+ * screen's first answer is in flight: the screen OWNS the reading from the
+ * moment it mounts, so the column does not start a query of its own for the
+ * second or so before it lands.
+ */
+export interface PublishedFleet {
+  answer: FleetAnswer | null;
 }
 
 const noop: PageContext = {
@@ -105,6 +119,7 @@ const noop: PageContext = {
   setCounts: () => {},
   setShowWorking: () => {},
   setMenu: () => {},
+  setFleet: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -190,6 +205,25 @@ export function useSectionCounts(counts: Record<string, string>): void {
     // The dependency is the CONTENT, for the reason `usePageLabels` gives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, setCounts]);
+}
+
+/**
+ * Hand the frame the `fleet` answer this screen polls, for the Settings
+ * column's Nodes figure.
+ *
+ * ONE READING, NOT TWO: the column says "n behind on config" as a mirror of
+ * the Nodes screen's own "Behind on config" tile, and with a poll of its own
+ * on a different clock the two disagreed for up to a poll interval while every
+ * tick sent the operator's engine the same question twice. While a screen has
+ * published here the column asks nothing and draws this answer. Cleared when
+ * the screen goes, for the reason [usePageLabels] gives: the frame outlives it.
+ */
+export function usePublishFleet(answer: FleetAnswer | null): void {
+  const { setFleet } = usePageContext();
+  useEffect(() => {
+    setFleet({ answer });
+  }, [answer, setFleet]);
+  useEffect(() => () => setFleet(null), [setFleet]);
 }
 
 /**
@@ -323,6 +357,7 @@ function Frame({ children }: { children: ReactNode }) {
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [showWorking, setShowWorking] = useState(false);
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
+  const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
 
   // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
   // dialog forever. Everything after that is the state bar.
@@ -401,7 +436,7 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu }),
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet }),
     [],
   );
 
@@ -414,13 +449,15 @@ function Frame({ children }: { children: ReactNode }) {
     onConfig: () => nav.to(["settings", "config"]),
   });
 
-  // THE SETTINGS COLUMN'S FIGURES come off the health push the frame already
-  // holds — nothing here polls.
-  const figures: Record<string, string> = {};
-  if (engine?.nodes !== undefined) figures.nodes = String(engine.nodes);
-  // "epoch 2", not "e2": a figure beside a row says what it counts, and a
-  // letter and a number is a code the reader has to be told.
-  if (engine?.applied_epoch !== undefined) figures.config = `epoch ${engine.applied_epoch}`;
+  // THE SETTINGS COLUMN'S FIGURES — the health push the frame already holds,
+  // and three operator answers asked only while the column is on screen. See
+  // `sidebar/settingsFigures.tsx`.
+  const figures = useSettingsSidebar({
+    here: row?.renderer === "column",
+    operator: viewer.operator,
+    health: engine,
+    published: publishedFleet,
+  });
 
   const screen = (
     <FillRequest.Provider value={setFilling}>
