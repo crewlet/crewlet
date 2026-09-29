@@ -121,3 +121,48 @@ func TestALiveHandleOutranksAnotherSeatsAlias(t *testing.T) {
 			"handle today", p.Name)
 	}
 }
+
+// THE HANDLE A SEAT WAS CREATED UNDER RESOLVES FOR EVER, as the org's own
+// lookup resolves it.
+//
+// The alias list is CAPPED, so enough renames push the origin off its end —
+// and a registry reading that list alone then answered nobody for a monitor
+// tag, a route_to or a runbook line written under the seat's first handle,
+// while [org.Organization.Role] still named the seat. And the origin OUTRANKS
+// another seat's retired alias, because the chart never issues it twice: the
+// other seat answered to it before this one was created there, and this one
+// is the seat the name has meant since.
+func TestAnOriginHandleResolvesAfterTheAliasListDropsIt(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{
+		Name: "nimbus",
+		Roles: []*org.Role{
+			// Listed FIRST, and carrying `ops-lead` as an ordinary retired
+			// alias: a single pass would let it answer for the name.
+			{
+				Name: "Platform Lead", DeclaredHandle: "platform-lead",
+				OriginHandle: "platform-lead-2", FormerHandles: []string{"ops-lead"},
+			},
+			// Created as `ops-lead` after the seat above gave it up, renamed
+			// often enough since that its list no longer carries it.
+			{
+				Name: "Head of Reliability", DeclaredHandle: "head-reliability",
+				OriginHandle: "ops-lead", FormerHandles: []string{"sre-lead-9"},
+			},
+		},
+	}
+	o.Normalize()
+	want := o.Role("ops-lead")
+	if want == nil || want.Handle() != "head-reliability" {
+		t.Fatalf("the fixture's own lookup names %v, want head-reliability", want)
+	}
+
+	p, ok := notify.NewRegistry(o, nil).ByHandle("ops-lead")
+	if !ok {
+		t.Fatalf("the seat's origin handle resolves to nobody")
+	}
+	if p.Handle != "head-reliability" {
+		t.Errorf("ops-lead resolved to %q, want the seat created under it — "+
+			"the answer org.Organization.Role gives", p.Handle)
+	}
+}

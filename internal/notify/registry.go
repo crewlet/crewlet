@@ -187,19 +187,29 @@ func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
 	// above already follows: two seats that both once answered to one name
 	// is a question this index cannot settle, and dropping both would
 	// silently retire a reference that does resolve.
-	for role := range o.AllRoles() {
+	//
+	// THE HANDLE A SEAT WAS CREATED UNDER FIRST, in a pass of its own, and
+	// the capped list of the others after — [org.Organization.Role]'s own
+	// order. The origin is the seat's identity: it resolves after enough
+	// renames have pushed it off the capped list (read from that list alone,
+	// a monitor tagged with it reached nobody), and since the chart never
+	// issues it twice it can be nobody else's alias, so it outranks one.
+	alias := func(role *org.Role, handle string) {
 		p, known := r.byHandle[role.Handle()]
-		if !known {
-			continue
+		if !known || handle == "" {
+			return
 		}
+		if _, taken := r.byHandle[handle]; taken {
+			return
+		}
+		r.byHandle[handle] = p
+	}
+	for role := range o.AllRoles() {
+		alias(role, role.OriginHandle)
+	}
+	for role := range o.AllRoles() {
 		for _, former := range role.FormerHandles {
-			if former == "" {
-				continue
-			}
-			if _, taken := r.byHandle[former]; taken {
-				continue
-			}
-			r.byHandle[former] = p
+			alias(role, former)
 		}
 	}
 	return r

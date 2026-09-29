@@ -43,6 +43,37 @@ func TestALookupFindsAColleagueByTheHandleItUsedToHave(t *testing.T) {
 	}
 }
 
+// AND BY THE HANDLE IT WAS CREATED UNDER, AFTER THE ALIAS LIST HAS LET IT GO.
+//
+// The list of retired handles is capped; the origin is the seat's identity and
+// org.Organization.Role resolves it for ever. Read from the list alone, a
+// colleague renamed often enough was "no such colleague" by their first name
+// here while every other lookup in the engine still named them.
+func TestALookupFindsAColleagueByTheHandleItWasCreatedUnder(t *testing.T) {
+	t.Parallel()
+	o := organization(t)
+	renamed := o.AgentSeatByHandle("agent-cto")
+	if renamed == nil {
+		t.Fatal("no agent-cto in the fixture")
+	}
+	renamed.OriginHandle = "platform-lead"
+	renamed.FormerHandles = []string{"platform-lead-7"}
+
+	tool := registered(t, builtin.Deps{}, builtin.LookupColleagueTool)
+	turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1",
+		Seat: o.AgentSeatByHandle("agent-ceo"), Org: o}
+
+	res := callFor(t, tool, turn, map[string]any{"query": "platform-lead"})
+	if res.Failed {
+		t.Fatalf("looking a colleague up by the handle it was created under failed:\n%s",
+			res.Output)
+	}
+	if !strings.Contains(res.Output, "agent-cto") {
+		t.Errorf("the answer does not name the seat created under that handle:\n%s",
+			res.Output)
+	}
+}
+
 // AND A HANDLE NOBODY HAS EVER HELD STILL FINDS NOBODY.
 //
 // The control. Without it the case above passes on a corpus that matched
