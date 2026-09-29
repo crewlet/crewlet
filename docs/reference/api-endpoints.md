@@ -1776,9 +1776,10 @@ build cannot represent that the write does not name.
   older build cannot name an unknown key at all (the strict reader refuses it),
   so no write through it can mean to remove one.
 - **A list member is matched by identity, not by position**: a seat by its
-  handle and a unit by its name anywhere in the document, so a seat moved to
-  another unit keeps its settings; an MCP server or a sandbox setup step by its
-  name within its own list. An identity held twice in the stored document, or
+  handle and a unit by its key (its `id`, or its name where it declares none —
+  two units may share a name, never a key) anywhere in the document, so a seat
+  moved to another unit keeps its settings; an MCP server or a sandbox setup
+  step by its name within its own list. An identity held twice in the stored document, or
   empty, matches nothing, so no seat's setting reaches another. A member of a
   list with no identity (a schedule, for example) keeps nothing the write
   replaced.
