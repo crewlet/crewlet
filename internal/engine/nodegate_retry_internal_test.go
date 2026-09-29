@@ -521,6 +521,10 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"floor":       {gate: refused(statelog.ReasonFloorUnknown), actions: []statelog.GateAction{retry}, detail: "coordination"},
 		"below floor": {gate: refused(statelog.ReasonBelowFloor), actions: []statelog.GateAction{retry, other}, detail: "snapshot"},
 		"evicted":     {gate: refused(statelog.ReasonEvicted), actions: []statelog.GateAction{other}, detail: "still counts"},
+		// A NODE THAT LEFT THE LOG'S PARTITION writes nothing that applies
+		// there, whichever id it retries under: another node serves it.
+		"released": {gate: refused(statelog.ReasonReleased), actions: []statelog.GateAction{other},
+			detail: "serves the partition"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),

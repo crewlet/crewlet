@@ -118,13 +118,19 @@ func NewFence(db store.PartitionReader, nodeID string) *Fence {
 // of a table this node owns. A coordination round trip here would put a
 // NETWORK call on the hot path of every write in the company, and it would be
 // a call to the estate an eviction has already established is silent.
+//
+// AN EVICTION AND NOTHING ELSE. A node's RELEASE of the log puts its later
+// records out just as an eviction does, but it is the node's own statement as
+// it leaves the log's partition, and what stops such a node writing there is
+// that it no longer serves the partition ([statelog.Holding]) — refused as
+// that, not as a removal from the fleet this node never suffered.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	var from, readmitted sql.NullInt64
 	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT from_position, readmitted_position FROM tracker_evictions
-			WHERE node_id = ? AND log_stream = ?`,
-			f.nodeID, trackerStream).Scan(&from, &readmitted)
+			WHERE node_id = ? AND log_stream = ? AND kind = ?`,
+			f.nodeID, trackerStream, string(statelog.EvictionKindEviction)).Scan(&from, &readmitted)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -238,20 +244,29 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 			return nil
 		}
 		var from, readmitted sql.NullInt64
+		var kind string
 		err := tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position FROM tracker_evictions
+			SELECT from_position, readmitted_position, kind FROM tracker_evictions
 			WHERE node_id = ? AND log_stream = ?`,
-			writer, p.Stream).Scan(&from, &readmitted)
+			writer, p.Stream).Scan(&from, &readmitted, &kind)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
 			return fmt.Errorf("tracker: read the eviction gate: %w", err)
 		}
+		gate, err := gateKind(kind)
+		if err != nil {
+			return err
+		}
 		at := p.Packed()
 		if from.Valid && at > from.Int64 &&
 			(!readmitted.Valid || at < readmitted.Int64) {
-			reason, gated = statelog.ReasonEvicted, true
+			// UNDER THE GATE THAT HOLDS THE RECORD: an eviction or the
+			// writer's own release, which the applier drops alike and a
+			// caller is told apart — `released` is a node that left this
+			// log's partition, `evicted` one the fleet put out.
+			reason, gated = gate.Reason(), true
 		}
 		return nil
 	})
@@ -515,7 +530,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 // EvictedBy is this writer's own actor, so the caller hands it a writer acting
 // as the operator who ran the gesture — see [Writer.As].
 func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
-	return w.gateNode(ctx, opID, nodeID, false)
+	return w.gateNode(ctx, opID, nodeID, gateEvict)
 }
 
 // ReadmitNode is the INVERSE COMMIT rather than a delete, so an eviction's
@@ -527,23 +542,56 @@ func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResul
 // register, the published floors and every identity-claiming log once, before
 // either log is written — see [statelog.PermitReadmission].
 func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
-	return w.gateNode(ctx, opID, nodeID, true)
+	return w.gateNode(ctx, opID, nodeID, gateReadmit)
 }
 
-// gateNode publishes one eviction record.
+// ReleaseLog publishes this node's RELEASE of this log: its own statement, as
+// it leaves the log's partition, that nothing it publishes here afterwards
+// applies on any node ([OpRelease], [statelog.EvictionKindRelease]).
+//
+// # Why the node's own record, and on the log
+//
+// A leaving node's writes that were in flight when it stopped deciding can
+// still land, and nothing but the log's order can say which landed first:
+// every record this node wrote below its release applies, and every one above
+// it is dropped on every holder by the same gate an eviction installs — with
+// no coordination read anybody has to trust. It is the node's own gesture, so
+// no live-lease refusal stands between it and the node it names, and the
+// framework holds it to naming the node that publishes it; nodeID is that
+// node, which the write authority checks against its own.
+//
+// UNJUDGED HERE, like the eviction: whether this node may leave the partition
+// is the leave protocol's question, and it asks it before this is called.
+func (w *Writer) ReleaseLog(ctx context.Context, opID, nodeID string) (WriteResult, error) {
+	return w.gateNode(ctx, opID, nodeID, gateRelease)
+}
+
+// gateOp is which of the three node-gate records a write publishes.
+type gateOp int
+
+const (
+	gateEvict gateOp = iota
+	gateReadmit
+	gateRelease
+)
+
+// gateNode publishes one node-gate record: an eviction, a readmission or a
+// release.
 //
 // A RETRY IS ANSWERED BY THE FRAMEWORK from this node's ledger, before this
 // decision runs ([statelog.Snap.Held]); what this write adds is the one thing
 // the ledger cannot say — whether the record its operation landed is still in
 // force, judged from the node's own row in the same snapshot
-// ([statelog.GateStanding]).
-func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool) (WriteResult, error) {
+// ([statelog.GateStanding]). A release stands exactly as an eviction does:
+// until a later gate record or a readmission replaces it.
+func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, gate gateOp) (WriteResult, error) {
 	if nodeID == "" {
 		return WriteResult{}, fmt.Errorf("tracker: an eviction names no node")
 	}
 	subject := EvictionSubject(nodeID)
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
+	readmit := gate == gateReadmit
 	return w.published(ctx, statelog.Request{
 		Subject:  wire(subject),
 		Scope:    scope.Resolve(subject),
@@ -558,12 +606,31 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 			return statelog.GateStanding(opID, nodeID, readmit, held, row, found)
 		},
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return w.decide(stamp, subject, OpEviction, "", scope, opID, Eviction{
+			eviction := Eviction{
 				V: GateRecordVersion, NodeID: nodeID,
 				EvictedBy: w.Actor, EvictedAt: at, Readmitted: readmit,
-			}, nil, at)
+			}
+			if gate == gateRelease {
+				// THE NODE ITSELF SAYS SO, and the row records it as the
+				// one who did.
+				eviction.EvictedBy = nodeID
+				return w.decide(stamp, subject, OpRelease, "", scope, opID,
+					releaseMutation{eviction}, nil, at)
+			}
+			return w.decide(stamp, subject, OpEviction, "", scope, opID, eviction, nil, at)
 		},
 	})
+}
+
+// gateKind reads the kind a row of tracker_evictions records, refusing one this
+// build does not know rather than guessing which gate it is.
+func gateKind(kind string) (statelog.EvictionKind, error) {
+	k := statelog.EvictionKind(kind)
+	if !k.Valid() {
+		return "", fmt.Errorf("tracker: an eviction row records the gate %q, which "+
+			"this build does not know — a newer build's applier wrote it", kind)
+	}
+	return k, nil
 }
 
 // standingIn is nodeID's eviction row on this log, read in the transaction the
@@ -571,10 +638,11 @@ func (w *Writer) gateNode(ctx context.Context, opID, nodeID string, readmit bool
 func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.EvictionRow, bool, error) {
 	var from int64
 	var readmitted sql.NullInt64
+	var kind string
 	err := tx.QueryRowContext(ctx, `
-		SELECT from_position, readmitted_position FROM tracker_evictions
+		SELECT from_position, readmitted_position, kind FROM tracker_evictions
 		WHERE node_id = ? AND log_stream = ?`,
-		nodeID, trackerStream).Scan(&from, &readmitted)
+		nodeID, trackerStream).Scan(&from, &readmitted, &kind)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return statelog.EvictionRow{}, false, nil
@@ -582,8 +650,13 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 		return statelog.EvictionRow{}, false, fmt.Errorf("tracker: read %s's "+
 			"eviction row: %w", nodeID, err)
 	}
+	gate, err := gateKind(kind)
+	if err != nil {
+		return statelog.EvictionRow{}, false, err
+	}
 	return statelog.EvictionRow{
 		NodeID: nodeID, From: uint64(from), Readmitted: uint64(readmitted.Int64),
+		Kind: gate,
 		// THE COMPARISON [Fence.Evicted] MAKES, so a retry and the node's
 		// own fence can never disagree about whether it is back.
 		Back: readmitted.Valid && readmitted.Int64 > from,

@@ -2195,6 +2195,10 @@ func (evictingProbe) Evicts(payload []byte) (bool, error) {
 	return body.Evicts, err
 }
 
+// Releases is false for every record: what this case reads is a node's
+// standing, and an eviction record is as much of one as a release.
+func (evictingProbe) Releases(statelog.Envelope) bool { return false }
+
 // WHO OPENED EACH GENERATION IS READ OFF THE LOG, past what the register knows.
 //
 // A reanchor appends its record before it commits and before it publishes its

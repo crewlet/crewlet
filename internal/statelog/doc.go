@@ -247,10 +247,13 @@
 // (iii) An evicted node's records are dropped by the applier's eviction gate
 // whatever it manages to publish, so the conclusion holds even when (i) and
 // (ii) are both defeated — by a frozen clock, or by a coordination read that
-// answered stale. This clause depends on nothing but the log's own order and
-// on the gate record being decodable by the applier that must obey it, which
-// is why a gate is a stop rather than a deferral, and why it is the layer
-// that makes the fence complete rather than merely deep.
+// answered stale. The same gate holds a node that RELEASED the log as it left
+// the log's partition ([EvictionKindRelease]): its own record, published on the
+// log, above which nothing it writes applies anywhere. This clause depends on
+// nothing but the log's own order and on the gate record being decodable by
+// the applier that must obey it, which is why a gate is a stop rather than a
+// deferral, and why it is the layer that makes the fence complete rather than
+// merely deep.
 //
 // Given all three: suppose a commit at sequence S on this object's subject
 // has been trimmed. Then S < F <= C+1, so S <= C, and by (i) it has been
@@ -429,6 +432,19 @@
 //     applier's refusal of a record whose address disagrees with its subject,
 //     for partitions. The publisher asks it first and never appends such a
 //     record ([ErrWrongPartition]), so one on a log is another writer's.
+//   - THE RELEASE GATE, clause (iii) for a node that LEAVES a partition. As it
+//     leaves, the node publishes a release on each identity-claiming log of
+//     the partition — its own statement, flagged a node gate, written under
+//     its domain's eviction subject — and every holder records it where an
+//     eviction is recorded ([EvictionRow.Kind]): every record the node
+//     publishes above it, with no readmission since, is dropped on every
+//     holder (`released`), identically by determinism, and the write that
+//     published it is told so rather than applied or lost. It depends on
+//     nothing but the log's order, so it holds when the leaving node's view of
+//     the fleet is stale. A release is only ever the publisher's own — the
+//     publisher refuses one naming another node, which would be an eviction
+//     nobody judged — and the node's own write fence does not read one as an
+//     eviction: it left a partition, and the fleet did not remove it.
 //
 // Under layout 0 every record and every path a domain of this build writes is
 // in the one partition, `estate.000`, so neither gate refuses anything a fleet

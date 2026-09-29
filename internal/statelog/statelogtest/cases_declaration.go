@@ -259,6 +259,18 @@ func Placement(c Candidate) []error {
 			framework = append(framework, env)
 		}
 	}
+	if c.EncodeRelease != nil {
+		// A RELEASE IS THE FRAMEWORK'S TOO: a node releases every log of
+		// the partition it leaves, each its own record on its own log.
+		payload, err := c.EncodeRelease("placement-node")
+		if err != nil {
+			add("%s cannot encode its release: %w", name, err)
+		} else if env, err := c.Domain.Envelope(payload); err != nil {
+			add("%s cannot read its own release's envelope: %w", name, err)
+		} else {
+			framework = append(framework, env)
+		}
+	}
 	for _, env := range framework {
 		if p, ok := c.Domain.PartitionOf(layout, env); ok {
 			add("%s places a %s record in %s — a framework record is appended to "+

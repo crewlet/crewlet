@@ -208,7 +208,10 @@ are deliberate:
   before learning it was evicted will drop it on replay. Every record names
   the node that published it and the generation it was decided in; the write
   path is handed both and refuses to append a record that does not carry
-  them, because a record naming nobody is one this gate can never drop.
+  them, because a record naming nobody is one this gate can never drop. The
+  same gate holds for a node that **released** the log as it left the log's
+  partition ([below](#a-node-that-leaves-a-partition-releases-its-logs)), and
+  a record it dropped is refused `released` rather than `evicted`.
 - **The deletion gate.** A record about a task a purge destroyed applies
   nowhere, for ever. This is what stops a redelivery months later resurrecting
   rows an operator deliberately removed.
@@ -245,6 +248,27 @@ partition it is in, and neither is a gate an ordinary write ever meets:
 Today's estate is one partition, `estate.000`, so every record and every scope
 lies in it and neither rule refuses anything; they are the rules a divided
 estate is held to from its first record.
+
+### A node that leaves a partition releases its logs
+
+A data node that stops holding a partition does not simply stop writing to
+it: a write it had in flight can still land after it has left. So as it
+leaves, the node **releases** each of the partition's logs that claims
+identity — the work tracker's and the knowledge base's — with a record of its
+own on that log. Everything it wrote below its release applies on every node;
+everything that lands above it is dropped on every node by the same gate an
+eviction installs, and the write that published it is refused `released`. The
+log's order is the only thing that decides which side a write fell on, so no
+node has to trust anyone's clock or a coordination read to agree.
+
+A release is the node's own statement and only ever names the node that
+publishes it — the write path refuses one naming another node, which would be
+an eviction nobody judged. It is recorded as a release rather than an
+eviction, and the node's own write check does not treat it as one: a node that
+left a partition is not a node the fleet removed. When the node joins the
+partition again, a node that serves the partition readmits it before it
+adopts the partition's data. Nothing in today's single-partition estate
+releases a log.
 
 ### A record whose scope meets a deferred scope is deferred too
 

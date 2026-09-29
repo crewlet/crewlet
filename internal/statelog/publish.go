@@ -917,6 +917,19 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
+	if probe, gates := p.domain.(EvictionProbe); gates && probe.Releases(env) &&
+		env.Subject != probe.EvictionSubject(p.nodeID) {
+		// A RELEASE IS THE NODE'S OWN STATEMENT, and the one gate record no
+		// operator judges: it takes effect on the node it names with no
+		// live-lease refusal between them, because a node leaving is
+		// alive by definition. So it may only ever name its publisher —
+		// one naming another node would be an eviction nobody permitted.
+		return fmt.Errorf("statelog: the %s record decided for %s is a release "+
+			"published on %s by %s — a release is a node's own statement that "+
+			"it has left the log, so it names the node that publishes it; an "+
+			"operator puts another node out with an eviction",
+			p.domain.Name(), req.Subject, env.Subject, p.nodeID)
+	}
 	// GATE 1, ON WHAT THE DEFERRAL WILL BE FILED UNDER: a holder that cannot
 	// decode this record indexes it by the RECORD's scope, not the request's,
 	// so both are held to this partition — a decision that widened its own

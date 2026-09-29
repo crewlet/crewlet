@@ -159,12 +159,19 @@ const (
 	// exactly one wins.
 	KindGeneration ObjectKind = "generation"
 
-	// KindEviction is a node's eviction or its readmission.
+	// KindEviction is a node's eviction, its RELEASE of the log as it
+	// leaves the log's partition ([OpRelease]), or the readmission that
+	// lifts either — three records under one kind, told apart by the op.
 	//
-	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its version
-	// is pinned at 1 for ever: a node that deferred an eviction would
-	// leave its own gate table empty and go on applying every record the
-	// evicted node appends, and there is no inverse that repairs it.
+	// ONE OF THE TWO KINDS THAT INSTALL A GATE, which is why its payload's
+	// SHAPE version is pinned at [GateRecordVersion] for ever: a node that
+	// deferred one would leave its own gate table empty and go on applying
+	// every record the node it names appends, and there is no inverse that
+	// repairs it. What does move is the RECORD version, and only for a
+	// change to what the gate's apply does: the release is written at
+	// [releaseVersion], so a build from before it halts there rather than
+	// record it as an eviction. It keeps this kind so that build still
+	// knows it for a gate.
 	KindEviction ObjectKind = "eviction"
 
 	// KindRankOrder is a project's manual order.

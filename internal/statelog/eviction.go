@@ -83,6 +83,53 @@ type EvictionRow struct {
 	From       uint64
 	Readmitted uint64
 	Back       bool
+
+	// Kind is which gate record put the node out: an operator's eviction,
+	// or the node's own release of the log when it left the log's
+	// partition. The latest of them is the row's, and a readmission lifts
+	// either.
+	//
+	// THE TWO GATE ALIKE, and the trim counts them alike: every record the
+	// node publishes above either is dropped on every holder, so neither
+	// node is a writer the log has to keep a tail for. They differ in who
+	// said so and in what a surface calls it — an eviction is the
+	// operator's judgement of a machine that is not coming back, a release
+	// the node's own statement that it has left this log ([ReasonReleased])
+	// — and a release is readmitted by the node's next join rather than by
+	// an operator.
+	Kind EvictionKind
+}
+
+// EvictionKind is which gate record put a node out of one log.
+type EvictionKind string
+
+const (
+	// EvictionKindEviction is an operator's eviction of a node the fleet
+	// judges is not coming back ([PermitEviction]).
+	EvictionKindEviction EvictionKind = "eviction"
+
+	// EvictionKindRelease is a node's RELEASE of a log: its own statement,
+	// published on the log as it leaves the log's partition, that every
+	// record it publishes above it is to apply nowhere. Self-issued by a live
+	// node, so no live-lease refusal applies to it; readmitted by the node's
+	// own next join of the partition, before it adopts.
+	EvictionKindRelease EvictionKind = "release"
+)
+
+// EvictionKinds is every kind, for validation and for a test that walks them.
+var EvictionKinds = []EvictionKind{EvictionKindEviction, EvictionKindRelease}
+
+// Valid reports whether a kind read from a domain's rows is one this build
+// knows. An unknown one is a row a newer build's applier wrote, and a reader
+// refuses it rather than guessing which gate it is.
+func (k EvictionKind) Valid() bool { return slices.Contains(EvictionKinds, k) }
+
+// Reason is the refusal a record this gate dropped is reported under.
+func (k EvictionKind) Reason() Reason {
+	if k == EvictionKindRelease {
+		return ReasonReleased
+	}
+	return ReasonEvicted
 }
 
 // Presence is a node holding a live lease, whether or not it has reported a

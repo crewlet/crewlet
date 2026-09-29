@@ -68,7 +68,7 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 // EVERY HISTORY ROW NAMES A KIND THIS BUILD KNOWS.
 //
 // The fallback used to end at `ChangeKind(op)` — the OPERATION, cast — and
-// four of the nine [tracker.OpKind]s are not [tracker.ChangeKind]s at all.
+// most of the [tracker.OpKind]s are not [tracker.ChangeKind]s at all.
 // Three are near-misses of one: a quiet removal filed as `tombstone` while the
 // filter spells it `removed`, a restore as `restore` against `restored`, a
 // purge as `purge` against `purged`. A word one letter from the right one is

@@ -31,7 +31,7 @@ func (Domain) Evictions(ctx context.Context, db store.PartitionReader) ([]statel
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT node_id, at, by, from_position, readmitted_position
+			SELECT node_id, at, by, from_position, readmitted_position, kind
 			FROM tracker_evictions WHERE log_stream = ?
 			ORDER BY node_id`, trackerStream)
 		if err != nil {
@@ -45,8 +45,12 @@ func (Domain) Evictions(ctx context.Context, db store.PartitionReader) ([]statel
 				e          statelog.EvictionRow
 				at, from   int64
 				readmitted sql.NullInt64
+				kind       string
 			)
-			if err := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted); err != nil {
+			if scanErr := rows.Scan(&e.NodeID, &at, &e.By, &from, &readmitted, &kind); scanErr != nil {
+				return scanErr
+			}
+			if e.Kind, err = gateKind(kind); err != nil {
 				return err
 			}
 			e.At = store.DecodeTime(at)

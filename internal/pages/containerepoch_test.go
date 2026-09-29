@@ -172,8 +172,12 @@ func TestAContainerKeepsItsCreationThroughAnUpdate(t *testing.T) {
 func TestAContainerRecordCarriesTheVersionThatAddedItsEpoch(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if got := (pages.Domain{}).RecordVersion(); got != 2 {
-		t.Fatalf("this build reads record version %d, want 2", got)
+	// THIS BUILD READS 3 — the release of a log was added at it — and a
+	// container's settings are still written at 2, the version that added
+	// their epoch: a record is written at the lowest version that carries
+	// what it says, never at the build's newest.
+	if got := (pages.Domain{}).RecordVersion(); got != 3 {
+		t.Fatalf("this build reads record version %d, want 3", got)
 	}
 	r.ensure(activation(0), "ENG", "Engineering", "")
 	if env := r.envelopeAt(r.logEnd()); env.V != 2 {

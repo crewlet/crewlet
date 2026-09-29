@@ -13,11 +13,12 @@
 // read, the record that must belong to the partition of the log it is on —
 // and the framework's own records to none, since each of the domain's logs
 // carries them alike — the record that must name the node that wrote it and
-// the generation it was decided in, the evictions a domain that claims identity
-// must be able to list — because the trim counts nodes per log, and a log whose
-// evictions nothing reads counts an evicted node for ever — and the node gate
-// that is the domain's own eviction and nothing else, because a write flagged
-// one is excused the fences and the reserve every other write is held to.
+// the generation it was decided in, the evictions and releases a domain that
+// claims identity must be able to list — because the trim counts nodes per log,
+// and a log whose evictions nothing reads counts an evicted node for ever — and
+// the node gate that is the domain's own eviction, release and readmission and
+// nothing else, because a write flagged one is excused the fences and the
+// reserve every other write is held to.
 //
 // # Bringing up a new domain: if a case fails, suspect the case
 //
@@ -126,6 +127,15 @@ type Candidate struct {
 	// publishes it. Required of a domain that claims identity, whose log the
 	// trim counts nodes on; see [Evictions].
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
+
+	// EncodeRelease builds the record by which nodeID RELEASES this domain's
+	// log as it leaves the log's partition — the node's own statement,
+	// written by it — as the domain's own writer publishes it. Required of a
+	// domain that claims identity, for EncodeGate's reason: a node that left
+	// a partition is still counted on the partition's logs until its
+	// release's rows say otherwise, and the same gate drops what it writes
+	// there afterwards. See [Evictions] and [NodeGates].
+	EncodeRelease func(nodeID string) ([]byte, error)
 }
 
 // layout is the layout the candidate is certified under.

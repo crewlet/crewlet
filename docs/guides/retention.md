@@ -546,6 +546,9 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
   (`-url`).
+- `released` — the node you ran it on released that log when it left the log's
+  partition, so nothing it writes there applies: run the gesture, under the
+  same `-op-id`, through a node that serves the partition (`-url`).
 - `unknown` that **this node cannot tell** — its operation ledger may have
   lost the row the operation needs, because the id was minted before the node
   adopted a peer's snapshot or before the ledger's sweep reached it. The node

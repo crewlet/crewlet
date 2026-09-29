@@ -133,6 +133,16 @@ const (
 	// it publishes will be applied anywhere. There is no retry.
 	ReasonEvicted Reason = "evicted"
 
+	// ReasonReleased — the record's writer RELEASED this log before the
+	// record's position and had not been readmitted: it left the log's
+	// partition, and its release is its own statement that nothing it
+	// publishes on the log afterwards applies anywhere ([EvictionKindRelease]).
+	// A record that landed after it — a write that was in flight while the
+	// node left — is dropped on every holder, which is what lets the node
+	// leave without a coordination round trip anybody has to trust. Another
+	// node that serves the partition takes the write.
+	ReasonReleased Reason = "released"
+
 	// ReasonDeferred — this node holds a record it cannot decode whose
 	// scope covers this object, so its rows are stale and any decision
 	// taken from them is unsafe. Another node can serve this write.
@@ -277,15 +287,16 @@ const (
 // is checked against this list ([TestEveryRefusalReasonIsInTheMetricsReference]).
 //
 // A RECORD A GATE DROPPED is refused under the gate that dropped it — evicted,
-// deleted, retired, abandoned, overtaken or wrong_partition — rather than under
-// a generic word, because the gate is what says why: which is why there is no
-// `gated` here.
+// released, deleted, retired, abandoned, overtaken or wrong_partition — rather
+// than under a generic word, because the gate is what says why: which is why
+// there is no `gated` here.
 func Reasons() []Reason {
 	return []Reason{
-		ReasonEvicted, ReasonDeferred, ReasonBehind, ReasonBelowFloor,
-		ReasonFloorUnknown, ReasonDeleted, ReasonRetired, ReasonAbandoned,
-		ReasonOvertaken, ReasonWrongPartition, ReasonLogFull, ReasonSkew,
-		ReasonOpReused, ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
+		ReasonEvicted, ReasonReleased, ReasonDeferred, ReasonBehind,
+		ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonRetired,
+		ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition, ReasonLogFull,
+		ReasonSkew, ReasonOpReused, ReasonLogTruncated, ReasonWrongStream,
+		ReasonSuperseded,
 	}
 }
 

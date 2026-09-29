@@ -301,6 +301,15 @@ func TestEveryGateRecordIsDeclared(t *testing.T) {
 				Op: string(tracker.OpEviction)},
 			gate: true,
 		},
+		"a node's release of the log": {
+			// THE SAME GATE AS AN EVICTION, the node's own. A node that
+			// deferred it would apply every write the leaver had in
+			// flight — and halting is the answer an older build gives
+			// it, by its kind, at the version that added it.
+			envelope: statelog.Envelope{Kind: string(tracker.KindEviction),
+				Op: string(tracker.OpRelease)},
+			gate: true,
+		},
 		"a purge": {
 			envelope: statelog.Envelope{Kind: string(tracker.KindTask),
 				Op: string(tracker.OpPurge)},
@@ -370,5 +379,82 @@ func TestEveryGateTableIsCoveredByThePredicate(t *testing.T) {
 		t.Fatalf("the schema holds gate tables %v and the predicate covers %v "+
 			"— a gate table with no clause in InstallsGate is a gate every "+
 			"node defers, which licenses every later record on it", tables, want)
+	}
+}
+
+// A NODE'S RELEASE OF THE LOG DROPS WHAT IT WRITES AFTER IT, AND ITS CALLER IS
+// TOLD SO.
+//
+// A node leaving a partition releases each identity-claiming log there: its own
+// statement that nothing it publishes on the log afterwards applies anywhere.
+// A write it had in flight that lands after the release is dropped on every
+// holder by the gate an eviction installs, and the writer is told `released` —
+// never `applied`, and never a lost race. The row records the release as the
+// node's own gate, which the node's write fence does not read as an eviction.
+// And a release is only ever the node's own: one naming another node would be
+// an eviction nobody judged, so the write authority refuses it.
+func TestAReleaseDropsWhatItsNodeWritesAfterIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	if _, err := r.writer.CreateTask(t.Context(), "op-before", newTask("t-before"), nil); err != nil {
+		t.Fatalf("a write before the release: %v", err)
+	}
+	released, err := r.writer.ReleaseLog(t.Context(), "op-release", r.nodeID)
+	if err != nil {
+		t.Fatalf("ReleaseLog: %v", err)
+	}
+	r.drain()
+
+	rows, err := tracker.Domain{}.Evictions(t.Context(), r.db.Reader())
+	if err != nil {
+		t.Fatalf("read the gates: %v", err)
+	}
+	var row *statelog.EvictionRow
+	for i := range rows {
+		if rows[i].NodeID == r.nodeID {
+			row = &rows[i]
+		}
+	}
+	switch {
+	case row == nil:
+		t.Fatalf("the release landed and the log's rows hold no gate for %s", r.nodeID)
+	case row.Kind != statelog.EvictionKindRelease:
+		t.Fatalf("the release is recorded as a %q", row.Kind)
+	case row.From != uint64(released.Position.Packed()) || row.Back:
+		t.Fatalf("the release is recorded as %+v, want the node out above its own "+
+			"position %d", *row, released.Position.Packed())
+	case row.By != r.nodeID:
+		t.Fatalf("the release is recorded as %s's, want the node's own (%s)", row.By, r.nodeID)
+	}
+	evicted, err := tracker.NewFence(r.db.Reader(), r.nodeID).Evicted(t.Context())
+	if err != nil || evicted {
+		t.Fatalf("the node's fence reads its own release as an eviction (%v, %v) — "+
+			"a node that left a partition is not one the fleet removed", evicted, err)
+	}
+
+	_, err = r.writer.CreateTask(t.Context(), "op-after", newTask("t-after"), nil)
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
+		t.Fatalf("a write landing after the node's release was answered %v, want "+
+			"a refusal %q — it is on the log and applies nowhere", err,
+			statelog.ReasonReleased)
+	}
+	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 1 {
+		t.Fatalf("the project holds %d task(s) after a write its node released "+
+			"the log before, want only the one written before", len(answer.Rows))
+	}
+
+	end, err := r.log.End(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	if _, err := r.writer.ReleaseLog(t.Context(), "op-release-other", "node-b"); err == nil {
+		t.Fatal("a node published a release naming another node — an eviction " +
+			"nobody judged")
+	}
+	if after, err := r.log.End(t.Context()); err != nil || after != end {
+		t.Fatalf("the refused release reached the log: its end moved from %d to %d (%v)",
+			end, after, err)
 	}
 }

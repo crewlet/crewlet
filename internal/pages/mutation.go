@@ -212,6 +212,10 @@ type ContainerPayload struct {
 // held.
 func recordVersionOf(payload any) int {
 	switch payload.(type) {
+	case releaseMutation:
+		// AN ADDED GATE APPLY, which no older build can honour: see
+		// [releaseVersion].
+		return releaseVersion
 	case restampPayload:
 		return baseRecordVersion
 	case ContainerPayload:
@@ -219,6 +223,14 @@ func recordVersionOf(payload any) int {
 	}
 	return baseRecordVersion
 }
+
+// releaseMutation is a node's release of this log, and its type is what
+// [recordVersionOf] raises the record to [releaseVersion] by.
+//
+// IT ENCODES EXACTLY AS AN [Eviction] — the embedded struct's fields and
+// nothing of its own — so the applier decodes both into one shape, and the op
+// on the envelope is what says which gate the row records.
+type releaseMutation struct{ Eviction }
 
 // restampPayload is a container record that changes nothing but the
 // activation stamp: the settings the row already holds, under a later
@@ -242,7 +254,8 @@ type StatusPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// Eviction is a node's eviction from this log, or its readmission.
+// Eviction is a node's eviction from this log, its release of the log
+// ([OpRelease]), or the readmission that lifts either.
 //
 // PINNED AT [GateRecordVersion] FOR EVER. See the constant.
 type Eviction struct {
@@ -299,7 +312,9 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ContainerPayload](rec)
 	case rec.Subject.Kind == KindContainer && rec.Op == OpPurge:
 		return decodePayload[StatusPayload](rec)
-	case rec.Subject.Kind == KindEviction && rec.Op == OpEviction:
+	case rec.Subject.Kind == KindEviction && (rec.Op == OpEviction || rec.Op == OpRelease):
+		// ONE PAYLOAD FOR BOTH GATES: a release is an eviction's bytes,
+		// and the op is what says which gate the row records.
 		return decodePayload[Eviction](rec)
 	case rec.Subject.Kind == KindGeneration && rec.Op == OpGeneration:
 		return decodePayload[Generation](rec)

@@ -143,13 +143,14 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind).InstallsGate() || OpKind(env.Op) == OpPurge
 }
 
-// NodeGate reports a node's eviction or readmission — the one record a write
-// flagged [statelog.Request.NodeGate] may carry.
+// NodeGate reports a node's eviction, its release of the log or the
+// readmission of either — the one record a write flagged
+// [statelog.Request.NodeGate] may carry.
 //
-// BY ITS KIND, which nothing but a node's eviction or readmission is published
-// under — and deliberately not InstallsGate: the purge is this log's other
-// gate, and it is an ordinary write that the gate reserve and the fences a
-// node gate is excused must hold.
+// BY ITS KIND, which nothing but those three is published under — and
+// deliberately not InstallsGate: the purge is this log's other gate, and it is
+// an ordinary write that the gate reserve and the fences a node gate is
+// excused must hold.
 func (Domain) NodeGate(env statelog.Envelope) bool {
 	return ObjectKind(env.Kind) == KindEviction
 }
@@ -162,8 +163,14 @@ func (Domain) EvictionSubject(node string) statelog.Subject {
 	return wire(EvictionSubject(node))
 }
 
+// Releases reports a node's release of this log ([OpRelease]): the eviction
+// kind under the release op, from the envelope alone.
+func (Domain) Releases(env statelog.Envelope) bool {
+	return ObjectKind(env.Kind) == KindEviction && OpKind(env.Op) == OpRelease
+}
+
 // Evicts decodes one record from a node's eviction subject: true for an
-// eviction, false for the readmission that inverts one.
+// eviction or a release, false for the readmission that inverts either.
 func (Domain) Evicts(payload []byte) (bool, error) {
 	record, err := Decode(payload)
 	if err != nil {

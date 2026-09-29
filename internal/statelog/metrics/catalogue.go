@@ -138,7 +138,9 @@ func Catalogue() []Instrument {
 			Shows: "Writes refused before or instead of an append, by `reason`, and " +
 				"EVERY value it carries is here, each with its remedy. The node: " +
 				"`evicted` (this node is removed from the fleet — run the write " +
-				"on another), `deferred` (it holds a record it cannot decode — a " +
+				"on another), `released` (it released this log when it left the " +
+				"log's partition — a node that serves the partition writes " +
+				"it), `deferred` (it holds a record it cannot decode — a " +
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
@@ -158,6 +160,7 @@ func Catalogue() []Instrument {
 				"undid it) — both answered by a NEW operation under a fresh " +
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
+				"`released` (written by a node after it released the log), " +
 				"`deleted`, `retired` (a kind this build no longer applies), " +
 				"`abandoned` (written in a generation a reanchor abandoned), " +
 				"`overtaken` (written after a restored reanchor, below its " +
@@ -317,7 +320,8 @@ func Catalogue() []Instrument {
 			Name: StatelogRecordsGated, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"gate", "subject_kind"},
 			Shows: "Records an apply gate dropped, by the gate that dropped " +
-				"each — the domain's own (`evicted`, `deleted`, `retired`) or " +
+				"each — the domain's own (`evicted`, `released`, `deleted`, " +
+				"`retired`) or " +
 				"the framework's (`abandoned`, `overtaken`, `wrong_partition`). " +
 				"A dropped commit is recoverable by nothing, and this is the " +
 				"only place anyone would see that it happened.",

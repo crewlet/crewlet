@@ -290,6 +290,82 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 	}
 }
 
+// A RELEASE IS WRITTEN AT THE VERSION THAT ADDED IT, AND A BUILD FROM BEFORE IT
+// HALTS THERE — through the real framework loop, over the real log.
+//
+// A release carries an eviction's bytes under the eviction's kind, so a build
+// that predates it would decode it and record an EVICTION: the same gate, in a
+// row naming the wrong one, which every newer node holds as a release — two
+// builds' rows differing for ever. Its kind is a gate's, so written at version
+// 5 that build halts at it rather than apply it the old way; the eviction
+// beside it stays at the version every build reads, because its apply did not
+// change.
+func TestAReleaseIsWrittenAtItsOwnVersionAndAnOlderBuildHaltsAtIt(t *testing.T) {
+	t.Parallel()
+	if got := (tracker.Domain{}).RecordVersion(); got < 5 {
+		t.Fatalf("this build reads record version %d, want at least the 5 that "+
+			"added a node's release of the log", got)
+	}
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	operator := r.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
+	if _, err := operator.EvictNode(t.Context(), "op-evict", "node-gone"); err != nil {
+		t.Fatalf("EvictNode: %v", err)
+	}
+	evicted := r.logEnd(t)
+	if _, err := r.writer.ReleaseLog(t.Context(), "op-release", r.nodeID); err != nil {
+		t.Fatalf("ReleaseLog: %v", err)
+	}
+	released := r.logEnd(t)
+	if v := r.recordAt(t, evicted).V; v != 1 {
+		t.Errorf("the eviction carries version %d, want 1 — its apply is every "+
+			"build's, and a higher version would halt nodes that can apply it", v)
+	}
+	if v := r.recordAt(t, released).V; v != 5 {
+		t.Errorf("the release carries version %d, want 5 — a build from before it "+
+			"would record it as an eviction", v)
+	}
+
+	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = olderNode.Close() })
+	build := olderTracker{reads: 4}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: build, Spec: statelog.EstateStream(build),
+		Layout: statelog.EstateLayout(build.Name()), LogID: statelog.EstateLog(build),
+		Applier: tracker.NewApplier("node-older"),
+		Fetch:   &trackerLogFetch{log: r.log, next: 1},
+		Log:     r.log,
+		Node:    olderNode,
+		DB:      older,
+	})
+	if err != nil {
+		t.Fatalf("build the older node's applier: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := runner.Run(ctx); !errors.Is(err, statelog.ErrStopped) {
+		t.Fatalf("the older node's loop ended with %v, want it stopped at the release", err)
+	}
+	// BELOW THE RELEASE, wherever in the batch the stop left it: the loop
+	// applies a run of records in one transaction, and a stop inside it
+	// commits none of them.
+	if at := runner.Committed().Seq; at >= released {
+		t.Errorf("the older node stands at %d, past the release at %d it cannot "+
+			"apply", at, released)
+	}
+	var gates int
+	if err := older.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `
+			SELECT COUNT(*) FROM tracker_evictions WHERE node_id = ?`,
+			r.nodeID).Scan(&gates)
+	}); err != nil {
+		t.Fatalf("read the older node's gates: %v", err)
+	}
+	if gates != 0 {
+		t.Errorf("the older node recorded the release it halted at (%d row(s))", gates)
+	}
+}
+
 // olderTracker is this domain as a build that reads only up to one record
 // version sees it.
 type olderTracker struct {

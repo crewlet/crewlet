@@ -139,10 +139,16 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	// closed one panics inside database/sql. [store.PartitionReader.Read]
 	// answers [store.ErrNoEstate], which the refusal below already handles
 	// as the honest "unreadable is not not-evicted".
+	//
+	// AN EVICTION AND NOTHING ELSE: a release is the node's own statement as
+	// it leaves the log's partition, and what stops such a node writing here
+	// is that it no longer serves the partition ([statelog.Holding]) — refused
+	// as that, not as a removal from the fleet this node never suffered.
 	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 		SELECT from_position, readmitted_position
-		FROM pages_evictions WHERE node_id = ?`, f.nodeID).Scan(&from, &readmitted)
+		FROM pages_evictions WHERE node_id = ? AND kind = ?`,
+			f.nodeID, string(statelog.EvictionKindEviction)).Scan(&from, &readmitted)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -257,15 +263,20 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 			return nil
 		}
 		var from, readmitted sql.NullInt64
+		var kind string
 		err := tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position
-			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted)
+			SELECT from_position, readmitted_position, kind
+			FROM pages_evictions WHERE node_id = ?`, writer).Scan(&from, &readmitted, &kind)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
 			return fmt.Errorf("pages: read the eviction gate for node %s: %w",
 				writer, err)
+		}
+		gate, err := gateKind(kind)
+		if err != nil {
+			return err
 		}
 		// THE APPLIER'S WINDOW, spelled as [Applier.Gated] spells it: the
 		// two must agree, and the same two comparisons are what makes that
@@ -274,7 +285,9 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		evicted := from.Valid && at > from.Int64
 		back := readmitted.Valid && at >= readmitted.Int64
 		if evicted && !back {
-			reason, gated = statelog.ReasonEvicted, true
+			// UNDER THE GATE THAT HOLDS THE RECORD: an eviction or the
+			// writer's own release, dropped alike and told apart.
+			reason, gated = gate.Reason(), true
 		}
 		return nil
 	})

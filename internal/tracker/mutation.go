@@ -30,11 +30,13 @@ import (
 //     the purged task's own records wrote beside its rows — its history,
 //     the notices it routed, its turn records and its dependency mirror
 //     ([rewriteVersion]).
+//   - 5: a node's RELEASE of the log ([OpRelease]), an eviction-kind record
+//     whose apply records the gate as the node's own ([releaseVersion]).
 //
 // A record is WRITTEN at the lowest version a reader can apply without
 // losing anything it says, never simply at this constant — see
 // [recordVersionOf] for why that matters to a node still on the older build.
-const RecordVersion = 4
+const RecordVersion = 5
 
 // baseRecordVersion is the version a record whose shape no later version
 // changed is written at: 1, which every build there has ever been reads.
@@ -80,6 +82,21 @@ const fileVersion = 3
 // cannot apply, and neither of them is applying it the old way.
 const rewriteVersion = 4
 
+// releaseVersion is the version a node's RELEASE of the log is written at
+// ([OpRelease]). See [recordVersionOf].
+//
+// # Why a release raises the record where its shape does not
+//
+// A release carries exactly the bytes an eviction does, under the eviction's
+// own kind, so a build from before it would decode it without complaint and
+// apply it as an eviction: the same gate, and a row that names the wrong gate
+// — which every newer node holds as a release, so the rows the identity claim
+// says are identical would differ once that build migrated. Written at this
+// version, that build knows it for a gate by its kind ([Domain.InstallsGate])
+// and HALTS at it rather than apply it the old way — the answer
+// [GateRecordVersion] gives every change to what a gate's apply does.
+const releaseVersion = 5
+
 // recordVersionOf is the version a record carrying payload is written at: the
 // lowest whose reader applies it without losing anything.
 //
@@ -111,6 +128,9 @@ const rewriteVersion = 4
 // then retained, holding back its project on that node until it upgrades; the
 // purge is a gate, so that node halts rather than defer it ([GateRecordVersion]
 // says why a gate is raised only when its apply changes).
+//
+// A RELEASE IS WRITTEN AT 5 for the purge's reason: it is an eviction's bytes
+// with its own apply ([releaseVersion]).
 func recordVersionOf(payload any) int {
 	switch p := payload.(type) {
 	case TaskPatch:
@@ -121,6 +141,8 @@ func recordVersionOf(payload any) int {
 		return fileVersion
 	case RankOrder, purgeMutation:
 		return rewriteVersion
+	case releaseMutation:
+		return releaseVersion
 	}
 	return baseRecordVersion
 }
@@ -165,14 +187,22 @@ const (
 	// OpEviction is a node's eviction or readmission.
 	OpEviction OpKind = "eviction"
 
+	// OpRelease is a node's RELEASE of the log: its own statement, as it
+	// leaves the log's partition, that nothing it publishes on the log
+	// afterwards applies anywhere. Published under the eviction's kind and
+	// subject, so it is a node gate and installs an apply gate as an
+	// eviction does, and a readmission lifts it the same way
+	// ([statelog.EvictionKindRelease]).
+	OpRelease OpKind = "release"
+
 	// OpBarrier is the read index's append, which writes nothing anywhere.
 	OpBarrier OpKind = "barrier"
 )
 
-// OpKinds are the nine, in the order they are documented.
+// OpKinds are the ten, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpTombstone, OpRestore, OpPurge,
-	OpTurn, OpGeneration, OpEviction, OpBarrier,
+	OpTurn, OpGeneration, OpEviction, OpRelease, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

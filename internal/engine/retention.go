@@ -735,6 +735,12 @@ type evictionLister interface {
 var (
 	_ evictionLister = tracker.Domain{}
 	_ evictionLister = pages.Domain{}
+
+	// AND BOTH READ THEIR GATE RECORDS OFF THE LOG — an eviction, a release
+	// and the readmission of either — which [stateLog.startLog] refuses a
+	// registered identity-claiming domain for lacking.
+	_ statelog.EvictionProbe = tracker.Domain{}
+	_ statelog.EvictionProbe = pages.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.

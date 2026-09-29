@@ -300,6 +300,11 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			return only(statelog.GateOtherNode, "this node is evicted itself and "+
 				"writes nothing to any log: run the gesture through a node the fleet "+
 				"still counts, under the same operation id")
+		case statelog.ReasonReleased:
+			return only(statelog.GateOtherNode, fmt.Sprintf("this node released %s "+
+				"when it left that log's partition, so nothing it writes there applies: "+
+				"run the gesture through a node that serves the partition, under the "+
+				"same operation id", d.Stream))
 		case statelog.ReasonWrongStream:
 			return only(statelog.GateReanchor, fmt.Sprintf("the log under %s's name "+
 				"is not the one this node's rows were derived from: re-anchor it "+

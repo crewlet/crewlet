@@ -45,8 +45,18 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.
 			EncodeGate: encodeSuiteGate,
+			// AND A NODE'S OWN RELEASE of the log as it leaves the log's
+			// partition, which the same table records as its own gate.
+			EncodeRelease: encodeSuiteRelease,
 		}
 	})
+}
+
+// encodeSuiteRelease is a node's release of this log, written by the node
+// itself as it leaves the log's partition.
+func encodeSuiteRelease(node string) ([]byte, error) {
+	return gateSuiteRecord(pages.EvictionSubject(node), pages.OpRelease, node,
+		"suite-release-"+node, gateSuiteEviction(node, false))
 }
 
 // encodeSuiteGate is the eviction record a peer's store publishes onto this
@@ -226,6 +236,10 @@ func TestThePagesGateReaderKeepsTheSharedRule(t *testing.T) {
 			Readmit: func(node, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpEviction,
 					writer, opID, gateSuiteEviction(node, true))
+			},
+			Release: func(node, opID string) ([]byte, error) {
+				return gateSuiteRecord(pages.EvictionSubject(node), pages.OpRelease,
+					node, opID, gateSuiteEviction(node, false))
 			},
 		}
 	})

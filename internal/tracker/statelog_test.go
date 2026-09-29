@@ -41,12 +41,20 @@ func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 			// publishes every kind it arbitrates — an anchor row for a
 			// kind nothing writes is a row nothing ever reads — so a
 			// partial list here would report the FIXTURE as the fault.
-			Kinds:      suiteKinds(),
-			Rows:       tracker.NewRows,
-			Write:      suiteWrite,
-			EncodeGate: encodeSuiteGate,
+			Kinds:         suiteKinds(),
+			Rows:          tracker.NewRows,
+			Write:         suiteWrite,
+			EncodeGate:    encodeSuiteGate,
+			EncodeRelease: encodeSuiteRelease,
 		}
 	})
+}
+
+// encodeSuiteRelease is a node's release of this log, written by the node
+// itself as it leaves the log's partition.
+func encodeSuiteRelease(node string) ([]byte, error) {
+	return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpRelease,
+		node, "suite-release-"+node, gateSuiteEviction(node, false))
 }
 
 // encodeSuiteGate is the eviction record a peer's writer publishes onto this
@@ -206,6 +214,10 @@ func TestTheTrackersGateReaderKeepsTheSharedRule(t *testing.T) {
 			Readmit: func(node, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpEviction,
 					writer, opID, gateSuiteEviction(node, true))
+			},
+			Release: func(node, opID string) ([]byte, error) {
+				return gateSuiteRecord(tracker.EvictionSubject(node), tracker.OpRelease,
+					node, opID, gateSuiteEviction(node, false))
 			},
 		}
 	})

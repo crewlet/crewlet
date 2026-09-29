@@ -18,11 +18,13 @@ import (
 //   - 1: every shape this domain has.
 //   - 2: a container's settings carry the chart epoch they were written from
 //     ([ContainerPayload.ChartEpoch]).
+//   - 3: a node's RELEASE of the log ([OpRelease]), an eviction-kind record
+//     whose apply records the gate as the node's own ([releaseVersion]).
 //
 // A record is WRITTEN at the lowest version a reader can apply without
 // losing anything it says, never simply at this constant — see
 // [recordVersionOf] for why that matters to a node still on the older build.
-const RecordVersion = 2
+const RecordVersion = 3
 
 // baseRecordVersion is the version a record whose shape no later version
 // changed is written at: 1, which every build there has ever been reads.
@@ -40,15 +42,33 @@ const baseRecordVersion = 1
 // since they began carrying the chart epoch. See [recordVersionOf].
 const containerEpochVersion = 2
 
-// GateRecordVersion is the version every gate-installing record carries, FOR
-// EVER.
+// GateRecordVersion is the SHAPE version every gate-installing record's payload
+// carries, FOR EVER, and the record version an eviction and a purge are written
+// at.
 //
-// An eviction whose version this build could not read would be deferred, and a
-// deferred gate leaves this node's own gate table empty while it goes on
-// applying every record the evicted node appends — with no inverse that
-// repairs it. So the two gate kinds are pinned at 1 and never evolve: a field
-// they need that they cannot have is a field that belongs somewhere else.
+// A gate record this build cannot read is never deferred: the framework knows
+// it for a gate from its envelope ([Domain.InstallsGate]) and HALTS the applier
+// at it, because a deferred gate would leave this node's own gate table empty
+// while it went on applying every record the evicted node appends, with no
+// inverse that repairs it — and a halt takes the node out of the fleet until it
+// is upgraded. So no mere change of SHAPE may raise a gate record's version:
+// the payload grows only by addition, and every build reads every one.
+//
+// WHAT DOES RAISE IT is a change to what a gate's APPLY does, which no older
+// build can honour — applied the old way it leaves rows every newer node does
+// not hold. Such a record is written at a record version above every build
+// that predates it, so that build halts there: the release at
+// [releaseVersion]. It keeps the eviction's kind so an older build still knows
+// it for a gate; one under a kind that build did not know would not be a gate
+// to it at all.
 const GateRecordVersion = 1
+
+// releaseVersion is the version a node's RELEASE of the log is written at
+// ([OpRelease]). A release carries an eviction's bytes under the eviction's
+// kind, so a build from before it would read it as an eviction — the same
+// gate, recorded as the wrong one, which every newer node holds as a release.
+// At this version that build halts at it instead ([GateRecordVersion]).
+const releaseVersion = 3
 
 // OpKind is what a record does.
 type OpKind string
@@ -99,6 +119,14 @@ const (
 	// OpEviction is a node's eviction from this log, or its readmission.
 	OpEviction OpKind = "eviction"
 
+	// OpRelease is a node's RELEASE of this log: its own statement, as it
+	// leaves the log's partition, that nothing it publishes here afterwards
+	// applies anywhere. Under the eviction's kind and subject and carrying
+	// the eviction's payload, so it is a node gate and installs an apply
+	// gate as an eviction does, and a readmission lifts it the same way
+	// ([statelog.EvictionKindRelease]).
+	OpRelease OpKind = "release"
+
 	// OpGeneration is a reanchor's record.
 	OpGeneration OpKind = "generation"
 
@@ -106,10 +134,10 @@ const (
 	OpBarrier OpKind = "barrier"
 )
 
-// OpKinds are the ten, in the order they are documented.
+// OpKinds are the eleven, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpRename, OpRetitle, OpTombstone, OpRestore, OpPurge,
-	OpEviction, OpGeneration, OpBarrier,
+	OpEviction, OpRelease, OpGeneration, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.

@@ -16,7 +16,8 @@ import (
 
 // GateCandidate is a domain whose applier installs the two gates a strict
 // domain has — a permanent DELETION MARKER on one object kind, and a node's
-// EVICTION WINDOW — together with the publisher-side reader,
+// EVICTION WINDOW, opened by an operator's eviction or by the node's own
+// release of the log — together with the publisher-side reader,
 // [statelog.Gates], that has to report them.
 //
 // A CANDIDATE OF ITS OWN rather than more fields on [Candidate], because not
@@ -38,12 +39,14 @@ type GateCandidate struct {
 	// writer and the operation id given. Create brings an object of Kind
 	// into existence; Write is an ordinary change to one; Purge destroys
 	// one and writes its marker; Evict and Readmit are the inverse pair on
-	// a node.
+	// a node; Release is the node's own release of the log, which the node
+	// itself writes.
 	Create  func(id, writer, opID string) ([]byte, error)
 	Write   func(id, writer, opID string) ([]byte, error)
 	Purge   func(id, writer, opID string) ([]byte, error)
 	Evict   func(node, writer, opID string) ([]byte, error)
 	Readmit func(node, writer, opID string) ([]byte, error)
+	Release func(node, opID string) ([]byte, error)
 }
 
 // GateFactory builds a fresh gate candidate for one case.
@@ -62,6 +65,9 @@ type GateFactory func(t *testing.T) GateCandidate
 // one of them to be reported. This package has no control domain that
 // installs gates, so the candidate is its own control: a family that passes
 // a reader answering the eviction first certifies nothing about precedence.
+// And it bends the candidate's own APPLIER the way the release gate could be
+// dropped — the writer's records after its release applied as though it had
+// never left — and requires that reported too.
 //
 // And it holds the domain's NODE-GATE answer to the same records
 // ([GateNodeGates]): its eviction and readmission are node gates, and its
@@ -92,7 +98,22 @@ func RunGates(t *testing.T, new GateFactory) {
 			})
 		}
 	})
-	t.Run("only a node's eviction and readmission are node gates", func(t *testing.T) {
+	t.Run("the cases catch an applier that breaks the rule", func(t *testing.T) {
+		for name, bend := range applierLiars {
+			t.Run(name, func(t *testing.T) {
+				err := GateAgreement(t, func(t *testing.T) GateCandidate {
+					c := new(t)
+					c.Applier = bend(c.Applier)
+					return c
+				})
+				if err == nil {
+					t.Errorf("an applier that %s passed every gate case — the "+
+						"family cannot tell it from one that keeps the rule", name)
+				}
+			})
+		}
+	})
+	t.Run("only a node's eviction, release and readmission are node gates", func(t *testing.T) {
 		if err := GateNodeGates(new(t)); err != nil {
 			t.Fatal(err)
 		}
@@ -124,13 +145,15 @@ type gateRecord struct {
 }
 
 // The ids the gate cases use. obj-1 is purged AFTER an evicted writer's
-// record on it, obj-3 BEFORE one, and obj-2 never.
+// record on it, obj-3 BEFORE one, and obj-2 never. node-c is the node that
+// releases the log.
 const (
-	gateObj1    = "gates-obj-1"
-	gateObj2    = "gates-obj-2"
-	gateObj3    = "gates-obj-3"
-	gateCounted = "gates-node-a"
-	gateEvicted = "gates-node-b"
+	gateObj1     = "gates-obj-1"
+	gateObj2     = "gates-obj-2"
+	gateObj3     = "gates-obj-3"
+	gateCounted  = "gates-node-a"
+	gateEvicted  = "gates-node-b"
+	gateReleased = "gates-node-c"
 
 	// ungatedKind is a subject kind no domain declares, so no deletion
 	// marker covers it: a record of it is asked about its writer only.
@@ -138,16 +161,21 @@ const (
 )
 
 var (
-	dropsEvicted = []statelog.Reason{statelog.ReasonEvicted}
-	dropsDeleted = []statelog.Reason{statelog.ReasonDeleted}
-	dropsBoth    = []statelog.Reason{statelog.ReasonEvicted, statelog.ReasonDeleted}
+	dropsEvicted        = []statelog.Reason{statelog.ReasonEvicted}
+	dropsDeleted        = []statelog.Reason{statelog.ReasonDeleted}
+	dropsBoth           = []statelog.Reason{statelog.ReasonEvicted, statelog.ReasonDeleted}
+	dropsReleased       = []statelog.Reason{statelog.ReasonReleased}
+	dropsReleasedPurged = []statelog.Reason{statelog.ReasonReleased, statelog.ReasonDeleted}
 )
 
-// gateHistory is the one sequence every gate case reads, at positions 1..12.
+// gateHistory is the one sequence every gate case reads, at positions 1..17.
 //
 // Each gate is held ALONE on some record and BOTH on another, the purge that
 // makes obj-1's marker lands ABOVE a record the eviction already dropped,
-// and the eviction window has records on both of its edges.
+// and the eviction window has records on both of its edges. Then node-c
+// RELEASES the log — the node's own gate record — and writes after it, a
+// write it had in flight while it left: dropped, alone and beside the
+// deletion marker, until a readmission takes it back.
 var gateHistory = []gateRecord{
 	{label: "create obj-1", body: func(c GateCandidate) ([]byte, error) {
 		return c.Create(gateObj1, gateCounted, "gates-create-1")
@@ -188,6 +216,23 @@ var gateHistory = []gateRecord{
 	}},
 	{label: "readmitted node-b writes obj-2", body: func(c GateCandidate) ([]byte, error) { // 12
 		return c.Write(gateObj2, gateEvicted, "gates-back")
+	}},
+	{label: "node-c releases the log", body: func(c GateCandidate) ([]byte, error) { // 13
+		return c.Release(gateReleased, "gates-release")
+	}},
+	{label: "node-c writes obj-2 after its release", drops: dropsReleased, // 14
+		body: func(c GateCandidate) ([]byte, error) {
+			return c.Write(gateObj2, gateReleased, "gates-released")
+		}},
+	{label: "node-c writes the purged obj-3 after its release", drops: dropsReleasedPurged, // 15
+		body: func(c GateCandidate) ([]byte, error) {
+			return c.Write(gateObj3, gateReleased, "gates-released-purged")
+		}},
+	{label: "readmit node-c", body: func(c GateCandidate) ([]byte, error) { // 16
+		return c.Readmit(gateReleased, gateCounted, "gates-readmit-released")
+	}},
+	{label: "readmitted node-c writes obj-2", body: func(c GateCandidate) ([]byte, error) { // 17
+		return c.Write(gateObj2, gateReleased, "gates-rejoined")
 	}},
 }
 
@@ -242,6 +287,24 @@ var gateQuestions = []gateQuestion{
 		id: gateObj2, writer: gateCounted, opID: "gates-counted", seq: 5},
 	{name: "a kind the deletion gate does not cover",
 		kind: ungatedKind, id: gateObj3, writer: gateCounted, opID: "gates-other-kind", seq: 10},
+	// A RELEASE IS THE SAME WINDOW, reported as the node's own gate: the
+	// write it had in flight when it left is dropped, and a caller is told
+	// the node left rather than that the fleet put it out.
+	{name: "a record only the writer's release drops",
+		id: gateObj2, writer: gateReleased, opID: "gates-released", seq: 14,
+		want: statelog.ReasonReleased},
+	{name: "a released writer's record under a kind no marker covers",
+		kind: ungatedKind, id: gateObj2, writer: gateReleased, opID: "gates-released-other", seq: 14,
+		want: statelog.ReasonReleased},
+	{name: "a record the release and the deletion both drop",
+		id: gateObj3, writer: gateReleased, opID: "gates-released-purged", seq: 15,
+		want: statelog.ReasonDeleted},
+	{name: "a record at the release's own position",
+		id: gateObj2, writer: gateReleased, opID: "gates-at-release", seq: 13},
+	{name: "a record at the released writer's readmission",
+		id: gateObj2, writer: gateReleased, opID: "gates-at-rejoin", seq: 16},
+	{name: "a readmitted released writer's record",
+		id: gateObj2, writer: gateReleased, opID: "gates-rejoined", seq: 17},
 }
 
 // GateAgreement applies the gate history through the candidate's own applier
@@ -256,7 +319,7 @@ func GateAgreement(t *testing.T, new GateFactory) error {
 	t.Helper()
 	c := new(t)
 	if c.Reader == nil || c.Create == nil || c.Write == nil || c.Purge == nil ||
-		c.Evict == nil || c.Readmit == nil || c.Kind == "" {
+		c.Evict == nil || c.Readmit == nil || c.Release == nil || c.Kind == "" {
 		t.Fatal("the gate candidate leaves a hook or its Kind out, so the gate " +
 			"cases cannot build the history they read — FATAL rather than a " +
 			"skip, for the reason requireKinds gives")
@@ -423,6 +486,26 @@ var gateLiars = map[string]func(statelog.Gates) statelog.Gates{
 			return evictionOnly(ctx, g, subj, writer, opID, next)
 		}}
 	},
+	"reports a release as an eviction": func(g statelog.Gates) statelog.Gates {
+		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
+			p statelog.Position) (statelog.Reason, bool, error) {
+			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p)
+			if r == statelog.ReasonReleased {
+				r = statelog.ReasonEvicted
+			}
+			return r, ok, err
+		}}
+	},
+	"reads no release": func(g statelog.Gates) statelog.Gates {
+		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
+			p statelog.Position) (statelog.Reason, bool, error) {
+			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p)
+			if r == statelog.ReasonReleased {
+				return "", false, err
+			}
+			return r, ok, err
+		}}
+	},
 	"keeps the window open at the readmission's position": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
 			p statelog.Position) (statelog.Reason, bool, error) {
@@ -441,6 +524,41 @@ var gateLiars = map[string]func(statelog.Gates) statelog.Gates{
 func evictionOnly(ctx context.Context, g statelog.Gates, subj statelog.Subject,
 	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
 	return g.GatedAt(ctx, statelog.Subject{Kind: ungatedKind, ID: subj.ID}, writer, opID, p)
+}
+
+// applierLiars are the appliers the gate cases must catch, each built from the
+// candidate's honest one.
+var applierLiars = map[string]func(statelog.Applier) statelog.Applier{
+	// THE RELEASE GATE DROPPED: a leaving node's in-flight write that lands
+	// after its release applies as though the node had never left — on
+	// every holder alike, so nothing diverges and nothing looks wrong, and
+	// the write the node was told was refused is in every copy's rows.
+	//
+	// Every other gate is kept: where the release answered, the record is
+	// asked again with no writer, which is the deletion marker alone — so
+	// what the family sees is the release, and only the release, missing.
+	"drops no record for its writer's release": func(a statelog.Applier) statelog.Applier {
+		return applierLiar{a, func(ctx context.Context, tx *sql.Tx,
+			rec statelog.Record) (statelog.Reason, bool, error) {
+			r, ok, err := a.Gated(ctx, tx, rec)
+			if err != nil || r != statelog.ReasonReleased {
+				return r, ok, err
+			}
+			anonymous := rec
+			anonymous.Writer = ""
+			return a.Gated(ctx, tx, anonymous)
+		}}
+	},
+}
+
+// applierLiar is an applier whose Gated is replaced.
+type applierLiar struct {
+	statelog.Applier
+	gated func(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error)
+}
+
+func (l applierLiar) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
+	return l.gated(ctx, tx, rec)
 }
 
 // liar is a reader whose GatedAt is replaced.

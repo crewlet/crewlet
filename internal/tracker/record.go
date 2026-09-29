@@ -564,7 +564,8 @@ type Placement struct {
 	Rank Rank   `json:"rank"`
 }
 
-// Eviction is a node's eviction or its readmission.
+// Eviction is a node's eviction, its release of the log ([OpRelease]) or the
+// readmission that lifts either.
 //
 // ITS SHAPE VERSION IS PINNED AT ONE FROM THE FIRST RELEASE AND FOR EVER,
 // because this record INSTALLS A GATE: a build that cannot decode a gate must
@@ -582,6 +583,14 @@ type Eviction struct {
 
 	Extra map[string]json.RawMessage `json:"-"`
 }
+
+// releaseMutation is a node's release of the log, and its type is what
+// [recordVersionOf] raises the record to [releaseVersion] by.
+//
+// IT ENCODES EXACTLY AS AN [Eviction] — the embedded struct's fields and
+// nothing of its own — so the applier decodes both into one shape, and the op
+// on the envelope is what says which gate the row records.
+type releaseMutation struct{ Eviction }
 
 // Generation is a reanchor's record, create-only at an expectation of zero.
 //

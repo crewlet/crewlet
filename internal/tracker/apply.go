@@ -65,10 +65,11 @@ func (a *Applier) Committed(context.Context) {}
 //     had one. It is FIRST and it touches no table: a node draining a log
 //     full of a retired kind should not also issue two queries per record it
 //     is certain to drop.
-//  2. THE EVICTION GATE. A record written by a node the fleet evicted before
-//     the record's own position is dropped everywhere. It depends on nothing
-//     but the log's own order, which is what makes it the fence that holds
-//     when coordination cannot be reached at all.
+//  2. THE EVICTION GATE. A record written by a node the fleet evicted — or
+//     that released this log as it left the log's partition — before the
+//     record's own position is dropped everywhere. It depends on nothing but
+//     the log's own order, which is what makes it the fence that holds when
+//     coordination cannot be reached at all.
 //  3. THE DELETION GATE. A record about a task a purge destroyed applies
 //     nowhere, for ever — otherwise a redelivery months later would resurrect
 //     rows an operator deliberately removed.
@@ -82,26 +83,36 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 
 	if rec.Writer != "" {
 		var from, readmitted sql.NullInt64
+		var kind string
 		err := tx.QueryRowContext(ctx, `
-			SELECT from_position, readmitted_position
+			SELECT from_position, readmitted_position, kind
 			FROM tracker_evictions WHERE node_id = ? AND log_stream = ?`,
-			rec.Writer, rec.Position.Stream).Scan(&from, &readmitted)
+			rec.Writer, rec.Position.Stream).Scan(&from, &readmitted, &kind)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
 			return "", false, fmt.Errorf("tracker: read the eviction gate for "+
 				"node %s: %w", rec.Writer, err)
 		default:
+			gate, err := gateKind(kind)
+			if err != nil {
+				return "", false, err
+			}
 			at := rec.Position.Packed()
 			// THE WINDOW IS HALF-OPEN AT BOTH ENDS, and both ends
 			// matter: a record at or below the eviction's own position
 			// was written while the node was still counted, and one at
 			// or above a readmission is written by a node the fleet has
 			// taken back.
+			//
+			// AND A RELEASE IS THE SAME WINDOW: the node's own statement
+			// that it left this log's partition, so a write it had in
+			// flight that landed after it is dropped here as on every
+			// holder — named `released` rather than `evicted`.
 			evicted := from.Valid && at > from.Int64
 			back := readmitted.Valid && at >= readmitted.Int64
 			if evicted && !back {
-				return statelog.ReasonEvicted, true, nil
+				return gate.Reason(), true, nil
 			}
 		}
 	}
