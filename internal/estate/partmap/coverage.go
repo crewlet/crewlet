@@ -1,6 +1,7 @@
 package partmap
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/membership"
@@ -17,6 +18,15 @@ import (
 // words wherever they ask.
 const WholeEstate = "layout 0: every data node holds the whole estate, so there " +
 	"is no partition to place, move or hold a node for"
+
+// Unplaced is what every surface says of a fleet at a partitioned layout whose
+// first estate map has not been written: nothing is placed yet, which — unlike
+// [WholeEstate] — is a wait rather than a fact about the fleet.
+func Unplaced(layout int) string {
+	return fmt.Sprintf("layout %d: no estate map has been written yet, so no partition "+
+		"is placed — the estate-map duty writes the first once the layout's logs exist "+
+		"and a company and a data node are there to place them on", layout)
+}
 
 // Able is every node whose live estate lease counts as PRESENT AND HEALTHY at a
 // layout — the reading the map's maintainer takes of each lease

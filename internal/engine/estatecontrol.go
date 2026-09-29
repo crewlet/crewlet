@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -32,7 +34,8 @@ import (
 // [partmap.ErrNoMap] (no estate map), [partmap.ErrUnknownPartition],
 // [partmap.ErrNotAHolder] and [partmap.ErrNowhereToMove] for a move, and
 // internal/membership's refusals for the rest — ErrRemovedMember tested
-// before ErrUnknownMember, which it wraps. A store that did not answer is
+// before ErrUnknownMember, which it wraps. A hold or a release confirmed for
+// another map is [ErrEstateOtherMap]; a store that did not answer is
 // [ErrEstateUnavailable], and a map this build cannot rewrite
 // [ErrEstateNewerMap].
 //
@@ -78,10 +81,7 @@ func noEstateMap(running statelog.Layout) error {
 	if running.Number == 0 {
 		return ErrEstateWhole
 	}
-	return fmt.Errorf("%w: this node runs layout %d and no estate map has been written yet, "+
-		"so no partition is placed; the estate-map duty writes the first once the layout's "+
-		"logs exist and a company and a data node are there to place them on",
-		partmap.ErrNoMap, running.Number)
+	return fmt.Errorf("%w: %s", partmap.ErrNoMap, partmap.Unplaced(running.Number))
 }
 
 // estateMapStore is what the gestures need from the coordination store.
@@ -123,16 +123,52 @@ func (c *EstateControl) In(ctx context.Context, node, by string) (EstateGesture,
 }
 
 // Hold holds the map for d, at most internal/membership's MaxHold: no member
-// is removed for absence until it expires or is released.
-func (c *EstateControl) Hold(ctx context.Context, d time.Duration, by, reason string) (EstateGesture, error) {
+// is removed for absence until it expires or is released. generation is the
+// map the operator confirmed it for ([ErrEstateOtherMap]).
+func (c *EstateControl) Hold(ctx context.Context, generation uuid.UUID, d time.Duration,
+	by, reason string) (EstateGesture, error) {
+
 	return c.apply(ctx, "hold", func(s partmap.MapState) (partmap.MapState, error) {
+		if err := sameEstateMap(s, generation); err != nil {
+			return s, err
+		}
 		return partmap.HoldFor(s, d, by, reason, c.now())
 	}, "for", d.String(), "by", by, "reason", reason)
 }
 
-// Release ends a hold.
-func (c *EstateControl) Release(ctx context.Context, by string) (EstateGesture, error) {
-	return c.apply(ctx, "release", partmap.Release, "by", by)
+// Release ends a hold. generation is the map the operator confirmed it for
+// ([ErrEstateOtherMap]).
+func (c *EstateControl) Release(ctx context.Context, generation uuid.UUID, by string) (EstateGesture, error) {
+	return c.apply(ctx, "release", func(s partmap.MapState) (partmap.MapState, error) {
+		if err := sameEstateMap(s, generation); err != nil {
+			return s, err
+		}
+		return partmap.Release(s)
+	}, "by", by)
+}
+
+// ErrEstateOtherMap is a hold or a release confirmed for a map other than the
+// stored one: another fleet's — a gesture sent through the wrong node — or this
+// fleet's before its map was written again from nothing.
+//
+// THE TWO GESTURES THAT NAME NO NODE ARE CONFIRMED BY THE MAP'S GENERATION,
+// where every other gesture repeats the node it moves: each acts on the whole
+// map — a hold keeps every gone member's partitions a copy short for as long
+// as it says, and a release lets the maintainer remove them at its next tick —
+// so the confirmation is what says the operator looked at THIS map. Checked
+// INSIDE the compare-and-set, on the record the gesture is applied to, rather
+// than against a read beside it.
+var ErrEstateOtherMap = errors.New("engine: the estate map is not the one the gesture was " +
+	"confirmed for")
+
+// sameEstateMap refuses a gesture confirmed for a generation the stored map is
+// not.
+func sameEstateMap(s partmap.MapState, generation uuid.UUID) error {
+	if s.Map.Generation != generation {
+		return fmt.Errorf("%w: it was confirmed for generation %s, and the stored map is "+
+			"generation %s", ErrEstateOtherMap, generation, s.Map.Generation)
+	}
+	return nil
 }
 
 // Move moves partition p off node: p's copy there is rebuilt on another member

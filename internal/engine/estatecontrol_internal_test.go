@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
@@ -70,8 +72,8 @@ func TestUnderLayoutZeroEveryEstateGestureSaysThereIsNoMap(t *testing.T) {
 	for name, gesture := range map[string]func() (EstateGesture, error){
 		"out":     func() (EstateGesture, error) { return c.Out(ctx, "a", "ops", "") },
 		"in":      func() (EstateGesture, error) { return c.In(ctx, "a", "ops") },
-		"hold":    func() (EstateGesture, error) { return c.Hold(ctx, time.Hour, "ops", "") },
-		"release": func() (EstateGesture, error) { return c.Release(ctx, "ops") },
+		"hold":    func() (EstateGesture, error) { return c.Hold(ctx, uuid.New(), time.Hour, "ops", "") },
+		"release": func() (EstateGesture, error) { return c.Release(ctx, uuid.New(), "ops") },
 		"move":    func() (EstateGesture, error) { return c.Move(ctx, p, "a", "ops", "") },
 		"cancel":  func() (EstateGesture, error) { return c.CancelMove(ctx, p, "a", "ops") },
 	} {
@@ -193,6 +195,42 @@ func TestAnEstateGestureLandsInTheStoredMap(t *testing.T) {
 	tightState, _, _, _ := tight.State(ctx)
 	if _, err := tight.Move(ctx, p, tightState.Map.HoldersOf(p)[0].Node, "ops", ""); !errors.Is(err, partmap.ErrNowhereToMove) {
 		t.Errorf("a move with no member to rebuild on = %v, want ErrNowhereToMove", err)
+	}
+}
+
+// A HOLD AND A RELEASE LAND ONLY ON THE MAP THEY WERE CONFIRMED FOR: confirmed
+// for another generation — another fleet's map, or this one's before it was
+// written again — each is refused by name and writes nothing, and confirmed for
+// the stored one each lands.
+func TestAHoldAndAReleaseLandOnlyOnTheMapTheyWereConfirmedFor(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := storedEstateMap(t, "a", "b", "c")
+	c := estateControlOver(store)
+	state, version, _, err := c.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := uuid.New()
+	for name, gesture := range map[string]func() (EstateGesture, error){
+		"hold":    func() (EstateGesture, error) { return c.Hold(ctx, other, time.Hour, "ops", "") },
+		"release": func() (EstateGesture, error) { return c.Release(ctx, other, "ops") },
+	} {
+		if got, err := gesture(); !errors.Is(err, ErrEstateOtherMap) || got.Landed {
+			t.Errorf("%s confirmed for another map = (landed %v, %v), want ErrEstateOtherMap",
+				name, got.Landed, err)
+		}
+	}
+	if _, after, _, _ := c.State(ctx); after != version {
+		t.Fatalf("a refused gesture moved the map's version from %d to %d", version, after)
+	}
+	held, err := c.Hold(ctx, state.Map.Generation, time.Hour, "ops", "rack work")
+	if err != nil || !held.Landed || held.State.Hold == nil {
+		t.Fatalf("a hold confirmed for the stored map = (%+v, %v), want it held", held, err)
+	}
+	released, err := c.Release(ctx, state.Map.Generation, "ops")
+	if err != nil || !released.Landed || released.State.Hold != nil {
+		t.Fatalf("a release confirmed for the stored map = (%+v, %v), want no hold", released, err)
 	}
 }
 
