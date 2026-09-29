@@ -98,6 +98,17 @@ var alarmMeaning = map[Kind]string{
 	KindObjectsUnhealthy: "This node's object store has failed, or its volume " +
 		"is full. A failed store is taken out of the placement map after the " +
 		"absence grace; a full one keeps serving while writes go elsewhere.",
+	KindEstateUnserved: "A partition of the estate map has no copy that can answer: every " +
+		"holder the map lists serving it is on a node the map counts absent or unhealthy, " +
+		"or it has none. Every read and write routed to it is refused.",
+	KindEstateShort: "A partition has fewer copies that can answer than its target has, and " +
+		"this node has seen it so for longer than the grace after which the map replaces a " +
+		"member it counts gone.",
+	KindEstateMoveStalled: "A holder has been joining a partition for longer than the " +
+		"rejoin window a join is sized against, as this node has seen it.",
+	KindEstateViewStale: "This node's view of the estate map, of the estate leases, or of " +
+		"the presence it routes the estate by has not been confirmed within the staleness " +
+		"bound every cached coordination fact is held to.",
 	// The two marks are the store's own, named once in internal/objstore/disk.
 	KindObjectsNearFull: fmt.Sprintf("This node's object store volume is past "+
 		"%.0f%% used. At %.0f%% it refuses every new chunk.",

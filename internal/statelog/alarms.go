@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 )
 
@@ -243,6 +244,10 @@ const (
 	KindObjectsDegraded     Kind = "objects_degraded"
 	KindObjectsUnhealthy    Kind = "objects_store_unhealthy"
 	KindObjectsNearFull     Kind = "objects_store_nearfull"
+	KindEstateUnserved      Kind = "estate_partition_unserved"
+	KindEstateShort         Kind = "estate_under_replicated"
+	KindEstateMoveStalled   Kind = "estate_move_stalled"
+	KindEstateViewStale     Kind = "estate_view_stale"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -418,6 +423,42 @@ type Reading struct {
 	ObjectsHealth       disk.HealthState
 	ObjectsHealthDetail string
 	ObjectsUsedPercent  float64
+
+	// EstateUnserved is how many partitions of the estate map no copy can
+	// answer for — no holder the map lists serving whose node it counts
+	// present and healthy — as this node's view of the map sees them now,
+	// and EstateUnservedWhich names them, the first few.
+	EstateUnserved      int
+	EstateUnservedWhich string
+
+	// EstateShort is how many partitions have fewer copies that can answer
+	// than their target has; EstateShortFor how long this node has seen the
+	// one short longest without a break, and EstateShortWhich names it.
+	// Measured by this node's own watch of the map, a LOWER BOUND: the
+	// record holds no time a node could compare its clock with, and a node
+	// that restarted counts from its restart.
+	EstateShort      int
+	EstateShortFor   time.Duration
+	EstateShortWhich string
+
+	// EstateJoiningFor is how long this node has seen the oldest join in
+	// flight without a break, measured as EstateShortFor is, and
+	// EstateJoiningWhich names it. EstateJoinBudget is the operator's
+	// rejoin window, the budget a join is modelled against — SUPPLIED
+	// rather than named here, because it is the node's configuration
+	// (`stream.tracker_retention.rejoin_window`); zero is a node running no
+	// estate view, which has no join to judge.
+	EstateJoiningFor   time.Duration
+	EstateJoiningWhich string
+	EstateJoinBudget   time.Duration
+
+	// EstateViewAge is how long ago this node's estate view was confirmed,
+	// at its oldest half — the estate map, the estate leases, or the
+	// presence layout 0 is routed by — and EstateViewStale names that half.
+	// A POINTER, for HeadroomFraction's reason: nil is a node running no
+	// estate view, and a zero age is a view confirmed this instant.
+	EstateViewAge   *time.Duration
+	EstateViewStale string
 }
 
 // Alarm is one condition currently true on this node.
@@ -854,6 +895,78 @@ var table = []rule{
 			"this node's store.objects.weight. Past the full mark this node " +
 			"refuses every new chunk and writes go to the other members, which " +
 			"fills them in turn.",
+	},
+	{
+		// THE EVENT ITSELF, with no threshold: a partition no copy can
+		// answer for refuses every read and write routed to it, and zero
+		// copies is not an invented number.
+		kind: KindEstateUnserved,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d partition(s) have no copy that can answer: %s",
+				r.EstateUnserved, r.EstateUnservedWhich), r.EstateUnserved > 0
+		},
+		remedy: "Every read and write routed to these partitions is refused. " +
+			"`crewlet estate map` lists each one's holders and marks a node the map " +
+			"counts absent or unhealthy with `!`: bring one of them back and it serves " +
+			"again at once. If none is coming back, restore the partition from a backup " +
+			"onto a data node — see docs/guides/backup.md.",
+	},
+	{
+		// AT MEMBERSHIP'S GRACE, borrowed (ADR-0015): the grace after which
+		// the map replaces a member it counts gone. A partition short for
+		// longer is one the map's own repair has not made whole within the
+		// time it gives a member to come back — a node lost, a store
+		// failed, or a rebuild onto new members still under way.
+		kind: KindEstateShort,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d partition(s) have fewer copies than their target; %s "+
+					"has been short for %s, past the %s after which the map replaces a "+
+					"member it counts gone", r.EstateShort, r.EstateShortWhich,
+					round(r.EstateShortFor), round(membership.OutGrace)),
+				r.EstateShortFor > membership.OutGrace
+		},
+		remedy: "`crewlet estate map` names the member each short partition is missing " +
+			"(ABSENT, STORE). The map removes a member gone past the grace and rebuilds its " +
+			"copies on the others, one transfer per node at a time, so this clears as those " +
+			"joins serve; a node added to a fleet with fewer data nodes than " +
+			"estate.replicas clears it the same way. Do not stop another data node until " +
+			"it clears.",
+	},
+	{
+		// AT THE REJOIN WINDOW, borrowed: the budget the operator sized a
+		// join against — a snapshot transfer and a replay — so a join past
+		// it is one that will not finish on its own.
+		kind: KindEstateMoveStalled,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%s has been joining for %s, past the %s rejoin window a "+
+					"join is sized against", r.EstateJoiningWhich, round(r.EstateJoiningFor),
+					round(r.EstateJoinBudget)),
+				r.EstateJoinBudget > 0 && r.EstateJoiningFor > r.EstateJoinBudget
+		},
+		remedy: "`crewlet estate map` shows what the joiner reports of the partition " +
+			"(adopting, catching_up, faulted). A join fetches a snapshot from a serving " +
+			"holder and replays the logs from it: check that a donor serves the partition " +
+			"and that the joiner's applier is moving (`crewlet retention status` on that " +
+			"node). One that cannot finish is taken off the node with `crewlet estate move`, " +
+			"so the copy is built on another member instead.",
+	},
+	{
+		// AT THE STALENESS BOUND EVERY CACHED COORDINATION FACT HERE HAS
+		// (FloorCacheStale): past it, anything that decides from the view
+		// treats it as unknown, and routing goes on from what it last saw.
+		kind: KindEstateViewStale,
+		fires: func(r Reading) (string, bool) {
+			if r.EstateViewAge == nil {
+				return "", false
+			}
+			return fmt.Sprintf("this node's view of %s was last confirmed %s ago",
+					r.EstateViewStale, round(*r.EstateViewAge)),
+				*r.EstateViewAge > FloorCacheStale
+		},
+		remedy: "Coordination is not answering this node, so it routes the estate on what " +
+			"it last saw and decides nothing from it — no join, no leave, no trim. Check " +
+			"this node's link to the coordination store; every estate alarm this node " +
+			"raises is silent until the view is current again.",
 	},
 }
 

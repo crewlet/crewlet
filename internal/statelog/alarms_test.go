@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -186,6 +187,29 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsHealth: disk.HealthNearFull, ObjectsUsedPercent: 88},
 			"88.0% used",
 		},
+		"a partition no copy can answer for": {
+			statelog.KindEstateUnserved,
+			statelog.Reading{EstateUnserved: 2, EstateUnservedWhich: "tracker.007, pages.001"},
+			"2 partition(s) have no copy that can answer: tracker.007, pages.001",
+		},
+		"a partition short past the grace": {
+			statelog.KindEstateShort,
+			statelog.Reading{EstateShort: 3, EstateShortFor: 11 * time.Minute,
+				EstateShortWhich: "tracker.007 (1 of 3 copies)"},
+			"tracker.007 (1 of 3 copies) has been short for 11m0s, past the 10m0s",
+		},
+		"a join past the rejoin window": {
+			statelog.KindEstateMoveStalled,
+			statelog.Reading{EstateJoiningFor: 31 * time.Minute, EstateJoinBudget: 30 * time.Minute,
+				EstateJoiningWhich: "tracker.007 on data-c"},
+			"tracker.007 on data-c has been joining for 31m0s, past the 30m0s rejoin window",
+		},
+		"an estate view past the staleness bound": {
+			statelog.KindEstateViewStale,
+			statelog.Reading{EstateViewAge: statelog.Age(2 * time.Minute),
+				EstateViewStale: "the estate leases"},
+			"view of the estate leases was last confirmed 2m0s ago",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(tc.reading)
@@ -296,6 +320,35 @@ func TestTheObjectStoreAlarmsAreSilentShortOfTheirThresholds(t *testing.T) {
 		if got := statelog.Evaluate(r); len(got) != 0 {
 			t.Errorf("%s raised %v", name, kindsOf(got))
 		}
+	}
+}
+
+// THE ESTATE ALARMS FIRE AT THE THRESHOLDS OTHER DECISIONS MADE, and not a
+// moment before (ADR-0015): a shortfall AT membership's grace is the map's own
+// repair still within the time it gives a member to come back, a join AT the
+// rejoin window is within its budget, and a view AT the staleness bound is one
+// every cached coordination fact here still answers from. A node that runs no
+// estate view — no join budget, no view age — raises none of them, and a view
+// confirmed this instant is a measured zero, not an absence.
+func TestTheEstateAlarmsAreSilentShortOfTheirThresholds(t *testing.T) {
+	t.Parallel()
+	for name, r := range map[string]statelog.Reading{
+		"short at the grace": {EstateShort: 1, EstateShortFor: membership.OutGrace,
+			EstateShortWhich: "tracker.007"},
+		"joining at the window": {EstateJoiningFor: 30 * time.Minute,
+			EstateJoinBudget: 30 * time.Minute, EstateJoiningWhich: "tracker.007 on data-c"},
+		"joining with no budget": {EstateJoiningFor: time.Hour},
+		"a view at the bound":    {EstateViewAge: statelog.Age(statelog.FloorCacheStale)},
+		"a view confirmed now":   {EstateViewAge: statelog.Age(0), EstateViewStale: "the estate map"},
+	} {
+		if got := statelog.Evaluate(r); len(got) != 0 {
+			t.Errorf("%s raised %v", name, kindsOf(got))
+		}
+	}
+	past := statelog.Reading{EstateShort: 1, EstateShortFor: membership.OutGrace + time.Second,
+		EstateShortWhich: "tracker.007"}
+	if got := statelog.Evaluate(past); len(got) != 1 || got[0].Kind != statelog.KindEstateShort {
+		t.Errorf("a shortfall a second past the grace raised %v", kindsOf(got))
 	}
 }
 
