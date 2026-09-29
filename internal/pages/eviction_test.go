@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,14 +124,17 @@ func TestAnEvictionNamingNothingIsRefused(t *testing.T) {
 	}
 }
 
-// A NODE'S RELEASE OF THIS LOG DROPS WHAT IT WRITES AFTER IT, AND ITS CALLER
-// IS TOLD SO — the knowledge base's half of the rule the tracker's log keeps.
+// A RELEASE RACING A WRITER: THE WRITE THE LEAVING NODE HAD IN FLIGHT IS
+// DROPPED ON EVERY HOLDER, AND ITS CALLER IS TOLD SO — the knowledge base's
+// half of the rule the tracker's log keeps.
 //
-// A write the leaving node had in flight that lands after its release is
-// dropped on every holder and answered `released`; the row records the release
-// as the node's own gate, which its write fence does not read as an eviction;
-// and a release naming another node is refused before it reaches the log.
-func TestAReleaseDropsWhatItsNodeWritesAfterIt(t *testing.T) {
+// The leave runs between the in-flight write's last question about serving and
+// its landing, so the write lands above the node's release and is refused
+// `released`; after the release the node decides nothing on the log
+// (`not_holder`); the row records the release as the node's own gate, which
+// its write fence does not read as an eviction; and a release naming another
+// node is refused before the log.
+func TestAReleaseRacingAWriterDropsTheWriteItHadInFlight(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	r.applyWhileWriting()
@@ -138,9 +142,24 @@ func TestAReleaseDropsWhatItsNodeWritesAfterIt(t *testing.T) {
 	r.write(author("ana"), pages.NewPage{Title: "before the release"})
 	engine := pages.Actor{Handle: "engine", Kind: pages.AuthorOperator, OperatorID: "engine"}
 
-	released, err := r.store.ReleaseLog(t.Context(), engine, "op-release", "node-a")
-	if err != nil {
-		t.Fatalf("ReleaseLog: %v", err)
+	var released statelog.Result
+	r.race.Before(func(subject string) bool { return !strings.Contains(subject, ".eviction.") },
+		func() {
+			// THE LEAVE, between the in-flight write's last question and
+			// its landing: the node stops serving, then releases the log.
+			r.holding.Stop(statelog.EstatePartition)
+			var err error
+			if released, err = r.store.ReleaseLog(t.Context(), engine, "op-release", "node-a"); err != nil {
+				t.Errorf("ReleaseLog: %v", err)
+			}
+		})
+	_, err := r.store.Create(t.Context(), author("ana"),
+		pages.NewPage{Container: "ENG", Title: "racing the release"})
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
+		t.Fatalf("the write that landed after its node's release was answered %v, "+
+			"want a refusal %q — it is on the log and applies nowhere", err,
+			statelog.ReasonReleased)
 	}
 	r.drain()
 	rows, err := pages.Domain{}.Evictions(t.Context(), r.db.Reader())
@@ -157,27 +176,30 @@ func TestAReleaseDropsWhatItsNodeWritesAfterIt(t *testing.T) {
 		t.Fatalf("the node's fence reads its own release as an eviction (%v, %v) — "+
 			"a node that left a partition is not one the fleet removed", evicted, err)
 	}
-
-	_, err = r.store.Create(t.Context(), author("ana"),
-		pages.NewPage{Container: "ENG", Title: "after the release"})
-	var refusal *statelog.Unavailable
-	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
-		t.Fatalf("a write landing after the node's release was answered %v, want a "+
-			"refusal %q — it is on the log and applies nowhere", err,
-			statelog.ReasonReleased)
+	var heads int
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `
+			SELECT COUNT(*) FROM pages_heads WHERE container = 'ENG'`).Scan(&heads)
+	}); err != nil {
+		t.Fatalf("count the pages: %v", err)
+	}
+	if heads != 1 {
+		t.Fatalf("ENG holds %d page(s), want only the one written before the release", heads)
 	}
 
-	end, err := r.log.End(t.Context())
-	if err != nil {
-		t.Fatalf("read the log's end: %v", err)
+	end := r.logEnd()
+	_, err = r.store.Create(t.Context(), author("ana"),
+		pages.NewPage{Container: "ENG", Title: "after the release"})
+	if !errors.Is(err, statelog.ErrNotHolder) {
+		t.Fatalf("a write asked of the node after it left was answered %v, want %v",
+			err, statelog.ErrNotHolder)
 	}
 	if _, err := r.store.ReleaseLog(t.Context(), engine, "op-release-other", "node-b"); err == nil {
 		t.Fatal("a node published a release naming another node — an eviction " +
 			"nobody judged")
 	}
-	if after, err := r.log.End(t.Context()); err != nil || after != end {
-		t.Fatalf("the refused release reached the log: its end moved from %d to %d (%v)",
-			end, after, err)
+	if after := r.logEnd(); after != end {
+		t.Fatalf("a refused write reached the log: its end moved from %d to %d", end, after)
 	}
 }
 
@@ -205,6 +227,8 @@ func TestAReleaseIsWrittenAtItsOwnVersionAndAnOlderBuildHaltsAtIt(t *testing.T) 
 	}
 	evicted := r.logEnd()
 	engine := pages.Actor{Handle: "engine", Kind: pages.AuthorOperator, OperatorID: "engine"}
+	// A NODE RELEASES A LOG ONCE IT HAS STOPPED SERVING ITS PARTITION.
+	r.holding.Stop(statelog.EstatePartition)
 	if _, err := r.store.ReleaseLog(t.Context(), engine, "op-release", "node-a"); err != nil {
 		t.Fatalf("ReleaseLog: %v", err)
 	}

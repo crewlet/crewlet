@@ -245,9 +245,24 @@ partition it is in, and neither is a gate an ordinary write ever meets:
   the same question first and never appends such a record, so one on a log was
   written by something else.
 
-Today's estate is one partition, `estate.000`, so every record and every scope
-lies in it and neither rule refuses anything; they are the rules a divided
-estate is held to from its first record.
+A third rule says who may write at all:
+
+- **Only a node that serves a partition writes to its logs.** A node serves a
+  partition from the moment it has caught up on every one of the partition's
+  logs until it begins to leave, and the trim counts the partition's holders
+  from the moment they begin to join — so every node that decides a write is a
+  node the trim is already waiting for. A write asked of a node that does not
+  serve the partition is refused `not_holder` before it reads anything, and
+  asked again just before the record is appended, so a write still deciding
+  when its node began to leave never reaches the log. A node that cannot tell
+  whether it serves the partition refuses `holding_unknown` rather than guess.
+  In both cases a node that serves the partition takes the write.
+
+Today's estate is one partition, `estate.000`, which every data node serves
+from the moment it starts and no node joins or leaves while it runs — and a
+node without the `data` role serves nothing and writes nothing, as it always
+has. So none of these rules refuses anything today; they are the rules a
+divided estate is held to from its first record.
 
 ### A node that leaves a partition releases its logs
 
@@ -263,12 +278,15 @@ node has to trust anyone's clock or a coordination read to agree.
 
 A release is the node's own statement and only ever names the node that
 publishes it — the write path refuses one naming another node, which would be
-an eviction nobody judged. It is recorded as a release rather than an
-eviction, and the node's own write check does not treat it as one: a node that
-left a partition is not a node the fleet removed. When the node joins the
-partition again, a node that serves the partition readmits it before it
-adopts the partition's data. Nothing in today's single-partition estate
-releases a log.
+an eviction nobody judged. It is the one record a node writes on a log after
+it has stopped serving the log's partition, and the write path refuses it
+while the node still serves: a node stops deciding first and releases second,
+so that everything it decided lies below its release. It is recorded as a
+release rather than an eviction, and the node's own write check does not treat
+it as one: a node that left a partition is not a node the fleet removed. When
+the node joins the partition again, a node that serves the partition readmits
+it before it adopts the partition's data. Nothing in today's single-partition
+estate releases a log.
 
 ### A record whose scope meets a deferred scope is deferred too
 

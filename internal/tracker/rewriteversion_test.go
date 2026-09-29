@@ -313,6 +313,8 @@ func TestAReleaseIsWrittenAtItsOwnVersionAndAnOlderBuildHaltsAtIt(t *testing.T) 
 		t.Fatalf("EvictNode: %v", err)
 	}
 	evicted := r.logEnd(t)
+	// A NODE RELEASES A LOG ONCE IT HAS STOPPED SERVING ITS PARTITION.
+	r.holding.Stop(statelog.EstatePartition)
 	if _, err := r.writer.ReleaseLog(t.Context(), "op-release", r.nodeID); err != nil {
 		t.Fatalf("ReleaseLog: %v", err)
 	}

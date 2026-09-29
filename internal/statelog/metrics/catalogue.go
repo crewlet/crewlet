@@ -140,7 +140,12 @@ func Catalogue() []Instrument {
 				"`evicted` (this node is removed from the fleet — run the write " +
 				"on another), `released` (it released this log when it left the " +
 				"log's partition — a node that serves the partition writes " +
-				"it), `deferred` (it holds a record it cannot decode — a " +
+				"it), `not_holder` (it does not serve the log's partition, never " +
+				"having held it or having begun to leave it — a node that serves " +
+				"it writes it), `holding_unknown` (it could not tell whether it " +
+				"serves the partition — clears when it can, and a node that " +
+				"serves it writes meanwhile), `deferred` (it holds a record it " +
+				"cannot decode — a " +
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +

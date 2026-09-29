@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -382,29 +383,51 @@ func TestEveryGateTableIsCoveredByThePredicate(t *testing.T) {
 	}
 }
 
-// A NODE'S RELEASE OF THE LOG DROPS WHAT IT WRITES AFTER IT, AND ITS CALLER IS
-// TOLD SO.
+// A RELEASE RACING A WRITER: THE WRITE THE LEAVING NODE HAD IN FLIGHT IS
+// DROPPED ON EVERY HOLDER, AND ITS CALLER IS TOLD SO.
 //
-// A node leaving a partition releases each identity-claiming log there: its own
-// statement that nothing it publishes on the log afterwards applies anywhere.
-// A write it had in flight that lands after the release is dropped on every
-// holder by the gate an eviction installs, and the writer is told `released` —
-// never `applied`, and never a lost race. The row records the release as the
-// node's own gate, which the node's write fence does not read as an eviction.
-// And a release is only ever the node's own: one naming another node would be
-// an eviction nobody judged, so the write authority refuses it.
-func TestAReleaseDropsWhatItsNodeWritesAfterIt(t *testing.T) {
+// A node leaving a partition stops deciding there, then releases each
+// identity-claiming log of it: its own statement that nothing it publishes on
+// the log afterwards applies anywhere. A write already past the node's last
+// question about serving when the leave began can still reach the broker after
+// the release — here the leave runs between that question and the landing —
+// and it is dropped by the gate an eviction installs, its writer told
+// `released`: never `applied`, and never a lost race. After the release the
+// node decides nothing on the log (`not_holder`); the row records the release
+// as the node's own gate, which the node's write fence does not read as an
+// eviction; and a release naming another node is refused before the log.
+func TestAReleaseRacingAWriterDropsTheWriteItHadInFlight(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	r.applyWhileWriting()
 	if _, err := r.writer.CreateTask(t.Context(), "op-before", newTask("t-before"), nil); err != nil {
 		t.Fatalf("a write before the release: %v", err)
 	}
-	released, err := r.writer.ReleaseLog(t.Context(), "op-release", r.nodeID)
-	if err != nil {
-		t.Fatalf("ReleaseLog: %v", err)
+	race := statelogtest.NewRace(r.log)
+	inFlight := r.writerOver(t, race)
+	var released tracker.WriteResult
+	race.Before(func(subject string) bool { return strings.HasSuffix(subject, ".t-racing") },
+		func() {
+			// THE LEAVE, between the in-flight write's last question and
+			// its landing: the node stops serving, then releases the log.
+			r.holding.Stop(statelog.EstatePartition)
+			var err error
+			if released, err = r.writer.ReleaseLog(t.Context(), "op-release", r.nodeID); err != nil {
+				t.Errorf("ReleaseLog: %v", err)
+			}
+		})
+	_, err := inFlight.CreateTask(t.Context(), "op-racing", newTask("t-racing"), nil)
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
+		t.Fatalf("the write that landed after its node's release was answered %v, "+
+			"want a refusal %q — it is on the log and applies nowhere", err,
+			statelog.ReasonReleased)
 	}
 	r.drain()
+	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 1 {
+		t.Fatalf("the project holds %d task(s), want only the one written before the "+
+			"release", len(answer.Rows))
+	}
 
 	rows, err := tracker.Domain{}.Evictions(t.Context(), r.db.Reader())
 	if err != nil {
@@ -433,28 +456,17 @@ func TestAReleaseDropsWhatItsNodeWritesAfterIt(t *testing.T) {
 			"a node that left a partition is not one the fleet removed", evicted, err)
 	}
 
+	end := r.logEnd(t)
 	_, err = r.writer.CreateTask(t.Context(), "op-after", newTask("t-after"), nil)
-	var refusal *statelog.Unavailable
-	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
-		t.Fatalf("a write landing after the node's release was answered %v, want "+
-			"a refusal %q — it is on the log and applies nowhere", err,
-			statelog.ReasonReleased)
-	}
-	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 1 {
-		t.Fatalf("the project holds %d task(s) after a write its node released "+
-			"the log before, want only the one written before", len(answer.Rows))
-	}
-
-	end, err := r.log.End(t.Context())
-	if err != nil {
-		t.Fatalf("read the log's end: %v", err)
+	if !errors.Is(err, statelog.ErrNotHolder) {
+		t.Fatalf("a write asked of the node after it left was answered %v, want %v",
+			err, statelog.ErrNotHolder)
 	}
 	if _, err := r.writer.ReleaseLog(t.Context(), "op-release-other", "node-b"); err == nil {
 		t.Fatal("a node published a release naming another node — an eviction " +
 			"nobody judged")
 	}
-	if after, err := r.log.End(t.Context()); err != nil || after != end {
-		t.Fatalf("the refused release reached the log: its end moved from %d to %d (%v)",
-			end, after, err)
+	if after := r.logEnd(t); after != end {
+		t.Fatalf("a refused write reached the log: its end moved from %d to %d", end, after)
 	}
 }

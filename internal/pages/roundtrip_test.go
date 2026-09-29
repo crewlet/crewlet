@@ -35,6 +35,14 @@ type roundTrip struct {
 	reader  *pages.Reader
 	waiter  *testWaiter
 
+	// holding is whether this node serves the log's partition, which a case
+	// about a node leaving it moves.
+	holding *statelogtest.Holding
+
+	// race is the broker this node's writes go through, which a case puts
+	// its hand into between a write's last check and its landing.
+	race *statelogtest.Race
+
 	consumed uint64
 }
 
@@ -116,10 +124,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
+	holding := statelogtest.NewHolding(statelog.EstatePartition)
+	race := statelogtest.NewRace(log)
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: log, Rows: rows, Fence: fence,
+		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: race, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
+		Holding:       holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -151,7 +162,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	return &roundTrip{
 		t: t, db: db, log: log, store: kb,
 		applier: pages.NewApplier(nodeID, nil, nil),
-		reader:  reader, waiter: waiter,
+		reader:  reader, waiter: waiter, holding: holding, race: race,
 	}
 }
 

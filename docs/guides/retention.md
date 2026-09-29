@@ -549,6 +549,13 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
 - `released` — the node you ran it on released that log when it left the log's
   partition, so nothing it writes there applies: run the gesture, under the
   same `-op-id`, through a node that serves the partition (`-url`).
+- `not_holder` — the node you ran it on does not serve that log's partition,
+  and only a node that serves a partition writes its logs: run the gesture,
+  under the same `-op-id`, through one that does (`-url`).
+- `holding_unknown` — the node you ran it on could not tell whether it serves
+  that log's partition, so it wrote nothing there: run the gesture again with
+  the same `-op-id` once it can, or through a node that serves the partition
+  (`-url`).
 - `unknown` that **this node cannot tell** — its operation ledger may have
   lost the row the operation needs, because the id was minted before the node
   adopted a peer's snapshot or before the ledger's sweep reached it. The node

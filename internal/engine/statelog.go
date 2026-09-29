@@ -177,6 +177,12 @@ type stateLog struct {
 	// are refused through [stateLog.appends].
 	mode statelog.MaintenanceMode
 
+	// holding is which partitions this node SERVES — the only ones whose
+	// logs its publishers write ([statelog.Holding]). Read once, where the
+	// runtime is built, because under this build nothing joins or leaves a
+	// partition while the node runs ([holdingOf]).
+	holding statelog.Holding
+
 	// logs is every log this node runs NOW, as one immutable [logSet]: a
 	// log is started and stopped while the node runs ([stateLog.startLogs],
 	// [stateLog.stopLogs]), so every reader takes the whole set at once
@@ -511,12 +517,10 @@ func (s *stateLog) estate(p statelog.PartitionID) store.PartitionHandle {
 // opening the files, the backup copying them and the operator's migration —
 // so each reads it here rather than deriving it.
 func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
-	if !holdsData(b) {
-		return nil, nil
-	}
 	layout := LayoutZero()
-	files := make([]store.PartitionFile, 0, len(layout.Partitions()))
-	for _, p := range layout.Partitions() {
+	held := heldIn(b, layout)
+	files := make([]store.PartitionFile, 0, len(held))
+	for _, p := range held {
 		f, err := layout.File(p)
 		if err != nil {
 			return nil, fmt.Errorf("engine: the partition %s this node holds: %w", p, err)
@@ -524,6 +528,35 @@ func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
 		files = append(files, f)
 	}
 	return files, nil
+}
+
+// heldIn is every partition of layout a node configured as b holds: all of
+// them on a data node, and none on a node without `data`.
+//
+// ALL OF THEM, because nothing joins or leaves a partition while this build
+// runs: the state log opens every partition of the layout it runs and runs
+// every one of its logs. It is the one rule both what a node holds
+// ([HeldPartitions]) and what it serves ([holdingOf]) are read from, so the
+// files a node keeps open and the logs it may write can never be two answers.
+func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID {
+	if !holdsData(b) {
+		return nil
+	}
+	return layout.Partitions()
+}
+
+// holdingOf is who may write which log on a node configured as b that runs
+// layout — the answer the write authority's gate 3 asks ([statelog.Holding]).
+//
+// SERVING IS HOLDING HERE, because a partition is served from the moment a
+// node's join has established it until its leave stops deciding there, and no
+// partition is joined or left while this build runs: a data node serves every
+// partition it holds from boot — layout 0's estate.000 — and a node without
+// `data` holds nothing and serves nothing, which is what it always was, since
+// it runs no applier and so no publisher. The set is fixed for the life of the
+// runtime for the same reason, so it is read once, where the runtime is built.
+func holdingOf(b *config.Bootstrap, layout statelog.Layout) statelog.Holding {
+	return statelog.ServesOnly(heldIn(b, layout)...)
 }
 
 // HeldPartitions is [HeldPartitions] for this node: the partitions it holds,
@@ -693,7 +726,8 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
 		layout: layout, mode: e.Mode(), host: host, epoch: epoch,
-		nodeID: nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
+		holding: holdingOf(boot, layout),
+		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilings, volume: streamVolume(boot),
@@ -1486,6 +1520,9 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 		// read: a record or a scope naming another partition is refused
 		// before anything is appended.
 		Layout: s.layout, LogID: id,
+		// AND WHETHER THIS NODE SERVES IT: only a node that serves a
+		// partition writes its logs, which is gate 3.
+		Holding: s.holding,
 		// THE RUNNER IS THE IDENTITY, for the reason it is the waiter:
 		// the positions a write forms its expectation from and resolves
 		// its record against are the runner's, so the answer to "are

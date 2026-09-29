@@ -85,7 +85,10 @@ func Stamped(t *testing.T, new Factory) error {
 	log := &recordingLog{last: map[string]uint64{}}
 	deps := statelog.Deps{
 		Domain: c.Domain, Spec: c.spec(), Layout: c.layout(), LogID: c.log(),
-		Log: log, Rows: rows,
+		// SERVING ITS LOG'S PARTITION, which is what a node deciding a
+		// write through the domain's own path is.
+		Holding: statelog.ServesOnly(c.log().Partition),
+		Log:     log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
 		Waiter: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,

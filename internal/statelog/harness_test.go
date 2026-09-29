@@ -13,6 +13,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 )
 
 // The fakes below are the framework's own seams and nothing else. A real
@@ -628,6 +629,10 @@ type harness struct {
 	// reserve is the log's gate reserve, nil for a domain that keeps none.
 	reserve *statelog.Reserve
 	gen     atomic.Uint32
+
+	// holding is whether this node serves the log's partition — gate 3's
+	// answer, which a case moves.
+	holding *statelogtest.Holding
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
@@ -703,8 +708,12 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		t.Fatalf("recorder: %v", err)
 	}
 
+	// A NODE SERVING THE LOG'S PARTITION, which a case moves to reach gate
+	// 3's refusals.
+	h.holding = statelogtest.NewHolding(logOf(domain).Partition)
 	deps := statelog.Deps{
 		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
+		Holding:       h.holding,
 		Log:           h.appends,
 		Rows:          h.rows,
 		Fence:         h.fence,

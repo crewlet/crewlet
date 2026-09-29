@@ -121,6 +121,9 @@ func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 		OpID:     opID,
 		Pattern:  statelog.PatternArbitrated,
 		NodeGate: true,
+		// A RELEASE IS THE ONE WRITE A NODE MAKES ON A LOG IT NO LONGER
+		// SERVES, and the framework holds it to exactly that.
+		Release: gate == gateRelease,
 		Standing: func(tx *sql.Tx, held statelog.Position) error {
 			row, found, err := standingIn(ctx, tx, nodeID)
 			if err != nil {

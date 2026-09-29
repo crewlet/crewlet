@@ -143,6 +143,22 @@ const (
 	// node that serves the partition takes the write.
 	ReasonReleased Reason = "released"
 
+	// ReasonNotHolder — this node does not serve the partition of the log the
+	// write would go to ([Holding], [ErrNotHolder]): it never held the
+	// partition, or it has begun to leave it. Only a partition's serving
+	// holders write its logs, because they are the writers the trim counts
+	// there. Another node that serves the partition takes the write, under
+	// the same operation id: nothing was appended under it here.
+	ReasonNotHolder Reason = "not_holder"
+
+	// ReasonHoldingUnknown — whether this node serves the log's partition
+	// could not be established ([Holding] answered an error). The third
+	// value, and it BLOCKS, for [ReasonFloorUnknown]'s reason: a write
+	// decided by a node the trim may not be counting is a lost update, which
+	// nothing recovers. It clears when the node can tell again, and a node
+	// that serves the partition can take the write meanwhile.
+	ReasonHoldingUnknown Reason = "holding_unknown"
+
 	// ReasonDeferred — this node holds a record it cannot decode whose
 	// scope covers this object, so its rows are stale and any decision
 	// taken from them is unsafe. Another node can serve this write.
@@ -292,11 +308,11 @@ const (
 // there is no `gated` here.
 func Reasons() []Reason {
 	return []Reason{
-		ReasonEvicted, ReasonReleased, ReasonDeferred, ReasonBehind,
-		ReasonBelowFloor, ReasonFloorUnknown, ReasonDeleted, ReasonRetired,
-		ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition, ReasonLogFull,
-		ReasonSkew, ReasonOpReused, ReasonLogTruncated, ReasonWrongStream,
-		ReasonSuperseded,
+		ReasonEvicted, ReasonReleased, ReasonNotHolder, ReasonHoldingUnknown,
+		ReasonDeferred, ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown,
+		ReasonDeleted, ReasonRetired, ReasonAbandoned, ReasonOvertaken,
+		ReasonWrongPartition, ReasonLogFull, ReasonSkew, ReasonOpReused,
+		ReasonLogTruncated, ReasonWrongStream, ReasonSuperseded,
 	}
 }
 

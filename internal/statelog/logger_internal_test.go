@@ -41,7 +41,8 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	publisher, err := NewPublisher(Deps{
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{}, Rows: struct{ Rows }{},
 		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
-		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
+		Holding: ServesOnly(loggerProbeLog.Partition),
+		Fence:   struct{ Fence }{}, Gates: struct{ Gates }{},
 		Waiter: struct{ Waiter }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
 	})

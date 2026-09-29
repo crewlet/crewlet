@@ -432,6 +432,18 @@
 //     applier's refusal of a record whose address disagrees with its subject,
 //     for partitions. The publisher asks it first and never appends such a
 //     record ([ErrWrongPartition]), so one on a log is another writer's.
+//   - GATE 3, for the premise that every writer is counted: only a node that
+//     SERVES a partition writes its logs ([Holding]). A partition's holders are
+//     counted on its logs from the moment they begin to join, and a node serves
+//     from the moment its join has established every log until its leave stops
+//     deciding — so every writer is a node the trim already waits for. The
+//     publisher asks before a write takes its snapshot, so a node that does not
+//     serve the partition never decides from its rows, and again before the
+//     append, so a write still deciding when its node began to leave is not
+//     appended; it refuses `not_holder` ([ErrNotHolder]), or `holding_unknown`
+//     where the node cannot tell — never a guess. The one record it inverts the
+//     rule for is the node's RELEASE ([Request.Release]), written only once the
+//     node has stopped serving ([ErrReleaseWhileServing]).
 //   - THE RELEASE GATE, clause (iii) for a node that LEAVES a partition. As it
 //     leaves, the node publishes a release on each identity-claiming log of
 //     the partition — its own statement, flagged a node gate, written under
@@ -447,9 +459,11 @@
 //     eviction: it left a partition, and the fleet did not remove it.
 //
 // Under layout 0 every record and every path a domain of this build writes is
-// in the one partition, `estate.000`, so neither gate refuses anything a fleet
-// before layouts wrote: they are the rules the partitioned layout's writes are
-// held to from its first record.
+// in the one partition, `estate.000`, which every data node serves from boot
+// and which no node joins or leaves while it runs — and a node without `data`
+// serves nothing and runs no publisher. So no gate refuses anything a fleet
+// before layouts wrote, and nothing releases a log: they are the rules the
+// partitioned layout's writes are held to from its first record.
 //
 // # Which log a coordination record is about
 //

@@ -525,6 +525,12 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// there, whichever id it retries under: another node serves it.
 		"released": {gate: refused(statelog.ReasonReleased), actions: []statelog.GateAction{other},
 			detail: "serves the partition"},
+		// A NODE THAT DOES NOT SERVE THE LOG'S PARTITION never writes it,
+		// whichever id it retries under; one that cannot tell may again.
+		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{other},
+			detail: "one that does"},
+		"holding unknown": {gate: refused(statelog.ReasonHoldingUnknown),
+			actions: []statelog.GateAction{retry, other}, detail: "could not tell"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),

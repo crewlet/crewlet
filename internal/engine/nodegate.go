@@ -305,6 +305,16 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 				"when it left that log's partition, so nothing it writes there applies: "+
 				"run the gesture through a node that serves the partition, under the "+
 				"same operation id", d.Stream))
+		case statelog.ReasonNotHolder:
+			return only(statelog.GateOtherNode, fmt.Sprintf("this node does not "+
+				"serve the partition %s is on, and only a node that serves a partition "+
+				"writes its logs: run the gesture through one that does, under the "+
+				"same operation id", d.Stream))
+		case statelog.ReasonHoldingUnknown:
+			return retry(fmt.Sprintf("this node could not tell whether it serves "+
+				"the partition %s is on: the same gesture under the same operation id "+
+				"finishes it once it can, here or through a node that serves the "+
+				"partition", d.Stream), statelog.GateOtherNode)
 		case statelog.ReasonWrongStream:
 			return only(statelog.GateReanchor, fmt.Sprintf("the log under %s's name "+
 				"is not the one this node's rows were derived from: re-anchor it "+

@@ -310,6 +310,22 @@ type Request struct {
 	// [Publisher.stamped]).
 	NodeGate bool
 
+	// Release marks a node's RELEASE of this log ([EvictionKindRelease]):
+	// the one write a node makes on a partition's log after it has stopped
+	// serving the partition, and the only one it may. A node leaves by
+	// ceasing to decide first and releasing second, so that everything it
+	// decided is on the log below its release — and every write it had in
+	// flight that lands above is dropped on every holder by the gate the
+	// release installs.
+	//
+	// So it inverts gate 3 for this one record ([Holding]): a release is
+	// refused while this node serves the log's partition
+	// ([ErrReleaseWhileServing]) and every other write is refused while it
+	// does not ([ErrNotHolder]). A release is a node gate, so a Release write
+	// is a NodeGate write, and the publisher holds the flag to the record in
+	// both directions, as it holds NodeGate ([Publisher.stamped]).
+	Release bool
+
 	// Standing judges a retry this node's ledger already answers
 	// ([Snap.Held]), for a write whose landed record a LATER write can
 	// undo: nil when the operation's record is still the one in force, a
@@ -422,6 +438,10 @@ type Publisher struct {
 	layout Layout
 	logID  LogID
 
+	// holding is whether this node serves that log's partition
+	// ([Deps.Holding]).
+	holding Holding
+
 	// admission holds this log's ordinary appends out of its gate reserve,
 	// nil on a log that keeps none ([KeepsGateReserve]).
 	admission Admission
@@ -470,6 +490,13 @@ type Deps struct {
 	Layout Layout
 	LogID  LogID
 
+	// Holding answers whether this node serves the log's partition: gate 3,
+	// asked before every write takes its snapshot and again before it is
+	// appended. REQUIRED — a publisher that could not ask would write any
+	// log it is handed, which is the uncounted writer the floor theorem's
+	// premise excludes ([Holding]).
+	Holding Holding
+
 	Log    Appender
 	Rows   Rows
 	Fence  Fence
@@ -505,6 +532,10 @@ func NewPublisher(d Deps) (*Publisher, error) {
 	switch {
 	case d.Domain == nil:
 		return nil, fmt.Errorf("statelog: publisher has no domain")
+	case d.Holding == nil:
+		return nil, fmt.Errorf("statelog: publisher has no holding — only a node " +
+			"that serves a partition may write its logs, and a publisher that " +
+			"cannot ask whether this one does would write any log it is handed")
 	case d.Log == nil:
 		return nil, fmt.Errorf("statelog: publisher has no appender")
 	case d.Rows == nil:
@@ -556,6 +587,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		prefix:        spec.SubjectPrefix,
 		layout:        d.Layout,
 		logID:         d.LogID,
+		holding:       d.Holding,
 		log:           d.Log,
 		rows:          d.Rows,
 		fence:         d.Fence,
@@ -599,6 +631,21 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 	// any fence, because it is the caller's mistake rather than this node's
 	// state, and no fence clearing changes it.
 	if err := p.withinPartition("the write", req.Subject, req.Scope); err != nil {
+		return Result{}, err
+	}
+	if req.Release && !req.NodeGate {
+		return Result{}, fmt.Errorf("statelog: the write on %s is flagged a release "+
+			"and not a node gate — a release is a node's gate record, excused the "+
+			"fences every node gate is, so it is flagged both", req.Subject)
+	}
+	// GATE 3, BEFORE STEP 0: only a node that serves the log's partition
+	// decides a write for it, so one that does not is refused before it
+	// reads a row — a decision taken from the rows of a partition this node
+	// is not counted on is the one the floor theorem's premise excludes.
+	// After gate 1, because a scope that crosses partitions is the caller's
+	// mistake wherever it is sent, and routing it to a node that serves the
+	// partition would only meet that refusal there.
+	if err := p.serves(req); err != nil {
 		return Result{}, err
 	}
 
@@ -917,6 +964,18 @@ func (p *Publisher) stamped(req Request, snap Snap) error {
 			"node gate is excused",
 			p.domain.Name(), req.Subject, env.Kind, env.Op)
 	}
+	if releases := p.releases(env); releases != req.Release {
+		// THE RELEASE FLAG IS HELD TO THE RECORD IN BOTH DIRECTIONS, for
+		// the node gate's reason: it is what gate 3 inverts, so a release
+		// the flag did not declare would have been refused as a write from
+		// a node that stopped serving — or allowed where the node still
+		// serves — and a flagged write that is not a release would be an
+		// ordinary record written by a node that no longer serves.
+		return fmt.Errorf("statelog: the %s record decided for %s is %s, and the "+
+			"write is %s — a release is flagged as one, and only a release is",
+			p.domain.Name(), req.Subject, releaseWord(releases),
+			releaseWord(req.Release))
+	}
 	if probe, gates := p.domain.(EvictionProbe); gates && probe.Releases(env) &&
 		env.Subject != probe.EvictionSubject(p.nodeID) {
 		// A RELEASE IS THE NODE'S OWN STATEMENT, and the one gate record no
@@ -983,6 +1042,39 @@ func (p *Publisher) withinPartition(what string, subject Subject, scope ScopeSet
 	return nil
 }
 
+// serves is gate 3 — whether this node may make this write on its log's
+// partition now: a release only once it has stopped serving the partition, and
+// every other write only while it serves it ([Request.Release]). An unknown
+// answer refuses both.
+func (p *Publisher) serves(req Request) error {
+	serving, err := p.holding.Serving(p.logID.Partition)
+	switch {
+	case err != nil:
+		return refuseHoldingUnknown(p.logID, req.OpID, err)
+	case req.Release && serving:
+		return fmt.Errorf("%w: %s still serves %s, and was asked to release %s",
+			ErrReleaseWhileServing, p.nodeID, p.logID.Partition, p.logID)
+	case !req.Release && !serving:
+		return refuseNotHolder(p.logID, req.OpID)
+	}
+	return nil
+}
+
+// releases reports whether a record is a node's release of the log, which only
+// a domain that reads its node gates off its log can say ([EvictionProbe]).
+func (p *Publisher) releases(env Envelope) bool {
+	probe, gates := p.domain.(EvictionProbe)
+	return gates && probe.Releases(env)
+}
+
+// releaseWord names which a record or a write is, for a refusal.
+func releaseWord(release bool) string {
+	if release {
+		return "a release"
+	}
+	return "not a release"
+}
+
 // partitionOf names a partition for a refusal, or says the layout has none: a
 // domain that cannot place a path or a record under a layout answers a
 // partition no log carries — the zero one among them — and printing its empty
@@ -1033,6 +1125,14 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	// object, told to a caller this node had refused for a reason of its
 	// own.
 	if err := p.fence0(ctx, req); err != nil {
+		return Result{Rounds: round}, dispDone, err
+	}
+	// GATE 3 AGAIN, BEFORE THE APPEND, for fence 0's reason: a node that
+	// began to leave the partition while this write was deciding has
+	// stopped serving it, and the write it decided must not be appended —
+	// the leave's release is how a write that got past this check is kept
+	// out, and this is what keeps that to the writes already in flight.
+	if err := p.serves(req); err != nil {
 		return Result{Rounds: round}, dispDone, err
 	}
 	// THE RESERVE, for every append but a node gate's, held until the

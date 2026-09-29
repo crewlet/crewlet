@@ -202,6 +202,15 @@ func TestARetryOfAWriteThatLandedIsAnsweredWithIt(t *testing.T) {
 // arrives.
 func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	t.Helper()
+	lost := &lossyLog{Appender: r.log}
+	return r.writerOver(t, lost), lost
+}
+
+// writerOver is a second writer over this harness's own log, estate and
+// holding, as this node, whose appends go through appender — a case's hand on
+// the broker between a write's decision and its landing.
+func (r *roundTrip) writerOver(t *testing.T, appender statelog.Appender) *tracker.Writer {
+	t.Helper()
 	rows, err := tracker.NewRows(r.db.Reader(), statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
@@ -213,11 +222,10 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 		return statelog.LogEnds{First: first, Last: last}, err
 	}
 	fence.Committed = r.waiter.Committed
-	lost := &lossyLog{Appender: r.log}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: lost, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: appender, Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Identity: r.waiter,
-		NodeID: r.nodeID, Admission: r.reserve,
+		NodeID: r.nodeID, Admission: r.reserve, Holding: r.holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -232,7 +240,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	if err != nil {
 		t.Fatalf("build the writer: %v", err)
 	}
-	return writer, lost
+	return writer
 }
 
 // AN OPERATION ID CARRIED TO ANOTHER TASK IS REFUSED, NOT ANSWERED WITH THE
