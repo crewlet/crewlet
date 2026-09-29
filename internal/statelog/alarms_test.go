@@ -417,6 +417,33 @@ func TestTheBackupAlarmFiresAtTheAgeThePolicyNames(t *testing.T) {
 	}
 }
 
+// A FLEET WITH NO BACKUP AT ALL IS ALARMED AT ONCE, AND TOLD SO.
+//
+// It used to be handed an age made up to exceed the policy — the policy plus
+// an hour — so the alarm fired and then printed that invented age: a fresh
+// fleet that had never taken a backup was told its newest one was 25 hours
+// old. The detail must say no backup exists and name no age; with no policy
+// the missing backup is a decision, not an alarm.
+func TestNoBackupAtAllIsSaidRatherThanGivenAnAge(t *testing.T) {
+	t.Parallel()
+	const policy = 24 * time.Hour
+	alarm, firing := find(statelog.Evaluate(statelog.Reading{
+		NoBackup: true, BackupMaxAge: policy,
+	}), statelog.KindBackupAge)
+	if !firing {
+		t.Fatal("a fleet with no backup under a 24h policy raised nothing")
+	}
+	if !strings.Contains(alarm.Detail, "no verified backup has been taken") ||
+		strings.Contains(alarm.Detail, " old,") {
+		t.Errorf("detail = %q, want it to say no backup has been taken and "+
+			"to name no age", alarm.Detail)
+	}
+	if got := statelog.Evaluate(statelog.Reading{NoBackup: true}); len(got) != 0 {
+		t.Errorf("a deployment with no backup policy and no backup raised %v",
+			kindsOf(got))
+	}
+}
+
 // EVERY KIND IS IN THE TABLE EXACTLY ONCE, and every one has a remedy.
 //
 // A duplicate kind would raise the same alarm twice on every surface; a kind

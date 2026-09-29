@@ -319,8 +319,10 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		// youngest. A zero age would read as a copy taken this second,
 		// which silences the one alarm a company that never backs up
 		// most needs — and "a company that never backs up never trims"
-		// is the term it is about to hit.
-		out.BackupAge = out.BackupMaxAge + time.Hour
+		// is the term it is about to hit. Said as a fact of its own: an
+		// age made up to exceed the policy was printed as the age of a
+		// backup nobody took.
+		out.NoBackup = true
 	}
 	for _, name := range r.state.order {
 		running := r.state.domains[name]

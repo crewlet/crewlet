@@ -214,6 +214,14 @@ type Reading struct {
 	// does not want one.
 	BackupAge, BackupMaxAge time.Duration
 
+	// NoBackup is the fleet having no verified backup at all, which is the
+	// OLDEST backup there is rather than the youngest: under a policy it
+	// raises `backup_age` at once, since a company that never backs up is
+	// one whose trim never advances. A field of its own rather than an age
+	// made up to exceed the policy, which the alarm then printed as the age
+	// of a backup that does not exist.
+	NoBackup bool
+
 	// TrimBlockedFor is how long the trim has been unable to advance, and
 	// TrimBlockedBy names the term holding it. Per DOMAIN, like
 	// HeadroomFraction.
@@ -508,9 +516,16 @@ var table = []rule{
 		// the first one that mattered.
 		kind: KindBackupAge,
 		fires: func(r Reading) (string, bool) {
+			if r.BackupMaxAge <= 0 {
+				return "", false
+			}
+			if r.NoBackup {
+				return fmt.Sprintf("no verified backup has been taken, and the "+
+					"policy asks for one every %s", round(r.BackupMaxAge)), true
+			}
 			return fmt.Sprintf("the newest verified backup is %s old, and the "+
 					"policy asks for %s", round(r.BackupAge), round(r.BackupMaxAge)),
-				r.BackupMaxAge > 0 && r.BackupAge > r.BackupMaxAge
+				r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
 			"and check whatever was meant to run it. The trim will not " +
