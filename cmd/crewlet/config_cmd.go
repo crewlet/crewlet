@@ -241,16 +241,12 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 			return nil, nil, fmt.Errorf("secrets keyring: %w", err)
 		}
 	}
-	db, err := store.Open(ctx, boot.Store.Path, store.Options{
+	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
+	// are the node's own, and this command reads nothing a state log
+	// applies, so it opens no partition.
+	db, err := store.OpenNode(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout:  boot.Store.BusyTimeout(),
-		// THE NODE ESTATE ALONE: revisions and the bootstrap secret
-		// store are the node's own, and this command reads nothing a
-		// state log applies. Opening both, it created a replicated
-		// database beside store.path — with every migration applied —
-		// on a node whose store.replicated_path puts the real one on
-		// another volume.
-		NodeOnly: true,
 	})
 	if err != nil {
 		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the

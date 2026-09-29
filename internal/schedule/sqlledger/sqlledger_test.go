@@ -81,7 +81,7 @@ func TestAClaimAgainstNoTableIsUnknownNotARefusal(t *testing.T) {
 	t.Parallel()
 	// A MIGRATED STORE WITH THE TABLE DROPPED, not a raw sql.Open on a
 	// bare file. The driver loads a native library on its first connection
-	// and PANICS on a half-written cache unless store.Open has prepared it
+	// and PANICS on a half-written cache unless store.OpenNode has prepared it
 	// (internal/store/turso.go), so a second way into a connection is a
 	// second way to take the test binary down — the same defect
 	// store.Pending had. Dropping the table is the honest way to reach
@@ -141,7 +141,7 @@ func TestTheStatementsNameTheirColumns(t *testing.T) {
 // exercise an arrangement nothing runs in.
 func open(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "schedule.db"),
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "schedule.db"),
 		store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)

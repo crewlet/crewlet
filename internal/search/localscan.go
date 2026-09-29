@@ -81,7 +81,7 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		return out, nil
 	}
 	var vectors []SemanticHit
-	if err := n.Index.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := n.Index.estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		vectors, _, err = Semantic(ctx, tx, SemanticQuery{
 			Vector: q.Vector, Model: q.Model, Dim: q.Dim,

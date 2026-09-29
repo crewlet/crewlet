@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -102,14 +103,14 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 
 	// AND THE PUBLISHER'S OWN READING OF THE GATE AGREES, so a write
 	// resolved later is told `evicted` rather than "somebody else won".
-	if reason, gated, err := tracker.NewGates(back.Store).GatedAt(t.Context(),
+	if reason, gated, err := tracker.NewGates(storetest.EstateOf(back.Store).Reader()).GatedAt(t.Context(),
 		statelog.Subject{Kind: string(tracker.KindView), ID: "v-evicted"},
 		self, "op-view-evicted", viewAt); err != nil || !gated ||
 		reason != statelog.ReasonEvicted {
 		t.Fatalf("the tracker's gate reads (%q, %v, %v) for the evicted node's "+
 			"record, want evicted", reason, gated, err)
 	}
-	if reason, gated, err := pages.NewGates(back.Store).GatedAt(t.Context(),
+	if reason, gated, err := pages.NewGates(storetest.EstateOf(back.Store).Reader()).GatedAt(t.Context(),
 		statelog.Subject{Kind: string(pages.KindContainer), ID: "EVICTED"},
 		self, "", pageAt); err != nil || !gated ||
 		reason != statelog.ReasonEvicted {
@@ -234,7 +235,7 @@ func requireWriter(t *testing.T, running *runningLog, seq uint64, writer string)
 func requireRow(t *testing.T, back *Backends, table, column, key string, want bool) {
 	t.Helper()
 	var n int
-	if err := back.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(back.Store).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM `+table+` WHERE `+column+` = ?`, key).Scan(&n)
 	}); err != nil && !errors.Is(err, sql.ErrNoRows) {

@@ -340,11 +340,11 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 func (w *Writer) unvouchedCreate(ctx context.Context, opID string, task Task,
 	minted statelog.Result) (WriteResult, error) {
 
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{Result: minted}, nil
 	}
 	var held bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		_, held, err = readTask(ctx, tx, task.ID)
 		return err
@@ -481,7 +481,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	id string) (WriteResult, error) {
 
 	out := WriteResult{Result: result}
-	if w.db == nil {
+	if w.db.IsZero() {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
 			"earlier copy of this operation, and this writer has no store to "+
 			"read its key from", id))
@@ -489,7 +489,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	}
 	var task Task
 	var held bool
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		task, held, err = readTask(ctx, tx, id)
 		return err
@@ -1066,12 +1066,12 @@ func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
 // sequence's later step, whose scope names the container and whose own decide
 // re-reads everything it acts on.
 func (w *Writer) taskProject(ctx context.Context, id string) (string, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return "", fmt.Errorf("tracker: this writer has no store to read task "+
 			"%s's project from", id)
 	}
 	var project string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		task, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -1337,11 +1337,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		carried []Tag
 		arrived bool
 	)
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the subtree a cross-project move re-keys")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, taskID)
 		switch {
@@ -1542,7 +1542,7 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 // down is a move that is done, and one in the trash is frozen until somebody
 // restores it.
 func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return false, fmt.Errorf("tracker: this writer has no store, so it " +
 			"cannot read the subtree an abandoned move left behind")
 	}
@@ -1551,7 +1551,7 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 		subtree []Task
 		marked  bool
 	)
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -1775,7 +1775,7 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 // tagsOf reads a project's tag set outside any decision.
 func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
 	var set TagSet
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		stored, held, err := readTagSet(ctx, tx, project)
 		if err != nil {
 			return err
@@ -1826,11 +1826,11 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 	defer claim.release(ctx)
 
 	var task Task
-	if w.db == nil {
+	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
 			"so it cannot read the children a merge re-parents")
 	}
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		current, held, err := readTask(ctx, tx, duplicate)
 		switch {
@@ -1951,7 +1951,7 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 	var after string
 	for {
 		var batch []Task
-		if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 			var err error
 			batch, err = readChildBatch(ctx, tx, duplicate, project, after, WalkBatch)
 			return err

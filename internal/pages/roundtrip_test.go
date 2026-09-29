@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE WHOLE PATH: a write reaches the broker, the applier and the reader.
@@ -27,7 +28,7 @@ var wednesday = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 type roundTrip struct {
 	t       *testing.T
-	db      *store.DB
+	db      store.PartitionHandle
 	log     *js.DomainLog
 	store   *pages.Store
 	applier *pages.Applier
@@ -67,15 +68,11 @@ func newRoundTrip(t *testing.T) *roundTrip {
 }
 
 // openNodeStore opens one node's own store, closed with the test.
-func openNodeStore(t *testing.T, name string) *store.DB {
+func openNodeStore(t *testing.T, name string) store.PartitionHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), name),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), name), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
@@ -85,15 +82,15 @@ func openNodeStore(t *testing.T, name string) *store.DB {
 // newRoundTripOn is the harness's node over a log and a store it is handed:
 // the ones [newRoundTrip] opens, or a SECOND node joining the same log under
 // its own id and its own store — the shape a race between two nodes needs.
-func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
+func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	nodeID string) *roundTrip {
 
 	t.Helper()
-	rows, err := pages.NewRows(db, statelog.EstateStream(pages.Domain{}))
+	rows, err := pages.NewRows(db.Reader(), statelog.EstateStream(pages.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := pages.NewFence(db, nodeID)
+	fence := pages.NewFence(db.Reader(), nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address. The log's own
@@ -121,7 +118,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Log: log, Rows: rows, Fence: fence,
-		Gates: pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -130,7 +127,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 		t.Fatalf("build the publisher: %v", err)
 	}
 	kb, err := pages.NewStore(pages.Options{
-		Publisher: publisher, DB: db,
+		Publisher: publisher, DB: db.Reader(),
 		Now: func() time.Time { return wednesday },
 	})
 	if err != nil {
@@ -140,13 +137,13 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	// reader its own transaction would exercise the SQL and none of the
 	// contract the rows are served under — which is the shape that let the
 	// level be a label for as long as it was.
-	authority, err := statelogtest.LocalReader(pages.Domain{}, db.Replicated(),
+	authority, err := statelogtest.LocalReader(pages.Domain{}, db,
 		waiter.Committed())
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: db, Log: authority, Committed: waiter.Committed,
+		DB: db.Reader(), Log: authority, Committed: waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -196,7 +193,7 @@ func (r *roundTrip) drain() {
 			Payload:  payload,
 			StoredAt: storedAt,
 		}
-		if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 			reason, gated, err := r.applier.Gated(r.t.Context(), tx, record)
 			if err != nil {
 				return err

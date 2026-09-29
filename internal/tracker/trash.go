@@ -319,12 +319,12 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 // descendant that arrives after this read is left live rather than removed,
 // which is the safe direction and which a re-run fixes.
 func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return nil, fmt.Errorf("tracker: this writer has no store, so it "+
 			"cannot read task %s's subtree; a subtree removal needs one", id)
 	}
 	var out []Task
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		out, err = readSubtree(ctx, tx, id)
 		return err
@@ -341,11 +341,11 @@ func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
 // is the whole point of the column: a restore brings back exactly what one
 // removal took.
 func (w *Writer) removedWith(ctx context.Context, id string) ([]Task, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return nil, nil
 	}
 	var out []Task
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT id, project_key FROM tracker_tasks
 			 WHERE removed_with = ? AND removed_at IS NOT NULL

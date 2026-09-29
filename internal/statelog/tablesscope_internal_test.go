@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE SCOPE INDEX IS THE SAME ROWS AT EVERY CHUNK WIDTH.
@@ -98,12 +99,16 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 // reads its scope index back in path order.
 func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []string {
 	t.Helper()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "scope.db"), store.Options{})
+	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "scope.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	rep := db.Replicated()
+	file := storetest.LayoutZero(1)
+	if _, err := db.OpenPartition(ctx, file); err != nil {
+		t.Fatalf("open %s: %v", file.Name, err)
+	}
+	rep := db.PartitionHandle(file.Name)
 
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {

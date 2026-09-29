@@ -105,11 +105,10 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	// ONE ESTATE, opened as one. This file is a copy of the replicated
-	// estate — the node's own or a backup's — and opening it as a node
-	// would apply the OTHER estate's whole migration sequence into it and
-	// open a second file beside it.
-	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
+	// ONE FILE, opened as one. This is layout 0's partition — the node's
+	// own or a backup's copy of it — and opening it as a node would apply
+	// the node estate's whole migration sequence into it.
+	db, err := store.OpenEstate(ctx, store.EstatePartition, path, store.Options{})
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}

@@ -185,11 +185,11 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View) (WriteRe
 // A view this node does not hold reports no move: there is no strip for it to
 // be leaving.
 func (w *Writer) viewHome(ctx context.Context, id, home string) (string, bool, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return "", false, nil
 	}
 	var kind, container string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx,
 			`SELECT container_kind, container_id FROM tracker_views WHERE id = ?`, id)
 		return row.Scan(&kind, &container)

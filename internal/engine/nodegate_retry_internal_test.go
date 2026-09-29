@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -133,7 +134,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 			}
 			for _, running := range identity {
 				waitApplied(t, running)
-				rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+				rows, err := running.domain.(evictionLister).Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
 				if err != nil {
 					t.Fatalf("read %s's evictions: %v", running.domain.Name(), err)
 				}
@@ -176,7 +177,7 @@ func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 				"an answer for an operation that never ran", name, b[name].Position)
 		}
 		waitApplied(t, running)
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
 		if err != nil {
 			t.Fatalf("read %s's evictions: %v", name, err)
 		}
@@ -244,7 +245,7 @@ func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 		t.Fatalf("a superseded retry moved the logs from %v to %v", before, after)
 	}
 	for _, running := range identity {
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
 		if err != nil || len(rows) != 1 || !rows[0].Back {
 			t.Fatalf("%s holds %+v (%v) after the refused retry, want %s still back",
 				running.domain.Name(), rows, err, away)
@@ -343,7 +344,7 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 	e, back, _ := trimmedTracker(t)
 	gate, _, recs := recordingGate(t, e, back)
 	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
-	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(back.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DROP TABLE pages_ops`)
 		return err
 	}); err != nil {
@@ -649,7 +650,7 @@ func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, []gateLo
 		if err != nil {
 			t.Fatalf("a recorded publisher for %s: %v", name, err)
 		}
-		gl, err := gateLogFor(running, pub, back.Store, s.nodeID, nil)
+		gl, err := gateLogFor(running, pub, storetest.EstateOf(back.Store).Reader(), s.nodeID, nil)
 		if err != nil {
 			t.Fatalf("the gate's writer for %s: %v", name, err)
 		}

@@ -32,9 +32,9 @@ func ring(t *testing.T, ids ...string) secrets.Keyring {
 
 func secretStore(t *testing.T, k secrets.Keyring) (*store.SecretValues, *store.DB, secrets.Cipher) {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "s.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "s.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if len(k.Keys) == 0 {

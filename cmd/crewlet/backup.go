@@ -80,6 +80,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		NodeID     string    `json:"node_id"`
 		Stores     []struct {
 			Estate     string   `json:"estate"`
+			Partition  string   `json:"partition"`
 			File       string   `json:"file"`
 			Source     string   `json:"source"`
 			Bytes      int64    `json:"bytes"`
@@ -111,8 +112,14 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(w, "store\t—\t—\tnot on this node")
 	}
 	for _, st := range manifest.Stores {
+		// A PARTITION BY NAME, because a node's partitions are all one
+		// estate and the name is what says which of them this copy is.
+		what := st.Estate
+		if st.Partition != "" {
+			what += " " + st.Partition
+		}
 		fmt.Fprintf(w, "store (%s)\t%s\t%s\t%d migrations\n",
-			st.Estate, st.File, humanBytes(st.Bytes), len(st.Migrations))
+			what, st.File, humanBytes(st.Bytes), len(st.Migrations))
 	}
 	// THE CHUNKS ARE THE COMPANY'S, not this node's share: absent only where
 	// the copy names no file at all.

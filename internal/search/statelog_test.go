@@ -53,9 +53,9 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 // count is what says whether anything was published: a record the publisher
 // refused is a batch that published nothing, and a tick that published
 // nothing certifies nothing.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, db *store.DB) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: pub, Store: db, Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: pub, Estate: db, Log: statelog.EstateStream(search.Domain{}).Name,
 		// THE SUITE'S ONE NODE, applied through its own end: the corpus is
 		// one document, below the index's minimum, so the step decides
 		// nothing whatever it reads.

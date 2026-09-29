@@ -174,7 +174,7 @@ func applyInto(t *testing.T, new Factory, records []suiteRecord) map[string]int 
 	c := new(t)
 	db := openEstate(t, c)
 
-	w, err := db.Replicated().Writer(t.Context())
+	w, err := db.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("pin a writer: %v", err)
 	}

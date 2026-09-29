@@ -202,11 +202,11 @@ func TestARetryOfAWriteThatLandedIsAnsweredWithIt(t *testing.T) {
 // arrives.
 func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	t.Helper()
-	rows, err := tracker.NewRows(r.db, statelog.EstateStream(tracker.Domain{}))
+	rows, err := tracker.NewRows(r.db.Reader(), statelog.EstateStream(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := tracker.NewFence(r.db, r.nodeID)
+	fence := tracker.NewFence(r.db.Reader(), r.nodeID)
 	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
 	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
 		first, last, err := r.log.Bounds(ctx)
@@ -216,7 +216,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 	lost := &lossyLog{Appender: r.log}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Log: lost, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(r.db), Waiter: r.waiter, Identity: r.waiter,
+		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Identity: r.waiter,
 		NodeID: r.nodeID, Admission: r.reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
@@ -225,7 +225,7 @@ func (r *roundTrip) lossyWriter(t *testing.T) (*tracker.Writer, *lossyLog) {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: r.db, NodeID: r.nodeID, Claims: memory.New(),
+		Publisher: publisher, DB: r.db.Reader(), NodeID: r.nodeID, Claims: memory.New(),
 		Actor: "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})

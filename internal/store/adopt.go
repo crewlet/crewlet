@@ -172,7 +172,7 @@ func RemoveCopy(path string) error {
 // its pages already applied, and the whole point here is that the database is
 // self-contained the instant this returns.
 func checkpointAndClose(ctx context.Context, path string) error {
-	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
+	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1}, nil)
 	if err != nil {
 		return err
 	}
@@ -187,91 +187,5 @@ func checkpointAndClose(ctx context.Context, path string) error {
 		Scan(&busy, &logFrames, &checkpointed); err != nil {
 		return fmt.Errorf("store: checkpoint %s: %w", path, err)
 	}
-	return nil
-}
-
-// CloseReplicated and ReopenReplicated bracket a join's install, keeping the
-// handle every caller holds valid across it.
-//
-// # Why a bracket and not a reconstruction
-//
-// A join arrives at a node that is already assembled: the engine holds one
-// *DB and hands it to the applier, the write authority, the read seam, the
-// projector and the backup. Returning a NEW handle would mean re-threading
-// every one of them, and the failure of missing one is silent — a subsystem
-// still reading the file that was replaced, which opens, answers, and answers
-// from the state this node adopted its way out of.
-//
-// So the outer handle is stable and its PEER is what changes. A caller that
-// took [DB.Replicated] before the swap holds the old one — which is why
-// nothing long-lived may take it: the state log's framework resolves the peer
-// through the node handle on every call, and the engine ends every applier,
-// whose pinned connections are the only long-held claims on the file, before
-// it calls this. That is what makes an adoption possible on a RUNNING node
-// rather than only at boot.
-//
-// # Why the close is separate from the rename
-//
-// [AdoptFile] takes no handle and both files must already be closed when it
-// runs: this process's claim is on the PATH rather than the inode, so an open
-// handle would go on writing into a file that is no longer at that name. The
-// join owns the rename between these two calls, and it is the join that knows
-// whether it reached it.
-func (d *DB) CloseReplicated() error {
-	switch {
-	case d == nil || d.sql == nil:
-		return fmt.Errorf("store: no handle to close a replicated estate on")
-	case d.estate != EstateNode:
-		return fmt.Errorf("store: a %s handle has no replicated peer — the "+
-			"bracket is the node handle's, because that is the one every "+
-			"caller reaches the replicated estate through", d.estate)
-	case d.Replicated() == nil:
-		// ALREADY CLOSED IS NOT AN ERROR: a join that failed between
-		// the close and the rename unwinds by reopening, and an unwind
-		// that had to know how far it got would need a record of that
-		// which nothing keeps — the adoption row stamps when an
-		// adoption began and whether it completed, not the step it
-		// reached.
-		return nil
-	}
-	err := d.replicated.Swap(nil).Close()
-	if err != nil {
-		return fmt.Errorf("store: close the replicated estate: %w", err)
-	}
-	return nil
-}
-
-// ReopenReplicated brings the peer back up at the same path, with the same
-// options, running the migrator: an artefact from a peer on an OLDER build is
-// one this node brings forward, and one from a newer build was refused before
-// the transfer started.
-//
-// A failure here leaves the node with NO replicated estate rather than with
-// the old one, and says so: after the rename the old database is gone, and a
-// handle that quietly went on answering from a file the caller cannot name is
-// the failure the whole sequence is against.
-func (d *DB) ReopenReplicated(ctx context.Context) error {
-	switch {
-	case d == nil || d.sql == nil:
-		return fmt.Errorf("store: no handle to reopen a replicated estate on")
-	case d.estate != EstateNode:
-		return fmt.Errorf("store: a %s handle has no replicated peer to reopen",
-			d.estate)
-	case d.Replicated() != nil:
-		return nil
-	}
-	path := ReplicatedPath(d.path, d.opened.ReplicatedPath)
-	// THE PROBE IS NOT REPEATED, for [Open]'s reason: it answers a
-	// question about the driver compiled into this process, and a file
-	// arriving from a peer did not change which driver that is. HANDED OVER
-	// rather than assigned afterwards, so the adopted estate's own
-	// `store_opened` line reports the capabilities it will actually use —
-	// an adoption is precisely when an operator reads that line.
-	replicated, err := openEstate(ctx, EstateReplicated, path, d.opened, &d.caps)
-	if err != nil {
-		return fmt.Errorf("store: reopen the replicated estate at %s — this "+
-			"node has none open and cannot serve without one: %w", path, err)
-	}
-	d.replicated.Store(replicated)
 	return nil
 }

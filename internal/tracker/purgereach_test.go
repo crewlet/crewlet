@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -315,13 +316,9 @@ func TestAPurgeWhoseReachGrewAfterItsScopeWasReadIsRefused(t *testing.T) {
 
 	// A PEER on the same log, caught up, which makes the dependent wait —
 	// both halves, the second on the purged task's own subject.
-	peerDB, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "peer.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the peer's store: %v", err)
-	}
-	t.Cleanup(func() { _ = peerDB.Close() })
-	peer := newRoundTripOn(t, a.broker, a.log, peerDB, "node-b")
+	peerDBNode, peerDB := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "peer.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = peerDBNode.Close() })
+	peer := newRoundTripOn(t, a.broker, a.log, peerDBNode, peerDB, "node-b")
 	peer.drain()
 	peer.applyWhileWriting()
 	peer.waitOn(dependent, purged)
@@ -334,7 +331,7 @@ func TestAPurgeWhoseReachGrewAfterItsScopeWasReadIsRefused(t *testing.T) {
 	}
 	a.applyWhileWriting()
 	operator := a.writer.As("ops-1", tracker.AuthorOperator, tracker.Provenance{})
-	_, err = operator.PurgeTask(t.Context(), "op-purge", purged.ID, purged.Project,
+	_, err := operator.PurgeTask(t.Context(), "op-purge", purged.ID, purged.Project,
 		"a duplicate import")
 	if !errors.Is(err, statelog.ErrConflict) || !strings.Contains(err.Error(), dependent.ID) {
 		t.Fatalf("a purge whose reach grew to %s after its scope was read answered %v, "+

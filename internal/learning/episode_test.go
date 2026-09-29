@@ -22,9 +22,9 @@ func episodes(t *testing.T, opts ...func(*store.Options)) *learning.Episodes {
 	for _, fn := range opts {
 		fn(&o)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "l.db"), o)
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "l.db"), o)
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return learning.NewEpisodes(db)
@@ -470,9 +470,9 @@ func TestListColumnsAlwaysHoldAJSONArray(t *testing.T) {
 	//
 	// Found by mutation: dropping the guard changed no Go-visible
 	// behaviour, so the property had to be asserted at the column.
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "j.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "j.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	e := learning.NewEpisodes(db)

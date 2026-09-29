@@ -69,6 +69,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // Candidate is a domain under test, with the two things a suite needs that a
@@ -91,7 +92,7 @@ type Candidate struct {
 
 	// Migrate creates this domain's own tables in a fresh replicated
 	// estate. The framework's three are already there.
-	Migrate func(ctx context.Context, db *store.DB) error
+	Migrate func(ctx context.Context, db store.PartitionHandle) error
 
 	// Encode builds a valid record for an object of this domain. The
 	// suite varies the version to reach the deferral contract, so a
@@ -105,14 +106,14 @@ type Candidate struct {
 
 	// Rows builds the domain's own read seam over an estate, on the log spec
 	// names — the one its production publisher decides through.
-	Rows func(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error)
+	Rows func(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error)
 
 	// Write performs at least one write through the domain's OWN
 	// production write path — the writer every caller reaches, not a
 	// fixture — over the publisher the suite hands it, which decides from
 	// db. It is how [Stamped] reaches the one builder that can forget the
 	// framework's stamp.
-	Write func(ctx context.Context, pub *statelog.Publisher, db *store.DB) error
+	Write func(ctx context.Context, pub *statelog.Publisher, db store.PartitionReader) error
 
 	// Generation is the domain's generation record — the one a reanchor opens
 	// a generation with — or nil for a domain that keeps none. What the
@@ -164,17 +165,14 @@ func Run(t *testing.T, new Factory) {
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
 }
 
-// openEstate brings up a replicated estate with the framework's tables and the
-// candidate's own.
-func openEstate(t *testing.T, c Candidate) *store.DB {
+// openEstate brings up a partition with the framework's tables and the
+// candidate's own, and answers the handle the runtime would hand the
+// candidate's applier and readers.
+func openEstate(t *testing.T, c Candidate) store.PartitionHandle {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := node.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
@@ -188,10 +186,10 @@ func openEstate(t *testing.T, c Candidate) *store.DB {
 
 // countRows is what determinism and idempotency are both asserted over: the
 // exact contents of every table the domain declares, in a stable order.
-func countRows(t *testing.T, db *store.DB, tables map[string]statelog.TableClass) map[string]int {
+func countRows(t *testing.T, db store.PartitionHandle, tables map[string]statelog.TableClass) map[string]int {
 	t.Helper()
 	out := map[string]int{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		for name := range tables {
 			var n int
 			if err := tx.QueryRowContext(t.Context(),

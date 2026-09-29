@@ -47,9 +47,9 @@ func runSuite(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	db, err := store.Open(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
+	db, err := store.OpenNode(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "api test: store.Open:", err)
+		fmt.Fprintln(os.Stderr, "api test: store.OpenNode:", err)
 		return 2
 	}
 	defer func() { _ = db.Close() }()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // pageRow is one row of pages_heads as this corpus reads it.
@@ -31,7 +32,7 @@ type pageRow struct {
 func TestARenamedPageIsNotReEmbedded(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
-	corpus := search.PageCorpus{DB: db}
+	corpus := search.PageCorpus{DB: storetest.EstateOf(db).Reader()}
 
 	writePage(t, db, pageRow{
 		id: "p1", container: "eng", title: "Runbook", body: "how to restart",
@@ -87,7 +88,7 @@ func TestARenamedPageIsNotReEmbedded(t *testing.T) {
 func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)
-	corpus := search.PageCorpus{DB: db}
+	corpus := search.PageCorpus{DB: storetest.EstateOf(db).Reader()}
 
 	for _, row := range []pageRow{
 		{id: "kept", container: "eng", title: "Kept", body: "b", status: "published", edit: 1},
@@ -127,11 +128,7 @@ func TestAWithdrawnPageLosesItsVector(t *testing.T) {
 
 func pagesStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -144,7 +141,7 @@ func writePage(t *testing.T, db *store.DB, row pageRow) {
 	if row.trashed {
 		trashed = int64(1)
 	}
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.WithoutCancel(t.Context()), `
 			INSERT INTO pages_heads
 				(id, container, title, title_norm, body, status, edit_version,
@@ -166,7 +163,7 @@ func writePage(t *testing.T, db *store.DB, row pageRow) {
 
 func writeVector(t *testing.T, db *store.DB, source, id string, rev int64) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(context.WithoutCancel(t.Context()), `
 			INSERT INTO kb_vectors
 				(source, source_id, source_rev, model, dim, search_shard,

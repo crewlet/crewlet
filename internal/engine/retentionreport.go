@@ -330,9 +330,15 @@ func (r *retention) replica() statelog.ReplicaReport {
 	out := statelog.ReplicaReport{
 		RejoinWindowSeconds: r.cfg.RejoinWindow().Seconds(),
 	}
-	if r.db != nil {
-		if info, err := os.Stat(r.db.Replicated().Path()); err == nil {
-			out.StoreBytes = info.Size()
+	// EVERY PARTITION THE NODE HOLDS, because replacing the node is
+	// adopting each of them.
+	for _, name := range r.db.OpenPartitions() {
+		part, err := r.db.PartitionDB(name)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(part.Path()); err == nil {
+			out.StoreBytes += info.Size()
 		}
 	}
 	out.ProjectedJoinSeconds = statelog.ProjectJoinSeconds(out.StoreBytes)

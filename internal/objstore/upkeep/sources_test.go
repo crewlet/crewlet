@@ -108,7 +108,7 @@ func (e sqlEstate) Read(ctx context.Context, _ statelog.Position, fn func(*sql.T
 // judged unreferenced and deleted.
 func TestAReadOfASlotRunAnswersExactlyThatRun(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "refs.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "refs.db"), store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

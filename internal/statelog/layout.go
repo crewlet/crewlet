@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The vocabulary of a partitioned estate: a SPACE of numbered PARTITIONS, a
@@ -315,6 +316,19 @@ func (l Layout) Logs(p PartitionID) []LogID {
 		out = append(out, LogID{Domain: d, Partition: p})
 	}
 	return out
+}
+
+// File is partition p of this layout as the store opens it: its layout, its
+// name, and one log for each domain its space carries — each of which pins a
+// writer on the file for the life of its apply loop — or an error naming a
+// partition this layout does not have.
+func (l Layout) File(p PartitionID) (store.PartitionFile, error) {
+	logs := l.Logs(p)
+	if len(logs) == 0 {
+		return store.PartitionFile{}, fmt.Errorf("%w: layout %d has no partition %q",
+			ErrInvalidPartitionID, l.Number, p)
+	}
+	return store.PartitionFile{Layout: l.Number, Name: p.String(), Logs: len(logs)}, nil
 }
 
 // Count is how many partitions the space has in this layout, or 0 for a

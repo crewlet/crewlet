@@ -143,14 +143,19 @@ func (r *retention) poolWait(db *store.DB, file string) {
 // own list is unexported and is about REMOVING sidecars from a copy.
 const walSuffix = "-wal"
 
-// storeFiles is every database file this node holds, in a stable order.
+// storeFiles is every database file this node holds, in a stable order: its
+// own, then each partition it holds open by name. A partition an adoption holds
+// closed is not measured while it is closed — the file under its name is the
+// one being replaced.
 func storeFiles(db *store.DB) []*store.DB {
 	if db == nil {
 		return nil
 	}
 	out := []*store.DB{db}
-	if peer := db.Replicated(); peer != nil && peer != db {
-		out = append(out, peer)
+	for _, name := range db.OpenPartitions() {
+		if part, err := db.PartitionDB(name); err == nil {
+			out = append(out, part)
+		}
 	}
 	return out
 }
@@ -194,10 +199,11 @@ func (r *retention) space(out *statelog.Reading) {
 			out.WALBytes = max(out.WALBytes, wal)
 		}
 	}
-	// ONE VOLUME, from the node estate's path. Both files are opened under
+	// ONE VOLUME, from the node estate's path. Every file is opened under
 	// `store.dir` and a deployment that split them across two mounts would
-	// need two free counts — but it cannot: [store.Open] derives both from
-	// one directory.
+	// need two free counts — but it cannot: [store.ReplicatedPath] derives
+	// the partitions' directory from the node's own path unless an operator
+	// moves it.
 	if free, err := freeSpace(r.db.Path()); err == nil {
 		out.FreeBytes = free
 	}

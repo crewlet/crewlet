@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -161,7 +162,7 @@ func commentOn(r *roundTrip, taskID, op, id string) (tracker.WriteResult, error)
 func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundTrip {
 	t.Helper()
 	stream := statelog.EstateStream(tracker.Domain{}).Name
-	at, _, _, err := statelog.CursorFor(t.Context(), donor.db.Replicated(), stream)
+	at, _, _, err := statelog.CursorFor(t.Context(), donor.db, stream)
 	if err != nil {
 		t.Fatalf("read the donor's checkpoint: %v", err)
 	}
@@ -175,7 +176,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 				return statelog.Health{Position: at, Drained: true, Lag: &lag}
 			},
 		}},
-		DB: donor.db, Dir: dir, NodeID: "node-a", EngineVersion: "v0.0.0-test",
+		Partition: donor.db, Dir: dir, NodeID: "node-a", EngineVersion: "v0.0.0-test",
 		Counted:  func(context.Context) (int, error) { return 3, nil },
 		Interval: 24 * time.Hour,
 	})
@@ -203,17 +204,14 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	t.Cleanup(func() { cancel(); <-served })
 
 	nodePath := filepath.Join(t.TempDir(), "node.db")
-	joiner, err := store.Open(t.Context(), nodePath, store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the joiner's store: %v", err)
-	}
-	t.Cleanup(func() { _ = joiner.Close() })
+	joinerNode, joiner := storetest.OpenEstate(t, nodePath, store.Options{}, 1)
+	t.Cleanup(func() { _ = joinerNode.Close() })
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains: map[string]statelog.Registered{"tracker": {
 			Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}),
 			Log: statelog.LogID{Domain: tracker.Domain{}.Name(), Partition: statelog.EstatePartition},
 		}},
-		LivePath: joiner.ReplicatedPath(),
+		LivePath: storetest.Partition(t, joiner).Path(),
 		NodeID:   "node-b",
 		Conn:     donor.broker.Conn(),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
@@ -222,18 +220,14 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
 			return func() {}, nil
 		},
-		Close: func(context.Context) error { return joiner.Close() },
+		Close: func(context.Context) error { return joinerNode.ClosePartition(joiner.Name()) },
 		Reopen: func(ctx context.Context) error {
-			reopened, err := store.Open(ctx, nodePath, store.Options{PinnedWriters: 1})
-			if err != nil {
-				return err
-			}
-			joiner = reopened
-			return nil
+			_, err := joinerNode.OpenPartition(ctx, storetest.LayoutZero(1))
+			return err
 		},
 		Record: func(ctx context.Context, began time.Time, from string,
 			m statelog.Manifest, phase statelog.AdoptionPhase) error {
-			return statelog.RecordAdoption(ctx, joiner, began, from, m, phase)
+			return statelog.RecordAdoption(ctx, joinerNode, began, from, m, phase)
 		},
 	})
 	if err != nil {
@@ -252,7 +246,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	r := newRoundTripOn(t, donor.broker, donor.log, joiner, "node-b")
+	r := newRoundTripOn(t, donor.broker, donor.log, joinerNode, joiner, "node-b")
 	r.consumed = at.Seq
 	r.waiter.reach(at)
 	return r
@@ -291,8 +285,8 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	// THE SWEEP, with a cutoff past the row — the arithmetic of a month
 	// passing, done by the job that runs it.
 	sweep, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.db,
-		DB: r.db.Replicated(),
+		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Applier: r.applier, Fetch: noFetch{}, Log: r.log, Node: r.node,
+		DB: r.db,
 	})
 	if err != nil {
 		t.Fatalf("build the ledger's owner: %v", err)

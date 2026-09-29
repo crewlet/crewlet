@@ -59,7 +59,7 @@ func referencedIn(ctx context.Context, path string, tables []objstore.ReferenceT
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
+	db, err := store.OpenEstate(ctx, store.EstatePartition, path, store.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("backup: open the copy to read its chunks: %w", err)
 	}

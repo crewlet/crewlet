@@ -41,7 +41,7 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 		t.Fatalf("the task survived its purge: %+v", answer.Rows)
 	}
 
-	gates := tracker.NewGates(r.db)
+	gates := tracker.NewGates(r.db.Reader())
 	reason, gated, err := gates.GatedAt(t.Context(),
 		statelog.Subject{Kind: "task", ID: "t-1"}, "node-a", "op-purge",
 		purged.Position)
@@ -135,7 +135,7 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 	r.redeliver(patch.Position.Seq)
 
 	var rejects int
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT rejects FROM tracker_deletions WHERE task_id = ?`,
 			"t-1").Scan(&rejects)
@@ -167,7 +167,7 @@ func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	r := newRoundTrip(t)
 	standing := func(node string) (held, back bool) {
 		t.Helper()
-		rows, err := tracker.Domain{}.Evictions(t.Context(), r.db)
+		rows, err := tracker.Domain{}.Evictions(t.Context(), r.db.Reader())
 		if err != nil {
 			t.Fatalf("read the evictions: %v", err)
 		}
@@ -305,7 +305,7 @@ func TestEveryGateTableIsCoveredByThePredicate(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	var tables []string
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			`SELECT name FROM sqlite_master WHERE type = 'table'
 			 AND (name LIKE 'tracker_%evict%' OR name LIKE 'tracker_%deletion%')

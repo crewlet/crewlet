@@ -563,7 +563,7 @@
               "type": "string"
             }
           ],
-          "description": "Connection pool bound; 0 takes the store default."
+          "description": "Connection pool bound for the node's database, and the read concurrency its partition files share (at least two readers each, beside one writer per log); 0 takes the store default of 4."
         },
         "objects": {
           "$ref": "#/$defs/StoreObjects"
@@ -578,7 +578,7 @@
           ]
         },
         "replicated_path": {
-          "description": "Second local database, for replicated state; empty puts it beside path.",
+          "description": "Where the replicated estate's partition files live: layout 0's file, with later layouts' beside it; empty puts it beside path.",
           "type": [
             "string",
             "number",

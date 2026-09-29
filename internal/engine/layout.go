@@ -5,6 +5,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -132,6 +133,23 @@ func (e *Engine) layout() statelog.Layout {
 		return n.log.layout
 	}
 	return LayoutZero()
+}
+
+// domainEstate is layout 0's one partition as this node's DOMAIN-LEVEL
+// consumers read it — a seat's tracker search, the search index and its
+// coverage — which is where [stateLog.Domain]'s logs are, while those
+// consumers key nothing to a partition. A node holding no such partition
+// answers [store.ErrNoEstate] through it.
+//
+// A READ handle, because every one of those consumers only reads: what may
+// write a partition is the short list internal/store's applier gate reads,
+// and a domain-level accessor answering the write handle would have put every
+// caller of it on that list.
+func (e *Engine) domainEstate() store.PartitionReader {
+	if e.backends == nil || e.backends.Store == nil {
+		return store.PartitionReader{}
+	}
+	return e.backends.Store.PartitionHandle(statelog.EstatePartition.String()).Reader()
 }
 
 // estateLog is a registered domain's one log under [LayoutZero], and

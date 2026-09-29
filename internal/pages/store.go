@@ -61,7 +61,7 @@ type Store struct {
 	// see rows before they form a record. It is never the write path's own
 	// snapshot — that is the framework's, taken per append — and nothing
 	// read here is paired with an expectation.
-	db *store.DB
+	db store.PartitionReader
 
 	now      func() time.Time
 	newID    func() string
@@ -73,7 +73,7 @@ type Options struct {
 	// Publisher is the domain's write authority, and DB the replicated
 	// estate its decisions read.
 	Publisher *statelog.Publisher
-	DB        *store.DB
+	DB        store.PartitionReader
 
 	// Now is the clock the AUTHORED instants are stamped from. Nil takes
 	// the wall clock in UTC. An argument rather than a package call, so a
@@ -89,7 +89,7 @@ func NewStore(opts Options) (*Store, error) {
 			"write here is a record on the pages log, and a store with no " +
 			"publisher could validate a page and then write it nowhere")
 	}
-	if opts.DB == nil {
+	if opts.DB.IsZero() {
 		return nil, errors.New("pages: a store is required: a write decides " +
 			"from this node's own applied rows, inside the snapshot the " +
 			"expectation is formed in")
@@ -216,7 +216,7 @@ var errPageMoved = errors.New("pages: the page moved to another space under this
 // empty when this node holds no such page.
 func (s *Store) containerOf(ctx context.Context, pageID string) (string, error) {
 	var container string
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx,
 			`SELECT container FROM pages_heads WHERE id = ?`, pageID).Scan(&container)
 		if errors.Is(err, sql.ErrNoRows) {

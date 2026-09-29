@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -227,20 +228,16 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 	r.drain()
 	ordered := r.logEnd(t)
 
-	older, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "older.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the older node's store: %v", err)
-	}
-	t.Cleanup(func() { _ = older.Close() })
+	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain:  olderTracker{reads: 3},
 		Spec:    statelog.EstateStream(olderTracker{reads: 3}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,
-		Node:    older,
-		DB:      older.Replicated(),
+		Node:    olderNode,
+		DB:      older,
 	})
 	if err != nil {
 		t.Fatalf("build the older node's applier: %v", err)
@@ -259,7 +256,7 @@ func TestABuildBeforeVersionFourRetainsARankOrderAndHaltsAtAPurge(t *testing.T) 
 	value := func(query string) string {
 		t.Helper()
 		var v string
-		if err := older.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := older.Read(t.Context(), func(tx *sql.Tx) error {
 			return tx.QueryRowContext(t.Context(), query).Scan(&v)
 		}); err != nil {
 			t.Fatalf("%s: %v", query, err)
@@ -306,7 +303,7 @@ func (o olderTracker) RecordVersion() int { return o.reads }
 func rankColumn(t *testing.T, h *applyHarness, id string) string {
 	t.Helper()
 	var rank string
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT rank FROM tracker_tasks WHERE id = ?`, id).Scan(&rank)
 	}); err != nil {
@@ -319,7 +316,7 @@ func rankColumn(t *testing.T, h *applyHarness, id string) string {
 func documentOf(t *testing.T, h *applyHarness, id string) tracker.Task {
 	t.Helper()
 	var document []byte
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT document FROM tracker_tasks WHERE id = ?`, id).Scan(&document)
 	}); err != nil {

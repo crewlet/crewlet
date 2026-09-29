@@ -322,7 +322,7 @@ func (e *Embedder) maintainIndex(ctx context.Context, dim int) (int, error) {
 // indexState reads what a tick decides from, in one snapshot.
 func (e *Embedder) indexState(ctx context.Context, dim int) (IndexState, error) {
 	var s IndexState
-	err := e.deps.Store.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		if s.Head, s.Indexed, err = readIndexHead(ctx, tx); err != nil {
 			return err
@@ -378,7 +378,7 @@ func (e *Embedder) train(ctx context.Context, dim int, state IndexState) (int, e
 		})
 	}
 	var set trainingSet
-	err := e.deps.Store.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		set, err = readTrainingSet(ctx, tx, e.deps.Model, dim)
 		return err
@@ -445,7 +445,7 @@ func (e *Embedder) trainFrom(ctx context.Context, dim int, set trainingSet, basi
 func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, error) {
 	var set trainingSet
 	var index IVF
-	err := e.deps.Store.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		if set, err = readTrainingSet(ctx, tx, e.deps.Model, dim); err != nil {
 			return err
@@ -631,7 +631,7 @@ func (e *Embedder) publishIndex(ctx context.Context, dim int, index IndexRecord)
 func (e *Embedder) rollout(ctx context.Context, head IndexHead) (int, error) {
 	var ranges []RolloutRange
 	pending := map[int]bool{}
-	err := e.deps.Store.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		if ranges, err = readRollout(ctx, tx); err != nil {
 			return err

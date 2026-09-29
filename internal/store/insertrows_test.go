@@ -38,7 +38,7 @@ func insertRowsStore(t *testing.T) (*store.DB, *store.Writer) {
 	db, w := openApplierStore(t, filepath.Join(t.TempDir(), "insrows.db"))
 	t.Cleanup(func() { _ = w.Close() })
 	t.Cleanup(func() { _ = db.Close() })
-	rep := db.Replicated()
+	rep := partitionOf(t, db)
 	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), rowsTable)
 		return err

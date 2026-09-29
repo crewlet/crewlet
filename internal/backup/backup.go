@@ -111,12 +111,19 @@ var log = logging.Get("backup")
 // or a shipping script has to look for — see docs/guides/backup.md.
 const ManifestName = "manifest.json"
 
-// storeFileNames are the database copies inside a backup directory, one per
-// estate. Named rather than derived, because these strings are what a restore
-// procedure and every shipping script look for — see docs/guides/backup.md.
+// storeFileNames are the database copies inside a backup directory: the
+// node's own file, and the one partition a backup copies beside it. Named
+// rather than derived, because these strings are what a restore procedure and
+// every shipping script look for — see docs/guides/backup.md.
+//
+// THE PARTITION'S IS store-replicated.db because the partition a backup copies
+// is layout 0's one, estate.000 — the replicated estate a node has always
+// kept, under the name its copy has always had. [estates] refuses a node that
+// holds any other, rather than filing it under a name that says it is the
+// whole estate.
 var storeFileNames = map[store.Estate]string{
-	store.EstateNode:       "store.db",
-	store.EstateReplicated: "store-replicated.db",
+	store.EstateNode:      "store.db",
+	store.EstatePartition: "store-replicated.db",
 }
 
 // streamDirName holds the stream snapshots.
@@ -195,8 +202,12 @@ type Manifest struct {
 // tracker and whose audit log are from different moments — which is not a
 // partial restore, it is an inconsistent one.
 type StoreArtifact struct {
-	// Estate is which of the node's databases this copy is.
+	// Estate is which kind of the node's databases this copy is.
 	Estate store.Estate `json:"estate"`
+
+	// Partition names the partition a partition's copy is, and is empty
+	// for the node's own.
+	Partition string `json:"partition,omitempty"`
 
 	// File is the copy, relative to the backup directory.
 	File string `json:"file"`
@@ -403,7 +414,11 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// replicated estate alone it has the tracker and no audit log, no
 	// memory and no secret bootstrap. Either one restores into a company
 	// that is missing half of itself while looking like a backup.
-	for _, db := range estates(s.store) {
+	files, err := estates(s.store)
+	if err != nil {
+		return Manifest{}, err
+	}
+	for _, db := range files {
 		name := storeFileNames[db.Estate()]
 		info, err := db.Backup(ctx, filepath.Join(dir, name))
 		if err != nil {
@@ -416,6 +431,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 		}
 		manifest.Stores = append(manifest.Stores, StoreArtifact{
 			Estate:     db.Estate(),
+			Partition:  db.File().Name,
 			File:       name,
 			Source:     db.Path(),
 			Bytes:      info.Bytes,
@@ -429,7 +445,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// is the only one that describes the file — and the applier ran
 	// throughout the copy, so the live cursor names where this node was
 	// when the copy started.
-	if replicated := copyOf(manifest, store.EstateReplicated); replicated != "" {
+	if replicated := copyOf(manifest, store.EstatePartition); replicated != "" {
 		path := filepath.Join(dir, replicated)
 		cursors, err := statelog.CursorsInFile(ctx, path)
 		if err != nil {
@@ -480,7 +496,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("backup: measure the copy: %w", err)
 		}
 		for i := range manifest.Stores {
-			if manifest.Stores[i].Estate == store.EstateReplicated {
+			if manifest.Stores[i].Estate == store.EstatePartition {
 				manifest.Stores[i].SHA256 = digest
 				manifest.Stores[i].Bytes = size.Size()
 			}
@@ -533,14 +549,36 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	return manifest, nil
 }
 
-// estates is every database handle a node holds, in copy order: its own store,
-// then the replicated estate beside it.
-func estates(db *store.DB) []*store.DB {
+// estates is every database handle a backup copies, in copy order: the node's
+// own store, then the partition it holds beside it — layout 0's one, the
+// whole replicated estate.
+//
+// A NODE HOLDING NO PARTITION copies its own file alone: it runs no state log,
+// so it holds nothing a log derives. A node holding any partition but layout
+// 0's is REFUSED, naming what it holds: a backup has one partition member,
+// named for the whole estate, and a copy of one partition of many filed under
+// that name would restore as a company missing every other partition's rows.
+func estates(db *store.DB) ([]*store.DB, error) {
 	out := []*store.DB{db}
-	if peer := db.Replicated(); peer != nil {
-		out = append(out, peer)
+	held := db.OpenPartitions()
+	switch {
+	case len(held) == 0:
+		return out, nil
+	case len(held) > 1:
+		return nil, fmt.Errorf("backup: this node holds %d partitions (%v), and a "+
+			"backup copies one partition file, %s, which is layout 0's whole estate",
+			len(held), held, storeFileNames[store.EstatePartition])
 	}
-	return out
+	part, err := db.PartitionDB(held[0])
+	if err != nil {
+		return nil, fmt.Errorf("backup: the partition %s: %w", held[0], err)
+	}
+	if part.File().Layout != 0 {
+		return nil, fmt.Errorf("backup: this node holds the partition %s of layout %d, "+
+			"and a backup copies one partition file, %s, which is layout 0's whole estate",
+			held[0], part.File().Layout, storeFileNames[store.EstatePartition])
+	}
+	return append(out, part), nil
 }
 
 // emptyDir makes dir if it is absent, refuses it if it holds anything, and
@@ -619,14 +657,17 @@ func storeBytes(m Manifest) int64 {
 // treated as a crashed holder, which is exactly right for a crashed holder and
 // exactly wrong for a 40-minute copy of a large store.
 //
-// A handle with no replicated peer (one that IS the replicated estate, rather
-// than the node's own store) gets a no-op release and no pin: there is no
+// A node holding no partition gets a no-op release and no pin: there is no
 // applier cursor to read a position from, so there is nothing to pin at.
 func (s *Service) hold(ctx context.Context) (func(), error) {
-	if s.store.Replicated() == nil {
+	files, err := estates(s.store)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) < 2 {
 		return func() {}, nil
 	}
-	live, err := s.livePositions(ctx)
+	live, err := s.livePositions(ctx, files[1])
 	if err != nil {
 		return nil, err
 	}
@@ -688,11 +729,11 @@ func (s *Service) hold(ctx context.Context) (func(), error) {
 	}, nil
 }
 
-// livePositions is where this node's appliers stand right now.
-func (s *Service) livePositions(ctx context.Context) (map[string]coord.Position, error) {
-	replicated := s.store.Replicated()
+// livePositions is where the appliers of the partition a backup copies stand
+// right now.
+func (s *Service) livePositions(ctx context.Context, partition *store.DB) (map[string]coord.Position, error) {
 	out := map[string]coord.Position{}
-	if err := replicated.Read(ctx, func(tx *sql.Tx) error {
+	if err := partition.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT stream, generation, seq FROM statelog_cursor`)
 		if err != nil {

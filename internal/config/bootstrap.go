@@ -1143,20 +1143,26 @@ type Store struct {
 	// the production shape.
 	SnapshotDir string `yaml:"snapshot_dir,omitempty" json:"snapshot_dir,omitempty" desc:"Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots."`
 
-	// ReplicatedPath is the second database this node owns: everything a
-	// state log's applier writes. Empty puts it beside Path, which is
-	// what makes "back up the data directory" true.
+	// ReplicatedPath is where the replicated estate lives on this node —
+	// everything a state log's applier writes: the file of layout 0's one
+	// partition, with every later layout's partition files kept in the
+	// same directory beside it. Empty puts it beside Path, which is what
+	// makes "back up the data directory" true.
 	//
-	// Separable because the two files have different appetites — the
+	// Separable because the two estates have different appetites — the
 	// replicated one is what a snapshot copies and what a node joining the
 	// fleet writes at line rate — so an operator with a fast local disk
 	// and a large network volume has a real reason to split them. Both are
 	// still this node's alone, and neither is shared with a peer.
-	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Second local database, for replicated state; empty puts it beside path."`
+	ReplicatedPath string `yaml:"replicated_path,omitempty" json:"replicated_path,omitempty" desc:"Where the replicated estate's partition files live: layout 0's file, with later layouts' beside it; empty puts it beside path."`
 
-	// MaxOpenConns bounds the connection pool; 0 takes the store's own
-	// default, which is sized to the dashboard's query concurrency.
-	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound; 0 takes the store default."`
+	// MaxOpenConns bounds the node's own database's pool, and is the read
+	// concurrency the replicated estate's partition files SHARE between
+	// them: each file keeps at least two readers of it, beside one pinned
+	// writer per state log the partition carries. 0 takes the store's own
+	// default of four, which is sized to the dashboard's query
+	// concurrency.
+	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound for the node's database, and the read concurrency its partition files share (at least two readers each, beside one writer per log); 0 takes the store default of 4."`
 
 	// BusyTimeoutSeconds is how long a statement waits for the file lock
 	// before giving up; 0 takes the store's own default.

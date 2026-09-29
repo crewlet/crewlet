@@ -88,7 +88,7 @@ type Writer struct {
 	// a subtree BEFORE their first append. It is never the write path's
 	// own snapshot — that is the framework's, taken per append — and
 	// nothing decided here is paired with an expectation.
-	db *store.DB
+	db store.PartitionReader
 
 	// claims is the coordination a walking sequence takes its claim from,
 	// and nodeID is where it runs — the prefix of every claim's owner, never
@@ -175,7 +175,7 @@ type Writer struct {
 // WriterDeps is everything a writer needs that it does not own.
 type WriterDeps struct {
 	Publisher *statelog.Publisher
-	DB        *store.DB
+	DB        store.PartitionReader
 	Claims    Claims
 	NodeID    string
 
@@ -981,7 +981,7 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"turn twice")
 	case turn.Task == "":
 		return WriteResult{}, fmt.Errorf("tracker: a turn's spend names no task")
-	case w.db == nil:
+	case w.db.IsZero():
 		return WriteResult{}, fmt.Errorf("tracker: this writer holds no " +
 			"replicated estate to read the task's project from; a turn's " +
 			"spend is recorded through a writer that does")
@@ -1020,7 +1020,7 @@ var errTaskMoved = errors.New("tracker: the task moved project under this write"
 // [Writer.taskProject]'s "not on this node", no retry will ever change.
 func (w *Writer) projectForTurn(ctx context.Context, id string) (string, error) {
 	var project string
-	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		task, held, err := readTask(ctx, tx, id)
 		if err != nil {
 			return err
@@ -1306,7 +1306,7 @@ func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
 	if err != nil {
 		return nil, err
 	}
-	if w.db == nil {
+	if w.db.IsZero() {
 		// NO STORE, NO RE-SPREAD, AND THE DRAG STILL LANDS. The applier
 		// flags the project from the key's own length, so the repair is
 		// scheduled by the record rather than by whoever wrote it.
@@ -1314,7 +1314,7 @@ func (w *Writer) placeBetween(ctx context.Context, project, taskID string,
 	}
 
 	var neighbours []Placement
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml (trailing: covers this line only, not the closure)
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, rank FROM tracker_tasks

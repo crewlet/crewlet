@@ -750,14 +750,19 @@ store:
                                     #   separate volume is the production shape
   # replicated_path: "./crewlet-data/crewlet-replicated.db"
                                     #   the REPLICATED estate — everything a
-                                    #   state log's applier writes. Empty puts it
+                                    #   state log's applier writes. It names the
+                                    #   file of the estate's one partition today,
+                                    #   and a partitioned layout keeps each of
+                                    #   its partition files in the same
+                                    #   directory beside it. Empty puts it
                                     #   beside `path`, which is what makes "back
                                     #   up the data directory" true. It is a
-                                    #   second FILE rather than more tables
+                                    #   separate FILE rather than more tables
                                     #   because a snapshot for a joining node is
-                                    #   a copy of this one alone; separate it
-                                    #   only to put it on a different disk, and
-                                    #   never onto the same file as `path`
+                                    #   a copy of a partition's file alone;
+                                    #   separate it only to put it on a
+                                    #   different disk, and never onto the same
+                                    #   file as `path`
   # scratch: false                  #   DELETE this node's store at every boot,
                                     #   under the store's own lock, and open it
                                     #   with no replicated estate at all.
@@ -771,13 +776,17 @@ store:
                                     #   `search eval` commands refuse a scratch
                                     #   store: what they wrote would be gone at
                                     #   the next boot
-  # max_open_conns: 0               #   connection-pool bound; 0 takes the
-                                    #   store's own default, which is four
-                                    #   readers plus one pinned connection per
-                                    #   state-log domain. Raise it if the
-                                    #   `pool_starved` alarm fires — see
-                                    #   reference/alarms.md — which means reads
-                                    #   are queuing before they start
+  # max_open_conns: 0               #   connection-pool bound for this node's
+                                    #   own database, and the read concurrency
+                                    #   the replicated estate's partition files
+                                    #   SHARE: each file keeps at least two
+                                    #   readers of it, plus one pinned
+                                    #   connection per state log the partition
+                                    #   carries. 0 takes the store's own default
+                                    #   of four. Raise it if the `pool_starved`
+                                    #   alarm fires — see reference/alarms.md —
+                                    #   which means reads are queuing before
+                                    #   they start
   # busy_timeout_seconds: 0         #   how long a WRITE waits for the
                                     #   database's write lock before giving up
                                     #   and retrying once; 0 takes the store's

@@ -292,12 +292,12 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 // restored node would, so a copy that cannot be opened is a failed backup
 // rather than a surprise on the worst day of the deployment's life.
 //
-// It goes through openPrepared rather than [Open] deliberately, for two
-// reasons that both matter: Open MIGRATES, which would mutate the artifact
-// being verified, and Open takes the exclusive lock, which is a claim on a
-// file this process is about to rename.
+// It goes through openPrepared rather than [OpenEstate] deliberately, for two
+// reasons that both matter: an open MIGRATES, which would mutate the artifact
+// being verified, and it takes the exclusive lock, which is a claim on a file
+// this process is about to rename.
 func verifyBackup(ctx context.Context, path string, want []string) ([]string, error) {
-	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
+	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: backup verify: the copy at %s will not open: %w", path, err)
 	}

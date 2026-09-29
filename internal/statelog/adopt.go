@@ -330,7 +330,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 	defer func() { _ = store.RemoveCopy(part) }()
 
 	// 4. INSPECT, READ-ONLY, before anything migrates it.
-	schema, err := store.PendingEstate(ctx, store.EstateReplicated, part, store.Options{})
+	schema, err := store.PendingEstate(ctx, store.EstatePartition, part, store.Options{})
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: inspect the artefact: %w", err)
 	}
@@ -341,7 +341,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 				"claim the file does not keep is a corrupt snapshot", applied)
 		}
 	}
-	known, err := store.KnownMigrations(store.EstateReplicated)
+	known, err := store.KnownMigrations(store.EstatePartition)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: read this binary's schema: %w", err)
 	}
@@ -475,7 +475,7 @@ func (a *Adopter) recordScrubbedLedgers(ctx context.Context, part string, m Mani
 	if len(lost) == 0 {
 		return nil
 	}
-	db, err := store.OpenEstate(ctx, store.EstateReplicated, part, store.Options{})
+	db, err := store.OpenEstate(ctx, store.EstatePartition, part, store.Options{})
 	if err != nil {
 		return fmt.Errorf("statelog: open the artefact to record the ledger its "+
 			"donor scrubbed: %w", err)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY TABLE THAT NAMES A CHUNK IS DECLARED, AND EVERY DECLARATION IS A TABLE
@@ -20,13 +21,10 @@ import (
 // deleted a day after they were written.
 func TestEveryTableThatNamesAChunkIsDeclared(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	columns := map[string][]string{}
-	rows, err := db.Replicated().SQL().QueryContext(t.Context(),
+	rows, err := storetest.Partition(t, storetest.EstateOf(db)).SQL().QueryContext(t.Context(),
 		`SELECT m.name, i.name FROM sqlite_master m
 		 JOIN pragma_table_info(m.name) i
 		 WHERE m.type = 'table'`)

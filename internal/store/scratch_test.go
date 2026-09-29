@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"database/sql"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +18,7 @@ import (
 func TestAScratchStoreStartsEmpty(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "scratch.db")
-	first, err := store.Open(t.Context(), path, store.Options{Scratch: true, NodeOnly: true})
+	first, err := store.OpenNode(t.Context(), path, store.Options{Scratch: true})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -33,7 +32,7 @@ func TestAScratchStoreStartsEmpty(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	second, err := store.Open(t.Context(), path, store.Options{Scratch: true, NodeOnly: true})
+	second, err := store.OpenNode(t.Context(), path, store.Options{Scratch: true})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -58,7 +57,7 @@ func TestAScratchStoreStartsEmpty(t *testing.T) {
 	if err := second.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	third, err := store.Open(t.Context(), path, store.Options{NodeOnly: true})
+	third, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("reopen without scratch: %v", err)
 	}
@@ -81,7 +80,7 @@ func TestAScratchStoreStartsEmpty(t *testing.T) {
 func TestAScratchOpenNeverDeletesADatabaseSomebodyElseHolds(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "held.db")
-	held, err := store.Open(t.Context(), path, store.Options{NodeOnly: true})
+	held, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -102,7 +101,7 @@ func TestAScratchOpenNeverDeletesADatabaseSomebodyElseHolds(t *testing.T) {
 
 	// AND THIS ONE: the in-process claim is shared, so the lock alone would
 	// let a scratch open delete a database a caller here is reading.
-	if _, err := store.Open(t.Context(), path, store.Options{Scratch: true, NodeOnly: true}); err == nil {
+	if _, err := store.OpenNode(t.Context(), path, store.Options{Scratch: true}); err == nil {
 		t.Fatal("a scratch open over a store this process holds was allowed")
 	}
 
@@ -113,34 +112,5 @@ func TestAScratchOpenNeverDeletesADatabaseSomebodyElseHolds(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatal("a refused scratch open still deleted the holder's rows")
-	}
-}
-
-// A NODE-ONLY STORE HAS NO REPLICATED ESTATE, and says so on every use.
-//
-// A node without the `data` role holds no copy of the replicated estate, and
-// a code path that reached for one anyway must be told — an empty database in
-// its place reads as a company with nothing in it, which is the answer a seat
-// acts on by filing a duplicate.
-func TestANodeOnlyStoreAnswersNoEstate(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	db, err := store.Open(t.Context(), filepath.Join(dir, "node.db"), store.Options{NodeOnly: true})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer db.Close()
-	if db.Replicated() != nil {
-		t.Fatal("a node-only store opened a replicated estate")
-	}
-	if err := db.Replicated().Read(t.Context(), func(*sql.Tx) error { return nil }); !errors.Is(err, store.ErrNoEstate) {
-		t.Errorf("a read through the absent estate = %v, want ErrNoEstate", err)
-	}
-	if got := db.ReplicatedPath(); got != "" {
-		t.Errorf("a node-only store names a replicated path %q it will never have", got)
-	}
-	matches, _ := filepath.Glob(filepath.Join(dir, "*replicated*"))
-	if len(matches) != 0 {
-		t.Errorf("a node-only store created %v beside itself", matches)
 	}
 }

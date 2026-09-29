@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE INDEX MEETS THE FLOOR CURVE ON EVERY MEMBER OF THE FIXTURE FAMILY, IN
@@ -567,7 +568,7 @@ func TestARowTheRolloutHasNotReachedIsStillFound(t *testing.T) {
 	// THE BEST ANSWER to a query is the document the query IS.
 	var target []byte
 	var targetKey string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		var source, id string
 		if err := tx.QueryRowContext(t.Context(), `
 			SELECT source, source_id, embedding FROM kb_vectors
@@ -581,7 +582,7 @@ func TestARowTheRolloutHasNotReachedIsStillFound(t *testing.T) {
 	}
 	var hits []search.SemanticHit
 	var report search.Stage1Report
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		hits, report, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: target, Model: model, Dim: dim, Probes: 1, Limit: 5,
@@ -739,7 +740,7 @@ func TestTheStoredCodeIsTheQuantizedCode(t *testing.T) {
 			}
 		}
 		var blob []byte
-		if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 			return tx.QueryRowContext(t.Context(), `SELECT vector1bit(?)`,
 				pack(v)).Scan(&blob)
 		}); err != nil {
@@ -1213,7 +1214,7 @@ func measureRecord(generation int64, probes int) search.VectorRecord {
 func readingOf(t testing.TB, db *store.DB, model string, dim int) search.TrainingReading {
 	t.Helper()
 	var reading search.TrainingReading
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		reading, err = search.ReadTrainingSet(t.Context(), tx, model, dim)
 		return err
@@ -1269,7 +1270,7 @@ func indexedStore(t *testing.T, model string, dim, n int) (*store.DB, int64) {
 	rng := rand.New(rand.NewPCG(uint64(n), uint64(dim)))
 	topics := topicCentres(rng, 16, dim)
 	seq := uint64(0)
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		applier := search.NewApplier()
 		for i := range n {
 			source := search.SourcePage
@@ -1321,7 +1322,7 @@ func applyAt(t *testing.T, db *store.DB, rec search.VectorRecord, seq uint64) {
 func applyAll(t *testing.T, db *store.DB, entries []logged) {
 	t.Helper()
 	applier := search.NewApplier()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		for _, entry := range entries {
 			payload, err := entry.rec.Encode()
 			if err != nil {
@@ -1349,7 +1350,7 @@ type installed struct {
 func indexOf(t *testing.T, db *store.DB) installed {
 	t.Helper()
 	var out installed
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
 			SELECT h.generation, h.lists, h.probes, COALESCE(c.centroids, x'')
 			FROM kb_ivf h LEFT JOIN kb_ivf_centroids c ON c.id = 1
@@ -1390,7 +1391,7 @@ func recountLists(t *testing.T, db *store.DB) []string {
 func queryStrings(t *testing.T, db *store.DB, query string) []string {
 	t.Helper()
 	var out []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), query)
 		if err != nil {
 			return err
@@ -1420,7 +1421,7 @@ type codedRow struct {
 func rowsWithCodes(t *testing.T, db *store.DB, dim int) []codedRow {
 	t.Helper()
 	var out []codedRow
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), `
 			SELECT source, source_id, ivf_gen, ivf_list, bits FROM kb_vectors_bin`)
 		if err != nil {
@@ -1503,7 +1504,7 @@ func stage1(t *testing.T, db *store.DB, q search.SemanticQuery) ([]string, searc
 	t.Helper()
 	var out []string
 	var report search.Stage1Report
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		candidates, r, err := search.Stage1(t.Context(), tx, q)
 		report = r
 		for _, c := range candidates {

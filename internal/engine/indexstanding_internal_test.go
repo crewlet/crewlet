@@ -166,6 +166,12 @@ func TestATickStopsWhenItsLeaseCannotBeRenewed(t *testing.T) {
 // noEvictions is an identity log that has not applied any eviction yet.
 type noEvictions struct{ statelog.Domain }
 
-func (noEvictions) Evictions(context.Context, *store.DB) ([]statelog.EvictionRow, error) {
+// HELD TO THE INTERFACE AT COMPILE TIME: a fake whose method stops matching
+// the lister's does not list nothing, it lists NO EVICTIONS AT ALL, and the
+// duty reads that as an unreadable log — which is how this one passed its
+// case for the wrong reason once the lister's parameter moved.
+var _ evictionLister = noEvictions{}
+
+func (noEvictions) Evictions(context.Context, store.PartitionReader) ([]statelog.EvictionRow, error) {
 	return nil, nil
 }

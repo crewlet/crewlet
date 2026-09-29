@@ -308,7 +308,7 @@ func relationKindList() string {
 func (w *Writer) scopeForDependents(ctx context.Context, id string,
 	scope ScopeSet) (ScopeSet, error) {
 
-	if w.db == nil {
+	if w.db.IsZero() {
 		// A WRITER WITH NO REPLICATED ESTATE CANNOT ENUMERATE, and the
 		// honest move is to leave the scope alone rather than refuse
 		// every status write it makes. Such a writer cannot have
@@ -327,7 +327,7 @@ func (w *Writer) scopeForDependents(ctx context.Context, id string,
 		dependents []string
 		filed      map[string]string
 	)
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
 		if err != nil || !held {
 			// NOT HELD IS NOT AN ERROR HERE. The decide is what

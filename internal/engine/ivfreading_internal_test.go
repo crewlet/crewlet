@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE INDEX'S ALARM INPUT DESCRIBES THE SPACE THE COMPANY SEARCHES IN, and
@@ -71,7 +72,7 @@ func TestTheIndexReadingDescribesOnlyTheSpaceTheCompanySearches(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode the verdict: %v", err)
 			}
-			if err := e.backends.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			if err := storetest.EstateOf(e.backends.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 				_, err := search.NewApplier().Apply(t.Context(), tx, statelog.Record{
 					Position: statelog.Position{Stream: "S", Generation: 1, Seq: 9},
 					Payload:  payload,

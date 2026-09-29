@@ -102,10 +102,10 @@ type embedDuty struct {
 	register func(context.Context) ([]coord.NodePositions, error)
 	leases   liveLeases
 
-	// identity is every domain that claims identity, whose eviction records
-	// are how the fleet says a node is gone — the vector log carries none
-	// of its own ([embedDuty.evicted]) — and db the store they are read
-	// from.
+	// identity is every log whose domain claims identity, whose eviction
+	// records are how the fleet says a node is gone — the vector log
+	// carries none of its own ([embedDuty.evicted]) — and db the node whose
+	// partitions they are read from, each log's from its own.
 	identity []*runningLog
 	db       *store.DB
 
@@ -132,7 +132,7 @@ func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 	if running == nil || running.publisher == nil {
 		return
 	}
-	corpora := e.corpora()
+	corpora := e.corpora(s.estate(running.id.Partition).Reader())
 	if len(corpora) == 0 {
 		return
 	}
@@ -170,14 +170,14 @@ func (e *Engine) stopEmbedding() {
 	e.embedding = nil
 }
 
-// corpora is every source kind this node can embed.
+// corpora is every source kind this node can embed out of one partition.
 //
 // ONE CONSTRUCTION SITE, because the coverage gauge and the duty must be
 // counting and filling the same set: a corpus the duty embeds and the gauge
 // does not reports a company as permanently short of coverage, and the reverse
 // reports it as complete while a whole source kind is unsearchable by meaning.
-func (e *Engine) corpora() []search.Corpus {
-	if e.backends == nil || e.backends.Store == nil {
+func (e *Engine) corpora(estate store.PartitionReader) []search.Corpus {
+	if e.backends == nil || e.backends.Store == nil || estate.IsZero() {
 		return nil
 	}
 	// BOTH SOURCE KINDS. A duty that embedded only one would leave the
@@ -185,8 +185,8 @@ func (e *Engine) corpora() []search.Corpus {
 	// reporting the half it did cover as the whole — which is the reading
 	// an operator would act on.
 	return []search.Corpus{
-		search.TaskCorpus{DB: e.backends.Store},
-		search.PageCorpus{DB: e.backends.Store},
+		search.TaskCorpus{DB: estate},
+		search.PageCorpus{DB: estate},
 	}
 }
 
@@ -260,9 +260,9 @@ func (d *embedDuty) tick(ctx context.Context) {
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: d.publisher,
 		// THE PARTITION'S OWN FILE AND LOG, for the semantic index the
-		// duty keeps beside its vectors (ADR-0022): the one replicated
-		// file and the one vector log this layout has.
-		Store:    d.engine.backends.Store,
+		// duty keeps beside its vectors (ADR-0022): the partition the
+		// vector log it publishes onto is in.
+		Estate:   d.db.PartitionHandle(d.log.id.Partition.String()).Reader(),
 		Log:      d.log.spec.Name,
 		Standing: d.standing,
 		Embedder: provider,
@@ -409,7 +409,7 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 		if !ok {
 			return nil, fmt.Errorf("the %s log lists no evictions", running.domain.Name())
 		}
-		rows, err := lister.Evictions(ctx, d.db)
+		rows, err := lister.Evictions(ctx, d.db.PartitionHandle(running.id.Partition.String()).Reader())
 		if err != nil {
 			return nil, fmt.Errorf("read the %s log's evictions: %w",
 				running.domain.Name(), err)
@@ -450,7 +450,7 @@ func (e *Engine) vectorCoverage(ctx context.Context) (float64, bool, error) {
 	if !configured {
 		return 0, false, nil
 	}
-	return search.Coverage(ctx, e.corpora(), model, provider.Width())
+	return search.Coverage(ctx, e.corpora(e.domainEstate()), model, provider.Width())
 }
 
 // indexReading is the semantic index's alarm input (ADR-0022): the latest
@@ -471,7 +471,7 @@ func (e *Engine) indexReading(ctx context.Context, out *statelog.Reading) {
 	}
 	var head search.IndexHead
 	var indexed bool
-	if err := e.backends.Store.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := e.domainEstate().Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		head, indexed, err = search.ReadIndex(ctx, tx)
 		return err

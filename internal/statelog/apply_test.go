@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // ---- the applier's fakes -------------------------------------------- //
@@ -293,6 +294,7 @@ func (f *probeFetch) ackedAll() map[uint64]int {
 type applyHarness struct {
 	t       *testing.T
 	db      *store.DB
+	estate  store.PartitionHandle
 	runner  *statelog.Runner
 	applier *probeApplier
 	fetch   *probeFetch
@@ -302,12 +304,7 @@ type applyHarness struct {
 func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(t.Context(), filepath.Join(dir, "node.db"), store.Options{
-		PinnedWriters: 1,
-	})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
@@ -318,7 +315,7 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	// its own migration; the framework's migration deliberately creates
 	// only its own three, so a second domain adds a file rather than
 	// editing one that has already shipped.
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
 	}); err != nil {
@@ -337,14 +334,14 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 		Fetch:      fetch,
 		Log:        fetch,
 		Node:       db,
-		DB:         db.Replicated(),
+		DB:         estate,
 		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    recorder,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	return &applyHarness{t: t, db: db, runner: runner, applier: applier,
+	return &applyHarness{t: t, db: db, estate: estate, runner: runner, applier: applier,
 		fetch: fetch, metrics: recorder}
 }
 
@@ -371,7 +368,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.metrics = recorder
 	// AT THE CHECKPOINT THE ROWS HOLD, as the engine builds a restarting
 	// node's runner — generation 1 on a node that never committed.
-	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(),
+	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.estate,
 		specOf(domain).Name)
 	if err != nil {
 		h.t.Fatalf("read the checkpoint: %v", err)
@@ -385,7 +382,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		Fetch:              h.fetch,
 		Log:                h.fetch,
 		Node:               h.db,
-		DB:                 h.db.Replicated(),
+		DB:                 h.estate,
 		Checkpoint:         checkpoint.At,
 		CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt:    created,
@@ -400,7 +397,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 // ledgerHolds reports whether this node's operation ledger holds opID.
 func (h *applyHarness) ledgerHolds(opID string) (bool, error) {
 	var count int64
-	err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM probe_ops WHERE op_id = ?`, opID).Scan(&count)
 	})
@@ -412,7 +409,7 @@ func (h *applyHarness) ledgerHolds(opID string) (bool, error) {
 func (h *applyHarness) retainedCount() int64 {
 	h.t.Helper()
 	var count int64
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count)
 	}); err != nil {
@@ -569,7 +566,7 @@ func TestTheCheckpointCommitsWithTheRowsItCovers(t *testing.T) {
 	// the checkpoint. Reading them in one transaction is the assertion:
 	// the contract is that they are simultaneous, not that they exist.
 	var rows, ops, anchors, cursor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
 		}
@@ -617,7 +614,7 @@ func TestARecordThisBuildCannotDecodeIsRetainedAtItsPosition(t *testing.T) {
 	var deferredPos, scopeRows int64
 	var version int64
 	var payload []byte
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT position, version, payload FROM probe_log_deferred`).
 			Scan(&deferredPos, &version, &payload); err != nil {
@@ -690,7 +687,7 @@ func TestARecordOverAStaleScopeIsRetainedRatherThanApplied(t *testing.T) {
 			seen)
 	}
 	var deferred int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&deferred)
 	}); err != nil {
@@ -721,7 +718,7 @@ func TestAGatedRecordWritesNoRowsAndStillMovesTheAnchor(t *testing.T) {
 
 	var rows, ops int64
 	var anchor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
 		}
@@ -769,7 +766,7 @@ func TestAnAnchorIsWrittenOnlyForAnArbitratedKind(t *testing.T) {
 
 	var anchors int64
 	var subject string
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM statelog_anchor`).Scan(&anchors); err != nil {
 			return err
@@ -820,7 +817,7 @@ func TestARecordThatInstallsAGateStopsRatherThanDefers(t *testing.T) {
 			"record it stopped on", got)
 	}
 	var deferred int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&deferred)
 	}); err != nil {
@@ -867,7 +864,7 @@ func TestARedeliveredRecordIsAppliedOnceAndAcknowledged(t *testing.T) {
 			"be applied twice", len(seen))
 	}
 	var rows int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows)
 	}); err != nil {
 		t.Fatalf("count the rows: %v", err)
@@ -902,7 +899,7 @@ func TestACompactedDomainStepsOverHolesAndSupersedesItsDeferrals(t *testing.T) {
 	}
 
 	var count, position, orphans int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count); err != nil {
 			return err
@@ -1168,7 +1165,7 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 			"0 — the record before the failure was in the same transaction", got)
 	}
 	var rows, anchors int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM probe_rows`).Scan(&rows); err != nil {
 			return err
 		}
@@ -1388,7 +1385,7 @@ func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 	// Written directly: applying enough records to cross the batch is a
 	// minute of broker round trips to test one loop.
 	rows := statelog.OpsPurgeBatch + 7
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		for i := range rows {
 			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO probe_ops (op_id, subject, position, applied_at)
@@ -1411,7 +1408,7 @@ func TestTheOperationSweepDrainsABacklogWiderThanOneBatch(t *testing.T) {
 			swept, rows)
 	}
 	var left int
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_ops`).Scan(&left)
 	}); err != nil {
@@ -1642,7 +1639,7 @@ func TestARetainedRecordIsAppliedByTheBuildThatCanReadIt(t *testing.T) {
 	}
 	var ops, orphans int64
 	var anchor int64
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT COUNT(*) FROM probe_ops WHERE op_id IN ('op-2', 'op-3')`).
 			Scan(&ops); err != nil {
@@ -1968,7 +1965,7 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 	if established, _ := h.runner.ObserveEnd(h.runner.Committed(), 2); !established {
 		t.Fatal("the verdict was not re-established for the adoption case")
 	}
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET seq = 1, stored_at = ? WHERE stream = ?`,
 			store.EncodeTime(probeStoredAt(1)), probeStream)
@@ -2116,7 +2113,7 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 		t.Errorf("the loop reports itself committed through %d, want 2 — the "+
 			"run applied 2 and closed with a redelivery of 1", got)
 	}
-	at, _, found, err := statelog.CursorFor(h.t.Context(), h.db.Replicated(),
+	at, _, found, err := statelog.CursorFor(h.t.Context(), h.estate,
 		specOf(probeDomain{}).Name)
 	if err != nil {
 		t.Fatalf("read the checkpoint: %v", err)
@@ -2198,7 +2195,7 @@ func (f *flakyEstate) pinAttempts() int {
 func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	flaky := &flakyEstate{inner: h.db.Replicated(), refusals: 3}
+	flaky := &flakyEstate{inner: h.estate, refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Applier:    h.applier,
@@ -2340,7 +2337,7 @@ func waitForDrain(t *testing.T, h *applyHarness, want bool, what string) {
 func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	rows, err := statelog.NewRows(h.db, probeDomain{}, specOf(probeDomain{}), nil)
+	rows, err := statelog.NewRows(h.estate.Reader(), probeDomain{}, specOf(probeDomain{}), nil)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -2354,7 +2351,7 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	}
 	seed := func(appliedAt time.Time) {
 		t.Helper()
-		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `
 				INSERT INTO probe_ops (op_id, subject, position, applied_at)
 				VALUES (?, 'probe.o1', 1, ?)`,

@@ -14,13 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/disk"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // fileWithChunks puts a file row and its chunk rows straight into the
 // replicated estate, as an applier would have.
 func fileWithChunks(t *testing.T, db *store.DB, chunks ...[]byte) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `INSERT INTO tracker_files
 			(id, project_key, path, created_at, updated_at, version, document)
 			VALUES ('ENG.x', 'ENG', 'x', 0, 0, 1, x'7b7d')`); err != nil {

@@ -76,7 +76,7 @@ import (
 // than wired, and [pages.Fence] never had one, so the two fences now answer the
 // same question the same way.
 type Fence struct {
-	db     *store.DB
+	db     store.PartitionReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
@@ -107,7 +107,7 @@ type Fence struct {
 }
 
 // NewFence builds the write fence for one node.
-func NewFence(db *store.DB, nodeID string) *Fence {
+func NewFence(db store.PartitionReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
@@ -120,7 +120,7 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // a call to the estate an eviction has already established is silent.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	var from, readmitted sql.NullInt64
-	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT from_position, readmitted_position FROM tracker_evictions
 			WHERE node_id = ? AND log_stream = ?`,
@@ -193,11 +193,11 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 // same gate again, and burns its whole round budget to a conflict a model
 // reads as a colleague editing the same object.
 type Gates struct {
-	db *store.DB
+	db store.PartitionReader
 }
 
 // NewGates builds the gate reader for one node.
-func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
+func NewGates(db store.PartitionReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at a position applies nowhere, and the
 // gate that answers for it, by the rule [statelog.Gates] states — which the
@@ -208,7 +208,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 
 	var reason statelog.Reason
 	var gated bool
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
 		// marker holds the task for every writer for ever, where an
 		// eviction is one writer's and a readmission ends it, so `deleted`

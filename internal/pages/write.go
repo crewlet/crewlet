@@ -828,7 +828,7 @@ func (s *Store) head(ctx context.Context, pageID string) (Page, error) {
 func (s *Store) headAt(ctx context.Context, pageID string) (Page, uint64, error) {
 	var page Page
 	var revision uint64
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		page, revision, err = readHeadTx(ctx, tx, pageID)
 		return err

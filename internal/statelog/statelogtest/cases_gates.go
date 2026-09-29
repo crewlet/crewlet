@@ -29,7 +29,7 @@ type GateCandidate struct {
 
 	// Reader is the publisher's side of the gates, over the estate the
 	// cases applied into.
-	Reader func(db *store.DB) statelog.Gates
+	Reader func(db store.PartitionReader) statelog.Gates
 
 	// Kind is the subject kind the deletion gate covers.
 	Kind string
@@ -80,7 +80,7 @@ func RunGates(t *testing.T, new GateFactory) {
 				err := GateAgreement(t, func(t *testing.T) GateCandidate {
 					c := new(t)
 					honest := c.Reader
-					c.Reader = func(db *store.DB) statelog.Gates {
+					c.Reader = func(db store.PartitionReader) statelog.Gates {
 						return bend(honest(db))
 					}
 					return c
@@ -269,7 +269,7 @@ func GateAgreement(t *testing.T, new GateFactory) error {
 
 	problems := applyGateHistory(t, c, db, at)
 
-	gates := c.Reader(db)
+	gates := c.Reader(db.Reader())
 	for _, q := range gateQuestions {
 		kind := q.kind
 		if kind == "" {
@@ -305,11 +305,11 @@ func GateAgreement(t *testing.T, new GateFactory) error {
 // THE APPLIER IS WHAT THE READER HAS TO AGREE WITH, so the history is only
 // the history the questions assume if the applier dropped exactly what it
 // says it did.
-func applyGateHistory(t *testing.T, c GateCandidate, db *store.DB,
+func applyGateHistory(t *testing.T, c GateCandidate, db store.PartitionHandle,
 	at func(uint64) statelog.Position) []string {
 
 	t.Helper()
-	w, err := db.Replicated().Writer(t.Context())
+	w, err := db.Writer(t.Context())
 	if err != nil {
 		t.Fatalf("pin a writer: %v", err)
 	}

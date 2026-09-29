@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -94,11 +95,12 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTheInboxSweepDeclinesWithNoStore keeps the nil guard honest: a node with
-// no store contributes no job rather than a job that panics on its first tick.
+// TestTheInboxSweepDeclinesWithNoStore keeps the zero guard honest: a node
+// holding no partition contributes no job rather than a job that fails on its
+// first tick.
 func TestTheInboxSweepDeclinesWithNoStore(t *testing.T) {
 	t.Parallel()
-	if jobs := tracker.InboxJobs(nil, maintenance.Fixed(time.Hour)); jobs != nil {
+	if jobs := tracker.InboxJobs(store.PartitionHandle{}, maintenance.Fixed(time.Hour)); jobs != nil {
 		t.Fatalf("a node with no store contributed %d sweep jobs", len(jobs))
 	}
 }

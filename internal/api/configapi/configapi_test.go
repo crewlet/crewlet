@@ -82,9 +82,9 @@ func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
 // a queue to record the nudge on.
 func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -1076,9 +1076,9 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 // answering 503) would hide the mistake behind an answer that looks deliberate.
 func TestNewRefusesAMissingStorePlaneOrBootstrap(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 

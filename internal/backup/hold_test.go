@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE COPY'S OWN POSITION IS IN THE MANIFEST, read from the file rather than
@@ -67,7 +68,7 @@ func TestTheManifestNamesThePositionInsideTheCopy(t *testing.T) {
 	// question a shipped artefact raises. It was retaken after this
 	// package opened the copy to read its checkpoints.
 	for _, artifact := range manifest.Stores {
-		if artifact.Estate != store.EstateReplicated {
+		if artifact.Estate != store.EstatePartition {
 			continue
 		}
 		digest, err := store.FileDigest(filepath.Join(dir, artifact.File))
@@ -297,7 +298,7 @@ func trimTo(t *testing.T, nc *nats.Conn, name string, seq uint64) {
 
 func seedCursor(t *testing.T, db *store.DB, stream string, generation uint32, seq uint64) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
 			VALUES (?, ?, ?, 0, 0)

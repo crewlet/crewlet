@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 var clock = time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -98,10 +99,7 @@ func seedBucket(t *testing.T, nc *nats.Conn, bucket, key, value string) {
 
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "store.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -167,7 +165,7 @@ func TestABackupCapturesBothEstates(t *testing.T) {
 			t.Errorf("the %s copy the manifest names is not there: %v", st.Estate, err)
 		}
 	}
-	if !seen[store.EstateNode] || !seen[store.EstateReplicated] {
+	if !seen[store.EstateNode] || !seen[store.EstatePartition] {
 		t.Errorf("the manifest covers %v, want both estates", seen)
 	}
 	for _, st := range manifest.Stores {

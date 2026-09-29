@@ -48,8 +48,8 @@ import (
 // retention is ASKED AT EVERY SWEEP, because the horizon is the company's
 // `tracker.native.inbox_retention_days` and an apply moves it under a running
 // node — see [maintenance.Horizon] for what reading it once cost.
-func InboxJobs(db *store.DB, retention maintenance.Horizon) []maintenance.Job {
-	if db == nil {
+func InboxJobs(db store.PartitionHandle, retention maintenance.Horizon) []maintenance.Job {
+	if db.IsZero() {
 		return nil
 	}
 	return []maintenance.Job{{
@@ -76,9 +76,9 @@ func InboxJobs(db *store.DB, retention maintenance.Horizon) []maintenance.Job {
 // running node. A pooled write transaction takes the same write lock through
 // the same queue (see internal/store's writequeue.go), which is all this
 // needs.
-func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
+func purgeInbox(ctx context.Context, db store.PartitionHandle, cutoff time.Time) (int64, error) {
 	var swept int64
-	err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	err := db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM tracker_notifications WHERE created_at < ?`,

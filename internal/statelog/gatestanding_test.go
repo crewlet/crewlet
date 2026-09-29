@@ -117,7 +117,7 @@ func TestAHeldOperationIsJudgedInsideTheSnapshot(t *testing.T) {
 	h := newApplyHarness(t, probeDomain{})
 	const opID = "op-2.evict.probe:node-away"
 	subject := statelog.Subject{Kind: "eviction", ID: "node-away"}
-	ledger(t, h.db, opID, probePrefix+"."+subject.String(),
+	ledger(t, h.estate, opID, probePrefix+"."+subject.String(),
 		statelog.Position{Stream: probeStream, Generation: 1, Seq: 4})
 	unread := errors.New("the node's row could not be read")
 
@@ -142,7 +142,7 @@ func TestAHeldOperationIsJudgedInsideTheSnapshot(t *testing.T) {
 			judge:  func(*sql.Tx, statelog.OpEntry) error { return nil }},
 	} {
 		t.Run(name, func(t *testing.T) {
-			rows, err := statelog.NewRows(h.db, tc.domain, specOf(tc.domain), nil)
+			rows, err := statelog.NewRows(h.estate.Reader(), tc.domain, specOf(tc.domain), nil)
 			if err != nil {
 				t.Fatalf("NewRows: %v", err)
 			}
@@ -175,9 +175,9 @@ type missingLedger struct{ probeDomain }
 func (missingLedger) OpsTable() string { return "probe_ops_absent" }
 
 // ledger writes one operation row, as this node's applier would have.
-func ledger(t *testing.T, db *store.DB, opID, subject string, at statelog.Position) {
+func ledger(t *testing.T, db store.PartitionHandle, opID, subject string, at statelog.Position) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
 			VALUES (?, ?, ?, ?)`, opID, subject, at.Packed(),

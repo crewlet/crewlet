@@ -21,7 +21,7 @@ import (
 //
 // What is genuinely this domain's is the pair of GUARDS below. spec is the log
 // the publisher writes, whose checkpoint and anchors the seam reads.
-func NewRows(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error) {
+func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 	return statelog.NewRows(db, Domain{}, spec, taskGuards)
 }
 

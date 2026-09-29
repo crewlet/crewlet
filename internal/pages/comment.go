@@ -348,7 +348,7 @@ const commentNamespace = "crewlet.pages.comment"
 // through the reader would mean two seams for one question.
 func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
 	var out []Comment
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
 			`SELECT document FROM pages_comments WHERE page_id = ?
 			  ORDER BY created_at, id`, pageID)
@@ -389,7 +389,7 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 	Revision, error) {
 
 	var out Revision
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		var author, message, title, body string
 		var created int64
 		err := tx.QueryRowContext(ctx, `

@@ -499,6 +499,14 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 			"own to remember a log that diverged from its rows in, and would " +
 			"forget it at the first restart after the log lost the record it " +
 			"was found by")
+	case d.Node.Estate() != store.EstateNode:
+		// A PARTITION'S OWN DATABASE is the one handle the type does not
+		// stop — it answers Estate like the node's — and the verdict
+		// written into it would be lost on the first adoption that
+		// replaces the file, which is when it is needed.
+		return nil, fmt.Errorf("statelog: applier was handed the %q estate as "+
+			"this node's own; a log's divergence verdict is kept in the node's "+
+			"file (store.OpenNode), which no adoption replaces", d.Node.Estate())
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
 	}

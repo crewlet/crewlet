@@ -353,7 +353,7 @@ func TestAForeignValueIsOutOfEveryPredicate(t *testing.T) {
 	// The engine has no foreign writer yet, so the row is planted the way
 	// a mirror would write it — which is what this case is about: the
 	// PREDICATE, not the writer.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO tracker_field_values
 				(task_id, field_id, seq, kind, hidden, num)
@@ -483,7 +483,7 @@ func TestAValueForAnUndeclaredFieldIsRecordedAsForeign(t *testing.T) {
 
 	var kind, text string
 	var hidden int
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT kind, hidden, text FROM tracker_field_values
 			 WHERE task_id = 't-orphan' AND field_id = 'f-gone'`).

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -50,11 +51,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	donorDir := t.TempDir()
 	replicated := filepath.Join(donorDir, "crewlet-replicated.db")
 	copyAdvancedTo(t, back, running, at, last, replicated)
-	donorNode, err := store.Open(t.Context(), filepath.Join(donorDir, "node.db"),
-		store.Options{ReplicatedPath: replicated})
-	if err != nil {
-		t.Fatalf("open the donor's store: %v", err)
-	}
+	donorNode, _ := storetest.OpenEstate(t, filepath.Join(donorDir, "node.db"), store.Options{ReplicatedPath: replicated}, 1)
 	t.Cleanup(func() { _ = donorNode.Close() })
 	lag := uint64(0)
 	var registered []statelog.Registered
@@ -66,7 +63,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, DB: donorNode, Dir: snapDir, NodeID: "donor",
+		Domains: registered, Partition: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
 		Counted:       func(context.Context) (int, error) { return 2, nil },
 		Interval:      24 * time.Hour,
@@ -146,7 +143,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// adopter holds its donor's rows and inherits its donor's watermark —
 	// which says nothing lost, on a donor that never swept. An adopter that
 	// recorded a loss here would answer its own backlog `unknown`.
-	rows, err := tracker.NewRows(back.Store, estateSpec(tracker.Domain{}))
+	rows, err := tracker.NewRows(storetest.EstateOf(back.Store).Reader(), estateSpec(tracker.Domain{}))
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
@@ -364,10 +361,10 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
 	t.Helper()
-	if _, err := back.Store.Replicated().Backup(t.Context(), path); err != nil {
+	if _, err := storetest.Partition(t, storetest.EstateOf(back.Store)).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
-	copyDB, err := store.OpenEstate(t.Context(), store.EstateReplicated, path, store.Options{})
+	copyDB, err := store.OpenEstate(t.Context(), store.EstatePartition, path, store.Options{})
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
@@ -439,14 +436,14 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			} else {
 				s.haltAppliers()
 			}
-			if err := back.Store.CloseReplicated(); err != nil {
+			if err := closeEstateZero(back.Store); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
 
 			if err := s.restoreEstate(s.run); err != nil {
 				t.Fatalf("restore: %v", err)
 			}
-			if back.Store.Replicated() == nil {
+			if !estateZeroOpen(back.Store) {
 				t.Fatal("the restore left the replicated estate closed — nothing " +
 					"else in a running node reopens it")
 			}
@@ -496,7 +493,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			return s.restoreEstate(s.run)
 		}},
 		{"a rejoin that finds it current", func(t *testing.T, e *Engine, back *Backends, s *stateLog) error {
-			if err := back.Store.ReopenReplicated(t.Context()); err != nil {
+			if err := openEstateZero(t.Context(), back.Store); err != nil {
 				t.Fatalf("open the installed artefact: %v", err)
 			}
 			return e.rejoin(s.run, s)
@@ -512,10 +509,10 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 			copyAdvancedTo(t, back, running, at, last, artefact)
 			// WHAT A JOIN LEAVES when it installed an artefact and could
 			// not open it: the file renamed into place, the estate closed.
-			if err := back.Store.CloseReplicated(); err != nil {
+			if err := closeEstateZero(back.Store); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
-			if err := store.AdoptFile(t.Context(), back.Store.ReplicatedPath(), artefact); err != nil {
+			if err := store.AdoptFile(t.Context(), estateZeroPath(back.Store), artefact); err != nil {
 				t.Fatalf("install the artefact: %v", err)
 			}
 
@@ -575,17 +572,23 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	}
 	boot := func(t *testing.T, ask func(h *harness) error) *harness {
 		t.Helper()
-		db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+		db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
 		if err != nil {
-			t.Fatalf("open the store: %v", err)
+			t.Fatalf("open the node: %v", err)
 		}
 		t.Cleanup(func() { _ = db.Close() })
+		if err := openEstateZero(t.Context(), db); err != nil {
+			t.Fatalf("open layout 0's partition: %v", err)
+		}
 		ctx, cancel := context.WithCancel(t.Context())
-		h := &harness{s: &stateLog{nodeID: "node-0", db: db, run: ctx, stop: cancel}}
+		// THE LAYOUT IS WHAT NAMES THE PARTITIONS a heartbeat checks are
+		// open: a state log with none has nothing it could find lost.
+		h := &harness{s: &stateLog{nodeID: "node-0", layout: LayoutZero(), db: db,
+			run: ctx, stop: cancel}}
 		t.Cleanup(h.s.Stop)
 		h.s.rejoin = func(context.Context) error {
 			h.asks.Add(1)
-			if h.s.db.Replicated() == nil {
+			if !estateZeroOpen(h.s.db) {
 				h.closedAtAsk.Add(1)
 			}
 			return ask(h)
@@ -634,7 +637,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	t.Run("an ask that lost the estate", func(t *testing.T) {
 		t.Parallel()
 		h := boot(t, func(h *harness) error {
-			if err := h.s.db.CloseReplicated(); err != nil {
+			if err := closeEstateZero(h.s.db); err != nil {
 				return err
 			}
 			return fmt.Errorf("%w: the artefact is installed and opening it "+
@@ -642,7 +645,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		})
 		request(t, h)
 		widened(t, h, "an ask that fetched and then lost the estate")
-		if h.s.db.Replicated() != nil {
+		if estateZeroOpen(h.s.db) {
 			t.Fatal("the staging did not leave the estate closed")
 		}
 
@@ -656,7 +659,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 				"(%d asks) — a whole transfer again, inside the interval that "+
 				"bounds exactly that", n)
 		}
-		if h.s.db.Replicated() == nil {
+		if !estateZeroOpen(h.s.db) {
 			t.Fatal("the next heartbeat left the replicated estate closed")
 		}
 		widened(t, h, "the reopen")
@@ -668,8 +671,8 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		// A DIRECTORY WHERE THE FILE WAS: the store cannot open it, for a
 		// reason an operator fixes, and it is fixed below by putting the
 		// file back.
-		path := h.s.db.ReplicatedPath()
-		if err := h.s.db.CloseReplicated(); err != nil {
+		path := estateZeroPath(h.s.db)
+		if err := closeEstateZero(h.s.db); err != nil {
 			t.Fatalf("close the replicated estate: %v", err)
 		}
 		if err := os.Rename(path, path+".aside"); err != nil {
@@ -680,7 +683,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 		}
 
 		request(t, h)
-		if h.s.db.Replicated() != nil {
+		if estateZeroOpen(h.s.db) {
 			t.Fatal("the staging did not make the reopen fail")
 		}
 		if n := h.asks.Load(); n != 0 {
@@ -699,7 +702,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 			t.Fatalf("put the file back: %v", err)
 		}
 		request(t, h)
-		if h.s.db.Replicated() == nil {
+		if !estateZeroOpen(h.s.db) {
 			t.Fatal("the heartbeat after the cause was gone left the estate closed")
 		}
 		if h.asks.Load() != 1 || h.closedAtAsk.Load() != 0 {
@@ -742,7 +745,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 	live := stats.CreatedAt
 
 	s.haltApplier(name)
-	at, keyed, _, err := statelog.CursorFor(t.Context(), s.db.Replicated(),
+	at, keyed, _, err := statelog.CursorFor(t.Context(), storetest.EstateOf(s.db),
 		running.spec.Name)
 	if err != nil {
 		t.Fatalf("read the checkpoint: %v", err)
@@ -782,7 +785,7 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	s := e.native.Load().log
 	quietHeartbeat(s)
 	s.haltAppliers()
-	if err := back.Store.CloseReplicated(); err != nil {
+	if err := closeEstateZero(back.Store); err != nil {
 		t.Fatalf("close the replicated estate: %v", err)
 	}
 
@@ -797,7 +800,7 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 		t.Fatalf("the restore ran to its end (%v) while a recovery held the node", err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if back.Store.Replicated() != nil {
+	if estateZeroOpen(back.Store) {
 		unlock()
 		t.Fatal("the restore reopened the estate while a recovery held the node")
 	}
@@ -805,7 +808,7 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("the restore, once the recovery ended: %v", err)
 	}
-	if back.Store.Replicated() == nil {
+	if !estateZeroOpen(back.Store) {
 		t.Fatal("the restore left the estate closed")
 	}
 }

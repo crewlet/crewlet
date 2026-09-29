@@ -101,9 +101,9 @@ six false statements by the time anybody checked.
 | # | Decision | Enforced by |
 |---|---|---|
 | [0001](0001-one-broker-carries-the-stream-and-the-coordination-store.md) | One broker carries both the stream and the coordination store | `TestNoPackageBuildsASubjectByHand`, `queuetest` |
-| [0002](0002-the-stream-is-the-write-ahead-log.md) | The stream is the write-ahead log; the SQL estate is derived | `TestOnlyTheApplierWritesTheReplicatedEstate` |
+| [0002](0002-the-stream-is-the-write-ahead-log.md) | The stream is the write-ahead log; the SQL estate is derived | `TestOnlyTheApplierWritesThePartitions` |
 | [0003](0003-fleet-agreement-state-lives-in-coordination.md) | Fleet-agreement state lives in coordination, never a node's own file | `TestEveryNodeTableSaysWhoHasToAgreeOnIt` |
-| [0004](0004-a-node-keeps-two-database-files.md) | A node keeps two database files, and nothing spans them | `TestNoStatementNamesBothEstates` |
+| [0004](0004-a-node-keeps-two-database-files.md) | A node keeps two database files, and nothing spans them | `TestNoStatementSpansTwoFiles` |
 | [0005](0005-ownership-is-three-valued.md) | "Do I hold this?" has three answers, never two | the `(value, error)` signature |
 | [0006](0006-event-evolution-is-additive-only.md) | Event evolution is additive-only and unknown types round-trip | `TestAnUnknownTypesLargeIntegersSurviveARoundTrip` |
 | [0007](0007-turso-is-the-only-store-driver.md) | Turso is the only store driver, and it bounds the release matrix | `TestTursoIsTheOnlyDriverInTheBinary` |

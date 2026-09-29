@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -81,7 +82,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	}
 	// Commit a checkpoint under that identity, the way the applier does
 	// with every batch, so the second boot has something to compare.
-	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(back.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -388,7 +389,13 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	// boot finds is — by every identity check — the one it started against.
 	// This is a node whose rows are newer than the broker it came back to.
 	ahead := end + 5
-	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	// The runtime closed the partition with the state log; staging a row in
+	// it is opening it again, as the next boot will.
+	if err := openEstateZero(t.Context(), back.Store); err != nil {
+		back.Close(context.Background())
+		t.Fatalf("reopen the partition: %v", err)
+	}
+	if err := storetest.EstateOf(back.Store).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE statelog_cursor SET seq = ? WHERE stream = ?`, ahead, stream)
 		return err
@@ -513,7 +520,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stats: %v", err)
 			}
-			if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+			if err := storetest.EstateOf(s.db).Tx(t.Context(), func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(t.Context(), `
 					INSERT INTO statelog_cursor
 						(stream, generation, seq, stream_created_at, updated_at)
@@ -557,7 +564,7 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "crewlet.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
@@ -570,6 +577,11 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	s := &stateLog{
 		layout: LayoutZero(), mode: statelog.ModeNormal, nodeID: "node-a", db: db,
 		ceilings: ceilings, run: t.Context(),
+	}
+	// THE PARTITION FIRST, as the runtime's own start opens it before any
+	// log's checkpoint is read.
+	if _, err := s.openPartitions(t.Context()); err != nil {
+		t.Fatalf("open the partitions: %v", err)
 	}
 	appendTo, err := s.provision(t.Context(), q, tracker.Domain{}, estateLog(tracker.Domain{}))
 	if err != nil {

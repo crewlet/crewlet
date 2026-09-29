@@ -310,11 +310,11 @@ type SnapshotDeps struct {
 	// missing is one nobody can use.
 	Domains []Registered
 
-	// DB is the node's store. The artefact is a copy of the REPLICATED
-	// estate alone — the node's own estate holds the audit log and the
-	// secret bootstrap, which is exactly what a peer must not inherit and
-	// what would otherwise dominate the transfer.
-	DB *store.DB
+	// Partition is the partition the artefact copies: its file alone. The
+	// node's own estate holds the audit log and the secret bootstrap, which
+	// is exactly what a peer must not inherit and what would otherwise
+	// dominate the transfer.
+	Partition store.PartitionHandle
 
 	// Dir is where this node keeps its snapshots.
 	Dir string
@@ -351,8 +351,8 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 		return nil, fmt.Errorf("statelog: a snapshot with no registered domain " +
 			"names no position, and a recipient refuses an artefact that does " +
 			"not name every domain its own build registers")
-	case d.DB == nil:
-		return nil, fmt.Errorf("statelog: the snapshot loop has no store")
+	case d.Partition.Name() == "":
+		return nil, fmt.Errorf("statelog: the snapshot loop has no partition to copy")
 	case d.Dir == "":
 		return nil, fmt.Errorf("statelog: the snapshot loop has nowhere to write")
 	case d.NodeID == "":
@@ -436,9 +436,15 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	}
 	discard := func() { _ = store.RemoveCopy(part) }
 
-	info, err := s.deps.DB.Replicated().Backup(ctx, part)
+	live, err := s.deps.Partition.DB()
 	if err != nil {
-		return Manifest{}, fmt.Errorf("statelog: copy the replicated estate: %w", err)
+		return Manifest{}, fmt.Errorf("statelog: copy the partition %s: %w",
+			s.deps.Partition.Name(), err)
+	}
+	info, err := live.Backup(ctx, part)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("statelog: copy the partition %s: %w",
+			s.deps.Partition.Name(), err)
 	}
 
 	// THE DONOR SCRUBS, on a list DERIVED from what every domain declares
@@ -790,9 +796,15 @@ func (s *Snapshotter) space() (free, size int64, err error) {
 	if statfsErr := unix.Statfs(dir, &fs); statfsErr != nil {
 		return 0, 0, fmt.Errorf("statelog: measure the free space on %s: %w", dir, statfsErr)
 	}
-	info, err := os.Stat(s.deps.DB.ReplicatedPath())
+	live, err := s.deps.Partition.DB()
 	if err != nil {
-		return 0, 0, fmt.Errorf("statelog: measure the replicated estate: %w", err)
+		return 0, 0, fmt.Errorf("statelog: measure the partition %s: %w",
+			s.deps.Partition.Name(), err)
+	}
+	info, err := os.Stat(live.Path())
+	if err != nil {
+		return 0, 0, fmt.Errorf("statelog: measure the partition %s: %w",
+			s.deps.Partition.Name(), err)
 	}
 	// Bavail is what an unprivileged process may actually use, which is
 	// what this loop is: Bfree includes the reserve only root can reach.

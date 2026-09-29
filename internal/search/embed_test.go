@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE ROUND TRIP: the duty embeds, the record reaches a real broker, this
@@ -55,7 +56,7 @@ func TestTheEmbedDutyReachesTheSearch(t *testing.T) {
 		t.Fatalf("embed the query: %v", err)
 	}
 	var hits []search.SemanticHit
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
 		hits, _, err = search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: pack(vector), Model: embedModel,
@@ -293,7 +294,7 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 		corpora[i] = &scriptedCorpus{source: search.SourceTask, backlog: -1}
 	}
 	_, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Store: h.db, Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
 		Standing: h.standing(nil),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 	})
@@ -426,18 +427,14 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 
 	h := &embedHarness{
 		t: t, db: db, log: log, applier: search.NewApplier(),
 		embedder: &scriptedEmbedder{Fake: embeddings.NewFake(64), poisonID: -1},
 	}
-	rows, err := search.NewRows(db, statelog.EstateStream(search.Domain{}))
+	rows, err := search.NewRows(storetest.EstateOf(db).Reader(), statelog.EstateStream(search.Domain{}))
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
@@ -451,7 +448,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 		t.Fatalf("build the publisher: %v", err)
 	}
 	h.publisher = publisher
-	h.duty = h.dutyOver(search.TaskCorpus{DB: db})
+	h.duty = h.dutyOver(search.TaskCorpus{DB: storetest.EstateOf(db).Reader()})
 	return h
 }
 
@@ -461,7 +458,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 	h.t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Store: h.db, Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
 		Now: func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
@@ -499,7 +496,7 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 	// map's order, which documents a tick embedded — and so which corpus an
 	// index was trained on — changed from run to run.
 	slices.Sort(ids)
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Tx(h.t.Context(), func(tx *sql.Tx) error {
 		for _, id := range ids {
 			h.version++
 			document := fmt.Sprintf(`{"body":%q}`, bodies[id])
@@ -534,7 +531,7 @@ func (h *embedHarness) seedTasks(bodies map[string]string) {
 
 func (h *embedHarness) removeTask(id string) {
 	h.t.Helper()
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Tx(h.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(h.t.Context(),
 			`UPDATE tracker_tasks SET removed_at = 1 WHERE id = ?`, id)
 		return err
@@ -570,7 +567,7 @@ func (h *embedHarness) drain() {
 			},
 			Payload: payload, StoredAt: storedAt,
 		}
-		if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+		if err := storetest.EstateOf(h.db).Tx(h.t.Context(), func(tx *sql.Tx) error {
 			_, err := h.applier.Apply(h.t.Context(), tx, record,
 				statelog.ApplyOptions{StoredAt: storedAt})
 			return err
@@ -584,7 +581,7 @@ func (h *embedHarness) drain() {
 func (h *embedHarness) vectors() int {
 	h.t.Helper()
 	var n int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM kb_vectors`).Scan(&n)
 	}); err != nil {

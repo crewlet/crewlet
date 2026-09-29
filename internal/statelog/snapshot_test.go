@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // liveStreamCreatedAt is the instant the probe stream was created, as both
@@ -26,6 +27,7 @@ var liveStreamCreatedAt = time.Unix(1_700_000_000, 0).UTC()
 type snapHarness struct {
 	t      *testing.T
 	db     *store.DB
+	estate store.PartitionHandle
 	dir    string
 	health statelog.Health
 	nodes  int
@@ -47,16 +49,13 @@ type snapHarness struct {
 func newSnapHarness(t *testing.T) *snapHarness {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := store.Open(t.Context(), filepath.Join(dir, "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), probeDDL)
 		return err
 	}); err != nil {
@@ -66,6 +65,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 	h := &snapHarness{
 		t:       t,
 		db:      db,
+		estate:  estate,
 		dir:     filepath.Join(dir, "snapshots"),
 		nodes:   3,
 		created: liveStreamCreatedAt,
@@ -94,7 +94,7 @@ func newSnapHarness(t *testing.T) *snapHarness {
 // is what a real applier does with every batch.
 func (h *snapHarness) cursor(seq uint64) {
 	h.t.Helper()
-	if err := h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(h.t.Context(), `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
@@ -115,7 +115,7 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 			Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
 		}},
-		DB:            h.db,
+		Partition:     h.estate,
 		Dir:           h.dir,
 		NodeID:        "node-a",
 		EngineVersion: "v0.0.0-test",
@@ -217,7 +217,7 @@ func TestADonorScrubsItsOwnTablesBeforeItOffersAnything(t *testing.T) {
 	h := newSnapHarness(t)
 	// A row in the replicated table, a row in the ledger, both of which
 	// travel, and one in a table the domain classes Local.
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO probe_rows (position, kind, stored_at) VALUES (1, 'edit', 0);
 			INSERT INTO probe_ops (op_id, subject, position, applied_at)
@@ -373,7 +373,7 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 		if _, err := h.snap.Take(t.Context()); err != nil {
 			t.Fatalf("the first take: %v", err)
 		}
-		seedCursor(t, h.db, probeStream,
+		seedCursor(t, h.estate, probeStream,
 			statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}, h.created)
 		h.health.Position = statelog.Position{Stream: probeStream, Generation: 2, Seq: 10}
 		h.clock = h.clock.Add(time.Minute)
@@ -601,7 +601,7 @@ func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
 func TestADomainWithNoCheckpointIsSnapshottedAtZero(t *testing.T) {
 	t.Parallel()
 	h := newSnapHarness(t)
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DELETE FROM statelog_cursor`)
 		return err
 	}); err != nil {

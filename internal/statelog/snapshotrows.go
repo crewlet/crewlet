@@ -39,7 +39,7 @@ type Guards func(ctx context.Context, tx *sql.Tx, subj Subject) (deleted, guard 
 
 // SnapshotRows is [Rows] over one domain's own estate.
 type SnapshotRows struct {
-	db     *store.DB
+	db     store.PartitionReader
 	tables tables
 	guards Guards
 }
@@ -47,9 +47,14 @@ type SnapshotRows struct {
 // NewRows builds the publisher's read seam for a domain, on the one of its
 // logs spec names — whose stream keys the checkpoint a decision is paired with
 // and whose prefix keys every anchor an expectation is formed from.
-func NewRows(db *store.DB, d Domain, spec StreamSpec, guards Guards) (*SnapshotRows, error) {
-	if db == nil {
-		return nil, fmt.Errorf("statelog: a read seam needs a store")
+//
+// A PARTITION'S READ HANDLE, and nothing looser: the node's own database reads
+// exactly as a partition does, and a seam over it answers every decision from
+// a file with none of the domain's tables — "no such table", or worse, the
+// empty answer of a table that happens to share the name.
+func NewRows(db store.PartitionReader, d Domain, spec StreamSpec, guards Guards) (*SnapshotRows, error) {
+	if db.IsZero() {
+		return nil, fmt.Errorf("statelog: a read seam needs a partition")
 	}
 	t, err := newTables(d, spec)
 	if err != nil {
@@ -71,7 +76,7 @@ func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSe
 	decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error) {
 
 	var snap Snap
-	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE OPERATION FIRST — see [Snap.Held]. A domain with no ledger
 		// answers false here, which is every write on it.
 		entry, ok, err := r.tables.op(ctx, tx, opID)
@@ -172,7 +177,7 @@ func (r *SnapshotRows) Op(ctx context.Context, opID string) (OpEntry, bool, erro
 	}
 	var entry OpEntry
 	var held bool
-	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		entry, held, err = r.tables.op(ctx, tx, opID)
 		return err
@@ -193,7 +198,7 @@ func (r *SnapshotRows) LostBefore(ctx context.Context) (time.Time, bool, error) 
 		before time.Time
 		ok     bool
 	)
-	err := r.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		before, ok, err = r.tables.lostBefore(ctx, tx)
 		return err
@@ -216,7 +221,7 @@ func (r *SnapshotRows) LostBefore(ctx context.Context) (time.Time, bool, error) 
 //
 // So the suite runs one of each statement against a fresh estate and rolls it
 // back. What it proves is exactly what a comment cannot: the shapes agree.
-func CheckTables(ctx context.Context, db *store.DB, d Domain, spec StreamSpec) error {
+func CheckTables(ctx context.Context, db Estate, d Domain, spec StreamSpec) error {
 	t, err := newTables(d, spec)
 	if err != nil {
 		return err
@@ -236,7 +241,7 @@ func CheckTables(ctx context.Context, db *store.DB, d Domain, spec StreamSpec) e
 	// EVERY STATEMENT, INSIDE ONE TRANSACTION THAT IS THEN ABANDONED — so
 	// the check writes nothing and still exercises the writes.
 	probe := errCheckRolledBack
-	err = db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	err = db.Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := t.retain(ctx, tx, rec, false, db.Caps().MaxVariables); err != nil {
 			return fmt.Errorf("the deferred record's own tables: %w", err)

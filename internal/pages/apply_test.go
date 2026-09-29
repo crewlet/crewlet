@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // The applier's own guards, over a real replicated estate.
@@ -24,7 +25,7 @@ import (
 
 type harness struct {
 	t       *testing.T
-	db      *store.DB
+	db      store.PartitionHandle
 	applier *pages.Applier
 	seq     uint64
 
@@ -37,19 +38,15 @@ type harness struct {
 
 func newHarness(t *testing.T, skills pages.SkillDetector) *harness {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
 	return &harness{
 		t: t, db: db, applier: pages.NewApplier("node-a", skills, nil),
-		maxVariables: db.Replicated().Caps().MaxVariables,
+		maxVariables: db.Caps().MaxVariables,
 	}
 }
 
@@ -86,7 +83,7 @@ func (h *harness) applyAt(rec pages.MutationRecord, seq uint64) (
 		Payload:  body,
 		StoredAt: brokerAt,
 	}
-	err = h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	err = h.db.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		reason, gated, gErr := h.applier.Gated(h.t.Context(), tx, record)
 		if gErr != nil {
 			return gErr
@@ -109,7 +106,7 @@ func (h *harness) applyAt(rec pages.MutationRecord, seq uint64) (
 func (h *harness) count(table string) int {
 	h.t.Helper()
 	var n int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM `+table).Scan(&n)
 	}); err != nil {
@@ -122,7 +119,7 @@ func (h *harness) count(table string) int {
 func (h *harness) column(query string, args ...any) []string {
 	h.t.Helper()
 	var out []string
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(h.t.Context(), query, args...)
 		if err != nil {
 			return err
@@ -145,7 +142,7 @@ func (h *harness) column(query string, args ...any) []string {
 func (h *harness) scalar(query string, args ...any) string {
 	h.t.Helper()
 	var out sql.NullString
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(), query, args...).Scan(&out)
 	}); err != nil {
 		return ""

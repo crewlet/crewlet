@@ -72,7 +72,7 @@ func TestAnUnheldAddressIsProbedAtItsTitle(t *testing.T) {
 func (r *roundTrip) deferRecordAt(pageID, scope string) {
 	r.t.Helper()
 	position := int64(1)<<40 | 9_000_000
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO pages_log_deferred
 				(position, subject, subject_kind, subject_id, version, payload, stored_at)

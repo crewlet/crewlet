@@ -15,6 +15,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -477,19 +478,15 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	}
 	end := r.logEnd(t)
 
-	older, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "older.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the older node's store: %v", err)
-	}
-	t.Cleanup(func() { _ = older.Close() })
+	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: versionOneTracker{}, Spec: statelog.EstateStream(versionOneTracker{}),
 		Applier: tracker.NewApplier("node-older"),
 		Fetch:   &trackerLogFetch{log: r.log, next: 1},
 		Log:     r.log,
-		Node:    older,
-		DB:      older.Replicated(),
+		Node:    olderNode,
+		DB:      older,
 	})
 	if err != nil {
 		t.Fatalf("build the older node's applier: %v", err)
@@ -513,7 +510,7 @@ func TestAnOlderBuildRetainsAMoveMark(t *testing.T) {
 	value := func(query string) string {
 		t.Helper()
 		var v string
-		if err := older.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := older.Read(t.Context(), func(tx *sql.Tx) error {
 			return tx.QueryRowContext(t.Context(), query).Scan(&v)
 		}); err != nil {
 			t.Fatalf("%s: %v", query, err)

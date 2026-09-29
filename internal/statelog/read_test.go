@@ -30,7 +30,7 @@ type stubStore struct {
 
 func newStubStore(t *testing.T) *stubStore {
 	t.Helper()
-	return &stubStore{inner: newApplyHarness(t, probeDomain{}).db.Replicated()}
+	return &stubStore{inner: newApplyHarness(t, probeDomain{}).estate}
 }
 
 func (s *stubStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
@@ -525,7 +525,7 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
-	r := newReader(t, h.db.Replicated(), deferredHealth,
+	r := newReader(t, h.estate, deferredHealth,
 		&stubWaiter{at: healthy().Position}, index)
 
 	// A POINT READ about an object inside the deferred scope.
@@ -681,7 +681,7 @@ func TestADeferralLandingWhileAReadWaitsIsCaughtByTheSecondProbe(t *testing.T) {
 		return s
 	}
 	landing := &landsBetween{
-		inner: h.db.Replicated(),
+		inner: h.estate,
 		land: func() {
 			h.fetch.offer(1, env(1, "edit", "a", "op-1", 9, "project/ENG"))
 			if err := h.run(1); err != nil {
@@ -935,7 +935,7 @@ func TestADeferralLandingDuringTheWaitIsCaughtWhenNoneWasDeferredBefore(t *testi
 			// Nothing is deferred as far as the snapshot before the wait
 			// knows, which is what makes the probe before the barrier
 			// pass and leaves the answer's transaction as the only door.
-			r := newReader(t, h.db.Replicated(), healthy, waiter, nil)
+			r := newReader(t, h.estate, healthy, waiter, nil)
 			q := statelog.Query{
 				Level:       statelog.ReadSession,
 				Scope:       statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}},
@@ -985,7 +985,7 @@ func TestAPointReadNamedByReferenceIsProbedWhereItResolves(t *testing.T) {
 		s.DeferredFrom = 1
 		return s
 	}
-	r := newReader(t, h.db.Replicated(), deferred, &stubWaiter{at: healthy().Position}, nil)
+	r := newReader(t, h.estate, deferred, &stubWaiter{at: healthy().Position}, nil)
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
 
 	var resolved atomic.Int64

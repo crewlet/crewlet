@@ -24,7 +24,7 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 	t.Parallel()
 	valid := EmbedDeps{
 		Publisher: &statelog.Publisher{},
-		Store:     &store.DB{},
+		Estate:    (&store.DB{}).PartitionHandle("estate.000").Reader(),
 		Log:       statelog.EstateStream(Domain{}).Name,
 		Standing: func(context.Context) (LogStanding, error) {
 			return LogStanding{}, nil

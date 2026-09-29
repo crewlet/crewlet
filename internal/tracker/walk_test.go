@@ -38,7 +38,7 @@ func TestARespreadPreservesTheOrderAtEveryBatch(t *testing.T) {
 		t.Fatalf("the fixture's own order is %v, want %v", got, want)
 	}
 
-	plan, err := tracker.PlanRespread(t.Context(), r.db, "ENG")
+	plan, err := tracker.PlanRespread(t.Context(), r.db.Reader(), "ENG")
 	if err != nil {
 		t.Fatalf("PlanRespread: %v", err)
 	}

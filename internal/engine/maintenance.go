@@ -133,6 +133,13 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// contributes nothing rather than an empty sweep.
 		if n := e.native.Load(); n != nil {
 			if n.writer != nil {
+				// THE TRACKER'S PARTITION WITH ITS WRITE SIDE, which
+				// is what its two exceptions to the applier-only rule
+				// need — the duty's probe clear and the inbox sweep,
+				// each argued where internal/store's applier gate
+				// allows it — and nothing else on this list takes.
+				trackerEstate := e.backends.Store.PartitionHandle(
+					statelog.EstatePartition.String())
 				// THE TRACKER'S OWN JOBS, and they are a different
 				// kind of thing from a sweep: its records are a log
 				// and nothing deletes them here. They finish work a
@@ -143,7 +150,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// so a tick with nothing to do costs one indexed
 				// read.
 				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
-					DB: e.backends.Store, Writer: n.writer,
+					DB: trackerEstate, Writer: n.writer,
 					NodeID: n.nodeID,
 					// AND THE LEAD MAP, for the one repair whose
 					// commit carries a wake. Read per call against
@@ -166,7 +173,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// every sweep, for the conversation ledger's
 				// reason above.
 				jobs = append(jobs, tracker.InboxJobs(
-					e.backends.Store, e.inboxRetention)...)
+					trackerEstate, e.inboxRetention)...)
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
 			// registered domain. Every `<domain>_ops` migration says

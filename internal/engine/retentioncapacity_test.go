@@ -30,9 +30,9 @@ import (
 // the same silence with an extra step, so this asserts the table fires too.
 func TestTheCapacityAlarmsFireOnWhatThisNodesDiskIsDoing(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -111,9 +111,9 @@ func TestAnIdlePoolRecordsNothingRatherThanAZeroWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db", store.Options{})
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db", store.Options{})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 

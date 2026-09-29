@@ -31,7 +31,7 @@ import (
 func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "replicated.db")
-	old := migratedThrough(t, EstateReplicated, path, "0023_a_project_keeps_files.sql")
+	old := migratedThrough(t, EstatePartition, path, "0023_a_project_keeps_files.sql")
 
 	const digits = "0123456789abcdef"
 	chunks := []objstore.Hash{
@@ -66,7 +66,7 @@ func TestAChunkRowFromTheGroupEraReadsItsSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db, err := OpenEstate(t.Context(), EstateReplicated, path, Options{})
+	db, err := OpenEstate(t.Context(), EstatePartition, path, Options{})
 	if err != nil {
 		t.Fatalf("migrate the group-era database forward: %v", err)
 	}

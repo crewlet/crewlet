@@ -506,7 +506,7 @@ func TestTheStoreOutlivesTheHandlersThatWriteToIt(t *testing.T) {
 		t.Fatal("Close never returned")
 	}
 
-	again, err := store.Open(t.Context(), path, store.Options{})
+	again, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

@@ -122,11 +122,11 @@ type UnblockScan struct {
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a
 // repair and a source of duplicate wakes.
-func ScanUnblocked(ctx context.Context, db *store.DB, since uint64,
+func ScanUnblocked(ctx context.Context, db store.PartitionReader, since uint64,
 	limit int) (UnblockScan, error) {
 
 	scan := UnblockScan{Through: since}
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		// THE POSITION FIRST, and from the same transaction as the rows:
 		// a `through` read afterwards would cover records this scan did
 		// not see, and advancing past them is how a wake is lost.

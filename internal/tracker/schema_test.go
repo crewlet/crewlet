@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -20,17 +21,14 @@ import (
 // production.
 func ddl(t *testing.T) map[string]string {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close: %v", err)
 		}
 	})
 	out := map[string]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), `
 			SELECT name, type, COALESCE(tbl_name, ''), COALESCE(sql, '')
 			FROM sqlite_master
@@ -292,14 +290,11 @@ func TestTheSpendColumnsMatchTheSchema(t *testing.T) {
 // constraint is written the way it is.
 func TestTheRankCheckRefusesWhatTheObviousSpellingAccepts(t *testing.T) {
 	t.Parallel()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
-	defer func() { _ = db.Close() }()
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	defer func() { _ = dbNode.Close() }()
 
 	insert := func(rank string) error {
-		return db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		return db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `
 				INSERT INTO tracker_tasks
 					(id, key, project_key, root_id, type, title, status,
@@ -326,8 +321,8 @@ func TestTheRankCheckRefusesWhatTheObviousSpellingAccepts(t *testing.T) {
 // database keeps.
 func trackerSchemaSources() ([]string, error) {
 	var out []string
-	for _, name := range store.SchemaVersions(store.EstateReplicated) {
-		body, err := store.SchemaFile(store.EstateReplicated, name)
+	for _, name := range store.SchemaVersions(store.EstatePartition) {
+		body, err := store.SchemaFile(store.EstatePartition, name)
 		if err != nil {
 			return nil, err
 		}

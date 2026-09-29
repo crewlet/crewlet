@@ -218,7 +218,7 @@ func (r *roundTrip) deferRecordOn(taskID, project string) {
 // is how a newer peer's record looks to this build.
 func (r *roundTrip) deferRecordAt(taskID, scope string) {
 	r.t.Helper()
-	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO tracker_log_deferred
 				(position, subject, subject_kind, subject_id, version, payload, stored_at)

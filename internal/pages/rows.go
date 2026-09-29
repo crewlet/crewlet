@@ -15,7 +15,7 @@ import (
 
 // NewRows builds the publisher's read seam over the log spec names — the one
 // the publisher writes, whose checkpoint and anchors the seam reads.
-func NewRows(db *store.DB, spec statelog.StreamSpec) (statelog.Rows, error) {
+func NewRows(db store.PartitionReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 	return statelog.NewRows(db, Domain{}, spec, pageGuards)
 }
 
@@ -97,7 +97,7 @@ func ReadScope(container string) statelog.ScopeSet {
 // already has, and ClearForZero pays a coordination round trip because being
 // wrong there is a lost update rather than a duplicate.
 type Fence struct {
-	db     *store.DB
+	db     store.PartitionReader
 	nodeID string
 
 	// Floor is the fleet's published trim floor at a generation and Ends
@@ -119,7 +119,7 @@ type Fence struct {
 }
 
 // NewFence builds it.
-func NewFence(db *store.DB, nodeID string) *Fence {
+func NewFence(db store.PartitionReader, nodeID string) *Fence {
 	return &Fence{db: db, nodeID: nodeID}
 }
 
@@ -129,17 +129,17 @@ func NewFence(db *store.DB, nodeID string) *Fence {
 // precondition of an eviction being permitted at all, so the source that is
 // still fresh in exactly that failure is this node's own replicated table.
 func (f *Fence) Evicted(ctx context.Context) (bool, error) {
-	if f == nil || f.db == nil || f.nodeID == "" {
+	if f == nil || f.db.IsZero() || f.nodeID == "" {
 		return false, nil
 	}
 	var from, readmitted sql.NullInt64
-	// THROUGH THE HANDLE, NOT ITS POOL. `DB.SQL()` answers a NIL pool on a
-	// replicated estate that is not open — a legitimate, documented state
-	// of that peer, since an adoption closes it between its rename and its
-	// reopen — and a statement issued on it panics inside database/sql.
-	// [store.DB.Read] answers [store.ErrNoEstate], which the refusal below
-	// already handles as the honest "unreadable is not not-evicted".
-	err := f.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	// THROUGH THE HANDLE, NOT A POOL. A partition that is not open — a
+	// legitimate, documented state, since an adoption closes it between its
+	// rename and its reopen — has no pool, and a statement issued on a
+	// closed one panics inside database/sql. [store.PartitionReader.Read]
+	// answers [store.ErrNoEstate], which the refusal below already handles
+	// as the honest "unreadable is not not-evicted".
+	err := f.db.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 		SELECT from_position, readmitted_position
 		FROM pages_evictions WHERE node_id = ?`, f.nodeID).Scan(&from, &readmitted)
@@ -184,10 +184,10 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 // THE SAME TWO GATES [Applier.Gated] INSTALLS, read from the publisher's side.
 // The two must agree: a resolution that looked for a gate the applier never
 // installs would read every unapplied record as "somebody else won".
-type Gates struct{ db *store.DB }
+type Gates struct{ db store.PartitionReader }
 
 // NewGates builds it.
-func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
+func NewGates(db store.PartitionReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at p applies nowhere, and the gate that
 // answers for it, by the rule [statelog.Gates] states — which the tracker's
@@ -195,21 +195,21 @@ func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
 
-	if g == nil || g.db == nil {
+	if g == nil || g.db.IsZero() {
 		return "", false, nil
 	}
 	var reason statelog.Reason
 	var gated bool
-	// ONE TRANSACTION FOR BOTH GATES, on ONE load of the replicated peer,
-	// and through the HANDLE rather than its pool — see [Fence.Evicted] for
-	// why a nil pool is reachable here. The tracker's reader has the same
-	// shape, for the same reason.
+	// ONE TRANSACTION FOR BOTH GATES, on ONE resolution of the partition,
+	// and through the HANDLE rather than a pool — see [Fence.Evicted] for
+	// why a closed pool is reachable here. The tracker's reader has the
+	// same shape, for the same reason.
 	//
-	// This used to say so and then make two calls, each its own
-	// `Replicated().Read` — so the two halves of one answer were read at
-	// two instants, and possibly from two FILES: every `Replicated()`
-	// reloads the peer pointer, and an adoption swaps that pointer (close,
-	// rename the donated file into place, reopen) while readers run. The
+	// This used to say so and then make two calls, each its own read — so
+	// the two halves of one answer were read at two instants, and possibly
+	// from two FILES: every call resolves the partition afresh, and an
+	// adoption replaces its file (close, rename the donated file into
+	// place, reopen) while readers run. The
 	// applier also commits between any two reads, and the deletion gate is
 	// position-independent, so a purge of this page committing between
 	// the two calls made the first half describe the estate before it and
@@ -221,7 +221,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	// enforced. One snapshot is one state the applier committed, so the
 	// answer is right whenever the rule is right for a single state, which
 	// is the only thing [Applier.Gated]'s own reasoning establishes.
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
 		// marker holds the page for every writer for ever, where an
 		// eviction is one writer's and a readmission ends it, so `deleted`

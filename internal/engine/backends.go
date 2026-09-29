@@ -286,49 +286,22 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	return out, nil
 }
 
-// openStore opens this node's local database.
+// openStore opens this node's own database. Its partitions are opened on the
+// handle this returns by the state-log runtime, which is what knows the layout
+// the node runs and which of its partitions it holds ([stateLog.openPartitions]).
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
 		BusyTimeout:    b.Store.BusyTimeout(),
-		// ONE PINNED CONNECTION PER STATE-LOG DOMAIN, and nothing
-		// else. Each domain's apply loop holds one for its life: it is
-		// the single writer of that domain's tables, and a loop that
-		// had to reacquire one per batch would be competing with the
-		// readers it is applying for. The count is DECLARED rather
-		// than discovered so the pool is sized for them: an undeclared
-		// pin is a reader starved out of the pool by a writer that
-		// never gives its connection back.
-		//
-		// It carried a `+ sweepWriterPins` term for the maintenance
-		// worker, whose inbox sweep and duplicate-rank repair each took
-		// a pin of their own and were refused on every tick of a
-		// running node, the apply loops having taken every declared pin
-		// before the first sweep asked. That term was the pool sized
-		// for a job list in another package, holding on an invariant
-		// nothing enforces — a tick runs its jobs in series, so at most
-		// one pin at a time — and a third pinning job, or a tick that
-		// ran two in parallel, would have under-declared it silently.
-		// Neither sweep is a long-lived writer, so neither wants a pin:
-		// both take a pooled write transaction now, which reaches the
-		// same lock through the same queue.
-		//
-		// ONE PER LOG OF LAYOUT 0, the layout whose every log writes this
-		// one file: a log is one runner, and a runner pins one writer for
-		// the life of its loop.
-		PinnedWriters: len(LayoutZero().AllLogs()),
 	}
-	// A NODE WITHOUT `data` HOLDS NO COPY OF THE REPLICATED ESTATE and keeps
-	// nothing that has to outlive it. Its node estate is discarded and
-	// recreated at every boot, and the replicated one is not opened at
-	// all — so a path that reaches for it is told [store.ErrNoEstate]
-	// rather than handed an empty database that reads as a company with
-	// nothing in it. And no apply loop runs here to pin a writer.
+	// A NODE WITHOUT `data` HOLDS NO PARTITION and keeps nothing that has to
+	// outlive it. Its own file is discarded and recreated at every boot, and
+	// it runs no state log, so no partition is ever opened on it — a path
+	// that reaches for one is told [store.ErrNoEstate] rather than handed an
+	// empty database that reads as a company with nothing in it.
 	if !holdsData(b) {
 		opts.Scratch = b.Store.Scratch
-		opts.NodeOnly = true
-		opts.PinnedWriters = 0
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0: no DECLARED width, so it checks nothing against it
@@ -343,7 +316,7 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
-	db, err := store.Open(ctx, b.Store.Path, opts)
+	db, err := store.OpenNode(ctx, b.Store.Path, opts)
 	if err != nil {
 		return nil, fmt.Errorf("engine: store: %w", err)
 	}

@@ -466,7 +466,7 @@ func writeArtefact(t *testing.T, dir string, at time.Time) {
 		"taken_at": at, "finished_at": at.Add(2 * time.Minute),
 		"node_id": "node-0", "engine_version": "dev",
 		"stores": []map[string]any{{
-			"estate": "replicated", "bytes": 10415140864,
+			"estate": "partition", "partition": "estate.000", "bytes": 10415140864,
 			"migrations": []string{"0001_the_state_log_lands.sql"},
 		}},
 		"domains": map[string]any{

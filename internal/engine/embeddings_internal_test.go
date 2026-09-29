@@ -96,12 +96,17 @@ func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 // only part of Backends any of this reads.
 func engineOverStore(t *testing.T, width int) *Engine {
 	t.Helper()
-	db, err := store.Open(t.Context(), t.TempDir()+"/index.db",
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/index.db",
 		store.Options{EmbeddingDim: width})
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// A DATA NODE'S PARTITION, which its state log opens at start and
+	// every domain-level reader here reads through.
+	if err := openEstateZero(t.Context(), db); err != nil {
+		t.Fatalf("open layout 0's partition: %v", err)
+	}
 	return &Engine{backends: &Backends{Store: db}}
 }
 

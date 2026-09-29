@@ -106,14 +106,14 @@ func TestClosingReleasesTheDatabaseForTheNextOpen(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
 
-	first, err := Open(t.Context(), path, Options{})
+	first, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	second, err := Open(t.Context(), path, Options{})
+	second, err := OpenNode(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("reopen after close: %v — a clean restart is impossible", err)
 	}
@@ -136,7 +136,7 @@ func TestAFailedOpenDoesNotStrandTheLock(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	_, err := Open(t.Context(), path, Options{})
+	_, err := OpenNode(t.Context(), path, Options{})
 	if err == nil {
 		t.Fatal("a directory was opened as a database")
 	}

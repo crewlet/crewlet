@@ -24,13 +24,13 @@ import (
 func TestEveryPageReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	behind, err := statelogtest.LocalReaderBehind(pages.Domain{}, r.db.Replicated(),
+	behind, err := statelogtest.LocalReaderBehind(pages.Domain{}, r.db,
 		statelog.Position{Stream: statelog.EstateStream(pages.Domain{}).Name, Generation: 1, Seq: 1},
 		100_000)
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db, Log: behind})
+	reader, err := pages.NewReader(pages.ReaderOptions{DB: r.db.Reader(), Log: behind})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}
@@ -102,12 +102,12 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	// A READER THAT CAN WAIT, over the harness's own waiter — the one
 	// [newRoundTrip] builds is already at its position and never blocks,
 	// which would make "not yet applied" indistinguishable from applied.
-	waiting, err := statelogtest.LocalReaderOver(pages.Domain{}, r.db.Replicated(), r.waiter)
+	waiting, err := statelogtest.LocalReaderOver(pages.Domain{}, r.db, r.waiter)
 	if err != nil {
 		t.Fatalf("waiting read authority: %v", err)
 	}
 	reader, err := pages.NewReader(pages.ReaderOptions{
-		DB: r.db, Log: waiting, Committed: r.waiter.Committed,
+		DB: r.db.Reader(), Log: waiting, Committed: r.waiter.Committed,
 	})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)

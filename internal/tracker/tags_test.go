@@ -444,7 +444,7 @@ func (r *roundTrip) declareTags(slugs ...string) {
 func (r *roundTrip) tagsVersion(project string) int {
 	r.t.Helper()
 	var version int
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT tags_version FROM tracker_tagsets WHERE project_key = ?`,
 			project).Scan(&version)

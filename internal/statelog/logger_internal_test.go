@@ -32,7 +32,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	runner, err := NewRunner(RunnerDeps{
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
 		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
-		Node: struct{ NodeEstate }{}, DB: struct{ Estate }{},
+		Node: nodeProbe{}, DB: struct{ Estate }{},
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -47,7 +47,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	snapshotter, err := NewSnapshotter(SnapshotDeps{
-		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}}, DB: &store.DB{},
+		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}}, Partition: (&store.DB{}).PartitionHandle("estate.000"),
 		Dir: t.TempDir(), NodeID: "node-a",
 		Counted:  func(context.Context) (int, error) { return 2, nil },
 		Interval: time.Hour,
@@ -154,3 +154,10 @@ func (loggerProbe) OpsTable() string                  { return "" }
 func (loggerProbe) ReadinessInput() bool              { return false }
 func (loggerProbe) ClaimsIdentity() bool              { return false }
 func (loggerProbe) FeedGroup() string                 { return "" }
+
+// nodeProbe is a node estate that is nothing but its kind: a runner checks it
+// was handed the node's own file, and the tests that use this never reach a
+// row of it.
+type nodeProbe struct{ NodeEstate }
+
+func (nodeProbe) Estate() store.Estate { return store.EstateNode }

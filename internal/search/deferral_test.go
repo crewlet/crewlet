@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A DOCUMENT'S RECORDS KEEP VERSION 1, AND EVERY RECORD ABOUT THE INDEX IS
@@ -140,11 +141,7 @@ func TestAnIndexsRecordsWaitBehindItsDeferredCentroids(t *testing.T) {
 // openPinned is a store with the one pinned writer an applier loop holds.
 func openPinned(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
@@ -180,7 +177,7 @@ func (d versionDomain) RecordVersion() int { return d.reads }
 func retainedSeqs(t *testing.T, db *store.DB) []uint64 {
 	t.Helper()
 	var out []uint64
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			`SELECT position FROM vectors_log_deferred ORDER BY position`)
 		if err != nil {
@@ -213,7 +210,7 @@ func runLog(t *testing.T, db *store.DB, domain statelog.Domain, payloads [][]byt
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: statelog.EstateStream(domain), Applier: search.NewApplier(), Fetch: log, Log: log,
-		Node: db, DB: db.Replicated(),
+		Node: db, DB: storetest.EstateOf(db),
 		Checkpoint: statelog.Position{Generation: 1}, Metrics: recorder,
 	})
 	if err != nil {

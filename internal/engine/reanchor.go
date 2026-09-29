@@ -152,7 +152,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		Consumer: running.consumer,
 		Runner:   running.runner,
 		Evicted:  running.evicted,
-		DB:       replicatedEstate{node: s.db},
+		DB:       s.estate(running.id.Partition),
 		By:       req.By,
 		NodeID:   e.native.Load().nodeID,
 		// THE BRING-UP BUDGET OF THIS BROKER, for the steps after the
@@ -282,7 +282,8 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// THE CHECKPOINT ROW, not the runner's memory of it: the generation the
 	// transition derives from and the instant the rows are keyed to are the
 	// durable ones, and the loop that would move them is halted.
-	checkpoint, _, err := statelog.CheckpointOf(ctx, e.backends.Store.Replicated(), stream)
+	checkpoint, _, err := statelog.CheckpointOf(ctx,
+		e.backends.Store.PartitionHandle(running.id.Partition.String()).Reader(), stream)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
@@ -363,7 +364,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			candidates = append(candidates, writer)
 		}
 	}
-	evicted, err := n.log.evictedOn(ctx, running.domain, running.spec, running.log, candidates)
+	evicted, err := n.log.evictedOn(ctx, running.domain, running.id.Partition, running.spec, running.log, candidates)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
 			"of this node on %s are evicted could not be read, and an evicted "+
@@ -474,7 +475,7 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningLog, n *nativ
 		in.Opened, bound = opened, opened-1
 	}
 	in.Unheld, err = statelog.UnheldTail(ctx, running.domain, running.spec,
-		replicatedEstate{node: n.log.db}, running.log, in.Generation, in.FirstSeq, bound)
+		n.log.estate(running.id.Partition).Reader(), running.log, in.Generation, in.FirstSeq, bound)
 	if err != nil {
 		return fmt.Errorf("%w: whether %s holds records written after the restore "+
 			"that this node's rows do not could not be read, and a restored reanchor "+

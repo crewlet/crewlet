@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -231,7 +232,7 @@ func TestAChartOlderThanTheLedgerIsStillDecided(t *testing.T) {
 	// activation is older than that. A minute rather than now, so the
 	// apply's own mint, which an id resolves to the millisecond, is
 	// unambiguously after it.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
 		tracker.Domain{}, time.Now().Add(-time.Minute)); err != nil {
 		t.Fatalf("record the ledger's watermark: %v", err)
 	}
@@ -258,13 +259,9 @@ func TestAChartOlderThanTheLedgerIsStillDecided(t *testing.T) {
 func TestTwoNodesApplyingOneActivationWriteOnce(t *testing.T) {
 	t.Parallel()
 	a := newRoundTripWithoutProject(t)
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node-b.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open node b's store: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	b := newRoundTripOn(t, a.broker, a.log, db, "node-b")
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node-b.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = dbNode.Close() })
+	b := newRoundTripOn(t, a.broker, a.log, dbNode, db, "node-b")
 	b.applyWhileWriting()
 	chart := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
 
@@ -302,7 +299,7 @@ func TestAnUnknownChartWriteIsAnError(t *testing.T) {
 	r := newRoundTripWithoutProject(t)
 	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
 	// no operation minted before then — which is every one this apply mints.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
 		tracker.Domain{}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("record the ledger's watermark: %v", err)
 	}
@@ -325,7 +322,7 @@ func activation(n int) time.Time {
 func (r *roundTrip) projectName(key string) string {
 	r.t.Helper()
 	var name string
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT name FROM tracker_projects WHERE key = ?`, key).Scan(&name)
 	}); err != nil {
@@ -339,7 +336,7 @@ func (r *roundTrip) projectName(key string) string {
 func (r *roundTrip) chartEpoch(key string) int64 {
 	r.t.Helper()
 	var epoch int64
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(r.t.Context(),
 			`SELECT chart_epoch FROM tracker_projects WHERE key = ?`, key).Scan(&epoch)
 	}); err != nil {

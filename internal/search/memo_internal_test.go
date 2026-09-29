@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A PROCESS HOLDS ONE DECODED INDEX PER LOG, and a partition's retrain
@@ -27,7 +28,7 @@ func TestAProcessHoldsOneDecodedIndexPerLog(t *testing.T) {
 	a, headA := memoStore(t, "log-a", 1)
 	b, headB := memoStore(t, "log-b", 2)
 	load := func(db *store.DB, h IndexHead) error {
-		return db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return storetest.EstateOf(db).Read(ctx, func(tx *sql.Tx) error {
 			_, err := memo.load(ctx, tx, h)
 			return err
 		})
@@ -38,7 +39,7 @@ func TestAProcessHoldsOneDecodedIndexPerLog(t *testing.T) {
 	if err := load(b, headB); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(a).Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM kb_ivf_centroids`)
 		return err
 	}); err != nil {
@@ -63,10 +64,7 @@ func TestAProcessHoldsOneDecodedIndexPerLog(t *testing.T) {
 func memoStore(t *testing.T, log string, seed byte) (*store.DB, IndexHead) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "node.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
 	const dim, lists = 64, 4
 	centroids := make([]byte, 8*CodeWords(dim)*lists)
@@ -75,7 +73,7 @@ func memoStore(t *testing.T, log string, seed byte) (*store.DB, IndexHead) {
 	}
 	h := IndexHead{Generation: 9, Log: log, Model: "m", Dim: dim, Lists: lists,
 		Probes: 1, Digest: digestOf(centroids)}
-	if err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO kb_ivf_centroids (id, digest, centroids)
 			VALUES (1, ?, ?)`, h.Digest, centroids)
 		return err

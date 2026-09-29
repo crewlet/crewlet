@@ -179,7 +179,7 @@ func TestAnUnmirroredEdgeIsFlaggedAndRepaired(t *testing.T) {
 	}
 
 	// THE REPAIR WRITES THE MISSING COMMIT.
-	edges, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
+	edges, err := tracker.ScanOneSided(t.Context(), r.db.Reader(), wednesday.AddDate(1, 0, 0), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 	}
 	r.drain()
 
-	edges, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
+	edges, err := tracker.ScanOneSided(t.Context(), r.db.Reader(), wednesday.AddDate(1, 0, 0), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 
 	// AND IT IS OUT OF THE REPAIR'S SELECTION but IN the attention queue,
 	// which is the whole distinction between the two flags.
-	again, err := tracker.ScanOneSided(t.Context(), r.db, wednesday.AddDate(1, 0, 0), 16)
+	again, err := tracker.ScanOneSided(t.Context(), r.db.Reader(), wednesday.AddDate(1, 0, 0), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestTheOpenAskInferenceIsIndexServed(t *testing.T) {
 	r := newRoundTrip(t)
 
 	var plan string
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), `
 			EXPLAIN QUERY PLAN
 			SELECT id, author, substr(body, 1, 120)
@@ -545,7 +545,7 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 	// THE HORIZON IS BETWEEN THE TWO: older than the edge, newer than the
 	// touch. Aged on the task this finds nothing; aged on the edge it
 	// finds the one that needs repairing.
-	edges, err := tracker.ScanOneSided(t.Context(), r.db, old.AddDate(0, 0, 1), 16)
+	edges, err := tracker.ScanOneSided(t.Context(), r.db.Reader(), old.AddDate(0, 0, 1), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestTheRepairAgesOnTheEdgeNotTheTask(t *testing.T) {
 	}
 	// AND A FRESH EDGE IS NOT YET THE DUTY'S, so it never races a gesture
 	// still running.
-	fresh, err := tracker.ScanOneSided(t.Context(), r.db, old.AddDate(0, 0, -1), 16)
+	fresh, err := tracker.ScanOneSided(t.Context(), r.db.Reader(), old.AddDate(0, 0, -1), 16)
 	if err != nil {
 		t.Fatalf("ScanOneSided: %v", err)
 	}

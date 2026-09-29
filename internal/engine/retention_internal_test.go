@@ -1156,13 +1156,13 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
 	s := e.native.Load().log
-	closed, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "closed.db"),
+	closed, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "closed.db"),
 		store.Options{})
 	if err != nil {
 		t.Fatalf("open a second store: %v", err)
 	}
 	t.Cleanup(func() { _ = closed.Close() })
-	if err := closed.CloseReplicated(); err != nil {
+	if err := closeEstateZero(closed); err != nil {
 		t.Fatalf("close its replicated estate: %v", err)
 	}
 	for name, tc := range map[string]struct {

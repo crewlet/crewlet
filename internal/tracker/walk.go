@@ -111,10 +111,10 @@ func (p RespreadPlan) Batch(k int) []Placement {
 // ascending order, and the project's current minimum. Everything after that is
 // arithmetic — which is what makes the assignment a pure function of the plan
 // and therefore identical on whichever node completes the walk.
-func PlanRespread(ctx context.Context, db *store.DB, project string) (RespreadPlan, error) {
+func PlanRespread(ctx context.Context, db store.PartitionReader, project string) (RespreadPlan, error) {
 	var rows []Placement
 	var lowest Rank
-	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := db.Read(ctx, func(tx *sql.Tx) error {
 		// ONLY THE LONG ONES: a key already under the threshold costs
 		// nothing to leave where it is, and rewriting it would spend a
 		// record to change nothing.
@@ -209,7 +209,7 @@ func reserveBelow(floor Rank) (Rank, error) {
 // broker and exactly one proceeds, which is what stops them interleaving
 // batches into an order neither intended.
 func (w *Writer) Respread(ctx context.Context, opID, project string) (int, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return 0, fmt.Errorf("tracker: this writer has no store, so it cannot " +
 			"read the order a re-spread rewrites")
 	}

@@ -71,9 +71,9 @@ func openLearningDB(t *testing.T, opts ...func(*store.Options)) *store.DB {
 	for _, fn := range opts {
 		fn(&o)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "l.db"), o)
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "l.db"), o)
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("store.OpenNode: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
@@ -1678,7 +1678,7 @@ func BenchmarkRecallScan(b *testing.B) {
 	const dim = 1536
 	for _, n := range []int{100, 250, 500, 1000, 2000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
-			db, err := store.Open(b.Context(), filepath.Join(b.TempDir(), "l.db"),
+			db, err := store.OpenNode(b.Context(), filepath.Join(b.TempDir(), "l.db"),
 				store.Options{EmbeddingDim: dim})
 			if err != nil {
 				b.Fatal(err)

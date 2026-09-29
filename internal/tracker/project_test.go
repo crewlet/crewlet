@@ -205,7 +205,7 @@ func optionSlugs(groups []tracker.FieldGroup, id string) []string {
 func (r *roundTrip) strings(query string, args ...any) []string {
 	r.t.Helper()
 	var out []string
-	if err := r.db.Replicated().Read(r.t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(r.t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(r.t.Context(), query, args...)
 		if err != nil {
 			return err

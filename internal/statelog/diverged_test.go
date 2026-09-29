@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,9 +43,9 @@ func appliedThrough(t *testing.T, n uint64) *applyHarness {
 }
 
 // storedAtOf reads the record the committed checkpoint row names.
-func storedAtOf(t *testing.T, db *store.DB) time.Time {
+func storedAtOf(t *testing.T, db store.PartitionHandle) time.Time {
 	t.Helper()
-	cp, found, err := statelog.CheckpointOf(t.Context(), db.Replicated(), probeStream)
+	cp, found, err := statelog.CheckpointOf(t.Context(), db, probeStream)
 	if err != nil || !found {
 		t.Fatalf("read the checkpoint: %v (found %v)", err, found)
 	}
@@ -69,7 +70,7 @@ func appliedAt(h *applyHarness, seq uint64) bool {
 func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+	if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(3)) {
 		t.Fatalf("the checkpoint at 3 names the record stored at %s, want the one "+
 			"consumed there, %s", got, probeStoredAt(3))
 	}
@@ -89,7 +90,7 @@ func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 	if h.fetch.ackCount(3) < 2 {
 		t.Fatal("the redelivery was never consumed")
 	}
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+	if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(3)) {
 		t.Fatalf("after a run of redeliveries the checkpoint at 3 names %s, want %s",
 			got, probeStoredAt(3))
 	}
@@ -98,7 +99,7 @@ func TestACheckpointNamesTheRecordItStandsOn(t *testing.T) {
 	if err := h.run(4); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(4)) {
+	if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(4)) {
 		t.Fatalf("the checkpoint at 4 names %s, want %s", got, probeStoredAt(4))
 	}
 }
@@ -420,7 +421,7 @@ func unname(t *testing.T, h *applyHarness, ledger bool) {
 	if ledger {
 		stmts = append(stmts, `UPDATE probe_ops SET stored_at = 0`)
 	}
-	if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 		for _, stmt := range stmts {
 			if _, err := tx.ExecContext(t.Context(), stmt); err != nil {
 				return err
@@ -436,14 +437,14 @@ func unname(t *testing.T, h *applyHarness, ledger bool) {
 func rebuildLogged(h *applyHarness) *lockedBuffer {
 	h.t.Helper()
 	h.rebuild(probeDomain{}, time.Time{})
-	cp, _, err := statelog.CheckpointOf(h.t.Context(), h.db.Replicated(), probeStream)
+	cp, _, err := statelog.CheckpointOf(h.t.Context(), h.estate, probeStream)
 	if err != nil {
 		h.t.Fatalf("read the checkpoint: %v", err)
 	}
 	logs := &lockedBuffer{}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
-		Node: h.db, DB: h.db.Replicated(),
+		Node: h.db, DB: h.estate,
 		Checkpoint: cp.At, CheckpointStoredAt: cp.StoredAt,
 		Metrics: h.metrics, Logger: slog.New(slog.NewJSONHandler(logs, nil)),
 	})
@@ -458,6 +459,53 @@ func rebuildLogged(h *applyHarness) *lockedBuffer {
 func offerThrough(h *applyHarness, n uint64) {
 	for seq := uint64(1); seq <= n; seq++ {
 		h.fetch.offer(seq, env(seq, "edit", fmt.Sprint(seq), fmt.Sprintf("op-%d", seq), 1))
+	}
+}
+
+// THE VERDICT IS KEPT IN THE NODE'S OWN FILE, AND NOTHING ELSE IS ACCEPTED IN
+// ITS PLACE.
+//
+// [TestADivergenceSurvivesARestartAfterTheLogLosesItsRecord] is what the node's
+// file buys; this is what stops another file being handed as it. A partition
+// reads and writes exactly as the node's file does, carries none of the
+// verdict's table, and is replaced by an adoption — at the moment the verdict
+// has to be judged against what replaced it. Its handle cannot be handed at
+// all, which the build refuses; its database answers Estate like the node's,
+// so the runner refuses that.
+func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
+	t.Parallel()
+	node := reflect.TypeFor[statelog.NodeEstate]()
+	if reflect.TypeFor[store.PartitionHandle]().Implements(node) {
+		t.Error("a partition's handle satisfies statelog.NodeEstate, so the " +
+			"runtime can hand a partition as the node's own file and the " +
+			"build says nothing")
+	}
+	if !reflect.TypeFor[*store.DB]().Implements(node) {
+		t.Fatal("the node's own store does not satisfy statelog.NodeEstate")
+	}
+
+	h := newApplyHarness(t, probeDomain{})
+	part, err := h.estate.DB()
+	if err != nil {
+		t.Fatalf("the harness's partition: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		node   statelog.NodeEstate
+		refuse bool
+	}{
+		{"the node's own file", h.db, false},
+		{"a partition's database", part, true},
+	} {
+		_, err := statelog.NewRunner(statelog.RunnerDeps{
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier,
+			Fetch: h.fetch, Log: h.fetch, Node: c.node, DB: h.estate,
+			Metrics: h.metrics,
+		})
+		if got := err != nil; got != c.refuse {
+			t.Errorf("NewRunner with %s as the node's estate: err = %v, want "+
+				"refused = %v", c.name, err, c.refuse)
+		}
 	}
 }
 
@@ -489,7 +537,7 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 			t.Fatalf("VerifyCheckpoint = (%v, %v), want the checkpoint named and settled",
 				established, err)
 		}
-		if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+		if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(3)) {
 			t.Fatalf("the checkpoint row names %s, want the record the ledger names, %s — "+
 				"an idle domain commits no batch to name it", got, probeStoredAt(3))
 		}
@@ -528,7 +576,7 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 			t.Fatalf("VerifyCheckpoint = (%v, %v), want the checkpoint named and settled",
 				established, err)
 		}
-		if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(3)) {
+		if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(3)) {
 			t.Fatalf("the checkpoint row names %s, want the log's record at the operation "+
 				"the ledger names there, %s", got, probeStoredAt(3))
 		}
@@ -555,7 +603,7 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 			t.Fatalf("the identity is %v, want the divergence saying the ledger names "+
 				"another operation", err)
 		}
-		if got := storedAtOf(t, h.db); !got.IsZero() {
+		if got := storedAtOf(t, h.estate); !got.IsZero() {
 			t.Fatalf("the checkpoint row names %s — the log's record is not this node's "+
 				"and must never be written as the one it consumed", got)
 		}
@@ -575,7 +623,7 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 		t.Parallel()
 		h := appliedThrough(t, 3)
 		unname(t, h, true)
-		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `DELETE FROM probe_ops`)
 			return err
 		}); err != nil {
@@ -588,14 +636,14 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 			t.Fatalf("VerifyCheckpoint with nothing to name the checkpoint by = (%v, %v), "+
 				"want nothing established", established, err)
 		}
-		if got := storedAtOf(t, h.db); !got.IsZero() {
+		if got := storedAtOf(t, h.estate); !got.IsZero() {
 			t.Fatalf("the checkpoint row names %s with no evidence — the log's record "+
 				"is the thing in question", got)
 		}
 		if err := h.run(4); err != nil {
 			t.Fatalf("a checkpoint nothing names stopped: %v", err)
 		}
-		if got := storedAtOf(t, h.db); !got.Equal(probeStoredAt(4)) {
+		if got := storedAtOf(t, h.estate); !got.Equal(probeStoredAt(4)) {
 			t.Fatalf("the checkpoint names %s after a batch, want %s", got, probeStoredAt(4))
 		}
 		if said := logRecords(t, logs.Bytes(), "statelog_checkpoint_unnamed"); len(said) != 1 ||
@@ -609,7 +657,7 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 		t.Parallel()
 		h := appliedThrough(t, 3)
 		unname(t, h, true)
-		if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+		if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(t.Context(), `DELETE FROM probe_ops`)
 			return err
 		}); err != nil {
@@ -628,7 +676,7 @@ func TestAnUnnamedCheckpointIsNamedByThisNodesOwnEvidence(t *testing.T) {
 		if h.fetch.ackCount(3) < 1 {
 			t.Fatal("the redelivery was never consumed")
 		}
-		if got := storedAtOf(t, h.db); !got.IsZero() {
+		if got := storedAtOf(t, h.estate); !got.IsZero() {
 			t.Fatalf("a redelivery named the checkpoint by the log's record, %s — what a "+
 				"restored consumer redelivers is whichever history the log holds", got)
 		}
@@ -726,7 +774,7 @@ func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 	// AND A CHECKPOINT ON ANOTHER STREAM IS REFUSED rather than stood at.
 	_, err = statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
-		Node: h.db, DB: h.db.Replicated(),
+		Node: h.db, DB: h.estate,
 		Checkpoint: statelog.Position{Stream: "CREWLET_SOMEONE_ELSES_LOG", Generation: 1},
 	})
 	if !errors.Is(err, statelog.ErrWrongStream) {
@@ -818,7 +866,7 @@ func TestAMovedCheckpointEndsARecordedDivergence(t *testing.T) {
 				t.Fatalf("VerifyCheckpoint = (%v, %v), want the divergence", established, err)
 			}
 			if c.move != "" {
-				if err := h.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+				if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
 					_, err := tx.ExecContext(t.Context(), c.move, store.EncodeTime(otherHistory))
 					return err
 				}); err != nil {

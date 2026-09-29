@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -1247,7 +1248,7 @@ func replicatedDigest(t *testing.T, n *node) map[string]string {
 func digestTable(t *testing.T, n *node, table string) string {
 	t.Helper()
 	var rendered []string
-	if err := n.engine.Backends().Store.Replicated().Read(t.Context(),
+	if err := storetest.EstateOf(n.engine.Backends().Store).Read(t.Context(),
 		func(tx *sql.Tx) error {
 			rows, err := tx.QueryContext(t.Context(), `SELECT * FROM `+table)
 			if err != nil {

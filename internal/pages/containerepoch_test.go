@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // activation is the instant of the nth configuration activation of a case, in
@@ -250,19 +251,15 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 	t := r.t
 	t.Helper()
 	end := r.logEnd()
-	older, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "older.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open the older node's store: %v", err)
-	}
-	t.Cleanup(func() { _ = older.Close() })
+	olderNode, older := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "older.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = olderNode.Close() })
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: versionOneBuild{}, Spec: statelog.EstateStream(versionOneBuild{}),
 		Applier: pages.NewApplier("node-older", nil, nil),
 		Fetch:   &logFetch{log: r.log, next: 1},
 		Log:     r.log,
-		Node:    older,
-		DB:      older.Replicated(),
+		Node:    olderNode,
+		DB:      older,
 	})
 	if err != nil {
 		t.Fatalf("build the older node's applier: %v", err)
@@ -285,7 +282,7 @@ func (r *roundTrip) olderNodeApplies() func(query string) int {
 	return func(query string) int {
 		t.Helper()
 		var n int
-		if err := older.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := older.Read(t.Context(), func(tx *sql.Tx) error {
 			return tx.QueryRowContext(t.Context(), query).Scan(&n)
 		}); err != nil {
 			t.Fatalf("%s: %v", query, err)
@@ -421,7 +418,7 @@ func TestAnUnknownContainerWriteIsAnError(t *testing.T) {
 	r := newRoundTrip(t)
 	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
 	// no operation minted before then — which is every one this call mints.
-	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db,
 		pages.Domain{}, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("record the ledger's watermark: %v", err)
 	}

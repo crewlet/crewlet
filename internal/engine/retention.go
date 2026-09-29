@@ -715,7 +715,7 @@ func (r *retention) feedTerm(ctx context.Context, running *runningLog) (
 // refuses a registered identity-claiming domain that does not answer this,
 // and the statelogtest suite certifies that every one answers it correctly.
 type evictionLister interface {
-	Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error)
+	Evictions(ctx context.Context, db store.PartitionReader) ([]statelog.EvictionRow, error)
 }
 
 // The two identity-claiming domains this build registers, held to the
@@ -763,12 +763,12 @@ func (r *retention) tombstones(ctx context.Context, running *runningLog,
 			"domain", running.domain.Name())
 		return nil, false
 	}
-	rows, err := lister.Evictions(ctx, r.db)
+	rows, err := lister.Evictions(ctx, r.db.PartitionHandle(running.id.Partition.String()).Reader())
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
-		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. The
-		// replicated estate closes during shutdown and during an
-		// adoption's rename, and a tick already in flight reaches it —
+		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. A
+		// partition closes during shutdown and during an adoption's
+		// rename, and a tick already in flight reaches it —
 		// which is the honest answer rather than a fault, and logging
 		// it at WARN would put a line in every clean shutdown. It is
 		// still not a read.

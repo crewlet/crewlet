@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY INDEX ON THE VECTOR TABLES SERVES A QUERY THIS PACKAGE ISSUES, and the
@@ -125,7 +126,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		}
 		return nil
 	}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		if err := build(tx, " through the index", false); err != nil {
 			return err
 		}
@@ -138,14 +139,14 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	second := trainedIndex(t, db, model, dim)
 	second.Index.Seed++
 	applyAt(t, db, second, 1<<30)
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		return build(tx, " mid-rollout", false)
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	plans := map[string][]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		for name, q := range registered {
 			steps, err := explain(t, tx, q.statement, q.args...)
 			if err != nil {
@@ -248,7 +249,7 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 
 	// THE INVERSE: an index no registered plan reaches.
 	var declared []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(db).Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(), `
 			SELECT name FROM sqlite_master
 			WHERE type = 'index' AND tbl_name IN ('kb_vectors', 'kb_vectors_bin')
@@ -334,7 +335,7 @@ func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string,
 func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db)
+	x := search.NewIndexer(db, storetest.EstateOf(db).Reader())
 	// A TERM THAT IS NOT IN EVERY DOCUMENT. If the queried term appeared in
 	// the whole corpus, the posting list and the bucket range would be the
 	// same size and driving on either would be a defensible plan — which

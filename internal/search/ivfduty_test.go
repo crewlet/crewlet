@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE DUTY TRAINS AN INDEX, AND ITS ROLLOUT CONVERGES — through the real record
@@ -56,7 +57,7 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(h.db).Read(t.Context(), func(tx *sql.Tx) error {
 		hits, report, err := search.Semantic(t.Context(), tx, search.SemanticQuery{
 			Vector: pack(query), Model: embedModel, Dim: embedder.width, Limit: 5,
 		})
@@ -221,9 +222,9 @@ func TestTheIndexWaitsForEveryReaderAndForTheLog(t *testing.T) {
 func indexDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing func(context.Context) (search.LogStanding, error), now func() time.Time) *search.Embedder {
 	t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
-		Publisher: h.publisher, Store: h.db, Log: statelog.EstateStream(search.Domain{}).Name,
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
 		Standing: standing, Embedder: embedder, Model: embedModel,
-		Corpora: []search.Corpus{search.TaskCorpus{DB: h.db}},
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
 		Now:     now,
 	})
 	if err != nil {

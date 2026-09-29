@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -490,50 +489,92 @@ const RejoinRetryCeiling = 5 * time.Minute
 // the floor and refusing, until a peer can donate.
 var errNoDonor = errors.New("engine: no peer could donate a usable snapshot")
 
-// replicatedEstate is the replicated database AS THE FRAMEWORK MAY HOLD IT:
-// resolved on every call through the node handle, never captured.
+// estate is partition p's file AS THE RUNTIME HANDS IT to the framework and
+// the domains: resolved through this node's handle on every call, never
+// captured, because an adoption closes the file, renames a peer's artefact over
+// it and opens it again — see [store.PartitionHandle].
+func (s *stateLog) estate(p statelog.PartitionID) store.PartitionHandle {
+	return s.db.PartitionHandle(p.String())
+}
+
+// openPartitions opens the file of every partition of this node's layout that
+// is not open already, and answers the ones it opened.
 //
-// An adoption closes the peer, renames the artefact over it and reopens it,
-// so the peer is a different *store.DB afterwards. Every subsystem that took
-// the handle at boot would go on answering from a file no longer at that name
-// — which is why the framework takes this seam, and why the window in which
-// there is no peer answers [store.ErrNoEstate] rather than a stale database.
-type replicatedEstate struct{ node *store.DB }
-
-func (r replicatedEstate) Read(ctx context.Context, fn func(*sql.Tx) error) error {
-	peer := r.node.Replicated()
-	if peer == nil {
-		return store.ErrNoEstate
+// ALL OR NONE, as the logs are: a failure closes what this call opened and
+// leaves the node as it was, because a partition whose file is missing is one
+// whose logs nothing could apply.
+func (s *stateLog) openPartitions(ctx context.Context) ([]statelog.PartitionID, error) {
+	var opened []statelog.PartitionID
+	for _, p := range s.layout.Partitions() {
+		if _, err := s.db.PartitionDB(p.String()); err == nil {
+			continue
+		}
+		file, err := s.layout.File(p)
+		if err == nil {
+			_, err = s.db.OpenPartition(ctx, file)
+		}
+		if err != nil {
+			for _, done := range opened {
+				_ = s.db.ClosePartition(done.String())
+			}
+			return nil, fmt.Errorf("engine: open the partition %s: %w", p, err)
+		}
+		opened = append(opened, p)
 	}
-	return peer.Read(ctx, fn)
+	return opened, nil
 }
 
-func (r replicatedEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	peer := r.node.Replicated()
-	if peer == nil {
-		return store.ErrNoEstate
+// closePartitions closes every partition of this node's layout, once the loops
+// that wrote them have stopped — the half of a stop that gives the files back.
+func (s *stateLog) closePartitions() {
+	for _, p := range s.layout.Partitions() {
+		if err := s.db.ClosePartition(p.String()); err != nil {
+			log.Warn("statelog_partition_not_closed", "node", s.nodeID,
+				"partition", p.String(), "error", err.Error(),
+				"detail", "the file stays locked by this process until it exits")
+		}
 	}
-	return peer.Tx(ctx, fn)
 }
 
-func (r replicatedEstate) Writer(ctx context.Context) (*store.Writer, error) {
-	peer := r.node.Replicated()
-	if peer == nil {
-		return nil, store.ErrNoEstate
+// closedPartitions names every partition of the layout this node does not have
+// open — which, while its state log runs, is only ever one a failed join left
+// closed.
+func (s *stateLog) closedPartitions() []string {
+	var out []string
+	for _, p := range s.layout.Partitions() {
+		if _, err := s.db.PartitionDB(p.String()); err != nil {
+			out = append(out, p.String())
+		}
 	}
-	return peer.Writer(ctx)
+	return out
 }
 
-// Caps answers the CURRENT estate's probe, and the zero value in the window
-// where there is no estate: the caller is sizing a statement, not reading
-// state, and [store.RowsPerInsert] reads a zero limit as one row per
-// statement — the shape every applier had before the chunker was wired in.
-func (r replicatedEstate) Caps() store.Capabilities {
-	peer := r.node.Replicated()
-	if peer == nil {
-		return store.Capabilities{}
+// partitionClosed reports whether any partition of the layout is not open.
+func (s *stateLog) partitionClosed() bool { return len(s.closedPartitions()) > 0 }
+
+// wholeEstate is the one partition a whole-estate snapshot copies, a
+// whole-estate join replaces and a whole-estate adoption history is folded
+// into — which is the layout's only partition, and there is none on a layout
+// that has more than one.
+//
+// A SNAPSHOT IS A COPY OF ONE FILE, and the donor serves one artefact naming
+// every log it covers, so an artefact covers the estate only where the estate
+// is one file: layout 0, whose one partition is estate.000. A layout of many
+// partitions has no whole-estate artefact to take, offer or install.
+func (s *stateLog) wholeEstate() (statelog.PartitionID, bool) {
+	partitions := s.layout.Partitions()
+	if len(partitions) != 1 {
+		return statelog.PartitionID{}, false
 	}
-	return peer.Caps()
+	return partitions[0], true
+}
+
+// partitionFile is partition p of this node's layout as the store opens it.
+// Every partition asked of it is one of the layout's own — the layout was
+// validated where it was built — so an error here is a programming mistake,
+// and it is returned rather than assumed away.
+func (s *stateLog) partitionFile(p statelog.PartitionID) (store.PartitionFile, error) {
+	return s.layout.File(p)
 }
 
 // snapshotHeld is the artefact this node holds, and why it holds no current
@@ -640,6 +681,14 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	provisionCtx, cancelProvision := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
 	defer cancelProvision()
 
+	// EVERY PARTITION'S FILE FIRST, before anything reads a checkpoint out
+	// of one: the join below asks each log's rows where they stand, and a
+	// partition that is not open answers nothing it could be asked.
+	if _, err = s.openPartitions(ctx); err != nil {
+		s.Stop()
+		return nil, err
+	}
+
 	logs, err := s.provisionAll(provisionCtx, host)
 	if err != nil {
 		s.Stop()
@@ -650,10 +699,16 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	// whose ledger was scrubbed, on a file whose watermark does not say so
 	// — carried into that watermark here, once, before the join below can
 	// replace the file and before anything publishes. See
-	// [statelog.FoldLegacyAdoptions].
-	if err := statelog.FoldLegacyAdoptions(ctx, e.backends.Store, registeredDomains()); err != nil {
-		s.Stop()
-		return nil, err
+	// [statelog.FoldLegacyAdoptions]. Every such adoption installed the
+	// whole estate, so it is folded into the whole estate's one partition;
+	// a layout of many has none, and no whole-estate adoption ever
+	// installed any of its files.
+	if whole, ok := s.wholeEstate(); ok {
+		if err := statelog.FoldLegacyAdoptions(ctx, e.backends.Store, s.estate(whole),
+			registeredDomains()); err != nil {
+			s.Stop()
+			return nil, err
+		}
 	}
 
 	// ADOPT BEFORE ANY APPLIER RUNS, because a join REPLACES the
@@ -930,6 +985,10 @@ func (s *stateLog) Stop() {
 			running.consumer.Close()
 		}
 	}
+	// AND THE FILES, once nothing writes them: the partitions are this
+	// runtime's to hold for as long as it runs their logs, and a node whose
+	// state log has stopped holds none.
+	s.closePartitions()
 }
 
 // applierRun is one domain's apply loop: what ends it, and what reports it
@@ -1040,7 +1099,7 @@ func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 		// there is no loop to resume.
 		return
 	}
-	at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.spec.Name)
+	at, _, _, err := statelog.CursorFor(ctx, s.estate(running.id.Partition).Reader(), running.spec.Name)
 	if err == nil {
 		err = running.consumer.Reset(ctx, at.Seq)
 	}
@@ -1202,7 +1261,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	// so it is the only durable statement of it — and resuming a consumer
 	// anywhere else is either a hole (at the head) or a million
 	// redeliveries (at the beginning).
-	checkpoint, _, err := statelog.CheckpointOf(ctx, s.db.Replicated(), spec.Name)
+	checkpoint, _, err := statelog.CheckpointOf(ctx, s.estate(id.Partition).Reader(), spec.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -1222,20 +1281,16 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: spec, Applier: applier, Fetch: consumer,
-		// THE REPLICATED HANDLE, not the node one. The applier PINS a
-		// connection for the life of its loop, and the pins live on the
-		// replicated estate's pool — that is where every applier writes,
-		// and it is the pool [store.Options.PinnedWriters] grows. Handed
-		// the node handle it refuses at its first round with "declared 0
-		// pinned writers", which stops the loop before it applies a
-		// single record: the domain's rows never move, and the only
-		// symptom is a node that stays behind for ever.
-		//
-		// The seams beside it take the NODE handle and reach the peer
-		// themselves ([tracker.NewGates] also reads this node's own
-		// adoption row, which is deliberately not replicated), so the
-		// asymmetry here is real rather than an oversight.
-		DB: replicatedEstate{node: s.db},
+		// THE LOG'S PARTITION, not the node's own file. The applier PINS
+		// a connection for the life of its loop, and the pins live on the
+		// partition's pool — that is where the log's applier writes, and
+		// the pool is sized for one pin per log the partition carries
+		// ([store.PartitionFile.Logs]). Handed the node's own file it
+		// would refuse at its first round with "declared 0 pinned
+		// writers", which stops the loop before it applies a single
+		// record: the domain's rows never move, and the only symptom is a
+		// node that stays behind for ever.
+		DB: s.estate(id.Partition),
 		// AND THE NODE'S OWN, where a log that diverged from these rows is
 		// remembered across a restart ([statelog.NodeEstate]).
 		Node: s.db,
@@ -1253,7 +1308,7 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// evicted node opened, re-anchored past; or a peer's, adopted.
 		NodeID: s.nodeID,
 		Evicted: func(ctx context.Context, node string) (bool, error) {
-			evicted, readErr := s.evictedOn(ctx, domain, spec, appendTo, []string{node})
+			evicted, readErr := s.evictedOn(ctx, domain, id.Partition, spec, appendTo, []string{node})
 			return evicted[node], readErr
 		},
 		// NO LOGGER, here or at any other statelog constructor: an absent
@@ -1397,18 +1452,18 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 	var evicted func(context.Context) (bool, error)
 	switch domain.Name() {
 	case tracker.Domain{}.Name():
-		rows, err := tracker.NewRows(s.db, spec)
+		rows, err := tracker.NewRows(s.estate(id.Partition).Reader(), spec)
 		if err != nil {
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
-		fence := tracker.NewFence(s.db, s.nodeID)
+		fence := tracker.NewFence(s.estate(id.Partition).Reader(), s.nodeID)
 		fence.Floor = s.floorOf(id.String())
 		fence.Ends = s.logEndsOf(id.String(), appendTo, runner)
 		fence.Committed = runner.Committed
-		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.db)
+		deps.Rows, deps.Fence, deps.Gates = rows, fence, tracker.NewGates(s.estate(id.Partition).Reader())
 		evicted = fence.Evicted
 	case search.Domain{}.Name():
-		rows, err := search.NewRows(s.db, spec)
+		rows, err := search.NewRows(s.estate(id.Partition).Reader(), spec)
 		if err != nil {
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
@@ -1418,15 +1473,15 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 		// that a re-embed would not replace.
 		deps.Rows, deps.Fence, deps.Gates = rows, search.NewFence(), search.NewGates()
 	case pages.Domain{}.Name():
-		rows, err := pages.NewRows(s.db, spec)
+		rows, err := pages.NewRows(s.estate(id.Partition).Reader(), spec)
 		if err != nil {
 			return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
 		}
-		fence := pages.NewFence(s.db, s.nodeID)
+		fence := pages.NewFence(s.estate(id.Partition).Reader(), s.nodeID)
 		fence.Floor = s.floorOf(id.String())
 		fence.Ends = s.logEndsOf(id.String(), appendTo, runner)
 		fence.Committed = runner.Committed
-		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.db)
+		deps.Rows, deps.Fence, deps.Gates = rows, fence, pages.NewGates(s.estate(id.Partition).Reader())
 		evicted = fence.Evicted
 	default:
 		return nil, nil, fmt.Errorf("engine: domain %q is registered and has no "+
@@ -1484,7 +1539,7 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		Domain: domain,
 		Spec:   spec,
 		Mode:   s.mode,
-		DB:     replicatedEstate{node: s.db},
+		DB:     s.estate(running.id.Partition).Reader(),
 		Waiter: runner,
 		// READ FRESH ON EVERY READ, because every one of its terms can
 		// change between two of them — and because a captured value
@@ -2234,9 +2289,22 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 				"fleet for a snapshot at the generation named")
 	}
 
+	// AN ADOPTION INSTALLS ONE FILE, the whole estate's, which only a
+	// layout of one partition has — see [stateLog.wholeEstate].
+	whole, ok := s.wholeEstate()
+	if !ok {
+		return "", statelog.OfferRequest{}, fmt.Errorf("engine: logs %v cannot "+
+			"replay from where their rows stand, and layout %d has %d partitions: "+
+			"a whole-estate snapshot is one file, and this layout's estate is not",
+			slices.Concat(behind, passed), s.layout.Number, len(s.layout.Partitions()))
+	}
+	file, err := s.partitionFile(whole)
+	if err != nil {
+		return "", statelog.OfferRequest{}, err
+	}
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  s.registered(),
-		LivePath: e.backends.Store.ReplicatedPath(),
+		LivePath: e.backends.Store.PartitionPath(file),
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
@@ -2245,9 +2313,14 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		StillUsable: func(ctx context.Context, m statelog.Manifest) error {
 			return s.stillUsable(ctx, logs, m)
 		},
-		Hold:   s.holdTail,
-		Close:  func(context.Context) error { return e.backends.Store.CloseReplicated() },
-		Reopen: e.backends.Store.ReopenReplicated,
+		Hold:  s.holdTail,
+		Close: func(context.Context) error { return e.backends.Store.ClosePartition(file.Name) },
+		Reopen: func(ctx context.Context) error {
+			if _, reopenErr := e.backends.Store.OpenPartition(ctx, file); reopenErr != nil {
+				return reopenErr
+			}
+			return nil
+		},
 		Record: func(ctx context.Context, began time.Time, donor string,
 			m statelog.Manifest, phase statelog.AdoptionPhase) error {
 
@@ -2352,8 +2425,8 @@ const (
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
 	// this is about to replace would be writing into a file with no name.
-	// EVERY PARTITION, because every partition's rows are in the one
-	// replicated file a join replaces.
+	// EVERY PARTITION, because a join replaces the whole estate, and a
+	// layout a join can run on is one partition.
 	defer s.recovering.lock(s.layout.Partitions()...)()
 	log.WarnContext(ctx, "statelog_rejoin_started", "node", s.nodeID,
 		"detail", "this node cannot replay its way to where the fleet is — it is "+
@@ -2390,8 +2463,8 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	return nil
 }
 
-// restoreEstate reopens a replicated estate a failed join left closed, and
-// moves every consumer to the checkpoint the file it opened keeps.
+// restoreEstate reopens every partition of the layout a failed join left
+// closed, and moves every consumer to the checkpoint the file it opened keeps.
 //
 // THE APPLIERS ARE HALTED AROUND IT, as around a join: a consumer is reset
 // only while nothing fetches from it, and the relaunch is what resumes each
@@ -2417,18 +2490,19 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 	// that ran between this reopen and the re-key below would have its new
 	// checkpoint re-keyed back to the one this read before it, and its
 	// halted applier relaunched with every other in the middle of its
-	// transition. Every partition, for the join's reason: the file it
-	// reopens holds them all.
+	// transition. Every partition, because any of them may be the one a
+	// failed join left closed.
 	defer s.recovering.lock(s.layout.Partitions()...)()
 	s.haltAppliers()
 	// ctx is the state log's own run context, for [Engine.rejoin]'s
 	// reason: the relaunched appliers outlive the heartbeat tick.
 	defer s.launchAppliers(ctx)
-	if err := s.db.ReopenReplicated(ctx); err != nil {
+	reopened, err := s.openPartitions(ctx)
+	if err != nil {
 		return fmt.Errorf("%w: %w", statelog.ErrEstateNotRestored, err)
 	}
 	log.WarnContext(ctx, "statelog_estate_restored", "node", s.nodeID,
-		"path", s.db.ReplicatedPath(),
+		"partitions", reopened,
 		"detail", "the replicated database an earlier join left closed is "+
 			"open again; the node asks the fleet for a snapshot only if it is "+
 			"still below the floor, and no sooner than its retry interval allows")
@@ -2491,7 +2565,7 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (time.Time, error)) {
 	for _, running := range s.running() {
 		name := running.key
-		at, keyed, _, err := statelog.CursorFor(ctx, s.db.Replicated(), running.spec.Name)
+		at, keyed, _, err := statelog.CursorFor(ctx, s.estate(running.id.Partition).Reader(), running.spec.Name)
 		if err == nil {
 			// THE RUNNER FIRST, against the live instant the caller
 			// judged the file by: a runner still keyed to the history
@@ -2554,7 +2628,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 	if s.rejoin == nil || s.rejoining {
 		return
 	}
-	lost := s.db.Replicated() == nil
+	lost := s.partitionClosed()
 	ask := !now.Before(s.rejoinAfter)
 	if !lost && !ask {
 		return
@@ -2593,7 +2667,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 		}
 		if errors.Is(err, statelog.ErrEstateNotRestored) {
 			log.ErrorContext(s.run, "statelog_estate_lost",
-				"node", s.nodeID, "path", s.db.ReplicatedPath(), "error", err.Error(),
+				"node", s.nodeID, "partitions", s.closedPartitions(), "error", err.Error(),
 				"asks_fleet_again_in", max(0, time.Until(s.rejoinAfter)).Round(time.Second),
 				"detail", "this node has no replicated database open, so it "+
 					"serves no tracker, page or search read, applies no record "+
@@ -2639,7 +2713,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 	above := map[string]uint32{}
 	for _, id := range s.layout.AllLogs() {
 		stream, _ := s.layout.Stream(id)
-		at, _, found, readErr := statelog.CursorFor(ctx, s.db.Replicated(), stream)
+		at, _, found, readErr := statelog.CursorFor(ctx, s.estate(id.Partition).Reader(), stream)
 		if readErr != nil {
 			return nil, nil, statelog.OfferRequest{}, readErr
 		}
@@ -2682,7 +2756,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		}
 		first := stats.FirstSeq
 		stream, _ := s.layout.Stream(id)
-		at, _, found, err := statelog.CursorFor(ctx, s.db.Replicated(), stream)
+		at, _, found, err := statelog.CursorFor(ctx, s.estate(id.Partition).Reader(), stream)
 		if err != nil {
 			return nil, nil, statelog.OfferRequest{}, err
 		}
@@ -2880,7 +2954,7 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]uint64) (func(), 
 		// bare sequence names a number space: a hold stated in the
 		// wrong generation pins a position on a log that no longer
 		// exists, which the trim reads as no hold at all.
-		cursor, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), stream)
+		cursor, _, _, err := statelog.CursorFor(ctx, s.estate(id.Partition).Reader(), stream)
 		if err != nil {
 			return nil, err
 		}
@@ -3092,11 +3166,23 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		// the event-queue contract carries.
 		return
 	}
+	// A SNAPSHOT IS THE WHOLE ESTATE IN ONE FILE, which only a layout of
+	// one partition has ([stateLog.wholeEstate]): a node on a layout of
+	// many takes none and serves none, and says so once rather than failing
+	// a take on every tick.
+	whole, single := s.wholeEstate()
+	if !single {
+		log.InfoContext(ctx, "statelog_snapshots_not_armed", "node", s.nodeID,
+			"layout", s.layout.Number, "partitions", len(s.layout.Partitions()),
+			"detail", "a snapshot and a donor's offer are one file of the whole "+
+				"estate, and this layout's estate is a file per partition")
+		return
+	}
 	dir := boot.Store.SnapshotDirFor()
 
 	snapshotter, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
 		Domains:       slices.Collect(maps.Values(s.registered())),
-		DB:            e.backends.Store,
+		Partition:     s.estate(whole),
 		Dir:           dir,
 		NodeID:        s.nodeID,
 		EngineVersion: version.String(),

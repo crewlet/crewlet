@@ -69,11 +69,11 @@ func readPurgeReach(ctx context.Context, tx *sql.Tx, id string) (purgeReach, err
 // [Writer.scopeForDependents] does, and the decide refuses it wherever the
 // purge reaches further — naming the task it is short by.
 func (w *Writer) scopeForPurge(ctx context.Context, id, project string) (ScopeSet, error) {
-	if w.db == nil {
+	if w.db.IsZero() {
 		return purgeScope(id, project, nil), nil
 	}
 	var reach purgeReach
-	if err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		reach, err = readPurgeReach(ctx, tx, id)
 		return err

@@ -209,7 +209,7 @@ func TestAContendedWriteRunsItsBodyOnce(t *testing.T) {
 // by a commit to a table it never names.
 func openBeginStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "begin.db"), store.Options{})
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "begin.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

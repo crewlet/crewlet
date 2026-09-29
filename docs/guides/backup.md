@@ -17,11 +17,11 @@ crewlet backup -dir /var/backups/crewlet/2026-08-30T18-00
 ```
 Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
 
-WHAT                     FILE                                  SIZE       CONTENTS
-store (node)             store.db                              252.0 KiB  20 migrations
-store (replicated)       store-replicated.db                   1.2 MiB    3 migrations
-stream CREWLET_AGENT     streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
-bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 messages
+WHAT                          FILE                                  SIZE       CONTENTS
+store (node)                  store.db                              252.0 KiB  20 migrations
+store (partition estate.000)  store-replicated.db                   1.2 MiB    3 migrations
+stream CREWLET_AGENT          streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
+bucket crewlet_budgets        streams/KV_crewlet_budgets.snapshot   512 B      3 messages
 …
 ```
 

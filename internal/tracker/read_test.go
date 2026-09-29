@@ -25,12 +25,12 @@ func newReadHarness(t *testing.T) *readHarness {
 	// read the rows directly would be testing a path nothing takes — and
 	// it is how `read_level` came to be a word in the answer rather than a
 	// property of it.
-	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db,
 		statelog.Position{Stream: statelog.EstateStream(tracker.Domain{}).Name, Generation: 1, Seq: h.seq})
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := tracker.NewReader(h.db, log)
+	reader, err := tracker.NewReader(h.db.Reader(), log)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}

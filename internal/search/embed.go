@@ -237,9 +237,10 @@ type EmbedDeps struct {
 	// Publisher is the vector domain's write authority.
 	Publisher *statelog.Publisher
 
-	// Store holds the partition the duty keeps an index for (ADR-0022):
-	// the codes it trains on and the rows it reads the index's state from.
-	Store *store.DB
+	// Estate is the partition the duty keeps an index for (ADR-0022): the
+	// codes it trains on and the rows it reads the index's state from. Read
+	// only — what the duty decides it publishes, and the applier writes.
+	Estate store.PartitionReader
 
 	// Log names the vector log this duty writes, which is what the index's
 	// training seed is derived from ([IVFSeed]) — so two partitions'
@@ -294,8 +295,8 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 	switch {
 	case d.Publisher == nil:
 		return nil, fmt.Errorf("search: the embed duty has no publisher")
-	case d.Store == nil:
-		return nil, fmt.Errorf("search: the embed duty has no store — it keeps " +
+	case d.Estate.IsZero():
+		return nil, fmt.Errorf("search: the embed duty has no partition — it keeps " +
 			"the partition's semantic index, and trains it from the codes there")
 	case d.Log == "":
 		return nil, fmt.Errorf("search: the embed duty names no vector log — " +
@@ -773,7 +774,7 @@ func pack(v []float32, dim int) ([]byte, error) {
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their
 // own vectors, and there is no second read to keep in step.
-type TaskCorpus struct{ DB *store.DB }
+type TaskCorpus struct{ DB store.PartitionReader }
 
 // Source implements [Corpus].
 func (TaskCorpus) Source() Source { return SourceTask }
@@ -782,7 +783,7 @@ func (TaskCorpus) Source() Source { return SourceTask }
 func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
 	var stale []Document
 	var gone []string
-	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT t.id, t.project_key, t.version, t.title,
 			       COALESCE(json_extract(t.document, '$.body'), '')
@@ -857,7 +858,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 // task's version; every other row is exactly what the duty would select next.
 func (c TaskCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
 	var current, total int
-	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT COUNT(*),
 			       COUNT(CASE WHEN v.source_id IS NOT NULL

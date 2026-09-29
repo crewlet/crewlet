@@ -197,18 +197,25 @@ func waitForWaiters(t *testing.T, q *writeQueue, n int) {
 func TestWritersBeginInTheOrderTheyAsked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	node, err := Open(ctx, filepath.Join(t.TempDir(), "order.db"),
-		Options{PinnedWriters: 1, BusyTimeout: time.Minute})
+	node, err := OpenNode(ctx, filepath.Join(t.TempDir(), "order.db"),
+		Options{BusyTimeout: time.Minute})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = node.Close() }()
-	other, err := Open(ctx, node.Path(), Options{BusyTimeout: time.Minute})
+	db, err := node.OpenPartition(ctx, PartitionFile{Name: layoutZeroPartition, Logs: 1})
+	if err != nil {
+		t.Fatalf("open the partition: %v", err)
+	}
+	second, err := OpenNode(ctx, node.Path(), Options{BusyTimeout: time.Minute})
 	if err != nil {
 		t.Fatalf("open a second handle on the same file: %v", err)
 	}
-	defer func() { _ = other.Close() }()
-	db := node.Replicated()
+	defer func() { _ = second.Close() }()
+	other, err := second.OpenPartition(ctx, PartitionFile{Name: layoutZeroPartition, Logs: 1})
+	if err != nil {
+		t.Fatalf("open a second handle on the same partition: %v", err)
+	}
 	if err := db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE order_probe (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT, who TEXT NOT NULL)`)
@@ -216,7 +223,7 @@ func TestWritersBeginInTheOrderTheyAsked(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create the probe table: %v", err)
 	}
-	if db.writes != other.Replicated().writes {
+	if db.writes != other.writes {
 		t.Fatal("two handles on one file took two queues: they share one " +
 			"driver-level write lock, so they have to share one line for it")
 	}
@@ -246,7 +253,7 @@ func TestWritersBeginInTheOrderTheyAsked(t *testing.T) {
 	<-holding
 	go func() { done <- w.Tx(ctx, record("applier")) }()
 	waitForWaiters(t, db.writes, 1)
-	go func() { done <- other.Replicated().Tx(ctx, record("pooled")) }()
+	go func() { done <- other.Tx(ctx, record("pooled")) }()
 	waitForWaiters(t, db.writes, 2)
 	close(hold)
 	for range 3 {
@@ -288,7 +295,7 @@ func TestWritersBeginInTheOrderTheyAsked(t *testing.T) {
 func TestAReadTakesNoPlaceInTheWriteQueue(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, err := Open(ctx, filepath.Join(t.TempDir(), "readfree.db"),
+	db, err := OpenNode(ctx, filepath.Join(t.TempDir(), "readfree.db"),
 		Options{BusyTimeout: time.Minute})
 	if err != nil {
 		t.Fatalf("open: %v", err)

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -75,7 +76,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 
 	// AND THIS NODE HOLDS NO CHECKPOINT AT ALL — a machine added to the
 	// company, or one whose replicated estate was lost and rebuilt.
-	if err := s.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(s.db).Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`DELETE FROM statelog_cursor WHERE stream = ?`, stream)
 		return err

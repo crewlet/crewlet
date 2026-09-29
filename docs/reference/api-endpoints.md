@@ -3278,7 +3278,7 @@ curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "stores": [
     {"estate": "node", "file": "store.db", "source": "/data/company.db",
      "bytes": 258048, "sha256": "…", "migrations": ["0001_events.sql", "…"]},
-    {"estate": "replicated", "file": "store-replicated.db",
+    {"estate": "partition", "partition": "estate.000", "file": "store-replicated.db",
      "source": "/data/crewlet-replicated.db", "bytes": 131072, "sha256": "…",
      "migrations": ["0001_tracker.sql", "…"]}
   ],

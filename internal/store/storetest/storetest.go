@@ -118,7 +118,7 @@ func testSchemaIdempotent(t *testing.T, db *store.DB) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	again, err := store.Open(t.Context(), path, store.Options{})
+	again, err := store.OpenNode(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -1023,7 +1023,7 @@ func testBackup(t *testing.T, db *store.DB) {
 	}
 
 	// Opened as a database in its own right — the restore path, exercised.
-	restored, err := store.Open(ctx, dest, store.Options{})
+	restored, err := store.OpenNode(ctx, dest, store.Options{})
 	if err != nil {
 		t.Fatalf("the copy will not open as a database: %v", err)
 	}
@@ -1103,7 +1103,7 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 		t.Fatalf("backup under concurrent writes: %v", err)
 	}
 
-	restored, err := store.Open(ctx, dest, store.Options{})
+	restored, err := store.OpenNode(ctx, dest, store.Options{})
 	if err != nil {
 		t.Fatalf("a copy taken under writes will not open: %v", err)
 	}

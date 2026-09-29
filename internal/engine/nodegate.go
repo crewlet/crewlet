@@ -507,7 +507,8 @@ func gateLogsOf(s *stateLog, db *store.DB, nodeID string,
 		if !running.domain.ClaimsIdentity() {
 			continue
 		}
-		gl, err := gateLogFor(running, running.publisher, db, nodeID, rec)
+		gl, err := gateLogFor(running, running.publisher,
+			db.PartitionHandle(running.id.Partition.String()).Reader(), nodeID, rec)
 		if err != nil {
 			return nil, err
 		}
@@ -527,7 +528,10 @@ func gateLogs(logs ...gateLog) func() ([]gateLog, error) {
 
 // gateLogFor is one identity-claiming log's writer for the gate, publishing
 // through publisher — the domain's own write authority.
-func gateLogFor(running *runningLog, publisher *statelog.Publisher, db *store.DB,
+//
+// db is the log's own partition, which the domain's writer reads the rows it
+// decides from out of.
+func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.PartitionReader,
 	nodeID string, rec *metrics.Recorder) (gateLog, error) {
 
 	// THE LOG'S KEY NAMES THE GATE, never the domain alone: a domain with a

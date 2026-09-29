@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -214,7 +215,7 @@ func readProject(t *testing.T, e *engine.Engine, key string) (string, int64, boo
 	t.Helper()
 	var purpose string
 	var epoch int64
-	err := e.Backends().Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	err := storetest.EstateOf(e.Backends().Store).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT purpose, chart_epoch FROM tracker_projects WHERE key = ?`,
 			key).Scan(&purpose, &epoch)
@@ -253,7 +254,7 @@ func containerRow(t *testing.T, e *engine.Engine, key string) pages.Container {
 func readContainer(t *testing.T, e *engine.Engine, key string) (pages.Container, bool) {
 	t.Helper()
 	var document []byte
-	err := e.Backends().Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	err := storetest.EstateOf(e.Backends().Store).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT document FROM pages_containers WHERE key = ?`, key).Scan(&document)
 	})
@@ -274,7 +275,7 @@ func readContainer(t *testing.T, e *engine.Engine, key string) (pages.Container,
 func projectHistory(t *testing.T, e *engine.Engine) int {
 	t.Helper()
 	var n int
-	if err := e.Backends().Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(e.Backends().Store).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tracker_history
 			WHERE kind IN (?, ?)`, string(tracker.ChangeProjectCreated),
 			string(tracker.ChangeProjectUpdated)).Scan(&n)

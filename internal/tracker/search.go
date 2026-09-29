@@ -96,12 +96,12 @@ const MaxSearchLimit = 50
 
 // Searcher answers a ranked item search.
 type Searcher struct {
-	db   *store.DB
+	db   store.PartitionReader
 	rank Ranker
 }
 
 // NewSearcher builds one over this node's store and its index.
-func NewSearcher(db *store.DB, rank Ranker) *Searcher {
+func NewSearcher(db store.PartitionReader, rank Ranker) *Searcher {
 	return &Searcher{db: db, rank: rank}
 }
 
@@ -116,7 +116,7 @@ var ErrIndexBuilding = fmt.Errorf("tracker: the search index is still building")
 // Search ranks the company's work items against plain text.
 func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked, error) {
 	switch {
-	case s == nil || s.rank == nil || s.db == nil:
+	case s == nil || s.rank == nil || s.db.IsZero():
 		return nil, fmt.Errorf("tracker: this node has no search index")
 	case limit <= 0:
 		limit = SearchLimit
@@ -173,7 +173,7 @@ func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]
 		ids = append(ids, doc.ID)
 	}
 	out := make(map[string]Ranked, len(ids))
-	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT id, key, project_key, type, title, status, assignee
 			  FROM tracker_tasks

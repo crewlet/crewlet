@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // AN EVICTION STOPS EVERY IDENTITY-CLAIMING LOG COUNTING THE NODE ONCE ITS
@@ -226,7 +227,7 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 		if d.Domain != name || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission's answer for %s is %+v, want applied", name, d)
 		}
-		rows, err := running.domain.(evictionLister).Evictions(t.Context(), back.Store)
+		rows, err := running.domain.(evictionLister).Evictions(t.Context(), storetest.EstateOf(back.Store).Reader())
 		if err != nil {
 			t.Fatalf("read %s's evictions: %v", name, err)
 		}

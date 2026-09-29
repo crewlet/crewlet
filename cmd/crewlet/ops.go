@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -81,9 +83,9 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		// WHERE THE ENGINE PUTS IT. Left out, the store derives the
-		// replicated estate's path from store.path alone — so on a node
-		// whose store.replicated_path names another volume, this command
+		// WHERE THE ENGINE PUTS IT. Left out, the store derives layout 0's
+		// partition path from store.path alone — so on a node whose
+		// store.replicated_path names another volume, this command
 		// reported and migrated a fresh database it created beside
 		// store.path, and left the one the engine opens exactly as far
 		// behind as it found it.
@@ -91,8 +93,14 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 		BusyTimeout:    boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
+	// EVERY PARTITION OF THE LAYOUT THIS BUILD RUNS, which a data node
+	// holds all of — the files `crewlet run` opens beside the node's own.
+	partitions, err := layoutFiles(engine.LayoutZero())
+	if err != nil {
+		return err
+	}
 
-	schemas, err := store.Pending(ctx, boot.Store.Path, opts)
+	schemas, err := store.Pending(ctx, boot.Store.Path, opts, partitions...)
 	if err != nil {
 		// READING IS ALSO A SECOND PROCESS ON THE FILE, and until Pending
 		// took the lock this was the one path that did not say so: -check
@@ -106,9 +114,10 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 				"already applied every migration this binary carries, so a node "+
 				"that is up is a node with nothing pending.")
 	}
-	// BOTH ESTATES, ALWAYS BOTH. A node is two databases with two
-	// independent sequences, and a report that named one of them would be
-	// a deploy gate that passes while the other is behind.
+	// EVERY FILE, ALWAYS EVERY FILE. A node is its own database and one per
+	// partition it holds, each with its own ledger, and a report that named
+	// some of them would be a deploy gate that passes while another is
+	// behind.
 	var waiting int
 	for _, sch := range schemas {
 		waiting += len(sch.Pending)
@@ -116,7 +125,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if *check {
 		for _, sch := range schemas {
 			fmt.Fprintf(stdout, "%s (%s): %d applied, %d pending\n",
-				sch.Path, sch.Estate, len(sch.Applied), len(sch.Pending))
+				sch.Path, schemaLabel(sch), len(sch.Applied), len(sch.Pending))
 			for _, file := range sch.Pending {
 				fmt.Fprintf(stdout, "  pending  %s\n", file)
 			}
@@ -132,16 +141,17 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if waiting == 0 {
 		for _, sch := range schemas {
 			fmt.Fprintf(stdout, "%s (%s) is up to date (%d migration(s) applied).\n",
-				sch.Path, sch.Estate, len(sch.Applied))
+				sch.Path, schemaLabel(sch), len(sch.Applied))
 		}
 		return nil
 	}
 
 	// OPENING IS WHAT MIGRATES. There is deliberately no second code path
 	// that applies files: a migrator the engine does not use is one that
-	// can disagree with it about what "applied" means. One Open brings up
-	// both estates, so both sequences run here.
-	db, err := store.Open(ctx, boot.Store.Path, opts)
+	// can disagree with it about what "applied" means. The node's own file
+	// and each partition's are opened exactly as `crewlet run` opens them,
+	// so every sequence runs here.
+	db, err := store.OpenNode(ctx, boot.Store.Path, opts)
 	if err != nil {
 		// NO ROUTE AROUND THIS ONE, and that is correct: migrating the
 		// schema under a live engine is what the lock exists to prevent,
@@ -152,17 +162,27 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	for _, f := range partitions {
+		if _, err = db.OpenPartition(ctx, f); err != nil {
+			return engineHoldsTheStore(err, bootstrapPath,
+				"Stop `crewlet run` on this node and re-run — a schema change "+
+					"under a live engine is exactly what the lock prevents.")
+		}
+	}
+
 	for _, sch := range schemas {
 		handle := db
-		if sch.Estate == store.EstateReplicated {
-			handle = db.Replicated()
+		if sch.Estate == store.EstatePartition {
+			if handle, err = db.PartitionDB(sch.Partition); err != nil {
+				return err
+			}
 		}
 		now, err := handle.AppliedMigrations(ctx)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "%s (%s): applied %d migration(s).\n",
-			sch.Path, sch.Estate, len(now)-len(sch.Applied))
+			sch.Path, schemaLabel(sch), len(now)-len(sch.Applied))
 		for _, file := range sch.Pending {
 			fmt.Fprintf(stdout, "  applied  %s\n", file)
 		}
@@ -313,4 +333,26 @@ func budgetsReset(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "Reset %d scope(s): %s\n",
 		answer.Cleared, strings.Join(answer.Scopes, ", "))
 	return nil
+}
+
+// layoutFiles is every partition of a layout as the store opens it.
+func layoutFiles(layout statelog.Layout) ([]store.PartitionFile, error) {
+	var out []store.PartitionFile
+	for _, p := range layout.Partitions() {
+		f, err := layout.File(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// schemaLabel names one file of a migration report: the node's own, or which
+// partition.
+func schemaLabel(sch store.Schema) string {
+	if sch.Partition == "" {
+		return string(sch.Estate)
+	}
+	return string(sch.Estate) + " " + sch.Partition
 }

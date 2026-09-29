@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -17,7 +18,7 @@ import (
 // it.
 type applyHarness struct {
 	t       *testing.T
-	db      *store.DB
+	db      store.PartitionHandle
 	applier *tracker.Applier
 	seq     uint64
 
@@ -31,13 +32,9 @@ type applyHarness struct {
 
 func newApplyHarness(t *testing.T) *applyHarness {
 	t.Helper()
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
-		store.Options{PinnedWriters: 1})
-	if err != nil {
-		t.Fatalf("open a store: %v", err)
-	}
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		if err := dbNode.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
 		}
 	})
@@ -71,7 +68,7 @@ func (h *applyHarness) applyAt(rec tracker.MutationRecord, brokerAt time.Time,
 		Stream: "CREWLET_TRACKER_LOG", Generation: rec.Gen, Seq: seq,
 	}
 	var rows int
-	err = h.db.Replicated().Tx(h.t.Context(), func(tx *sql.Tx) error {
+	err = h.db.Tx(h.t.Context(), func(tx *sql.Tx) error {
 		record := statelog.Record{
 			Envelope: statelog.Envelope{
 				V: rec.V, Kind: string(rec.Subject.Kind),
@@ -116,7 +113,7 @@ func (e *gateError) Error() string { return "gated: " + string(e.reason) }
 func (h *applyHarness) count(table string) int {
 	h.t.Helper()
 	var n int
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(),
 			`SELECT COUNT(*) FROM `+table).Scan(&n)
 	}); err != nil {
@@ -129,7 +126,7 @@ func (h *applyHarness) count(table string) int {
 func (h *applyHarness) value(query string, args ...any) int64 {
 	h.t.Helper()
 	var n sql.NullInt64
-	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(h.t.Context(), query, args...).Scan(&n)
 	}); err != nil {
 		h.t.Fatalf("read %q: %v", query, err)
@@ -402,7 +399,7 @@ func TestAPurgeReParentsItsChildrenRatherThanOrphaningThem(t *testing.T) {
 	// AND ITS PARENT RESOLVES. A dangling pointer here is invisible to
 	// every reader and is what the whole case is about.
 	var parent sql.NullString
-	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := h.db.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT p.id FROM tracker_tasks c
 			 LEFT JOIN tracker_tasks p ON p.id = c.parent_id

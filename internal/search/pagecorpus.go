@@ -30,7 +30,7 @@ import (
 // whose text nobody touched — a provider bill for a title change.
 
 // PageCorpus embeds the knowledge base's published pages.
-type PageCorpus struct{ DB *store.DB }
+type PageCorpus struct{ DB store.PartitionReader }
 
 // Source implements [Corpus].
 func (PageCorpus) Source() Source { return SourcePage }
@@ -44,7 +44,7 @@ func (PageCorpus) Source() Source { return SourcePage }
 func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]Document, []string, error) {
 	var stale []Document
 	var gone []string
-	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
 			SELECT p.id, p.container, p.edit_version, p.title, p.body
 			FROM pages_heads p
@@ -116,7 +116,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 // working through.
 func (c PageCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
 	var current, total int
-	err := c.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 			SELECT COUNT(*),
 			       COUNT(CASE WHEN v.source_id IS NOT NULL

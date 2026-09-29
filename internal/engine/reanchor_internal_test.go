@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -569,7 +570,7 @@ type taskFields struct {
 func taskState(t *testing.T, e *Engine, id string) taskFields {
 	t.Helper()
 	var got taskFields
-	if err := e.backends.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(e.backends.Store).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(),
 			`SELECT title, status FROM tracker_tasks WHERE id = ?`, id).
 			Scan(&got.title, &got.status)
@@ -976,7 +977,7 @@ type cursorRow struct {
 func readCursorRow(t *testing.T, e *Engine, domain string) cursorRow {
 	t.Helper()
 	stream := e.native.Load().log.Domain(domain).spec.Name
-	at, created, _, err := statelog.CursorFor(t.Context(), e.backends.Store.Replicated(), stream)
+	at, created, _, err := statelog.CursorFor(t.Context(), storetest.EstateOf(e.backends.Store), stream)
 	if err != nil {
 		t.Fatalf("read %s's checkpoint: %v", domain, err)
 	}
@@ -991,7 +992,7 @@ var testActivation = time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
 func countRows(t *testing.T, e *Engine, query string, args ...any) int {
 	t.Helper()
 	var n int
-	if err := e.backends.Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := storetest.EstateOf(e.backends.Store).Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), query, args...).Scan(&n)
 	}); err != nil {
 		t.Fatalf("count: %v", err)

@@ -78,7 +78,7 @@ func Stamped(t *testing.T, new Factory) error {
 	if err := seedCheckpoint(t.Context(), db, at); err != nil {
 		t.Fatalf("place %s's checkpoint at generation %d: %v", name, SuiteGeneration, err)
 	}
-	rows, err := c.Rows(db, c.spec())
+	rows, err := c.Rows(db.Reader(), c.spec())
 	if err != nil {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
@@ -104,7 +104,7 @@ func Stamped(t *testing.T, new Factory) error {
 	if err != nil {
 		t.Fatalf("build a publisher over %s: %v", name, err)
 	}
-	if err := c.Write(t.Context(), pub, db); err != nil {
+	if err := c.Write(t.Context(), pub, db.Reader()); err != nil {
 		return fmt.Errorf("%s's own write path failed through the framework's "+
 			"publisher — a refusal naming the writer or the generation means "+
 			"its decision does not put the stamp it is handed on its "+
@@ -134,8 +134,8 @@ func Stamped(t *testing.T, new Factory) error {
 
 // seedCheckpoint places a fresh estate's checkpoint for one stream, which is
 // the row a snapshot reads the generation it stamps from.
-func seedCheckpoint(ctx context.Context, db *store.DB, at statelog.Position) error {
-	return db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+func seedCheckpoint(ctx context.Context, db store.PartitionHandle, at statelog.Position) error {
+	return db.Tx(ctx, func(tx *sql.Tx) error {
 		now := store.EncodeTime(time.Unix(1_700_000_000, 0).UTC())
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO statelog_cursor

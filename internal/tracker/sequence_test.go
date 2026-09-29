@@ -367,7 +367,7 @@ func requireAField(t *testing.T, r *roundTrip) {
 func counterOf(t *testing.T, r *roundTrip, project string) int {
 	t.Helper()
 	var last int
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(t.Context(),
 			`SELECT last FROM tracker_counters WHERE project_key = ?`,
 			project).Scan(&last)
@@ -384,7 +384,7 @@ func counterOf(t *testing.T, r *roundTrip, project string) int {
 func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
 	t.Helper()
 	var task tracker.Task
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
 		var body []byte
 		if err := tx.QueryRowContext(t.Context(),
 			`SELECT document FROM tracker_tasks WHERE id = ?`, id).
