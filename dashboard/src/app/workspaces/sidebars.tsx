@@ -29,6 +29,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import {
   indexOrg,
+  liveRowFor,
   seatTone,
   unitPath,
   unitTally,
@@ -193,7 +194,7 @@ export function useActivitySidebar(): SidebarSection[] {
     const seats: SidebarRow[] = index.seats
       .filter((s) => s.kind !== "human")
       .map((seat) => {
-        const live = agents.find((a) => a.role === seat.name);
+        const live = liveRowFor(agents, seat);
         return {
           key: seat.handle,
           label: seat.name,

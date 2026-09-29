@@ -188,6 +188,7 @@ describe("what it surfaces", () => {
     // the round started two seconds or eleven minutes ago.
     const call = (updated: string) => ({
       id: "a",
+      agent_id: "id-a",
       role: "Dev A",
       handle: "dev-a",
       live_call: {
@@ -280,6 +281,7 @@ describe("what it surfaces", () => {
         agents: [
           {
             id: "a",
+            agent_id: "id-a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -312,6 +314,7 @@ describe("ordering", () => {
         agents: [
           {
             id: "a",
+            agent_id: "id-a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -338,8 +341,9 @@ describe("ordering", () => {
         connected: false,
         engine: { status: "ok", configured: false },
         agents: [
-          { id: "a", role: "A", state: "afk", afk_reason: "stall" },
-          { id: "b", role: "B", state: "afk", afk_reason: "stall" },
+          // TWO SEATS SHARING A NAME: keyed by the name, their rows were one id.
+          { id: "a", agent_id: "id-a", role: "Engineer", state: "afk", afk_reason: "stall" },
+          { id: "b", agent_id: "id-b", role: "Engineer", state: "afk", afk_reason: "stall" },
         ],
       }),
     );

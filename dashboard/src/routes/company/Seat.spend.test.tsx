@@ -60,7 +60,7 @@ function rollup(since: string, until: string): Rollup {
   return {
     since,
     until,
-    agent_role: "",
+    agent_id: "",
     totals: bucket(),
     by_phase: [],
     by_model: [],
@@ -77,6 +77,9 @@ function mount(pushed: Rollup) {
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
     Promise.resolve({});
   store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  // The roster row is what pairs the seat with its spend row: both carry the
+  // seat's agent id, which a namesake does not share.
+  store.applySeats([{ id: "ceo", agent_id: "a-1", role: "CEO", handle: "ceo" }]);
   store.applyTokens(pushed);
   return render(
     <ClientContext.Provider value={{ store, socket }}>

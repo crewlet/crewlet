@@ -60,7 +60,11 @@ export interface Band {
 export function bandsOf(series: TokenSeries | null, group?: string): Band[] {
   return (series?.by_group ?? []).map((b, i) => ({
     key: b.other ? "" : b.group,
-    label: b.other ? `other (${b.folded})` : b.group,
+    // THE LABEL WHERE THE ENGINE SENT ONE: a seat band is keyed by the seat's
+    // agent id and a unit band by the unit's key — identities, since two
+    // seats or two units may share a name — and neither is words a reader
+    // should be handed.
+    label: b.other ? `other (${b.folded})` : b.label || b.group,
     // THE RESIDUAL IS NEVER A PHASE. It is "the rest", so it keeps the
     // residual hue whatever the grouping is — a fold of three phases drawn
     // in one of their colours would name one of them.

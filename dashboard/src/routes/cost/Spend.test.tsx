@@ -60,7 +60,7 @@ function rollup(total: number): Rollup {
   return {
     since: "2026-09-12T10:00:00Z",
     until: "2026-09-13T10:00:00Z",
-    agent_role: "",
+    agent_id: "",
     totals: bucket(total),
     by_phase: [],
     by_model: [],

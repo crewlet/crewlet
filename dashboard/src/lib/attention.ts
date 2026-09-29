@@ -270,11 +270,14 @@ export function attentionQueue(input: AttentionInput): Attention[] {
   }
 
   // --- seats ---------------------------------------------------------------
+  // Each row's id is the seat's AGENT ID, never its name: two seats sharing a
+  // name that both stopped were one row, and the queue said one seat was down
+  // when two were.
   for (const agent of agents) {
     const state = runState(agent, sandboxes);
     if (agent.last_error) {
       out.push({
-        id: `error-${agent.role}`,
+        id: `error-${agent.agent_id}`,
         severity: "critical",
         subject: "seat",
         icon: "warning",
@@ -288,7 +291,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     }
     if (state === "afk") {
       out.push({
-        id: `afk-${agent.role}`,
+        id: `afk-${agent.agent_id}`,
         severity: "caution",
         subject: "seat",
         icon: "pause",
@@ -307,7 +310,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       const how = staleness(call.updated_at, now);
       if (how) {
         out.push({
-          id: `stale-${agent.role}-${call.turn_id}`,
+          id: `stale-${agent.agent_id}-${call.turn_id}`,
           severity: how === "stalled" ? "critical" : "caution",
           subject: "seat",
           icon: "schedule",
@@ -333,7 +336,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     const meter = agent.budget;
     if (meter?.refused_at) {
       out.push({
-        id: `seat-budget-${agent.role}`,
+        id: `seat-budget-${agent.agent_id}`,
         severity: "caution",
         subject: "budget",
         icon: "token",
@@ -345,7 +348,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       });
     } else if (meter && meter.max > 0 && meter.used >= meter.max) {
       out.push({
-        id: `seat-budget-${agent.role}`,
+        id: `seat-budget-${agent.agent_id}`,
         severity: "caution",
         subject: "budget",
         icon: "token",

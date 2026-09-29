@@ -30,7 +30,9 @@ import { QueryState } from "~/components/common.tsx";
 import {
   awaitingPerson,
   indexOrg,
+  liveRowFor,
   runState,
+  sandboxFor,
   unitDirectLabel,
   type Seat,
   type Unit,
@@ -188,7 +190,7 @@ function bucketOf(
   // filed under one label before anything about what it is doing was read.
   // Grouping by state now answers the same question for both kinds, and
   // "which seats are people" is a filter rather than a bucket.
-  const sandbox = sandboxes.find((s) => s.role === seat.name);
+  const sandbox = sandboxFor(sandboxes, agent);
   if (awaitingPerson(sandbox?.status)) return "needs";
   if (agent?.last_error) return "broken";
   const state = runState(agent, sandboxes);
@@ -237,7 +239,7 @@ export function People() {
             s.goal.toLowerCase().includes(needle) ||
             s.unit?.name.toLowerCase().includes(needle),
         )
-        .map((seat) => ({ seat, agent: agents.find((a) => a.role === seat.name) }))
+        .map((seat) => ({ seat, agent: liveRowFor(agents, seat) }))
         // By NAME. Never by a field that a live push moves.
         .sort((a, b) => a.seat.name.localeCompare(b.seat.name))
     );

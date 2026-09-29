@@ -10,6 +10,7 @@
  * turn record" printed above the panel rendering that record.
  */
 
+import { isValidElement, type ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 import { outcomeOf, problemCount, turnFacts, type TurnView } from "./Turn.tsx";
 // THE SPAN RULE LIVES BESIDE THE PHASES IT MEASURES NOW. The turn CARD had a
@@ -233,6 +234,7 @@ describe("turnFacts", () => {
       nested: new Map(),
       rec: {} as TurnView["rec"],
       role: "",
+      handle: "",
       trigger: null,
       outcome: outcomeOf({} as TurnView["rec"]),
       running: false,
@@ -314,6 +316,19 @@ describe("turnFacts", () => {
       "+400 in 3 workers",
     );
     expect(fact(view({ tokens: 900 }), "Tokens")?.note).toBe(undefined);
+  });
+
+  test("the seat links by its handle, and a seat nobody can place is named unlinked", () => {
+    // The chip linked `handle={view.role}` — the seat's NAME as its address —
+    // which opened whichever seat of that name came first, a namesake
+    // included. The handle is resolved from the agent id the phases carry.
+    const placed = fact(view({ role: "Engineer", handle: "ada" }), "Seat");
+    expect(isValidElement(placed?.value)).toBe(true);
+    expect((placed?.value as ReactElement<{ handle: string }>).props.handle).toBe("ada");
+
+    // A seat the roster no longer carries has no page: the name, and no link.
+    expect(fact(view({ role: "Engineer", handle: "" }), "Seat")?.value).toBe("Engineer");
+    expect(fact(view({ role: "", handle: "" }), "Seat")?.value).toBe("the engine");
   });
 
   test("a turn with no phase record in hand counts nothing, and notes nothing", () => {

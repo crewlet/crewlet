@@ -276,7 +276,16 @@ export interface TurnView {
   /** The workers, filed under the phase that spawned each. */
   nested: Map<string, PhaseRecord[]>;
   rec: TurnRecord;
+  /**
+   * The seat the turn ran for: its name, and the HANDLE its page is at —
+   * resolved from the agent id the turn's phases carry, through the roster, so
+   * a renamed seat is named and linked as it is now. `handle` is "" for a seat
+   * the roster no longer carries, which then draws unlinked: it was linked by
+   * its NAME, as though a name were a handle, and opened whichever seat of
+   * that name came first.
+   */
   role: string;
+  handle: string;
   trigger: PhaseRecord["trigger"] | null;
   outcome: ReturnType<typeof outcomeOf>;
   running: boolean;
@@ -420,7 +429,7 @@ export function useTurnView(turnId: string): TurnView {
     const streamed = streamedPhases(phaseEvents, (r) => r.turnId === turnId);
     const live = agents
       .filter((a) => a.live_call && a.live_call.turn_id === turnId)
-      .map((a) => fromLiveCall(a.live_call!, a.role));
+      .map((a) => fromLiveCall(a.live_call!, a));
     // Within a turn, oldest first: a turn is read forwards. `mergePhases`
     // orders newest first, which is right for a feed and wrong here.
     return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
@@ -464,6 +473,10 @@ export function useTurnView(turnId: string): TurnView {
   const story = useMemo(() => tellStory(events), [events]);
   const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
 
+  // WHOSE TURN, by the agent id its phases name — see `TurnView.role`.
+  const agentId = phases.find((p) => p.agentId)?.agentId ?? str(rec.summary, "agent_id");
+  const seatRow = agentId ? agents.find((a) => a.agent_id === agentId) : undefined;
+
   return {
     turnId,
     loading,
@@ -476,7 +489,8 @@ export function useTurnView(turnId: string): TurnView {
     own,
     nested,
     rec,
-    role: phases[0]?.role ?? (rec.summary?.actor || ""),
+    role: seatRow?.role || phases[0]?.role || rec.summary?.actor || "",
+    handle: seatRow?.handle ?? "",
     trigger: phases.find((p) => p.trigger)?.trigger ?? null,
     outcome: outcomeOf(rec),
     running,
@@ -612,7 +626,13 @@ export function turnFacts(view: TurnView): Fact[] {
       label: "Seat",
       // The chip is its own link, so the fact carries no `path`: an anchor
       // inside the fact's own anchor is markup no browser agrees about.
-      value: view.role ? <SeatChip name={view.role} handle={view.role} /> : "the engine",
+      value: !view.role ? (
+        "the engine"
+      ) : view.handle ? (
+        <SeatChip name={view.role} handle={view.handle} />
+      ) : (
+        view.role
+      ),
     },
     {
       // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an empty

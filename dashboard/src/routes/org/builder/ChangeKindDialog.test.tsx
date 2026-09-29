@@ -225,7 +225,9 @@ test("a schedule the change strands, and the seat's work in flight, are said fir
       { handle: "member", name: "Member", unit: "team" },
     ],
   });
-  const agents: AgentRow[] = [{ id: "1", role: "Lead", handle: "lead", state: "working" }];
+  const agents: AgentRow[] = [
+    { id: "1", agent_id: "id-1", role: "Lead", handle: "lead", state: "working" },
+  ];
   open(checkedEdit(chart), "seat:lead", { agents });
   expect(screen.getByText(/Schedule standup on Team would have no runner/)).toBeDefined();
   expect(screen.getByText(/Lead is working now/)).toBeDefined();

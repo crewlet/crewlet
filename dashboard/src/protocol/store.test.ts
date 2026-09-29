@@ -10,7 +10,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
-import type { EventEnvelope, FeedRow } from "./types.ts";
+import type { AgentRow, EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -36,13 +36,35 @@ describe("agent overlays", () => {
     // lost the seat's static identity on every progress round would redraw
     // the roster several times a second with half its fields blank.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", state: "idle" }] });
-    store.applyAgents([{ role: "PM", state: "working", current_phase: "execute" }]);
+    store.applySnapshot({
+      agents: [{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm", state: "idle" }],
+    });
+    store.applyAgents([{ agent_id: "id-pm", state: "working", current_phase: "execute" }]);
 
     const [row] = store.state.agents;
     expect(row?.handle).toBe("pm");
     expect(row?.state).toBe("working");
     expect(row?.current_phase).toBe("execute");
+  });
+
+  test("two seats sharing a display name keep separate live state", () => {
+    // A seat's name is prose and the chart lets two seats carry the same one.
+    // Merged by name, each overlay landed on BOTH cards, so each rendered
+    // whatever the other was last doing.
+    const store = new Store();
+    store.applySnapshot({
+      agents: [
+        { id: "eng-a", agent_id: "id-a", role: "Engineer", handle: "eng-a", state: "idle" },
+        { id: "eng-b", agent_id: "id-b", role: "Engineer", handle: "eng-b", state: "idle" },
+      ],
+    });
+    store.applyAgents([{ agent_id: "id-b", state: "working", current_phase: "execute" }]);
+
+    const [a, b] = store.state.agents;
+    expect(a?.state).toBe("idle");
+    expect(a?.current_phase).toBeUndefined();
+    expect(b?.state).toBe("working");
+    expect(b?.current_phase).toBe("execute");
   });
 
   test("a keyed object is DISCARDED rather than half-applied", () => {
@@ -52,37 +74,44 @@ describe("agent overlays", () => {
     // The guard is what makes that loud rather than silent — and the e2e
     // replay is what makes it impossible to ship again.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", state: "idle" }] });
-    store.applyAgents({ PM: { state: "working" } } as never);
+    store.applySnapshot({ agents: [{ id: "pm", agent_id: "id-pm", role: "PM", state: "idle" }] });
+    store.applyAgents({ "id-pm": { state: "working" } } as never);
     expect(store.state.agents[0]?.state).toBe("idle");
   });
 
-  test("an overlay for a role the roster does not carry is appended", () => {
-    // A live revision can add a seat before the roster push lands.
+  test("an overlay for a seat the roster does not carry is dropped, and nothing redraws", () => {
+    // A seat reaches the list through the roster, which carries its merged
+    // overlay; an appended row would be a card with no name, no handle and
+    // no page, for a seat the server may already have removed.
     const store = new Store();
-    store.applyAgents([{ role: "New", state: "working" }]);
-    expect(store.state.agents).toHaveLength(1);
-    expect(store.state.agents[0]?.id).toBe("New");
+    const seen = vi.fn();
+    store.subscribe(["agents"], seen);
+    store.applyAgents([{ agent_id: "id-new", state: "working" }]);
+    expect(store.state.agents).toHaveLength(0);
+    expect(seen).not.toHaveBeenCalled();
   });
 
   test("a seats push can express a DELETION, which a merge cannot", () => {
     const store = new Store();
     store.applySnapshot({
       agents: [
-        { id: "pm", role: "PM" },
-        { id: "eng", role: "Engineer" },
+        { id: "pm", agent_id: "id-pm", role: "PM" },
+        { id: "eng", agent_id: "id-eng", role: "Engineer" },
       ],
     });
-    store.applySeats([{ id: "pm", role: "PM" }]);
+    store.applySeats([{ id: "pm", agent_id: "id-pm", role: "PM" }]);
     expect(store.state.agents.map((a) => a.role)).toEqual(["PM"]);
   });
 
-  test("a seats push keeps the live overlay the roster knows nothing about", () => {
+  test("a seats push keeps the live overlay of a seat it renamed", () => {
+    // The roster push after a rename carries a new handle and a new name for
+    // the same agent id, and the seat is still mid-turn.
     const store = new Store();
-    store.applyAgents([{ role: "PM", state: "working" }]);
-    store.applySeats([{ id: "pm", role: "PM", handle: "pm" }]);
+    store.applySnapshot({ agents: [{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm" }] });
+    store.applyAgents([{ agent_id: "id-pm", state: "working" }]);
+    store.applySeats([{ id: "lead", agent_id: "id-pm", role: "Product Lead", handle: "lead" }]);
     expect(store.state.agents[0]?.state).toBe("working");
-    expect(store.state.agents[0]?.handle).toBe("pm");
+    expect(store.state.agents[0]?.handle).toBe("lead");
   });
 });
 
@@ -254,17 +283,20 @@ describe("connection state", () => {
 });
 
 describe("subscriptions", () => {
+  const PM: AgentRow = { id: "pm", agent_id: "id-pm", role: "PM", handle: "pm" };
+
   test("a listener wakes only for the slices it asked for", () => {
     // An `agents` overlay is pushed TWICE PER TOOL-LOOP ROUND. A store that
     // woke every listener on every envelope would re-render the whole
     // application several times a second for the length of a turn.
     const store = new Store();
+    store.applySeats([PM]);
     const tokens = vi.fn();
     const agents = vi.fn();
     store.subscribe(["tokens"], tokens);
     store.subscribe(["agents"], agents);
 
-    store.applyAgents([{ role: "PM", state: "working" }]);
+    store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
     expect(agents).toHaveBeenCalledTimes(1);
     expect(tokens).not.toHaveBeenCalled();
   });
@@ -280,11 +312,15 @@ describe("subscriptions", () => {
   });
 
   test("unsubscribing actually detaches", () => {
+    // Against a seat the roster carries, so the overlay really does move the
+    // slice — an overlay for nobody emits nothing, and would pass this with
+    // the listener still attached.
     const store = new Store();
+    store.applySeats([PM]);
     const fn = vi.fn();
     const off = store.subscribe(["agents"], fn);
     off();
-    store.applyAgents([{ role: "PM" }]);
+    store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -293,8 +329,9 @@ describe("subscriptions", () => {
     // frequency — so the version is what gives each a cheap stable identity
     // for useSyncExternalStore.
     const store = new Store();
+    store.applySeats([PM]);
     const before = store.version("agents");
-    store.applyAgents([{ role: "PM" }]);
+    store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
     expect(store.version("agents")).toBeGreaterThan(before);
     expect(store.version("tokens")).toBe(0);
   });
@@ -307,18 +344,5 @@ describe("partial pushes", () => {
     const store = new Store();
     store.applySnapshot({ tokens: { by_phase: [] } as never });
     expect(store.state.tokens).toBeNull();
-  });
-});
-
-describe("seat lookup", () => {
-  test("a seat resolves by handle, id, role, and case-insensitively", () => {
-    // Links minted before seats were addressed by handle used ids and role
-    // names, and they are in people's history.
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "uuid-1", role: "Product Manager", handle: "pm" }] });
-    for (const key of ["pm", "PM", "uuid-1", "Product Manager", "product manager"]) {
-      expect(store.agentByKey(key)?.handle, key).toBe("pm");
-    }
-    expect(store.agentByKey("nobody")).toBeNull();
   });
 });

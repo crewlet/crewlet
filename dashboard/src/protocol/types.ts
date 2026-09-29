@@ -241,7 +241,6 @@ export interface Overlay {
    * roster sent (or the one a client already holds) stands.
    */
   state?: string;
-  runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
@@ -251,19 +250,40 @@ export interface Overlay {
   afk_reason?: string;
 }
 
+/**
+ * One row of an `agents` push: a seat's overlay, and the AGENT ID that names
+ * the roster row it is merged onto — nothing else that names the seat, since
+ * the roster carries its name and handle as they are now and an event carries
+ * them as they were.
+ */
+export interface OverlayRow extends Overlay {
+  agent_id: string;
+}
+
 /** A seat row: static config identity, plus whatever overlay has been merged. */
 export interface AgentRow extends Overlay {
+  /** The seat's HANDLE — what every screen addresses it by. */
   id: string;
-  agent_id?: string;
+  /**
+   * The seat's AGENT ID: derived from the handle it was CREATED under, so a
+   * rename does not move it and no two seats share it (`adr/0019`). THE key
+   * a live overlay, a sandbox run, a spend row and a phase record pair with
+   * this row by — never `role`, which is prose two seats may share, and never
+   * `handle`, which a rename moves while the events already in flight still
+   * carry the old one.
+   */
+  agent_id: string;
+  /** The seat's name. Display only: nothing pairs a row by it. */
   role: string;
   handle?: string;
-  /** Set by `applyAgents` when an overlay names a role the roster lacks. */
   [key: string]: unknown;
 }
 
 /** One in-flight detached coding run. */
 export interface SandboxEntry {
   turn_id: string;
+  /** What the seat was called when the run started — display only; the run
+   *  pairs with its seat's row by `agent_id`. */
   role: string;
   agent_handle: string;
   agent_id: string;
@@ -391,6 +411,8 @@ export interface ModelRow extends Bucket {
 export interface WorkerRow extends Bucket {
   worker: string;
 }
+/** One SEAT's spend: one row per agent id, so two seats sharing a name are two
+ *  rows. `role` and `handle` are what the chart calls the seat now. */
 export interface AgentSpendRow extends Bucket {
   role: string;
   handle: string;
@@ -416,7 +438,8 @@ export interface Rollup {
   /** The window this covers, as two RFC3339 instants — `until` exclusive. */
   since: string;
   until: string;
-  agent_role: string;
+  /** The one seat this covers, by agent id; empty for the whole company. */
+  agent_id: string;
   totals: Bucket;
   by_phase: PhaseRow[];
   by_model: ModelRow[];
@@ -436,8 +459,16 @@ export interface Rollup {
  * would be correct for a day and absent for every other range.
  */
 export interface SeriesBand extends Bucket {
-  /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
+  /**
+   * The band's key in each point's `groups`. Empty on, and only on, `other`.
+   * By seat it is the seat's agent id and by unit the unit's key — an
+   * IDENTITY, since two seats or two units may share a name — which is why
+   * `label` exists.
+   */
   group: string;
+  /** What a seat or unit band is called. Absent where `group` is already the
+   *  words: a phase, a model, a worker, a turn id. */
+  label?: string;
   handle?: string;
   /** The residual: every group past the chart's cap, and how many it stands for. */
   other: boolean;
@@ -2712,7 +2743,12 @@ export interface TurnAnswer {
 }
 
 /** A seat's phase history, newest first, with a cursor. */
+/** One seat's live state and finished calls, asked by its handle and answered
+ *  by the agent id that handle resolves to. */
 export interface AgentAnswer {
+  /** The handle the seat answers to NOW — a retired one asked for resolves. */
+  handle: string;
+  agent_id: string;
   role: string;
   live: Overlay | null;
   llm_history: EventRecord[];

@@ -1182,7 +1182,7 @@ describe("live state", () => {
     });
     const before = layout();
     rerender({
-      agents: [{ id: "a1", role: "Dev", handle: "dev", state: "working" }],
+      agents: [{ id: "a1", agent_id: "id-a1", role: "Dev", handle: "dev", state: "working" }],
     });
     expect(layout()).toEqual(before);
   });

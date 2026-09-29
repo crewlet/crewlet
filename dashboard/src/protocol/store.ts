@@ -24,7 +24,7 @@ import type {
   InboxChange,
   OrgBudget,
   OrgProjection,
-  Overlay,
+  OverlayRow,
   Rollup,
   SandboxEntry,
   ScheduleRow,
@@ -236,44 +236,61 @@ export class Store {
     this.emit(...ALL_DATA_SLICES);
   }
 
-  /** Changed seat overlays, keyed by role. */
-  applyAgents(rows: (Overlay & { role: string })[] | unknown): void {
+  /**
+   * Changed seat overlays, merged onto the roster rows by AGENT ID.
+   *
+   * By the id and nothing else. They were merged by ROLE NAME, which is prose:
+   * two seats sharing a name both took every overlay either of them moved, so
+   * each card rendered whatever the other was last doing. The handle is no
+   * better a key — a rename moves it while the overlays already in flight were
+   * cut before it — and the id, derived from the handle a seat was created
+   * under, is the one value a rename leaves where it was.
+   *
+   * An overlay for a seat the roster does not carry is DROPPED rather than
+   * appended as a row of its own. A seat reaches this list through the roster
+   * (the snapshot, or a `seats` push after every published company), and the
+   * server merges its live overlay into that roster row before sending it —
+   * so nothing dropped here is lost, while an appended row would be a card
+   * with no name, no handle and no page, for a seat the server may already
+   * have removed.
+   */
+  applyAgents(rows: OverlayRow[] | unknown): void {
     // `Array.isArray` is load-bearing. The server sent this as an object keyed
     // by role once; every push was silently discarded and seats rendered idle
     // for the whole of a turn, with both sides' own suites green. That is the
     // bug internal/e2e/golden_test.go exists to catch.
     if (!Array.isArray(rows) || rows.length === 0) return;
-    const byRole = new Map<string, Overlay & { role: string }>(
-      (rows as (Overlay & { role: string })[]).map((r) => [r.role, r]),
-    );
+    const byID = new Map<string, OverlayRow>();
+    for (const row of rows as OverlayRow[]) {
+      if (row && typeof row.agent_id === "string" && row.agent_id !== "") {
+        byID.set(row.agent_id, row);
+      }
+    }
+    let moved = false;
     this.state.agents = this.state.agents.map((a) => {
-      const patch = byRole.get(a.role);
+      const patch = byID.get(a.agent_id);
       if (!patch) return a;
-      byRole.delete(a.role);
+      moved = true;
       return { ...a, ...patch };
     });
-    // A seat the roster does not carry yet (a role added by a live revision)
-    // still belongs on screen.
-    for (const row of byRole.values()) {
-      this.state.agents = [...this.state.agents, { id: row.role, ...row }];
-    }
-    this.emit("agents");
+    if (moved) this.emit("agents");
   }
 
   /**
    * The complete seat list, replacing what is on screen.
    *
-   * Distinct from `applyAgents`, which merges changed overlays by role: a merge
-   * cannot express a deletion, so a revision that removes a role would leave
-   * its card rendered until the next reload.
+   * Distinct from `applyAgents`, which merges changed overlays: a merge cannot
+   * express a deletion, so a revision that removes a seat would leave its card
+   * rendered until the next reload.
    */
   applySeats(rows: AgentRow[] | unknown): void {
     if (!Array.isArray(rows)) return;
-    // Keep the live overlay each seat already carries — the config payload is
-    // static config and knows nothing about what a seat is doing right now.
-    const live = new Map(this.state.agents.map((a) => [a.role, a]));
+    // Keep the live overlay each seat already carries, matched by AGENT ID —
+    // which is what a renamed seat still carries when its handle and name
+    // have both moved.
+    const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
     this.state.agents = (rows as AgentRow[]).map((row) => {
-      const current = live.get(row.role);
+      const current = live.get(row.agent_id);
       return current ? { ...current, ...row } : row;
     });
     this.emit("agents");
@@ -396,35 +413,5 @@ export class Store {
         this.emit("phases");
       }
     }
-  }
-
-  // ---- reads -------------------------------------------------------------
-
-  agentById(id: string): AgentRow | null {
-    return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;
-  }
-
-  /**
-   * Resolve a seat by whatever the URL carried.
-   *
-   * Seats are addressed by HANDLE — the canonical identity everywhere else in
-   * the system, and the one an operator can read off a chat mention. Runtime
-   * ids and role names still resolve, because links minted before the move
-   * used them and they are in people's history.
-   */
-  agentByKey(key: string | null | undefined): AgentRow | null {
-    if (!key) return null;
-    const wanted = String(key);
-    const lower = wanted.toLowerCase();
-    return (
-      this.state.agents.find(
-        (a) =>
-          a.handle === wanted ||
-          a.id === wanted ||
-          a.role === wanted ||
-          String(a.handle ?? "").toLowerCase() === lower ||
-          String(a.role ?? "").toLowerCase() === lower,
-      ) ?? null
-    );
   }
 }

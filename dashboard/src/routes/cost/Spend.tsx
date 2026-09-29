@@ -67,6 +67,7 @@ import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
 // function that picks one. See the report.
 import { StackedTimeSeries, phaseColor } from "~/ui/charts.tsx";
 import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "~/lib/spend.ts";
+import { seatAddress } from "~/lib/seats.ts";
 import { useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer, TimeRange } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -313,7 +314,7 @@ export function Spend() {
   usePeekNeighbours(
     useMemo(
       () => [
-        ...seats.map((a) => ({ kind: "seat" as const, id: a.handle || a.role })),
+        ...seats.map((a) => ({ kind: "seat" as const, id: seatAddress(a) })),
         ...turns.map((t) => ({ kind: "turn" as const, id: t.turn_id })),
       ],
       [seats, turns],
@@ -542,9 +543,9 @@ export function Spend() {
           // of the panel it opens would have pointed at two different screens.
           // Both are built from one reference now, and ⌘-click still goes to
           // the seat's page.
-          rowHref={(a) => peekHref({ kind: "seat", id: a.handle || a.role })}
+          rowHref={(a) => peekHref({ kind: "seat", id: seatAddress(a) })}
           onRowActivate={peekRow<AgentSpendRow>((a) =>
-            openPeek({ kind: "seat", id: a.handle || a.role }),
+            openPeek({ kind: "seat", id: seatAddress(a) }),
           )}
           empty={{ title: "No seat has spent tokens in this window" }}
           columns={[

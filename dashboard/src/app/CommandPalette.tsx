@@ -20,7 +20,7 @@ import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
-import { indexOrg, unitPath } from "~/lib/seats.ts";
+import { indexOrg, liveRowFor, unitPath } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
 // `MarkName` `typeIcon` returns.
 import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
@@ -362,7 +362,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           )
         : 0;
       if (!Number.isFinite(s)) continue;
-      const live = agents.find((a) => a.role === seat.name);
+      const live = liveRowFor(agents, seat);
       push(
         {
           id: `seat-${seat.handle}`,

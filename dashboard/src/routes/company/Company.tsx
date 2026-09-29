@@ -54,6 +54,7 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import {
   indexOrg,
+  liveRowFor,
   seatPath,
   unitByKey,
   unitPath,
@@ -127,7 +128,7 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
           {seat.kind === "human" ? (
             <Tag appearance="outline">human</Tag>
           ) : (
-            <StateBadge agent={agents.find((a) => a.role === seat.name)} sandboxes={sandboxes} />
+            <StateBadge agent={liveRowFor(agents, seat)} sandboxes={sandboxes} />
           )}
         </a>
       ))}

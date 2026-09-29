@@ -287,7 +287,9 @@ describe("before the seats go", () => {
         },
       ],
     });
-    const agents: AgentRow[] = [{ id: "1", role: "Runner", handle: "runner", state: "working" }];
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "id-1", role: "Runner", handle: "runner", state: "working" },
+    ];
     open(checkedEdit(chart), "seat:runner", { agents });
     expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
     expect(screen.getByText(/Runner is working now/)).toBeDefined();
@@ -295,8 +297,14 @@ describe("before the seats go", () => {
 
   test("every seat a unit's removal takes that is working now is named", () => {
     const agents: AgentRow[] = [
-      { id: "1", role: "VP Engineering", handle: "vp-engineering", state: "working" },
-      { id: "2", role: "SRE", handle: "sre", state: "working" },
+      {
+        id: "1",
+        agent_id: "id-1",
+        role: "VP Engineering",
+        handle: "vp-engineering",
+        state: "working",
+      },
+      { id: "2", agent_id: "id-2", role: "SRE", handle: "sre", state: "working" },
     ];
     open(checkedEdit(), "unit:engineering", { agents });
     const notes = screen.getAllByText(/is working now/);

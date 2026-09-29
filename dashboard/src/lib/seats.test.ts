@@ -19,9 +19,13 @@
 import { describe, expect, test } from "vitest";
 import {
   indexOrg,
+  liveRowFor,
   llmChain,
   mcpEnvOf,
   runState,
+  sandboxFor,
+  seatAddress,
+  seatFilter,
   seatPath,
   seatReading,
   seatTone,
@@ -470,7 +474,7 @@ describe("what a seat is doing", () => {
     turn_id: "t1",
     role: "Dev A",
     agent_handle: "dev-a",
-    agent_id: "",
+    agent_id: "id-a",
     coding_agent: "claude-code",
     sandbox_id: "s1",
     task: "",
@@ -482,15 +486,73 @@ describe("what a seat is doing", () => {
     // Its kick-off turn already completed, which the projection reads as
     // idle — so without folding the live sandbox set in, a seat writing code
     // for ten minutes renders as idle.
-    expect(runState({ id: "a", role: "Dev A", state: "idle" }, [box])).toBe("awaiting_sandbox");
-    expect(runState({ id: "a", role: "Dev A", state: "idle" }, [])).toBe("idle");
+    expect(runState({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [box])).toBe(
+      "awaiting_sandbox",
+    );
+    expect(runState({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [])).toBe("idle");
+  });
+
+  test("a run belongs to its seat by agent id, never to a namesake", () => {
+    // Two seats may share a name. Paired by the run's role name, the second
+    // "Dev A" read as coding whenever the first one was.
+    const namesake = { id: "b", agent_id: "id-b", role: "Dev A", state: "idle" };
+    expect(runState(namesake, [box])).toBe("idle");
+    expect(sandboxFor([box], namesake)).toBeNull();
+    expect(sandboxFor([box], { agent_id: "id-a" })).toBe(box);
+    // An empty id pairs with nothing, not with every run that carries none.
+    expect(sandboxFor([{ ...box, agent_id: "" }], { agent_id: "" })).toBeNull();
+  });
+
+  test("a seat pairs with its live row by handle, never by name", () => {
+    const ada = {
+      id: "ada",
+      agent_id: "id-ada",
+      role: "Engineer",
+      handle: "ada",
+      state: "working",
+    };
+    const bob = { id: "bob", agent_id: "id-bob", role: "Engineer", handle: "bob", state: "idle" };
+    expect(liveRowFor([ada, bob], { handle: "bob" })).toBe(bob);
+    expect(liveRowFor([ada, bob], { handle: "ada" })).toBe(ada);
+    // A seat whose handle nobody reported pairs with nothing rather than with
+    // whichever namesake comes first.
+    expect(liveRowFor([ada, bob], { handle: "" })).toBeUndefined();
+  });
+
+  test("a spend row opens its seat by handle, and a retired one by its id — never by name", () => {
+    expect(seatAddress({ handle: "dev-a", agent_id: "id-a" })).toBe("dev-a");
+    // A row the chart no longer holds carries no handle. Its name is somebody
+    // else's address by now; its id answers the honest "no such seat".
+    expect(seatAddress({ handle: "", agent_id: "id-gone" })).toBe("id-gone");
+  });
+
+  test("a one-seat filter asks by the agent id its handle pairs with", () => {
+    const rows = [
+      { id: "dev-a", agent_id: "id-a", role: "Dev A", handle: "dev-a" },
+      { id: "dev-b", agent_id: "id-b", role: "Dev A", handle: "dev-b" },
+    ];
+    // No filter: no seat and no id, which a caller reads as "every seat".
+    expect(seatFilter(index, rows, "")).toEqual({ seat: null, agentId: "" });
+    // A filter on one of two namesakes narrows to that one alone.
+    const b = seatFilter(index, rows, "dev-b");
+    expect(b.seat?.handle).toBe("dev-b");
+    expect(b.agentId).toBe("id-b");
+    // A handle nothing answers to is NOT "every seat": the seat is null and a
+    // caller must say so rather than widen the list.
+    expect(seatFilter(index, rows, "nobody")).toEqual({ seat: null, agentId: "" });
+    // A person's seat has no roster row, so it narrows to no agent id at all.
+    const human = seatFilter(index, rows, "jane-founder");
+    expect(human.seat?.handle).toBe("jane-founder");
+    expect(human.agentId).toBe("");
   });
 
   test("colour is STATE and an idle seat gets none", () => {
     // An idle seat used to draw a tinted, glowing tile that read as activity.
     // The fix for that is not a duller hue, it is none.
-    expect(seatTone({ id: "a", role: "Dev A", state: "idle" }, [])).toBe("quiet");
-    expect(seatTone({ id: "a", role: "Dev A", state: "working" }, [])).toBe("working");
+    expect(seatTone({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [])).toBe("quiet");
+    expect(seatTone({ id: "a", agent_id: "id-a", role: "Dev A", state: "working" }, [])).toBe(
+      "working",
+    );
   });
 
   test("waiting on a person and having fallen over are DIFFERENT tones", () => {
@@ -500,19 +562,26 @@ describe("what a seat is doing", () => {
     // `sandbox.PendingRun` cannot write, so the case passed against a fixture
     // no engine produces while the real state reached no tone at all.
     expect(
-      seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "awaiting_clarification" }]),
+      seatTone({ id: "a", agent_id: "id-a", role: "Dev A" }, [
+        { ...box, status: "awaiting_clarification" },
+      ]),
     ).toBe("needs");
     // A box reaped past its pause TTL is the same fact one step worse.
-    expect(seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "reseed" }])).toBe("needs");
+    expect(
+      seatTone({ id: "a", agent_id: "id-a", role: "Dev A" }, [{ ...box, status: "reseed" }]),
+    ).toBe("needs");
     // And a running one is not waiting on anybody — without this the rule
     // could be "any sandbox at all" and still pass.
     expect(
-      seatTone({ id: "a", role: "Dev A", state: "idle" }, [{ ...box, status: "running" }]),
+      seatTone({ id: "a", agent_id: "id-a", role: "Dev A", state: "idle" }, [
+        { ...box, status: "running" },
+      ]),
     ).toBe("working");
     expect(
       seatTone(
         {
           id: "a",
+          agent_id: "id-a",
           role: "Dev A",
           last_error: { kind: "x", message: "", phase: "", turn_id: "", at: "", event_id: "" },
         },
@@ -523,11 +592,17 @@ describe("what a seat is doing", () => {
 
   test("a status line describes live state and never invents one", () => {
     expect(
-      statusLine({ id: "a", role: "Dev A", state: "working", current_phase: "execute" }),
+      statusLine({
+        id: "a",
+        agent_id: "id-a",
+        role: "Dev A",
+        state: "working",
+        current_phase: "execute",
+      }),
     ).toContain("working on the task");
-    expect(statusLine({ id: "a", role: "Dev A", state: "afk", afk_reason: "stall" })).toContain(
-      "no forward progress",
-    );
+    expect(
+      statusLine({ id: "a", agent_id: "id-a", role: "Dev A", state: "afk", afk_reason: "stall" }),
+    ).toContain("no forward progress");
     expect(statusLine(undefined)).toBe("not running on this node");
     expect(statusLine(null, { seat: index.byName.get("Jane Founder")! })).toContain("human");
   });

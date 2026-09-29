@@ -25,6 +25,7 @@
  */
 
 import type {
+  AgentRow,
   EventRecord,
   LiveCall,
   PartialRound,
@@ -84,6 +85,14 @@ export interface PhaseRecord {
   workKey: string;
   phase: string;
   iteration: number;
+  /**
+   * The SEAT this phase ran for, by its agent id — what a screen filters a
+   * seat's phases by and finds the seat's row by. Never `role`: two seats may
+   * share a name, and a seat's page filtered by name listed its namesake's
+   * phases as its own.
+   */
+  agentId: string;
+  /** What the seat was called — as the record says, which is display only. */
   role: string;
   model: string;
   providerKey: string;
@@ -343,15 +352,22 @@ export function phaseKey(turnId: string, phase: string, iteration: number, taskI
   return taskId ? `${base}|${taskId}` : base;
 }
 
-/** A phase still running, from a seat's live overlay. */
-export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
+/**
+ * A phase still running, from a seat's live overlay — named after the seat row
+ * it hangs off, since the call itself says nothing about whose it is.
+ */
+export function fromLiveCall(
+  call: LiveCall,
+  seat: Pick<AgentRow, "agent_id" | "role">,
+): PhaseRecord {
   return {
     key: phaseKey(call.turn_id, call.phase, call.iteration),
     turnId: call.turn_id,
     workKey: call.work_key ?? "",
     phase: call.phase,
     iteration: call.iteration,
-    role,
+    agentId: seat.agent_id,
+    role: seat.role,
     model: call.model,
     providerKey: "",
     live: call.in_progress !== false && !call.failed,
@@ -420,6 +436,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     workKey: String(ev.work_key ?? p.work_key ?? ""),
     phase,
     iteration,
+    agentId: String(p.agent_id ?? ""),
     role: String(p.role ?? ev.actor ?? ""),
     model: String(p.model ?? ""),
     providerKey: String(p.provider_key ?? ""),
@@ -656,6 +673,8 @@ export interface TurnGroup {
       the split wrote. Two groups sharing one of these are two attempts at the
       same trigger; see `adr/0017`. */
   workKey: string;
+  /** The seat the turn ran for, by agent id — see `PhaseRecord.agentId`. */
+  agentId: string;
   role: string;
   /** The turn's OWN phases, in the order they ran. A nested call is not
       here — it hangs off the phase that made it, see `nested`. */
@@ -787,6 +806,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         // none, and a turn whose opening phase is such a record still belongs
         // to whatever unit of work its later phases name.
         workKey: ordered.find((r) => r.workKey)?.workKey ?? "",
+        // The first phase that NAMES a seat, for the work key's reason.
+        agentId: ordered.find((r) => r.agentId)?.agentId ?? "",
         role: ordered[0]?.role ?? "",
         phases: own,
         nested,

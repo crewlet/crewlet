@@ -34,6 +34,7 @@ import { goSignIn } from "~/lib/session.ts";
 import {
   roundLabel,
   runState,
+  sandboxFor,
   seatPath,
   seatTone,
   stateLabel,
@@ -132,7 +133,7 @@ export function SeatCard({
   sandboxes: SandboxEntry[];
 }) {
   const now = useNow();
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
+  const sandbox = sandboxFor(sandboxes, agent);
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on

@@ -29,6 +29,7 @@ import { Callout, Card, Skeleton } from "@crewlethq/ui";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtExact } from "~/lib/format.ts";
+import { seatAddress } from "~/lib/seats.ts";
 
 /**
  * What a headroom bar's colour says.
@@ -62,7 +63,7 @@ export function Budgets() {
   // that is grid state, and a stepper that cannot see it walks the opening
   // order rather than claiming to follow a sequence it does not have.
   usePeekNeighbours(
-    useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle || s.role })), [seats]),
+    useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: seatAddress(s) })), [seats]),
   );
 
   return (
@@ -104,9 +105,9 @@ export function Budgets() {
               // raised it. ⌘-click still opens the seat's own page, and the rail
               // is built from the same reference, so the two can never name
               // different screens.
-              rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
+              rowHref={(s) => peekHref({ kind: "seat", id: seatAddress(s) })}
               onRowActivate={(s, e) => {
-                const go = () => openPeek({ kind: "seat", id: s.handle || s.role });
+                const go = () => openPeek({ kind: "seat", id: seatAddress(s) });
                 // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the
                 // frame's one copy of which clicks mean "open elsewhere" and it
                 // reads a mouse event; the `enter` chord carries no button at

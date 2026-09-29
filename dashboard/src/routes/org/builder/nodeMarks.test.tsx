@@ -55,7 +55,7 @@ function api(agents: AgentRow[], sandboxes: SandboxEntry[] = [], problems: numbe
 }
 
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
-  ({ id: "a1", role: "Dev", handle: "dev", state: "idle", ...over }) as AgentRow;
+  ({ id: "a1", agent_id: "id-a1", role: "Dev", handle: "dev", state: "idle", ...over }) as AgentRow;
 
 describe("a seat's live state", () => {
   /*
@@ -147,12 +147,29 @@ describe("a seat's live state", () => {
   test("a seat with a sandbox waiting says so rather than what its row says", () => {
     render(
       <LiveState
-        api={api([agent({ state: "idle" })], [{ role: "Dev" } as SandboxEntry])}
+        api={api([agent({ state: "idle" })], [{ role: "Dev", agent_id: "id-a1" } as SandboxEntry])}
         view={seat()}
         compact
       />,
     );
     expect(screen.getByText("sandbox")).toBeDefined();
+  });
+
+  /*
+   * AND ONLY ITS OWN BOX. A run is paired with its seat by agent id, so a
+   * namesake's run — the same name, another seat — leaves this one's state
+   * alone.
+   */
+  test("a namesake's sandbox does not park this seat", () => {
+    render(
+      <LiveState
+        api={api([agent({ state: "idle" })], [{ role: "Dev", agent_id: "id-a2" } as SandboxEntry])}
+        view={seat()}
+        compact
+      />,
+    );
+    expect(screen.queryByText("sandbox")).toBeNull();
+    expect(screen.getByText("idle")).toBeDefined();
   });
 
   /*

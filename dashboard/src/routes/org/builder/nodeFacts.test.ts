@@ -237,7 +237,13 @@ describe("credentials", () => {
 });
 
 describe("live state", () => {
-  const agent = (state: string): AgentRow => ({ id: "1", role: "Dev", handle: "dev", state });
+  const agent = (state: string): AgentRow => ({
+    id: "1",
+    agent_id: "id-1",
+    role: "Dev",
+    handle: "dev",
+    state,
+  });
   const run: SandboxEntry = {
     turn_id: "t",
     role: "Dev",

@@ -73,7 +73,7 @@ import {
   useTokens,
 } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { awaitingPerson, indexOrg, runState } from "~/lib/seats.ts";
+import { awaitingPerson, indexOrg, liveRowFor, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
@@ -142,7 +142,7 @@ export function LiveNow() {
     () =>
       index.seats
         .filter((s) => s.kind === "agent")
-        .map((seat) => ({ seat, agent: agents.find((a) => a.role === seat.name) }))
+        .map((seat) => ({ seat, agent: liveRowFor(agents, seat) }))
         .filter(({ agent }) => {
           const state = runState(agent, sandboxes);
           return state === "working" || state === "awaiting_sandbox";
@@ -223,11 +223,16 @@ export function LiveNow() {
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .slice(0, 6)
         .map((a) => ({
-          id: a.handle || a.role,
+          // ONE BAR PER SEAT, keyed by the agent id the row is one per: two
+          // seats sharing a name are two bars, and a key built from the name
+          // made them one React key for two rows.
+          id: a.agent_id || a.role,
           label: a.role,
           value: a.total_tokens,
           display: fmtCount(a.total_tokens),
-          href: href(["company", "people", a.handle || a.role]),
+          // A seat the chart no longer carries has no page; linked by its
+          // NAME it opened whichever namesake came first.
+          ...(a.handle ? { href: href(["company", "people", a.handle]) } : {}),
         })),
     // `href` is a pure function of its arguments, not the navigator: listing
     // `nav` here made this recompute on every route change and named a

@@ -54,7 +54,8 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { BUCKET_MS, RANGE_MS, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
@@ -204,11 +205,21 @@ function foldBars(rows: TurnRow[], since: string, until: string, bucket: Bucket)
 function TurnList({ view, onChange }: { view: string; onChange: (v: string) => void }) {
   const now = useNow();
   const org = useOrg();
+  const agents = useAgents();
+  const index = useMemo(() => indexOrg(org), [org]);
   const { open: openPeek } = usePeekControls();
   // EVERY FILTER IS A FILTER, so it replaces the history entry: a reader
   // narrowing to one seat and then to the failures has walked one screen,
   // not three.
-  const [role, setRole] = useParam("role", "", "filter");
+  //
+  // THE SEAT BY ITS HANDLE, which is what the Activity rail's seat rows link
+  // with (`?seat=`) — this read `?role=`, a seat NAME, so every one of those
+  // links opened the unfiltered list — and asked of the engine by the agent
+  // id the handle resolves to, since a name is shared by every seat carrying
+  // it.
+  const [seatParam, setSeat] = useParam("seat", "", "filter");
+  const filter = seatFilter(index, agents, seatParam);
+  const unplaced = seatParam !== "" && filter.agentId === "";
   const [failed, setFailed] = useParam("failed", "", "filter");
   // ALIGNED, because this window drives a chart as well as a list: the top
   // edge is the END of the bucket in progress, so the current column is drawn
@@ -221,10 +232,12 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
     {
       days: windowDays(range.window),
       limit: PAGE,
-      ...(role ? { role } : {}),
+      ...(filter.agentId ? { agent_id: filter.agentId } : {}),
       ...(failed ? { failed } : {}),
     },
-    { pollMs: 20_000 },
+    // NOT ASKED for a seat this node cannot place: unfiltered, the answer
+    // would be every seat's turns under one seat's heading.
+    { pollMs: 20_000, enabled: !unplaced },
   );
   const turns = useMemo(() => list.data?.turns ?? [], [list.data]);
   // THE WINDOW, half-open, applied to what came back. The engine was asked in
@@ -259,7 +272,10 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   usePeekNeighbours(
     useMemo(() => rows.map((t) => ({ kind: "turn" as const, id: t.turn_id })), [rows]),
   );
-  const seats = (org?.roles ?? []).filter((r) => r.kind !== "human");
+  // EVERY AGENT SEAT, from the index: `org.roles` is only the seats at the
+  // ROOT of the chart, so a company that puts its agents in units offered no
+  // chip for any of them.
+  const seats = index.seats.filter((s) => s.kind !== "human" && s.handle !== "");
 
   return (
     <>
@@ -301,18 +317,18 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
       <div className="row gap-2 wrap">
         <Button
           size="small"
-          variant={role ? "primary" : "secondary"}
-          onClick={() => setRole("")}
+          variant={seatParam ? "primary" : "secondary"}
+          onClick={() => setSeat("")}
           leadingIcon={<GroupGlyph size="xs" />}
         >
-          {role || "every seat"}
+          {seatParam ? (filter.seat?.name ?? `@${seatParam}`) : "every seat"}
         </Button>
         {seats.slice(0, 8).map((seat) => (
           <Button
-            key={seat.name}
+            key={seat.handle}
             size="small"
-            variant={role === seat.name ? "primary" : "secondary"}
-            onClick={() => setRole(role === seat.name ? "" : seat.name)}
+            variant={seatParam === seat.handle ? "primary" : "secondary"}
+            onClick={() => setSeat(seatParam === seat.handle ? "" : seat.handle)}
           >
             {seat.name}
           </Button>
@@ -330,6 +346,12 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
         />
       </div>
 
+      {unplaced && (
+        <span className="t-caption">
+          No agent seat answers to @{seatParam} on this node, so there are no turns to narrow to.
+          Clear the seat filter to see every seat's.
+        </span>
+      )}
       {list.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading turns" />
       )}

@@ -29,6 +29,9 @@ import {
 } from "./phases.ts";
 import type { EventRecord, LiveCall } from "~/protocol/index.ts";
 
+/** The seat row a live call hangs off: what `fromLiveCall` names it after. */
+const PM = { agent_id: "id-pm", role: "PM" };
+
 function liveCall(over: Partial<LiveCall> = {}): LiveCall {
   return {
     turn_id: "t1",
@@ -83,7 +86,7 @@ describe("identity", () => {
     // different one inserted: the entrance animation replayed, the row
     // relocated from the end of the list into its chronological slot, and its
     // expanded state was lost with the key it was filed under.
-    const live = fromLiveCall(liveCall(), "PM");
+    const live = fromLiveCall(liveCall(), PM);
     const done = fromPhaseEvent(phaseEvent());
     expect(done).not.toBeNull();
     expect(live.key).toBe(done!.key);
@@ -94,7 +97,7 @@ describe("identity", () => {
     // It is the complete one. A live call lingering in the projection after
     // its event has landed would otherwise re-blank the fields only the event
     // carries — the decision, the notes, the verbatim system prompt.
-    const live = fromLiveCall(liveCall({ response: "partial" }), "PM");
+    const live = fromLiveCall(liveCall({ response: "partial" }), PM);
     const done = fromPhaseEvent(phaseEvent({ decision: "done", response: "final" }))!;
     const merged = mergePhases([done], [live]);
     expect(merged).toHaveLength(1);
@@ -218,7 +221,7 @@ describe("ordering", () => {
   });
 
   test("a turn group reports live and failed from its phases", () => {
-    const live = fromLiveCall(liveCall({ phase: "review", iteration: 2 }), "PM");
+    const live = fromLiveCall(liveCall({ phase: "review", iteration: 2 }), PM);
     const failed = fromPhaseEvent(phaseEvent({ phase: "execute", failed: true }))!;
     const [group] = groupTurns([live, failed]);
     expect(group?.live).toBe(true);
@@ -581,7 +584,7 @@ describe("delegated workers", () => {
   test("a phase with no task id keeps its original identity", () => {
     expect(phaseKey("t1", "execute", 1)).toBe("t1|execute|1");
     expect(phaseKey("t1", "subagent", 1, "gather")).toBe("t1|subagent|1|gather");
-    const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), "PM");
+    const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), PM);
     const done = fromPhaseEvent(phaseEvent({ phase: "execute", iteration: 1 }))!;
     expect(live.key).toBe(done.key);
   });
@@ -596,7 +599,7 @@ describe("the phases that finish while a tab is watching", () => {
   // reads it.
 
   test("a streamed record replaces the live call it closes, in place", () => {
-    const live = fromLiveCall(liveCall({ phase: "review", iteration: 1 }), "PM");
+    const live = fromLiveCall(liveCall({ phase: "review", iteration: 1 }), PM);
     const streamed = streamedPhases(
       [phaseEvent({ phase: "review", iteration: 1, decision: "done" })],
       () => true,
@@ -619,7 +622,7 @@ describe("the phases that finish while a tab is watching", () => {
       phaseEvent({ phase: "onboarding", iteration: 0 }, "2026-01-01T00:00:01Z"),
       phaseEvent({ phase: "execute", iteration: 1 }, "2026-01-01T00:00:05Z"),
     ];
-    const liveReview = fromLiveCall(liveCall({ phase: "review", iteration: 1 }), "PM");
+    const liveReview = fromLiveCall(liveCall({ phase: "review", iteration: 1 }), PM);
 
     const during = groupTurns(
       mergePhases(
@@ -648,15 +651,24 @@ describe("the phases that finish while a tab is watching", () => {
     expect(after[0]?.phases.map((p) => p.phase)).toEqual(["onboarding", "execute", "review"]);
   });
 
-  test("the scope filter reads the record, not the envelope", () => {
-    // A seat page keeps its own seat's phases. The role is on the PAYLOAD; an
-    // envelope's `actor` agrees today and is not the field a phase record is
-    // built from.
+  test("the scope filter reads the record's seat by agent id, not the envelope or the name", () => {
+    // A seat page keeps its own seat's phases. The seat is on the PAYLOAD, by
+    // the agent id every phase record carries; an envelope's `actor` is the
+    // seat's NAME, which two seats may share — so here two "Engineer"s, and
+    // only one of them is this page's.
     const events = [
-      phaseEvent({ role: "PM" }),
-      phaseEvent({ role: "Engineer" }, "2026-01-01T00:00:10Z"),
+      phaseEvent({ agent_id: "id-ada", role: "Engineer" }),
+      phaseEvent({ agent_id: "id-bob", role: "Engineer" }, "2026-01-01T00:00:10Z"),
     ];
-    expect(streamedPhases(events, (r) => r.role === "PM").map((r) => r.role)).toEqual(["PM"]);
+    const mine = streamedPhases(events, (r) => r.agentId === "id-ada");
+    expect(mine.map((r) => r.agentId)).toEqual(["id-ada"]);
+    expect(mine.map((r) => r.role)).toEqual(["Engineer"]);
+  });
+
+  test("a live call is named after the seat row it hangs off", () => {
+    const live = fromLiveCall(liveCall(), PM);
+    expect(live.agentId).toBe("id-pm");
+    expect(live.role).toBe("PM");
   });
 
   test("a row with no payload is dropped rather than rendered blank", () => {
@@ -714,7 +726,7 @@ describe("a phase's duration", () => {
     // The overlay's `started_at` is what keeps a running phase's counter
     // correct; the duration is the engine's FINAL measurement and does not
     // exist until the phase lands.
-    const live = fromLiveCall(liveCall({ started_at: "2026-01-01T00:00:30Z" }), "PM");
+    const live = fromLiveCall(liveCall({ started_at: "2026-01-01T00:00:30Z" }), PM);
     expect(phaseDuration(live)).toBeNull();
     expect(phaseStart(live)).toBe(Date.parse("2026-01-01T00:00:30Z"));
   });

@@ -813,9 +813,81 @@ export function awaitingPerson(status: string | undefined): boolean {
  */
 export function runState(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): RunState {
   if (!agent) return "offline";
-  const role = agent.role;
-  if (role && sandboxes.some((s) => s.role === role)) return "awaiting_sandbox";
+  if (sandboxFor(sandboxes, agent)) return "awaiting_sandbox";
   return (agent.state as RunState) || "offline";
+}
+
+/**
+ * The live row for a seat of the org index: the roster row carrying the same
+ * HANDLE, or undefined for a seat the roster does not carry (a person, or a
+ * seat this node has no chart row for yet).
+ *
+ * BY HANDLE, because both halves carry the handle the seat answers to NOW —
+ * the org projection and the roster are cut from the same chart view — and a
+ * handle is unique. It paired by NAME, which is prose two seats may share, so
+ * the second "Engineer" in a company wore the first one's state, its live call
+ * and its sandbox, on every screen that drew it. A seat with no known handle
+ * (an engine that reports no derived hierarchy) pairs with nothing rather than
+ * with a namesake.
+ */
+export function liveRowFor(
+  agents: readonly AgentRow[],
+  seat: Pick<Seat, "handle"> | null | undefined,
+): AgentRow | undefined {
+  const handle = seat?.handle;
+  if (!handle) return undefined;
+  return agents.find((a) => a.handle === handle);
+}
+
+/**
+ * The address a row NAMING a seat — a spend row, a budget row — opens it by:
+ * its HANDLE. A row carrying none is a seat the chart no longer holds, and it
+ * opens by its agent id, which answers the honest "no such seat" — where the
+ * NAME it fell back to opened whichever seat of that name came first, somebody
+ * else entirely. The name is never an address here, so it is not even read.
+ */
+export function seatAddress(row: { handle?: string; agent_id: string }): string {
+  return row.handle || row.agent_id;
+}
+
+/**
+ * What a list narrowed to ONE SEAT asks the engine for.
+ *
+ * A link and a URL carry the seat's HANDLE — the address every screen gives
+ * a seat — and the engine narrows a turn list, a phase list and a spend
+ * rollup by the seat's AGENT ID, which neither a rename nor a namesake moves.
+ * They narrowed by the seat's NAME, so a filter on one "Engineer" listed every
+ * Engineer's turns as that seat's.
+ *
+ * `agentId` is "" while the filter names no seat (`handle` empty) AND when it
+ * names one this node cannot place — a handle no agent seat answers to — which
+ * `seat` being null tells apart: a caller must not read that second case as
+ * "every seat", since a filter that silently widened would answer a question
+ * nobody asked.
+ */
+export function seatFilter(
+  index: OrgIndex,
+  agents: readonly AgentRow[],
+  handle: string,
+): { seat: Seat | null; agentId: string } {
+  if (!handle) return { seat: null, agentId: "" };
+  const seat = index.byHandle.get(handle) ?? null;
+  return { seat, agentId: liveRowFor(agents, seat)?.agent_id ?? "" };
+}
+
+/**
+ * The detached coding run a seat's row is parked on, or null — matched by
+ * AGENT ID, which the run carries for exactly this and which neither a rename
+ * nor a namesake moves. It matched the run's role name, so a seat whose
+ * namesake was coding read as coding too.
+ */
+export function sandboxFor(
+  sandboxes: readonly SandboxEntry[],
+  agent: Pick<AgentRow, "agent_id"> | null | undefined,
+): SandboxEntry | null {
+  const id = agent?.agent_id;
+  if (!id) return null;
+  return sandboxes.find((s) => s.agent_id === id) ?? null;
 }
 
 /**
@@ -834,7 +906,7 @@ export type SeatTone = "working" | "needs" | "broken" | "quiet";
 
 export function seatTone(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): SeatTone {
   if (!agent) return "quiet";
-  const sandbox = sandboxes.find((s) => s.role === agent.role);
+  const sandbox = sandboxFor(sandboxes, agent);
   if (awaitingPerson(sandbox?.status)) return "needs";
   if (agent.last_error) return "broken";
   const state = runState(agent, sandboxes);

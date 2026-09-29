@@ -164,7 +164,9 @@ describe("a seat", () => {
       ],
       seats: [{ handle: "runner", name: "Runner", unit: "ops" }],
     });
-    const agents: AgentRow[] = [{ id: "1", role: "Runner", handle: "runner", state: "working" }];
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "id-1", role: "Runner", handle: "runner", state: "working" },
+    ];
     open(checkedEdit(chart), "seat:runner", { agents });
     choose("Other");
     expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
@@ -178,7 +180,9 @@ describe("a seat", () => {
 
 describe("a unit", () => {
   test("a unit that moves with a seat working inside it names that seat", () => {
-    const agents: AgentRow[] = [{ id: "1", role: "SRE", handle: "sre", state: "working" }];
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "id-1", role: "SRE", handle: "sre", state: "working" },
+    ];
     open(checkedEdit(), "unit:platform", { agents });
     expect(
       screen.getByText(

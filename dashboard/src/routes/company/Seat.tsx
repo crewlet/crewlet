@@ -88,9 +88,11 @@ import { chartSeatPath, chartUnitPath, useChartRead, WITH_RUNTIME } from "~/lib/
 import {
   awaitingPerson,
   indexOrg,
+  liveRowFor,
   llmChain,
   mcpEnvOf,
   reportsCaption,
+  sandboxFor,
   seatPath,
   seatReading,
   statusLine,
@@ -302,11 +304,6 @@ function findSeat(index: OrgIndex, handle: string): Seat | null {
   );
 }
 
-/** The live row for a seat, matched every way the roster and the overlay agree. */
-function liveRow(agents: AgentRow[], handle: string, seat: Seat | null): AgentRow | undefined {
-  return agents.find((a) => a.handle === handle || a.id === handle || a.role === seat?.name);
-}
-
 /**
  * The facts a seat wears, in the one order.
  *
@@ -314,15 +311,17 @@ function liveRow(agents: AgentRow[], handle: string, seat: Seat | null): AgentRo
  * the same facts in the same order wherever the object appears, and two lists
  * written separately drift on the first field somebody adds to one of them.
  *
- * RUNTIME IS NOT A NODE ID, and the label says the smaller true thing rather
- * than the larger convenient one. `runtime_id` is the agent INSTANCE the live
- * projection minted, and that projection belongs to the node this dashboard is
- * attached to — so an empty one means "no instance here", never "this seat is
- * placed nowhere". Which node HOLDS the seat's lease is a fleet fact and lives
- * on `#/admin/fleet`; asking the fleet in order to label one seat would make
+ * THE AGENT ID IS THE SEAT'S IDENTITY, not a node's and not an instance's: it
+ * is derived from the handle the seat was created under, so it is what the
+ * seat's mailbox, lease, memory and every event it publishes are keyed by, and
+ * it survives a rename that moves every other name on this header. The row
+ * used to be a "runtime id" read off the live projection, which carried
+ * whatever the last event put there — this id from a turn, the handle from a
+ * spawn. Which node HOLDS the seat's lease is a fleet fact and lives on
+ * `#/admin/fleet`; asking the fleet in order to label one seat would make
  * opening a peek a company-wide read.
  *
- * A HUMAN SEAT'S RUNTIME AND MODEL ARE EMPTY ON PURPOSE. `FactLine` drops a
+ * A HUMAN SEAT'S AGENT ID AND MODEL ARE EMPTY ON PURPOSE. `FactLine` drops a
  * fact whose value is empty, so the two rows that describe a runtime are
  * absent for a seat that has none — rather than present and dashed, which
  * would claim the engine failed to record something it will never record.
@@ -360,13 +359,13 @@ function seatFacts({
       path: manager ? seatPath(manager) : undefined,
     },
     {
-      label: "Runtime",
+      label: "Agent id",
       value: human ? (
         ""
-      ) : agent?.runtime_id ? (
-        <code className="inline">{agent.runtime_id}</code>
+      ) : agent?.agent_id ? (
+        <code className="inline">{agent.agent_id}</code>
       ) : (
-        "not running on this node"
+        "not on this node's roster"
       ),
     },
     {
@@ -389,7 +388,7 @@ function seatFacts({
  * The MODEL fact's words, one per outcome of the guarded read.
  *
  * `unread` IS THE EMPTY STRING, so [FactLine] drops the fact entirely — the
- * same rule the Runtime row above follows for a human seat. A screen that has
+ * same rule the Agent id row above follows for a human seat. A screen that has
  * not asked has nothing to report about the chain, and every sentence it could
  * print instead is a claim nothing on the wire supports: "unknown" says the
  * engine failed to answer, an em dash says the field is empty, and "needs an
@@ -560,13 +559,15 @@ export function SeatScreen({ handle }: { handle: string }) {
   // other, which reads exactly like a complete widget and is not one.
   const panelId = useId();
 
-  const agent = liveRow(agents, handle, seat);
-  const sandbox = sandboxes.find((s) => s.role === seat?.name) ?? null;
-  // The ROLE NAME, which is what a phase record carries — the URL and every
-  // link into this screen carry the handle. Empty for a handle that resolves to
-  // nothing, and the stream filter below reads it as "match no phase" rather
-  // than as "match every phase that named no role".
-  const role = agent?.role ?? seat?.name ?? "";
+  const agent = liveRowFor(agents, seat);
+  const sandbox = sandboxFor(sandboxes, agent);
+  // The AGENT ID, which is what a phase record, a turn row and a spend row
+  // name the seat by — the URL and every link into this screen carry the
+  // handle. It was the ROLE NAME, which two seats may share, so this page
+  // listed a namesake's turns, phases and spend as this seat's own. Empty for
+  // a handle that resolves to no agent seat, and every filter below reads it
+  // as "match nothing" rather than as "match every record that named none".
+  const agentId = agent?.agent_id ?? "";
 
   // The seat's own phase history. Its `live` half is deliberately NOT read:
   // the projection already pushes it onto the roster, and reading it here too
@@ -643,24 +644,23 @@ export function SeatScreen({ handle }: { handle: string }) {
     { handle },
     { enabled: tab === "work" && mayReadPerson, pollMs: 30_000 },
   );
-  // THE TURN LIST ABOVE THE TRANSCRIPT. `turns` is keyed on the ROLE NAME
-  // rather than the handle — a phase record carries the role, which is why
-  // `role` is derived above — and a seat whose handle resolves to no role
-  // would otherwise ask for every turn in the company.
+  // THE TURN LIST ABOVE THE TRANSCRIPT, asked by the seat's AGENT ID — see
+  // `agentId` above — and not asked at all for a handle that resolves to no
+  // agent seat, which would otherwise ask for every turn in the company.
   const turnList = useQuery(
     "turns",
-    { role, limit: 50 },
+    { agent_id: agentId, limit: 50 },
     // TWENTY SECONDS, the cadence `routes/activity/Turns.tsx` already gives the
     // same question — a store aggregate with no push behind it. Asked once at
     // mount, this table froze its iterations, tokens and running flag at
     // whatever the turn looked like when the tab opened, beside cards that keep
     // ticking; and the turn a reader opened the tab to watch was never in it.
-    { enabled: tab === "turns" && role !== "", pollMs: 20_000 },
+    { enabled: tab === "turns" && agentId !== "", pollMs: 20_000 },
   );
   const spend = useQuery(
     "tokens",
-    { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
-    { enabled: tab === "cost" && !!seat },
+    { agent_id: agentId, since_days: 7, recent_turns: 50 },
+    { enabled: tab === "cost" && agentId !== "" },
   );
   // THE GUARDED HALF. A seat's model chain, token budget, contact identities
   // and tool credentials are NOT on the anonymous org projection —
@@ -745,13 +745,13 @@ export function SeatScreen({ handle }: { handle: string }) {
     // The query above is answered ONCE, at mount. Every phase that finishes
     // after it — which is every phase of the turn a reader opened this tab to
     // watch — reaches the tab only here.
-    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
-    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role)] : [];
+    const streamed = streamedPhases(phaseEvents, (r) => agentId !== "" && r.agentId === agentId);
+    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent)] : [];
     // Streamed FIRST so the query's own copy of the same phase wins the key:
     // both are the same durable record, and preferring the one that came
     // through the paged, authoritative answer keeps one source in charge.
     return mergePhases([...streamed, ...stored], live);
-  }, [history.data, phaseEvents, agent, role]);
+  }, [history.data, phaseEvents, agent, agentId]);
 
   const turns = useMemo(() => groupTurns(phases), [phases]);
   // WHICH OF THESE ARE THE SAME WORK. A turn id names one run, so a trigger
@@ -817,7 +817,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const manager = seat.manager;
   const reports = seat.reports;
   const state = runState(agent, sandboxes);
-  const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
+  const seatSpend = agentId ? tokens?.by_agent?.find((a) => a.agent_id === agentId) : undefined;
 
   return (
     <>
@@ -1296,10 +1296,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           {r.kind === "human" ? (
                             <Tag appearance="outline">human</Tag>
                           ) : (
-                            <StateBadge
-                              agent={agents.find((a) => a.role === r.name)}
-                              sandboxes={sandboxes}
-                            />
+                            <StateBadge agent={liveRowFor(agents, r)} sandboxes={sandboxes} />
                           )}
                         </div>
                         {/* A GOAL IS PROSE, SO IT GETS THE CARD'S OWN WIDTH.
@@ -1682,7 +1679,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     size="small"
                     variant="secondary"
                     onClick={() =>
-                      nav.to(["activity", "turns"], { view: "phases", role: seat.name })
+                      nav.to(["activity", "turns"], { view: "phases", seat: seat.handle })
                     }
                   >
                     All model activity for {seat.name}
@@ -2342,19 +2339,20 @@ export function SeatPeek({ handle }: { handle: string }) {
 
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = findSeat(index, handle);
-  const agent = liveRow(agents, handle, seat);
-  // The ROLE NAME, which is what a phase record carries. `role !== ""` below is
-  // load-bearing rather than defensive: an unresolved handle must match NO
-  // phase, where an empty role compared against a record's own empty one would
-  // match every phase the engine recorded without one.
-  const role = agent?.role ?? seat?.name ?? "";
+  const agent = liveRowFor(agents, seat);
+  // The AGENT ID, which is what a phase record names its seat by — never the
+  // name, which a namesake shares. `agentId !== ""` below is load-bearing
+  // rather than defensive: an unresolved handle must match NO phase, where an
+  // empty id compared against a record's own empty one would match every
+  // phase the engine recorded without one.
+  const agentId = agent?.agent_id ?? "";
 
   const lastTurn = useMemo(() => {
-    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
-    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role)] : [];
+    const streamed = streamedPhases(phaseEvents, (r) => agentId !== "" && r.agentId === agentId);
+    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent)] : [];
     // Newest turn first, so the head of the list is the one being asked about.
     return groupTurns(mergePhases(streamed, live))[0] ?? null;
-  }, [phaseEvents, agent, role]);
+  }, [phaseEvents, agent, agentId]);
 
   // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or hand-edited
   // URL as often as from a row, so the honest answer names the handle that
@@ -2372,7 +2370,7 @@ export function SeatPeek({ handle }: { handle: string }) {
 
   const human = seat.kind === "human";
   const reports = seat.reports;
-  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
+  const sandbox = sandboxFor(sandboxes, agent);
 
   return (
     <>
@@ -2505,10 +2503,7 @@ export function SeatPeek({ handle }: { handle: string }) {
                       {r.kind === "human" ? (
                         <Tag appearance="outline">human</Tag>
                       ) : (
-                        <StateBadge
-                          agent={agents.find((a) => a.role === r.name)}
-                          sandboxes={sandboxes}
-                        />
+                        <StateBadge agent={liveRowFor(agents, r)} sandboxes={sandboxes} />
                       )}
                     </div>
                     {/* THE SAME CORRECTION THE CARD ABOVE CARRIES, and the rail

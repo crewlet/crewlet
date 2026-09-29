@@ -39,7 +39,8 @@ import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useEngineHealth } from "~/lib/engineHealth.ts";
-import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useOrg, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtElapsed, plural, tsKey } from "~/lib/format.ts";
@@ -78,9 +79,20 @@ const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary", "jud
 export function ModelActivity() {
   const { socket } = useClient();
   const agents = useAgents();
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
   const { data: engine } = useEngineHealth();
   const [phase, setPhase] = useParam("phase", "");
-  const [role, setRole] = useParam("role", "");
+  // THE SEAT BY ITS HANDLE, asked of the engine and matched on the records by
+  // the agent id it resolves to — never by the seat's NAME, which is what this
+  // filtered on, so narrowing to one "Engineer" listed every Engineer's calls.
+  const [seatParam, setSeat] = useParam("seat", "");
+  const filter = seatFilter(index, agents, seatParam);
+  const unplaced = seatParam !== "" && filter.agentId === "";
+  const bySeat = useCallback(
+    (r: PhaseRecord) => !seatParam || (filter.agentId !== "" && r.agentId === filter.agentId),
+    [seatParam, filter.agentId],
+  );
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
 
   const [older, setOlder] = useState<EventRecord[]>([]);
@@ -94,10 +106,16 @@ export function ModelActivity() {
   // attached is the query that makes an activity screen slow — and a phase
   // record without its payload has no prompts, no response, no tool calls and
   // no decision, which is everything this screen is for.
-  const { data, loading, error, refusal } = useQuery("phases", {
-    limit: PAGE,
-    ...(role ? { role } : {}),
-  });
+  const { data, loading, error, refusal } = useQuery(
+    "phases",
+    {
+      limit: PAGE,
+      ...(filter.agentId ? { agent_id: filter.agentId } : {}),
+    },
+    // NOT ASKED for a seat this node cannot place, which unfiltered would
+    // answer with every seat's phases under one seat's name.
+    { enabled: !unplaced },
+  );
 
   const phaseEvents = usePhaseEvents();
 
@@ -108,17 +126,17 @@ export function ModelActivity() {
     // The query above is answered once. Without the phases that finish after
     // it, a row here leaves "Running now" when its phase completes and never
     // appears among the recent ones — it just goes.
-    const streamed = streamedPhases(phaseEvents, (r) => !role || r.role === role);
+    const streamed = streamedPhases(phaseEvents, bySeat);
     return [...streamed, ...answered];
-  }, [data, older, phaseEvents, role]);
+  }, [data, older, phaseEvents, bySeat]);
 
   const live = useMemo<PhaseRecord[]>(
     () =>
       agents
         .filter((a) => a.live_call)
-        .map((a) => fromLiveCall(a.live_call!, a.role))
-        .filter((r) => !role || r.role === role),
-    [agents, role],
+        .map((a) => fromLiveCall(a.live_call!, a))
+        .filter(bySeat),
+    [agents, bySeat],
   );
 
   const merged = useMemo(() => mergePhases(stored, live), [stored, live]);
@@ -142,38 +160,50 @@ export function ModelActivity() {
   // reader has been watching it, and it lands here the moment it completes.
   const settled = useSettled(done, phaseRecordKey, runningKeys);
 
+  // THE SAME QUESTION, ONE PAGE OLDER. It paged the event LISTING by actor —
+  // the seat's name again — and then read every row back through `event`,
+  // one round trip per phase, because a listing row carries no payload; the
+  // `phases` answer carries the payload and pages by the cursor it hands out.
   const loadOlder = useCallback(async () => {
     setPaging(true);
     setPageError(null);
     try {
-      const params: Record<string, unknown> = { type: "agent_phase_completed", limit: PAGE };
-      if (role) params.actor = role;
+      const params: Record<string, unknown> = { limit: PAGE };
+      if (filter.agentId) params.agent_id = filter.agentId;
+      const from = cursor ?? data?.next;
       const last = stored[stored.length - 1];
-      if (cursor) {
-        params.before_time = cursor.before_time;
-        params.before_id = cursor.before_id;
+      if (from?.before_id) {
+        params.before_time = from.before_time;
+        params.before_id = from.before_id;
       } else if (last) {
         params.before_time = last.at;
         params.before_id = last.eventId;
       }
-      const page = await socket.query("events", params);
-      // A feed row has no payload; a phase card needs one. Each row is read
-      // back through `event`, in parallel and bounded by the page size.
-      const full = await Promise.all(
-        (page.events ?? []).map((row) => socket.query("event", { id: row.id }).catch(() => null)),
-      );
-      setOlder((prev) => [...prev, ...full.filter((e): e is EventRecord => e !== null)]);
-      setCursor(page.next ?? null);
-      setExhausted(page.exhausted || !page.next);
+      const page = await socket.query("phases", params);
+      setOlder((prev) => [...prev, ...(page.phases ?? [])]);
+      setCursor(page.next?.before_id ? page.next : null);
+      setExhausted(page.exhausted || !page.next?.before_id);
     } catch (err) {
       setPageError(err instanceof Error ? err.message : "query_failed");
     } finally {
       setPaging(false);
     }
-  }, [socket, cursor, stored, role]);
+  }, [socket, cursor, data, stored, filter.agentId]);
 
-  const roles = useMemo(
-    () => [...new Set(agents.map((a) => a.role).filter(Boolean))].sort(),
+  // EVERY AGENT SEAT, BY HANDLE — the value the filter holds. It listed the
+  // distinct role NAMES of the roster, so two seats sharing a name were one
+  // option that selected both.
+  const seats = useMemo(
+    () =>
+      index.seats
+        .filter((s) => s.kind !== "human" && s.handle !== "")
+        .sort((a, b) => a.name.localeCompare(b.name) || a.handle.localeCompare(b.handle)),
+    [index],
+  );
+
+  // A record names its seat by agent id; its PAGE is addressed by handle.
+  const handleOf = useMemo(
+    () => new Map(agents.map((a) => [a.agent_id, a.handle ?? ""])),
     [agents],
   );
 
@@ -184,10 +214,14 @@ export function ModelActivity() {
 
   // A row goes to the seat, because that is where a transcript is readable:
   // one turn in focus instead of seven competing for the page. That is still
-  // where a row with no turn on it goes — see [openRow].
+  // where a row with no turn on it goes — see [openRow]. A seat this roster no
+  // longer carries has no page to go to, and the row stays put.
   const openSeat = useCallback(
-    (r: PhaseRecord) => nav.to(["company", "people", r.role], { tab: "model" }),
-    [nav],
+    (r: PhaseRecord) => {
+      const handle = handleOf.get(r.agentId);
+      if (handle) nav.to(["company", "people", handle], { tab: "model" });
+    },
+    [nav, handleOf],
   );
 
   /**
@@ -224,11 +258,14 @@ export function ModelActivity() {
    *  plain one. The two must name the same object or ⌘-click lands somewhere
    *  the click would not have. */
   const rowLink = useCallback(
-    (r: PhaseRecord) =>
-      r.turnId
-        ? href(["activity", "turns", r.turnId])
-        : href(["company", "people", r.role], { tab: "model" }),
-    [],
+    (r: PhaseRecord) => {
+      if (r.turnId) return href(["activity", "turns", r.turnId]);
+      const handle = handleOf.get(r.agentId);
+      return handle
+        ? href(["company", "people", handle], { tab: "model" })
+        : href(["activity", "turns"], { view: "phases" });
+    },
+    [handleOf],
   );
 
   // Defined here rather than at module scope because two cells need `now` to
@@ -366,7 +403,7 @@ export function ModelActivity() {
 
   const liveCount = live.filter((r) => r.live).length;
   const failedCount = merged.filter((r) => r.failed).length;
-  const filtering = !!(role || phase || onlyFailed);
+  const filtering = !!(seatParam || phase || onlyFailed);
 
   return (
     <>
@@ -418,15 +455,15 @@ export function ModelActivity() {
           // is wrong here: "a filter row of full-width selects is one question
           // per line, which is not what a filter bar is".
           width="auto"
-          value={role}
-          onChange={(value) => setRole(String(value))}
+          value={seatParam}
+          onChange={(value) => setSeat(String(value))}
           options={[
             { value: "", label: "Any seat" },
-            ...roles.map((r) => ({ value: r, label: r })),
+            ...seats.map((s) => ({ value: s.handle, label: s.name })),
           ]}
           ariaLabel="Filter by seat"
           placeholder="Any seat"
-          active={role !== ""}
+          active={seatParam !== ""}
         />
         <span className="spacer" />
         {/* THEIRS, AND IT IS BETTER THAN THE ROW OF TOGGLES IT REPLACES. These
@@ -462,7 +499,7 @@ export function ModelActivity() {
             variant="secondary"
             leadingIcon={<CloseGlyph size="xs" />}
             onClick={() => {
-              setRole("");
+              setSeat("");
               setPhase("");
               setOnlyFailed("");
             }}

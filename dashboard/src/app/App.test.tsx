@@ -250,7 +250,9 @@ describe("live state reaches the screen", () => {
       name: "Acme",
       roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
     });
-    store.applyAgents([{ role: "CEO", state: "working" }]);
+    store.applySeats([
+      { id: "ceo", agent_id: "id-ceo", role: "CEO", handle: "ceo", state: "working" },
+    ]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -305,7 +307,9 @@ describe("live state reaches the screen", () => {
       name: "Acme",
       roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
     });
-    store.applyAgents([{ role: "CEO", state: "working" }]);
+    store.applySeats([
+      { id: "ceo", agent_id: "id-ceo", role: "CEO", handle: "ceo", state: "working" },
+    ]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -359,6 +363,7 @@ describe("a turn watched to its end", () => {
       phase,
       iteration: phase === "onboarding" ? 0 : 1,
       role: "CEO",
+      agent_id: "id-ceo",
       model: "claude-sonnet-5",
       total_tokens: 100,
     },
@@ -368,6 +373,11 @@ describe("a turn watched to its end", () => {
     location.hash = "#/company/people/ceo?tab=turns";
     const { store, view } = mount();
     store.applyOrg(seat);
+    // The roster row pairs the page's seat (by handle) with the overlays and
+    // phase records that name it (by agent id).
+    store.applySeats([
+      { id: "ceo", agent_id: "id-ceo", role: "CEO", handle: "ceo", state: "idle" },
+    ]);
     const redraw = () =>
       view.rerender(
         <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
@@ -387,7 +397,7 @@ describe("a turn watched to its end", () => {
     store.applyEvent(phaseEnvelope("p2", "execute", "2026-01-01T00:00:05Z") as never);
     store.applyAgents([
       {
-        role: "CEO",
+        agent_id: "id-ceo",
         state: "working",
         live_call: {
           turn_id: "t1",
@@ -409,7 +419,7 @@ describe("a turn watched to its end", () => {
     // The review lands. The event goes out first, then the overlay that clears
     // the live call — the order internal/api/stream.Ingest publishes them in.
     store.applyEvent(phaseEnvelope("p3", "review", "2026-01-01T00:00:09Z") as never);
-    store.applyAgents([{ role: "CEO", state: "idle", live_call: null }] as never);
+    store.applyAgents([{ agent_id: "id-ceo", state: "idle", live_call: null }] as never);
     redraw();
 
     // STILL THERE, all three phases of it, and no longer running.
@@ -432,7 +442,7 @@ describe("a turn watched to its end", () => {
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     store.applyAgents([
       {
-        role: "CEO",
+        agent_id: "id-ceo",
         state: "working",
         live_call: {
           turn_id: "t1",
@@ -449,7 +459,7 @@ describe("a turn watched to its end", () => {
     ] as never);
     redraw();
     store.applyEvent(phaseEnvelope("p1", "execute", "2026-01-01T00:00:05Z") as never);
-    store.applyAgents([{ role: "CEO", state: "idle", live_call: null }] as never);
+    store.applyAgents([{ agent_id: "id-ceo", state: "idle", live_call: null }] as never);
     redraw();
     expect(screen.queryByText(/finished while you were reading/)).toBeNull();
     expect(screen.getAllByText("execute").length).toBeGreaterThan(0);
