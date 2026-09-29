@@ -26,7 +26,8 @@ import { EventRow, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag } from "@crewlethq/ui";
 import { CloseGlyph, SearchGlyph, TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { useEngineHealth } from "~/lib/engineHealth.ts";
-import { useClient, useEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useEvents, useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -122,6 +123,20 @@ export function Activity() {
   const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
+  // ONE SEAT, by the HANDLE a link carries, asked of the engine by the AGENT
+  // ID it pairs with. A seat's "all activity" used to arrive here as `actor`
+  // carrying the seat's NAME, which two seats may share, so a namesake's
+  // events were listed — and counted on the axis — as this seat's. `actor`
+  // stays for what it is: a free-text match on whoever acted.
+  const [seatParam, setSeat] = useParam("seat", "");
+  const org = useOrg();
+  const agents = useAgents();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seat = seatFilter(index, agents, seatParam);
+  const agentId = seat.agentId;
+  // A handle no agent seat on this node answers to. Asked unfiltered, the
+  // answer would be every seat's events under one seat's heading.
+  const unplaced = seatParam !== "" && agentId === "";
   const [q, setQ] = useParam("q", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
   // NOT ALIGNED to the bucket. A chart rounds its edges up so the column in
@@ -182,7 +197,7 @@ export function Activity() {
     setExhausted(false);
     setPageError(null);
     setFetched(false);
-  }, [category, actor, windowKey]);
+  }, [category, actor, agentId, windowKey]);
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
@@ -211,6 +226,9 @@ export function Activity() {
         // different filters over one list, and the paged half came back empty
         // for every prefix. The search box is where substring lives.
         .filter((e) => !actor || (e.actor ?? "") === actor)
+        // BY AGENT ID, as the store filtered the paged rows — and a seat this
+        // node cannot place matches nothing, never everything.
+        .filter((e) => !seatParam || (agentId !== "" && e.agent_id === agentId))
         .filter((e) => !onlyFailed || e.failed)
         .filter(
           (e) =>
@@ -221,7 +239,7 @@ export function Activity() {
         )
         .sort(newestFirst)
     );
-  }, [liveEvents, older, category, actor, q, onlyFailed, since, until]);
+  }, [liveEvents, older, category, actor, seatParam, agentId, q, onlyFailed, since, until]);
 
   // THE AXIS IS THE ENGINE'S. This tab holds at most the last 400 events and
   // the store's window it never holds, so a histogram folded here would be
@@ -232,15 +250,23 @@ export function Activity() {
   // The SERVER-SIDE filters only. `q` and `failed` are applied in the browser
   // to whatever arrived, so an axis carrying them would be counting a set the
   // engine was never asked about.
-  const series = useQuery("event_series", {
-    since: axis.since,
-    until: axis.until,
-    bucket,
-    ...(category ? { category } : {}),
-    ...(actor ? { actor } : {}),
-  });
+  const series = useQuery(
+    "event_series",
+    {
+      since: axis.since,
+      until: axis.until,
+      bucket,
+      ...(category ? { category } : {}),
+      ...(actor ? { actor } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+    },
+    { enabled: !unplaced },
+  );
 
   const loadOlder = useCallback(async () => {
+    // NOTHING TO ASK for a seat this node cannot place: unfiltered, the page
+    // would be every seat's history listed under one seat.
+    if (unplaced) return;
     setPaging(true);
     setPageError(null);
     try {
@@ -250,6 +276,7 @@ export function Activity() {
       const params: Record<string, unknown> = { limit: PAGE, since, until };
       if (category) params.category = category;
       if (actor) params.actor = actor;
+      if (agentId) params.agent_id = agentId;
       if (cursor) {
         params.before_time = cursor.before_time;
         params.before_id = cursor.before_id;
@@ -272,7 +299,7 @@ export function Activity() {
     } finally {
       setPaging(false);
     }
-  }, [socket, cursor, rows, category, actor, since, until]);
+  }, [socket, cursor, rows, category, actor, agentId, unplaced, since, until]);
 
   // THE FIRST PAGE OF THE WINDOW, once per window. `loadOlder` is a
   // dependency and changes with every render that changes `rows`, so the
@@ -284,7 +311,7 @@ export function Activity() {
     void loadOlder();
   }, [fetched, loadOlder]);
 
-  const filtered = !!(category || actor || q || onlyFailed);
+  const filtered = !!(category || actor || seatParam || q || onlyFailed);
 
   return (
     <>
@@ -299,6 +326,7 @@ export function Activity() {
             onClick={() => {
               setCategory("");
               setActor("");
+              setSeat("");
               setQ("");
               setOnlyFailed("");
             }}
@@ -381,8 +409,20 @@ export function Activity() {
         <FilterChip pressed={!!onlyFailed} onPressedChange={(on) => setOnlyFailed(on ? "1" : "")}>
           Failures only
         </FilterChip>
+        {seatParam && (
+          // THE SEAT FILTER SAYS WHO IT IS, by name, and pressing it lifts it.
+          <FilterChip pressed onPressedChange={() => setSeat("")}>
+            {seat.seat?.name ?? `@${seatParam}`}
+          </FilterChip>
+        )}
         <span className="spacer" />
       </div>
+      {unplaced && (
+        <span className="t-caption">
+          No agent seat answers to @{seatParam} on this node, so there is no activity to narrow to.
+          Clear the seat filter to see everyone's.
+        </span>
+      )}
 
       {/* THE CLOSED SET, so a category with nothing in it is still offered:
           that says the category exists and is quiet, which is an answer — and

@@ -26,6 +26,14 @@ type Envelope struct {
 	Topic        string         `json:"topic"`
 	Payload      map[string]any `json:"payload,omitempty"`
 
+	// AgentID is the agent seat the event is about, when it is about one —
+	// the payload's own `agent_id`, lifted beside the row's other fields so
+	// the row a feed lists carries it whether it arrived live or from the
+	// store (store.EventRecord.AgentID). A feed narrowed to one seat filters
+	// on it; filtered on the actor, which is the seat's NAME, it listed a
+	// namesake's events as this seat's.
+	AgentID string `json:"agent_id,omitempty"`
+
 	// Failed says whether the work this event reports failed.
 	//
 	// It carries the SAME derivation FeedRow gets, from the same function,
@@ -57,6 +65,8 @@ type FeedRow struct {
 	ParentSpanID string `json:"parent_span_id"`
 	Topic        string `json:"topic"`
 	Failed       bool   `json:"failed"`
+	// AgentID is [Envelope.AgentID], carried onto the payload-free row.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // WebhookTopic is the topic a webhook delivery's envelope and feed row name.

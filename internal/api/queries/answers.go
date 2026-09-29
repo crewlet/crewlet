@@ -911,11 +911,15 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 // beneath it, silently.
 func eventFilters(p Params) (store.ListQuery, error) {
 	q := store.ListQuery{
-		Type:         p.String("type"),
-		Source:       p.String("source"),
-		Category:     p.String("category"),
-		TraceID:      p.String("trace_id"),
-		Actor:        p.String("actor"),
+		Type:     p.String("type"),
+		Source:   p.String("source"),
+		Category: p.String("category"),
+		TraceID:  p.String("trace_id"),
+		Actor:    p.String("actor"),
+		// ONE SEAT BY ITS AGENT ID, which is what a seat's own "all
+		// activity" asks by — never its name under `actor`, which a
+		// namesake shares.
+		AgentID:      strings.TrimSpace(p.String("agent_id")),
 		RelatedAgent: p.String("agent"),
 		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
 		// DEAD: the column exists, the reader filters on it, and no

@@ -45,9 +45,10 @@ afterEach(() => {
 });
 
 /** Mount the log over a socket that counts what it is asked, and for what. */
-function mount() {
+function mount(seed?: (store: Store) => void) {
   const asked: { what: string; params: Record<string, unknown> }[] = [];
   const store = new Store();
+  seed?.(store);
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -256,5 +257,85 @@ test("the key a heading groups on is the string it draws", () => {
     }
   } finally {
     setZone("");
+  }
+});
+
+/** Two agent seats sharing one name, told apart only by handle and agent id. */
+function namesakes(store: Store): void {
+  store.applyOrg({
+    name: "Acme",
+    roles: [
+      { name: "Engineer", handle: "eng-a" },
+      { name: "Engineer", handle: "eng-b" },
+    ],
+  });
+  store.applySeats([
+    { id: "eng-a", agent_id: "id-a", role: "Engineer", handle: "eng-a" },
+    { id: "eng-b", agent_id: "id-b", role: "Engineer", handle: "eng-b" },
+  ]);
+  const at = new Date(Date.now() - 30_000).toISOString();
+  for (const [id, agent] of [
+    ["live-a", "id-a"],
+    ["live-b", "id-b"],
+  ] as const) {
+    store.applyEvent({
+      id,
+      type: "agent_turn_completed",
+      timestamp: at,
+      source: "Engineer",
+      actor: "Engineer",
+      summary: `turn by ${agent}`,
+      category: "lifecycle",
+      trace_id: "",
+      span_id: "",
+      parent_span_id: "",
+      topic: "",
+      failed: false,
+      agent_id: agent,
+    });
+  }
+}
+
+// ONE SEAT'S ACTIVITY IS ITS OWN WHEN ITS NAME IS SHARED.
+//
+// A seat's "Its events" arrived here as `actor` carrying the seat's NAME, so
+// the list, its paged history and the axis above it all counted a namesake's
+// events as this seat's. It arrives as the HANDLE now and is asked — and the
+// live rows filtered — by the agent id the handle pairs with.
+test("a seat filter asks and lists by agent id, never by the name it shares", async () => {
+  location.hash = "#/activity?seat=eng-b";
+  try {
+    const { asked } = mount(namesakes);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    for (const what of ["events", "event_series"]) {
+      const ask = asked.find((a) => a.what === what);
+      expect(ask?.params.agent_id, what).toBe("id-b");
+      expect(ask?.params.actor, what).toBeUndefined();
+    }
+    expect(screen.getByText("turn by id-b")).toBeDefined();
+    expect(screen.queryByText("turn by id-a")).toBeNull();
+  } finally {
+    location.hash = "";
+  }
+});
+
+// AND A HANDLE NOTHING ANSWERS TO NARROWS TO NOTHING, rather than to
+// everything: asked unfiltered, the log would list every seat's events under
+// the one a reader followed a link to.
+test("a seat this node cannot place asks for nothing and says so", async () => {
+  location.hash = "#/activity?seat=nobody";
+  try {
+    const { count } = mount(namesakes);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(count("events")).toBe(0);
+    expect(count("event_series")).toBe(0);
+    expect(screen.queryByText(/turn by/)).toBeNull();
+    expect(screen.getByText(/No agent seat answers to @nobody/)).toBeDefined();
+  } finally {
+    location.hash = "";
   }
 });

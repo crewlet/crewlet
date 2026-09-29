@@ -827,7 +827,17 @@ export function SeatScreen({ handle }: { handle: string }) {
             leadingIcon={<TimelineGlyph size="xs" />}
             size="small"
             variant="secondary"
-            onClick={() => nav.to(["activity"], { actor: seat.name })}
+            // AN AGENT SEAT BY ITS HANDLE, which the feed narrows by the
+            // agent id it pairs with — never by the name, which a namesake
+            // shares and which listed its events as this seat's. A PERSON has
+            // no agent id: what the log records about them is what names them
+            // as the actor, so their seat keeps the actor match.
+            onClick={() =>
+              nav.to(
+                ["activity"],
+                seat.kind === "human" ? { actor: seat.name } : { seat: seat.handle },
+              )
+            }
           >
             Its events
           </Button>

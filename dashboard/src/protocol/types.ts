@@ -39,6 +39,10 @@ export interface FeedRow {
   parent_span_id: string;
   topic: string;
   failed: boolean;
+  /** The agent seat the event is about, when it is about one — by its agent
+   *  id, which a namesake does not share. What a feed narrowed to one seat
+   *  filters on, live rows and stored ones alike. */
+  agent_id?: string;
 }
 
 /**

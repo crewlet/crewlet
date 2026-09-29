@@ -140,6 +140,14 @@ type EventRecord struct {
 	// (turnlist's grouping, the phase-token rollup, the filter above).
 	WorkKey string `json:"work_key,omitempty"`
 
+	// AgentID is the agent seat the event is about, when it is about one:
+	// the derived id (ADR-0019) that neither a rename nor a namesake moves.
+	// Named on the row rather than left for a reader to dig out of Tags
+	// because a feed narrowed to one seat filters its LIVE rows the same way
+	// the store filtered these, and livestate.FeedRow carries it under the
+	// same name. A copy of the tag, as the promoted column is.
+	AgentID string `json:"agent_id,omitempty"`
+
 	// Payload is the full serialized event. Nil on a listing — see above.
 	Payload json.RawMessage `json:"payload,omitempty"`
 
@@ -212,6 +220,12 @@ type ListQuery struct {
 	Category string
 	TraceID  string
 	Actor    string
+
+	// AgentID selects the events about ONE agent seat, on the promoted and
+	// indexed agent_id column. It is what a seat's own "all activity" view
+	// asks by: it used to ask by Actor with the seat's NAME, which two seats
+	// may share, so a namesake's events were listed as this seat's.
+	AgentID string
 
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
@@ -508,6 +522,7 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 	addEq("category", q.Category)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
+	addEq("agent_id", q.AgentID)
 	addEq("turn_id", q.TurnID)
 	addEq("work_key", q.WorkKey)
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
@@ -949,6 +964,7 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 		tags = map[string]string{}
 	}
 	rec.Tags = tags
+	rec.AgentID = tags["agent_id"]
 	rec.Failed = types.Failed(rec.Type, false, tags["failed"] == "true")
 }
 

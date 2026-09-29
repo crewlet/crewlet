@@ -526,6 +526,8 @@ func TestTheStoresOwnFiltersArePassedThrough(t *testing.T) {
 		if i%2 == 0 {
 			rec.Type = "agent_turn_completed"
 			rec.Actor = "CTO"
+			// Two seats sharing the name, told apart by the agent id.
+			rec.Tags = map[string]string{"agent_id": fmt.Sprintf("cto-%d", i%4)}
 		}
 	})
 	r := registryOver(t, queries.Sources{Events: db.Events()})
@@ -544,6 +546,18 @@ func TestTheStoresOwnFiltersArePassedThrough(t *testing.T) {
 	for _, row := range byActor {
 		if row.Actor != "CTO" {
 			t.Errorf("the actor filter let %q through", row.Actor)
+		}
+	}
+	// ONE SEAT BY ITS AGENT ID, which the actor — a name both seats carry —
+	// cannot narrow to.
+	bySeat := ask(t, r, "events", map[string]any{"agent_id": "cto-2"})["events"].([]store.EventRecord)
+	if len(bySeat) == 0 || len(bySeat) >= len(byActor) {
+		t.Fatalf("the agent_id filter kept %d of the %d rows the shared name matches",
+			len(bySeat), len(byActor))
+	}
+	for _, row := range bySeat {
+		if row.AgentID != "cto-2" {
+			t.Errorf("the agent_id filter let a row about %q through", row.AgentID)
 		}
 	}
 }

@@ -114,3 +114,47 @@ func phaseIDs(records []store.EventRecord) []string {
 	}
 	return out
 }
+
+// A SEAT'S ACTIVITY FEED IS ITS OWN WHEN ITS NAME IS SHARED.
+//
+// The seat page's "all activity" asked the feed by `actor`, which is the seat's
+// NAME: a namesake's events came back as this seat's, and the axis above them
+// counted both. The listing and the axis narrow by the promoted agent id, and
+// the row names it, so the dashboard filters the live rows it merges in the
+// same way.
+func TestASeatsFeedIsItsOwnWhenItsNameIsShared(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	now := time.Now().UTC().Truncate(time.Hour)
+
+	for i, agentID := range []string{"a-ada", "a-bob"} {
+		id := "turn-" + agentID
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: "agent_turn_completed", Source: "Engineer",
+			Category: "lifecycle", Time: now.Add(-time.Duration(i+1) * time.Minute), Actor: "Engineer",
+			Tags:    map[string]string{"agent_id": agentID, "agent_role": "Engineer", "turn_id": id},
+			Payload: []byte(`{}`),
+		}); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+
+	q := store.ListQuery{AgentID: "a-bob", Since: now.Add(-time.Hour), Until: now.Add(time.Hour)}
+	rows, err := log.List(t.Context(), q)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != "turn-a-bob" {
+		t.Fatalf("a-bob's feed = %v, want only its own", phaseIDs(rows))
+	}
+	if rows[0].AgentID != "a-bob" {
+		t.Errorf("the row names agent %q, want the seat it is about", rows[0].AgentID)
+	}
+	bars, err := log.Histogram(t.Context(), store.HistogramQuery{ListQuery: q, Bucket: store.BucketHour})
+	if err != nil {
+		t.Fatalf("Histogram: %v", err)
+	}
+	if bars.Total != 1 {
+		t.Errorf("the axis counts %d, want the one row the listing shows", bars.Total)
+	}
+}

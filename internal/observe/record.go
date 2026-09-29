@@ -120,6 +120,11 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	payload := payloadOf(ev)
+	// THE FIELD THE STORE'S TAG IS READ FROM ([store.ExtractTags] takes
+	// `agent_id` off the same flat object), so a row that arrived live and the
+	// same row read back from the store name one seat.
+	agentID, _ := payload["agent_id"].(string)
 	return livestate.Envelope{
 		ID:   ev.ID.String(),
 		Type: ev.Type,
@@ -137,7 +142,8 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Topic:        topics.Event(ev.Type),
-		Payload:      payloadOf(ev),
+		Payload:      payload,
+		AgentID:      agentID,
 	}, true
 }
 
@@ -186,6 +192,6 @@ func FeedRow(rec store.EventRecord) livestate.FeedRow {
 		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary,
 		Category: rec.Category, TraceID: rec.TraceID, SpanID: rec.SpanID,
 		ParentSpanID: rec.ParentSpanID, Topic: topic,
-		Failed: rec.Failed,
+		Failed: rec.Failed, AgentID: rec.AgentID,
 	}
 }
