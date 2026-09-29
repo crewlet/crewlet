@@ -183,6 +183,28 @@
 // tick reads its three inputs and leaves the store as it found it. The duty's
 // own lease is the only record its holder keeps.
 //
+// # What counts as a copy, for every surface and alarm
+//
+// [Map.Coverage] is each partition's copies as the surfaces and the alarms
+// count them: a holder the map lists serving whose node the maintainer counts
+// present and healthy ([Able], the same reading [Next] takes of every lease).
+// The map's own count keeps a serving holder serving for membership's grace
+// after its node goes — routers route to it and nothing answers — so a surface
+// that counted it would call a partition whole for the ten minutes nobody can
+// read it. At layout 0 there is no map, and every surface says so in one
+// sentence, [WholeEstate]; a partitioned layout whose first map is not written
+// yet is [Unplaced], a wait.
+//
+// # How long a condition has held is a node's own observation
+//
+// Two of the estate alarms fire on a duration, and the record holds no time a
+// node could compare its clock with — the holder table counts epochs, and the
+// map is written only when something changes. [Watch] is each evaluating
+// node's own sighting of the map on the maintainer's cadence, measuring on its
+// own monotonic clock how long it has seen a partition short or unserved and a
+// join in flight without a break: a LOWER BOUND, so an alarm can fire a
+// sighting late and never on a condition nobody saw hold.
+//
 // # The view
 //
 // [View] is what every other reader holds: the map WATCHED — a change reaches
