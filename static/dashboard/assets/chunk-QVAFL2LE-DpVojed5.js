@@ -1,1 +1,0 @@
-import{t as e}from"./react-D3MgmOsQ.js";import{va as t}from"./media-v5Yv0Bz6.js";var n=e();function r({columns:e=4,className:r,children:i,...a}){return(0,n.jsx)(`div`,{...a,className:t(`crewlet-stat-group`,r),style:{"--crewlet-stat-group-cols":e,...a.style},children:i})}export{r as t};

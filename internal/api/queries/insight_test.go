@@ -990,6 +990,37 @@ func (s modalSearcher) Search(_ context.Context, q knowledge.Query) knowledge.Re
 	}
 }
 
+// AN EMPTY PHRASE IS THE PROBE: the searcher is still asked, so the answer
+// carries which modes it serves and why the asked one would degrade — the
+// facts a screen needs to offer the modes before anybody types. It used to
+// return before asking, so every mode looked available until the first
+// search came back degraded.
+func TestAnEmptyKnowledgeSearchCarriesTheModes(t *testing.T) {
+	t.Parallel()
+	var asked knowledge.Mode
+	searcher := modalSearcher{asked: &asked, outcome: knowledge.Outcome{
+		Modes:    []knowledge.Mode{knowledge.ModeKeyword},
+		Degraded: knowledge.DegradedNoEmbeddings,
+		Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
+	}}
+	sources := queries.Sources{
+		Knowledge: func() knowledge.Searcher { return searcher },
+		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+	}
+	got := asMap(t, answer(t, sources, "knowledge", map[string]any{"q": "", "mode": "semantic"}))
+	if asked != knowledge.ModeSemantic {
+		t.Errorf("the probe asked %q, want the mode it was given", asked)
+	}
+	modes, _ := got["modes"].([]any)
+	if len(modes) != 1 || modes[0] != "keyword" || got["degraded"] != "no_embeddings" {
+		t.Errorf("the probe answered modes=%v degraded=%v, want [keyword] and no_embeddings",
+			got["modes"], got["degraded"])
+	}
+	if hits, _ := got["hits"].([]any); len(hits) != 0 {
+		t.Errorf("an empty phrase answered %d hits, want none", len(hits))
+	}
+}
+
 // KNOWLEDGE HONOURS THE MODE AND SAYS WHAT IT SERVED AND COVERED.
 //
 // A partial fan-out used to be a log line on the coordinating node, so this

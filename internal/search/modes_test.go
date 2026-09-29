@@ -232,7 +232,39 @@ func TestWithNoProviderHybridServesKeywordAndSemanticServesNothing(t *testing.T)
 				t.Errorf("the scanner ran %d times, want once — a semantic "+
 					"search with nothing to rank by must not scan", n)
 			}
+
+			// AND THE PROBE PREDICTS EXACTLY THAT, with no query: both modes
+			// that rank by meaning degrade, keyword does not.
+			for mode, want := range map[knowledge.Mode]knowledge.Degradation{
+				knowledge.ModeHybrid:   knowledge.DegradedNoEmbeddings,
+				knowledge.ModeSemantic: knowledge.DegradedNoEmbeddings,
+				knowledge.ModeKeyword:  knowledge.NotDegraded,
+			} {
+				if got := fan.ProbeDegradation(mode); got != want {
+					t.Errorf("the probe for %s answered %q, want %q", mode, got, want)
+				}
+			}
 		})
+	}
+}
+
+// A PROBE NEVER PREDICTS A TRANSIENT FAILURE. With a provider configured
+// every mode is on offer — whether this query's own vector will be computed is
+// a fact about a search, and a screen that greyed Meaning out because the
+// provider once rate-limited would hide a mode that works.
+func TestAProbeWithAProviderDegradesNothing(t *testing.T) {
+	t.Parallel()
+	p := newProvider()
+	p.embed.fail = errors.New("the provider is rate limiting")
+	fan := &search.FanOut{Self: "n1", Vectors: search.NewQueryVectors(p.read),
+		Local: &recordingScan{slice: bothHalves("n1", search.Everything())}}
+	for _, mode := range knowledge.Modes {
+		if got := fan.ProbeDegradation(mode); got != knowledge.NotDegraded {
+			t.Errorf("the probe for %s answered %q with a provider configured", mode, got)
+		}
+	}
+	if got := p.embed.calls.Load(); got != 0 {
+		t.Errorf("the probe made %d provider calls, want none", got)
 	}
 }
 

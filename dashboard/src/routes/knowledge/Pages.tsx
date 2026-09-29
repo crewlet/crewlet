@@ -27,7 +27,17 @@ import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Card, cx, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  cx,
+  EmptyState,
+  FilterChip,
+  Input,
+  Select,
+  Skeleton,
+  Tag,
+} from "@crewlethq/ui";
 // OURS, DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
 // `semantics`: `radio` selects as the arrows move, `tabs` is manual but
 // demands a `panelId` naming a TabPanel neither of these rows controls. Both
@@ -56,6 +66,7 @@ import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageRevision, PageSummary } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
+import { usePagedPages } from "./usePagedPages.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
@@ -230,11 +241,16 @@ export function Pages({ container: fromPath }: { container?: string }) {
   if (kind === "skills") params.skills = true;
   if (kind === "prose") params.skills = false;
 
-  const { data, loading, error } = useQuery("pages", params, { pollMs: 20_000 });
+  // EVERY PAGE, NOT THE FIRST FIFTY. This read took the default window and
+  // drew what came back as the container, so a space of four hundred pages
+  // was fifty rows with nothing to say the rest existed. It reads windows of
+  // 500 now, with the listing's own total and "Load more" from its cursor.
+  const listing = usePagedPages(params, { pollMs: 20_000 });
+  const { loading, error } = listing;
 
   const rows = useMemo(
-    () => [...(data?.pages ?? [])].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
-    [data],
+    () => [...listing.rows].sort((a, b) => tsKey(b.updated_at) - tsKey(a.updated_at)),
+    [listing.rows],
   );
   const containerKeys = useMemo(
     () => (containers.data?.containers ?? []).map((c) => c.key).sort(),
@@ -472,6 +488,31 @@ export function Pages({ container: fromPath }: { container?: string }) {
               },
             ]}
           />
+          {listing.more && (
+            // A WINDOW LABELLED AS ONE: what is drawn of how many there are.
+            // The order above is newest first AMONG THE LOADED PAGES — the
+            // engine pages by title, so an unloaded window can hold a newer
+            // page, and the foot says so rather than implying a whole sort.
+            <Card.Footer variant="meta">
+              <span className="row wrap gap-2">
+                <span>
+                  {rows.length.toLocaleString()} of {(listing.total ?? 0).toLocaleString()} pages
+                  loaded — sorted among these.
+                </span>
+                <Button
+                  variant="secondary"
+                  size="small"
+                  onClick={listing.loadMore}
+                  loading={listing.paging}
+                >
+                  Load more
+                </Button>
+                {listing.pageError && (
+                  <span role="alert">The next pages could not be read ({listing.pageError}).</span>
+                )}
+              </span>
+            </Card.Footer>
+          )}
         </Card>
       </QueryState>
     </>
@@ -595,7 +636,10 @@ export function PageView({ id }: { id: string }) {
             {data.children?.length ? (
               <Card>
                 <Card.Header>
-                  <Card.Title>{`Children (${data.children.length})`}</Card.Title>
+                  {/* THE TOTAL, not the length: the read carries the first
+                      fifty by title, and "Children (50)" over a page with
+                      sixty said fifty. */}
+                  <Card.Title>{`Children (${data.children_total ?? data.children.length})`}</Card.Title>
                 </Card.Header>
                 <ul className="list">
                   {data.children.map((child) => (
@@ -777,7 +821,10 @@ export function PagePeek({ id }: { id: string }) {
               </Card>
 
               <Card>
-                <Card.Header icon={<NetworkGlyph size="sm" />} count={children.length}>
+                <Card.Header
+                  icon={<NetworkGlyph size="sm" />}
+                  count={data?.children_total ?? children.length}
+                >
                   <Card.Title>Where it sits</Card.Title>
                 </Card.Header>
                 <div className="col gap-2">

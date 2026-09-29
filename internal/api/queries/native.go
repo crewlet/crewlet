@@ -658,8 +658,16 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		Label:     strings.TrimSpace(p.String("label")),
 		Watcher:   strings.TrimSpace(p.String("watcher")),
 		Title:     strings.TrimSpace(p.String("title")),
-		Limit:     Clamp(p.Int("limit", 0), pages.DefaultLimit, pages.MaxLimit),
-		Offset:    p.Int("offset", 0),
+		// THE TOP OF A CONTAINER is its own key rather than an empty
+		// `parent`, which already means "under any parent" — a tree
+		// loading its first level asks the opposite question.
+		Roots: p.Bool("roots", false),
+		Limit: Clamp(p.Int("limit", 0), pages.DefaultLimit, pages.MaxLimit),
+		After: strings.TrimSpace(p.String("after")),
+	}
+	if f.Roots && f.ParentID != "" {
+		return nil, fmt.Errorf("%w: roots and parent ask opposite questions — "+
+			"name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
 	}
 	for _, name := range splitList(p.String("status")) {
 		status := pages.Status(name)
@@ -691,14 +699,23 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	list, err := s.Pages.List(ctx, f, fresh)
+	if errors.Is(err, pages.ErrBadCursor) {
+		return nil, badParams("after", f.After, []string{"the after of a previous answer"})
+	}
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
+	out := map[string]any{
+		// THE TOTAL BESIDE THE WINDOW: a page of 50 and a container of 50
+		// were one answer, and every screen drew the first as the second.
+		"pages": list.Pages, "limit": f.Limit, "total": list.Total,
 		"read_level": list.Level, "complete": list.Complete,
 		"position": list.Position, "log_lag": list.LogLag,
-	}, nil
+	}
+	if list.After != "" {
+		out["after"] = list.After
+	}
+	return out, nil
 }
 
 func (s Sources) page(ctx context.Context, p Params) (any, error) {

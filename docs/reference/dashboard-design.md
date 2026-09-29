@@ -734,7 +734,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
-| `#/knowledge` | **Knowledge** — live search over the backend, and the containers | `q=` |
+| `#/knowledge` | **Knowledge** — the ranked search, or with no phrase the spaces at a glance; beside every Knowledge screen, the tree (search, mode, spaces) | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change | |
 | `#/spend` | **Spend › Overview** — tokens over time, then by phase, model, seat, and the costliest turns (tokens only) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
@@ -1347,14 +1347,14 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | Piece | What it is |
 |---|---|
 | `sidebar/` | the one sidebar — [The sidebar](#the-sidebar) — with the health card and the user block |
-| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link |
+| `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star and Copy link, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav`), with a key mark on a guarded section and an arrow on a cross-link, and Knowledge draws a TREE there — its search, the search's mode and every space's pages (`KnowledgeTree`, out of the Knowledge chunk) |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
 | `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the one width the dashboard derives itself — where the peek becomes a column |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
 | `ObjectTabs` + `tabFit` | an object's own tabs as the kit's underline row, drawing the tabs that FIT and folding the rest into a "More" menu at its end — the tab the reader is on always drawn — by the same arithmetic (`foldTabs`) the section strip folds with; the widths are read off a hidden, inert twin of the row |
-| `DetailRail` | the peek's chrome — resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
+| `DetailRail` | the peek's chrome — resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column, 1416 beside Knowledge's tree), a drawer under that |
 | `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
@@ -1369,8 +1369,9 @@ pane: a `DataGrid`'s rows become labelled cards — or, on a grid that asks for
 `phoneLead` cells), then its marks. The work list takes the compact row,
 because it is scanned by the dozen and its labelled card stood eight lines
 and 230px per task; the table keeps the labels, since its question is a field
-at a time. The Settings column stacks
-above its section, and the page bar's controls take a line of their own and
+at a time. The Settings column and the Knowledge tree stack
+above the screen beside them — the tree with its spaces folded behind one
+disclosure, since its length is the company's page count — and the page bar's controls take a line of their own and
 scroll. Both are the kit's numbers, written as media-query literals that
 `frame.test.ts` holds against `app/layout.ts`, which reads them from the kit.
 
@@ -1385,11 +1386,11 @@ And the peek is a column of the sheet wherever the list beside it keeps its
 | the peek, at rest | 420 |
 | the scroller's reserved gutter (`scrollbar-gutter: stable`, drawn 10 px wide) | 10 |
 | the screen's padding (`spacing.5`, each side) | 40 × density |
-| Settings' section column, on a screen that draws one | 236 |
+| Settings' section column, on a screen that draws one — or Knowledge's tree (`TREE_COLUMN`) | 236, or 256 |
 | the list | 444 |
 
-— **1160 px** on a screen and **1396 px** beside Settings' column at the normal
-density (1152 and 1388 compact, 1167 and 1403 comfortable). Below that the peek
+— **1160 px** on a screen, **1396 px** beside Settings' column and **1416 px**
+beside Knowledge's tree at the normal density (1152 and 1388 compact, 1167 and 1403 comfortable). Below that the peek
 is a drawer over the screen. The first cut of this counted only the sidebar,
 the inset, the hairlines, the peek and the list, and put the threshold at
 1112: the Work list beside a peek there was 396 px, and at 1280 a peek on
@@ -4537,6 +4538,77 @@ it, so a link to one run landed on a board with the run below the fold.
   and is cut with an ellipsis, its whole value in the title, only where two
   are still too narrow. The clamp every other fact takes split
   `turn.guard_breach` as "turn.guard_breac" over "h".
+
+## Knowledge: a tree, and search with real modes
+
+Every Knowledge screen stands beside ONE COLUMN, the approved artboard's tree:
+the search box, the search's mode, and every space's pages. It is the
+workspace's `tree` renderer (`app/nav.ts`) — drawn by the shell and mounted
+once for the workspace, 256 px wide (`TREE_COLUMN`, counted by the peek
+arithmetic above) — so a folder a reader opened stays open while they read the
+pages in it.
+
+- **The mode is Hybrid, Keyword or Meaning**, and the wire is
+  `mode=hybrid|keyword|semantic` — the word for `semantic` is the reader's and
+  is never sent. The column learns what the backend serves from the
+  `knowledge` PROBE: the question asked with no phrase, which runs nothing and
+  answers `modes` and, asked for `semantic`, the configuration reason the
+  others would degrade (`no_embeddings`, `unsupported`). A mode the answer does
+  not list is **disabled with that reason written under the control** —
+  `aria-disabled`, so it stays in the arrows' path and a keyboard reader
+  lands on it to hear why — and before the probe answers nothing is disabled,
+  because "not known yet" is never a reason to take a mode away. **The default
+  is a mode the engine serves**: Hybrid where it is served as asked, else the
+  first mode the probe lists — Keyword on a company with no embeddings
+  provider — so the checked segment is never one the control also draws as
+  unavailable, and an address that names no `mode=` runs in that same default
+  (the search screen waits for the probe rather than running Hybrid first and
+  reporting "asked for Hybrid, served Keyword" about a choice nobody made). A
+  mode the reader named in the address is theirs and is kept, and the answer
+  says what served it. On the search screen a mode re-runs the search;
+  anywhere else it is the mode the next search runs.
+- **Results say what ranked them**: "ranked by Keyword" on every result card,
+  a sentence above the hits when the engine served something other than what
+  was asked (`served_mode`, `degraded`), and a warning when the fan-out was
+  PARTIAL — the buckets nobody scanned and the node that did not answer, from
+  the answer's `coverage` — because a short list from two thirds of the corpus
+  is otherwise indistinguishable from a small corpus. The search reads this
+  node's own copy of the pages on the native backend, and the screen says so;
+  it no longer claims "no local copy", which was true only of Confluence.
+- **A search that did not run** says which of `no_company`, `no_backend`,
+  `no_scope` or `building` it was, with the remedy that reason names.
+- **The spaces** are listed with each space's key; the unit that files into
+  one and the tracker project it works in are named for a reader who may read
+  the company document, in four states — read (which may be "no unit names
+  it"), no token held, read in flight, refused — and "needs an operator token"
+  is said only to a browser that holds none. A project the space's key does not
+  already name is drawn beside it as a dashed key, not only in a tooltip.
+  A space opens onto its top level (`pages{container, roots}`) and a page that
+  holds pages onto its children (`pages{parent}`), each read in windows of 500
+  with **Load more** from the answer's `after` and "n of total" beside it. A
+  row opens only where the engine counted children the same listing would show.
+  The page being read is opened to — its space and every ancestor.
+- **On a phone the spaces fold.** Below 640 px the frame is one pane and the
+  column stacks above the screen, so a tree as long as the company's pages
+  would stand between a reader and every page they open — opened to a page,
+  a space's top level alone is up to 500 rows. The search and its mode stay
+  drawn; the spaces are one disclosure (**Spaces**, with how many), closed on
+  every arrival, and nothing under it is read until it is opened.
+- **The home** (no phrase) is the spaces as cards: name, key, purpose and page
+  count. On a company whose knowledge lives in a vendor's wiki there is nothing
+  on the engine to browse, and both the tree and the home say so rather than
+  drawing an error.
+- **A space's own page** reads every page, not the first fifty, and says
+  "n of total pages loaded" with Load more when a space outgrows a window.
+- **A container's peek** reads one window of 500 and COUNTS off the listing's
+  `total`: the Recent pages count and "n more pages in this container" are the
+  container's, never the window's. When the container outgrows the window,
+  Recent pages and Who writes here each say they cover the first pages by
+  title, since the listing is ordered by title rather than by time.
+
+Agent skills and agent diaries are sections of this workspace that land with
+their own screens; the tree does not draw a row for an address that does not
+resolve yet.
 
 ## Honest empty states
 

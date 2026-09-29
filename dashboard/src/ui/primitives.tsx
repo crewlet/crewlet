@@ -333,6 +333,15 @@ export function Segmented<T extends string>({
     capped?: boolean;
     icon?: GlyphName;
     title?: string;
+    /**
+     * The option cannot be chosen here, and `describedBy` names the element
+     * that says why. It STAYS IN THE ARROWS' PATH and focusable
+     * (`aria-disabled`, not `disabled`): a reader has to be able to land on a
+     * mode to hear why it is unavailable, and a disabled button is skipped
+     * silently. Pressing it does nothing.
+     */
+    disabled?: boolean;
+    describedBy?: string;
   }[];
   onChange: (value: T) => void;
   size?: "sm";
@@ -340,10 +349,16 @@ export function Segmented<T extends string>({
   /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
   activate?: "manual" | "automatic";
 }) {
+  // A DISABLED OPTION IS NEVER COMMITTED, by a press or by automatic
+  // activation alike — the one gate both paths go through.
+  const choose = (next: T) => {
+    if (options.find((o) => o.value === next)?.disabled) return;
+    onChange(next);
+  };
   const { box, onKeyDown, stop } = useRovingGroup(
     options.map((o) => o.value),
     value,
-    onChange,
+    choose,
     activate,
   );
   // THE ONE THING MANUAL ACTIVATION OWES A READER: saying so.
@@ -394,7 +409,9 @@ export function Segmented<T extends string>({
           // still deciding.
           tabIndex={o.value === stop ? 0 : -1}
           title={o.title}
-          onClick={() => onChange(o.value)}
+          aria-disabled={o.disabled || undefined}
+          aria-describedby={o.describedBy}
+          onClick={() => choose(o.value)}
         >
           {o.icon && <Mark name={o.icon} size="xs" />}
           {o.label}

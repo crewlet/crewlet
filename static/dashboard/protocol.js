@@ -239,7 +239,9 @@ var TOKEN_KEY = {
 	/** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
 	peekWidth: "crewlet.peek.width",
 	/** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
-	orgDraft: "crewlet_org_draft"
+	orgDraft: "crewlet_org_draft",
+	/** The folders open in the Knowledge tree, for this tab (`routes/knowledge/KnowledgeTree.tsx`). */
+	knowledgeOpen: "crewlet.knowledge.open"
 }.apiToken;
 /** The stored token, or "". Never throws. */
 function apiToken() {

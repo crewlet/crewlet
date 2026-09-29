@@ -168,8 +168,13 @@ func (s *Searcher) Building(_ context.Context) bool {
 // went with the reason for it.
 func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Result {
 	if s.index == nil || strings.TrimSpace(q.Text) == "" {
+		// THE PROBE: nothing runs and nothing is read, but the answer
+		// still says which modes this node would serve as asked and how
+		// the asked one would degrade — a configuration fact, so a screen
+		// can offer the modes honestly before anybody has typed.
 		return knowledge.Result{Outcome: knowledge.Outcome{
 			Modes:    s.fan.Modes(),
+			Degraded: s.fan.ProbeDegradation(q.Mode),
 			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}},
 		}}
 	}

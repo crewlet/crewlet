@@ -72,6 +72,20 @@ one ranking guaranteed not to find them — so it answers no hits and says why,
 rather than a keyword answer labelled as meaning. Hybrid does fall back: the
 words are half of what was asked for.
 
+**The modes on offer are known before anybody types.** A search with an empty
+phrase is the seam's PROBE: it runs nothing and reads nothing, and answers
+`modes` and — for the mode asked — the `degraded` the CONFIGURATION decides
+(`no_embeddings`, `unsupported`; never a transient `embedding_failed`, which is
+a property of one search). The dashboard's Knowledge tree asks it for
+`semantic` and disables a mode the answer does not list, with the reason
+written under the control, rather than letting a reader pick Meaning and find
+out from a degraded answer. The same answer sets the dashboard's DEFAULT:
+Hybrid where it is served, otherwise the first mode listed — Keyword on a
+company with no embeddings provider — so a search nobody chose a mode for runs
+in a mode the engine serves as asked instead of reporting a degradation of a
+choice nobody made. The wire default is unchanged: a request that names no
+mode is still `hybrid`.
+
 A keyword search sends no vector at all, so a participant runs no vector scan
 for it; the rankers a query needs travel with it, and the asking node fuses
 only the ones it asked for even from a participant on an older build that ran

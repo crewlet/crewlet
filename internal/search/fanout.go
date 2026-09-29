@@ -348,6 +348,17 @@ func (f *FanOut) Modes() []knowledge.Mode {
 	return []knowledge.Mode{knowledge.ModeKeyword}
 }
 
+// ProbeDegradation is how a search in `mode` would degrade for a reason the
+// CONFIGURATION decides — no embeddings provider, or semantic search off —
+// with no query and no I/O. A transient reason (the provider failing this
+// query's vector) is a property of a search and is never predicted here.
+func (f *FanOut) ProbeDegradation(mode knowledge.Mode) knowledge.Degradation {
+	if mode.Semantic() && !slices.Contains(f.Modes(), knowledge.ModeSemantic) {
+		return knowledge.DegradedNoEmbeddings
+	}
+	return knowledge.NotDegraded
+}
+
 // resolve turns the asked mode into the rankers to run and the vector they
 // need, and says what will be served.
 //

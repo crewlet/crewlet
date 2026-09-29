@@ -2128,6 +2128,256 @@ a.prof-row:hover {
 
 /* ---- Knowledge ---------------------------------------------------------- */
 
+/* A LIST THAT IS A LIST FOR A SCREEN READER and draws none of its own marks:
+   the Knowledge home's spaces (on the shared `.grid-auto` recipe) and a
+   search's ranked hits, whose rank is their order. */
+.k-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.k-space {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  height: 100%;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.k-space:hover {
+  border-color: var(--color-border-hover);
+}
+
+.k-space:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* THE TREE COLUMN (routes/knowledge/KnowledgeTree.tsx), the approved
+   artboard's: the search and its mode on top, then every space's pages, each
+   level one 14px step in. It is `.section-column`'s frame — sticky, full
+   height, hairline — and scrolls on its own when a space runs longer than the
+   window, so the pane beside it never moves with it. */
+.ktree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4) var(--spacing-2) var(--spacing-5);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.ktree-search {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-1);
+}
+
+.ktree-search > form {
+  align-self: stretch;
+}
+
+.ktree-reason,
+.ktree-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-tertiary);
+}
+
+.ktree-note {
+  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1)
+    calc(
+      var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
+    );
+}
+
+.ktree-spaces {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+}
+
+.ktree-heading {
+  margin: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+/* THE PHONE'S DISCLOSURE (the spaces folded under the search): the heading's
+   own register, at the target floor, spanning the column so the whole row is
+   the control. */
+.ktree-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  width: 100%;
+  min-height: var(--size-target-min);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ktree-fold:hover {
+  color: var(--color-text-primary);
+}
+
+.ktree-fold:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+.ktree-fold-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.ktree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ONE ROW: the expander (or its room), the link, and a space's key. The
+   indent is the row's own padding, so the current row's lift spans the whole
+   width at every depth, as the artboard draws it. */
+.ktree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-height: var(--size-nav-row);
+  padding: 0 var(--spacing-2) 0 calc(var(--spacing-1) + var(--ktree-depth, 0) * 14px);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+
+.ktree-row:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+/* WHERE THE READER IS: the rail's own mark — raised, a hairline drawn as an
+   outline so forced-colours mode keeps it, the primary ink. */
+.ktree-row.is-current {
+  background: var(--color-surface-elevated);
+  outline: 1px solid var(--color-border-default);
+  outline-offset: -1px;
+  color: var(--color-text-primary);
+}
+
+.ktree-expander {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  /* THE TARGET FLOOR, though the chevron in it is 12px: a smaller box is a
+     control a pointer reaches by missing it. */
+  width: var(--size-target-min);
+  height: var(--size-target-min);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.ktree-expander:hover {
+  color: var(--color-text-primary);
+}
+
+.ktree-expander:focus-visible,
+.ktree-link:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+.ktree-spacer {
+  flex: none;
+  width: var(--size-target-min);
+}
+
+.ktree-link {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: var(--size-target-min);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+}
+
+.ktree-mark {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.ktree-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ktree-draft {
+  flex: none;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+/* A SPACE'S KEY, the artboard's small mono chip at the row's end. */
+.ktree-key {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 5px;
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+/* THE TRACKER PROJECT a space's units work in, where the key does not already
+   name it: the same chip with a dashed edge, so it reads as a second, related
+   key rather than as the space's own. */
+.ktree-proj {
+  border-style: dashed;
+  background: transparent;
+}
+
+.ktree-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1)
+    calc(
+      var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
+    );
+}
+
 .hit {
   display: flex;
   flex-direction: column;

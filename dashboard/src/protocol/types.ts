@@ -2831,12 +2831,22 @@ export interface PageSummary {
   labels?: string[];
   updated_at: string;
   revision: number;
+  /** How many pages sit directly under this one that the SAME listing would
+   *  show (its status and skill narrowing applied), so a tree draws an
+   *  expander only where one opens onto something. Absent means none. */
+  children?: number;
 }
 
 export interface PagesAnswer {
   pages: PageSummary[];
   limit: number;
-  offset: number;
+  /** How many pages the filter matches IN ALL — never the window's length,
+   *  which is what every screen drew as the size of a container before. */
+  total: number;
+  /** What to pass as `after` for the next window; absent on the last one. A
+   *  cursor rather than an offset, because a listing read while seats write
+   *  repeats and skips rows under an offset. */
+  after?: string;
   /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
    *  — so a page list served far behind the log was pixel-identical to a
    *  complete one. Same envelope as every other state-log answer. */
@@ -2933,7 +2943,9 @@ export interface PageDetail {
   revision: number;
   comments?: PageComment[];
   history?: PageRevision[];
+  /** The first page of children by title; `children_total` is all of them. */
   children?: PageSummary[];
+  children_total?: number;
   /** The parent chain, outermost first — the breadcrumb. */
   ancestors?: PageSummary[];
 }

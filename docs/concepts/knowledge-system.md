@@ -370,8 +370,17 @@ Two properties differ from the vendor path and both are visible:
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
-  missing from `GET /containers` and from the Knowledge rail. That is what a
+  missing from `GET /containers` and from the Knowledge tree. That is what a
   space nobody declared looks like.
+- **THE DASHBOARD BROWSES IT AS A TREE**, one level at a time: a space's top
+  (`pages{container, roots: true}`) and one page's children
+  (`pages{parent}`), each read in windows of 500 with the listing's `total`
+  and an `after` cursor, and each page saying how many `children` the same
+  listing would show under it — so an expander never opens onto a folder
+  whose pages are all in the trash. A search there reads THIS NODE'S OWN COPY
+  (the rows, the lexical index and the replicated vectors), and the screen
+  says so: it is as current as this node's place on the pages log. See
+  [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-a-tree-and-search-with-real-modes).
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
   the version before it, by line.

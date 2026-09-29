@@ -57,6 +57,11 @@ const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
     by: "app/Shell.tsx",
     why: "listReserve() for the frame on screen, set on .app with data-peek=column",
   },
+  {
+    name: "--section-column",
+    by: "app/Shell.tsx",
+    why: "columnWidth() for the workspace's column, set on .section-frame — the same number the peek threshold counts",
+  },
 ];
 
 /** Every stylesheet under `dashboard/src`, wherever a screen keeps one. */

@@ -29,10 +29,12 @@
  *     + 420  the peek
  *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
- *     + 236  Settings' section column, on a screen that draws one
+ *     + 236  Settings' section column, on a screen that draws one —
+ *            or 256, Knowledge's tree ([TREE_COLUMN])
  *     + 444  the list
  *
- * = 1160 on a screen, 1396 beside Settings' column, at the normal density.
+ * = 1160 on a screen, 1396 beside Settings' column and 1416 beside
+ * Knowledge's tree, at the normal density.
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
@@ -64,6 +66,7 @@
  */
 
 import { breakpoint, density, size, spacing } from "@crewlethq/tokens";
+import type { SectionRenderer } from "./nav.ts";
 
 const px = (value: string): number => Number.parseFloat(value);
 
@@ -126,10 +129,36 @@ export function densityScale(choice: keyof typeof density): number {
   return Number(density[choice]);
 }
 
+/**
+ * Knowledge's tree column: the artboard's 256.
+ *
+ * WIDER THAN SETTINGS' COLUMN, deliberately. Settings lists nine sections at
+ * one level; the tree nests a space, a folder and a page under each other,
+ * each level indented, with a space's key on the right — and at the rail's
+ * 236 a third-level title had under 120px before it was cut.
+ */
+export const TREE_COLUMN = 256;
+
+/** How wide the column a workspace draws beside its screens is, if it draws one. */
+export function columnWidth(renderer: SectionRenderer | undefined): number {
+  switch (renderer) {
+    case "column":
+      return px(size.shell.rail);
+    case "tree":
+      return TREE_COLUMN;
+    default:
+      return 0;
+  }
+}
+
 /** Which frame a screen sits in, for the one term that differs. */
 export interface Frame {
-  /** Settings' section column is drawn inside the screen, beside the list. */
-  sectionColumn: boolean;
+  /**
+   * The width of the column drawn inside the screen beside the list —
+   * Settings' sections, Knowledge's tree — or 0 where there is none
+   * ([columnWidth]).
+   */
+  column: number;
   /** The reader's density multiplier ([densityScale]). */
   scale: number;
 }
@@ -140,13 +169,8 @@ export interface Frame {
  * where there is one, and the list. The peek's track is capped at the sheet
  * less this, which is what `--peek-reserve` carries.
  */
-export function listReserve({ sectionColumn, scale }: Frame): number {
-  return (
-    SCROLLBAR_GUTTER +
-    2 * CONTENT_PADDING * scale +
-    (sectionColumn ? px(size.shell.rail) : 0) +
-    LIST_FLOOR
-  );
+export function listReserve({ column, scale }: Frame): number {
+  return SCROLLBAR_GUTTER + 2 * CONTENT_PADDING * scale + column + LIST_FLOOR;
 }
 
 /**

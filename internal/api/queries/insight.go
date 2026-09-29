@@ -423,9 +423,10 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 			"this node is still indexing what it has projected, so a search "+
 				"here would answer empty for pages that exist")
 	}
-	if text == "" {
-		return out, nil
-	}
+	// AN EMPTY PHRASE IS THE SEAM'S PROBE rather than an early return:
+	// nothing runs, but the answer carries the modes this backend serves as
+	// asked and why the asked one would degrade, so a screen offers the
+	// modes honestly before its reader types — see [knowledge.Searcher].
 	result := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
@@ -433,6 +434,11 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 		Mode:  mode,
 	})
 	outcome(out, result.Outcome)
+	if text == "" {
+		// A PROBE HAS NO HITS, whatever a backend put in its result: a list
+		// under a phrase nobody typed would be an answer to no question.
+		return out, nil
+	}
 	rows := make([]map[string]any, 0, len(result.Hits))
 	for _, hit := range result.Hits {
 		rows = append(rows, map[string]any{

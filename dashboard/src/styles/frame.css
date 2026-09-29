@@ -1077,8 +1077,9 @@ a.user-block-who:focus-visible {
   outline-offset: var(--size-focus-ring-inset-offset);
 }
 
-/* ---- The Settings column -------------------------------------------------
-   Settings draws its sections as a column beside the screen, flush with the
+/* ---- The Settings column and the Knowledge tree ---------------------------
+   Settings draws its sections as a column beside the screen, and Knowledge
+   its search and its spaces' tree the same way, flush with the
    sheet: the column is the full height of the scroller's view, drawn with a
    hairline, and its list stays put while the section beside it scrolls. The
    kit's content padding is taken back for this one frame and given to the
@@ -1091,7 +1092,10 @@ a.user-block-who:focus-visible {
 .section-frame {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: var(--size-shell-rail) minmax(0, 1fr);
+  /* THE SHELL HANDS THE WIDTH IN (`--section-column`, from `columnWidth` in
+     app/layout.ts) — the same number the peek threshold counted, so the
+     column drawn and the column subtracted are one value. */
+  grid-template-columns: var(--section-column) minmax(0, 1fr);
   min-height: 100%;
 }
 

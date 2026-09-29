@@ -210,6 +210,8 @@ func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 type stubPages struct {
 	filter pages.Filter
 	list   []pages.Summary
+	total  int
+	after  string
 	err    error
 
 	// level is what the surface asked for, so a route that stopped naming
@@ -236,7 +238,9 @@ func (s *stubPages) List(_ context.Context, f pages.Filter,
 	fresh statelog.Freshness,
 ) (pages.Listing, error) {
 	s.filter, s.level, s.fresh = f, fresh.Level, fresh
-	return pages.Listing{Pages: s.list, Level: fresh.Level, Complete: true}, s.err
+	return pages.Listing{
+		Pages: s.list, Total: s.total, After: s.after, Level: fresh.Level, Complete: true,
+	}, s.err
 }
 
 func (s *stubPages) Get(_ context.Context, _ string,
@@ -587,6 +591,41 @@ func TestSkillsIsThreeStated(t *testing.T) {
 	}
 	if p.filter.Skills == nil || *p.filter.Skills {
 		t.Error("skills=false reached the reader as absent or true")
+	}
+}
+
+// A TREE LEVEL IS ASKED FOR AND ANSWERED WHOLE: `roots` and `after` reach
+// the reader, and the answer carries the listing's TOTAL and the next cursor
+// beside the window — without them fifty pages and a container of four hundred
+// were one answer.
+func TestAPageListingCarriesItsTotalAndCursor(t *testing.T) {
+	p := &stubPages{list: []pages.Summary{{ID: "p1", Title: "Runbooks"}}}
+	p.total, p.after = 412, "next-window"
+	got, err := askNative(t, queries.Sources{Pages: p}, "pages",
+		map[string]any{"container": "ENG", "roots": true, "after": "cursor-1", "limit": 500})
+	if err != nil {
+		t.Fatalf("pages: %v", err)
+	}
+	if !p.filter.Roots || p.filter.After != "cursor-1" || p.filter.Limit != 500 {
+		t.Errorf("the reader was asked %+v, want roots, after=cursor-1, limit 500", p.filter)
+	}
+	answer := got.(map[string]any)
+	if answer["total"] != 412 || answer["after"] != "next-window" {
+		t.Errorf("the answer carries total %v and after %v, want 412 and the cursor",
+			answer["total"], answer["after"])
+	}
+	// ROOTS AND A PARENT ARE OPPOSITE QUESTIONS, refused rather than one
+	// silently winning.
+	_, err = askNative(t, queries.Sources{Pages: p}, "pages",
+		map[string]any{"roots": true, "parent": "p1"})
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("roots with a parent answered %v, want bad params", err)
+	}
+	// AND A CURSOR THE READER REFUSES IS THE CALLER'S MISTAKE.
+	p.err = fmt.Errorf("wrapped: %w", pages.ErrBadCursor)
+	_, err = askNative(t, queries.Sources{Pages: p}, "pages", map[string]any{"after": "junk"})
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("a refused cursor answered %v, want bad params", err)
 	}
 }
 

@@ -310,6 +310,13 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		return tools.Result{Output: "No pages match that filter."}, nil
 	}
 	out := map[string]any{"count": len(got.Pages), "pages": got.Pages}
+	// AND HOW MANY THE FILTER MATCHED IN ALL, when that is more than this
+	// answer holds. Without it a listing cut at its limit read as the whole
+	// container, and a model that believes a short list writes the page that
+	// is already there.
+	if got.Total > len(got.Pages) {
+		out["total"] = got.Total
+	}
 	// AND WHAT THE ANSWER COULD NOT ACCOUNT FOR. A listing served over a
 	// deferred scope may be missing pages, and a model that reads a short
 	// list as the whole truth writes the duplicate.

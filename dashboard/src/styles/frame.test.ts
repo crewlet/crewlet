@@ -13,6 +13,8 @@ import {
   PHONE_BREAKPOINT,
   SCROLLBAR_GUTTER,
   SHELL_BREAKPOINT,
+  TREE_COLUMN,
+  columnWidth,
   densityScale,
   listReserve,
   peekColumnMin,
@@ -316,16 +318,21 @@ describe("the frame's layout", () => {
       /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
     );
     expect(CONTENT_PADDING).toBe(20);
-    // Settings' column is one rail wide, inside the screen.
+    // The column inside the screen is as wide as the shell says — the number
+    // the arithmetic below counted — and Settings' is one rail wide.
     expect(block(ours, ".section-frame")).toMatch(
-      /grid-template-columns:\s*var\(--size-shell-rail\) minmax\(0, 1fr\)/,
+      /grid-template-columns:\s*var\(--section-column\) minmax\(0, 1fr\)/,
     );
+    expect(columnWidth("column")).toBe(Number.parseFloat(size.shell.rail));
+    expect(columnWidth("tree")).toBe(TREE_COLUMN);
+    expect(columnWidth("tabs")).toBe(0);
 
     // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
-    // and 236 more beside Settings' column.
+    // 236 more beside Settings' column and 256 beside Knowledge's tree.
     const normal = densityScale("normal");
-    expect(peekColumnMin({ sectionColumn: false, scale: normal })).toBe(1160);
-    expect(peekColumnMin({ sectionColumn: true, scale: normal })).toBe(1396);
+    expect(peekColumnMin({ column: 0, scale: normal })).toBe(1160);
+    expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1396);
+    expect(peekColumnMin({ column: columnWidth("tree"), scale: normal })).toBe(1416);
 
     // AND AT EVERY DENSITY, the list the column leaves at the threshold —
     // walked term by term here rather than through `listReserve`, so a term
@@ -333,8 +340,8 @@ describe("the frame's layout", () => {
     // least the floor, and one pixel narrower it would not be.
     for (const choice of Object.keys(density) as (keyof typeof density)[]) {
       const scale = densityScale(choice);
-      for (const sectionColumn of [false, true]) {
-        const at = peekColumnMin({ sectionColumn, scale });
+      for (const column of [0, columnWidth("column"), columnWidth("tree")]) {
+        const at = peekColumnMin({ column, scale });
         const list = (window: number) =>
           window -
           Number.parseFloat(size.shell.rail) -
@@ -343,15 +350,15 @@ describe("the frame's layout", () => {
           PEEK_WIDTH -
           SCROLLBAR_GUTTER -
           2 * CONTENT_PADDING * scale -
-          (sectionColumn ? Number.parseFloat(size.shell.rail) : 0);
-        const frame = `${choice}${sectionColumn ? ", beside Settings' column" : ""}`;
+          column;
+        const frame = `${choice}${column ? `, beside a ${column}px column` : ""}`;
         expect(list(at), frame).toBeGreaterThanOrEqual(LIST_FLOOR);
         expect(list(at - 1), frame).toBeLessThan(LIST_FLOOR);
         // The cap on the track is exactly the resting width at the threshold,
         // so a column never opens narrower than the width it was decided at.
         const sheetInside =
           at - Number.parseFloat(size.shell.rail) - Number.parseFloat(size.shell.inset) * scale - 2;
-        expect(sheetInside - listReserve({ sectionColumn, scale }), frame).toBeGreaterThanOrEqual(
+        expect(sheetInside - listReserve({ column, scale }), frame).toBeGreaterThanOrEqual(
           PEEK_WIDTH,
         );
       }

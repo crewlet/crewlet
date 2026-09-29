@@ -125,6 +125,29 @@ export function ScreenBoundary({ resetKey, children }: { resetKey: string; child
 }
 
 /**
+ * A column a workspace draws beside its screens from its own chunk — the
+ * Knowledge tree. Reset by the WORKSPACE rather than the path: the column
+ * outlives every navigation inside it (that is what keeps its expanded
+ * folders), so a navigation is not a reason to redraw one that threw, and
+ * leaving the workspace unmounts it anyway.
+ */
+export function ColumnBoundary({
+  what,
+  resetKey,
+  children,
+}: {
+  what: string;
+  resetKey: string;
+  children: ReactNode;
+}) {
+  return (
+    <Guarded what={what} loading={`Loading ${what.toLowerCase()}`} rows={8} resetKey={resetKey}>
+      {children}
+    </Guarded>
+  );
+}
+
+/**
  * The peek's body, reset by the object it shows, so `[` and `]` step off a
  * peek that threw onto one that may not.
  */

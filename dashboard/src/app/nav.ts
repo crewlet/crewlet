@@ -23,7 +23,8 @@
  *   - A SIDEBAR ROW is a workspace, or a live shortcut to a project, a pinned
  *     view or a starred page.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer —
- *     `tabs` in the page header, or `column` for Settings.
+ *     `tabs` in the page header, `column` for Settings, or `tree` for
+ *     Knowledge, whose column also holds its spaces and pages.
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1–9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -45,8 +46,13 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 export type Workspace =
   "home" | "inbox" | "me" | "work" | "agents" | "live" | "knowledge" | "spend" | "settings";
 
-/** How a workspace draws its sections. */
-export type SectionRenderer = "tabs" | "column" | "none";
+/**
+ * How a workspace draws its sections: `tabs` in the page header, a `column`
+ * of them beside the screen (Settings), or a `tree` — Knowledge, whose column
+ * is its spaces and pages as well as its sections, drawn by the workspace's
+ * own chunk (`routes/knowledge/KnowledgeTree.tsx`).
+ */
+export type SectionRenderer = "tabs" | "column" | "tree" | "none";
 
 /** Where a workspace's row sits in the sidebar. */
 export type SidebarPlace = "you" | "workspace" | "foot";
@@ -378,14 +384,17 @@ export const WORKSPACES: WorkspaceRow[] = [
     hint: "The company's own pages, searched the way an agent searches them",
     chord: "k",
     place: "workspace",
-    renderer: "tabs",
+    // A TREE, the approved Knowledge layout: the search, its mode and every
+    // space's pages in a column beside whatever is open, so a reader moving
+    // from a hit to its neighbours never loses their place in the tree.
+    renderer: "tree",
     sections: [
       {
         key: "search",
         label: "Search",
         icon: "search",
         path: ["knowledge"],
-        hint: "Search the knowledge base, and browse its containers",
+        hint: "Search the knowledge base by words, meaning or both, and browse its spaces",
       },
     ],
   },

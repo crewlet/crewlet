@@ -538,6 +538,17 @@ a.seat-chip:hover {
     var(--shadow-sm),
     0 0 0 1px var(--color-border-default);
 }
+/* AN OPTION THIS PLACE CANNOT SERVE stays in the row and in the arrows' path
+   — a reader lands on it to hear why — and is drawn quieter, with the
+   not-allowed pointer; the reason is written beside the group, never only in
+   a tooltip. */
+.segmented > button[aria-disabled="true"] {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.segmented > button[aria-disabled="true"]:hover {
+  color: var(--color-text-tertiary);
+}
 .segmented.sm > button {
   height: calc(var(--size-control-sm) - 4px);
   padding: 0 var(--spacing-2);

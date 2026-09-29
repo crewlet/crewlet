@@ -216,6 +216,14 @@ type Searcher interface {
 	// than failing a turn because a wiki was slow. What it does NOT do is
 	// fail silently: a search that could not cover the whole corpus, or
 	// could not rank the way it was asked to, says so in the outcome.
+	//
+	// AN EMPTY TEXT IS A PROBE: it runs nothing and does no I/O, and it
+	// answers the outcome a search in that mode would START from — the
+	// [Outcome.Modes] this backend serves as asked, and the
+	// [Outcome.Degraded] its configuration decides (no embeddings, a
+	// backend with no such ranker). That is how a screen learns which
+	// modes to offer before anybody has typed, rather than after the first
+	// search came back degraded.
 	Search(ctx context.Context, q Query) Result
 }
 

@@ -52,7 +52,7 @@ import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { CommandPalette } from "./palette/Palette.tsx";
-import { LayerBoundary } from "./boundaries.tsx";
+import { ColumnBoundary, LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
 import { TokenDialog } from "./TokenDialog.tsx";
@@ -68,7 +68,7 @@ import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import { useMediaQuery } from "~/lib/media.ts";
-import { PEEK_WIDTH, densityScale, listReserve, peekColumnMin } from "./layout.ts";
+import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import { useKeymap } from "./keymap.ts";
@@ -370,7 +370,8 @@ function Frame({ children }: { children: ReactNode }) {
   // WHICH SHAPE THE PEEK TAKES — see the file's doc. The frame is described
   // by what stands in front of the list, and the width asked is the one at
   // which this frame, at this density, still leaves the list its floor.
-  const frame = { sectionColumn: row?.renderer === "column", scale: densityScale(prefs.density) };
+  const column = columnWidth(row?.renderer);
+  const frame = { column, scale: densityScale(prefs.density) };
   const roomy = useMediaQuery(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
@@ -471,14 +472,26 @@ function Frame({ children }: { children: ReactNode }) {
             </PeekRestingWidth.Provider>
           }
         >
-          {row?.renderer === "column" ? (
-            <div className="section-frame">
-              <SectionColumn
-                row={row}
-                path={route.path}
-                operator={viewer.operator}
-                figures={figures}
-              />
+          {row && column > 0 ? (
+            // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
+            // ([columnWidth]), handed to the grid rather than written again
+            // in the stylesheet, so the two cannot drift.
+            <div
+              className="section-frame"
+              style={{ "--section-column": `${column}px` } as CSSProperties}
+            >
+              {row.renderer === "tree" ? (
+                <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
+                  <KnowledgeTree />
+                </ColumnBoundary>
+              ) : (
+                <SectionColumn
+                  row={row}
+                  path={route.path}
+                  operator={viewer.operator}
+                  figures={figures}
+                />
+              )}
               <div className="section-body">{screen}</div>
             </div>
           ) : (
@@ -519,6 +532,13 @@ function Frame({ children }: { children: ReactNode }) {
     </NewTaskOpener.Provider>
   );
 }
+
+/**
+ * Knowledge's tree, out of the Knowledge chunk: the one `tree` renderer, and
+ * it is the workspace's own code — it reads spaces and pages — so the frame
+ * loads it the way it loads a screen rather than carrying it in the entry.
+ */
+const KnowledgeTree = lazyScreen("knowledge", (module) => module.KnowledgeTree);
 
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);

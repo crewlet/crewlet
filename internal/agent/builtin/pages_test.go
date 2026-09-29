@@ -679,6 +679,51 @@ func TestAPageWriteAnswersItsOutcomeAndPosition(t *testing.T) {
 	}
 }
 
+// A LISTING CUT AT ITS LIMIT SAYS HOW MANY THERE ARE IN ALL. Without the
+// total, fifty pages of a container of four hundred read to a model as the
+// whole container — and a model that believes a short list writes the page
+// that is already there.
+func TestACutListingTellsTheModelTheTotal(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		total int
+		want  bool
+	}{
+		"cut at its limit": {total: 412, want: true},
+		// THE CONTROL: a listing that is everything carries no total, or
+		// the assertion above would pass on a tool that always renders it.
+		"whole": {total: 1, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			kb := &cutKB{total: tc.total}
+			reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: newFakeKB()})
+			res := callWork(t, reg, builtin.ListPagesTool, map[string]any{"container": "ENG"})
+			if res.Failed {
+				t.Fatalf("list_pages: %s", res.Output)
+			}
+			if got := strings.Contains(res.Output, `"total"`); got != tc.want {
+				t.Errorf("total rendered = %v, want %v:\n%s", got, tc.want, res.Output)
+			}
+		})
+	}
+}
+
+// cutKB answers one page of a listing that matched `total`.
+type cutKB struct {
+	fakeKB
+	total int
+}
+
+func (c *cutKB) List(_ context.Context, _ pages.Filter,
+	fresh statelog.Freshness,
+) (pages.Listing, error) {
+	return pages.Listing{
+		Pages: []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
+		Total: c.total, Level: fresh.Level, Complete: true,
+	}, nil
+}
+
 // A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so
 // the store derives a second comment rather than the first one's retry; a
 // remark repeated with nothing between carries the same count and stays one.
