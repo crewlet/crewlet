@@ -4,9 +4,10 @@
 //
 // # Why it matters here more than on most servers
 //
-// The operator token that writes /config and /secrets lives in the dashboard
-// origin's localStorage. Anything that runs script on that origin can read it,
-// and the engine serves three kinds of HTML there: the dashboard shell, the
+// The dashboard acts with the session cookie of whoever signed in to it, and
+// anything that runs script on its origin acts with that session: the cookie
+// is HttpOnly, so a script cannot read it, but every request it makes carries
+// it. And the engine serves three kinds of HTML there: the dashboard shell, the
 // GitHub App landing page and the Slack OAuth landing page. The two landing
 // pages are unauthenticated and render values an arriving browser supplies.
 // A Content-Security-Policy is per response, so a policy on the shell alone

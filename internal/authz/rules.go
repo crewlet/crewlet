@@ -184,7 +184,7 @@ const (
 
 	// --- the identity directory -------------------------------------- //
 	//
-	// SIX VERBS FOR SIXTEEN ROUTES, because the routes differ in what
+	// SIX VERBS FOR FIFTEEN ROUTES, because the routes differ in what
 	// they do and not in how they are decided. What separates them is the
 	// three questions this estate actually asks: is this about a person or
 	// about the directory, does it CHANGE anything, and — for a change —

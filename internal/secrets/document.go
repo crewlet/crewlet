@@ -27,9 +27,8 @@ import (
 // [internal/chart]'s own sealing: the STRUCTURE is plaintext and a
 // secret-tagged VALUE — a seat's address among them — is never plaintext, the
 // row carrying a `${VAR}` reference to a value sealed in the store. A person's
-// own fields ride under a key that can be deleted in the identity directory,
-// not in the chart. What is left here is the settings document, for which
-// this argument holds unchanged.
+// own fields live in the identity directory, not in the chart. What is left
+// here is the settings document, for which this argument holds unchanged.
 const EnvelopeKey = "__encrypted__"
 
 // ErrUnsealedWithKey reports a payload that is NOT sealed, read by a caller

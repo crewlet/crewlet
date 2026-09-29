@@ -61,8 +61,8 @@
 // A seat binding — the claim subject `iam.seat.<id>`, the row's `seat_id`, the
 // seat a removal's tombstone records, the successor's stamp on that tombstone,
 // and every reading of them ([Reader.SeatHolders], [Reader.SeatBindings], the
-// fleet's scatter answer, the notify registry's standing, the request path's
-// seat table, the dangling-binding rule) — names the seat by the handle it was
+// notify registry's standing, the request path's seat table, the
+// dangling-binding rule) — names the seat by the handle it was
 // CREATED under: `chart.Seat.Origin`, the same anchor ADR-0019 derives the
 // agent id from, which no rename moves and the chart never issues twice.
 //
@@ -94,7 +94,7 @@ import (
 // with that literal in it.
 type ObjectKind string
 
-// The eleven kinds.
+// The ten kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's

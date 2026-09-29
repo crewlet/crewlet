@@ -64,9 +64,9 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
 // style, by hash, and no script at all.
 //
 // Every value on this page comes from the query string, and the page shares an
-// origin with the dashboard, whose operator token is in localStorage. The
-// template's escaping is the first defence; this is the one that holds if the
-// escaping is ever wrong.
+// origin with the dashboard, whose requests carry a signed-in person's session.
+// The template's escaping is the first defence; this is the one that holds if
+// the escaping is ever wrong.
 var slackOAuthPolicy = pagepolicy.MustForTemplate(slackOAuthPage, slackOAuthView{})
 
 type slackOAuthView struct{ Heading, Error, Code, Handle string }

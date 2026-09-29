@@ -50,9 +50,9 @@ import (
 //   - A SEAT'S ADDRESS IS SEALED LIKE A CREDENTIAL, and nothing else about a
 //     seat's own columns is. A seat's name and its contact identities are
 //     chart content, in the clear on the log, in every node's rows and in
-//     every snapshot. The place a PERSON's name and address live under a key
-//     that can be deleted — the only erasure a write-ahead log can actually
-//     offer — is the identity directory (internal/iamdomain), not the chart; a
+//     every snapshot. The place a PERSON's name and address live — sealed
+//     under the fleet keyring and erased from every row when they are removed
+//     — is the identity directory (internal/iamdomain), not the chart; a
 //     leaver's seat stops naming them when the seat's own fields are edited.
 //
 // # The runtime half is sealed by walking it, and this package cannot read it

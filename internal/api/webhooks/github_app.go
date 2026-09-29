@@ -202,8 +202,9 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
 // Rendered with a view for each branch that holds a block, because only the
 // install arrival carries the script. The page is unauthenticated and renders
 // a seat name and GitHub's refusal text from the query, and it shares an origin
-// with the dashboard, whose operator token is in localStorage: a hash policy
-// means that even markup the template failed to escape could run nothing.
+// with the dashboard, whose requests carry a signed-in person's session: a hash
+// policy means that even markup the template failed to escape could run
+// nothing.
 var githubAppPolicy = pagepolicy.MustForTemplate(githubAppPage,
 	githubAppView{Heading: "App not created", Error: "refused"},
 	githubAppView{

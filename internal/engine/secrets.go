@@ -263,7 +263,8 @@ func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 // literal (the row carries its `${VAR}`), and the party registry resolves that
 // reference and matches the address in memory with iam.NormalizeEmail, the
 // fold the identity estate blinds under. A person's own name and address live
-// under a key that can be deleted in the identity directory, not in the chart.
+// in the identity directory, sealed under the fleet keyring and erased from
+// every row when they are removed — not in the chart.
 //
 // NIL ONLY ON AN ENGINE WITH NO STORE — one built by hand in a test, since
 // [New] refuses a node without a keyring or a fleet backend — and the chart's

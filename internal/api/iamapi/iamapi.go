@@ -29,11 +29,12 @@
 //
 // # Nothing here opens a sealed value it was not asked to
 //
-// A name and an address are ciphertext in every row and opening one costs a
-// fleet-secret read per person. So the listing opens them for the page it
-// returns and nothing more, and a person whose key a removal destroyed is
-// reported as REMOVED rather than as a decrypt failure — which is a state a
-// caller renders, not an outage they retry.
+// A name and an address are ciphertext in every row, sealed under the fleet
+// keyring. So the listing opens them for the page it returns and nothing more,
+// and a value this node's keyring cannot open is reported as SEALED rather
+// than as a failure — a state a caller renders, not an outage they retry. A
+// removed person has nothing left to open: the removal erased their sealed
+// values from every row.
 package iamapi
 
 import (
