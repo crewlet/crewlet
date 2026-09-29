@@ -49,6 +49,7 @@ import {
 import { SegmentedControl, StatusDot, useToast } from "@crewlethq/ui";
 import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
+import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
@@ -215,7 +216,9 @@ export function Shell({ children }: { children: ReactNode }) {
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
 
-  const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // THE SHARED READ (`lib/engineHealth.ts`): one per tab, which every screen
+  // drawing the same facts is handed at the same moment.
+  const { data: engine } = useEngineHealth();
   // THE VIEWER'S OWN INBOX IS PUSHED, and the poll is what remains when a push
   // is not: a frame lost to backpressure or to a reconnect is never re-sent,
   // and a node that cannot decide the watch sends none until it can.

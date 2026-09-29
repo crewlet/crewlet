@@ -70,6 +70,7 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
+import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -639,16 +640,15 @@ export function NodePeek({ id }: { id: string }) {
  * rather than to a lease row.
  *
  * `stream` answers about the node that served the socket and says so — it has
- * a `node` field — so it is asked only when the object being read IS that
- * node, and the fact renders as an honest dash on every other. Painting this
+ * a `node` field — so it is read only for the object that IS that node, and
+ * the fact renders as an honest dash on every other. Painting this
  * dashboard's own version onto a peer would answer "is the fleet mid-upgrade"
- * with "no" on exactly the fleet that is.
+ * with "no" on exactly the fleet that is. The answer is the frame's SHARED
+ * health read (`lib/engineHealth.ts`) rather than a poll of this screen's own.
  */
 function useNodeVersion(id: string, thisNode?: string): string | undefined {
-  const engine = useQuery("stream", undefined, {
-    enabled: id !== "" && thisNode === id,
-    pollMs: POLL_MS,
-  });
+  const engine = useEngineHealth();
+  if (id === "" || thisNode !== id) return undefined;
   return engine.data?.node === id ? engine.data.version : undefined;
 }
 

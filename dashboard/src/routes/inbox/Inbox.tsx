@@ -72,6 +72,7 @@ import { ArrowForwardGlyph, InboxGlyph } from "@crewlethq/icons/glyphs";
 // still one of ours. Resolving it to a glyph is the other half of this port and
 // belongs in that file; see the report.
 import { Mark } from "~/ui/glyph.tsx";
+import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
@@ -134,7 +135,9 @@ export function Inbox() {
   const budget = useOrgBudget();
   const tokens = useTokens();
   const { connected, authRejected } = useConnection();
-  const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // THE SHARED READ (`lib/engineHealth.ts`): one per tab, which every screen
+  // drawing the same facts is handed at the same moment.
+  const { data: engine } = useEngineHealth();
   // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
   // this queue has by construction: it is waiting for a person. The live
   // projection sweeps a sandbox entry after twelve hours, so reading it here

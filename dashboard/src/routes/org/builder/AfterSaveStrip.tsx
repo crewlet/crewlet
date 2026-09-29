@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
+import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   rest,
@@ -69,8 +70,10 @@ import {
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /**
- * How often the two answers are read while the apply is still moving. The
- * Integrations screen settles on the same cadence after its own writes: fast
+ * How often the fleet and retention answers are read while the apply is still
+ * moving — the engine's own health is the shared read, at its own five
+ * seconds (`lib/engineHealth.ts`). The Integrations screen settles on the
+ * same cadence after its own writes: fast
  * enough that a node applying in a second or two is seen at once, slow enough
  * not to poll an engine that is busy applying.
  */
@@ -231,7 +234,11 @@ export function AfterSaveStrip({
   const [pollMs, setPollMs] = useState<number | undefined>(APPLYING_POLL_MS);
   const settings = saved.settings;
   const chart = saved.chart;
-  const stream = useQuery("stream", undefined, { pollMs, enabled: settings !== null });
+  // THE SHARED HEALTH READ (`lib/engineHealth.ts`), already at five seconds —
+  // the rail reads it too, and a second poller of the same answer on this
+  // strip's cadence made the two disagree about the applied epoch for the
+  // length of the difference. Its `refetch` brings the shared poll forward.
+  const stream = useEngineHealth();
   const fleet = useQuery("fleet", undefined, { pollMs, enabled: settings !== null });
   const retention = useQuery("retention", undefined, { pollMs, enabled: chart !== null });
   const settingsState = useMemo(
@@ -353,16 +360,11 @@ export function PreviousRevisionNote() {
   const saved = useSavedChanges();
   const settings = saved?.settings ?? null;
   const waiting = settings !== null && settings.epoch !== null;
-  // ON THE RECONCILE CADENCE, not the strip's quick one. This note lives for
-  // as long as the node has not applied the revision, which can be for ever
-  // when the node refuses it, and a node's applied epoch cannot move faster
-  // than `configplane.ReconcileInterval` anyway. The Shell already reads
-  // `stream` on the same interval; a second, faster poller of the same
-  // answer would be paid for the life of the tab.
-  const stream = useQuery("stream", undefined, {
-    enabled: waiting,
-    pollMs: waiting ? RECONCILE_POLL_MS : undefined,
-  });
+  // THE SHARED HEALTH READ, which the frame is already polling: this note
+  // lives for as long as the node has not applied the revision — for ever,
+  // when the node refuses it — and a poller of its own, however slow, was a
+  // second read of the one answer paid for the life of the tab.
+  const stream = useEngineHealth();
   const settingsBehind =
     settings !== null &&
     settings.epoch !== null &&

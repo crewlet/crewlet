@@ -3051,7 +3051,11 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   keeps what the save wrote — the settings' `{revision_id, epoch}` and the
   chart's furthest position — in a tab-lived store outside any screen
   (`savedChanges.ts`). It follows the settings on the `stream` query's
-  `applied_epoch` and the `fleet` query, resolving to Applied, Applied on N of
+  `applied_epoch` — the tab's ONE shared read of the engine's health
+  (`lib/engineHealth.ts`), polled every five seconds while anything draws it,
+  which the rail, the inbox, the fleet and every other surface showing the
+  engine's own facts read too, so no two of them disagree about one engine —
+  and the `fleet` query, resolving to Applied, Applied on N of
   M nodes, or the node that refused it with a link to the Fleet screen, and
   the chart on the `retention` report's per-node applied positions for the
   chart's log, which only a fleet operator is shown — for anybody else it says
