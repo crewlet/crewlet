@@ -570,6 +570,11 @@ func TestAViewIsFreshOnlyWhileBothHalvesAreConfirmed(t *testing.T) {
 	if v.Fresh() {
 		t.Fatal("a view whose map was last confirmed past the bound is fresh")
 	}
+	// AND IT SAYS WHICH HALF, AND HOW OLD: what an alarm reports.
+	if mapAt, leasesAt := v.Confirmed(); !mapAt.Equal(base) || !leasesAt.Equal(c.Now()) {
+		t.Errorf("Confirmed = (%v, %v), want the map at %v and the leases at %v",
+			mapAt, leasesAt, base, c.Now())
+	}
 	if _, _, err := v.Serving(statelog.PartitionID{Space: statelog.SpaceTracker}); err != nil {
 		t.Errorf("routing refused a view that is only old: %v", err)
 	}
@@ -584,12 +589,41 @@ func TestAViewIsFreshOnlyWhileBothHalvesAreConfirmed(t *testing.T) {
 	leases.mu.Lock()
 	leases.broken = true
 	leases.mu.Unlock()
+	quiet := c.Now()
 	c.advance(statelog.FloorCacheStale + time.Second)
 	if _, _, err := v.Read(t.Context()); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 	if v.Fresh() {
 		t.Error("a view whose leases were last listed past the bound is fresh")
+	}
+	// THE LEASES' LAST LISTING IS STILL SAID past their trust, which is the
+	// age an alarm reports — not a zero time a reader cannot measure from.
+	if mapAt, leasesAt := v.Confirmed(); !mapAt.Equal(c.Now()) || leasesAt.Before(quiet) ||
+		c.Now().Sub(leasesAt) <= statelog.FloorCacheStale {
+		t.Errorf("Confirmed = (%v, %v) at %v, want the map now and the leases at %v",
+			mapAt, leasesAt, c.Now(), quiet)
+	}
+}
+
+// THE LEASES A VIEW LISTED ARE WHAT IT HANDS AN ALARM, each read as the
+// maintainer reads one — and a listing it does not have is unknown, never an
+// empty fleet.
+func TestAViewHandsOverTheLeasesItListed(t *testing.T) {
+	t.Parallel()
+	leases := &failingLister{Lister: coordmemory.New()}
+	for _, node := range []string{"a", "b"} {
+		claimEstate(t, leases.Lister.(coord.Backend), node, estateLease(0, true, PartServing))
+	}
+	v := viewOver(t, coordmemory.NewFleet(), leases, layoutZero, nil)
+	if _, err := v.Presences(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("a view that has not listed hands over (%v), want unknown", err)
+	}
+	run(t, v)
+	eventually(t, "the view to list the leases", v.Fresh)
+	got, err := v.Presences()
+	if err != nil || len(got) != 2 || got[0].Meta.Healthy == nil {
+		t.Fatalf("Presences = (%+v, %v), want a and b, read as leases", got, err)
 	}
 }
 

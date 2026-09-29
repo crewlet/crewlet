@@ -568,6 +568,34 @@ func (v *View) Fresh() bool {
 	return err == nil && now.Sub(listed) <= statelog.FloorCacheStale
 }
 
+// Confirmed is when each half was last confirmed — the map by a read or a
+// delivery the store answered, the leases by a listing — and the zero time for
+// a half never confirmed: what an alarm reports the age of when the view is
+// not [View.Fresh].
+func (v *View) Confirmed() (mapAt, leasesAt time.Time) {
+	v.mu.Lock()
+	mapAt = v.confirmedAt
+	v.mu.Unlock()
+	return mapAt, v.leases.ListedAt()
+}
+
+// Presences is every live estate lease that offers a share ([PresenceOf]), as
+// the view last listed them — or an error wrapping [coord.ErrUnavailable]
+// when that is not known, never an empty list standing in for it.
+func (v *View) Presences() ([]Presence, error) {
+	leases, _, err := v.leases.Leases()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Presence, 0, len(leases))
+	for _, lease := range leases {
+		if p, ok := PresenceOf(lease); ok {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // Invalidate asks for a listing now, because a caller asked a node the view
 // named and got no answer: of the estate leases ([coord.LeaseView.Invalidate]),
 // and of presence where that is what named it.
