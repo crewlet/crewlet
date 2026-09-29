@@ -363,6 +363,16 @@ func TestADrawOnAHandleClosedUnderItAnswersNoEstate(t *testing.T) {
 		}
 		t.Errorf("a draw on a closed handle = %v, want ErrNoEstate", err)
 	}
+	// AND EVERY STATEMENT BEHIND A GUARD, entered past it, which is where
+	// such a close lands: the snapshot's copy and the ledger read each take
+	// their connection by the same draw rather than from the pool.
+	if err := db.vacuumInto(t.Context(), filepath.Join(t.TempDir(), "copy.db")); !errors.Is(err, ErrNoEstate) {
+		t.Errorf("a copy begun on a handle closed after Backup's guard = %v, want ErrNoEstate", err)
+	}
+	if _, err := db.appliedVersions(t.Context()); !errors.Is(err, ErrNoEstate) {
+		t.Errorf("a ledger read begun on a handle closed after AppliedMigrations' "+
+			"guard = %v, want ErrNoEstate", err)
+	}
 }
 
 // A DROP REFUSED FOR NAMING ANOTHER FILE LEAVES THE OPEN SET UNTOUCHED.

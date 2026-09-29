@@ -192,8 +192,17 @@ func (d *DB) AppliedMigrations(ctx context.Context) ([]string, error) {
 	return d.appliedVersions(ctx)
 }
 
+// appliedVersions reads the ledger through ONE CONNECTION DRAWN FROM THIS
+// HANDLE ([DB.conn]), for [DB.vacuumInto]'s reason: a partition closed after
+// [DB.AppliedMigrations]'s guard answers [ErrNoEstate] rather than
+// database/sql's "database is closed".
 func (d *DB) appliedVersions(ctx context.Context) ([]string, error) {
-	rows, err := d.sql.QueryContext(ctx,
+	conn, err := d.conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rows, err := conn.QueryContext(ctx,
 		`SELECT version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return nil, fmt.Errorf("store: read schema_migrations: %w", err)

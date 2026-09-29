@@ -190,7 +190,7 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// Also why this is an ExecContext rather than the [DB.Tx] every other
 	// write in this package goes through: VACUUM cannot run inside a
 	// transaction.
-	if _, err := d.sql.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part)); err != nil {
+	if err := d.vacuumInto(ctx, part); err != nil {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup %s to %s: %w", d.path, dest, err)
 	}
@@ -409,6 +409,22 @@ func remove(path string) error {
 		return fmt.Errorf("store: clear %s: %w", path, err)
 	}
 	return nil
+}
+
+// vacuumInto writes the copy to part through ONE CONNECTION DRAWN FROM THIS
+// HANDLE ([DB.conn]) rather than through the pool, so a close that lands after
+// [DB.Backup]'s guard — an adoption or a leave closing the partition a
+// snapshot is being taken of — answers [ErrNoEstate], the state every caller
+// branches on, rather than database/sql's "database is closed", which none
+// does.
+func (d *DB) vacuumInto(ctx context.Context, part string) error {
+	conn, err := d.conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = conn.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part))
+	return err
 }
 
 // sqlStringLiteral renders s as a SQL string literal.
