@@ -1240,7 +1240,9 @@ thing under test to test itself. It writes nothing to the live store and takes
 no lock on it.
 
 It prints what the artefact holds — when it was taken and by which node, each
-estate's size and migration count, and every domain's generation and sequence —
+store copy (its estate and, for a partition, which one, as `crewlet backup`
+names it) with its size and migration count, and every domain's generation and
+sequence —
 and then **exits non-zero past its cadence**, which defaults to 30 days
 (`-cadence`). That default is derived rather than chosen: `min_age` is 7 days,
 so a restore path broken for longer than one replay window means the log can no
