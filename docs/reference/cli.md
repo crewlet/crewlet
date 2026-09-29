@@ -113,7 +113,7 @@ the [admission rules](../concepts/configuration.md#what-a-stored-revision-is-hel
 only when it is actually written as a new revision (`-company` into an empty
 store, `-import-company` over a different company): a file that is already the
 active revision, or a bootstrap the store's own company outranks, starts the
-node even when it carries a duplicate name stored before the rule existed.
+node even when it carries a duplicate unit key stored before the rule existed.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the
@@ -706,8 +706,8 @@ the first non-flag token, so a command that took the file and kept going would
 silently validate the defaults instead and print a success line about files it
 never opened.
 
-Validation is **deep**: it builds the `Organization`, so duplicate seat and
-unit names, bad cron expressions, invalid timezones, two seats declaring one
+Validation is **deep**: it builds the `Organization`, so duplicate handles and
+unit keys, bad cron expressions, invalid timezones, two seats declaring one
 contact identity, and a knowledge scope with no backend behind it all fail here
 rather than at run time. A human seat with **no** contact identity is not among
 them: a person who works only through the dashboard has no chat account to

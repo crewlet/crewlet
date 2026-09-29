@@ -186,11 +186,13 @@ func TestAStoredRevisionDecodesAndIsValidatedSeparately(t *testing.T) {
 
 // THE ADMISSION RULES ARE A CLASS APART FROM THE RUNNABLE ONES.
 //
-// A document somebody submits is refused for a duplicate seat or unit name,
-// and a stored revision carrying one is applied: it was admitted before the
-// rule and runs as it always did. So Validate (the check for a submitted
-// document) must include them and ValidateRunnable (the check for applying a
-// revision) must not, and each class must be reachable on its own.
+// A document somebody submits is refused for two units on one key — here two
+// teams called Platform, whose ids are both minted `platform` — and a stored
+// revision carrying one is applied: it was admitted before the rule and runs
+// as it always did. So Validate (the check for a submitted document) must
+// include it and ValidateRunnable (the check for applying a revision) must
+// not, and each class must be reachable on its own. The two seats named
+// Engineer beside them are NOT a violation of either class: a name is prose.
 func TestTheAdmissionRulesAreAClassApartFromTheRunnableOnes(t *testing.T) {
 	t.Parallel()
 	const doc = `
@@ -209,22 +211,26 @@ units:
         roles: [{name: Engineer, handle: product-engineer, llm: zulu}]
 `
 	if _, err := config.ParseCompany([]byte(doc)); err == nil {
-		t.Fatal("a submitted document with duplicate names was accepted")
+		t.Fatal("a submitted document with a duplicate unit key was accepted")
 	}
 	cfg, err := config.ParseCompanyDocument([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for _, sentinel := range []error{org.ErrDuplicateSeatName, org.ErrDuplicateUnitName} {
-		if err := cfg.Validate(); !errors.Is(err, sentinel) {
-			t.Errorf("Validate() = %v, want it to include %v", err, sentinel)
-		}
-		if err := cfg.ValidateAdmission(); !errors.Is(err, sentinel) {
-			t.Errorf("ValidateAdmission() = %v, want it to include %v", err, sentinel)
-		}
+	if err := cfg.Validate(); !errors.Is(err, org.ErrDuplicateUnit) {
+		t.Errorf("Validate() = %v, want it to include %v", err, org.ErrDuplicateUnit)
+	}
+	if err := cfg.ValidateAdmission(); !errors.Is(err, org.ErrDuplicateUnit) {
+		t.Errorf("ValidateAdmission() = %v, want it to include %v", err, org.ErrDuplicateUnit)
 	}
 	if err := cfg.ValidateRunnable(); err != nil {
-		t.Errorf("ValidateRunnable() = %v, want nil: duplicate names are admission rules", err)
+		t.Errorf("ValidateRunnable() = %v, want nil: a duplicate unit key is an admission rule", err)
+	}
+	// GIVE THE TEAMS TWO KEYS and the document is admitted, the two seats
+	// called Engineer included.
+	cfg.Units[1].Children[0].ID = "product-platform"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil once the two units are keyed apart", err)
 	}
 	// AND THE RUNNABLE CLASS STILL HOLDS ITS OWN. A split that lost the
 	// runnable rules would pass everything above.

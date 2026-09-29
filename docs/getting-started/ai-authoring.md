@@ -210,10 +210,10 @@ crewlet validate company.yaml -json
       "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
     { "path": "units[0].roles[0].name", "segments": ["units", 0, "roles", 0, "name"],
       "kind": "conflict", "seat": "software-engineer",
-      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A colleague named in prose is resolved by this name, so an agent asking for it is offered both of them every time; give each of these seats its own name" },
+      "message": "duplicate handle \"software-engineer\": 2 seats derive it (seat \"Software Engineer\" in unit \"Engineering\"; seat \"Software Engineer\" in unit \"Engineering\"). The handle is the canonical seat identity, naming its inbox, its agent id and its external accounts, so give each of these seats a distinct name or an explicit handle" },
     { "path": "units[0].roles[1].name", "segments": ["units", 0, "roles", 1, "name"],
-      "kind": "conflict", "seat": "software-engineer-2",
-      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A colleague named in prose is resolved by this name, so an agent asking for it is offered both of them every time; give each of these seats its own name" }
+      "kind": "conflict", "seat": "software-engineer",
+      "message": "duplicate handle \"software-engineer\": 2 seats derive it (seat \"Software Engineer\" in unit \"Engineering\"; seat \"Software Engineer\" in unit \"Engineering\"). The handle is the canonical seat identity, naming its inbox, its agent id and its external accounts, so give each of these seats a distinct name or an explicit handle" }
   ],
   "warnings": [
     { "kind": "dangling_reference", "ref": "lead",
@@ -252,10 +252,13 @@ Each problem carries:
 
 `kind` is a closed set with a fallback deliberately: a loop branching on it
 must never receive an empty string and read it as a field somebody forgot to
-populate. Two seats sharing a name are one message and **one problem per
-seat**, each at the name that seat wrote, so `problems` can hold more entries
-than the prose output has lines (which leads such a message with every path
-it applies to).
+populate. Two seats sharing a handle are one message and **one problem per
+seat**, each at the field that seat wrote — its `handle`, or its `name` where
+the handle is derived from it — so `problems` can hold more entries than the
+prose output has lines (which leads such a message with every path it applies
+to). Two seats merely sharing a *name* are fine: a name is prose, and the
+example above is refused only because neither seat declares a `handle`, so
+both derive the same one.
 
 `warnings` are references that resolve to nothing: a unit `lead` (a seat
 handle), a root seat's `unit` (a unit key), a `manages` entry (either), or a
@@ -279,7 +282,7 @@ and a second copy is what makes the loop's log unreadable.
 so a complete config validates *before any secret exists*. You can draft
 and check an entire company offline.
 
-Validation is deep: it builds the `Organization`, so duplicate seat names,
+Validation is deep: it builds the `Organization`, so duplicate handles,
 duplicate unit keys, bad cron expressions, invalid timezones and a
 knowledge scope with no backend behind it all fail here rather than at run
 time, and a unit lead that is no seat's handle is reported as a warning.

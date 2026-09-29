@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/chart"
 )
 
 // Organization is the whole company: a flexible hierarchy of units, the
@@ -776,7 +778,7 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 //
 // ADMISSION rules were added after companies already existed, and a company
 // that breaks one still runs exactly as it did before the rule: two units
-// called "Platform" resolve references to the first of them today and did
+// keyed "platform" resolve references to the first of them today and did
 // yesterday. [Organization.ValidateAdmission] holds them. A document somebody
 // submits is refused for breaking one, while a STORED revision that breaks one
 // is applied with a warning, because refusing it would take a running company
@@ -807,14 +809,22 @@ func (o *Organization) Validate() error {
 }
 
 // ValidateAdmission reports every ADMISSION rule the company breaks, joined:
-// duplicate seat names, two units answering to one key (a duplicate name, or
-// an id that is another unit's key), and a unit reference on a seat declared
-// inside a unit of a different key. See the class note above [Organization.Validate].
-// It assumes [Organization.Normalize] has run, so a root seat moved into its
-// unit is counted once, where it now sits.
+// two units answering to one key, and a unit reference on a seat declared
+// inside a unit of a different key. See the class note above
+// [Organization.Validate]. It assumes [Organization.Normalize] has run, so a
+// root seat moved into its unit is counted once, where it now sits.
+//
+// NO NAME IS HELD UNIQUE, a seat's or a unit's, and that is the org chart's
+// own rule rather than a leniency here. A name is prose: nothing references a
+// seat or a unit by it — a `lead:`, a `manages:` entry and a `unit:` name a
+// handle or a key — and the chart could not refuse a duplicate if it wanted
+// to, because a name is CONTENT, arbitrated on its own object's subject, so
+// two leads naming two teams alike never contend. A document rule the chart
+// cannot hold made a chart exported from a running company one its own import
+// could refuse. What reads a name — a colleague lookup, a roster — answers a
+// shared one with an honest list naming each seat's handle.
 func (o *Organization) ValidateAdmission() error {
-	return errors.Join(o.validateSeatNames(), o.validateUnitKeys(),
-		o.validateUnitRefs())
+	return errors.Join(o.validateUnitKeys(), o.validateUnitRefs())
 }
 
 // validateUnitRefs refuses a `unit:` reference on a seat that sits inside a
@@ -864,228 +874,68 @@ func (o *Organization) validateHandles() error {
 					"identity, naming its inbox, its agent id and its external "+
 					"accounts, so give each of these seats a distinct name or an "+
 					"explicit handle",
-				ErrDuplicateHandle, g.key, len(g.members), describeSeats(g.members, true)),
+				ErrDuplicateHandle, g.key, len(g.members), describeSeats(g.members)),
 		})
 	}
 	return errors.Join(errs...)
 }
 
-// validateSeatNames enforces org-wide seat name uniqueness.
-//
-// A seat's name is DISPLAY, and this rule is about what reads it. Nothing in
-// the document resolves a seat by name any more — a unit's `lead:` and every
-// `manages:` entry are handles — so a duplicate no longer makes a seat
-// unreachable through a reference. What it still does is make the seat
-// unaddressable by the one party that types prose: a model reaching a
-// colleague names what it remembers, and the colleague lookup answers an
-// exact role-name match with one seat or an honest list. Two seats of one
-// name are permanently that list, on every ask, every mention and every
-// roster row a lead reads.
-//
-// Compared as the EXACT string, because that is how an exact role-name match
-// is made: two names differing only in case or spacing are distinct there, so
-// they are distinct here. A unit key is folded instead (see validateUnitKeys
-// below), and the two rules are not in disagreement: a seat's identity is its
-// HANDLE, held unique by a runnable rule, so nothing is ever filed or
-// referenced under a seat's name, and a pair differing only in case derives
-// ONE handle unless it declares two, which is where that rule reports it. A
-// unit derives nothing of the sort: its name IS its key wherever it declares
-// no id. A name that is empty or blank is skipped, since [Role.Validate]
-// already refuses it.
-func (o *Organization) validateSeatNames() error {
-	groups := groupBy(o.placedSeats(), func(s placedSeat) string {
-		if strings.TrimSpace(s.role.Name) == "" {
-			return ""
-		}
-		return s.role.Name
-	})
-	var errs []error
-	for _, g := range groups {
-		errs = append(errs, &DuplicateError{
-			Kind: DuplicateSeatName, Key: g.key, Seats: seatsOf(g.members),
-			Err: fmt.Errorf(
-				"%w %q: %d seats carry it (%s). A colleague named in prose is "+
-					"resolved by this name, so an agent asking for it is offered "+
-					"both of them every time; give each of these seats its own name",
-				ErrDuplicateSeatName, g.key, len(g.members), describeSeats(g.members, false)),
-		})
-	}
-	return errors.Join(errs...)
-}
-
-// foldUnitKey is THE fold a unit key is claimed and compared under, and the
-// only one: what a key means is decided here, and every question asked about
-// a group afterwards (which of its members carry the name, which answers by
-// an id) has to be asked in the same terms or the group and the message it
-// produces disagree.
-//
-// Not [strings.EqualFold] at those questions, which is close enough to read
-// as the same rule and is not: it folds by [unicode.SimpleFold], while this
-// folds by [unicode.ToLower], and the two part over characters that are real
-// in a team name. "İstanbul" and "Istanbul" are ONE key here, so the pair is
-// refused, and EqualFold calls them different, so the unit written second
-// used to lose the duplicate NAME sentinel and be described as answering by
-// an id it never declared.
-func foldUnitKey(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
-}
-
-// validateUnitKeys enforces chart-wide uniqueness of a unit's identity: ONE
-// message per key, naming every unit that answers to it.
+// validateUnitKeys enforces chart-wide uniqueness of a unit's KEY — the
+// address [Unit.Key] names, its id or, on a unit that declares none, its
+// name: ONE message per key, naming every unit that answers to it.
 //
 // # What a collision costs
 //
 // [Unit.Key] is what work, routing and pages are filed under, and
-// [Organization.Unit] resolves a name to the FIRST unit carrying it. So two
-// units answering to one key do not conflict loudly: one of them simply
-// receives the other's work, for ever, and the chart looks correct.
+// [Organization.Unit] resolves a key to the FIRST unit answering to it. So two
+// units on one key do not conflict loudly: one of them simply receives the
+// other's work, for ever, and the chart looks correct. The org chart gives
+// one address to one object, so an import of the pair lands the first and
+// declines the second.
 //
-// # Why an id may not collide with another unit's NAME either
+// # Folded as the CHART folds an address
 //
-// Key falls back to the name, so a company that gives one unit the id
-// "platform" while another is NAMED "Platform" has exactly the collision
-// above. It arrives by a door nobody is watching: adding an id that is
-// already some other unit's name.
+// [chart.NormalizeKey] is what a unit's key becomes the moment the file is
+// imported — lower-cased, whitespace a hyphen — so `Product Team` and
+// `product-team` are one address there, and they are one key here. A second
+// fold would be a second answer to "which object is this", and the one that
+// disagreed with the chart would admit a file whose import then declines a
+// unit, one log line per node, after the rest of it has landed.
 //
-// # EVERY KEY IS FOLDED, names and ids alike
+// # A NAME IS NOT A KEY
 //
-// A name is prose, and "Platform" and "platform" are one team. Two units a
-// reader cannot tell apart are refused here, naming both and where each one
-// sits, rather than admitted so that the first person to write the case they
-// remember files one team's work, routing and pages under the other for
-// ever.
-//
-// That a reference resolves a name EXACTLY ([Organization.Unit], [Unit.Child]
-// and the manages index all match the string as written) is what makes the
-// collision QUIET, not what makes it safe: both spellings resolve, each to a
-// different team, and the chart looks correct either way. A reference that
-// resolves is the symptom, so it is no argument for admitting the pair.
-//
-// Folding is also what makes the two vocabularies comparable. An id is a
-// lowercase key by rule while a name is written however a person writes it,
-// so an exact comparison would let `id: platform` sit beside `name: Platform`
-// unreported, which is the cross-check above. This package validates no shape
-// of its own and so may not lean on the config layer narrowing an id: an
-// `id: Platform` is folded here like every other key.
-//
-// The seat name rule beside this one does NOT fold, and the two are not in
-// disagreement. A seat's key is its HANDLE, which is unique by a runnable
-// rule, so a seat name is never what work is filed under; two seats named
-// "Dev" and "dev" that declare no handle derive one and are refused by the
-// handle rule (validateHandles above) before this class is reached. A unit
-// derives no second identity, so its name IS its key wherever it declares no
-// id, and this rule is the only thing between that pair and a silent
-// misfiling.
+// Only [Unit.Key] is compared. Two units NAMED alike on distinct ids are two
+// addresses, which is the chart's own rule — a name is prose, and see
+// [Organization.ValidateAdmission] for why no name is held unique — and an id
+// that happens to spell another unit's name collides with nothing, since
+// nothing resolves a unit that declares an id by its name.
 //
 // THE FIRST SPELLING MET OWNS THE GROUP, and is what the message is reported
 // in: an operator searches their document for what they wrote, not for a form
 // nothing in it contains.
 //
-// # One rule, two sentinels
-//
-// A collision between two NAMES wraps [ErrDuplicateUnitName] as well as
-// [ErrDuplicateUnit], because a name IS the key on a unit that declares no
-// id: two rules reporting it put one mistake in front of an operator twice,
-// and in front of the builder twice for each unit carrying it.
-//
-// An ADMISSION rule (see the class note above [Organization.Validate]), like
-// the duplicate seat name beside it. Companies holding two units of one name
-// were admitted before the rule and run exactly as they did, so a submitted
-// document is refused for it while a stored revision is applied with a
-// warning. An id collision cannot reach a stored revision that predates the
-// field at all, so nothing is grandfathered by the class that had a choice.
+// An ADMISSION rule (see the class note above [Organization.Validate]).
 func (o *Organization) validateUnitKeys() error {
-	units := o.placedUnits()
-	// byKey indexes a group by the FOLDED text every member of it answers
-	// to, a name and an id alike, which is what makes "Platform",
-	// "platform" and `id: platform` one group rather than three near
-	// misses nobody is told about.
-	byKey := make(map[string]int, len(units))
-	var all []duplicateGroup[placedUnit]
-
-	// group returns the group indexed under folded, starting one reported
-	// in the spelling that key was first met in. A GROUP KEEPS ITS FIRST
-	// SPELLING, so a chart carrying both cases of a name is reported in the
-	// one written first rather than in whichever the walk reached last.
-	group := func(folded, spelling string) int {
-		i, seen := byKey[folded]
-		if !seen {
-			i = len(all)
-			byKey[folded] = i
-			all = append(all, duplicateGroup[placedUnit]{key: spelling})
-		}
-		return i
-	}
-	// join adds a unit to a group it is not already in. POINTER IDENTITY,
-	// not the key's text: a unit whose id equals its own name claims the
-	// same key twice and collides with nobody.
-	join := func(i int, by placedUnit) {
-		for _, m := range all[i].members {
-			if m.unit == by.unit {
-				return
-			}
-		}
-		all[i].members = append(all[i].members, by)
-	}
-
-	// EVERY NAME IS CLAIMED BEFORE ANY ID, so a group is reported in a name
-	// wherever one carries the key and an id colliding with a name is named
-	// after it in the message: the id is the field somebody just added, and
-	// the one they can change without renaming a team. A blank name is
-	// skipped rather than claimed, since [Unit.Validate] already reports it
-	// and an empty key would group every nameless unit together.
-	for _, c := range units {
-		name := strings.TrimSpace(c.unit.Name)
-		if name == "" {
-			continue
-		}
-		join(group(foldUnitKey(name), name), c)
-	}
-	for _, c := range units {
-		id := strings.TrimSpace(c.unit.ID)
-		if id == "" {
-			continue
-		}
-		join(group(foldUnitKey(id), id), c)
-	}
-
+	groups := groupBy(o.placedUnits(), func(u placedUnit) string {
+		return chart.NormalizeKey(u.unit.Key())
+	})
 	var errs []error
-	for _, g := range all {
-		if len(g.members) < 2 {
-			continue
-		}
+	for _, g := range groups {
+		spelling := strings.TrimSpace(g.members[0].unit.Key())
 		carriers := make([]*Unit, len(g.members))
-		named := 0
 		for i, m := range g.members {
 			carriers[i] = m.unit
-			// FOLDED BY foldUnitKey, the way the key was claimed. A
-			// unit named "platform" in a group reported as "Platform"
-			// answers by its NAME, and measuring that any other way
-			// would both count it as an id carrier in the message and
-			// drop the duplicate name sentinel from a pair that is
-			// exactly that.
-			if foldUnitKey(m.unit.Name) == foldUnitKey(g.key) {
-				named++
-			}
-		}
-		// A key two units carry as their NAME is a duplicate name as well,
-		// and the error carries both sentinels so a caller branching on
-		// either one means this collision. A key that arrived through an id
-		// carries the key sentinel alone: no name is duplicated, and saying
-		// one is sends an operator to rename a team that is named once.
-		key := fmt.Errorf("%w %q", ErrDuplicateUnit, g.key)
-		if named > 1 {
-			key = fmt.Errorf("%w %q (a %w)", ErrDuplicateUnit, g.key, ErrDuplicateUnitName)
 		}
 		errs = append(errs, &DuplicateError{
-			Kind: DuplicateUnitName, Key: g.key, Units: carriers,
+			Kind: DuplicateUnitKey, Key: spelling, Units: carriers,
 			Err: fmt.Errorf(
-				"%w: %d units answer to it (%s). A unit's key is its id when it "+
-					"declares one and its name otherwise, and a manages entry or a "+
-					"seat's unit reference resolves to the first unit answering to "+
-					"it, so one team's work, routing and pages are filed under "+
-					"another. Give each of these units its own id",
-				key, len(g.members), describeUnits(g.members, g.key)),
+				"%w %q: %d units answer to it (%s). A unit's key is its id "+
+					"when it declares one and its name otherwise; a manages "+
+					"entry or a seat's unit reference resolves to the first "+
+					"unit answering to it, and the org chart gives one address "+
+					"to one unit, so one team's work, routing and pages are "+
+					"filed under another. Give each of these units its own id",
+				ErrDuplicateUnit, spelling, len(g.members), describeUnits(g.members)),
 		})
 	}
 	return errors.Join(errs...)
@@ -1182,42 +1032,25 @@ func seatsOf(placed []placedSeat) []*Role {
 	return out
 }
 
-// describeSeats renders colliding seats for one grouped message. byName says
-// what tells them apart: their names when they share a handle, their handles
-// when they share a name.
-func describeSeats(seats []placedSeat, byName bool) string {
+// describeSeats renders seats sharing a handle for one grouped message: each
+// seat's name and where it sits, which is what tells them apart.
+func describeSeats(seats []placedSeat) string {
 	parts := make([]string, len(seats))
 	for i, s := range seats {
-		if byName {
-			parts[i] = fmt.Sprintf("seat %q %s", s.role.Name, s.place)
-		} else {
-			parts[i] = fmt.Sprintf("handle %q %s", s.role.Handle(), s.place)
-		}
+		parts[i] = fmt.Sprintf("seat %q %s", s.role.Name, s.place)
 	}
 	return strings.Join(parts, "; ")
 }
 
-// describeUnits renders colliding units for one grouped message: each unit's
-// name and where it sits, because two units answering to one key differ in
-// their place when the key is a shared name and in their name when it is an
-// id that is another unit's.
-//
-// A unit that does not answer to the key by its name answers by its id, and
-// the id is named: it is the field that collided, the one an operator just
-// added, and the one they can change without renaming a team.
-//
-// Asked through foldUnitKey, the way the key was claimed, and never through
-// [strings.EqualFold]: the two agree on the cases anyone writes by hand and
-// part over characters that are real in a team name, so a unit named
-// "Istanbul" in a group reported as "İstanbul" would be described as
-// answering by an id it never declared, reading `(id "")`.
-func describeUnits(units []placedUnit, key string) string {
+// describeUnits renders units sharing a key for one grouped message: each
+// unit's name, where it sits and the key AS IT WROTE IT, because two units
+// answering to one address may spell it two ways (`Product Team` and
+// `product-team`), and the spelling is what an operator changes.
+func describeUnits(units []placedUnit) string {
 	parts := make([]string, len(units))
 	for i, u := range units {
-		parts[i] = fmt.Sprintf("unit %q %s", u.unit.Name, u.place)
-		if foldUnitKey(u.unit.Name) != foldUnitKey(key) {
-			parts[i] += fmt.Sprintf(" (id %q)", strings.TrimSpace(u.unit.ID))
-		}
+		parts[i] = fmt.Sprintf("unit %q %s (key %q)", u.unit.Name, u.place,
+			strings.TrimSpace(u.unit.Key()))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -1258,7 +1091,7 @@ func describeUnits(units []placedUnit, key string) string {
 // and reporting one collision twice would read as two problems.
 //
 // A RUNNABLE rule (see the class note above [Organization.Validate]), unlike
-// the duplicate seat and unit names: an identity is what a message is ROUTED
+// the duplicate unit key: an identity is what a message is ROUTED
 // by, so a company carrying a collision is not running as its author reads it
 // — one of the two people is already unreachable, today, and no later
 // revision makes the mail they never received arrive.
@@ -1285,7 +1118,7 @@ func (o *Organization) validateContactIdentities() error {
 						"seats silently stops being reachable. Give each of them "+
 						"its own account",
 					ErrDuplicateIdentity, f.key, g.key, len(g.members),
-					describeSeats(g.members, true)),
+					describeSeats(g.members)),
 			})
 		}
 	}

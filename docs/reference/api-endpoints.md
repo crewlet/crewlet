@@ -1390,7 +1390,7 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 | `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into, and an entity body it cannot read is placed where that entity sits (`mcp_servers[1].comand` for a typo in the second server). `""` only for a failure that belongs to no place in it, such as a whole document that is not YAML at all |
 | `segments` | The same path taken apart: strings for keys, numbers for list indexes. A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is `""` |
 | `kind` | `missing`, `unknown_value`, `out_of_range`, `conflict`, `unknown_field`, `shape`, or `invalid` for anything this build does not classify |
-| `message` | The failure's whole line, exactly as it appears in `detail`. A duplicate name is one line naming every entity and one problem beside each, so there can be more problems than lines |
+| `message` | The failure's whole line, exactly as it appears in `detail`. A duplicate handle or unit key is one line naming every entity and one problem beside each, so there can be more problems than lines |
 | `seat` | The engine-derived handle of the seat the problem is about, when it is about one |
 | `unit` | The name of the unit the problem is about, when it is about one |
 | `line` | The 1-based line in the text that was sent, for a failure the parser found. A patch's failure found in the merged document names no line, because that text is the engine's merge rather than anything sent |
@@ -1702,7 +1702,7 @@ Answers `201` with the revision, its epoch and its warnings (see
 runnable rule of this build (a reload is an apply, so it re-publishes only a
 company every node can run; correct it with `PUT` or `PATCH`). A document that
 breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
-such as a duplicate seat or unit name stored before the rule existed, reloads:
+such as two sandbox setup steps of one name stored before the rule existed, reloads:
 that is how a credential rotation still reaches a company carrying one. Its
 answer lists each violation as an `admission` warning.
 

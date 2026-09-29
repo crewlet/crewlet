@@ -153,15 +153,14 @@ func TestAUnitErrorCarriesItsUnitAndField(t *testing.T) {
 
 // A DUPLICATE CARRIES EVERY ENTITY THAT SHARES THE KEY, in the order they were
 // met, so a caller can put a problem beside each one rather than beside the
-// first. Three seats on one name are one error holding three seats.
+// first. Three seats on one handle are one error holding three seats.
 func TestADuplicateErrorCarriesEveryEntity(t *testing.T) {
 	t.Parallel()
-	a, b, c := &Role{Name: "Engineer", DeclaredHandle: "a"}, &Role{Name: "Engineer", DeclaredHandle: "b"},
-		&Role{Name: "Engineer", DeclaredHandle: "c"}
-	x, y := &Role{Name: "Dev"}, &Role{Name: "dev", DeclaredHandle: "dev"}
-	platformA, platformB := &Unit{Name: "Platform"}, &Unit{Name: "Platform"}
-	o := normalized(&Organization{Name: "T", Roles: []*Role{a, x}, Units: []*Unit{
-		{Name: "Engineering", Roles: []*Role{b, y}, Children: []*Unit{platformA}},
+	a, b, c := &Role{Name: "Engineer", DeclaredHandle: "dev"}, &Role{Name: "Dev"},
+		&Role{Name: "Developer", DeclaredHandle: "dev"}
+	platformA, platformB := &Unit{Name: "Platform", ID: "platform"}, &Unit{Name: "Core", ID: "platform"}
+	o := normalized(&Organization{Name: "T", Roles: []*Role{a}, Units: []*Unit{
+		{Name: "Engineering", Roles: []*Role{b}, Children: []*Unit{platformA}},
 		{Name: "Product", Roles: []*Role{c}, Children: []*Unit{platformB}},
 	}})
 
@@ -173,9 +172,8 @@ func TestADuplicateErrorCarriesEveryEntity(t *testing.T) {
 		seats []*Role
 		units []*Unit
 	}{
-		{"handle", o.Validate(), DuplicateHandle, "dev", []*Role{x, y}, nil},
-		{"seat name", o.ValidateAdmission(), DuplicateSeatName, "Engineer", []*Role{a, b, c}, nil},
-		{"unit name", o.ValidateAdmission(), DuplicateUnitName, "Platform", nil, []*Unit{platformA, platformB}},
+		{"handle", o.Validate(), DuplicateHandle, "dev", []*Role{a, b, c}, nil},
+		{"unit key", o.ValidateAdmission(), DuplicateUnitKey, "platform", nil, []*Unit{platformA, platformB}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

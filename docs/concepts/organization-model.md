@@ -462,29 +462,33 @@ roles:
 
 **Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the active revision and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **coding runs** are kept for the same 24 hours and ended when the mailbox is retired, each one announced as lost. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. Renaming a seat's handle is a removal of the old handle and an addition of the new one. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
-### Names and handles are unique
+### Handles and keys are unique; names are not
 
-Three identities must each name exactly one thing in the whole company:
+Two identities must each name exactly one thing in the whole company:
 
 | Identity | Unique across | Why |
 |---|---|---|
 | Seat **handle** | Every seat, agent and human | It names the seat's inbox, its derived agent id, its external accounts — and it is what a unit's `lead` and every `manages` entry resolve. Two seats on one handle share an inbox, or an agent absorbs a person's activity. |
-| Seat **name** | Every seat, at any depth | The name is display, and a colleague named in prose is resolved by it: a model reaching a teammate types the name it remembers, and an exact role-name match answers with one seat or an honest list. Two seats of one name are permanently that list, on every ask and every roster row. |
-| Unit **key** (`id`, or the name where none is declared) | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first unit answering to the key. Two units on one key read as distinct on every screen while each reference reaches only one of them. |
+| Unit **key** (`id`, minted from the name where none is declared) | Every unit in the tree, not only siblings | A `manages` entry naming a unit and a root seat's `unit:` reference search the whole tree and resolve to the first unit answering to the key, and the [org chart](chart-domain.md) gives one address to one object. Two units on one key read as distinct on every screen while each reference reaches only one of them. |
 
-Seat names are compared as the exact string, the way an exact role-name match is made: `Dev` and `dev` are two different names. Unit keys are compared **folded**, ids and names alike, because a name is prose and a reader who cannot tell two teams apart files one team's work under the other. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, and where each one sits:
+**A display name is neither.** Two seats may share a name on two handles, and two units a name on two keys — two teams called "Platform" in two departments, or two people both called "Alex". Nothing references a seat or a unit by its name, and the chart could not hold one unique if it tried: a name is **content**, written on its own object's subject, so two leads naming two teams alike never contend. A file is held to exactly what the chart holds, so a chart exported from a running company always imports back. What reads a name answers a shared one honestly: a colleague lookup offers every seat an exact name matches, each with its handle, and a roster row carries the handle beside the name. The [org builder](../guides/org-builder.md) suggests "Software Engineer 2" beside an existing "Software Engineer" as a convenience, not a rule.
+
+A unit key is compared the way the chart compares an address — lower-cased, with whitespace as a hyphen — so `Product Team` and `product-team` are one key. A unit that declares no `id` is keyed on one minted from its name, which is how two units named alike collide when neither declares an id. A seat or unit with no name (or a name that derives no handle) is refused by its own rule and is never reported as a duplicate of another. A refusal names every entity that shares the key, in one message per key, where each one sits, and — for a unit — the key as it wrote it:
 
 ```
-duplicate unit key "Platform": 2 units answer to it (under unit "Engineering"; under unit "Product"). ...
+duplicate unit key "platform": 2 units answer to it (unit "Platform" under unit "Engineering" (key "platform"); unit "Platform" under unit "Product" (key "platform")). ...
 ```
 
-#### Companies stored before the name rules
+#### Where the rules are held
 
-Handle uniqueness has always been enforced. Seat name, seat `id` and unit key uniqueness are **admission rules**: they were added after companies existed, and a company that breaks one still runs exactly as it did before. The same holds for a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference). So they are enforced where a document is *submitted* and reported where a stored one is *applied*:
+The **chart** holds both on every path that gives an object an address: a batch's create or rename onto a key something already answers to is refused, and an import declines the second placement (see [What a structural change is](#what-a-structural-change-is-and-what-it-refuses)). A **company file** is held to them before any of it is published, so an operator is told at the file rather than by a declined placement in a log line.
 
-- **Refused on every write.** `PUT /config`, `PATCH /config`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` into an empty store, `-import-company` over a different company) all refuse a document with a duplicate seat name, seat id or unit key, including a write to a company whose stored revision already carries one and a write that does not touch the duplicates. The write that corrects them is accepted.
-- **Applied with a warning.** A stored revision carrying a duplicate name (written by an earlier build, or activated by an older peer during a rolling upgrade) is applied by every node, a node boots on it (including one started with `-company` or `-import-company` naming a file that is that revision, or a `-company` file the store's own company outranks), and `POST /config/reload`, a `/setup` credential rotation (which reloads) and a revert to it still work. The vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`) read such a file too. Each node logs `org_admission_warning` once for every violation when it applies the epoch, naming the revision and the entities, with the document path of each under `paths`.
-- **Always readable.** `GET /config`, the revision reads, diffs, `crewlet config show` and `crewlet config export` serve the stored document as it is, so the duplicates can be seen and corrected.
+Handle uniqueness is a **runnable** rule: a file breaking it is refused everywhere it is read. Unit-key uniqueness is an **admission rule**, as is a [`unit:` reference on a seat declared inside another unit](#a-seats-unit-reference) — rules added after companies existed — so they are enforced where a file is *submitted* and not where one is merely *read*:
+
+- **Refused where a file becomes the company.** `crewlet validate`, `crewlet config import` and a company file `crewlet run` imports (`-company` into an empty store, `-import-company` over a different company) refuse a file that breaks one, naming the file and the rule.
+- **Read where nothing is written.** A `-company` file `crewlet run` boots on without importing it (the store's own company outranks it), and the vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`), read one as it stands.
+
+A stored configuration revision never carries a chart any more — the chart is [its own log](chart-domain.md), and a revision written before the split is refused at boot, naming `crewlet config import` — so no stored revision is applied with an org rule broken.
 
 ### Management Hierarchy
 
@@ -635,7 +639,7 @@ units:
 
 A seat declared at the **root** can name the unit it belongs to with `unit:`, **by that unit's key**, which is how the per-entity configuration API adds a seat to a unit. The engine moves such a seat into that unit before anything else is derived, so it inherits the unit's tool credentials and is auto-managed by the unit's lead exactly as a seat written inside the unit is. A seat moved this way is still reported, and edited, where it was written.
 
-The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that keys a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the key of the unit the seat is declared in is accepted. This is an [admission rule](#companies-stored-before-the-name-rules): a stored company that already carries such a reference still runs exactly as it did.
+The reference places a root seat and nothing else. A seat declared **inside** a unit is never moved by one, so a `unit:` on it that keys a different unit reads as a placement and does nothing: the seat stays where it is written while the document says it belongs elsewhere. A document carrying one is refused at that seat's `unit`; repeating the key of the unit the seat is declared in is accepted. This is an [admission rule](#where-the-rules-are-held): a file carrying one is refused where it would become the company, and read as it stands where nothing is written.
 
 ### Dangling references
 

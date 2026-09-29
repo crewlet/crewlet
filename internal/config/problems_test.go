@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -95,15 +94,16 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 		},
 		{
 			// ONE LINE, ONE PROBLEM PER SEAT, each at the name that seat
-			// wrote. Identical names are the case a name-based lookup
-			// cannot tell apart at all.
-			name: "two seats of one name",
-			doc: "name: Acme\nroles:\n  - name: Software Engineer\n    handle: swe-root\n" +
-				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n        handle: swe-eng\n",
-			messageHas: "duplicate seat name",
+			// wrote: two seats of one name that declare no handle derive
+			// one, and it is the HANDLE they collide on — a name alone is
+			// prose and collides with nothing.
+			name: "two seats of one name deriving one handle",
+			doc: "name: Acme\nroles:\n  - name: Software Engineer\n" +
+				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n",
+			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "swe-root", ""},
-				{"units[0].roles[0].name", "conflict", "swe-eng", ""},
+				{"roles[0].name", "conflict", "software-engineer", ""},
+				{"units[0].roles[0].name", "conflict", "software-engineer", ""},
 			},
 		},
 		{
@@ -119,13 +119,16 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 			},
 		},
 		{
-			name: "two units of one name",
+			// AT THE ID, which is the unit's key and the field to change —
+			// here minted from a name both units carry, since neither
+			// declares one.
+			name: "two units on one key",
 			doc: "name: Acme\nunits:\n  - name: Eng\n    children:\n      - name: Platform\n" +
 				"  - name: Product\n    children:\n      - name: Platform\n",
-			messageHas: "duplicate unit name",
+			messageHas: "duplicate unit key",
 			want: []located{
-				{"units[0].children[0].name", "conflict", "", "Platform"},
-				{"units[1].children[0].name", "conflict", "", "Platform"},
+				{"units[0].children[0].id", "conflict", "", "Platform"},
+				{"units[1].children[0].id", "conflict", "", "Platform"},
 			},
 		},
 		{
@@ -238,19 +241,16 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 			"unknown_value"},
 		{"duplicate handle",
 			"name: Acme\nroles:\n  - name: Dev\n  - name: Developer\n    handle: dev\n", "conflict"},
-		{"duplicate seat name",
-			"name: Acme\nroles:\n  - name: Dev\n    handle: a\n  - name: Dev\n    handle: b\n", "conflict"},
-		{"duplicate unit name", "name: Acme\nunits:\n  - name: Eng\n  - name: Eng\n", "conflict"},
 		// Two seats on one account carries ErrDuplicateIdentity ALONE — no
-		// name or handle collided — so it is the one duplicate a missing
-		// table entry reports as `invalid`.
+		// handle collided — so a missing table entry reports it as
+		// `invalid`.
 		{"duplicate contact identity",
 			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +
 				"    contact: {slack_user_id: U0F}\n  - name: Ada\n    kind: human\n" +
 				"    contact: {slack_user_id: U0F}\n",
 			"conflict"},
-		// A collision an id carried names no duplicate name and so carries
-		// only the key sentinel, which is the entry the table lost.
+		// The id minted from `Platform` and the one `Product` wrote are
+		// one key.
 		{"duplicate unit key", "name: Acme\nunits:\n  - name: Platform\n  - name: Product\n    id: platform\n",
 			"conflict"},
 		{"agent-only field set on a human seat",
@@ -420,11 +420,10 @@ units:
 	for _, w := range warnings {
 		paths = append(paths, w.Path)
 	}
-	for _, want := range []string{"units[0].name", "units[1].children[0].name",
-		"units[0].roles[0].name", "units[1].children[0].roles[0].name"} {
-		if !slices.Contains(paths, want) {
-			t.Errorf("no admission warning at %s: %v", want, paths)
-		}
+	// THE TWO UNITS, at the id each one's key is — minted from the shared
+	// name — and NOT the two seats called Engineer: a name is prose.
+	if want := []string{"units[0].id", "units[1].children[0].id"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("admission warnings at %v, want exactly %v", paths, want)
 	}
 
 	// And Warnings is ONE list in a fixed order: the references, then

@@ -6,12 +6,13 @@ import (
 	"testing"
 )
 
-// The admission rules: seat names and unit names are unique across the whole
-// company. They are a CLASS of their own, apart from Validate, because stored
-// companies predate them and still run exactly as they did; the config layer
-// refuses a submitted document for breaking one and applies a stored revision
-// with a warning. What these pin is the rule itself, its class, and the shape
-// of what it reports.
+// The admission rules: a unit key is unique across the whole company, and a
+// `unit:` reference is written only where it places something. They are a
+// CLASS of their own, apart from Validate, because stored companies predate
+// them and still run exactly as they did; the config layer refuses a
+// submitted document for breaking one and applies a stored revision with a
+// warning. What these pin is the rule itself, its class, and the shape of what
+// it reports — and what it deliberately does NOT hold unique: a name.
 
 // violations flattens a joined error into the leaf errors that wrap sentinel.
 func violations(err, sentinel error) []error {
@@ -32,52 +33,36 @@ func violations(err, sentinel error) []error {
 	return out
 }
 
-// A SEAT NAME IS A REFERENCE, so two seats cannot share one, even with
-// distinct handles, which is exactly the collision the handle rule misses.
-func TestDuplicateSeatNamesAreAnAdmissionRule(t *testing.T) {
+// A NAME IS PROSE, AND TWO THINGS MAY SHARE ONE — two seats on distinct
+// handles, two units on distinct ids, anywhere in the tree.
+//
+// That is the org chart's own rule: a name is content arbitrated on its own
+// object's subject, so no chart write can refuse a second "Engineer", and a
+// document rule the chart cannot hold made the chart a running company
+// exported one its own import refused. Nothing references a seat or a unit by
+// its name, so the pair is two addresses and nothing more.
+func TestAnyNameMayBeSharedOnDistinctAddresses(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Backend", Roles: []*Role{{Name: "Engineer", DeclaredHandle: "backend-engineer"}}},
-		{Name: "Frontend", Roles: []*Role{{Name: "Engineer", DeclaredHandle: "frontend-engineer"}}},
+		{Name: "Engineering", ID: "engineering", Children: []*Unit{
+			{Name: "Platform", ID: "eng-platform",
+				Roles: []*Role{{Name: "Engineer", DeclaredHandle: "backend-engineer"}}},
+		}},
+		{Name: "Product", ID: "product", Children: []*Unit{
+			{Name: "Platform", ID: "product-platform",
+				Roles: []*Role{{Name: "Engineer", DeclaredHandle: "frontend-engineer"}}},
+		}},
 	}})
 
-	got := violations(o.ValidateAdmission(), ErrDuplicateSeatName)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want one duplicate seat name", o.ValidateAdmission())
-	}
-	for _, want := range []string{`"Engineer"`, `"backend-engineer"`, `"frontend-engineer"`,
-		`in unit "Backend"`, `in unit "Frontend"`} {
-		if !strings.Contains(got[0].Error(), want) {
-			t.Errorf("the message does not name %s: %v", want, got[0])
-		}
-	}
-	// NOT A RUNNABLE RULE. A stored company carrying this runs as it always
-	// did, and folding the rule into Validate would refuse to apply it.
-	if err := o.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil: a duplicate seat name is an admission rule", err)
-	}
-}
-
-// A UNIT NAME IS UNIQUE ACROSS THE TREE, not among siblings: every reference
-// to a unit searches the whole tree and takes the first match.
-func TestDuplicateUnitNamesAnywhereInTheTreeAreAnAdmissionRule(t *testing.T) {
-	t.Parallel()
-	o := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Engineering", Children: []*Unit{{Name: "Platform", Roles: []*Role{{Name: "Dev A"}}}}},
-		{Name: "Product", Children: []*Unit{{Name: "Platform", Roles: []*Role{{Name: "Dev B"}}}}},
-	}})
-
-	got := violations(o.ValidateAdmission(), ErrDuplicateUnitName)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want one duplicate unit name", o.ValidateAdmission())
-	}
-	for _, want := range []string{`"Platform"`, `under unit "Engineering"`, `under unit "Product"`} {
-		if !strings.Contains(got[0].Error(), want) {
-			t.Errorf("the message does not name %s: %v", want, got[0])
-		}
+	if err := o.ValidateAdmission(); err != nil {
+		t.Errorf("ValidateAdmission() = %v, want nil: a shared name is two addresses", err)
 	}
 	if err := o.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil: a duplicate unit name is an admission rule", err)
+		t.Errorf("Validate() = %v, want nil: a shared name is two addresses", err)
+	}
+	// AND EACH IS REACHED BY ITS ADDRESS: the pair is two units, keyed apart.
+	if a, b := o.Unit("eng-platform"), o.Unit("product-platform"); a == nil || b == nil || a == b {
+		t.Errorf("the two units named Platform are not two addresses: %p %p", a, b)
 	}
 }
 
@@ -106,14 +91,12 @@ func TestADuplicatedKeyIsOneMessageNamingEveryEntity(t *testing.T) {
 		t.Errorf("the handle message does not name all three seats: %s", msg)
 	}
 
-	names := violations(o.ValidateAdmission(), ErrDuplicateSeatName)
-	if len(names) != 1 || !strings.Contains(names[0].Error(), "2 seats") {
-		t.Errorf("seat name messages = %v, want one naming the two seats called \"Dev\"", names)
-	}
-	units := violations(o.ValidateAdmission(), ErrDuplicateUnitName)
+	// THREE UNITS KEYED ON ONE NAME, since none declares an id: one key,
+	// one message, all three units and where each sits.
+	units := violations(o.ValidateAdmission(), ErrDuplicateUnit)
 	if len(units) != 1 || !strings.Contains(units[0].Error(), "3 units") ||
 		!strings.Contains(units[0].Error(), `under unit "Edge"`) {
-		t.Errorf("unit name messages = %v, want one naming all three units called \"Core\"", units)
+		t.Errorf("unit key messages = %v, want one naming all three units keyed \"Core\"", units)
 	}
 }
 
@@ -131,7 +114,7 @@ func TestAMissingIdentityIsNeverReportedAsADuplicate(t *testing.T) {
 		Units: []*Unit{{Name: "", Roles: []*Role{{Name: "Dev"}}}, {Name: "  ", Roles: []*Role{{Name: "Ops"}}}},
 	})
 
-	for _, sentinel := range []error{ErrDuplicateHandle, ErrDuplicateSeatName, ErrDuplicateUnitName} {
+	for _, sentinel := range []error{ErrDuplicateHandle, ErrDuplicateUnit} {
 		if got := violations(errors.Join(o.Validate(), o.ValidateAdmission()), sentinel); len(got) != 0 {
 			t.Errorf("a missing identity was reported as %v: %v", sentinel, got)
 		}
@@ -142,109 +125,58 @@ func TestAMissingIdentityIsNeverReportedAsADuplicate(t *testing.T) {
 	}
 }
 
-// A UNIT NAME IS FOLDED AND A SEAT NAME IS NOT, because a unit's name is its
-// key and a seat's name is not.
+// A UNIT KEY IS FOLDED EXACTLY AS THE CHART FOLDS AN ADDRESS.
 //
-// Admission folds a unit's name because a name is prose: "Platform" and
-// "platform" are one team to every reader, and Unit.Key files work, routing
-// and pages under whichever spelling a document happened to be written with.
-// That Organization.Unit resolves the name EXACTLY is what makes the mistake
-// QUIET rather than what makes it safe, so the pair is refused, naming both
-// and where each one sits.
-//
-// A seat's key is its HANDLE, held unique by a runnable rule, so nothing is
-// ever filed under a seat's name: "Dev" and "dev" are two seats wherever they
-// declare two handles. Declaring none, they derive ONE, and the handle rule
-// reports that instead, which is why the seat rule needs no fold of its own.
-func TestAUnitNameIsFoldedAndASeatNameIsNot(t *testing.T) {
+// The file is checked so its import is not declined, and the chart's
+// [chart.NormalizeKey] lower-cases a key and turns its whitespace into a
+// hyphen: `Product Team` and `product-team` are one address there, so they are
+// one key here, and so are two cases of one name on units that declare no id.
+// The fold is ToLower's, which is why "İstanbul" and "Istanbul" are one key.
+func TestAUnitKeyIsFoldedAsTheChartFoldsAnAddress(t *testing.T) {
 	t.Parallel()
-	o := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Platform", Roles: []*Role{{Name: "Dev"}}},
-		{Name: "platform", Roles: []*Role{{Name: "dev", DeclaredHandle: "dev-two"}}},
-	}})
-
-	got := violations(o.ValidateAdmission(), ErrDuplicateUnit)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want the two spellings reported once", o.ValidateAdmission())
-	}
-	// A NAME IS THE KEY IT DUPLICATES, so the one error carries both
-	// sentinels and sends the operator to rename one of the two teams.
-	if !errors.Is(got[0], ErrDuplicateUnitName) {
-		t.Errorf("two units of one name were not reported as a duplicate name: %v", got[0])
-	}
-	for _, want := range []string{`"Platform"`, `unit "Platform" at the top level`,
-		`unit "platform" at the top level`} {
-		if !strings.Contains(got[0].Error(), want) {
-			t.Errorf("the message does not name %s: %v", want, got[0])
-		}
-	}
-	// STILL AN ADMISSION RULE. A stored company carrying the pair runs as
-	// it always did, so only a submitted document is refused for it.
-	if err := o.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil: a duplicate unit name is an admission rule", err)
-	}
-	// AND THE SEATS INSIDE THOSE UNITS ARE FINE: two names differing in
-	// case, two handles, nothing filed under either name.
-	if seats := violations(o.ValidateAdmission(), ErrDuplicateSeatName); len(seats) != 0 {
-		t.Errorf("seat names differing in case were reported: %v", seats)
-	}
-	if handles := violations(o.Validate(), ErrDuplicateHandle); len(handles) != 0 {
-		t.Errorf("seats declaring two handles were reported as sharing one: %v", handles)
-	}
-
-	// DECLARING NO HANDLE, that same pair derives one, and the handle rule
-	// refuses it as a RUNNABLE rule: the collision a fold would have caught
-	// on the seat side is already covered, and covered more strictly.
-	derived := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Core", Roles: []*Role{{Name: "Dev"}, {Name: "dev"}}},
-	}})
-	if seats := violations(derived.ValidateAdmission(), ErrDuplicateSeatName); len(seats) != 0 {
-		t.Errorf("seat names differing in case were reported: %v", seats)
-	}
-	if handles := violations(derived.Validate(), ErrDuplicateHandle); len(handles) != 1 {
-		t.Fatalf("Validate() = %v, want the one handle both seats derive", derived.Validate())
+	for name, units := range map[string][]*Unit{
+		"whitespace against a hyphen": {{Name: "Product", ID: "Product Team"}, {Name: "Design", ID: "product-team"}},
+		"two cases of one name":       {{Name: "Platform"}, {Name: "platform"}},
+		"a dotted capital":            {{Name: "İstanbul"}, {Name: "Istanbul"}},
+		"a name against an id":        {{Name: "Platform"}, {Name: "Product", ID: "platform"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			o := normalized(&Organization{Name: "T", Units: units})
+			got := violations(o.ValidateAdmission(), ErrDuplicateUnit)
+			if len(got) != 1 {
+				t.Fatalf("ValidateAdmission() = %v, want the two units reported once",
+					o.ValidateAdmission())
+			}
+			// EACH UNIT IS NAMED WITH THE KEY AS IT WROTE IT, which is the
+			// spelling an operator changes.
+			for _, u := range units {
+				if want := `(key "` + u.Key() + `")`; !strings.Contains(got[0].Error(), want) {
+					t.Errorf("the message does not name %s: %v", want, got[0])
+				}
+			}
+			// STILL AN ADMISSION RULE: only a submitted document is refused.
+			if err := o.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil: a duplicate unit key is an admission rule", err)
+			}
+		})
 	}
 }
 
-// AN ID IS COMPARED FOLDED, against names and other ids alike.
+// AN ID THAT SPELLS ANOTHER UNIT'S NAME COLLIDES WITH NOTHING, and a unit's id
+// may repeat its own name.
 //
-// An id is the other vocabulary: a lowercase key by rule, where a name is
-// prose. Comparing the two exactly would let `id: platform` sit beside
-// `name: Platform` unreported, and [Unit.Key] then files one team's work
-// under the key the other answers to. It is a duplicate KEY and not a
-// duplicate name: nothing here is named twice, and saying so would send an
-// operator to rename a team that is named once.
-func TestAnIDIsComparedFoldedAgainstAName(t *testing.T) {
+// Only a key is compared: a unit that declares an id answers to the id alone,
+// so its name is reachable by nothing and cannot be what another unit's id
+// collides with.
+func TestAnIDCollidesWithKeysAndNeverWithANameThatIsNotOne(t *testing.T) {
 	t.Parallel()
-	o := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Platform", Roles: []*Role{{Name: "Dev"}}},
-		{Name: "Product", ID: "platform", Roles: []*Role{{Name: "Ops"}}},
+	crossed := normalized(&Organization{Name: "T", Units: []*Unit{
+		{Name: "Platform", ID: "core"},
+		{Name: "Product", ID: "platform"},
 	}})
-
-	got := violations(o.ValidateAdmission(), ErrDuplicateUnit)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want one duplicate unit key", o.ValidateAdmission())
-	}
-	if errors.Is(got[0], ErrDuplicateUnitName) {
-		t.Errorf("an id collision was reported as a duplicate name: %v", got[0])
-	}
-	for _, want := range []string{`"Platform"`, `unit "Product"`, `(id "platform")`} {
-		if !strings.Contains(got[0].Error(), want) {
-			t.Errorf("the message does not name %s: %v", want, got[0])
-		}
-	}
-}
-
-// TWO IDS ARE ONE KEY WHEN THEY DIFFER ONLY IN CASE, and a unit whose id
-// repeats its own name answers to that key alone.
-func TestIDsCollideWithEachOtherAndNeverWithTheirOwnUnit(t *testing.T) {
-	t.Parallel()
-	folded := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Platform", ID: "Core"},
-		{Name: "Product", ID: "core"},
-	}})
-	if got := violations(folded.ValidateAdmission(), ErrDuplicateUnit); len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want the two ids reported once", folded.ValidateAdmission())
+	if err := crossed.ValidateAdmission(); err != nil {
+		t.Errorf("ValidateAdmission() = %v, want nil: an id spelling another unit's name is no key of that unit's", err)
 	}
 
 	own := normalized(&Organization{Name: "T", Units: []*Unit{
@@ -254,31 +186,33 @@ func TestIDsCollideWithEachOtherAndNeverWithTheirOwnUnit(t *testing.T) {
 	if err := own.ValidateAdmission(); err != nil {
 		t.Errorf("ValidateAdmission() = %v, want nil: a unit's id may repeat its own name", err)
 	}
+
+	ids := normalized(&Organization{Name: "T", Units: []*Unit{
+		{Name: "Platform", ID: "Core"},
+		{Name: "Product", ID: "core"},
+	}})
+	if got := violations(ids.ValidateAdmission(), ErrDuplicateUnit); len(got) != 1 {
+		t.Fatalf("ValidateAdmission() = %v, want the two ids reported once", ids.ValidateAdmission())
+	}
 }
 
 // EVERY SPELLING OF ONE KEY IS ONE GROUP, REPORTED IN THE FIRST OF THEM.
 //
-// Both cases of a name and an id folding onto them are one key and one
-// mistake, so they are one message naming all three units: every pair among
-// them answers to the key, and changing any one of the three clears only its
-// own share. The message is reported in the first spelling met, which is what
-// an operator can search their document for, and the id's own spelling never
-// reopens the key: `id: Platform` and `id: platform` join the same group as
-// each other and as every unit named either way.
+// The message is reported in the first spelling met, which is what an
+// operator can search their document for, and it names every unit answering
+// to the key: changing any one of three clears only its own share.
 func TestEverySpellingOfOneKeyIsOneGroupReportedInTheFirst(t *testing.T) {
 	t.Parallel()
 	for name, units := range map[string][]*Unit{
 		"an id spelled as the first name": {
 			{Name: "Platform"}, {Name: "platform"}, {Name: "Product", ID: "Platform"},
 		},
-		"an id spelled as the second name": {
-			{Name: "platform"}, {Name: "Platform"}, {Name: "Product", ID: "Platform"},
-		},
-		"an id folding onto two names": {
-			{Name: "Platform"}, {Name: "PLATFORM"}, {Name: "Product", ID: "platform"},
+		"an id first": {
+			{Name: "Product", ID: "platform"}, {Name: "Platform"}, {Name: "PLATFORM"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			o := normalized(&Organization{Name: "T", Units: units})
 
 			got := violations(o.ValidateAdmission(), ErrDuplicateUnit)
@@ -289,9 +223,9 @@ func TestEverySpellingOfOneKeyIsOneGroupReportedInTheFirst(t *testing.T) {
 			if !errors.As(got[0], &dup) {
 				t.Fatalf("the violation is not a DuplicateError: %#v", got[0])
 			}
-			if dup.Key != units[0].Name {
+			if dup.Key != units[0].Key() {
 				t.Errorf("the collision is reported as %q, want the first spelling %q",
-					dup.Key, units[0].Name)
+					dup.Key, units[0].Key())
 			}
 			if len(dup.Units) != 3 || dup.Units[0] != units[0] ||
 				dup.Units[1] != units[1] || dup.Units[2] != units[2] {
@@ -299,84 +233,6 @@ func TestEverySpellingOfOneKeyIsOneGroupReportedInTheFirst(t *testing.T) {
 					unitNames(dup.Units))
 			}
 		})
-	}
-}
-
-// WHICH UNITS CARRY THE NAME IS DECIDED UNDER THE SAME FOLD, and that decides
-// both the second sentinel and what the message tells the operator to change.
-//
-// A key TWO units are named for is a duplicate NAME as well, in whichever case
-// each of them is written: the way out is to rename a team, and the error says
-// so. A key only one unit is named for arrived through an id, so it carries
-// ErrDuplicateUnit alone and the message names the id that joined the group,
-// rather than sending somebody to rename a team that is named once. Measuring
-// a member's name against the key EXACTLY gets both halves wrong: the pair
-// above would lose its name sentinel, and the unit spelled unlike the key
-// would be described as answering by an id it never declared.
-func TestWhichUnitsCarryTheNameIsDecidedUnderTheSameFold(t *testing.T) {
-	t.Parallel()
-	named := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "Platform"},
-		{Name: "platform"},
-		{Name: "Product", ID: "platform"},
-	}})
-
-	got := violations(named.ValidateAdmission(), ErrDuplicateUnit)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want one duplicate unit key", named.ValidateAdmission())
-	}
-	if !errors.Is(got[0], ErrDuplicateUnitName) {
-		t.Errorf("a key two units are named for was not reported as a duplicate name: %v", got[0])
-	}
-	if !strings.Contains(got[0].Error(), `unit "Product" at the top level (id "platform")`) ||
-		strings.Contains(got[0].Error(), `unit "platform" at the top level (id`) {
-		t.Errorf("the message does not name the id against the one unit that joined by it: %v", got[0])
-	}
-
-	byID := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "platform"},
-		{Name: "Product", ID: "platform"},
-	}})
-
-	got = violations(byID.ValidateAdmission(), ErrDuplicateUnit)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want one duplicate unit key", byID.ValidateAdmission())
-	}
-	if errors.Is(got[0], ErrDuplicateUnitName) {
-		t.Errorf("a key carried by an id was reported as a duplicate name: %v", got[0])
-	}
-	if !strings.Contains(got[0].Error(), `unit "Product" at the top level (id "platform")`) {
-		t.Errorf("the message does not say which id joined the group: %v", got[0])
-	}
-
-	// AND THE FOLD IS foldUnitKey, NOT [strings.EqualFold]. The two agree on
-	// every case a person types by hand, which is what makes the wrong one
-	// read as correct, and they part over characters that are real in a team
-	// name: EqualFold folds by [unicode.SimpleFold], where "İstanbul" and
-	// "Istanbul" are two keys, while the claim folds by [unicode.ToLower],
-	// where they are one. Claimed as one key and asked about as two, the pair
-	// loses the name sentinel and the unit written second is described as
-	// answering by an id it never declared.
-	divergent := normalized(&Organization{Name: "T", Units: []*Unit{
-		{Name: "İstanbul"},
-		{Name: "Istanbul"},
-	}})
-
-	got = violations(divergent.ValidateAdmission(), ErrDuplicateUnit)
-	if len(got) != 1 {
-		t.Fatalf("ValidateAdmission() = %v, want the two spellings reported once",
-			divergent.ValidateAdmission())
-	}
-	if !errors.Is(got[0], ErrDuplicateUnitName) {
-		t.Errorf("two units named for one key were not reported as a duplicate name: %v", got[0])
-	}
-	if strings.Contains(got[0].Error(), `(id `) {
-		t.Errorf("a unit named for the key was described as answering by an id: %v", got[0])
-	}
-	for _, want := range []string{`unit "İstanbul" at the top level`, `unit "Istanbul" at the top level`} {
-		if !strings.Contains(got[0].Error(), want) {
-			t.Errorf("the message does not name %s: %v", want, got[0])
-		}
 	}
 }
 

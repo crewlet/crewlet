@@ -160,17 +160,9 @@ var problemKinds = []struct {
 	// on one identity, a field on the wrong kind of seat, a schedule and a
 	// unit that has nobody to run it.
 	{"conflict", org.ErrDuplicateHandle},
-	{"conflict", org.ErrDuplicateSeatName},
-	{"conflict", org.ErrDuplicateUnitName},
-	// Two seats on one external account — the "two entities on one
-	// identity" this group's comment opens with, and the only duplicate
-	// that carries no name sentinel alongside it, so with no entry of its
-	// own it arrived as `invalid` while every sibling duplicate was a
-	// conflict.
+	// Two seats on one external account, and two units on one key — the
+	// other two "entities on one identity" this group's comment opens with.
 	{"conflict", org.ErrDuplicateIdentity},
-	// Its own entry, although a duplicate NAME already carries both
-	// sentinels: where an id is what collided the error carries this one
-	// alone, and with no entry that collision arrives as `invalid`.
 	{"conflict", org.ErrDuplicateUnit},
 	{"conflict", org.ErrHumanSeatField},
 	{"conflict", org.ErrAgentSeatField},
@@ -321,9 +313,12 @@ func (x *identityIndex) place(leaf error) *located {
 			l.problems = append(l.problems,
 				x.problem(extend(x.seats[r], field), kind, text, r.Handle(), ""))
 		}
+		// A UNIT IS PLACED AT ITS ID, which is its key in every document
+		// this reads — one is minted from the name where none was written —
+		// and the field the message tells an operator to change.
 		for _, u := range dup.Units {
 			l.problems = append(l.problems,
-				x.problem(at(x.units[u], "name"), kind, text, "", u.Name))
+				x.problem(at(x.units[u], "id"), kind, text, "", u.Name))
 		}
 		return l
 	case errors.As(leaf, &seatErr):

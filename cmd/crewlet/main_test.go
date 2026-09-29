@@ -1193,44 +1193,44 @@ func TestTheJSONOutputCarriesAPathPerProblem(t *testing.T) {
 }
 
 // A RULE THE ORG MODEL CHECKS IS LOCATED TOO, by the seat it is about rather
-// than by its name: two seats of one name are one line of text and one
-// problem beside each seat, at the name each one wrote.
+// than by its name: two seats declaring one handle are one line of text and
+// one problem beside each seat, at the handle each one wrote.
 func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 	t.Parallel()
-	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1)
+	doc := strings.Replace(companyYAML, "    handle: cto\n", "    handle: ceo\n", 1)
 	got, raw, _ := validateJSON(t, doc)
 	var paths []string
 	for _, p := range got.Problems {
-		if strings.Contains(p.Message, "duplicate seat name") {
+		if strings.Contains(p.Message, "duplicate handle") {
 			paths = append(paths, p.Path+"@"+p.Seat)
 			if p.Kind != "conflict" {
 				t.Errorf("kind = %q, want conflict", p.Kind)
 			}
 		}
 	}
-	if want := []string{"roles[0].name@ceo", "roles[1].name@cto"}; !slices.Equal(paths, want) {
+	if want := []string{"roles[0].handle@ceo", "roles[1].handle@ceo"}; !slices.Equal(paths, want) {
 		t.Errorf("duplicate problems at %v, want %v\n%s", paths, want, raw)
 	}
 }
 
 // THE PROSE SAYS EACH THING ONCE, AND WHERE. A rule the org model reports
 // names its seat in words, so the path leads the line; two seats sharing a
-// name are one message, printed once and led by both paths rather than
+// handle are one message, printed once and led by both paths rather than
 // repeated for the second seat. A warning is printed too, and fails nothing.
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
-	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
+	doc := strings.Replace(companyYAML, "    handle: cto\n", "    handle: ceo\n", 1) +
 		"units:\n  - name: Platform\n    lead: ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
 	if err == nil {
-		t.Fatalf("a document with a duplicate seat name validated: %s", out.String())
+		t.Fatalf("a document with a duplicate handle validated: %s", out.String())
 	}
-	if n := strings.Count(err.Error(), "duplicate seat name"); n != 1 {
+	if n := strings.Count(err.Error(), "duplicate handle"); n != 1 {
 		t.Errorf("the duplicate is printed %d times, want once:\n%v", n, err)
 	}
-	if !strings.Contains(err.Error(), "roles[0].name, roles[1].name: duplicate seat name") {
+	if !strings.Contains(err.Error(), "roles[0].handle, roles[1].handle: duplicate handle") {
 		t.Errorf("the duplicate is not led by both paths:\n%v", err)
 	}
 	if !strings.Contains(out.String(), "warning (dangling reference): units[0].lead: ") {
@@ -1368,8 +1368,8 @@ func TestAWarningLineCarriesItsKind(t *testing.T) {
 	}, {
 		name: "an admission rule",
 		w: config.Warning{Kind: config.WarningAdmission,
-			Path: "roles[0].name", Message: "duplicate seat name"},
-		want: "warning (admission): roles[0].name: duplicate seat name",
+			Path: "units[0].id", Message: "duplicate unit key"},
+		want: "warning (admission): units[0].id: duplicate unit key",
 	}, {
 		name: "an advisory",
 		w: config.Warning{Kind: config.WarningAdvisory,

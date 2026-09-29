@@ -89,10 +89,11 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 	}
 }
 
-// duplicateNamesRevision breaks both admission rules and no runnable one: two
-// units called "Platform", each with a seat called "Engineer" on its own
-// handle. A build before those rules admitted it.
-const duplicateNamesRevision = `{"name":"Nimbus",` +
+// duplicateKeysRevision breaks an admission rule and no runnable one: two
+// units called "Platform" declaring no id, so both are keyed `platform` — each
+// with a seat called "Engineer" on its own handle, which breaks nothing, a
+// name being prose. A build before the rule admitted it.
+const duplicateKeysRevision = `{"name":"Nimbus",` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
 	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
 	`"units":[` +
@@ -101,8 +102,8 @@ const duplicateNamesRevision = `{"name":"Nimbus",` +
 	`{"name":"Product","children":[{"name":"Platform",` +
 	`"roles":[{"name":"Engineer","handle":"product-engineer","llm":"main"}]}]}]}`
 
-// duplicateNamesYAML is the same company as a person would write it.
-const duplicateNamesYAML = `
+// duplicateKeysYAML is the same company as a person would write it.
+const duplicateKeysYAML = `
 name: Nimbus
 providers:
   llm:
@@ -119,7 +120,8 @@ units:
 `
 
 // A REVISION STILL CARRYING AN ORG CHART IS SHOWN AND EXPORTED, REFUSED AT
-// BOOT, AND A FILE WITH DUPLICATE NAMES IS NEITHER IMPORTED NOR VALIDATED.
+// BOOT, AND A FILE WITH A DUPLICATE UNIT KEY IS NEITHER IMPORTED NOR
+// VALIDATED.
 //
 // # Why the boot refuses it rather than running it
 //
@@ -142,7 +144,7 @@ units:
 func TestAnOldChartIsShownExportedAndRefusedAtBoot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	id := activateStored(t, cfg, duplicateNamesRevision)
+	id := activateStored(t, cfg, duplicateKeysRevision)
 
 	company, err := companyFromStore(t.Context(), cfg)
 	if err == nil {
@@ -163,16 +165,16 @@ func TestAnOldChartIsShownExportedAndRefusedAtBoot(t *testing.T) {
 	}
 
 	file := filepath.Join(dir, "duplicates.yaml")
-	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(duplicateKeysYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := configCmd(t, cfg, "import", file); err == nil ||
-		!strings.Contains(err.Error(), "duplicate unit name") {
-		t.Errorf("import of a file with duplicate names = %v, want a refusal naming the rule", err)
+		!strings.Contains(err.Error(), "duplicate unit key") {
+		t.Errorf("import of a file with a duplicate unit key = %v, want a refusal naming the rule", err)
 	}
 	var out, errOut bytes.Buffer
 	if err := run([]string{"validate", "-config", cfg, "-company", file}, &out, &errOut); err == nil {
-		t.Errorf("validate accepted a file with duplicate names:\n%s%s", out.String(), errOut.String())
+		t.Errorf("validate accepted a file with a duplicate unit key:\n%s%s", out.String(), errOut.String())
 	}
 }
 
@@ -197,8 +199,8 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 	}
 }
 
-// A COMPANY FILE WITH DUPLICATE NAMES STARTS THE NODE THAT RUNS IT, AND IS
-// REFUSED ONLY WHERE IT WOULD BE WRITTEN.
+// A COMPANY FILE WITH A DUPLICATE UNIT KEY STARTS THE NODE THAT RUNS IT, AND
+// IS REFUSED ONLY WHERE IT WOULD BE WRITTEN.
 //
 // `crewlet run -company company.yaml` is the documented way to run a node, and
 // most boots write nothing from that file: it is byte for byte the active
@@ -207,10 +209,10 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 // duplicate name stopped the node from starting after the upgrade that added
 // the rule. The rule still holds where the file becomes a new revision: an
 // empty store, or -import-company over a different company.
-func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T) {
+func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "company.yaml")
-	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(duplicateKeysYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,7 +237,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 		db := seedStore(t)
 		fleet := coordmemory.NewFleet()
 		err := seedCompany(t.Context(), db, fleet, nil, seed, fixtureCipher, quiet())
-		if err == nil || !strings.Contains(err.Error(), "duplicate unit name") ||
+		if err == nil || !strings.Contains(err.Error(), "duplicate unit key") ||
 			!strings.Contains(err.Error(), file) {
 			t.Fatalf("seed into an empty store = %v, want a refusal naming the file and the rule", err)
 		}
@@ -276,8 +278,8 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 		override := seed
 		override.Override = true
 		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, fixtureCipher, quiet())
-		if err == nil || !strings.Contains(err.Error(), "duplicate seat name") {
-			t.Errorf("-import-company of a file with duplicate names = %v, want a refusal", err)
+		if err == nil || !strings.Contains(err.Error(), "duplicate unit key") {
+			t.Errorf("-import-company of a file with a duplicate unit key = %v, want a refusal", err)
 		}
 		revisions, err := db.Configs().List(t.Context(), 0, 0)
 		if err != nil {
@@ -289,7 +291,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	})
 }
 
-// THE VENDOR COMMANDS ACT ON A COMPANY FILE WITH DUPLICATE NAMES.
+// THE VENDOR COMMANDS ACT ON A COMPANY FILE WITH A DUPLICATE UNIT KEY.
 //
 // They read the company a node runs and write none of it as a revision, so the
 // admission rules are not theirs to enforce: a deployment whose file carries a
@@ -297,10 +299,10 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 // upgrade that added it. Each command is expected to get PAST the load and
 // stop on its own business (this company enables no integration), which is
 // what the absence of the loader's "company config" prefix shows.
-func TestVendorCommandsReadACompanyFileWithDuplicateNames(t *testing.T) {
+func TestVendorCommandsReadACompanyFileWithADuplicateUnitKey(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "company.yaml")
-	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(duplicateKeysYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	noBootstrap := filepath.Join(dir, "absent.yaml")

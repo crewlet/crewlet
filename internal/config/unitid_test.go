@@ -70,11 +70,11 @@ func TestAUnitIDIsShapedLikeAKey(t *testing.T) {
 	}
 }
 
-// TWO UNITS MAY NOT ANSWER TO ONE KEY, and an id colliding with another
-// unit's NAME is the same collision arriving by a door nobody watches.
+// TWO UNITS MAY NOT ANSWER TO ONE KEY, however far apart they sit.
 //
 // A unit's key is what work, routing and pages are filed under, so a
-// collision sends one team's work to whichever unit a reader resolved first.
+// collision sends one team's work to whichever unit a reader resolved first,
+// and the org chart the file is imported into gives one address to one unit.
 func TestTwoUnitsCannotShareAKey(t *testing.T) {
 	t.Parallel()
 	for name, units := range map[string][]config.Unit{
@@ -82,27 +82,18 @@ func TestTwoUnitsCannotShareAKey(t *testing.T) {
 			{Name: "Platform", ID: "core"},
 			{Name: "Product", ID: "core"},
 		},
-		"an id equal to another unit's name": {
-			{Name: "Platform", ID: "plat"},
-			{Name: "Product", ID: "platform"},
-		},
-		"two units with one name": {
-			{Name: "Platform", ID: "platform-a"},
-			{Name: "platform", ID: "platform-b"},
-		},
-		// THE EXACT SAME NAME TWICE is the collision that looks least
-		// like one and is caught by nothing else: Organization.Unit
-		// resolves a name to the FIRST unit carrying it, so the second
-		// team's work goes to the first team, silently, for ever.
-		"two units with the identical name": {
-			{Name: "Platform", ID: "plat-a"},
-			{Name: "Platform", ID: "plat-b"},
+		// TWO NAMES WITH NO ID are two minted ids, and one name minted
+		// twice is one key: the document never wrote an id, so the name
+		// is the collision's only source.
+		"two units of one name that declare no id": {
+			{Name: "Platform"},
+			{Name: "Platform"},
 		},
 		// AND DEPTH IS NOT A NAMESPACE. A child unit is addressed by the
 		// same key as a root one, so nesting hides nothing.
 		"a child colliding with a root unit": {
-			{Name: "Engineering", ID: "eng", Children: []config.Unit{{Name: "Platform", ID: "plat-a"}}},
-			{Name: "Platform", ID: "plat-b"},
+			{Name: "Engineering", ID: "eng", Children: []config.Unit{{Name: "Platform", ID: "plat"}}},
+			{Name: "Product", ID: "plat"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -118,13 +109,28 @@ func TestTwoUnitsCannotShareAKey(t *testing.T) {
 	}
 
 	// AND DISTINCT KEYS ARE FINE, including a unit whose id differs from
-	// its own name — which is the ordinary case the field exists for.
-	c := unitsCompany(
-		config.Unit{Name: "Platform", ID: "core"},
-		config.Unit{Name: "Product", ID: "prod"},
-	)
-	if err := c.Validate(); err != nil {
-		t.Fatalf("distinct keys were refused: %v", err)
+	// its own name — which is the ordinary case the field exists for — two
+	// units NAMED alike, and an id that spells another unit's name. A name
+	// is prose, and nothing resolves a unit that declares an id by its name.
+	for name, units := range map[string][]config.Unit{
+		"an id unlike its name": {
+			{Name: "Platform", ID: "core"},
+			{Name: "Product", ID: "prod"},
+		},
+		"two units of one name on two ids": {
+			{Name: "Platform", ID: "plat-a"},
+			{Name: "Engineering", ID: "eng", Children: []config.Unit{{Name: "Platform", ID: "plat-b"}}},
+		},
+		"an id spelling another unit's name": {
+			{Name: "Platform", ID: "plat"},
+			{Name: "Product", ID: "platform"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := unitsCompany(units...).Validate(); err != nil {
+				t.Fatalf("distinct keys were refused: %v", err)
+			}
+		})
 	}
 }
 

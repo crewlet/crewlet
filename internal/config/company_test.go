@@ -516,16 +516,27 @@ roles:
 		rejects(t, "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n", "duplicate handle")
 	})
 
-	t.Run("two seats sharing a name on distinct handles", func(t *testing.T) {
-		t.Parallel()
-		rejects(t, "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n",
-			"duplicate seat name")
-	})
-
-	t.Run("two units sharing a name in different branches", func(t *testing.T) {
+	t.Run("two units keyed alike in different branches", func(t *testing.T) {
 		t.Parallel()
 		rejects(t, "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n"+
-			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit name")
+			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit key")
+	})
+
+	// A NAME IS PROSE, the org chart's own rule: two seats or two units may
+	// share one on distinct addresses, which is what every chart write
+	// already accepts and an exported chart can carry.
+	t.Run("two seats and two units sharing names on distinct addresses", func(t *testing.T) {
+		t.Parallel()
+		c, err := ParseCompany([]byte("name: Acme\n" +
+			"roles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n" +
+			"units:\n  - {name: Core, id: core, children: [{name: Platform, id: core-platform}]}\n" +
+			"  - {name: Edge, id: edge, children: [{name: Platform, id: edge-platform}]}\n"))
+		if err != nil {
+			t.Fatalf("a document sharing names on distinct addresses was refused: %v", err)
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("a document sharing names on distinct addresses was refused: %v", err)
+		}
 	})
 
 	t.Run("a malformed explicit handle", func(t *testing.T) {

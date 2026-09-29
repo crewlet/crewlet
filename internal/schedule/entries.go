@@ -27,9 +27,9 @@ type Entry struct {
 	// ledger keys a fire on. It was the role's handle and the unit's NAME,
 	// and both were wrong in the same way: a rename split a schedule's
 	// history in two and reset its dedupe, and two units of one name shared
-	// a fire key outright — one team's standup suppressing the other's,
-	// which a stored revision can still reach because duplicate unit names
-	// are an admission rule rather than a runnable one. See ADR-0019.
+	// a fire key outright — one team's standup suppressing the other's —
+	// while a name is prose the org chart lets any two units share. See
+	// ADR-0019.
 	ScopeID string
 
 	// ScopeName is the same scope as a person reads it: the seat's handle

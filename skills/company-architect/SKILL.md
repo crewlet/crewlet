@@ -204,14 +204,16 @@ it out.** The id is the unit's key — lowercase letters, digits, `-` and
 short and dull (`engineering`, `platform`). Write it yourself when the
 name is long or likely to change.
 
-**Seat names and unit keys are unique across the whole company.** Each
-reference resolves to the first match anywhere in the tree, so two units
-answering to one key silently share one team's work, routing and pages.
-Two seats called `Software Engineer` are refused too: a colleague named in
-prose is resolved by that name, so an agent asking for one is offered both
-every time. Both are refused by `crewlet validate` and by every config
-write. Give each its own name and key (`Payments Platform` /
-`id: payments-platform`, `Software Engineer 2`).
+**Handles and unit keys are unique across the whole company; names are
+not.** Each reference resolves to the first match anywhere in the tree, so
+two units answering to one key silently share one team's work, routing and
+pages, and two seats on one handle share one inbox — `crewlet validate`
+refuses both, and so does the org chart. A `name` is prose and may repeat:
+two seats called `Software Engineer` are fine on two handles, but two that
+declare no `handle` derive the same one and are refused for that. Prefer
+names a reader can tell apart anyway (`Software Engineer 2`), since a
+colleague asked for by a shared name is offered every seat that carries it,
+and give every seat an explicit `handle` and every unit its own `id`.
 
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in

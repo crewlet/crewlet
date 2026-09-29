@@ -565,8 +565,11 @@ units:
 		},
 		{name: "a stdio server with no command", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nmcp_servers:\n  - {name: calc}\n"},
 		{name: "duplicate handles", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n"},
-		{name: "duplicate seat names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n"},
-		{name: "duplicate unit names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n  - {name: Edge, children: [{name: Platform}]}\n"},
+		{name: "duplicate unit keys", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n  - {name: Edge, children: [{name: Platform}]}\n"},
+		// A NAME IS PROSE: neither layer may refuse two seats or two units
+		// sharing one on distinct addresses, which is what the org chart
+		// holds and what an exported chart carries back.
+		{name: "shared names on distinct addresses", tier: TierCompany, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\nunits:\n  - {name: Core, id: core, children: [{name: Platform, id: core-platform}]}\n  - {name: Edge, id: edge, children: [{name: Platform, id: edge-platform}]}\n"},
 		{name: "duplicate setup step names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - {name: registry, commands: [\"true\"]}\n      - {name: registry, commands: [\"true\"]}\n"},
 		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
 		// A TIER A TOKEN'S ID AT ITS BOUND AND ONE PAST IT. The bound is

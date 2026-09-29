@@ -205,10 +205,11 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names, duplicate seat ids,
-// duplicate unit keys and a unit reference on a seat declared inside a unit
-// of a different key (see [org.Organization.ValidateAdmission]), a unit with
-// no id, duplicate sandbox setup step names within one list, a GitHub App
+// Today they are the org's duplicate unit keys and a unit reference on a seat
+// declared inside a unit of a different key (see
+// [org.Organization.ValidateAdmission], which also says why no NAME is held
+// unique), a unit with no id, duplicate sandbox setup step names within one
+// list, a GitHub App
 // on a human seat, and the four WHOLE-DOCUMENT rules in
 // [Company.validateFileRules] — an `mcp_env` key naming no server, two seats
 // declaring one email, a reference that is shaped like neither a handle nor a
