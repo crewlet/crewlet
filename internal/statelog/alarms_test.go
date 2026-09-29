@@ -206,9 +206,18 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"an estate view past the staleness bound": {
 			statelog.KindEstateViewStale,
-			statelog.Reading{EstateViewAge: statelog.Age(2 * time.Minute),
-				EstateViewStale: "the estate leases"},
-			"view of the estate leases was last confirmed 2m0s ago",
+			statelog.Reading{EstateView: &statelog.EstateViewAge{Half: "the estate map",
+				Age: 2 * time.Minute, Bound: statelog.FloorCacheStale}},
+			"view of the estate map was last confirmed 2m0s ago, past the 1m0s",
+		},
+		// THE BOUND IS THE VIEW'S, not a minute restated here: leases a
+		// second past a 45-second TTL are no answer, and the alarm says so
+		// at the same instant the view stops deciding from them.
+		"estate leases past their TTL": {
+			statelog.KindEstateViewStale,
+			statelog.Reading{EstateView: &statelog.EstateViewAge{Half: "the estate leases",
+				Age: 46 * time.Second, Bound: 45 * time.Second}},
+			"view of the estate leases was last confirmed 46s ago, past the 45s",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -338,8 +347,12 @@ func TestTheEstateAlarmsAreSilentShortOfTheirThresholds(t *testing.T) {
 		"joining at the window": {EstateJoiningFor: 30 * time.Minute,
 			EstateJoinBudget: 30 * time.Minute, EstateJoiningWhich: "tracker.007 on data-c"},
 		"joining with no budget": {EstateJoiningFor: time.Hour},
-		"a view at the bound":    {EstateViewAge: statelog.Age(statelog.FloorCacheStale)},
-		"a view confirmed now":   {EstateViewAge: statelog.Age(0), EstateViewStale: "the estate map"},
+		"a view at the bound": {EstateView: &statelog.EstateViewAge{Half: "the estate map",
+			Age: statelog.FloorCacheStale, Bound: statelog.FloorCacheStale}},
+		"leases at their TTL": {EstateView: &statelog.EstateViewAge{Half: "the estate leases",
+			Age: 45 * time.Second, Bound: 45 * time.Second}},
+		"a view confirmed now": {EstateView: &statelog.EstateViewAge{Half: "the estate map",
+			Bound: statelog.FloorCacheStale}},
 	} {
 		if got := statelog.Evaluate(r); len(got) != 0 {
 			t.Errorf("%s raised %v", name, kindsOf(got))

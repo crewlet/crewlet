@@ -106,9 +106,10 @@ var alarmMeaning = map[Kind]string{
 		"member it counts gone.",
 	KindEstateMoveStalled: "A holder has been joining a partition for longer than the " +
 		"rejoin window a join is sized against, as this node has seen it.",
-	KindEstateViewStale: "This node's view of the estate map, of the estate leases, or of " +
-		"the presence it routes the estate by has not been confirmed within the staleness " +
-		"bound every cached coordination fact is held to.",
+	KindEstateViewStale: "This node's view of the estate map or of the estate leases has " +
+		"not been confirmed within the age past which it is unknown: the staleness bound " +
+		"every cached coordination fact is held to, or the estate leases' TTL where that " +
+		"is shorter.",
 	// The two marks are the store's own, named once in internal/objstore/disk.
 	KindObjectsNearFull: fmt.Sprintf("This node's object store volume is past "+
 		"%.0f%% used. At %.0f%% it refuses every new chunk.",

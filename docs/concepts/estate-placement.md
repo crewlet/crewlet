@@ -149,15 +149,18 @@ each at a threshold another decision already made:
 | `estate_partition_unserved` | A partition has no copy that can answer — the event itself |
 | `estate_under_replicated` | A partition has had fewer copies than its target for longer than membership's ten-minute grace, the time the map gives a member before replacing it |
 | `estate_move_stalled` | A holder has been joining for longer than the rejoin window (`stream.tracker_retention.rejoin_window`, 30 minutes by default), the budget a join is sized against |
-| `estate_view_stale` | This node's view of the map, the estate leases or — at layout 0 — the fleet's presence has not been confirmed within the 60-second bound every cached coordination fact is held to |
+| `estate_view_stale` | This node's view of the map or of the estate leases has not been confirmed within the age past which nothing may decide from it: the 60-second bound every cached coordination fact is held to, or the estate leases' TTL (`coordination.lease_ttl_seconds`) where that is shorter — the one rule the view itself decides by, so the alarm and the view never disagree |
 
 The two durations are **this node's own observation**: the map records epochs,
 not times, so each node measures how long it has seen a condition hold without
 a break, on its own clock. That is a lower bound — a node that restarted, or
 whose view went stale in between, counts from again — so an alarm can fire a
 sighting late, never on a condition nobody saw hold. While the view is stale the
-other three alarms are silent and `estate_view_stale` says why. At layout 0
-there is no map, so only `estate_view_stale` can fire.
+other three alarms are silent and `estate_view_stale` says why. The view lists
+the estate leases at least every fifteen seconds whatever the lease TTL, so a
+healthy node's view is never stale. At layout 0 there is no map, so only
+`estate_view_stale` can fire; the fleet's presence, which names layout 0's
+servers, is not judged, since it answers routing alone.
 
 ## The gestures
 

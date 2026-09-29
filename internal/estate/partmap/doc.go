@@ -221,5 +221,9 @@
 // key was lost replaces the lost one whatever its version, and it takes a read
 // nothing overtook as the store's value now. Routing may use it at any age;
 // anything that decides asks [View.Fresh], which is false once either half was
-// last confirmed more than statelog.FloorCacheStale ago.
+// last confirmed more than statelog.FloorCacheStale ago — the leases more than
+// their TTL, where that is shorter. [View.Staleness] is that rule half by half,
+// and the one the estate_view_stale alarm reads, so the two cannot disagree;
+// the leases are listed at least every [ViewConfirm], so a healthy view stays
+// fresh at any TTL.
 package partmap

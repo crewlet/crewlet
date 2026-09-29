@@ -91,7 +91,18 @@ import (
 // trim's counted set, a capacity window's participants, an eviction — asks
 // [View.Fresh] first and treats a view whose map or leases were last confirmed
 // more than [statelog.FloorCacheStale] ago as unknown, the age past which every
-// cached coordination fact here is.
+// cached coordination fact here is — and the leases past their TTL where that
+// is shorter, since a listing a TTL old is no answer at all
+// ([coord.LeaseView]). [View.Staleness] is that one rule, half by half, and
+// what the estate_view_stale alarm reads, so the alarm and every decision can
+// never disagree about whether the view is stale.
+//
+// Two things make it hold on a HEALTHY fleet at any TTL: the map is read every
+// [ViewConfirm], and the leases are listed at least that often
+// ([viewListEvery]) — four confirmations inside the bound, so three may fail
+// in a row before the view is stale. The presence roster layout 0 routes by
+// is NOT a half: it answers routing alone, which may use any age, and it is
+// three-valued on its own lease view's terms.
 
 // ViewConfirm is how often a view reads the map from the store to confirm the
 // watch has not gone silent.
@@ -103,6 +114,22 @@ import (
 // stream's leader, so at this cadence a hundred nodes cost the store seven reads
 // a second.
 const ViewConfirm = coord.ReconcileInterval
+
+// viewListEvery is how often a view lists the estate leases: their renew
+// cadence, heartbeat, and never less often than [ViewConfirm].
+//
+// NOT THE HEARTBEAT ALONE: a listing more often than the leases renew finds
+// nothing new, but it CONFIRMS — and the view is judged by
+// [statelog.FloorCacheStale] whatever the TTL. At the default TTL (45s) the
+// heartbeat is fifteen seconds and the two agree; at a TTL above 45s the
+// heartbeat is longer than ViewConfirm, and at one above 180s longer than the
+// bound itself, where a healthy view listed on the heartbeat went stale
+// between every two listings and the alarm read by it raised and cleared on
+// every data node. One listing of one lease class every fifteen seconds is
+// what every deployment at the default already pays.
+func viewListEvery(heartbeat time.Duration) time.Duration {
+	return min(heartbeat, ViewConfirm)
+}
 
 // MapSource is where a view reads the estate map: the coordination store's
 // read and watch of it.
@@ -143,7 +170,8 @@ type ViewOptions struct {
 	Roster Roster
 
 	// Heartbeat is the estate leases' renew cadence, and TTL how long one
-	// survives unrenewed — the lease view's cadence and its trust.
+	// survives unrenewed — the lease view's cadence ([viewListEvery]) and
+	// its trust.
 	Heartbeat, TTL time.Duration
 
 	// Now is the clock, for tests. Nil is the wall clock.
@@ -159,6 +187,12 @@ type View struct {
 	roster  Roster
 	running statelog.Layout
 	now     func() time.Time
+
+	// leaseBound is the age past which the lease half is unknown to a
+	// decider ([View.Staleness]), and built when the view was — what a half
+	// never confirmed is aged from.
+	leaseBound time.Duration
+	built      time.Time
 
 	mu sync.Mutex
 	// known is whether the store has answered at all; present whether it
@@ -201,7 +235,7 @@ func NewView(opts ViewOptions) (*View, error) {
 			"fleet's live data nodes, which serve that layout's one partition")
 	}
 	leases, err := coord.NewLeaseView(opts.Leases, coord.ClassEstate, coord.ViewOptions{
-		Every: opts.Heartbeat, Trust: opts.TTL, Now: opts.Now,
+		Every: viewListEvery(opts.Heartbeat), Trust: opts.TTL, Now: opts.Now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("estate/partmap: the estate leases' view: %w", err)
@@ -211,7 +245,8 @@ func NewView(opts ViewOptions) (*View, error) {
 		now = time.Now
 	}
 	return &View{maps: opts.Maps, leases: leases, roster: opts.Roster, running: opts.Running,
-		now: now, watches: map[*viewWatch]struct{}{}}, nil
+		now: now, leaseBound: min(opts.TTL, statelog.FloorCacheStale), built: now(),
+		watches: map[*viewWatch]struct{}{}}, nil
 }
 
 // Run follows the map and lists the leases until ctx ends, and returns ctx's
@@ -552,31 +587,72 @@ func (v *View) Read(ctx context.Context) (Map, uint64, error) {
 	return m, version, nil
 }
 
-// Fresh reports whether both halves were confirmed within
-// [statelog.FloorCacheStale]: the map by a read or a delivery the store
+// Fresh reports whether both halves have been confirmed and neither is past
+// its bound ([View.Staleness]): the map by a read or a delivery the store
 // answered, the leases by a listing. A caller that DECIDES from the view treats
 // false as unknown — see the file's doc.
+//
+// ONE THING MORE THAN STALENESS: a half never confirmed is not fresh — it is
+// unknown, and the view's answers say so — while Staleness ages it from when
+// the view was built, so a node still starting raises no alarm for a view
+// that has not had time to answer.
 func (v *View) Fresh() bool {
 	v.mu.Lock()
 	confirmed := v.confirmedAt
 	v.mu.Unlock()
-	now := v.now()
-	if confirmed.IsZero() || now.Sub(confirmed) > statelog.FloorCacheStale {
+	if confirmed.IsZero() || v.leases.ListedAt().IsZero() {
 		return false
 	}
-	_, listed, err := v.leases.Leases()
-	return err == nil && now.Sub(listed) <= statelog.FloorCacheStale
+	return !v.Staleness(v.now()).Stale()
 }
 
-// Confirmed is when each half was last confirmed — the map by a read or a
-// delivery the store answered, the leases by a listing — and the zero time for
-// a half never confirmed: what an alarm reports the age of when the view is
-// not [View.Fresh].
-func (v *View) Confirmed() (mapAt, leasesAt time.Time) {
+// Staleness is how current the view is at now, judged half by half by the rule
+// [View.Fresh] decides by — see the file's doc.
+type Staleness struct {
+	// Half is the half nearest its bound — the one furthest past it, where
+	// any is: "the estate map" or "the estate leases".
+	Half string
+
+	// Age is how long ago that half was last confirmed: the map by a read
+	// or a delivery the store answered, the leases by a listing — whatever
+	// its age, and from when the view was built for a half never confirmed.
+	Age time.Duration
+
+	// Bound is the age past which anything deciding from the view treats
+	// that half as unknown: [statelog.FloorCacheStale], and for the leases
+	// their TTL where that is shorter.
+	Bound time.Duration
+}
+
+// Stale reports whether the half is past its bound.
+func (s Staleness) Stale() bool { return s.Age > s.Bound }
+
+// Staleness is the view's half nearest its bound at now — the one rule
+// [View.Fresh] and the estate_view_stale alarm both read.
+func (v *View) Staleness(now time.Time) Staleness {
 	v.mu.Lock()
-	mapAt = v.confirmedAt
+	mapAt := v.confirmedAt
 	v.mu.Unlock()
-	return mapAt, v.leases.ListedAt()
+	halves := []Staleness{
+		{Half: "the estate map", Age: v.ageOf(mapAt, now), Bound: statelog.FloorCacheStale},
+		{Half: "the estate leases", Age: v.ageOf(v.leases.ListedAt(), now), Bound: v.leaseBound},
+	}
+	out := halves[0]
+	for _, h := range halves[1:] {
+		if h.Age-h.Bound > out.Age-out.Bound {
+			out = h
+		}
+	}
+	return out
+}
+
+// ageOf is how long before now a half was confirmed at, from when the view was
+// built for one never confirmed, and never negative.
+func (v *View) ageOf(at, now time.Time) time.Duration {
+	if at.IsZero() {
+		at = v.built
+	}
+	return max(now.Sub(at), 0)
 }
 
 // Presences is every live estate lease that offers a share ([PresenceOf]), as

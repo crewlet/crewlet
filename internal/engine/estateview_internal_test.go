@@ -66,13 +66,43 @@ func (b *breakableMaps) set(broken bool) {
 	b.mu.Unlock()
 }
 
+// breakableLeases lists the estate leases until it is told to stop answering.
+type breakableLeases struct {
+	coord.Backend
+	mu     sync.Mutex
+	broken bool
+}
+
+func (b *breakableLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	b.mu.Lock()
+	broken := b.broken
+	b.mu.Unlock()
+	if broken {
+		return nil, errors.New("coordination timed out")
+	}
+	return b.Backend.ListLive(ctx, class)
+}
+
+func (b *breakableLeases) set(broken bool) {
+	b.mu.Lock()
+	b.broken = broken
+	b.mu.Unlock()
+}
+
 // runningWatch is an estate watch over maps and leases on clock c, running its
 // view until the test ends, and fresh.
 func runningWatch(t *testing.T, maps partmap.MapSource, leases coord.Backend,
 	presence *coord.LeaseView, running statelog.Layout, c *viewClock) *estateWatch {
 
 	t.Helper()
-	b := config.DefaultBootstrap()
+	return runningWatchOn(t, config.DefaultBootstrap(), maps, leases, presence, running, c)
+}
+
+// runningWatchOn is runningWatch on this node's own Tier A.
+func runningWatchOn(t *testing.T, b config.Bootstrap, maps partmap.MapSource, leases coord.Backend,
+	presence *coord.LeaseView, running statelog.Layout, c *viewClock) *estateWatch {
+
+	t.Helper()
 	w, err := newEstateWatch(&b, maps, leases, presence, running, c.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +180,8 @@ func TestTheEstateAlarmsReadWhatTheViewHasSeen(t *testing.T) {
 		t.Fatalf("the reading is %+v, want every one of %d partitions unserved and short "+
 			"for 31m, joins for 31m against a 30m window", r, parts)
 	}
-	if r.EstateViewAge == nil || *r.EstateViewAge != 0 {
-		t.Errorf("a view confirmed this instant reads as %v old", r.EstateViewAge)
+	if r.EstateView == nil || r.EstateView.Age != 0 {
+		t.Errorf("a view confirmed this instant reads as %+v", r.EstateView)
 	}
 	fired := map[statelog.Kind]string{}
 	for _, a := range statelog.Evaluate(r) {
@@ -187,7 +217,9 @@ func TestAStaleEstateViewSaysSoAndSeesNothing(t *testing.T) {
 	c.advance(statelog.FloorCacheStale + time.Minute)
 	w.view.Invalidate()
 	deadline := time.Now().Add(5 * time.Second)
-	for _, at := w.view.Confirmed(); !at.Equal(c.Now()); _, at = w.view.Confirmed() {
+	// LISTED AT THE NEW INSTANT once the map is the half the view names:
+	// until then the leases, an equal age past a shorter bound, are.
+	for st := w.view.Staleness(c.Now()); st.Half != "the estate map"; st = w.view.Staleness(c.Now()) {
 		if time.Now().After(deadline) {
 			t.Fatal("the leases were never listed at the new instant")
 		}
@@ -203,10 +235,10 @@ func TestAStaleEstateViewSaysSoAndSeesNothing(t *testing.T) {
 	if r.EstateUnserved != 0 || r.EstateShort != 0 || r.EstateJoiningFor != 0 {
 		t.Errorf("a stale view still reports what it saw: %+v", r)
 	}
-	if r.EstateViewAge == nil || *r.EstateViewAge != statelog.FloorCacheStale+time.Minute ||
-		r.EstateViewStale != "the estate map" {
-		t.Fatalf("the view's age reads %v of %q, want the estate map %v ago", r.EstateViewAge,
-			r.EstateViewStale, statelog.FloorCacheStale+time.Minute)
+	if v := r.EstateView; v == nil || v.Age != statelog.FloorCacheStale+time.Minute ||
+		v.Half != "the estate map" || v.Bound != statelog.FloorCacheStale {
+		t.Fatalf("the view reads %+v, want the estate map %v ago against %v", r.EstateView,
+			statelog.FloorCacheStale+time.Minute, statelog.FloorCacheStale)
 	}
 	alarms := statelog.Evaluate(r)
 	if len(alarms) != 1 || alarms[0].Kind != statelog.KindEstateViewStale {
@@ -225,8 +257,10 @@ func TestAStaleEstateViewSaysSoAndSeesNothing(t *testing.T) {
 }
 
 // UNDER LAYOUT 0 THERE IS NO MAP, so nothing is short, unserved or joining —
-// and the view is still judged, with the fleet's presence it routes the estate
-// by among its halves.
+// and the view is still judged, on its own two halves: the store answering
+// that there is no map, and the estate leases. The fleet's presence it names
+// layout 0's servers from is NOT one of them — it answers routing, which may
+// use any age — so a presence view that has never listed raises nothing here.
 func TestUnderLayoutZeroTheEstateAlarmsJudgeTheViewAlone(t *testing.T) {
 	t.Parallel()
 	c := &viewClock{now: gestureNow}
@@ -245,12 +279,68 @@ func TestUnderLayoutZeroTheEstateAlarmsJudgeTheViewAlone(t *testing.T) {
 	if r.EstateUnserved != 0 || r.EstateShort != 0 || r.EstateJoiningFor != 0 {
 		t.Errorf("layout 0 reports a map's findings: %+v", r)
 	}
-	// THE PRESENCE VIEW NEVER LISTED — it is not run here — so it is as old
-	// as the watch, and it is the half the alarm names.
-	if r.EstateViewAge == nil || *r.EstateViewAge != 2*time.Minute ||
-		r.EstateViewStale != "the fleet's presence" {
-		t.Errorf("the view's age reads %v of %q, want the fleet's presence two minutes old",
-			r.EstateViewAge, r.EstateViewStale)
+	// THE PRESENCE VIEW NEVER LISTED — it is not run here — and the view,
+	// confirmed this instant, is current all the same.
+	if v := r.EstateView; v == nil || v.Age != 0 {
+		t.Errorf("a layout-0 view confirmed this instant reads %+v", r.EstateView)
+	}
+	if got := statelog.Evaluate(r); len(got) != 0 {
+		t.Errorf("a current layout-0 view raised %v", got)
+	}
+}
+
+// THE ALARM AND THE VIEW'S OWN FRESHNESS NEVER DISAGREE, at any TTL: the estate
+// leases stop being listed, and at every instant after it estate_view_stale
+// fires exactly when the view has stopped being fresh — at the leases' TTL
+// where that is shorter than the minute every cached fact is held to (the
+// default, 45 seconds), and at the minute where the TTL is longer. Judged at
+// the minute whatever the TTL, the alarm stayed quiet from 45 to 60 seconds
+// while the view was no longer fresh and the watch had already forgotten what
+// it saw: the map alarms silent, and nothing saying why.
+func TestTheStaleAlarmFiresExactlyWhenTheViewIsNotFresh(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		ttlSeconds float64
+		bound      time.Duration
+	}{
+		"the default lease TTL": {0, 45 * time.Second},
+		"a five-minute TTL":     {300, statelog.FloorCacheStale},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := &viewClock{now: gestureNow}
+			leases := &breakableLeases{Backend: coordmemory.New()}
+			claimLeases(t, leases.Backend, testLayoutOne.Number, "a", "b", "c", "d")
+			b := config.DefaultBootstrap()
+			b.Coordination.LeaseTTLSeconds = tc.ttlSeconds
+			w := runningWatchOn(t, b, storedEstateMap(t, "a", "b", "c", "d"), leases, nil,
+				testLayoutOne, c)
+			w.sample(c.Now())
+			leases.set(true)
+			for _, age := range []time.Duration{30 * time.Second, 50 * time.Second,
+				tc.bound, tc.bound + time.Second, 2 * time.Minute} {
+				c.advance(age - c.Now().Sub(gestureNow))
+				// THE MAP GOES ON ANSWERING: only the leases are quiet. And
+				// the watch is NOT sampled again, so what it saw while the
+				// view was fresh is still in it: a reading must not report
+				// that beside the alarm saying the view is stale.
+				if _, _, err := w.view.Read(t.Context()); err != nil {
+					t.Fatalf("Read: %v", err)
+				}
+				var r statelog.Reading
+				w.reading(c.Now(), &r)
+				fired := firedKind(statelog.Evaluate(r), statelog.KindEstateViewStale)
+				if fresh := w.view.Fresh(); fired == fresh || fired != (age > tc.bound) {
+					t.Errorf("leases unlisted for %v: estate_view_stale fired %v and the view "+
+						"is fresh %v; want it to fire exactly past %v (%+v)", age, fired, fresh,
+						tc.bound, r.EstateView)
+				}
+				// AND WHILE IT FIRES NOTHING THE VIEW SAW IS REPORTED.
+				if fired && (r.EstateUnserved != 0 || r.EstateShort != 0 || r.EstateJoiningFor != 0) {
+					t.Errorf("a stale view still reports what it saw: %+v", r)
+				}
+			}
+		})
 	}
 }
 
@@ -269,13 +359,13 @@ func TestTheRetentionReadingCarriesTheEstateView(t *testing.T) {
 	e := &Engine{}
 	r := &retention{state: &stateLog{}, fleet: coordmemory.NewFleet(), nodeID: "a",
 		estate: e.estateReading}
-	if got := r.reading(t.Context(), c.Now(), coord.BackupPoint{}, false, nil); got.EstateViewAge != nil ||
+	if got := r.reading(t.Context(), c.Now(), coord.BackupPoint{}, false, nil); got.EstateView != nil ||
 		got.EstateJoinBudget != 0 {
 		t.Errorf("a node running no estate view reads %+v", got)
 	}
 	e.estateWatch.Store(w)
 	got := r.reading(t.Context(), c.Now(), coord.BackupPoint{}, false, nil)
-	if got.EstateUnserved != len(testLayoutOne.Partitions()) || got.EstateViewAge == nil {
+	if got.EstateUnserved != len(testLayoutOne.Partitions()) || got.EstateView == nil {
 		t.Fatalf("the reading does not carry the estate view: %+v", got)
 	}
 	if !firedKind(statelog.Evaluate(got), statelog.KindEstateUnserved) {

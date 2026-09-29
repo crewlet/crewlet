@@ -51,6 +51,12 @@ func (c *clock) advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+func (c *clock) set(at time.Time) {
+	c.mu.Lock()
+	c.now = at
+	c.mu.Unlock()
+}
+
 // roster is a settable presence roster: the live data nodes, or why they are
 // not known.
 type roster struct {
@@ -570,10 +576,10 @@ func TestAViewIsFreshOnlyWhileBothHalvesAreConfirmed(t *testing.T) {
 	if v.Fresh() {
 		t.Fatal("a view whose map was last confirmed past the bound is fresh")
 	}
-	// AND IT SAYS WHICH HALF, AND HOW OLD: what an alarm reports.
-	if mapAt, leasesAt := v.Confirmed(); !mapAt.Equal(base) || !leasesAt.Equal(c.Now()) {
-		t.Errorf("Confirmed = (%v, %v), want the map at %v and the leases at %v",
-			mapAt, leasesAt, base, c.Now())
+	// AND IT SAYS WHICH HALF, HOW OLD AND AGAINST WHAT: what an alarm reports.
+	if st := v.Staleness(c.Now()); st.Half != "the estate map" || !st.Stale() ||
+		st.Age != statelog.FloorCacheStale+time.Second || st.Bound != statelog.FloorCacheStale {
+		t.Errorf("Staleness = %+v, want the estate map a second past the bound", st)
 	}
 	if _, _, err := v.Serving(statelog.PartitionID{Space: statelog.SpaceTracker}); err != nil {
 		t.Errorf("routing refused a view that is only old: %v", err)
@@ -597,13 +603,127 @@ func TestAViewIsFreshOnlyWhileBothHalvesAreConfirmed(t *testing.T) {
 	if v.Fresh() {
 		t.Error("a view whose leases were last listed past the bound is fresh")
 	}
-	// THE LEASES' LAST LISTING IS STILL SAID past their trust, which is the
+	// THE LEASES' LAST LISTING IS STILL AGED past their trust, which is the
 	// age an alarm reports — not a zero time a reader cannot measure from.
-	if mapAt, leasesAt := v.Confirmed(); !mapAt.Equal(c.Now()) || leasesAt.Before(quiet) ||
-		c.Now().Sub(leasesAt) <= statelog.FloorCacheStale {
-		t.Errorf("Confirmed = (%v, %v) at %v, want the map now and the leases at %v",
-			mapAt, leasesAt, c.Now(), quiet)
+	if st := v.Staleness(c.Now()); st.Half != "the estate leases" || !st.Stale() ||
+		st.Age < c.Now().Sub(quiet) {
+		t.Errorf("Staleness = %+v at %v, want the leases, listed before %v", st, c.Now(), quiet)
 	}
+}
+
+// THE LEASES ARE UNKNOWN AT THEIR TTL WHERE THAT IS SHORTER THAN THE STALENESS
+// BOUND, and the view's own staleness says so at the same instant: a listing
+// fifty seconds old under a forty-five-second TTL is no answer at all, so the
+// view is not fresh — and Staleness, which the estate_view_stale alarm reads,
+// calls the leases stale then too, rather than at the minute every other
+// cached fact is held to, which left a gap where nothing could decide from the
+// view and nothing said why. Under a TTL longer than the bound, the bound is
+// the minute.
+func TestAViewsLeasesAreStaleAtTheirTTLWhereThatIsShorter(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		ttl, bound time.Duration
+	}{
+		"the default TTL":        {ttl: 45 * time.Second, bound: 45 * time.Second},
+		"a TTL past the minute":  {ttl: 5 * time.Minute, bound: statelog.FloorCacheStale},
+		"a TTL at the bound":     {ttl: statelog.FloorCacheStale, bound: statelog.FloorCacheStale},
+		"a TTL well short of it": {ttl: 9 * time.Second, bound: 9 * time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := &clock{now: base}
+			leases := &failingLister{Lister: coordmemory.New()}
+			store, _, _ := storeWithMap(t)
+			v, err := NewView(ViewOptions{Maps: quietWatch{store}, Leases: leases,
+				Running: layoutZero, Roster: &roster{nodes: []string{"a"}},
+				Heartbeat: 20 * time.Millisecond, TTL: tc.ttl, Now: c.Now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run(t, v)
+			eventually(t, "a fresh view", v.Fresh)
+			leases.mu.Lock()
+			leases.broken = true
+			leases.mu.Unlock()
+
+			// THE MAP IS NOT READ AGAIN, so both halves are as old as each
+			// other and the one the view names is the one further past its
+			// own bound — the leases, wherever their TTL is the shorter.
+			for _, age := range []time.Duration{tc.bound, tc.bound + time.Second} {
+				c.set(base.Add(age))
+				st := v.Staleness(c.Now())
+				stale := age > tc.bound
+				if st.Stale() != stale || v.Fresh() == stale {
+					t.Errorf("leases last listed %v ago under a %v TTL: Staleness %+v, Fresh %v; "+
+						"want both to say stale %v", age, tc.ttl, st, v.Fresh(), stale)
+				}
+				if stale && st.Bound != tc.bound {
+					t.Errorf("the stale half reads %+v, want it judged against %v", st, tc.bound)
+				}
+				if stale && tc.bound < statelog.FloorCacheStale && st.Half != "the estate leases" {
+					t.Errorf("the stale half reads %+v, want the estate leases", st)
+				}
+			}
+		})
+	}
+}
+
+// THE LEASES ARE LISTED AT LEAST EVERY ViewConfirm, whatever their heartbeat:
+// a listing more often than they renew finds nothing new but confirms, and a
+// view listed only on a long TTL's heartbeat went stale between every two
+// listings on a healthy fleet.
+func TestAViewListsTheLeasesAtLeastEveryConfirmation(t *testing.T) {
+	t.Parallel()
+	for heartbeat, want := range map[time.Duration]time.Duration{
+		3 * time.Second:              3 * time.Second,
+		ViewConfirm:                  ViewConfirm,
+		100 * time.Second:            ViewConfirm,
+		statelog.FloorCacheStale * 2: ViewConfirm,
+	} {
+		if got := viewListEvery(heartbeat); got != want {
+			t.Errorf("a heartbeat of %v lists every %v, want %v", heartbeat, got, want)
+		}
+	}
+
+	// AND THE VIEW LISTS ON IT: an hour's heartbeat, and a second listing
+	// within a confirmation — real time, since the lease view's cadence is
+	// a ticker.
+	listings := &countingLister{Lister: coordmemory.New()}
+	v, err := NewView(ViewOptions{Maps: coordmemory.NewFleet(), Leases: listings,
+		Running: layoutZero, Roster: &roster{nodes: []string{"a"}},
+		Heartbeat: time.Hour, TTL: 3 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, v)
+	deadline := time.Now().Add(ViewConfirm + 10*time.Second)
+	for listings.count() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the leases were listed %d time(s) in %v under an hour's heartbeat, "+
+				"want again within %v", listings.count(), ViewConfirm+10*time.Second, ViewConfirm)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// countingLister counts the listings a view makes.
+type countingLister struct {
+	coord.Lister
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingLister) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.Lister.ListLive(ctx, class)
+}
+
+func (c *countingLister) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
 
 // THE LEASES A VIEW LISTED ARE WHAT IT HANDS AN ALARM, each read as the

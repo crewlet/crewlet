@@ -18,28 +18,34 @@ import (
 // A node that evaluates the alarm table — one running the state log, whose
 // retention loop is where the table is evaluated — watches the estate map the
 // way every reader of it does (partmap.View: the map watched and confirmed
-// every fifteen seconds, beside a watched listing of the estate leases, and
-// under layout 0 the fleet's presence), and samples it on the map
-// maintainer's own cadence into a partmap.Watch. The four estate alarms are
-// read off that: the partitions no copy can answer for, the one short of
-// copies longest, the oldest join in flight, and how old the view itself is.
+// every fifteen seconds, beside a watched listing of the estate leases), and
+// samples it on the map maintainer's own cadence into a partmap.Watch. The
+// four estate alarms are read off that: the partitions no copy can answer for,
+// the one short of copies longest, the oldest join in flight, and how current
+// the view itself is — by the view's OWN staleness rule (partmap.View.Staleness),
+// never one restated here, so estate_view_stale fires exactly when the view
+// stops being fresh.
 //
 // # A sample it could not see through is a break
 //
-// A view that is not fresh — its map or its leases last confirmed past the
-// staleness bound — is one this node decides nothing from, and a sample taken
-// through it is no sighting at all: the watch forgets what it had seen, and the
-// three map alarms go quiet while estate_view_stale says why. Keeping the runs
-// across the gap would let an alarm fire on a condition nobody saw hold for its
-// whole grace; losing them makes it fire a gap late, which is the direction a
-// lower bound is allowed to err in.
+// A view that is not fresh — its map or its leases last confirmed past their
+// bound — is one nothing may decide from, and a sample taken through it is no
+// sighting at all: the watch forgets what it had seen, and the three map
+// alarms go quiet while estate_view_stale says why. A reading taken while the
+// view is stale reports no finding either, whatever the last sample saw, so
+// the two can never be read side by side. Keeping the runs across the gap
+// would let an alarm fire on a condition nobody saw hold for its whole grace;
+// losing them makes it fire a gap late, which is the direction a lower bound
+// is allowed to err in.
 //
 // # Under layout 0
 //
 // There is no map, so there is nothing to be short or stalled, and the three
-// map alarms never fire. The view is still run and its age still judged, since
-// the estate is routed by what it answers from — the fleet's presence, under
-// layout 0.
+// map alarms never fire. The view is still run and its staleness still judged
+// — the store answering that there is no map confirms the map half — and the
+// fleet's presence is its roster, which layout 0's one partition is served by.
+// The roster is not judged: it answers routing alone, which may use any age
+// (partmap.View's doc).
 
 // estateSampleInterval is how often the watch samples the view: the map
 // maintainer's own tick (coord.ReconcileInterval, fifteen seconds), so a
@@ -51,18 +57,9 @@ const estateSampleInterval = coord.ReconcileInterval
 type estateWatch struct {
 	view *partmap.View
 
-	// presence is the fleet's presence view, which layout 0's servers are
-	// answered from; nil where there is none.
-	presence *coord.LeaseView
-
-	// running is the layout this node runs, and budget the operator's
-	// rejoin window — what a join is sized against.
-	running statelog.Layout
-	budget  time.Duration
-
-	// started is when the watch began, which a half never confirmed is
-	// judged stale from.
-	started time.Time
+	// budget is the operator's rejoin window — what a join is sized
+	// against.
+	budget time.Duration
 
 	now func() time.Time
 
@@ -125,8 +122,10 @@ func (e *Engine) stopEstateWatch() {
 // routing layout 0 by presence.
 //
 // ON THE ESTATE LEASE'S OWN TERMS, as the presence view is on the presence
-// lease's: the leases are listed once per heartbeat and trusted for one TTL,
-// both from the TTL in force.
+// lease's: the leases renew once per heartbeat and a listing is trusted for one
+// TTL, both from the TTL in force — and the view lists them at least every
+// fifteen seconds whatever the heartbeat, which is what keeps it fresh on a
+// healthy fleet at a long TTL (partmap.View).
 func newEstateWatch(b *config.Bootstrap, maps partmap.MapSource, leases coord.Backend,
 	presence *coord.LeaseView, running statelog.Layout, now func() time.Time) (*estateWatch, error) {
 
@@ -142,8 +141,7 @@ func newEstateWatch(b *config.Bootstrap, maps partmap.MapSource, leases coord.Ba
 	if err != nil {
 		return nil, fmt.Errorf("engine: watch the estate map: %w", err)
 	}
-	return &estateWatch{view: view, presence: presence, running: running,
-		budget: b.Stream.TrackerRetention.RejoinWindow(), started: now(), now: now}, nil
+	return &estateWatch{view: view, budget: b.Stream.TrackerRetention.RejoinWindow(), now: now}, nil
 }
 
 // run samples the view on [estateSampleInterval] until ctx ends.
@@ -179,11 +177,16 @@ func (w *estateWatch) sample(now time.Time) {
 	w.found = w.watch.Observe(m, live, now)
 }
 
-// reading fills the estate alarms' half of a reading.
+// reading fills the estate alarms' half of a reading: the view's staleness by
+// its own rule, and — only while the view is not stale — what the watch last
+// saw through it.
 func (w *estateWatch) reading(now time.Time, out *statelog.Reading) {
 	out.EstateJoinBudget = w.budget
-	age, which := w.age(now)
-	out.EstateViewAge, out.EstateViewStale = statelog.Age(age), which
+	st := w.view.Staleness(now)
+	out.EstateView = &statelog.EstateViewAge{Half: st.Half, Age: st.Age, Bound: st.Bound}
+	if st.Stale() {
+		return
+	}
 
 	w.mu.Lock()
 	f := w.found
@@ -202,35 +205,6 @@ func (w *estateWatch) reading(now time.Time, out *statelog.Reading) {
 		out.EstateJoiningFor = f.Joining[0].For
 		out.EstateJoiningWhich = f.Joining[0].Partition + " on " + f.Joining[0].Node
 	}
-}
-
-// age is how long ago the view's oldest half was confirmed, and which half it
-// is — the estate map, the estate leases, and under layout 0 the presence the
-// estate is routed by. A half never confirmed is as old as the watch.
-func (w *estateWatch) age(now time.Time) (time.Duration, string) {
-	mapAt, leasesAt := w.view.Confirmed()
-	halves := []struct {
-		name string
-		at   time.Time
-	}{{"the estate map", mapAt}, {"the estate leases", leasesAt}}
-	if w.running.Number == 0 && w.presence != nil {
-		halves = append(halves, struct {
-			name string
-			at   time.Time
-		}{"the fleet's presence", w.presence.ListedAt()})
-	}
-	var oldest time.Duration
-	which := ""
-	for _, h := range halves {
-		at := h.at
-		if at.Before(w.started) {
-			at = w.started
-		}
-		if age := max(now.Sub(at), 0); which == "" || age > oldest {
-			oldest, which = age, h.name
-		}
-	}
-	return oldest, which
 }
 
 // findingNames is the first few findings by name, and how many more — the

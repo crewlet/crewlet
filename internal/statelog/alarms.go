@@ -452,13 +452,27 @@ type Reading struct {
 	EstateJoiningWhich string
 	EstateJoinBudget   time.Duration
 
-	// EstateViewAge is how long ago this node's estate view was confirmed,
-	// at its oldest half — the estate map, the estate leases, or the
-	// presence layout 0 is routed by — and EstateViewStale names that half.
-	// A POINTER, for HeadroomFraction's reason: nil is a node running no
-	// estate view, and a zero age is a view confirmed this instant.
-	EstateViewAge   *time.Duration
-	EstateViewStale string
+	// EstateView is how current this node's estate view is, at the half
+	// nearest its bound. A POINTER, for HeadroomFraction's reason: nil is a
+	// node running no estate view, and a zero age is a view confirmed this
+	// instant.
+	EstateView *EstateViewAge
+}
+
+// EstateViewAge is one half of a node's estate view against its bound: which
+// half, how long ago it was last confirmed, and the age past which anything
+// deciding from the view treats it as unknown.
+//
+// THE BOUND IS SUPPLIED, never named here: it is the VIEW'S OWN RULE
+// (partmap.View.Staleness) — FloorCacheStale, and the lease TTL for the estate
+// leases where that is shorter, since a listing a TTL old is no answer at all.
+// Restated in this table, the alarm judged the leases at the minute while the
+// view had stopped answering from them at their TTL, and for fifteen seconds of
+// every outage the alarms went quiet with nothing saying why.
+type EstateViewAge struct {
+	Half  string
+	Age   time.Duration
+	Bound time.Duration
 }
 
 // Alarm is one condition currently true on this node.
@@ -951,22 +965,31 @@ var table = []rule{
 			"so the copy is built on another member instead.",
 	},
 	{
-		// AT THE STALENESS BOUND EVERY CACHED COORDINATION FACT HERE HAS
-		// (FloorCacheStale): past it, anything that decides from the view
-		// treats it as unknown, and routing goes on from what it last saw.
+		// AT THE VIEW'S OWN BOUND, borrowed (ADR-0015) and supplied in the
+		// reading ([EstateViewAge]): the age past which anything deciding
+		// from the view treats that half as unknown — FloorCacheStale, the
+		// bound every cached coordination fact here is held to, or the
+		// estate leases' TTL where shorter. So it fires exactly when the
+		// view stops being fresh, and the three map alarms it silences are
+		// never silent without it saying why.
 		kind: KindEstateViewStale,
 		fires: func(r Reading) (string, bool) {
-			if r.EstateViewAge == nil {
+			v := r.EstateView
+			if v == nil {
 				return "", false
 			}
-			return fmt.Sprintf("this node's view of %s was last confirmed %s ago",
-					r.EstateViewStale, round(*r.EstateViewAge)),
-				*r.EstateViewAge > FloorCacheStale
+			return fmt.Sprintf("this node's view of %s was last confirmed %s ago, past the "+
+					"%s after which it is unknown", v.Half, round(v.Age), round(v.Bound)),
+				v.Age > v.Bound
 		},
-		remedy: "Coordination is not answering this node, so it routes the estate on what " +
-			"it last saw and decides nothing from it — no join, no leave, no trim. Check " +
-			"this node's link to the coordination store; every estate alarm this node " +
-			"raises is silent until the view is current again.",
+		// WHAT A STALE VIEW STOPS ON THIS BUILD, and nothing it does not:
+		// the view is what the estate alarms are read from, and it is not
+		// yet what anything routes or decides by — the map's maintainer
+		// reads the store on each tick of its own.
+		remedy: "This node cannot confirm the estate map or its estate leases with the " +
+			"coordination store, so it cannot see which partitions are unserved, short or " +
+			"stalled: its other estate alarms are silent until it can, and another node's " +
+			"are the ones to read meanwhile. Check this node's link to the coordination store.",
 	},
 }
 
