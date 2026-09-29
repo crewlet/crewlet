@@ -34,11 +34,21 @@
  *
  * Signing out, here or everywhere, ends in a RELOAD at the sign-in — see
  * [page] — because the tab is about to be somebody else's.
+ *
+ * # Nor does a session that ended some other way
+ *
+ * A session also ends with nobody signing out — an idle deadline, a
+ * revocation, a sign-out in another tab — and the tab is then ROUTED to the
+ * sign-in rather than reloaded, with everything it held still in it. So a
+ * sign-in by somebody other than the person this tab was read by
+ * (`lib/reader.ts`) hands the tab over exactly as a sign-out does, and only
+ * the same person coming back carries on where they were.
  */
 
 import { useCallback } from "react";
 import { buildHash, parseHash, useNavigator } from "~/app/router.tsx";
 import { framelessOf } from "~/app/nav.ts";
+import { currentReader, noteReader } from "~/lib/reader.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import {
   auth,
@@ -148,12 +158,35 @@ export async function signOut(): Promise<void> {
  * used to forget that draft; a sign-out is the same hand-over.
  */
 function leave(): void {
+  forgetTab();
+  page.reloadInto("#/login");
+}
+
+/** Empty the tab's own storage — its reader record with everything else. */
+function forgetTab(): void {
   try {
     sessionStorage.clear();
   } catch {
     // A browser that refuses storage holds nothing in it to leave behind.
   }
-  page.reloadInto("#/login");
+}
+
+/**
+ * The tab, handed to somebody who is not the person it was read by.
+ *
+ * WHAT A SIGN-OUT DOES, for the case no sign-out covered: a session that
+ * ended without one — an idle deadline, a revocation, a sign-out in another
+ * tab — routes the tab to the sign-in with everything its last reader saw
+ * still in it, and whoever signed in next was served it: the store's company
+ * state, a snapshot their own grants would refuse them, and the builder's
+ * kept draft as their own. The same reload drops all of it and cannot miss a
+ * cache added later; the new reader is recorded between the emptying and the
+ * reload, so the tab that comes back knows who it is read by.
+ */
+function handOver(person: string, hash: string): void {
+  forgetTab();
+  noteReader(person);
+  page.reloadInto(hash);
 }
 
 /**
@@ -171,16 +204,38 @@ export async function signOutEverywhere(): Promise<void> {
 }
 
 /**
- * What a screen calls once the browser holds a session — with the status the
- * engine answered for it, and the `next` the screen was given.
+ * What a sign-in answered, as far as where the browser goes next depends on
+ * it: what the session may do, and WHO it is — `person` is the principal's id
+ * every sign-in answers, absent only where a screen was handed no answer.
  */
-export function useSignedIn(): (status: SessionStatus, next: string | null) => void {
+export interface SignedInAs {
+  status: SessionStatus;
+  person?: string;
+}
+
+/**
+ * What a screen calls once the browser holds a session — with what the engine
+ * answered for it, and the `next` the screen was given.
+ *
+ * A SIGN-IN AS SOMEBODY OTHER THAN THIS TAB'S READER HANDS THE TAB OVER
+ * (`handOver`) and reloads into where the sign-in was going. The same person
+ * signing in again — their session lapsed while they were away — keeps the
+ * tab, and with it the draft the builder kept for when they came back.
+ */
+export function useSignedIn(): (answer: SignedInAs, next: string | null) => void {
   const nav = useNavigator();
   const { socket } = useClient();
   return useCallback(
-    (status, next) => {
+    ({ status, person = "" }, next) => {
       const target = safeNext(next);
-      if (status === "second_factor_enrolment_required") {
+      const enrol = status === "second_factor_enrolment_required";
+      const reader = currentReader();
+      if (person !== "" && reader !== null && reader !== person) {
+        handOver(person, enrol ? buildHash(["enrol"], { next: target }) : target);
+        return;
+      }
+      noteReader(person);
+      if (enrol) {
         // THE NEED FIRST, for the same reason as below: the `sign_in` a
         // transport recorded while nobody was signed in would otherwise send
         // the enrolment screen straight back to the sign-in form.

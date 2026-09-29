@@ -55,6 +55,7 @@ import { useFillScreen } from "~/app/fill.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { needsSentence } from "~/lib/refusal.ts";
+import { useReader } from "~/lib/reader.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { refusedGrants } from "~/protocol/index.ts";
@@ -811,7 +812,15 @@ function Lens({
   const answered = problemsCurrent ? state.check.outcome : null;
   const status: CheckStatus =
     check.machine.status === "checking" || !answered ? check.machine.status : answered.status;
-  const keeping = useDraftKeeping({ state, dispatch: dispatchRaw, loaded, storage, now: Date.now });
+  const tabReader = useReader();
+  const keeping = useDraftKeeping({
+    state,
+    dispatch: dispatchRaw,
+    loaded,
+    storage,
+    now: Date.now,
+    reader: tabReader,
+  });
   const { forget } = keeping;
   // A refused read may be the tab changing hands: the kept draft is not
   // offered to whoever holds it next.

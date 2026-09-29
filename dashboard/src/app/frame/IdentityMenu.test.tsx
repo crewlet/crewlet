@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { IdentityMenu } from "./IdentityMenu.tsx";
 import { Router } from "~/app/router.tsx";
+import { currentReader, noteReader } from "~/lib/reader.ts";
 import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, sessionRestored, type Viewer } from "~/protocol/index.ts";
@@ -187,6 +188,21 @@ describe("what the menu offers", () => {
     expect(await openMenu("jane.doe")).toEqual(["Sign out", "Sign out everywhere"]);
     choose("Sign out");
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
+  });
+
+  // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is read
+  // by here, since no sign-in in it said — and a sign-in later in this tab is
+  // decided against it. One already recorded is never overwritten.
+  test("the session it finds is adopted as the tab's reader, where none is recorded", async () => {
+    engine({ "GET /auth/session": PERSON });
+    mount(JANE);
+    await waitFor(() => expect(currentReader()).toBe("p-1"));
+
+    cleanup();
+    noteReader("p-9");
+    mount(JANE);
+    await openMenu("Jane Doe");
+    expect(currentReader()).toBe("p-9");
   });
 
   test("nobody at all is offered a way to sign in, back to where they are", async () => {

@@ -139,6 +139,7 @@ const kept = (overrides: Partial<KeptDraft> = {}): KeptDraft => ({
   ops: [],
   undone: [],
   savedAt: 1_700_000_000_000,
+  reader: "p-1",
   ...overrides,
 });
 
@@ -183,6 +184,7 @@ describe("keeping and restoring", () => {
       "baseRevision",
       "mode",
       "ops",
+      "reader",
       "savedAt",
       "undone",
       "v",
@@ -200,6 +202,9 @@ describe("keeping and restoring", () => {
       ["an edit without its revision", kept({ baseRevision: null })],
       ["a create with a revision", kept({ mode: "create", baseRevision: "rev-1" })],
       ["no fingerprint", { ...kept(), basePrint: undefined }],
+      // A DRAFT NOBODY KEPT is a draft nobody can be offered.
+      ["no reader", { ...kept(), reader: undefined }],
+      ["an empty reader", kept({ reader: "" })],
       ["a chart where a fingerprint goes", kept({ basePrint: JSON.stringify(fixtureChart()) })],
       ["an extra key", { ...kept(), chart: { seats: [] } }],
       ["a template in edit mode", kept({ ops: [templateOperation()] })],
@@ -256,11 +261,12 @@ describe("keeping and restoring", () => {
 });
 
 describe("restoreOffer", () => {
-  const loaded = (revision: string | null, print = PRINT, mode: "edit" | "create" = "edit") => ({
-    mode,
-    revision,
-    print,
-  });
+  const loaded = (
+    revision: string | null,
+    print = PRINT,
+    mode: "edit" | "create" = "edit",
+    reader = "p-1",
+  ) => ({ mode, revision, print, reader });
 
   test("keep or discard on the same company, update when its settings or its chart moved", () => {
     expect(restoreOffer(kept(), loaded("rev-1"))).toEqual({ kind: "keep_or_discard" });
@@ -270,6 +276,21 @@ describe("restoreOffer", () => {
     // A save of the draft was out: whatever landed is the rebase's to meet.
     expect(restoreOffer(kept({ write: "write-0001" }), loaded("rev-1"))).toEqual({
       kind: "update",
+    });
+  });
+
+  // A DRAFT IS KEPT FOR SOMEBODY. A session that ended with the builder closed
+  // routed the tab to the sign-in, and the next person to sign in was offered
+  // the last one's unsaved company edits as their own — a save of which would
+  // be recorded as theirs. Whatever else the draft could be carried onto.
+  test("a draft kept for another reader is discarded, before anything it could be carried onto", () => {
+    const other = loaded("rev-1", PRINT, "edit", "p-2");
+    expect(restoreOffer(kept(), other)).toEqual({ kind: "discard_other_reader" });
+    expect(restoreOffer(kept({ write: "write-0001" }), other)).toEqual({
+      kind: "discard_other_reader",
+    });
+    expect(restoreOffer(kept(), loaded(null, PRINT, "create", "p-2"))).toEqual({
+      kind: "discard_other_reader",
     });
   });
 
@@ -297,6 +318,7 @@ describe("persistencePlan", () => {
       log: { ops, undone: [] },
       keep: true,
       pending: null,
+      reader: "p-1",
     };
     expect(persistencePlan(state, 42)).toEqual({
       action: "keep",

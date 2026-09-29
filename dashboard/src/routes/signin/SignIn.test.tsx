@@ -13,6 +13,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
+import { currentReader, noteReader } from "~/lib/reader.ts";
+import { page } from "~/lib/session.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { currentSessionNeed, LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
 
@@ -124,6 +126,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   sessionRestored();
   localStorage.clear();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
   location.hash = "#/";
 });
 
@@ -317,5 +321,97 @@ describe("a browser that is already signed in", () => {
     act(() => carry.click());
     await waitFor(() => expect(location.hash).toBe(NEXT));
     expect(reconnect).toHaveBeenCalled();
+  });
+});
+
+// A SESSION ALSO ENDS WITH NOBODY SIGNING OUT — an idle deadline, a
+// revocation, a sign-out in another tab — and the tab is then ROUTED here with
+// everything its last reader saw still in it: the store's company state, and
+// the builder's kept draft. Only a sign-out reloaded it, so whoever signed in
+// next was served the last person's company, and their unsaved draft as
+// their own.
+describe("a sign-in in a tab somebody else was reading", () => {
+  let reloads: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    reloads = vi.spyOn(page, "reloadInto").mockImplementation(() => {});
+  });
+
+  test("hands the tab over: its storage emptied, the new reader recorded, reloaded where it was going", async () => {
+    engine({
+      "GET /auth/config": LOCAL,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    noteReader("p-9");
+    sessionStorage.setItem("crewlet_org_draft", "{}");
+    const { reconnect } = mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => expect(reloads).toHaveBeenCalledWith(NEXT));
+    expect(sessionStorage.getItem("crewlet_org_draft")).toBeNull();
+    expect(currentReader()).toBe("p-1");
+    // THE RELOAD DIALS: a socket re-dialled in a page about to be dropped is
+    // a connection opened for nothing.
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  test("a session that may only enrol is handed over into the enrolment", async () => {
+    engine({
+      "GET /auth/config": LOCAL,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": {
+        status: 200,
+        body: { ...(SIGNED_IN.body as object), status: "second_factor_enrolment_required" },
+      },
+    });
+    noteReader("p-9");
+    mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() =>
+      expect(reloads).toHaveBeenCalledWith(`#/enrol?next=${encodeURIComponent(NEXT)}`),
+    );
+  });
+
+  // THE CONTROL: the same person back after their session lapsed carries on
+  // where they were — the builder keeps their draft for exactly this.
+  test("the same person signing in again keeps the tab and what it holds", async () => {
+    engine({
+      "GET /auth/config": LOCAL,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    noteReader("p-1");
+    sessionStorage.setItem("crewlet_org_draft", "{}");
+    const { reconnect } = mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => expect(location.hash).toBe(NEXT));
+    expect(reloads).not.toHaveBeenCalled();
+    expect(reconnect).toHaveBeenCalled();
+    expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
+  });
+
+  // A TAB NOBODY WAS READING has nothing of anybody's in it to hand over.
+  test("a first sign-in in a fresh tab records its reader and carries on", async () => {
+    engine({
+      "GET /auth/config": LOCAL,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => expect(location.hash).toBe(NEXT));
+    expect(reloads).not.toHaveBeenCalled();
+    expect(currentReader()).toBe("p-1");
   });
 });

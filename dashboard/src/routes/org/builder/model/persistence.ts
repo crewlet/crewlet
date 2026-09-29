@@ -2,7 +2,7 @@
  * Keeping the operator's work across a reload of the tab.
  *
  * ONLY THE LOG IS KEPT. One key, `crewlet_org_draft`, holds
- * `{ v, mode, baseRevision, basePrint, ops, undone, savedAt }`, and `write`
+ * `{ v, mode, baseRevision, basePrint, ops, undone, savedAt, reader }`, and `write`
  * with the nodes it `creates` while a save of that log is out, and nothing
  * else: never the base settings, the chart, the draft or the problems. They
  * hold contact identities, emails, policies and `${VAR}` names; kept in
@@ -35,6 +35,16 @@
  * and a colleague's draft is not something to offer the next operator.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
+ *
+ * AND WHO KEPT IT IS PART OF IT. A draft carries the principal it was kept for
+ * (`reader`, the tab's reader from `lib/reader.ts`), and one kept for anybody
+ * else is discarded unoffered ([restoreOffer]). The change-of-reader check
+ * above is the builder's own, and it lives in a component: a session that
+ * ended while the builder was closed routed the tab to the sign-in, the next
+ * person to sign in opened the builder fresh — so their first answer was not
+ * a change — and the last person's unsaved company edits were offered to them
+ * as their own, a save of which would be recorded as theirs. The stamp makes
+ * that a fact of the draft rather than of a component staying mounted.
  *
  * A SAVE WHOSE OUTCOME IS NOT KNOWN IS KEPT WITH ITS LOG, AND WITH WHAT IT
  * CREATES. A save is a sequence of writes, any of which can land without its
@@ -100,6 +110,8 @@ export interface KeptDraft {
   readonly undone: readonly Operation[];
   /** Milliseconds since the epoch, from the injected clock. */
   readonly savedAt: number;
+  /** The principal it was kept for. See the module doc. */
+  readonly reader: string;
   /**
    * The write id of a save of this log whose outcome is not known yet; absent
    * otherwise. See the module doc.
@@ -202,6 +214,8 @@ export function restoreDraft(storage: DraftStorage | null): Restored {
 
 /** What to offer when a kept draft meets the company that was just loaded. */
 export type RestoreOffer =
+  /** Kept for somebody else: discarded, and never offered. */
+  | { readonly kind: "discard_other_reader" }
   /** The same company: offer Keep or Discard. */
   | { readonly kind: "keep_or_discard" }
   /**
@@ -219,8 +233,11 @@ export type RestoreOffer =
 /** Decides what a restored draft offers against the company as loaded. */
 export function restoreOffer(
   kept: KeptDraft,
-  loaded: { mode: BuilderMode; revision: string | null; print: string },
+  loaded: { mode: BuilderMode; revision: string | null; print: string; reader: string },
 ): RestoreOffer {
+  // FIRST, before anything the draft could be carried onto: a colleague's
+  // draft is not this reader's to keep, update or even be told about.
+  if (kept.reader !== loaded.reader) return { kind: "discard_other_reader" };
   // A CREATE DRAFT WHOSE SAVE WAS OUT meets the company that save may have
   // made, and is carried onto it rather than thrown away with it.
   if (kept.mode === "create" && loaded.mode === "edit" && kept.write !== undefined) {
@@ -248,7 +265,7 @@ export function parseKeptDraft(value: unknown): KeptDraft | undefined {
     !isRecord(value) ||
     !exactKeys(
       value,
-      ["v", "mode", "baseRevision", "basePrint", "ops", "undone", "savedAt"],
+      ["v", "mode", "baseRevision", "basePrint", "ops", "undone", "savedAt", "reader"],
       ["write", "creates"],
     )
   )
@@ -266,6 +283,7 @@ export function parseKeptDraft(value: unknown): KeptDraft | undefined {
   if (value.mode === "edit" ? !isNonEmptyString(value.baseRevision) : value.baseRevision !== null)
     return undefined;
   if (typeof value.savedAt !== "number" || !Number.isFinite(value.savedAt)) return undefined;
+  if (!isNonEmptyString(value.reader)) return undefined;
   if (!Array.isArray(value.ops) || !Array.isArray(value.undone)) return undefined;
   if (value.ops.length + value.undone.length > MAX_KEPT_OPERATIONS) return undefined;
   const mode = value.mode;
@@ -513,6 +531,8 @@ export interface PersistableState {
   readonly keep: boolean;
   /** A save of this log whose outcome is not known yet, or `null`. */
   readonly pending: PendingWrite | null;
+  /** The principal the tab is read by, whom a kept draft is kept for. */
+  readonly reader: string;
 }
 
 /** The one storage action a state calls for. */
@@ -537,6 +557,7 @@ export function persistencePlan(state: PersistableState, now: number): Persisten
       ops: state.log.ops,
       undone: state.log.undone,
       savedAt: now,
+      reader: state.reader,
       ...(state.pending !== null
         ? { write: state.pending.write, creates: state.pending.creates }
         : {}),

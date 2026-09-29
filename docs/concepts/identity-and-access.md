@@ -1294,7 +1294,10 @@ are](#some-gestures-ask-how-recently-you-proved-who-you-are). The page bar's
 identity menu signs out — `POST /auth/logout`, or `POST /auth/logout/all` for
 every session the person holds — and then reloads into the sign-in with the
 tab's `sessionStorage` emptied, because a route change would leave the last
-person's company in the tab's memory for whoever sits down next.
+person's company in the tab's memory for whoever sits down next. A session
+that ended with nobody signing out routes the tab to the sign-in instead, so a
+sign-in there by anybody other than the person the tab was read by hands it
+over the same way; the same person signing back in carries on where they were.
 [Dashboard Design](../reference/dashboard-design.md#signing-in-is-a-screen-outside-the-frame)
 has the whole of it.
 

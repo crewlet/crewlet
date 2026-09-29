@@ -10,7 +10,13 @@
  * be offered. The decision waits for the company to be loaded, because a log
  * replays onto nothing else.
  *
+ * IT ALSO WAITS FOR THE READER — who this tab is read by (`lib/reader.ts`) —
+ * because a draft is kept FOR somebody, and one kept for anybody else is
+ * discarded without being offered or mentioned.
+ *
  * WHAT THE DECISION IS (spec 3.3):
+ * - a draft kept for another reader is discarded, and nothing is said: it is
+ *   a colleague's unsaved work, and not this reader's to hear about;
  * - the same company (settings revision and chart rows) offers Keep or
  *   Discard, and the Builder records nothing until the operator picks one;
  * - a moved company runs the update-my-draft flow through the reducer's
@@ -109,6 +115,7 @@ export function useDraftKeeping({
   loaded,
   storage,
   now,
+  reader,
 }: {
   state: BuilderState;
   dispatch: (action: BuilderAction) => void;
@@ -116,6 +123,8 @@ export function useDraftKeeping({
   storage: DraftStorage | null;
   /** Milliseconds since the epoch, for `savedAt`. */
   now: () => number;
+  /** The principal this tab is read by, or null until it is known. */
+  reader: string | null;
 }): DraftKeeping {
   const [decided, setDecided] = useState(false);
   const [offer, setOffer] = useState<KeptDraft | null>(null);
@@ -143,7 +152,7 @@ export function useDraftKeeping({
   // Decide the kept draft once the company is loaded, and once no run of this
   // page's own is still writing to it.
   useEffect(() => {
-    if (decided || offer || waiting || restoringFrom.current || !loaded) return;
+    if (decided || offer || waiting || restoringFrom.current || !loaded || reader === null) return;
     const running = saveInFlight();
     if (running) {
       setWaiting(true);
@@ -178,7 +187,13 @@ export function useDraftKeeping({
           mode: state.mode,
           revision: state.base.revision,
           print: state.base.print,
+          reader,
         });
+        if (decision.kind === "discard_other_reader") {
+          clearDraft(storage);
+          setDecided(true);
+          return;
+        }
         if (decision.kind === "discard_mode_changed") {
           clearDraft(storage);
           setDecisionNotice({
@@ -198,7 +213,7 @@ export function useDraftKeeping({
         setOffer(kept);
       }
     }
-  }, [decided, offer, waiting, loaded, state, storage, restore]);
+  }, [decided, offer, waiting, loaded, reader, state, storage, restore]);
 
   // Read a restore's outcome: adopted, refused, or an update that has ended.
   useEffect(() => {
@@ -225,7 +240,9 @@ export function useDraftKeeping({
       }
       return;
     }
-    if (!decided) return;
+    // DECIDED IMPLIES A READER, since the decision waits for one; the check
+    // is what lets the plan carry it without a cast.
+    if (!decided || reader === null) return;
     const plan = persistencePlan(
       {
         mode: state.mode,
@@ -234,6 +251,7 @@ export function useDraftKeeping({
         log: state.log,
         keep: state.keep,
         pending: pendingWrite.current,
+        reader,
       },
       now(),
     );
@@ -263,6 +281,7 @@ export function useDraftKeeping({
     state.base.print,
     storage,
     now,
+    reader,
   ]);
 
   const keep = useCallback(() => {

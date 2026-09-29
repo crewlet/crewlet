@@ -202,7 +202,7 @@ function Redeem({
         name: name.trim(),
         password,
       });
-      signedIn(answer.status, LANDING);
+      signedIn(answer, LANDING);
     } catch (err) {
       if (err instanceof RestError && err.status === 410) {
         onSpent(err.sentence || refusalText(err));

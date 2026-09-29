@@ -692,8 +692,9 @@ those names, which is one more reason a file kept in a repository should hold
 The builder keeps the draft's list of changes (never the company itself) in
 the tab's session storage, so a reload or a trip to another screen does not
 lose the work. The list holds what you typed into it, so the storage belongs
-to the tab and is emptied when you sign out. When the builder opens and finds
-a kept draft:
+to the tab and is emptied when you sign out — or when somebody else signs in
+here after your session ended — and a kept draft is only ever offered back to
+the person it was kept for. When the builder opens and finds a kept draft:
 
 - **Made against the company as it still is** (the same settings revision and
   the same chart rows): a banner offers **Keep the draft** or **Discard it**,

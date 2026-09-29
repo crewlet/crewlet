@@ -22,14 +22,17 @@
 
 import { useState } from "react";
 import { useRoute } from "~/app/router.tsx";
-import { useSignedIn } from "~/lib/session.ts";
+import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
 import { FirstRecoveryCodes, SecondFactorSetup } from "./SecondFactor.tsx";
 import { SignInPage } from "./SignInPage.tsx";
 
 export function Enrol() {
   const next = useRoute().query.get("next");
   const signedIn = useSignedIn();
-  const [enrolled, setEnrolled] = useState(false);
+  // THE WHOLE SESSION THE ENROLMENT OPENED, which says who it is: the sign-in
+  // that led here recorded the same person, and what carries on is decided
+  // against it like any other sign-in's answer.
+  const [enrolled, setEnrolled] = useState<SignedInAs | null>(null);
 
   return (
     <SignInPage
@@ -41,9 +44,11 @@ export function Enrol() {
       }
     >
       {enrolled ? (
-        <FirstRecoveryCodes onDone={() => signedIn("signed_in", next)} />
+        <FirstRecoveryCodes onDone={() => signedIn(enrolled, next)} />
       ) : (
-        <SecondFactorSetup onEnrolled={() => setEnrolled(true)} />
+        <SecondFactorSetup
+          onEnrolled={(answer) => setEnrolled(answer.session ?? { status: "signed_in" })}
+        />
       )}
     </SignInPage>
   );

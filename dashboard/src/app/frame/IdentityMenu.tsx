@@ -37,6 +37,7 @@ import { Avatar, Button, Menu, useToast, type MenuEntry } from "@crewlethq/ui";
 import { PersonGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
+import { adoptReader } from "~/lib/reader.ts";
 import { goSignIn, signOut, signOutEverywhere } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { auth, type SessionAnswer } from "~/protocol/index.ts";
@@ -58,7 +59,12 @@ function useSessionAnswer(enabled: boolean, login: string): SessionAnswer | null
     if (!enabled) return;
     let live = true;
     auth.session().then(
-      (session) => live && setAnswer(session),
+      (session) => {
+        // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER learns who it is
+        // read by here, since no sign-in in it ever said (`lib/reader.ts`).
+        adoptReader(session.person);
+        if (live) setAnswer(session);
+      },
       () => {},
     );
     return () => {

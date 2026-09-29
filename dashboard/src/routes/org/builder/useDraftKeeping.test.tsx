@@ -13,6 +13,7 @@ import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/pe
 import { templateIntent } from "./model/templates.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { asReader, company, Engine, json, mountBuilder, rereadViewer } from "./testkit.tsx";
+import { noteReader } from "~/lib/reader.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -54,6 +55,7 @@ function keep(draft: Partial<KeptDraft>): void {
     ops: [editCeo()],
     undone: [],
     savedAt: 1_000,
+    reader: "p-1",
     ...draft,
   };
   sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(kept));
@@ -78,7 +80,7 @@ test("an edit is kept as its operation log and nothing of the document", async (
   await waitFor(() => expect(kept()).not.toBeNull());
   const value = JSON.parse(kept()!) as Record<string, unknown>;
   expect(Object.keys(value).sort()).toEqual(
-    ["baseRevision", "basePrint", "mode", "ops", "savedAt", "undone", "v"].sort(),
+    ["baseRevision", "basePrint", "mode", "ops", "reader", "savedAt", "undone", "v"].sort(),
   );
   expect(value.baseRevision).toBe("r1");
   expect(value.basePrint).toBe(fixturePrint());
@@ -369,4 +371,34 @@ test("coming back to the lens restores this page's own draft without asking", as
   await waitFor(() => expect(holdsChanges()).toBe(true));
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
+});
+
+// A DRAFT IS KEPT FOR SOMEBODY. A session that ended while the builder was
+// closed routes the tab to the sign-in, and the builder the next person opens
+// is a fresh mount — whose first viewer answer is not a change — so the last
+// person's unsaved company edits were offered to them as their own, a save of
+// which would have been recorded as theirs.
+test("a draft kept for another reader is discarded and never offered", async () => {
+  keep({ reader: "p-2" });
+  const engine = new Engine(company());
+  mountBuilder({ engine, reader: "p-1" });
+  await screen.findByText("No problems");
+  await waitFor(() => expect(kept()).toBeNull());
+  expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
+  expect(screen.getByText("editable")).toBeDefined();
+});
+
+// AND NOTHING IS DECIDED UNTIL THE TAB KNOWS WHO READS IT: a draft neither
+// offered to a reader who may not be its own, nor erased for one who may be.
+test("a kept draft waits for the tab's reader before it is offered or cleared", async () => {
+  keep({});
+  const engine = new Engine(company());
+  mountBuilder({ engine, reader: null });
+  await screen.findByText("No problems");
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
+  expect(kept()).not.toBeNull();
+
+  act(() => noteReader("p-1"));
+  expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
 });

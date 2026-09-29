@@ -669,6 +669,7 @@ describe("restoring a kept draft", () => {
     ops: state.log.ops,
     undone: state.log.undone,
     savedAt: 0,
+    reader: "p-1",
   });
 
   test("on the same base, with every operation applying, is the draft the operator left, redo stack included", () => {
@@ -760,6 +761,7 @@ describe("restoring a kept draft", () => {
       ops: made.log.ops,
       undone: [],
       savedAt: 0,
+      reader: "p-1",
       write: "w1",
       creates: [],
     };

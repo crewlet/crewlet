@@ -26,6 +26,7 @@ import { vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
 import { REDACTED } from "~/lib/format.ts";
+import { noteReader } from "~/lib/reader.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import {
   LiveSocket,
@@ -828,6 +829,7 @@ export function mountBuilder({
   keys,
   query = () => null,
   wrap = (tree) => tree,
+  reader = "p-1",
 }: {
   engine: Engine;
   org?: OrgProjection | null;
@@ -841,9 +843,17 @@ export function mountBuilder({
   query?: (what: string) => unknown;
   /** A provider the lens reads from, which the application frame supplies. */
   wrap?: (tree: ReactNode) => ReactNode;
+  /**
+   * Who the tab is read by (`lib/reader.ts`), whom a kept draft is kept for;
+   * `null` for a tab that has not learned it. The frame records it in a real
+   * tab — a sign-in, or the identity menu's session read — and the lens alone
+   * has neither, so it is recorded here as they would.
+   */
+  reader?: string | null;
 }) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
+  if (reader !== null) noteReader(reader);
   engine.install();
   const store = new Store();
   if (connected) store.applyHealth({ status: "ok" });

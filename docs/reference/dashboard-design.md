@@ -911,6 +911,19 @@ chart, a session without `state:read` — still has them: the identity menu offe
 the two under the session's own login, and the refusal's strip carries a
 **Sign out** of its own.
 
+**A sign-in by somebody else hands the tab over the same way.** A session also
+ends with nobody signing out — an idle deadline, a revocation, a sign-out in
+another tab — and the tab is then routed to the sign-in with what its last
+reader saw still in memory. So the tab records WHO it is read by
+(`lib/reader.ts`: the principal id every sign-in answers, kept in the tab's
+`sessionStorage`, and adopted from `GET /auth/session` by a tab opened with a
+session already in the browser), and a sign-in naming anybody else empties the
+tab's storage, records the new reader and reloads into where the sign-in was
+going — the enrolment first, for a session that may only enrol. The same person
+signing in again after their session lapsed keeps the tab, and with it the
+builder's kept draft. That draft is stamped with the reader it was kept for, and
+one kept for anybody else is discarded unoffered.
+
 ### The Inbox is the landing screen
 
 A dashboard's home used to be a summary of the company. What a person opening
@@ -2988,7 +3001,12 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   mode. It writes nothing before that decision, because the plan for an empty
   log is to clear. A change of reader or a refused credential clears it and
   withdraws an offer, and a sign-out empties the tab's storage before it
-  reloads. A draft with changes asks the browser's prompt before the tab goes
+  reloads. A kept draft carries the principal it was kept for (the tab's
+  reader), the decision waits until the tab knows its reader, and a draft kept
+  for anybody else is discarded without being offered or mentioned — the
+  builder's own change-of-reader check lives in a component, and a builder the
+  next person opened fresh after a lapsed session had no earlier reader to
+  compare. A draft with changes asks the browser's prompt before the tab goes
   (session storage does not outlive the tab), and one that storage cannot keep
   at all asks before the lens is left, since that loses it too; a move within
   the lens keeps the Builder and asks nothing.

@@ -35,8 +35,8 @@ import { useEffect, useState } from "react";
 import { Button, Callout, Disclosure, FormField, Input, Text } from "@crewlethq/ui";
 import { useRoute } from "~/app/router.tsx";
 import { refusalText } from "~/lib/refusal.ts";
-import { useSignedIn } from "~/lib/session.ts";
-import { auth, RestError, type SessionAnswer, type SessionStatus } from "~/protocol/index.ts";
+import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
+import { auth, RestError, type SessionAnswer } from "~/protocol/index.ts";
 import { SignInPage } from "./SignInPage.tsx";
 
 /** What the posture read found: a backend, or nothing that could be read. */
@@ -85,7 +85,7 @@ export function SignIn() {
         <Callout
           variant="neutral"
           action={
-            <Button size="small" variant="secondary" onClick={() => signedIn(current.status, next)}>
+            <Button size="small" variant="secondary" onClick={() => signedIn(current, next)}>
               Continue as {current.login}
             </Button>
           }
@@ -94,8 +94,8 @@ export function SignIn() {
           Signing in below replaces that session in this browser.
         </Callout>
       )}
-      {passwords && <PasswordForm onSignedIn={(status) => signedIn(status, next)} />}
-      <TokenForm open={!passwords} onSignedIn={(status) => signedIn(status, next)} />
+      {passwords && <PasswordForm onSignedIn={(answer) => signedIn(answer, next)} />}
+      <TokenForm open={!passwords} onSignedIn={(answer) => signedIn(answer, next)} />
     </SignInPage>
   );
 }
@@ -111,7 +111,7 @@ function useWait(): [boolean, (seconds: number) => void] {
   return [until !== 0, (seconds) => setUntil(Date.now() + seconds * 1000)];
 }
 
-function PasswordForm({ onSignedIn }: { onSignedIn: (status: SessionStatus) => void }) {
+function PasswordForm({ onSignedIn }: { onSignedIn: (answer: SignedInAs) => void }) {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -142,7 +142,7 @@ function PasswordForm({ onSignedIn }: { onSignedIn: (status: SessionStatus) => v
         password,
         ...(asked ? { code: code.trim() } : {}),
       });
-      onSignedIn(answer.status);
+      onSignedIn(answer);
     } catch (err) {
       if (err instanceof RestError && err.code === "second_factor_required") {
         setAsked(true);
@@ -236,7 +236,7 @@ function TokenForm({
 }: {
   /** Open from the start where the token is the only way in. */
   open: boolean;
-  onSignedIn: (status: SessionStatus) => void;
+  onSignedIn: (answer: SignedInAs) => void;
 }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -250,7 +250,7 @@ function TokenForm({
     try {
       const answer = await auth.exchangeToken(value);
       setTyped("");
-      onSignedIn(answer.status);
+      onSignedIn(answer);
     } catch (err) {
       setRefusal(refusalText(err));
     } finally {
