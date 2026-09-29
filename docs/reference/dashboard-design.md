@@ -1168,7 +1168,12 @@ The scopes are named in the palette's footer with the one in use marked: a
 sigil nobody is told about is a feature that does not exist.
 
 An empty palette offers **recents** — the last few objects this reader opened,
-most recently visited first, per browser. Objects only: anything the rail or a
+most recently visited first, per browser AND PER READER: recents and stars are
+kept under the principal the tab is read by (`lib/reader.ts`), because one
+browser is often several people and a single list drew the last person's
+recent and starred titles in the next person's palette and rail. A tab that has
+not learned who reads it draws and keeps neither, and a sign-out deletes
+neither — a person back at their desk finds their own. Objects only: anything the rail or a
 sidebar already lists is left out, because a recents list repeating the
 navigation beside it costs a reader a scan and tells them nothing. The label
 stored is the one the **screen** resolved, which lands a render after the route

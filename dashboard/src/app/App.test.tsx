@@ -17,6 +17,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { DESTINATIONS } from "./nav.ts";
 import { buildHash } from "./router.tsx";
+import { noteReader } from "~/lib/reader.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 
 class InertWebSocket {
@@ -52,6 +53,7 @@ afterEach(() => {
   // without this every render stacks up in one document and a getByText that
   // should find one node finds five.
   cleanup();
+  sessionStorage.clear();
   location.hash = "#/";
 });
 
@@ -266,6 +268,9 @@ describe("live state reaches the screen", () => {
   // every workspace sidebar's Starred section was empty by construction.
   test("keeping a page puts it in this workspace's sidebar", async () => {
     localStorage.clear();
+    // A STAR IS KEPT FOR THE TAB'S READER (`lib/starred.ts`), whom the frame
+    // learns from the session read this suite does not answer.
+    noteReader("p-1");
     resetStarsForTest();
     location.hash = "#/company/people/ceo";
     const { store, view } = mount();

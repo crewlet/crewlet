@@ -27,6 +27,7 @@ import { ContentCopyGlyph, MenuGlyph } from "@crewlethq/icons/glyphs";
 // THE STAR HAS NO GLYPH IN UILET — see `StarPage` below.
 import { Mark } from "~/ui/glyph.tsx";
 import { PAGE_ACTIONS_SLOT } from "./PageActions.tsx";
+import { useReader } from "~/lib/reader.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 
 export interface Crumb {
@@ -147,12 +148,16 @@ export function CopyLink({ label = "Copy link" }: { label?: string }) {
 export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
   const stars = useStarred();
   const toggle = useToggleStar();
+  const reader = useReader();
   const [said, setSaid] = useState("");
   const kept = starredIn(stars, path);
   // A PAGE WITH NO IDENTITY CANNOT BE KEPT. The inbox and each workspace's
   // landing page are one click from the rail, and a star on one is a shortcut
   // to somewhere the reader is never more than one click from.
   if (path.length < 2) return null;
+  // NOR BY NOBODY: stars are kept per reader (`lib/starred.ts`), and a tab
+  // that has not learned who reads it has no list to keep one in.
+  if (reader === null) return null;
   const onClick = () => {
     const what = toggle({ path, label, workspace });
     if (what !== "full") return;

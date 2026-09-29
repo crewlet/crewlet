@@ -32,7 +32,8 @@ import { Conversations } from "./Conversations.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { resetForTest } from "~/lib/recents.ts";
+import { noteReader } from "~/lib/reader.ts";
+import { recentsKey, resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, OrgProjection } from "~/protocol/index.ts";
 
@@ -48,6 +49,8 @@ class InertWebSocket {
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   localStorage.clear();
+  sessionStorage.clear();
+  noteReader("p-1");
   resetForTest();
 });
 
@@ -99,7 +102,7 @@ const here = () => trail().querySelector("[aria-current='page']")?.textContent;
 
 /** The labels the palette would offer, read the way its own snapshot reads them. */
 function recents(): string[] {
-  const raw = localStorage.getItem("crewlet_recents");
+  const raw = localStorage.getItem(recentsKey("p-1"));
   return raw ? (JSON.parse(raw) as { label: string }[]).map((r) => r.label) : [];
 }
 

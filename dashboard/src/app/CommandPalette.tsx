@@ -111,7 +111,7 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
     void navigator.clipboard?.writeText(window.location.href);
   });
   add("sign-in", "key", "Sign in as somebody else", "or with an API token", goSignIn);
-  add("clear-recents", "schedule", "Clear recents", "this browser only", forgetAll);
+  add("clear-recents", "schedule", "Clear recents", "yours, in this browser", forgetAll);
   return out;
 }
 

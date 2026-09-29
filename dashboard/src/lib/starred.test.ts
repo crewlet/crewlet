@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MaxStars, isStarred, resetForTest, starredIn, toggleStar } from "./starred.ts";
+import { act, renderHook } from "@testing-library/react";
+import {
+  MaxStars,
+  isStarred,
+  resetForTest,
+  starredIn,
+  starsKey,
+  toggleStar,
+  useStarred,
+} from "./starred.ts";
+import { noteReader } from "./reader.ts";
 
-function stored(): { path: string[]; label: string }[] {
-  const raw = localStorage.getItem("crewlet_starred");
+function stored(reader = "p-1"): { path: string[]; label: string }[] {
+  const raw = localStorage.getItem(starsKey(reader));
   return raw ? (JSON.parse(raw) as { path: string[]; label: string }[]) : [];
 }
 
@@ -12,7 +22,41 @@ function star(label: string, ...path: string[]) {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
+  noteReader("p-1");
   resetForTest();
+});
+
+/**
+ * ONE BROWSER IS OFTEN SEVERAL PEOPLE, and a single list per browser drew the
+ * last person's kept titles in the next person's rail on a shared machine.
+ */
+describe("whose stars they are", () => {
+  it("are the tab's reader's, and a second reader of the browser keeps their own", () => {
+    star("ENG-1", "work", "ENG-1");
+    const { result } = renderHook(() => useStarred());
+    expect(result.current.map((s) => s.label)).toEqual(["ENG-1"]);
+
+    act(() => noteReader("p-2"));
+    expect(result.current).toEqual([]);
+    expect(isStarred(["work", "ENG-1"])).toBe(false);
+    act(() => {
+      star("ENG-2", "work", "ENG-2");
+    });
+    expect(result.current.map((s) => s.label)).toEqual(["ENG-2"]);
+    // A STAR IS A DECISION, and its owner's are still there for them.
+    expect(stored("p-1").map((s) => s.label)).toEqual(["ENG-1"]);
+  });
+
+  it("are nobody's until the tab knows who reads it, and none is kept", () => {
+    sessionStorage.clear();
+    resetForTest();
+    expect(star("ENG-1", "work", "ENG-1")).toBe("nobody");
+    expect(isStarred(["work", "ENG-1"])).toBe(false);
+    for (let i = 0; i < localStorage.length; i++) {
+      expect(localStorage.key(i) ?? "").not.toMatch(/^crewlet_starred/);
+    }
+  });
 });
 
 describe("keeping a shortcut", () => {
@@ -72,7 +116,7 @@ describe("keeping a shortcut", () => {
 describe("a store that will not cooperate", () => {
   it("drops a row a previous build wrote in a shape this one cannot use", () => {
     localStorage.setItem(
-      "crewlet_starred",
+      starsKey("p-1"),
       JSON.stringify([{ label: "no path" }, { path: ["work", "ENG-1"], label: "ENG-1", at: 1 }]),
     );
     resetForTest();
@@ -95,7 +139,7 @@ describe("a store that will not cooperate", () => {
   });
 
   it("reads a value that is not even a list as nothing", () => {
-    localStorage.setItem("crewlet_starred", '"not a list"');
+    localStorage.setItem(starsKey("p-1"), '"not a list"');
     resetForTest();
     star("ENG-1", "work", "ENG-1");
     expect(stored().map((s) => s.label)).toEqual(["ENG-1"]);
@@ -123,7 +167,7 @@ describe("two tabs on one origin", () => {
     expect(isStarred(["work", "ENG-1"])).toBe(true);
     // The other tab stars something. No event is delivered here.
     localStorage.setItem(
-      "crewlet_starred",
+      starsKey("p-1"),
       JSON.stringify([
         { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
         { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },
@@ -136,7 +180,7 @@ describe("two tabs on one origin", () => {
   it("unstars against what is stored, not against what it last drew", () => {
     star("ENG-1", "work", "ENG-1");
     localStorage.setItem(
-      "crewlet_starred",
+      starsKey("p-1"),
       JSON.stringify([
         { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
         { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },

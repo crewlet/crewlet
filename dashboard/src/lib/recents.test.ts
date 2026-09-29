@@ -1,17 +1,60 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MaxRecents, forgetAll, remember, resetForTest } from "./recents.ts";
+import { act, renderHook } from "@testing-library/react";
+import {
+  MaxRecents,
+  forgetAll,
+  recentsKey,
+  remember,
+  resetForTest,
+  useRecents,
+} from "./recents.ts";
+import { noteReader } from "./reader.ts";
 
 /** Read the list the way the hook's snapshot does, without rendering. */
 type Row = { path: string[]; label: string; workspace: string; at: number };
 
-function stored(): Row[] {
-  const raw = localStorage.getItem("crewlet_recents");
+function stored(reader = "p-1"): Row[] {
+  const raw = localStorage.getItem(recentsKey(reader));
   return raw ? (JSON.parse(raw) as Row[]) : [];
 }
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
+  noteReader("p-1");
   resetForTest();
+});
+
+/**
+ * ONE BROWSER IS OFTEN SEVERAL PEOPLE. A single list per browser drew the last
+ * person's recent titles — a colleague's review, an incident, a person's page —
+ * in the next person's palette and rail on a shared machine.
+ */
+describe("whose list it is", () => {
+  it("is the tab's reader's, and a second reader of the browser has their own", () => {
+    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    const { result } = renderHook(() => useRecents());
+    expect(result.current.map((r) => r.label)).toEqual(["ENG-1"]);
+
+    act(() => noteReader("p-2"));
+    expect(result.current).toEqual([]);
+    act(() => remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true));
+    expect(result.current.map((r) => r.label)).toEqual(["ENG-2"]);
+    // AND THE FIRST PERSON'S IS STILL THERE for when they are back.
+    expect(stored("p-1").map((r) => r.label)).toEqual(["ENG-1"]);
+    expect(stored("p-2").map((r) => r.label)).toEqual(["ENG-2"]);
+  });
+
+  it("is nobody's until the tab knows who reads it, and records nothing", () => {
+    sessionStorage.clear();
+    resetForTest();
+    const { result } = renderHook(() => useRecents());
+    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    expect(result.current).toEqual([]);
+    for (let i = 0; i < localStorage.length; i++) {
+      expect(localStorage.key(i) ?? "").not.toMatch(/^crewlet_recents/);
+    }
+  });
 });
 
 describe("what the reader opened", () => {
@@ -150,7 +193,7 @@ describe("a store that will not cooperate", () => {
     // The value survives upgrades, so a row in an old shape is an ordinary
     // thing to find — and rendering a recent with no path is not an option.
     localStorage.setItem(
-      "crewlet_recents",
+      recentsKey("p-1"),
       JSON.stringify([
         { label: "no path" },
         // A ROW WITH NO WORKSPACE is the shape every build before the cap
@@ -182,7 +225,7 @@ describe("a store that will not cooperate", () => {
   });
 
   it("reads a value that is not even a list as nothing", () => {
-    localStorage.setItem("crewlet_recents", '"not a list"');
+    localStorage.setItem(recentsKey("p-1"), '"not a list"');
     resetForTest();
     remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
     expect(stored().map((r) => r.label)).toEqual(["ENG-1"]);
@@ -206,7 +249,7 @@ describe("two tabs on one origin", () => {
     expect(stored().map((r) => r.label)).toEqual(["ENG-1"]);
     // The other tab goes somewhere. No event is delivered here.
     localStorage.setItem(
-      "crewlet_recents",
+      recentsKey("p-1"),
       JSON.stringify([
         { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work", at: 2 },
         { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 },
