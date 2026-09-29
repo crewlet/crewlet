@@ -69,6 +69,15 @@ func serveAPI(
 // change, and run BOTH suites. CLAUDE.md says the same thing in one line: a
 // run of `make test` by itself has not exercised the fleet.
 //
+// THE HUMAN SURFACES ARE NOT COPIED, and they are the exception that shows the
+// cure. The sign-in surface, the identity directory, the human write surface
+// and the two credential arms beside them are built by
+// [api.NewHumanSurfaces], which `crewlet run` calls too — they lived in
+// package main, where nothing here could reach them, so this suite mounted
+// none of them and a fleet whose sessions did not cross between its members
+// left it green. A surface built here by a function the command also calls
+// cannot drift from the one it serves; a copy can.
+//
 // ONE WIRING FOR EVERY CASE HERE, because there is one wiring: the API is built
 // from the engine's own store, broker and coordination plane, and reads its
 // company off the live epoch rather than being told once that one is active.
@@ -177,6 +186,22 @@ func wireAPI(
 		return fail("backup", err)
 	}
 
+	// THE WAY IN, THE DIRECTORY AND THE HUMAN WRITE SURFACE, through the
+	// constructor cmd/crewlet builds them with — see above.
+	humans, err := api.NewHumanSurfaces(boot, e)
+	if err != nil {
+		return fail("human surfaces", err)
+	}
+	if humans.SignIn != nil {
+		// A SIGN-IN'S AFTERMATH IS THE SURFACE'S OWN TO STOP — a stale
+		// password's rewrite — and it runs after the listener closes
+		// and before the engine it writes to, which is where the
+		// reversed teardown puts it: after the entries appended below,
+		// and before the engine, which every caller stops after this
+		// list.
+		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
+	}
+
 	// The chart surface, wired as cmd/crewlet wires it. It is REQUIRED by
 	// api.New rather than optional, because a narrower answer built around
 	// a nil — an absent route, a 503 — reads as deliberate and hides the
@@ -247,6 +272,9 @@ func wireAPI(
 		// the snapshot alone while the push path went unexercised.
 		HealthInterval: tickInterval,
 	}
+	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
+	// absent surface stays absent rather than being mounted over a nil.
+	humans.Mount(&opts)
 	if amend != nil {
 		amend(&opts)
 	}

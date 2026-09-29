@@ -16,16 +16,16 @@ import (
 // `GET /iam/check` NAMES A DANGLING BINDING THROUGH THE SEAM THIS NODE WIRES,
 // not through one a case builds.
 //
-// The directory report asks [danglingBindings] whether a person's seat binding
-// dangles, and that seam is the one place the engine's rule — the request
-// path's own seat table, which the `iam_binding_dangling` alarm asks too — is
-// connected to the report. internal/api/iamapi's suite hands the report a
-// function of its own, so a node whose wiring passed nil, or a seam asking a
-// narrower question, left every suite green while `crewlet iam check` said
-// nothing about a person refused on every request. So this case boots a node,
-// serves its API the way `crewlet run` does, binds a machine to an AGENT's
-// seat — the residue the narrower question used to miss — and reads the
-// report over HTTP.
+// The directory report asks the seam [api.NewHumanSurfaces] wires whether a
+// person's seat binding dangles, and that seam is the one place the engine's
+// rule — the request path's own seat table, which the `iam_binding_dangling`
+// alarm asks too — is connected to the report. internal/api/iamapi's suite
+// hands the report a function of its own, so a node whose wiring passed nil,
+// or a seam asking a narrower question, left every suite green while `crewlet
+// iam check` said nothing about a person refused on every request. So this
+// case boots a node, serves its API the way `crewlet run` does, binds a
+// machine to an AGENT's seat — the residue the narrower question used to miss
+// — and reads the report over HTTP.
 func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

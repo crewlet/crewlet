@@ -370,11 +370,13 @@ type Options struct {
 	// the registration could not read one half of what it is about.
 	//
 	// OPTIONAL, unlike the four above, and its absence is a real posture
-	// rather than a wiring mistake: a deployment whose keyring cannot
-	// sign for the fleet has no way to mint a session, and the honest
-	// shape is a sign-in surface that is ABSENT rather than one that
-	// answers 503 to every attempt. `crewlet validate` refuses that
-	// keyring by name, so an operator learns it on a laptop.
+	// rather than a wiring mistake: a node that started with no active
+	// company holds no identity directory to sign anybody in against, and
+	// the honest shape is a sign-in surface that is ABSENT rather than one
+	// that answers 503 to every attempt. ABSENT MEANS A NIL INTERFACE,
+	// never a nil *authapi.Service inside one, which [New] cannot tell
+	// from a surface that is there — [HumanSurfaces.Mount] is the one
+	// place the conversion happens.
 	Auth authMounter
 
 	// Chart serves /chart and /company/export, normally a

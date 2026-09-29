@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -40,8 +39,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
-	"github.com/crewlet/crewlet/internal/api/workapi"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -1354,7 +1351,8 @@ func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *
 // httpSurface is the HTTP listener a node binds: the whole API on a node with
 // the ingress role, or only its seats' tool bridge on a node without it. The
 // app and the projector are nil in the second shape, and the sign-in surface
-// is nil there and on a node that serves no sign-in (see [signInSurface]).
+// is nil there and on a node that serves no sign-in (see
+// [api.NewHumanSurfaces]).
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
@@ -1564,39 +1562,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	// THE WAY IN. Built before the options below so a node that cannot
-	// serve one says so in its own log line rather than by a route that
-	// is quietly absent.
-	authSurface, sessions, err := signInSurface(boot, e)
+	// THE WAY IN, THE DIRECTORY AND THE HUMAN WRITE SURFACE, with the two
+	// credential arms the guard resolves a cookie and a machine token
+	// through. Built before the options below so a node that serves none
+	// says so in its own log line rather than by a route that is quietly
+	// absent — and built by internal/api rather than here, because the
+	// end-to-end suite serves them through the same constructor: see
+	// [api.HumanSurfaces].
+	humans, err := api.NewHumanSurfaces(boot, e)
 	if err != nil {
 		return nil, err
-	}
-	// AND THE THIRD CREDENTIAL, a machine token the directory minted —
-	// built on EVERY node, not only those that sign people in: it needs no
-	// keyring, and on a node that started with no company, and so holds no
-	// directory, its read answers "cannot say" — a 503 rather than a 401
-	// telling a pipeline its credential is broken.
-	machineTokens, err := auth.NewTokens(auth.TokensDeps{
-		Directory: e, Chart: engine.SeatViewOf(e),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("api: the machine-token arm: %w", err)
 	}
 	// AND WHAT A COMPANY WITH NOBODY IN IT DOES NEXT: its first person is
 	// invited under a Tier A token like everybody after them, and the log
 	// says so once at boot.
 	announceUnclaimed(ctx, e)
-	// AND THE DIRECTORY, which is nil on exactly the nodes the sign-in
-	// surface is nil on.
-	directory, err := directorySurface(boot, e)
-	if err != nil {
-		return nil, err
-	}
-	// AND THE WRITE SURFACE, nil on a company on Jira and Confluence.
-	workRoutes, err := workSurface(e)
-	if err != nil {
-		return nil, err
-	}
 
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
@@ -1702,7 +1682,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// inherit, and a read that outlived the interval firing the next tick
 	// would cost a goroutine per tick for the life of the process. Nothing
 	// else reached from here creates a context.
-	app, err := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
+	opts := api.Options{
 		Bootstrap: boot,
 		// THE COMPANY'S HALF OF A TIER A PRINCIPAL: the identity
 		// directory's binding for a token's login, resolved through the
@@ -1906,24 +1886,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// addresses through: the chart seals every address, so its rows
 		// carry references only a node that resolves them can compare.
 		Resolve: e.LookupSecret,
-		// HOW A PERSON BECOMES A PRINCIPAL, or nil on a node that started
-		// with no active company — see [signInSurface] for why that is
-		// honest rather than a fault.
-		Auth: authSurface,
-		// AND THE OTHER END OF THE COOKIE IT MINTS. Nil exactly when
-		// Auth is: a node that cannot sign one has none to check.
-		Sessions: sessions,
-		// AND OF THE TOKENS /iam/credentials MINTS — `crewlet iam
-		// token`'s value, presented as CREWLET_API_TOKEN.
-		Tokens: machineTokens,
-		// THE COMPANY'S IDENTITY DIRECTORY, nil on a node that started with
-		// no active company — see [directorySurface].
-		IAM: directory,
-		// AND THE HUMAN WRITE SURFACE over the tracker and the knowledge
-		// base, nil on a company that runs neither natively — see
-		// [workSurface]. It is also where the one operation nothing
-		// undoes, destroying a work item, is reached.
-		Work: workRoutes,
 		// WHETHER THIS NODE'S REPLICATED COPY IS FIT TO ANSWER FROM, for
 		// /ready. The ENGINE's own verdict rather than a second one built
 		// here: it is the same question that decides whether this node may
@@ -1966,7 +1928,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
 		},
-	})
+	}
+	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it
+	// mints, the tokens /iam/credentials mints, the company's identity
+	// directory and the human write surface — each absent on a node that
+	// serves none, and handed over by the one method that keeps an absent
+	// surface absent rather than mounting its routes over a nil service.
+	// See [api.HumanSurfaces.Mount].
+	humans.Mount(&opts)
+	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
 		return nil, err
 	}
@@ -2075,7 +2045,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	e.SetOnCompanyPublished(func(context.Context) { app.Stream().CompanyPublished() })
 
 	return &httpSurface{app: app, server: server, projector: projector,
-		auth: authSurface}, nil
+		auth: humans.SignIn}, nil
 }
 
 // serveBridgeOnly is serveAPI for a node whose roles leave out ingress: it
@@ -2681,7 +2651,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
 	}
-	opts.Work, opts.Pages = nativeToolDeps(e)
+	opts.Work, opts.Pages = api.NativeToolDeps(e)
 	// THE PRINCIPAL IS THE PARTY, and it comes from the request's context
 	// rather than from the call: a tracker whose author field is chosen by
 	// the writer is not an audit trail, and there is deliberately no way to
@@ -2711,198 +2681,6 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// long-lived MCP session.
 	opts.Authorize = builtin.Decide(engine.ChartAuthorityOf(e))
 	return opsmcp.New(opts)
-}
-
-// nativeToolDeps are the deps the builtin tools are built from for a surface
-// whose caller is a PERSON rather than a seat: the operator's assistant over
-// MCP, and the HTTP write surface.
-//
-// ONE CONSTRUCTOR FOR BOTH, because the two serve the same tools and a field
-// wired on one and forgotten on the other is a tool that behaves differently
-// depending on where it was called from — which is the drift each of the
-// comments below records having happened once already. Actor and Authorize are
-// left for each surface to set: the first carries a per-request key on one of
-// them, and the second is decided where the surface is built.
-//
-// The DEFAULTS are deliberately absent. A seat files into its unit's project
-// when it names none, because a seat HAS a unit; a person does not, so the
-// argument is required and the tool refuses naming it rather than guessing a
-// project on somebody's behalf.
-func nativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
-	var work builtin.WorkDeps
-	var kb builtin.PageDeps
-	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
-		work = builtin.WorkDeps{
-			Reader: reader,
-			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
-			// from the request's context rather than from the call: a
-			// tracker whose author field is chosen by the writer is not
-			// an audit trail, and there is deliberately no way to name a
-			// seat to act as.
-			Writer: func(actor builtin.Actor) builtin.WorkWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE TWO SEQUENCES, which this surface went
-			// without — so an operator's assistant was refused
-			// `waiting_on` and `blocking` by name on a tool whose
-			// own description offers them, and would not have been
-			// served the fold at all. Both need the replicated
-			// estate, which this writer has; nothing else about
-			// them differs from a seat's.
-			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			Merges: func(actor builtin.Actor) builtin.WorkMerger {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE RANKED SEARCH. It reads, so it takes no actor —
-			// the corpus is the same for everybody and there is nothing
-			// to attribute — and without it the operator catalogue
-			// listed a verb this surface could never register.
-			Search: engine.WorkSearcher(e),
-			// THE SAVED-VIEW WRITER, which only this surface has: a
-			// view is furniture a person arranges, and no seat is
-			// given the tools that reach it.
-			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE CATALOGUE WRITER: the company's own vocabulary is
-			// a person's to set, never a seat's to widen so its own
-			// create succeeds.
-			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE PERSON WRITER. Who may write what is the
-			// tracker's own rule; what this surface supplies is the
-			// identity it is judged against.
-			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND THE INBOX READ. It takes no actor for the reason
-			// Search takes none — it reads, and whose inbox is an
-			// argument rather than an identity — and it is this
-			// surface's alone beside the person writer, because a
-			// seat has a mailbox rather than an inbox.
-			Inbox: reader,
-			// AND THE TRASH. A removal takes an item off every board in
-			// the company and a restore puts it back at any age; neither
-			// destroys anything, which is what separates both from the
-			// purge the CLI guards with a typed confirmation. No seat
-			// holds either — see internal/agent/builtin/worktrash.go.
-			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
-			// this one is on every surface — declaring a tag is open
-			// to every seat — and what an operator adds here is the
-			// credential the archive facet asks for.
-			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
-			},
-			// WHOSE RECORD A LOGIN NAMES, which every person verb
-			// resolves its name through: a login is never a seat, and
-			// read literally a bound person's named a record nothing of
-			// theirs is kept under.
-			Holders: e,
-			// THE ROSTER, so an operator's assistant is refused a
-			// handle nobody has rather than silently filing work for
-			// one — the same check every seat's tools make.
-			Seats: func() []colleague.Seat {
-				c := e.Company()
-				if c == nil {
-					return nil
-				}
-				return builtin.Corpus(c.Org, e.WithheldContacts())
-			},
-			// AND THE THREE CHART SEAMS THE SEAT SURFACE HAS AND THIS
-			// ONE WENT WITHOUT. Their absence was invisible and not
-			// harmless: with no Leads, an operator filing an unassigned
-			// task woke nobody at all — the lead fallback is what
-			// catches exactly that task — and with no Units every
-			// project this surface listed read as belonging to no team.
-			Leads:          engine.LiveLeads(e),
-			Units:          engine.LiveUnits(e),
-			DefaultProject: func(string) string { return "" },
-			// THE MENTION RESOLVER, which this surface went without: a
-			// comment's @-mention is turned into a wake by the tracker's
-			// recipients only when the writer resolved it, so an
-			// operator writing "@alice can you take this" reached her
-			// watchers and never her — while the tool's own description,
-			// which their assistant reads, promised it would.
-			Mentions: engine.LiveMentions(e),
-			Await:    e.WaitCommitted,
-		}
-	}
-	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
-		kb = builtin.PageDeps{
-			Reader: reader, Writer: writer,
-			Mentions: engine.LiveMentions(e),
-			// THE SKILLS CONTAINER, so a person's write into it is asked
-			// for the grant a tool skill takes rather than admitted on
-			// knowledge:write alone — the store exempts every person,
-			// because capability is not its question.
-			SkillsContainer: engine.LiveSkillsContainer(e),
-			Await:           e.WaitCommitted,
-		}
-	}
-	return work, kb
-}
-
-// workSurface builds the human write surface, or nil where this node runs
-// neither a native tracker nor a native knowledge base.
-//
-// FROM THE SAME DEPS the operator's assistant is served from — see
-// [nativeToolDeps] — and deciding on the same chart, so a route and the tool
-// behind it answer one question one way. What it adds is the two writers the
-// tools never reach: the tracker's, bound to the caller, for a rank move, a
-// comment edit and the purge, and the knowledge base's store for its rename
-// and its three destructive verbs.
-func workSurface(e *engine.Engine) (surfaceMounter, error) {
-	work, kb := nativeToolDeps(e)
-	opts := workapi.Options{
-		Work: work, Pages: kb, Chart: engine.ChartAuthorityOf(e),
-	}
-	if writer := e.TrackerWriter(); writer != nil {
-		opts.Tracker = func(actor builtin.Actor) workapi.TrackerWriter {
-			return writer.As(actor.Handle, actor.Kind,
-				tracker.Provenance{OperatorID: actor.OperatorID})
-		}
-	}
-	// THE CONVERSION IS THE POINT, for [nativeWork]'s reason: a typed nil
-	// *pages.Store inside the interface would pass the surface's own
-	// check and panic on the first press.
-	if store := e.PagesStore(); store != nil {
-		opts.PageStore = store
-	}
-	surface, err := workapi.New(opts)
-	if err != nil {
-		return nil, fmt.Errorf("api: the work surface: %w", err)
-	}
-	if surface == nil {
-		return nil, nil
-	}
-	return surface, nil
-}
-
-// surfaceMounter is an optional API surface that mounts guarded routes.
-//
-// AN INTERFACE AND NOT A POINTER, for [nativeWork]'s reason and with its
-// failure: an absent surface returned as a nil *T is a NON-NIL interface once
-// it reaches api.Options, so the app's own "is there one" check passes and
-// mounts every route over a nil service — which answers each request with a
-// nil dereference instead of the 404 an absent surface is documented to be.
-// The conversion from a nil pointer to a nil interface has to happen where the
-// pointer is still typed, and that is here.
-type surfaceMounter interface {
-	Routes(mux authz.Mux) error
 }
 
 // operatorKnowledge resolves the node's searcher per call, for the reason the

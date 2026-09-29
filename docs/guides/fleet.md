@@ -95,6 +95,25 @@ provisioner follows the same rule, and both take `-api URL` to name the node
 to write through. The process environment remains the fallback every node
 resolves from, so a platform secret projected as env still works unchanged.
 
+**One keyring and one `api.external_url` on every node that serves the API.**
+A browser behind a load balancer signs in on whichever node it reaches and
+presents that cookie to every other. Each node verifies it under the fleet
+keyring and resolves it against its own copy of the identity directory, which
+reaches it only through the identity log — so a node that has not yet applied
+a sign-in serves that cookie's reads and holds its first write for up to five
+seconds while it catches up, and never answers `401` in between, which a
+browser would read as "signed out" and throw a good cookie away (the whole
+table is in [Identity and Access](../concepts/identity-and-access.md#validation-is-three-valued-twice)).
+A sign-out everywhere made on one node is refused on every other from the
+moment each applies it. `api.external_url` is the address the load balancer
+answers on, the same on every node: it names the cookie, and it is the only
+`Origin` a write or a live-socket handshake carrying that cookie is accepted
+from. All of this is exercised on a clustered fleet by the end-to-end suite on
+every pull request: a cookie minted on one member reads, writes as its person
+and opens the live socket on another, the same handshake from another site's
+origin is refused, and a sign-out everywhere on the second member is refused
+on the first.
+
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either
 restarts — and a rolling upgrade restarts them one at a time, which makes
