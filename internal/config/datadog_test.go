@@ -302,6 +302,46 @@ func TestDatadogAcceptsTheDismissFallback(t *testing.T) {
 	}
 }
 
+// A SETTINGS DOCUMENT NAMES A SEAT IT DOES NOT CARRY, AND THAT IS NOT A FAULT.
+//
+// The org chart is a log of its own, so a stored revision — and every body
+// `PUT /config` and `PATCH /config` take — is the settings half alone and
+// holds no seat. Held to "names an agent seat in THIS document", every such
+// document with Datadog enabled was refused as "declares no agent seat at
+// all": the setup form could not connect Datadog, and a revision imported
+// from a whole file was then refused by every node that applied it. Only a
+// document that carries a chart can be asked about one; the running pair is
+// the continuous report's to judge. A file carrying a chart is still refused
+// for a fallback naming none of its seats (above).
+func TestASettingsDocumentMayNameASeatItDoesNotCarry(t *testing.T) {
+	t.Parallel()
+	doc := `
+name: Acme
+providers:
+  llm:
+    fast:
+      type: anthropic
+      model: claude-golden
+integrations:
+  datadog:
+` + completeDatadog + `
+`
+	c, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("a settings document routing to a seat was refused: %v", err)
+	}
+	if err := c.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v: every node applying this revision would refuse it", err)
+	}
+	// AND THE SHAPE IS STILL THE DOCUMENT'S: no chart can make a value that
+	// is not a handle name a seat.
+	shape := strings.Replace(doc, "route_to: swe", `route_to: "SRE Lead"`, 1)
+	if _, err := config.ParseCompany([]byte(shape)); err == nil ||
+		!strings.Contains(err.Error(), "not a seat handle") {
+		t.Errorf("a settings document routing to %q = %v, want the shape refused", "SRE Lead", err)
+	}
+}
+
 // THE REGION IS AS LOAD-BEARING AS THE TWO KEYS. A key issued in one region
 // is refused by every other and the hostname is the only thing that tells
 // them apart, so a block with both keys and no site cannot build one call —

@@ -496,7 +496,7 @@ func (c *Company) AdmissionWarnings() []Warning {
 // and every file that declares a chart — which is every file a founder
 // authors — still gets the whole report.
 func (c *Company) ReferenceWarnings() []Warning {
-	if len(c.Roles) == 0 && len(c.Units) == 0 {
+	if !c.CarriesChart() {
 		// EMPTY, NEVER NIL, like every other exit here: the answer is
 		// "no references to report", and [Company.Warnings] appends onto
 		// this — so a nil would make a company with no findings answer

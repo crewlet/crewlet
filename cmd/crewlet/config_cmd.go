@@ -953,7 +953,7 @@ func settingsHalfOf(path string) ([]byte, error) {
 func stageTheChart(ctx context.Context, cs *configStore, path string,
 	company *config.Company, stdout io.Writer) error {
 
-	if company == nil || (len(company.Roles) == 0 && len(company.Units) == 0) {
+	if company == nil || !company.CarriesChart() {
 		return nil
 	}
 	authored := config.AuthoredChart(company)

@@ -380,10 +380,18 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// `notification_undeliverable` warning per untagged alert, for ever —
 	// and one naming a HUMAN seat, which resolves fine and is then dropped
 	// as a self-action. Both read as correct configuration on every screen,
-	// which is the state the field exists to prevent. This is the only
-	// place either can be caught: the parser deliberately does not consult
+	// which is the state the field exists to prevent. A FILE is the one
+	// place either can be REFUSED: the parser deliberately does not consult
 	// the roster (a bad monitor TAG must stay visible as the operator's
 	// typo it is), and the setup form is one of three write paths.
+	//
+	// ONLY A DOCUMENT CARRYING A CHART IS ASKED ABOUT ITS SEATS
+	// ([Company.CarriesChart]). A settings document holds none, so asked
+	// the same question it refused every write and every apply with
+	// Datadog enabled as "declares no agent seat at all". The seat it names
+	// there is the RUNNING chart's, and the continuous report judges that
+	// pair; what no chart can change — a value that is not a handle — is
+	// refused either way.
 	fallback := ""
 	if dd := c.Integrations.Datadog; dd != nil && dd.Enabled {
 		fallback = strings.TrimSpace(dd.RouteTo)
@@ -409,6 +417,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 					"digits and hyphens starting with a letter or digit, so "+
 					"this names no seat and every untagged alert is verified, "+
 					"counted and delivered to nobody", fallback)
+		case !c.CarriesChart():
+			// A settings document: the running chart answers this.
 		case agents == 0:
 			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q names no seat: this company declares no agent seat at all, "+
@@ -1123,6 +1133,21 @@ func (c *Company) eachRole() iter.Seq2[*Role, Path] {
 		}
 		walk(c.Units, field("units"))
 	}
+}
+
+// CarriesChart reports whether this document holds an org chart at all — a
+// seat or a unit anywhere in it.
+//
+// THE ONE QUESTION EVERY RULE ABOUT THE PAIR ASKS FIRST. An authored FILE
+// carries both halves; a stored revision, and every body `PUT /config` and
+// `PATCH /config` take, carry the settings alone, because the chart is a log
+// of its own. A rule comparing a setting against the seats — a reference that
+// names one, a fallback that must wake one — can only be asked of a document
+// that carries them: asked of a settings document it answers that every seat
+// is missing, which is not a conservative answer but a wrong one, on every
+// company at once. The running pair is the continuous report's to judge.
+func (c *Company) CarriesChart() bool {
+	return len(c.Roles) > 0 || len(c.Units) > 0
 }
 
 // SandboxPlacements is every cell a seat could ACTUALLY land in, each mapped
