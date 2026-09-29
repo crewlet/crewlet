@@ -743,6 +743,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
 | `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
+| `#/settings/people` | **People & access** — every human seat, where agents reach them and whether they act here as themselves; every API token by label, the person it acts as and its scope. Never a value *(operator)*. No tail: a person's page is their seat | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every tool a seat can call, by origin. Not guarded: the registry is the push every reader gets, and only an MCP server's template reads the guarded configuration, which its panel says itself. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
@@ -4872,11 +4873,11 @@ when it turns over, or now by raising its ceiling. Home's and the Inbox's
 (`RaiseBudgetDialog`), each field captioned with what that window has spent and
 when it resets.
 
-## Settings: the frame, secrets, nodes and configuration
+## Settings: the frame, people, secrets, nodes and configuration
 
 Settings is the one workspace that draws its sections as a **column** beside
 the screen rather than as tabs in the page bar, in three groups: **Company**
-(General, and Budgets as a cross-link — it lives once, under Spend, and its
+(General, People & access, and Budgets as a cross-link — it lives once, under Spend, and its
 arrow says pressing it leaves Settings), **Connect** (Integrations, Tools &
 MCP, Secrets) and **Engine** (Nodes, Configuration, Backups & retention, Audit
 log). A guarded section draws a key and **is never hidden**: a section that
@@ -4927,6 +4928,24 @@ reading rather than two polls on two clocks that disagreed for up to 30 s.
 policies every executor is given verbatim — read from the org projection, so a
 reader without a credential can open it, as they can Tools & MCP. It is
 edited in the org builder (**Edit in org**).
+
+**People & access** draws the engine's `access` answer: one join, walked from
+both ends. **People** is every human seat — the person, their team, where
+agents reach them (one chip per contact field, as written: a `${VAR}` is its
+name, and one this engine's environment does not set is a warning chip saying
+so) and whether they **act here** as themselves: *Acts as themself*, *Not
+bound*, *Variable unset* or *No such token*, each with the binding as written
+beside it, because each failure has its own remedy. **API tokens** is every
+label the guard accepts, the person it acts as (or *Nobody — writes under its
+own label*), its scope (*Person* or *Operator*) and **yours** on the one this
+browser presents. A tile counts the **broken bindings** — a seat naming a token
+that binds nobody, which otherwise looks bound until that person presses a
+button and is refused. Tokens are declared in Tier A (`api.auth.tokens`) and
+change at a restart, so the screen edits nothing; **Edit people in org** leaves
+for the builder, where a contact and its binding are written. **It never holds
+a value** — not an answer's, and not the token this browser presents. A
+disabled guard is a red banner: every caller is `anonymous` and nobody acts as
+a person.
 
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.

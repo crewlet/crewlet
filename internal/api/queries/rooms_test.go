@@ -106,6 +106,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.
 		Retention: func(context.Context) any { return nil },
+		// THE GUARD'S POSTURE, which the API always supplies from the
+		// guard it mounts.
+		Access: &queries.AccessPosture{},
 	}
 }
 

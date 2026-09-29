@@ -28,6 +28,7 @@
 // `protocol.js`, where the `~` alias does not exist.
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
+import type { AccessAnswer } from "../contract/access.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type {
@@ -4231,6 +4232,7 @@ export interface QueryMap {
   token_series: TokenSeries;
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
+  access: AccessAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;

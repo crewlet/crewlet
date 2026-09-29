@@ -98,6 +98,16 @@ var contract = []Entry{
 	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsATasksTextAtTheEnginesCaps"},
 	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsATasksTextAtTheEnginesCaps"},
 
+	// access.ts
+	{"AccessAnswer", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"AccessAuth", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"AccessToken", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"AccessSeat", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"AccessPerson", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"AccessContact", ReadInterface, "internal/api/queries.TestTheAccessScreenReadsWhatThisAnswerSends"},
+	{"TokenScope", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+	{"AccessBinding", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
+
 	// attribution.ts
 	{"CHANGE_FIELDS", ReadLiteral, "internal/tracker.TestAttributionFieldsAreTheEngines"},
 

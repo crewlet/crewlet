@@ -496,3 +496,36 @@ func TestTheOperatorIDIsAnAttributionAndNotAnAddress(t *testing.T) {
 		t.Error("a seat bound to an API token reads as having no identity")
 	}
 }
+
+// A CONTACT'S FIELDS ARE SHOWN AS WRITTEN, one per config key, and each says
+// whether it resolves by the SAME rule the engine consumes identities by — so
+// a field this reports as resolving is one routing uses, and the reserved
+// operator id reached through a variable resolves nowhere.
+func TestContactFieldsResolveAsTheEngineConsumesThem(t *testing.T) {
+	t.Parallel()
+	c := &HumanContact{
+		SlackUserID:        "U0ANA",
+		AtlassianAccountID: "${ATLASSIAN_ID}",
+		GitLabUsername:     "${UNSET_LOGIN}",
+		CrewletOperatorID:  "${OPERATOR}",
+	}
+	lookup := lookupFrom(map[string]string{"ATLASSIAN_ID": "5b10ac", "OPERATOR": ReservedOperatorID})
+	got := c.Fields(lookup)
+	want := []ContactField{
+		{Key: "slack_user_id", Value: "U0ANA", Resolves: true},
+		{Key: "atlassian_account_id", Value: "${ATLASSIAN_ID}", Reference: true, Resolves: true},
+		{Key: "gitlab_username", Value: "${UNSET_LOGIN}", Reference: true},
+		{Key: "crewlet_operator_id", Value: "${OPERATOR}", Reference: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Fields = %+v\nwant %+v", got, want)
+	}
+	// ONE FIELD PER KEY: Atlassian is two identities to the router and one
+	// field to the person who wrote it.
+	if n := len(c.ResolvedIdentities(lookup)); n != 3 {
+		t.Errorf("resolved identities = %d, want slack plus jira and confluence", n)
+	}
+	if (*HumanContact)(nil).Fields(lookup) != nil {
+		t.Error("a nil contact has fields")
+	}
+}

@@ -80,6 +80,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
+	{method: "GET", pattern: "/access", what: "access"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
 	// above, so /work/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather

@@ -71,6 +71,11 @@ const ACCENT: Site[] = [
     why: "The same fact, in the retention table's node column.",
   },
   {
+    file: "routes/settings/Access.tsx",
+    line: `{t.yours && <Tag variant="brand">yours</Tag>}`,
+    why: 'The token THIS BROWSER presents, among every token the guard accepts: the same fact as Nodes\' "you are on", in the tokens table.',
+  },
+  {
     file: "routes/work/SavedViews.tsx",
     line: `<Tag key="pinned" variant="brand" title="pinned by you — pins are per reader">`,
     why: "A pin is PER READER; the view's own facts beside it are outline. The screen's own comment states the rule, and `viewMarks` is the ONE place that draws it — the grid and the facts block each had their own copy, already drifted.",

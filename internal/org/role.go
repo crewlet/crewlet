@@ -382,36 +382,99 @@ func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	}
 	var out []Identity
 	for _, t := range contactTransports {
-		f := contactFields[t.field]
+		resolved, ok := resolveContactField(t.field, c, lookup)
+		if !ok {
+			continue
+		}
+		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
+	}
+	return out
+}
+
+// resolveContactField is one field's consumable value — every rule
+// [HumanContact.ResolvedIdentities] states, for one field — or false when it
+// has none: unset, an unset or empty variable, or the reserved operator id.
+//
+// ONE COPY, because two readers need it: the identities the engine consumes and
+// the per-field account [HumanContact.Fields] gives a screen. Two copies of the
+// `${VAR}` handling are two chances for a person's contact to read as
+// resolving on the screen that shows it and as absent to the engine that uses
+// it.
+func resolveContactField(field int, c *HumanContact, lookup EnvLookup) (string, bool) {
+	f := contactFields[field]
+	raw := strings.TrimSpace(*f.value(c))
+	if raw == "" {
+		return "", false
+	}
+	resolved := raw
+	if name, isRef := envref.Whole(raw); isRef {
+		v, ok := lookup(name)
+		if !ok {
+			return "", false
+		}
+		resolved = strings.TrimSpace(v)
+		if resolved == "" {
+			return "", false
+		}
+	}
+	if f.lowercase {
+		resolved = strings.ToLower(resolved)
+	}
+	// A REFERENCE THAT RESOLVES TO THE RESERVED ID BINDS NOBODY. Validation
+	// refuses the literal, but a ${VAR}'s value lives in an environment it
+	// cannot always see, so the refusal has to be repeated where the value
+	// is known. Omitted, like an unset variable, rather than returned:
+	// every consumer of this identity — the seat a credential resolves to,
+	// the alias a personal read matches, the registry — would otherwise
+	// make a disabled guard's caller this person.
+	if field == fieldCrewletOperatorID && resolved == ReservedOperatorID {
+		return "", false
+	}
+	return resolved, true
+}
+
+// ContactField is one identity field of a contact AS CONFIGURED, beside
+// whether it resolves — what a screen shows an operator about a person.
+//
+// PER FIELD, not per transport: [HumanContact.Identities] lists Jira and
+// Confluence as two identities over one Atlassian field, which is right for
+// routing and reads as a duplicate to a person checking what they wrote.
+type ContactField struct {
+	// Key is the config key the value is written under: `slack_user_id`.
+	Key string
+	// Value is the field VERBATIM — a literal id or a `${VAR}` reference,
+	// never the variable's value. An account id is not a secret, but a
+	// reference's value lives in a process environment, and a screen that
+	// printed environment values would be one somebody extends to a
+	// variable that is.
+	Value string
+	// Reference reports that Value is a whole `${VAR}`.
+	Reference bool
+	// Resolves reports that the engine can use the field: a literal
+	// always, a reference whose variable is set here and non-empty — and
+	// never a binding that resolves to the reserved operator id.
+	Resolves bool
+}
+
+// Fields returns every declared field in config order, through the same
+// resolution the engine consumes identities by. A nil lookup reads the process
+// environment.
+func (c *HumanContact) Fields(lookup EnvLookup) []ContactField {
+	if c == nil {
+		return nil
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	var out []ContactField
+	for i, f := range contactFields {
 		raw := strings.TrimSpace(*f.value(c))
 		if raw == "" {
 			continue
 		}
-		resolved := raw
-		if name, isRef := envref.Whole(raw); isRef {
-			v, ok := lookup(name)
-			if !ok {
-				continue
-			}
-			resolved = strings.TrimSpace(v)
-			if resolved == "" {
-				continue
-			}
-		}
-		if f.lowercase {
-			resolved = strings.ToLower(resolved)
-		}
-		// A REFERENCE THAT RESOLVES TO THE RESERVED ID BINDS NOBODY. Validation
-		// refuses the literal, but a ${VAR}'s value lives in an environment it
-		// cannot always see, so the refusal has to be repeated where the value
-		// is known. Omitted, like an unset variable, rather than returned:
-		// every consumer of this identity — the seat a credential resolves to,
-		// the alias a personal read matches, the registry — would otherwise
-		// make a disabled guard's caller this person.
-		if t.transport == TransportCrewlet && resolved == ReservedOperatorID {
-			continue
-		}
-		out = append(out, Identity{Transport: t.transport, ExternalID: resolved})
+		_, isRef := envref.Whole(raw)
+		_, resolves := resolveContactField(i, c, lookup)
+		out = append(out, ContactField{Key: f.key, Value: raw, Reference: isRef, Resolves: resolves})
 	}
 	return out
 }

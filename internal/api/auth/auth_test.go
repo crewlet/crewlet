@@ -570,3 +570,23 @@ func TestTheSocketPathTakesItsTokenFromTheQuery(t *testing.T) {
 		}
 	}
 }
+
+// THE LABELS THE GUARD ACCEPTS, in order, and none under a disabled guard —
+// which accepts every caller as anonymous and no listed token at all, so a
+// listing read off the document would name credentials that authenticate
+// nobody.
+func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "ops", Token: "t-ops"},
+		config.APIToken{ID: "ci", Token: "t-ci"}))
+	if got := g.TokenIDs(); strings.Join(got, ",") != "ci,ops" {
+		t.Errorf("TokenIDs = %v, want the labels in order", got)
+	}
+	off := guard(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{{ID: "ops", Token: "t-ops"}}
+		a.Disabled = true
+	})
+	if got := off.TokenIDs(); len(got) != 0 {
+		t.Errorf("a disabled guard lists %v, want none", got)
+	}
+}

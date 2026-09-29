@@ -262,6 +262,12 @@ type Sources struct {
 	// say anything about.
 	Retention func(ctx context.Context) any
 
+	// Access is the auth guard's posture — the token LABELS it accepts and
+	// never a value (see [AccessPosture]) — for `access`. Nil leaves the
+	// question unregistered; the API always supplies it, from the guard it
+	// mounts.
+	Access *AccessPosture
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to. The RESOLVED id
 	// (config.ResolveNodeID), which is also the name the node's presence
@@ -396,6 +402,12 @@ func Register(r *Registry, s Sources) {
 		// a guard the server did not keep, and on a node with
 		// `api.allow_anonymous_read` an anonymous GET read all of it.
 		r.RegisterOperator("fleet", s.fleet)
+	}
+	if s.Access != nil {
+		// OPERATOR-ONLY: which labels the guard accepts and which person
+		// each is, is a map of which credential to take. See
+		// [Sources.access].
+		r.RegisterOperator("access", s.access)
 	}
 	// WHO IS ASKING. Registered unconditionally: a process with no company
 	// still has a credential presented to it, and "this token resolves to

@@ -132,6 +132,12 @@ Settings › **Secrets** (`#/settings/secrets`) lists what the fleet holds and c
 
 Before a removal the screen says **which config fields point at the row**, read from [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-auth-gated) and listed by path. That is the failure this confirmation exists to prevent: the config keeps `${VAR}` pointers, so removing a row a seat's `bot_token` still names leaves that pointer resolving to `""` at the next activation, and the webhook route or transport holding it starts refusing deliveries with nothing naming the row that went away. Removing a referenced row takes an explicit acknowledgement, and so does removing one when the check itself did not answer, **"the configuration could not be read" is never rendered as "nothing points at this"**, because the second is a reassurance the screen has not earned. A rotation is safe by construction, since the pointer keeps naming a row that still exists.
 
+The API's own bearer tokens are NOT in this store: they are Tier A
+(`api.auth.tokens`), the root of trust the store's keyring comes from. Settings
+› **People & access** (`#/settings/people`) lists their labels — never a value
+— beside the person each one acts as, read from
+[`GET /access`](../reference/api-endpoints.md#get-access).
+
 ### From a provisioner
 
 Every provisioning CLI takes `-secret-store` in place of `-env-file`:

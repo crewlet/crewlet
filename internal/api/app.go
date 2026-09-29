@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -327,6 +328,17 @@ func New(opts Options) (*App, error) {
 	}
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
+	}
+	// WHO MAY REACH THE COMPANY, read off the guard just mounted rather than
+	// off Tier A: the guard is what decides, and a disabled one accepts no
+	// listed token (see [queries.AccessPosture]).
+	sources.Access = &queries.AccessPosture{
+		TokenIDs:      a.guard.TokenIDs(),
+		Disabled:      a.guard.Disabled(),
+		AnonymousRead: a.guard.AnonymousRead(),
+	}
+	if opts.Bootstrap != nil {
+		sources.Access.AllowedOrigins = slices.Clone(opts.Bootstrap.API.Auth.AllowedOrigins)
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)

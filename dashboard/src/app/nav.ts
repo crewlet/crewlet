@@ -471,6 +471,15 @@ export const WORKSPACES: WorkspaceRow[] = [
         group: "Company",
       },
       {
+        key: "people",
+        label: "People & access",
+        icon: "users",
+        path: ["settings", "people"],
+        hint: "The people in the chart, how agents reach them, and the API tokens that act as them",
+        group: "Company",
+        guarded: true,
+      },
+      {
         key: "budgets",
         label: "Budgets",
         icon: "sliders-vertical",
@@ -605,6 +614,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "events",
   "pages",
   "budgets",
+  "people",
   "integrations",
   "tools",
   "servers",

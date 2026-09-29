@@ -97,6 +97,7 @@ node means nothing was done.
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
+| `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -219,7 +220,7 @@ through unchanged; one that adds its own `Content-Security-Policy` produces two
 policies, and a browser enforces both.
 
 Read-side handlers live in the `internal/api` package (one module
-per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
+per domain — `agents`, `events`, `tokens`, `org`, `fleet`, `access`,
 `sandbox_runs`, `budgets`, `integrations`, `webhooks`,
 `dashboard`, `health`);
 `webhooks` and `/config/*` keep a stable external contract, while the
@@ -1984,6 +1985,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `seat_activity` | `{seat?, days?, previous?}` | `GET /agents/activity`. Every seat's TURNS over the `days` (1 to 90, default 7) company days ending today, summed across every node from the replicated usage domain — so the answer is the same on whichever node is asked and still counts a node that has left. `{since, until, days, previous_since?, previous_until?, seats, quantile_resolution}`; each seat is `{handle, role, agent_id, in_chart, turns, failed, reviewed, first_pass, first_pass_pct?, sent_back, p50_ms?, p90_ms?, tokens, per_day, last_turn_at?, previous?}`. `first_pass_pct` is `first_pass` over REVIEWED turns (0–100) and is ABSENT when none was reviewed — a 0% for a seat nobody reviewed would be a verdict nobody gave. `sent_back` counts reviews that sent work back. `p50_ms` and `p90_ms` are read from the merged turn-duration histogram and are within `quantile_resolution` (0.06) of the true value; absent when no turn ended. `per_day` is every day of the window, oldest first, a quiet day included as zeros. `previous` (with `previous=true`) is the seat's `{turns, failed, reviewed, first_pass, sent_back, tokens, per_day}` over the same number of days before, `per_day` being every one of those days, oldest first — so a profile draws the fortnight its week-on-week figure is made over from this one answer. Every AGENT seat of the current chart has a row, a quiet one with zeros ("took no turns" is a measurement); a seat that has left the chart appears with `in_chart: false` while its days are in the window; a human seat has none. `seat=` narrows to one handle, and a handle with no rows answers one row of zeros rather than none; a human seat's handle is refused (`bad_params`, naming the person), because the engine runs no turns for a person and a zero row would say one took none. Ordered by handle |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
+| `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
 | `sandbox_tail` | `{turn_id, launch_id}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output: {text, source: transcript\|stderr\|none, cut, as_of, finished}` (the last 8 KiB, redacted), `not_running` with the record's `status` (`awaiting_clarification`, `launching`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left), `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget (no `node` for a run nobody holds right now), or `owner_upgrading` naming an owner whose build does not advertise the `sandbox_tail` feature. A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s while a running job's span is open, and nothing else asks |
@@ -3475,6 +3477,55 @@ shared knowledge backend, reachable by all members via query-time search.
 ---
 
 ## Fleet, Sandbox Runs & Schedules
+
+### `GET /access`
+
+Backs **Settings › People & access**: who can reach the company through this
+engine's own surface, and as whom. **It needs a token, reads included** —
+which labels the guard accepts and whom each one is, is a map of which
+credential to take — and `api.allow_anonymous_read` does not open it.
+
+**Labels, never values.** The answer is built from the auth guard the API
+mounts, through a type with no member a token's value could travel in, so no
+edit to the answer can put one on the wire. It is read off the GUARD rather
+than off Tier A because the guard is what decides: with `api.auth.disabled`
+it accepts no listed token at all, so `tokens` is empty and every binding
+reads `no_token`.
+
+It is one join walked from both ends. Each token names the human seat whose
+`contact.crewlet_operator_id` binds it — through the same lookup the viewer and
+[`/operator/act`](#operatoract--the-dashboards-write-surface) make — and a
+bound token's `scope` is `person` (it acts from the dashboard as that seat);
+every other token's is `operator` (every guarded surface under its own label,
+never the act transport). Each person names the state of their own binding:
+
+| `binding` | Means | The remedy |
+|---|---|---|
+| `bound` | The id resolves to a label the guard accepts | — |
+| `unbound` | The seat names no id — an ordinary state: agents reach them on their other surfaces | Add `crewlet_operator_id` to act as themself |
+| `unresolved` | The id is a `${VAR}` this engine's environment does not set (or it resolves to the reserved `anonymous`) | Set the variable, or write the label |
+| `no_token` | The id resolves to a label `api.auth.tokens` does not carry — every binding under a disabled guard | Correct the label on either side |
+
+`operator_id` is the binding as WRITTEN, and each of `contacts` — the seat's
+other identity fields, one per config key — is its `value` as written with
+`reference` and `resolves` beside it: a `${VAR}` is its name, never the
+variable's value. The binding is not among the contacts, because it is an
+attribution rather than an address.
+
+```json
+{
+  "auth": {"disabled": false, "anonymous_read": true, "allowed_origins": []},
+  "tokens": [
+    {"id": "ci", "scope": "operator", "seat": null, "yours": false},
+    {"id": "founder", "scope": "person", "seat": {"handle": "ana", "name": "Ana Diaz"}, "yours": true}
+  ],
+  "people": [
+    {"handle": "ana", "name": "Ana Diaz", "email": "ana@example.com", "availability": "",
+     "operator_id": "founder", "binding": "bound",
+     "contacts": [{"key": "slack_user_id", "value": "U0FOUNDER", "reference": false, "resolves": true}]}
+  ]
+}
+```
 
 ### `GET /fleet`
 

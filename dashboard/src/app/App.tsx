@@ -74,6 +74,7 @@ const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
 const General = lazyScreen("settings", (m) => m.General);
+const PeopleAndAccess = lazyScreen("settings", (m) => m.PeopleAndAccess);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Tools = lazyScreen("settings", (m) => m.Tools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
@@ -153,6 +154,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Budgets />;
     case "general":
       return <General />;
+    case "people":
+      return <PeopleAndAccess />;
     case "integrations":
       return <Integrations key={route.kind ?? ""} kind={route.kind} />;
     case "tools":

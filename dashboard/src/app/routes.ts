@@ -107,6 +107,7 @@ export type Screen =
   | { screen: "spend-tasks" }
   | { screen: "budgets" }
   | { screen: "general" }
+  | { screen: "people" }
   | { screen: "integrations"; kind?: string }
   | { screen: "tools"; server?: string; tool?: string }
   | { screen: "secrets"; name?: string }
@@ -343,6 +344,9 @@ function settings(rest: string[], screen: Make, under: Under): Route {
   if (first === undefined) return screen({ screen: "general" });
   const none = () => missing("settings", under("Settings"));
   switch (first) {
+    case "people":
+      // NO TAIL: a person's page is their seat, under Agents.
+      return tail.length ? none() : screen({ screen: "people" });
     case "integrations":
       if (tail.length > 1) return none();
       return screen(

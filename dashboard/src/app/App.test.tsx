@@ -348,7 +348,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
       expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
-      expect(content().querySelector(".crewlet-stat-card"), section.key).toBeNull();
+      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
       expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent, section.key).toBe("");
       expect(content().textContent, section.key).not.toMatch(/\b0 (nodes?|credentials?)\b/);
       expect(content().textContent, section.key).not.toMatch(/No nodes are reporting/);
@@ -412,7 +412,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
         document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
         section.key,
       ).toBeNull();
-      expect(content().querySelector(".crewlet-stat-card"), section.key).toBeNull();
+      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
       view.unmount();
       cleanup();
     }

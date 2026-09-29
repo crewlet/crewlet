@@ -24,7 +24,9 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -239,6 +241,17 @@ func (g *Guard) Disabled() bool { return g.disabled }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
+
+// TokenIDs names the credentials this guard accepts, sorted — their LABELS and
+// never their values, for the `access` answer.
+//
+// Read off the guard rather than off Tier A, because the guard is what decides:
+// a disabled guard accepts every caller as [AnonymousOperator] and no listed
+// token at all, and an answer built from the document would name credentials
+// that authenticate nobody.
+func (g *Guard) TokenIDs() []string {
+	return slices.Sorted(maps.Keys(g.tokens))
+}
 
 // Operator returns the operator id a bare token authenticates as.
 //
