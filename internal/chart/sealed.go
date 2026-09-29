@@ -163,9 +163,8 @@ const SealSource = "chart"
 // the seconds between the two, and across a retry the broker sent back to
 // decide again, a value exists that no row names yet. An hour is two orders of
 // magnitude past the longest of those (the publisher's own resolve budget is
-// seconds), and it is the grace the identity estate's key duty gives a key
-// nobody owns for the same reason. A re-seal re-dates the row, so a value
-// being written is never an hour old.
+// seconds). A re-seal re-dates the row, so a value being written is never an
+// hour old.
 const SealGrace = time.Hour
 
 // OrphanedSeals is every value this domain sealed that nothing names and that
