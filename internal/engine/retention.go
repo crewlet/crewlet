@@ -144,6 +144,12 @@ type retention struct {
 	// leave. Nil puts none.
 	background func(domain string) int
 
+	// estate fills the estate map's half of a reading — what this node's
+	// estate view has seen of each partition's copies and joins, and how
+	// old the view is. Nil on an engine running no estate view, which
+	// reads as nothing to report.
+	estate func(now time.Time, out *statelog.Reading)
+
 	// mu guards the coverage cache below. The tick and every API request
 	// assemble a report, on different goroutines.
 	mu sync.Mutex
@@ -203,6 +209,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		objects:     e.objectsReading,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
+		estate:      e.estateReading,
 		pooled:      map[string]poolCounters{},
 		done:        make(chan struct{}),
 	}

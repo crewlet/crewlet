@@ -138,6 +138,27 @@ Each answers in one of five states: `whole` (layout 0), `no_map` (a partitioned
 layout whose first map is not written yet — a wait), `placed`, `unreadable` (a
 map a newer build wrote) and `unavailable`.
 
+## Alarms
+
+Every node that runs the state log watches the estate map on the maintainer's
+own fifteen-second cadence and raises four [alarms](../reference/alarms.md),
+each at a threshold another decision already made:
+
+| Alarm | Fires when |
+|---|---|
+| `estate_partition_unserved` | A partition has no copy that can answer — the event itself |
+| `estate_under_replicated` | A partition has had fewer copies than its target for longer than membership's ten-minute grace, the time the map gives a member before replacing it |
+| `estate_move_stalled` | A holder has been joining for longer than the rejoin window (`stream.tracker_retention.rejoin_window`, 30 minutes by default), the budget a join is sized against |
+| `estate_view_stale` | This node's view of the map, the estate leases or — at layout 0 — the fleet's presence has not been confirmed within the 60-second bound every cached coordination fact is held to |
+
+The two durations are **this node's own observation**: the map records epochs,
+not times, so each node measures how long it has seen a condition hold without
+a break, on its own clock. That is a lower bound — a node that restarted, or
+whose view went stale in between, counts from again — so an alarm can fire a
+sighting late, never on a condition nobody saw hold. While the view is stale the
+other three alarms are silent and `estate_view_stale` says why. At layout 0
+there is no map, so only `estate_view_stale` can fire.
+
 ## The gestures
 
 | Gesture | Effect | Confirmed by |

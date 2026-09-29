@@ -319,6 +319,13 @@ type Engine struct {
 	estateMaintainer *loop
 	estateControl    *EstateControl
 
+	// estateWatch is this node's estate view and what the estate alarms
+	// read of it, nil until the state log's duties start and on a node
+	// with no coordination store. ATOMIC for retention's reason: armed with
+	// the native runtime, which an apply can bring up while the API reads
+	// the alarms. See estateview.go.
+	estateWatch atomic.Pointer[estateWatch]
+
 	// boot is the operator's Tier A configuration this engine was built
 	// from. Immutable; kept because a node that meets its first native
 	// company at an apply brings the state log up then, and the log's
@@ -1521,6 +1528,8 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.stopRetention()
+	// AFTER the retention loop, whose evaluation reads it.
+	e.stopEstateWatch()
 	e.stopBudgetReports()
 	e.stopEmbedding()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission

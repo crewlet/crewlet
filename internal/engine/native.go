@@ -522,6 +522,9 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	if n == nil {
 		return
 	}
+	// THE ESTATE VIEW FIRST, which the retention loop's alarm evaluation
+	// reads the estate alarms from.
+	e.startEstateWatch(ctx)
 	e.startRetention(ctx, e.boot, n.log)
 	// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other half of
 	// semantic search is present and correct over an empty corpus — which
