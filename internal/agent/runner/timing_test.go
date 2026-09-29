@@ -166,7 +166,19 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 		if frame.RoundStartedAt.IsZero() {
 			t.Errorf("a round-%d frame names no round start", round)
 		}
-		if len(frame.Rounds) != round {
+		// A round's OPENING frame is published as its provider call is
+		// made, so it carries the rounds before it and a start later than
+		// every one of them; every later frame of the round carries it too.
+		switch len(frame.Rounds) {
+		case round:
+		case round - 1:
+			if frame.RunningCall != nil {
+				t.Errorf("round %d's opening frame names a running call", round)
+			}
+			if n := len(frame.Rounds); n > 0 && !frame.RoundStartedAt.After(frame.Rounds[n-1].StartedAt) {
+				t.Errorf("round %d's opening frame carries the previous round's start %v", round, frame.RoundStartedAt)
+			}
+		default:
 			t.Errorf("a round-%d frame carries %d timed rounds", round, len(frame.Rounds))
 		}
 		if call := frame.RunningCall; call != nil {

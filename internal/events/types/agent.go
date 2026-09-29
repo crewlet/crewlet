@@ -821,7 +821,10 @@ type AgentTurnProgress struct {
 	RoundCeiling int `json:"round_ceiling,omitempty"`
 	// RoundStartedAt is when the latest round's provider call was made:
 	// the round being written while the model answers, and the round whose
-	// tools are running after it has. Absent on the opening frame.
+	// tools are running after it has. Absent on the phase's opening frame,
+	// which is published before any round; every ROUND's first frame
+	// carries it, published the moment that round's provider call is made,
+	// so a start later than every entry in Rounds is a round in flight.
 	RoundStartedAt time.Time `json:"round_started_at,omitzero"`
 	// RunningCall is the tool call in flight — see [RunningCall]. Absent
 	// whenever no call is running.
@@ -832,8 +835,9 @@ type AgentTurnProgress struct {
 	// RoundNum is zero-based, or -1 for the opening update a phase publishes
 	// before its first provider call — the one carrying PromptMessages so the
 	// live view can show what the agent was asked while it is still answering.
-	// Consumers read RoundNum+1 as "rounds so far", which is why the sentinel
-	// is -1 rather than 0.
+	// Consumers read RoundNum+1 as the round the phase is ON — the rounds
+	// that have come back, plus the one in flight once its opening frame
+	// has been published — which is why the sentinel is -1 rather than 0.
 	RoundNum       int             `json:"round_num"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
 	// RoundNarration is what the model said in each round so far. Free on

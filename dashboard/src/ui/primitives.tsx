@@ -726,6 +726,21 @@ export function DownloadButton({
 }
 
 /**
+ * Hand text to the reader as a file from a control that cannot say so on
+ * itself — a menu item, which closes on the press — and report what happened:
+ * whether the browser took the download, and the name it was offered under
+ * (sanitised exactly as [DownloadButton]'s), for the toast that says so.
+ */
+export function downloadText(
+  text: string,
+  filename: string,
+  mime = "application/json;charset=utf-8",
+): { started: boolean; name: string } {
+  const name = safeFilename(filename);
+  return { started: saveTextFile(text, name, mime), name };
+}
+
+/**
  * Save `text` to the reader's machine as `filename`, and report whether the
  * browser took it.
  *

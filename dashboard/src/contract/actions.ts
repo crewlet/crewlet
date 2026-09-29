@@ -181,6 +181,16 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  steer_turn: {
+    // STEER ON THE TURN TRACE: a note to a turn running now, read at its
+    // next round. It crosses to the node running the turn on an ephemeral
+    // ask rather than into a log, so it raises no floor; what became of it
+    // is the turn's own `agent_turn_steered`, which the trace re-reads.
+    args: ["turn_id", "note"],
+    domain: null,
+    refreshes: ["turn"],
+    scope: "person",
+  },
   write_page: {
     // "SAVE AS A PAGE" in the Inbox's composer: what the person wrote becomes
     // a new page in the knowledge base, which is then attached to the item

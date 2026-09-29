@@ -19,6 +19,7 @@ import { turnSpan } from "~/lib/phases.ts";
 import type { PhaseRecord, Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { tellStory } from "~/lib/turnstory.ts";
+import { phaseRecord } from "~/test/phaseRecord.ts";
 
 function record(payload: Record<string, unknown>): EventRecord {
   return { payload } as unknown as EventRecord;
@@ -207,16 +208,11 @@ describe("outcomeOf", () => {
 
 /**
  * The fact line is what the page and the rail BOTH wear, so what it says about
- * a number is said once. THREE of its facts carry a note — an outcome, a
- * duration and a token figure — and a note is a claim about where a value came
- * from, which is exactly the kind of claim that goes stale silently, because
- * nothing on screen contradicts it. This block said two, and the third was the
- * one nothing here pinned: a count stated in prose and checked by nobody is how
- * a branch stops being covered without any test going red.
- *
- * These pin the branches rather than the prose: an outcome is captioned with
- * WHOSE word it is, a duration only when it was NOT measured, a token figure
- * only when workers are outside it.
+ * a number is said once. A note is a claim about where a value came from —
+ * the kind of claim that goes stale silently, because nothing on screen
+ * contradicts it — so these pin the branches rather than the prose: a wall
+ * clock is captioned only when it was NOT measured, a token figure only when
+ * workers are outside it, and the cache only when a phase reported one.
  */
 describe("turnFacts", () => {
   function view(over: Partial<TurnView>): TurnView {
@@ -228,7 +224,7 @@ describe("turnFacts", () => {
       events: [],
       cut: false,
       phases: [],
-      own: [{} as PhaseRecord],
+      own: [phaseRecord()],
       nested: new Map(),
       rec: {} as TurnView["rec"],
       role: "",
@@ -236,7 +232,7 @@ describe("turnFacts", () => {
       outcome: outcomeOf({} as TurnView["rec"]),
       running: false,
       durationMs: null,
-      span: { from: 0, to: 0 },
+      span: { from: 0, to: 0, timed: false },
       tokens: 0,
       workerTokens: 0,
       workerCount: 0,
@@ -245,83 +241,128 @@ describe("turnFacts", () => {
       story: tellStory([]),
       trouble: 0,
       clean: false,
+      coverage: null,
+      nodes: [],
+      workItem: null,
+      stage: "",
+      parked: false,
+      overlay: true,
+      startedAt: 0,
+      handle: "",
+      paused: false,
+      liveCall: null,
       ...over,
     };
   }
 
-  function fact(v: TurnView, label: string) {
-    return turnFacts(v).find((f) => f.label === label);
+  function fact(v: TurnView, label: string, now = 0) {
+    return turnFacts(v, now).find((f) => f.label === label);
   }
-
-  test("the outcome carries whose word it is, and a running turn carries neither", () => {
-    // `done` is the REVIEWER's verdict and `delivered` is the executor's own,
-    // and the fact renders one word for both — so without the note a reader
-    // cannot tell a turn the reviewer passed from one that merely reported
-    // itself finished. It is the third note, and the one this block used to
-    // claim did not exist.
-    const done = view({
-      outcome: outcomeOf({
-        summary: record({ failed: false, decision: "done" }),
-        learning: record({ review_outcome: "done", outcome: "delivered" }),
-      }),
-    });
-    expect(fact(done, "Outcome")?.value).toBe("done");
-    expect(fact(done, "Outcome")?.note).toBe("delivered the work");
-
-    // A RUNNING TURN HAS NO OUTCOME. `outcomeOf` answers an em dash for a
-    // caller with a tile to fill; a fact line has no tile, so the value is
-    // dropped — and the note has to go with it, or the line carries a caption
-    // about nothing, directly under the badge that says "running".
-    const running = view({ outcome: outcomeOf({ summary: undefined, learning: undefined }) });
-    expect(fact(running, "Outcome")?.value).toBe("");
-    expect(fact(running, "Outcome")?.note).toBe(undefined);
-  });
 
   test("the engine's own milliseconds carry no note", () => {
     // A caption under every duration is a caption nobody reads, and then the
     // one time it says something else it is missed. Measured is the silent
     // case precisely so the derived one is loud.
-    expect(fact(view({ durationMs: 121, span: { from: 10, to: 900 } }), "Took")?.note).toBe(
-      undefined,
+    const measured = fact(
+      view({ durationMs: 121, span: { from: 10, to: 900, timed: true } }),
+      "Wall clock",
     );
+    expect(measured?.value).toBe("121ms");
+    expect(measured?.note).toBe(undefined);
   });
 
   test("a duration this page derived says so, and says which window", () => {
-    const spanned = fact(view({ span: { from: 1_000, to: 4_000 } }), "Took");
-    expect(spanned?.note).toBe("spanning the turn's first and last event");
+    const spanned = fact(view({ span: { from: 1_000, to: 4_000, timed: false } }), "Wall clock");
+    expect(spanned?.note).toBe("first to last event");
+    // THE WATERFALL'S WINDOW, where anything was timed: the same length the
+    // Turn row beneath the header is drawn at, and a note that says so.
+    const timed = fact(view({ span: { from: 1_000, to: 1_416, timed: true } }), "Wall clock");
+    expect([timed?.value, timed?.note]).toEqual(["416ms", "from its spans; no closing record"]);
     // A CUT VIEW HOLDS BOTH ENDS — the span is the turn's real window — but
     // the record carrying the engine's own measurement is missing from a turn
     // this page has both ends of, and those are different sentences.
-    const cut = fact(view({ cut: true, span: { from: 1_000, to: 4_000 } }), "Took");
-    expect(cut?.note).toBe("spanning the turn's ends — its own record is not among them");
+    const cut = fact(
+      view({ cut: true, span: { from: 1_000, to: 4_000, timed: false } }),
+      "Wall clock",
+    );
+    expect(cut?.note).toBe("from its ends; record not shown");
+  });
+
+  test("a running turn's wall clock is how long it has run, off its own start", () => {
+    const running = fact(view({ running: true, startedAt: 1_000 }), "Wall clock", 373_000);
+    expect(running?.value).toBe("6m 12s");
+    expect(running?.note).toBe(undefined);
   });
 
   test("a turn with neither a measurement nor a window states no duration", () => {
-    const f = fact(view({ span: { from: 0, to: 0 } }), "Took");
+    const f = fact(view({ span: { from: 0, to: 0, timed: false } }), "Wall clock");
     expect(f?.value).toBe("");
     expect(f?.note).toBe(undefined);
   });
 
-  test("the token figure names its workers, and stays silent where there are none", () => {
+  test("tokens are in and out, and name the workers outside them", () => {
     // `subagent_tokens` is deliberately outside `total_tokens` at the engine,
     // so the note is the only thing on either surface that answers "how much
     // of this turn was fan-out".
-    expect(fact(view({ tokens: 900, workerTokens: 400, workerCount: 1 }), "Tokens")?.note).toBe(
+    const own = [phaseRecord({ inputTokens: 1_200, outputTokens: 300 })];
+    expect(fact(view({ own }), "Tokens")?.value).toBe("1,200 in · 300 out");
+    expect(fact(view({ own, workerTokens: 400, workerCount: 1 }), "Tokens")?.note).toBe(
       "+400 in 1 worker",
     );
-    expect(fact(view({ tokens: 900, workerTokens: 400, workerCount: 3 }), "Tokens")?.note).toBe(
+    expect(fact(view({ own, workerTokens: 400, workerCount: 3 }), "Tokens")?.note).toBe(
       "+400 in 3 workers",
     );
-    expect(fact(view({ tokens: 900 }), "Tokens")?.note).toBe(undefined);
+    expect(fact(view({ own }), "Tokens")?.note).toBe(undefined);
+  });
+
+  test("the cache is a share of the input, and absent — never 0% — when none was reported", () => {
+    const cached = [phaseRecord({ inputTokens: 1_000, cacheReadTokens: 250 })];
+    expect(fact(view({ own: cached }), "Cache")?.value).toBe("25%");
+    expect(fact(view({ own: cached }), "Cache")?.note).toBe("250 of 1,000 input read from cache");
+    const unreported = [phaseRecord({ inputTokens: 1_000, cacheReadTokens: 0 })];
+    expect(fact(view({ own: unreported }), "Cache")?.value).toBe("");
+  });
+
+  test("a running phase reads as its round of its granted cap", () => {
+    const liveCall = {
+      phase: "execute",
+      iteration: 1,
+      rounds_used: 2,
+      round_num: 2,
+      max_rounds: 25,
+    } as TurnView["liveCall"];
+    // THE ROUND IS THE NOTE: as a clause of the value, "Execute · round 3 of
+    // 24" wrapped to two lines in its track at 1440.
+    const running = fact(view({ running: true, stage: "phase", liveCall }), "Phase");
+    expect([running?.value, running?.note]).toEqual(["Execute", "round 3 of 25"]);
+    const parked = fact(view({ running: true, stage: "parked", parked: true }), "Phase");
+    expect([parked?.value, parked?.note]).toEqual(["Execute", "waiting on a coding run"]);
+  });
+
+  test("a settled turn's phases hold one line, with its iterations as the note", () => {
+    const own = [
+      phaseRecord({ key: "a", phase: "execute", iteration: 1 }),
+      phaseRecord({ key: "b", phase: "review", iteration: 1 }),
+      phaseRecord({ key: "c", phase: "execute", iteration: 2 }),
+    ];
+    const phase = fact(view({ own, iterations: 2 }), "Phase");
+    expect([phase?.value, phase?.note]).toEqual(["Execute → Review", "2 iterations"]);
+    expect(fact(view({ own: own.slice(0, 2), iterations: 1 }), "Phase")?.note).toBe(undefined);
+  });
+
+  test("the node is the one the answer says ran it", () => {
+    expect(fact(view({ nodes: ["node-a", "node-b"] }), "Node")?.value).toBe("node-a, node-b");
+    expect(fact(view({}), "Node")?.value).toBe("");
   });
 
   test("a turn with no phase record in hand counts nothing, and notes nothing", () => {
-    // "0 phases · 0 rounds · 0 tokens" is a claim the turn did nothing. A turn
-    // still loading has not been shown to have done nothing — and a note
-    // hanging under an absent value would outlive the value it qualifies.
+    // "0 tokens · 0 tool calls" is a claim the turn did nothing. A turn still
+    // loading has not been shown to have done nothing — and a note hanging
+    // under an absent value would outlive the value it qualifies.
     const empty = view({ own: [], workerTokens: 400, workerCount: 2 });
     expect(fact(empty, "Tokens")?.value).toBe("");
     expect(fact(empty, "Tokens")?.note).toBe(undefined);
-    expect(fact(empty, "Phases")?.value).toBe("");
+    expect(fact(empty, "Tool calls")?.value).toBe("");
+    expect(fact(empty, "Cache")?.value).toBe("");
   });
 });

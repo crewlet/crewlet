@@ -774,8 +774,9 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	}
 	// The partial work is the point: a child that spent a round did work the
 	// parent paid for, and reporting zeros throws away both the transcript
-	// and the only evidence of the cost.
-	if res.Rounds != 1 || res.Tokens() != 100 {
+	// and the only evidence of the cost. TWO rounds: the second's provider
+	// call was made — the round it was cut off in — and billed nothing yet.
+	if res.Rounds != 2 || res.Tokens() != 100 {
 		t.Errorf("partial work lost: rounds=%d tokens=%d", res.Rounds, res.Tokens())
 	}
 	if len(res.Executions) != 1 {

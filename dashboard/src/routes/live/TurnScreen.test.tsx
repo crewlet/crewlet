@@ -12,12 +12,13 @@
  * the rows it holds do not support.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { TurnScreen } from "./Turn.tsx";
+import { TurnPeek, TurnScreen } from "./Turn.tsx";
 import { ABSORBED } from "~/contract/turnbands.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
 
@@ -93,19 +94,48 @@ function promptSize(payload: Record<string, unknown>): EventRecord {
   });
 }
 
-/** Mount the screen over one stubbed answer. */
-function mount(answer: Partial<TurnAnswer>) {
+/** Stand on one of the screen's tabs, as a reader's URL does. */
+function onTab(tab: "timeline" | "transcript" | "context" | "tools") {
+  location.hash = `#/live/turns/${TURN}${tab === "timeline" ? "" : `?tab=${tab}`}`;
+}
+
+beforeEach(() => onTab("transcript"));
+
+/**
+ * Mount the screen over one stubbed answer, on one of its tabs.
+ *
+ * THE TAB IS THE URL'S, as a reader's is: the phase cards are the Transcript
+ * tab's, the brief and the prompt weights the Context tab's, and the header,
+ * the page bar and what went wrong are on every tab.
+ */
+function mount(
+  answer: Partial<TurnAnswer>,
+  tab: "timeline" | "transcript" | "context" | "tools" = "transcript",
+) {
+  onTab(tab);
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
       ? Promise.resolve({ turn_id: TURN, events: [], truncated: false, ...answer })
       : Promise.resolve({});
+  return frame(store, socket);
+}
+
+/** Open the page bar's menu: other attempts, traces, and the turn as JSON. */
+async function openWaysOut() {
+  fireEvent.click(await screen.findByRole("button", { name: /More on this turn/ }));
+}
+
+/** The screen inside what the frame mounts around every screen. */
+function frame(store: Store, socket: LiveSocket) {
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <TurnScreen turnId={TURN} />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <TurnScreen turnId={TURN} />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }
@@ -139,12 +169,12 @@ test("a cut view names the middle as the gap, not the ending", async () => {
   expect(await screen.findByText(/middle not shown/)).toBeTruthy();
   expect(screen.getByText(/what is missing is the middle/)).toBeTruthy();
   // Neither note may state what it used to: "no turn record" is a claim about
-  // the TURN, and "spanning the turn's first and last event" is a claim about
+  // the TURN, and "first to last event" is a claim about
   // a window this page can no longer assume is whole. Both are `Fact.note`
   // now rather than a tile's caption, and the assertion is unchanged by that
   // on purpose — what must not appear is the sentence, wherever it is drawn.
   expect(screen.queryByText("no turn record")).toBeNull();
-  expect(screen.queryByText("spanning the turn's first and last event")).toBeNull();
+  expect(screen.queryByText("first to last event")).toBeNull();
 });
 
 // AND THE RECOVERED ENDING IS READ, so a cut turn reports how it ended.
@@ -171,7 +201,7 @@ test("a cut view still reports the outcome, off the recovered record", async () 
   // holds, and `delivered the work` is that recovery being read. It used to
   // reach only the page, through a tile the rail had no room for.
   expect((await screen.findAllByText("done")).length).toBeGreaterThan(0);
-  expect(screen.getByText("delivered the work")).toBeTruthy();
+  expect(screen.getByTitle("delivered the work")).toBeTruthy();
 });
 
 // AND IT DOES NOT CLAIM THE TURN WAS CLEAN. "Nothing went wrong" is a claim
@@ -207,19 +237,22 @@ test("a cut view withholds the clean badge, and a complete one gives it", async 
 // that renders a permanent 0 is the failure this case exists to catch, which
 // is why the figures asserted are ones only a measuring engine produces.
 test("each phase's prompt size is rendered rather than banded and dropped", async () => {
-  mount({
-    events: [
-      phase("2026-09-13T10:01:30Z", 90_000),
-      promptSize({
-        approximate_tokens: 7400,
-        system_chars: 24000,
-        user_chars: 1200,
-        message_chars: 0,
-        tool_chars: 3800,
-        tool_count: 11,
-      }),
-    ],
-  });
+  mount(
+    {
+      events: [
+        phase("2026-09-13T10:01:30Z", 90_000),
+        promptSize({
+          approximate_tokens: 7400,
+          system_chars: 24000,
+          user_chars: 1200,
+          message_chars: 0,
+          tool_chars: 3800,
+          tool_count: 11,
+        }),
+      ],
+    },
+    "context",
+  );
   expect(await screen.findByText("Prompt sent")).toBeTruthy();
   expect(screen.getByTitle("the engine's own approximation").textContent).toBe("7,400");
   expect(screen.getByTitle("bytes in the system prompt")).toBeTruthy();
@@ -242,23 +275,26 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
 // into one, the row asserted System 0 B over a 24,000-byte system prompt and
 // called two different prompts a token range.
 test("a phase that suspended draws its opening and its re-entry, not one merged row", async () => {
-  mount({
-    events: [
-      phase("2026-09-13T10:01:30Z", 90_000),
-      promptSize({
-        approximate_tokens: 1753,
-        system_chars: 24000,
-        user_chars: 2800,
-        message_chars: 0,
-      }),
-      promptSize({
-        approximate_tokens: 1814,
-        system_chars: 0,
-        user_chars: 0,
-        message_chars: 3329,
-      }),
-    ],
-  });
+  mount(
+    {
+      events: [
+        phase("2026-09-13T10:01:30Z", 90_000),
+        promptSize({
+          approximate_tokens: 1753,
+          system_chars: 24000,
+          user_chars: 2800,
+          message_chars: 0,
+        }),
+        promptSize({
+          approximate_tokens: 1814,
+          system_chars: 0,
+          user_chars: 0,
+          message_chars: 3329,
+        }),
+      ],
+    },
+    "context",
+  );
   await screen.findByText("Prompt sent");
   const tokens = screen.getAllByTitle("the engine's own approximation");
   expect(tokens.map((t) => t.textContent)).toEqual(["1,753", "1,814"]);
@@ -284,17 +320,20 @@ test("a phase that suspended draws its opening and its re-entry, not one merged 
 // signature, but the structure that prevents it does, and a figure column
 // added outside the shared box is exactly how it comes back.
 test("every figure column sits inside the box the rows are sized as", async () => {
-  mount({
-    events: [
-      phase("2026-09-13T10:01:30Z", 90_000),
-      event({
-        type: "prefetch_summary",
-        timestamp: "2026-09-13T10:00:00Z",
-        payload: { turn_id: TURN, onboarding_hint_hit: true, onboarding_hint_bytes: 1016 },
-      }),
-      promptSize({ approximate_tokens: 7400, system_chars: 24_000, user_chars: 1200 }),
-    ],
-  });
+  mount(
+    {
+      events: [
+        phase("2026-09-13T10:01:30Z", 90_000),
+        event({
+          type: "prefetch_summary",
+          timestamp: "2026-09-13T10:00:00Z",
+          payload: { turn_id: TURN, onboarding_hint_hit: true, onboarding_hint_bytes: 1016 },
+        }),
+        promptSize({ approximate_tokens: 7400, system_chars: 24_000, user_chars: 1200 }),
+      ],
+    },
+    "context",
+  );
   // BOTH TABLES, asserted by their own headings first: the prefetch half's
   // single figure is a column too — it was a bare trailing span — and without
   // this the loop below passes on a page that renders only the other half.
@@ -325,22 +364,25 @@ test("every figure column sits inside the box the rows are sized as", async () =
 // can, and it is exactly what goes missing when the next truncating cell is
 // added beside these two.
 test("a ledger cell that can be cut carries its whole text in a title", async () => {
-  mount({
-    events: [
-      event({
-        type: "prefetch_summary",
-        timestamp: "2026-09-13T10:00:00Z",
-        payload: {
-          turn_id: TURN,
-          thread_context_hit: true,
-          thread_context_bytes: 4096,
-          thread_context_read: true,
-          thread_context_posts: 12,
-          thread_context_stopped_short: true,
-        },
-      }),
-    ],
-  });
+  mount(
+    {
+      events: [
+        event({
+          type: "prefetch_summary",
+          timestamp: "2026-09-13T10:00:00Z",
+          payload: {
+            turn_id: TURN,
+            thread_context_hit: true,
+            thread_context_bytes: 4096,
+            thread_context_read: true,
+            thread_context_posts: 12,
+            thread_context_stopped_short: true,
+          },
+        }),
+      ],
+    },
+    "context",
+  );
   const note = await screen.findByText(/but not the newest/);
   expect(note.className).toContain("truncate");
   expect(note.getAttribute("title")).toBe(note.textContent);
@@ -378,13 +420,7 @@ test("a running turn's streamed phases keep the empty state away", async () => {
   // this phase did not fail.
   store.applyEvent({ ...phase("2026-09-13T10:01:30Z", 90_000), failed: false });
 
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <TurnScreen turnId={TURN} />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  frame(store, socket);
 
   expect(await screen.findByTitle("how long this phase took")).toBeTruthy();
   expect(screen.queryByText("No events for this turn")).toBeNull();
@@ -417,19 +453,14 @@ test("the trace buttons name this turn's traces, not the tab's", async () => {
     trace_id: "trace-mine",
   });
 
-  render(
-    <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <TurnScreen turnId={TURN} />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  frame(store, socket);
 
   // ONE trace, not two: the plural form is what a reader is offered when a
   // turn was genuinely resumed elsewhere, and this turn was not.
-  const button = await screen.findByRole("button", { name: "Trace" });
+  await openWaysOut();
+  const item = await screen.findByRole("menuitem", { name: /^Trace/ });
   expect(screen.queryByText(/Trace 1 of/)).toBeNull();
-  button.click();
+  fireEvent.click(item);
   expect(location.hash).toContain("trace-mine");
   expect(location.hash).not.toContain("trace-elsewhere");
 });
@@ -444,16 +475,14 @@ test("the trace buttons name this turn's traces, not the tab's", async () => {
 // turn from a complete one.
 test("the exported turn carries the truncation flag", async () => {
   mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)], truncated: true });
-  const copy = await screen.findByTitle(
-    "the whole turn as JSON — its record, its phases and everything else it published",
-  );
 
   let written = "";
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: (t: string) => ((written = t), Promise.resolve()) },
   });
-  copy.click();
+  await openWaysOut();
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Copy turn as JSON/ }));
 
   await waitFor(() => expect(written).not.toBe(""));
   expect(JSON.parse(written)).toHaveProperty("truncated", true);
@@ -478,7 +507,8 @@ test("a trace the rows never carried still reaches the header", async () => {
       }),
     ],
   });
-  // Two traces, so the header draws the numbered list rather than one button.
+  // Two traces, so the menu names them numbered rather than as one.
+  await openWaysOut();
   expect(await screen.findByText("Trace 1 of 2")).toBeTruthy();
   expect(screen.getByText("Trace 2 of 2")).toBeTruthy();
 });
@@ -493,9 +523,10 @@ test("an empty trace list falls through to the rows", async () => {
       event({ type: "turn_completed", timestamp: "2026-09-13T10:40:00Z", trace_id: "from-a-row" }),
     ],
   });
-  // One trace, so the header draws its single unnumbered button — which it
+  // One trace, so the menu offers its single unnumbered entry — which it
   // could only have got from the row.
-  expect(await screen.findByRole("button", { name: "Trace" })).toBeTruthy();
+  await openWaysOut();
+  expect(await screen.findByRole("menuitem", { name: /^Trace/ })).toBeTruthy();
 });
 
 // THE TITLE IS A LEAD, SO THE PANEL STILL PRINTS THE WHOLE TRIGGER.
@@ -526,7 +557,7 @@ function woken(trigger: Record<string, unknown>) {
 }
 
 test("a multi-sentence trigger prints whole, under the title's lead", async () => {
-  mount(woken({ id: "e-9", type: "chat_message", summary: MANY }));
+  mount(woken({ id: "e-9", type: "chat_message", summary: MANY }), "context");
   await screen.findByText("Woken by");
   // The header took the lead, and only the lead.
   expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
@@ -535,7 +566,7 @@ test("a multi-sentence trigger prints whole, under the title's lead", async () =
 });
 
 test("a one-sentence trigger the title says whole is not printed twice", async () => {
-  mount(woken({ id: "e-9", type: "chat_message", summary: ONE_SENTENCE }));
+  mount(woken({ id: "e-9", type: "chat_message", summary: ONE_SENTENCE }), "context");
   // The panel is still drawn, because it carries the link to the trigger
   // event. What goes is the prose, which is the half the header already is.
   expect(await screen.findByText("Woken by")).toBeTruthy();
@@ -545,9 +576,11 @@ test("a one-sentence trigger the title says whole is not printed twice", async (
 });
 
 test("…and with nothing else to carry, the panel goes with it", async () => {
-  mount(woken({ type: "chat_message", summary: ONE_SENTENCE }));
-  // The phase card is what says this screen rendered at all.
-  await screen.findByTitle("how long this phase took");
+  mount(woken({ type: "chat_message", summary: ONE_SENTENCE }), "context");
+  // The title is what says this screen rendered its answer at all.
+  await waitFor(() =>
+    expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE),
+  );
   expect(screen.queryByText("Woken by")).toBeNull();
 });
 
@@ -572,6 +605,7 @@ test("a re-run says which attempt it is and links the one before it", async () =
     events: [phase("2026-09-13T10:00:02Z", 1000)],
   });
   expect(await screen.findByText("attempt 2/2")).toBeTruthy();
+  await openWaysOut();
   // The one before it is REACHABLE, not merely announced — and says it
   // failed, so the pair reads as the story it is.
   expect(await screen.findByText(/Attempt 1 \(failed\)/)).toBeTruthy();
@@ -595,10 +629,10 @@ test("a turn that ran once carries no attempt badge", async () => {
   // stated.
   // …and the fact rather than the Phases CARD, which is a second element
   // with the same word in it.
-  const phases = (await screen.findAllByText("Phases")).find((el) =>
+  const fact = (await screen.findAllByText("Phase")).find((el) =>
     el.classList.contains("fact-label"),
   );
-  expect(phases?.parentElement?.textContent).toContain("1");
+  expect(fact?.parentElement?.textContent).toContain("Execute");
   expect(screen.queryByText(/attempt \d+\/\d+/)).toBeNull();
 });
 
@@ -698,32 +732,49 @@ test("the rows it does not list are accounted for, by where each went", async ()
  * the header keeping that claim.
  */
 test("a turn with only its opening record is headed by its seat and its wake", async () => {
-  mount({
-    events: [
-      event({
-        type: "agent_turn_started",
-        // Not the phases' `actor` fallback: the seat is read off the record.
-        actor: "",
-        payload: {
-          turn_id: TURN,
-          role: "CEO",
-          agent_handle: "ceo",
-          trigger: { type: "external_notification", summary: "Ana asked for the numbers" },
-          started_at: "2026-09-13T10:00:00Z",
-          resumed: false,
-        },
-      }),
-    ],
+  const opening = event({
+    type: "agent_turn_started",
+    // Not the phases' `actor` fallback: the seat is read off the record.
+    actor: "",
+    payload: {
+      turn_id: TURN,
+      role: "CEO",
+      agent_handle: "ceo",
+      trigger: { type: "external_notification", summary: "Ana asked for the numbers" },
+      started_at: "2026-09-13T10:00:00Z",
+      resumed: false,
+    },
   });
+  mount({ events: [opening] });
   await waitFor(() =>
     expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
   );
-  const head = document.querySelector(".object-head")?.textContent ?? "";
-  expect(head, "the header named no seat for a turn whose record names one").toContain("CEO");
-  expect(head).not.toContain("the engine");
-  // AND THE ROW IS ACCOUNTED FOR where the map says it went.
-  fireEvent.click(await screen.findByRole("button", { name: /Already on this page/ }));
-  expect(screen.getByText(ABSORBED.agent_turn_started!)).toBeTruthy();
+  // THE SEAT IS THE TRAIL'S on the page (see crumbs.test.tsx) and a fact on
+  // the rail, which has no trail: read off the record, never "the engine".
+  cleanup();
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({ turn_id: TURN, events: [opening], truncated: false })
+      : Promise.resolve({});
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <TurnPeek turnId={TURN} />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await waitFor(() => {
+    const head = document.querySelector(".object-head")?.textContent ?? "";
+    expect(head, "the rail named no seat for a turn whose record names one").toContain("CEO");
+    expect(head).not.toContain("the engine");
+  });
+  // AND THE ROW IS NOT "ALREADY ON THIS PAGE": the opening record is what the
+  // turn was GIVEN, which the header, the trail and the Context tab read.
+  expect(screen.queryByRole("button", { name: /Already on this page/ })).toBeNull();
 });
 
 /**
@@ -778,4 +829,92 @@ test("a turn with nothing absorbed draws no such note", async () => {
   });
   await screen.findByText(/no provider left in the chain/);
   expect(screen.queryByRole("button", { name: /Already on this page/ })).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Steer
+// ---------------------------------------------------------------------------
+
+/** Mount over a seat whose live overlay places it on this turn, at `stage`. */
+function onTurn(stage: "phase" | "parked") {
+  const store = new Store();
+  store.applyAgents([
+    {
+      role: "CEO",
+      handle: "ceo",
+      turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage },
+    },
+  ] as never);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({
+          turn_id: TURN,
+          events: [phase("2026-09-13T10:01:30Z", 90_000)],
+          truncated: false,
+        })
+      : Promise.resolve({});
+  frame(store, socket);
+}
+
+// THE STATUS SAYS WHERE THE TURN IS, running or parked, beside its title.
+test("a running turn says so beside its title, and a parked one says what it waits on", async () => {
+  onTurn("phase");
+  expect(await screen.findByText(/^Running/)).toBeTruthy();
+  cleanup();
+  onTurn("parked");
+  expect(await screen.findByText(/^Parked on a coding run/)).toBeTruthy();
+});
+
+// NEITHER RUNNING NOR ENDED IS A STATE, and the header says it. A turn whose
+// node stopped before it closed has no seat on it and no closing record, and
+// the header drew no mark at all beside a turns list reading "Not settled".
+//
+// AND ONLY WHILE THE OVERLAY CAN SEE THE SEATS: a view with no live
+// connection has no seat to ask, and "no seat is on it" is then not an answer.
+test("a turn nobody is running and nothing closed says it has not settled", async () => {
+  const events = [
+    event({
+      type: "agent_turn_started",
+      payload: { turn_id: TURN, role: "CEO", started_at: "2026-09-13T10:00:00Z" },
+    }),
+  ];
+  onTab("transcript");
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({ turn_id: TURN, events, truncated: false })
+      : Promise.resolve({});
+  frame(store, socket);
+  // THE ANSWER IS IN — the Timeline's rows are drawn from it — and still no
+  // claim is made about who is running the turn.
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  expect(screen.queryByLabelText("Loading the turn")).toBeNull();
+  expect(screen.queryByText("not settled"), "a disconnected view guessed").toBeNull();
+  act(() => store.setConnected(true));
+  expect(await screen.findByText("not settled")).toBeTruthy();
+  cleanup();
+  onTurn("phase");
+  expect(await screen.findByText(/^Running/)).toBeTruthy();
+  expect(screen.queryByText("not settled")).toBeNull();
+});
+
+// THE BAR HOLDS THE TURN'S OWN CONTROLS, and the rest is one menu. "Copy" sat
+// beside the frame's "Copy link" meaning something else, and with Download the
+// bar was eight controls — scrolled half off a phone's edge, where everything
+// but Steer now folds into the frame's "More".
+test("the turn as JSON is in the page bar's menu, and only Steer stays on a phone", async () => {
+  onTurn("phase");
+  const steer = await screen.findByRole("button", { name: /Steer/ });
+  expect(steer.closest(".page-action-folds")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Copy$/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Download$/ })).toBeNull();
+  const more = screen.getByRole("button", { name: /More on this turn/ });
+  expect(more.closest(".page-action-folds")).not.toBeNull();
+  fireEvent.click(more);
+  expect(await screen.findByRole("menuitem", { name: /Download turn as JSON/ })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: /Copy turn as JSON/ })).toBeTruthy();
 });

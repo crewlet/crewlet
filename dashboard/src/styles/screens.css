@@ -7346,3 +7346,392 @@ a.live-row:focus-visible {
   align-items: center;
   gap: 6px;
 }
+
+/* ---- The turn trace (`routes/live/Turn.tsx`, `routes/live/trace/`) --------
+   The header and its tabs are one block with the rule under the tabs, as a
+   seat's profile draws them; the tab's panel follows at the page's own gap.
+
+   ITS OWN NAMES, `trace-`. The page header was `.turn-head`, which is
+   already the collapsible head of every `TurnCard` (top of this sheet): the
+   header took the card head's pointer and hover slab, and every card head on
+   a seat's Turns tab took this grid and stacked one item per line.
+   `styles/frame.test.ts` refuses a class whose `display` two rules disagree
+   on, which is how that collision reads in a stylesheet. */
+.trace-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.trace-tabs {
+  /* STRETCHED, never shrunk to its tabs: \`ObjectTabs\` folds what does not
+     fit by measuring the box it is given, so a box sized by its own content
+     measures itself — a strip laid out before its count or its web font
+     arrived folded three tabs into "More" and never saw room to unfold
+     (\`styles/frame.test.ts\` refuses the shrink). */
+  margin-bottom: -1px;
+}
+.trace-panel {
+  min-width: 0;
+}
+
+/* THE TIMELINE: the waterfall, and the span a reader opened beside it once
+   the page can hold both — which is from the laptop's own page column. At
+   1280 that column is about 1024px: the detail's 320–380px and the gap leave
+   the waterfall 600px, whose bar track keeps 380px beside a 140px label
+   floor. The threshold was 1100px, which put the detail UNDER sixteen rows of
+   waterfall on the one width a laptop has, below the fold, with nothing to
+   say a click had done anything. Under the threshold (a phone, a laptop with
+   the peek open) it stacks, and `Waterfall` brings it into view. */
+.trace-timeline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+@container page (width >= 960px) {
+  .trace-timeline.has-detail {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  }
+}
+.waterfall-empty {
+  padding: var(--spacing-4) 0;
+}
+
+/* A ROW IS THREE TRACKS: the span's name (indented by its depth), its bar on
+   the turn's clock, and its length. The label track is a share of the width
+   with a floor, so a phone keeps a bar to read and a laptop keeps the name. */
+.waterfall {
+  --wf-label: minmax(140px, 34%);
+  --wf-dur: 64px;
+  /* One nesting level: a phase under the turn, a round under its phase, a
+     call under its round. */
+  --wf-indent: var(--spacing-4);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-elevated);
+  overflow: hidden;
+}
+.waterfall-head,
+.wf-row {
+  display: grid;
+  grid-template-columns: var(--wf-label) minmax(0, 1fr) var(--wf-dur);
+  align-items: center;
+  column-gap: var(--spacing-3);
+  padding-inline: var(--spacing-3);
+}
+.waterfall-head {
+  min-height: var(--size-row-sm);
+  border-bottom: 1px solid var(--color-border-default);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--font-letter-spacing-wide);
+}
+.waterfall-head-label {
+  min-width: 0;
+}
+.waterfall-head-axis {
+  grid-column: 2 / 3;
+  min-width: 0;
+}
+.waterfall-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wf-row {
+  width: 100%;
+  min-height: var(--size-row-sm);
+  border: 0;
+  border-bottom: 1px solid var(--color-border-default);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: start;
+  cursor: pointer;
+}
+.waterfall-rows li:last-child .wf-row {
+  border-bottom: 0;
+}
+.wf-row:hover {
+  background: var(--color-surface-hover);
+}
+.wf-row.selected {
+  background: var(--color-brand-accent-soft);
+}
+.wf-row:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
+  position: relative;
+}
+.wf-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.wf-name {
+  min-width: 0;
+}
+/* THE NAME KEEPS ITS WORDS, the model beside it gives way first: with both
+   shrinking alike, a narrow label read "Reflect… after the last p…" — half
+   of each, and neither the span a reader was looking for. */
+.wf-sub {
+  flex: 0 1000 auto;
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+}
+/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a run and the
+   reflection pass read as the headings the rows under them belong to. */
+.wf-row:is([data-kind="turn"], [data-kind="phase"], [data-kind="run"], [data-kind="reflection"])
+  .wf-name {
+  font-weight: var(--font-weight-medium);
+}
+.wf-steer {
+  flex: none;
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-chip);
+  background: var(--color-feedback-info-soft);
+  color: var(--color-feedback-info-ink);
+  font-size: var(--font-size-2xs);
+}
+.wf-track {
+  position: relative;
+  height: 14px;
+  min-width: 0;
+}
+.wf-dur {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  white-space: nowrap;
+}
+
+/* THE AXIS: offsets from the turn's start, each mark centred on its instant
+   but never past either end of the track — `TimeAxis` says which end a mark
+   anchors to, since the last mark is at the end only when the step divides
+   the turn. */
+.time-axis {
+  position: relative;
+  height: var(--size-row-sm);
+}
+.time-axis-mark {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+}
+.time-axis-mark[data-anchor="start"] {
+  transform: translate(0, -50%);
+}
+.time-axis-mark[data-anchor="end"] {
+  transform: translate(-100%, -50%);
+}
+
+/* NOW, on a running turn: a rule down the bar track at the window's end. The
+   one accent on the axis, because it is state — the turn is live.
+
+   THE OVERLAY IS THE ROWS' OWN GRID, so the rule's track is the bars' track
+   by construction. It was an inset computed as "padding + 34% + gap", which
+   is not where the bars are: the label track is `minmax(140px, 34%)` of the
+   row's CONTENT box, so the rule sat a few pixels off on every width and a
+   whole label-floor off wherever the floor won — and it ran on down through
+   the untimed list and the notes under the rows. */
+.waterfall-body {
+  position: relative;
+  min-width: 0;
+}
+.waterfall-now {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--wf-label) minmax(0, 1fr) var(--wf-dur);
+  column-gap: var(--spacing-3);
+  padding-inline: var(--spacing-3);
+  pointer-events: none;
+}
+.waterfall-now-track {
+  position: relative;
+  grid-column: 2 / 3;
+  min-width: 0;
+}
+.now-line {
+  position: absolute;
+  inset-block: 0;
+  width: 1px;
+  background: var(--color-brand-accent);
+}
+
+/* ONE BAR. Neutral by kind — a model call solid, a tool call lighter, a
+   container a thin rule over what ran under it — and coloured only by state:
+   running, failed, selected. */
+.span-bar {
+  position: absolute;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
+  border-radius: var(--radius-xs);
+  background: var(--color-text-secondary);
+}
+/* A TOOL CALL, A WORKER AND THE JUDGE are the lighter ink at a lower height —
+   the ink every chart here draws a secondary series in, which clears the
+   graphic-contrast floor on both themes where a border colour did not. */
+.span-bar:is([data-kind="tool"], [data-kind="worker"], [data-kind="judge"]) {
+  height: 8px;
+  background: var(--color-text-tertiary);
+}
+.span-bar:is(
+  [data-kind="turn"],
+  [data-kind="phase"],
+  [data-kind="run"],
+  [data-kind="reflection"],
+  [data-kind="context"]
+) {
+  height: 3px;
+  background: var(--color-text-tertiary);
+}
+.span-bar[data-kind="pending"] {
+  height: 4px;
+  background: transparent;
+  border: 1px dashed var(--color-border-strong);
+}
+.span-bar.failed {
+  background: var(--color-feedback-danger);
+}
+.span-bar.selected {
+  box-shadow: 0 0 0 2px var(--color-brand-accent);
+}
+/* RUNNING: striped in the accent. The stripe drifts while the span is open —
+   the steady-state pulse `styles/motion.test.ts` declares — and holds still
+   for a reader who asked for less motion (the component also draws it without
+   `.drifting` then, which is the half a suite can see). */
+.span-bar.open {
+  background-color: var(--color-brand-accent);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    var(--color-brand-accent-soft-strong) 4px 8px
+  );
+  background-size: 11.3px 11.3px;
+}
+.span-bar.drifting {
+  animation: span-drift 1.2s linear infinite;
+}
+@keyframes span-drift {
+  to {
+    background-position: 11.3px 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .span-bar.drifting {
+    animation: none;
+  }
+}
+
+/* WHAT NOTHING TIMED, AND THE NOTES A PERSON SENT, under the bars. */
+.waterfall-untimed,
+.waterfall-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+/* Headings, so each list is a section a screen reader can find and name;
+   drawn as the label they were. */
+.waterfall-subhead {
+  margin: 0;
+}
+.waterfall-untimed ul,
+.waterfall-notes ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.steer-mark {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+}
+.steer-mark-text {
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+.steer-mark-note {
+  display: block;
+  color: var(--color-text-primary);
+}
+
+/* THE SPAN A READER OPENED. The box is focusable from script only
+   (`Waterfall` focuses it when it stacks under the rows), and takes the
+   product's focus ring when a keyboard put it there. */
+.span-detail {
+  min-width: 0;
+  border-radius: var(--radius-lg);
+}
+.span-detail:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
+}
+.span-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: 0;
+  font-size: var(--font-size-xs);
+}
+.span-fact {
+  display: contents;
+}
+.span-fact dt {
+  color: var(--color-text-tertiary);
+}
+.span-fact dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.span-words {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.live-output {
+  min-width: 0;
+}
+
+@container page (width < 640px) {
+  /* ON A PHONE THE NAME WINS THE ROW. Four levels at a laptop's indent and a
+     model name beside each round left "Rou…" and "Execu…" in a 96px column:
+     a name a reader cannot read is a row they cannot choose. So the indent
+     halves, the model name (which the span's detail still carries) steps
+     aside, and the label takes half the row — a bar is still a bar at 120px. */
+  .waterfall {
+    --wf-label: minmax(96px, 50%);
+    --wf-dur: 48px;
+    --wf-indent: var(--spacing-2);
+  }
+  .wf-sub {
+    display: none;
+  }
+}

@@ -79,7 +79,7 @@ import {
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useWriteAccess, type WriteAccess } from "~/lib/useWriteAccess.ts";
+import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -174,7 +174,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   label: "Message",
                   icon: <MessageSquareGlyph size="sm" />,
                   onSelect: () => openNewTask({ assignee: seat.handle, ask: seat.handle }),
-                  ...held(messageAccess),
+                  ...menuHold(messageAccess),
                 },
               ]
             : []),
@@ -183,7 +183,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             label: "Assign task",
             icon: <PlusGlyph size="sm" />,
             onSelect: () => setAssigning(true),
-            ...held(assignAccess),
+            ...menuHold(assignAccess),
           },
           ...(human || paused
             ? []
@@ -193,7 +193,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   label: "Pause",
                   icon: <PauseGlyph size="sm" />,
                   onSelect: () => setPausing(true),
-                  ...held(pauseAccess),
+                  ...menuHold(pauseAccess),
                 },
               ]),
           ...(human
@@ -345,11 +345,6 @@ export function SeatScreen({ handle }: { handle: string }) {
       </div>
     </div>
   );
-}
-
-/** A folded action held as its inline control is: disabled, with the sentence. */
-function held(access: WriteAccess): { disabled?: boolean; description?: string } {
-  return access.can ? {} : { disabled: true, description: access.reason };
 }
 
 /** The badge, the name, the kind and state, and the line that places the seat. */

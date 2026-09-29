@@ -1690,6 +1690,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
+			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
+			// owns the run. The ENGINE's reader, because the answerer
+			// it registered on every node is the other half of the same
+			// protocol, and a node serving no API may be the owner.
+			SandboxTail: sandboxTails(e),
 			// THIS NODE'S PROJECTION of the company's own tracker and
 			// knowledge base — the same copy a seat's tools read, so an
 			// operator and an agent looking at one item see one item.
@@ -2895,6 +2900,16 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 // `agent_memory` and `conversations` over a reader that cannot answer.
 func memoryReads(e *engine.Engine) queries.SeatMemory {
 	if r := e.MemoryReads(); r != nil {
+		return r
+	}
+	return nil
+}
+
+// sandboxTails is this node's run-output reader, as the read surface wants it
+// — converted for [memoryReads]'s reason: a nil *TailReader in the interface
+// would register a question whose every answer panics.
+func sandboxTails(e *engine.Engine) queries.SandboxTails {
+	if r := e.SandboxTails(); r != nil {
 		return r
 	}
 	return nil

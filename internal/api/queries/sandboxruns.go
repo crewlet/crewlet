@@ -2,6 +2,7 @@ package queries
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -45,6 +46,31 @@ import (
 // resumed turn's own events, or a `sandbox_run_failed` naming the reason.
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
+}
+
+// SandboxTails answers a running coding run's live output from the node that
+// owns it — the one method this surface calls of [sandbox.TailReader].
+type SandboxTails interface {
+	Tail(ctx context.Context, turnID, launchID string) (sandbox.TailAnswer, error)
+}
+
+// sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
+// launch while it runs, `not_running` with the record's own status once it is
+// not, or the owning node NAMED where it did not answer (`owner_silent`) or
+// runs a build that cannot (`owner_upgrading`).
+//
+// BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
+// more than one job; a request naming only the turn would show whichever job
+// its row holds now, which is a different job from the span a person clicked
+// the moment a second launch replaces the first.
+func (s Sources) sandboxTail(ctx context.Context, p Params) (any, error) {
+	turnID := strings.TrimSpace(p.String("turn_id"))
+	launchID := strings.TrimSpace(p.String("launch_id"))
+	if turnID == "" || launchID == "" {
+		return nil, fmt.Errorf("%w: sandbox_tail needs a turn_id and the launch_id of the "+
+			"run's job", ErrBadParams)
+	}
+	return s.SandboxTail.Tail(ctx, turnID, launchID)
 }
 
 // sandboxRuns answers the board, or — with `audience=<handle>` — the runs

@@ -534,3 +534,81 @@ func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 	}
 	return cmds[len(cmds)-1]
 }
+
+// ---------------------------------------------------------------------
+// peek — a running job's live output
+// ---------------------------------------------------------------------
+
+// A PEEK IS THE TAIL OF THE PARSED TRANSCRIPT, REDACTED, and touches nothing.
+//
+// What a person watching a run wants is what it is doing now, so the END of
+// the agent's own account is kept; the box's environment holds the seat's
+// credentials, so a key the agent echoed must not reach a screen; and a peek
+// racing the completion poll must not change what the poll sees.
+func TestPeekTailsTheParsedTranscriptAndRedacts(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewOpenCode()
+	b := box(t, runner)
+	p := paths(b)
+	secret := "sk-ant-api03-" + strings.Repeat("x", 40)
+	var stream strings.Builder
+	for i := range 400 {
+		stream.WriteString(`{"type":"text","part":{"text":"step ` + strings.Repeat("·", 20) +
+			` number ` + string(rune('a'+i%26)) + `"}}` + "\n")
+	}
+	stream.WriteString(`{"type":"text","part":{"text":"exporting ` + secret + ` and running go test"}}` + "\n")
+	b.Put(p.Result(), stream.String())
+	b.Put(p.Err(), "stderr is not what a parsed transcript run shows")
+
+	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if out.Source != sandbox.SourceTranscript {
+		t.Errorf("source = %q; want the parsed transcript", out.Source)
+	}
+	if strings.Contains(out.Text, secret) {
+		t.Error("a credential the agent echoed reached the live output unredacted")
+	}
+	if !strings.HasSuffix(out.Text, "running go test") {
+		t.Errorf("the live output does not end with the newest line: …%q", out.Text[max(0, len(out.Text)-60):])
+	}
+	if !out.Cut || len(out.Text) > sandbox.MaxLiveOutputBytes+len("…") || !utf8.ValidString(out.Text) {
+		t.Errorf("cut=%v len=%d valid=%v; want the last %d bytes on a rune boundary, marked",
+			out.Cut, len(out.Text), utf8.ValidString(out.Text), sandbox.MaxLiveOutputBytes)
+	}
+	if out.Finished {
+		t.Error("a job with no done marker read as finished")
+	}
+	if out.AsOf.IsZero() {
+		t.Error("the peek carries no instant")
+	}
+	if done, _ := b.ReadFile(t.Context(), p.Done()); len(done) != 0 {
+		t.Error("a peek wrote the done marker")
+	}
+}
+
+// An agent that writes nothing parseable until it exits shows its stderr, and
+// one that has written nothing at all says so rather than failing.
+func TestPeekFallsBackToStderrAndThenToNothing(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := box(t, runner)
+	p := paths(b)
+
+	out, err := runner.Peek(t.Context(), b, sandbox.RunHandle{})
+	if err != nil || out.Source != sandbox.SourceNone || out.Text != "" {
+		t.Errorf("an empty box peeked %+v, %v; want source none and no text", out, err)
+	}
+
+	b.Put(p.Err(), "cloning github.com/acme/api\n")
+	out, err = runner.Peek(t.Context(), b, sandbox.RunHandle{})
+	if err != nil || out.Source != sandbox.SourceStderr || out.Text != "cloning github.com/acme/api" {
+		t.Errorf("a box with only stderr peeked %+v, %v; want its stderr", out, err)
+	}
+
+	b.Put(p.Done(), "0")
+	if out, _ = runner.Peek(t.Context(), b, sandbox.RunHandle{}); !out.Finished {
+		t.Error("a job whose done marker is written did not read as finished")
+	}
+}

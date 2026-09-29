@@ -167,29 +167,37 @@ export function FactLine({ facts }: { facts: Fact[] }) {
       {shown.map((fact) => (
         <span key={fact.label} className="fact">
           <span className="fact-label">{fact.label}</span>
-          {/* TWO LINES, THEN AN ELLIPSIS — not one. A fact is a short phrase
-              in a track as narrow as `8rem`, and cut to one line an agent's
-              "not running on this node" read "not running on this no…" at
-              1440, which says nothing about where it IS running. */}
-          <span className={cx("fact-value", !fact.whole && "clamp")}>
-            {fact.path ? (
-              <a className="t-link" href={href(fact.path, fact.query)}>
-                {fact.value}
-              </a>
-            ) : (
-              fact.value
-            )}
+          {/* THE VALUE AND ITS FOOTNOTES ARE ONE CELL. The labels share a
+              band across the row and so do the values' first lines; a note
+              follows its OWN value rather than a band of notes, because a
+              neighbour's value wrapping to two lines pushed that band down
+              and left "37%" with a line of air between it and the note
+              saying what it is 37% of. */}
+          <span className="fact-body">
+            {/* TWO LINES, THEN AN ELLIPSIS — not one. A fact is a short phrase
+                in a track as narrow as `7.5rem`, and cut to one line an agent's
+                "not running on this node" read "not running on this no…" at
+                1440, which says nothing about where it IS running. */}
+            <span className={cx("fact-value", !fact.whole && "clamp")}>
+              {fact.path ? (
+                <a className="t-link" href={href(fact.path, fact.query)}>
+                  {fact.value}
+                </a>
+              ) : (
+                fact.value
+              )}
+            </span>
+            {/* A NOTE AND A `setBy` ARE NOT EXCLUSIVE, and the note comes
+                first: it qualifies the value directly above it, where "set by"
+                is about a person and reads as a footnote to both. */}
+            {fact.note && <span className="fact-note">{fact.note}</span>}
+            {/* NEVER "set by —". A fact nothing recorded a change for renders
+                no line at all: an em dash there would claim the engine keeps a
+                record it does not. A fact with no VALUE never reaches here —
+                the filter above drops it — so `cleared` has no worked case on
+                this line and one on the rail's, which keeps its row. */}
+            {fact.setBy && <SetByLine setBy={fact.setBy} className="fact-setby" />}
           </span>
-          {/* A NOTE AND A `setBy` ARE NOT EXCLUSIVE, and the note comes
-              first: it qualifies the value directly above it, where "set by"
-              is about a person and reads as a footnote to both. */}
-          {fact.note && <span className="fact-note">{fact.note}</span>}
-          {/* NEVER "set by —". A fact nothing recorded a change for renders
-              no line at all: an em dash there would claim the engine keeps a
-              record it does not. A fact with no VALUE never reaches here —
-              the filter above drops it — so `cleared` has no worked case on
-              this line and one on the rail's, which keeps its row. */}
-          {fact.setBy && <SetByLine setBy={fact.setBy} className="fact-setby" />}
         </span>
       ))}
     </div>

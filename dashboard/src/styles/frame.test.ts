@@ -877,6 +877,48 @@ describe("the frame's layout", () => {
     }
   });
 
+  // ONE CLASS, ONE LAYOUT. The stylesheets are one global namespace, so a
+  // screen that names its header after a component's head quietly becomes
+  // that component: the trace page called its header `.turn-head`, which is
+  // every TurnCard's collapsible head, and a new `display: grid` rule for the
+  // page restacked every card head on a seat's Turns tab one item per line
+  // while the page header took the card's pointer and hover slab. Two
+  // unconditional rules giving one class two different `display` values is
+  // how that collision reads in a sheet — and so is one rule patching another
+  // further down, which is a recipe nobody can read in one place.
+  test("no class is given two different displays by two unconditional rules", () => {
+    const seen = new Map<string, string[]>();
+    for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
+      const css = sheet(name);
+      let depth = 0;
+      let start = 0;
+      let open = 0;
+      for (let i = 0; i < css.length; i++) {
+        if (css[i] === "{") {
+          if (depth === 0) open = i;
+          depth++;
+        } else if (css[i] === "}" && --depth === 0) {
+          const selector = css.slice(start, open).trim();
+          start = i + 1;
+          // Top-level rules only: a media or container query is a
+          // DELIBERATE second answer, for a width the first does not cover.
+          if (selector.startsWith("@")) continue;
+          const display = /(?:^|[;{\s])display:\s*([^;]+)/.exec(css.slice(open + 1, i));
+          if (!display) continue;
+          for (const one of selector.split(",").map((x) => x.trim())) {
+            if (!/^\.[\w-]+$/.test(one)) continue;
+            const at = `${display[1]!.trim()} (${name})`;
+            seen.set(one, [...(seen.get(one) ?? []), at]);
+          }
+        }
+      }
+    }
+    const clashes = [...seen].filter(
+      ([, all]) => new Set(all.map((a) => a.replace(/ \(.*\)$/, ""))).size > 1,
+    );
+    expect(clashes).toEqual([]);
+  });
+
   // AND WHAT IS INVISIBLE TAKES NO SPACE ANYWHERE.
   //
   // `.sr-only` is `position: absolute` with no offset, so its box sits at its
@@ -961,14 +1003,23 @@ describe("the frame's layout", () => {
     // 85, 162, 90, 169 — five columns placed at random rather than one row.
     expect(line).toMatch(/display:\s*grid/);
     expect(line).toMatch(/grid-template-columns:\s*repeat\(/);
+    // AND A TURN'S SEVEN FACTS FIT ONE LINE AT 1280, where the fact line is
+    // 984px wide (measured): at an 8rem floor "Wall clock" took a row alone.
+    const floor = Number(/minmax\(([\d.]+)rem/.exec(line)?.[1]) * 16;
+    const gap = /column-gap:\s*var\(--spacing-4\)/.test(line) ? 16 : NaN;
+    expect(7 * floor + 6 * gap).toBeLessThanOrEqual(984);
 
-    // AND EVERY FACT SITS ON THE SAME FOUR BANDS. Subgrid is what keeps the
+    // AND EVERY FACT SITS ON THE SAME TWO BANDS. Subgrid is what keeps the
     // labels on one line and the values on the next across the whole row: as
-    // four independent boxes, one three-line note pushed its own value up and
-    // left the rest of the row hanging.
+    // independent boxes, one three-line note pushed its own value up and left
+    // the rest of the row hanging. TWO, not four: with a band per footnote a
+    // neighbour's value wrapping to a second line pushed every note in the
+    // row away from the value it qualifies — "37%", a blank line, then "of
+    // 46.0k input read from cache" — so a note is its value's, in one cell.
     const fact = block(css, ".fact");
     expect(fact).toMatch(/grid-template-rows:\s*subgrid/);
-    expect(fact).toMatch(/grid-row:\s*span 4/);
+    expect(fact).toMatch(/grid-row:\s*span 2/);
+    expect(block(css, ".fact-body")).toMatch(/flex-direction:\s*column/);
 
     // AND THE CAP THAT USED TO STAND IN FOR ALL OF IT IS GONE. `max-width:
     // 16ch` could only narrow the problem — sixteen characters at `--font-size-2xs`
@@ -1376,4 +1427,91 @@ test("the lens slot vanishes when empty and takes the slack beside the trail whe
   const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .crumbs");
   expect(trail).toMatch(/flex:\s*0 100 auto/);
   expect(trail).toMatch(/max-width:\s*60%/);
+});
+
+// AN OBJECT'S TAB STRIP IS AS WIDE AS WHAT HOLDS IT. `ObjectTabs` folds the
+// tabs that do not fit by measuring the box it is given, so a box sized by
+// its own content measures ITSELF: the turn trace's strip, set
+// `justify-self: start` in its header grid, was measured before its Tools
+// count and its web font arrived, folded three tabs into "More", shrank to
+// "Timeline | More" — and the observer never saw room to unfold. Any rule on
+// the strip's own box, or on a class a screen hands it, that shrinks it to
+// its content repeats that. jsdom has no layout, so this is where it shows.
+test("an object tab strip spans its container rather than shrinking to its tabs", () => {
+  const src = fileURLToPath(new URL("..", import.meta.url));
+  const classes = new Set([".object-tabs"]);
+  for (const file of readdirSync(src, { recursive: true }) as string[]) {
+    if (!file.endsWith(".tsx") || file.endsWith(".test.tsx")) continue;
+    const text = readFileSync(join(src, file), "utf8");
+    for (const m of text.matchAll(/<ObjectTabs\b/g)) {
+      const tag = text.slice(m.index, text.indexOf("/>", m.index));
+      const named = /className="([^"]+)"/.exec(tag)?.[1] ?? "";
+      for (const c of named.split(/\s+/).filter(Boolean)) classes.add(`.${c}`);
+    }
+  }
+  // The profile's and the trace's, at least — a reader that found none has
+  // stopped reading the screens, and would pass everything.
+  expect(classes).toContain(".prof-tabs");
+  expect(classes).toContain(".trace-tabs");
+
+  const SHRINKS = [
+    /justify-self:\s*(start|end|center|flex-start|flex-end|self-start|self-end|left|right)/,
+    /align-self:\s*(start|end|center|flex-start|flex-end|baseline)/,
+    /(^|[;\s])width:\s*(max-content|min-content|fit-content)/,
+    /display:\s*inline/,
+    /float:/,
+    /margin-inline(-start|-end)?:\s*[^;]*auto/,
+  ];
+  const offenders: string[] = [];
+  for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
+    const css = sheet(name);
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      for (const sel of m[1]!.split(",")) {
+        // THE STRIP'S OWN BOX: the class in the selector's LAST compound.
+        // `.object-tabs > .object-tabs-strip` is the row inside it, which is
+        // meant to be as wide as its tabs.
+        const subject =
+          sel
+            .trim()
+            .split(/[\s>+~]+/)
+            .pop() ?? "";
+        const hit = [...classes].find((c) =>
+          new RegExp(`${c.replace(/[.]/g, "\\.")}(?![\\w-])`).test(subject),
+        );
+        if (!hit) continue;
+        const bad = SHRINKS.find((re) => re.test(m[2]!));
+        if (bad) offenders.push(`${name}: ${sel.trim()} { ${bad.source} }`);
+      }
+    }
+  }
+  expect(offenders, "a tab strip shrunk to its content folds tabs it has room for").toEqual([]);
+});
+
+// A SPAN OPENS BESIDE THE WATERFALL ON A LAPTOP. The page column at 1280 is
+// about 1024px (the fact line inside it measures 984, above), and the
+// threshold sat at 1100 — so on the one width a laptop has, the detail went
+// UNDER sixteen rows of waterfall, below the fold, and a click on a span
+// seemed to do nothing. And not so low that the waterfall beside a 380px
+// detail loses its bars: its label floor is 140px and its length 64.
+test("the span detail sits beside the waterfall at a laptop's page width", () => {
+  const css = sheet("screens.css");
+  const at = [
+    ...css.matchAll(/@container page \(width >= (\d+)px\)\s*\{\s*\.trace-timeline\.has-detail/g),
+  ];
+  expect(at, "the side-by-side rule is not where this reads it").toHaveLength(1);
+  const threshold = Number(at[0]![1]);
+  const LAPTOP_PAGE = 1024;
+  expect(threshold).toBeLessThanOrEqual(LAPTOP_PAGE);
+  const detail = Number(
+    /minmax\(\d+px,\s*(\d+)px\)/.exec(
+      atRuleBody(css, `@container page (width >= ${threshold}px)`),
+    )?.[1],
+  );
+  expect(detail).toBe(380);
+  // What the bars keep beside the widest detail at the threshold: the row's
+  // padding, the label's floor, the length and two gaps come off first.
+  const bars = threshold - detail - 16 - 2 * 12 - 140 - 64 - 2 * 12;
+  expect(bars, "the waterfall beside the detail has no room for its bars").toBeGreaterThanOrEqual(
+    240,
+  );
 });

@@ -150,6 +150,10 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
     props: { handle: "swe", name: "SWE", paused: false, working: true },
     name: /^Pause$/,
   },
+  SteerTurnButton: {
+    props: { turnId: "run-1", seat: "SWE", running: true, parked: false },
+    name: /^Steer$/,
+  },
 };
 
 /** The tool each control makes its change through, so a reader the engine does not serve it is refused. */
@@ -165,6 +169,7 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   MessageSeatButton: "create_work_item",
   AssignToSeatButton: "update_work_item",
   PauseSeatButton: "pause_seat",
+  SteerTurnButton: "steer_turn",
 };
 
 const EVERY_TOOL = Object.values(TOOLS);

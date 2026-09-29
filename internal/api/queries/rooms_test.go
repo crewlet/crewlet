@@ -92,9 +92,12 @@ func everySeam(t *testing.T) queries.Sources {
 		Channels: fakeChannels{},
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
-		Config:   surface,
-		Work:     emptyWork{},
-		Pages:    emptyPages{},
+		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
+		// fleet record, which answers every run `not_running`.
+		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet())},
+		Config:      surface,
+		Work:        emptyWork{},
+		Pages:       emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},

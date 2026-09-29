@@ -125,6 +125,10 @@ const (
 	// ObserveRead is where one history question is scattered. Every node
 	// serves it and answers from its own store; the asker merges.
 	ObserveRead = ObservePrefix + "read"
+	// ObserveSandboxTail is where a request for a running coding run's live
+	// output is scattered (internal/sandbox, `sandbox_tail`). Every node
+	// serves it and only the incarnation that owns the run answers.
+	ObserveSandboxTail = ObservePrefix + "sandbox_tail"
 
 	// SteerPrefix prefixes the subjects a person's note to a running turn
 	// crosses (internal/agent/steer).

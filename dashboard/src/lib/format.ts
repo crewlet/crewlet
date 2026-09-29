@@ -291,12 +291,20 @@ export function inTimeExact(ts: string | null | undefined, now: number): string 
   return fmtDate(ts);
 }
 
-/** A duration in ms as the shortest honest string. */
+/**
+ * A duration in ms as the shortest honest string.
+ *
+ * UNIT LETTERS WITH NO SPACE AT EVERY MAGNITUDE — "340ms", "1.2s", "45s",
+ * "1m 2s", "2h 3m" — which is how [fmtElapsed] and a waterfall's axis
+ * (`tickLabel`) write one too. This wrote "340 ms" and "1.2 s" under a minute
+ * and "1m 2s" above it, so a trace's duration column and the ruler over it
+ * read as three conventions on one screen.
+ */
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return EMPTY_VALUE;
-  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
   const s = ms / 1000;
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} s`;
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
   const m = Math.floor(s / 60);
   const rem = Math.round(s % 60);
   if (m < 60) return `${m}m ${rem}s`;

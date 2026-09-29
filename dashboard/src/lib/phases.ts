@@ -55,6 +55,28 @@ export interface ToolCall {
   origin: string;
   /** Which MCP server answered, for an `mcp:` origin; "" otherwise. */
   server: string;
+  /** When the call was handed to the tool, as the engine stamped it; "" on a
+   *  call nothing timed. The waterfall places a call here, and falls back to
+   *  running the round's calls one after another from the model's answer only
+   *  where this is absent. */
+  startedAt: string;
+}
+
+/**
+ * One round's MODEL call, as the tool loop timed it (`types.PhaseRound`) —
+ * the model's half of a round; its tool calls are timed on their own rows,
+ * which carry the same `round`, so a slow model and a slow tool are never one
+ * number.
+ */
+export interface TimedRound {
+  round: number;
+  startedAt: string;
+  durationMs: number;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  toolCalls: number;
 }
 
 /** One round's model turn: what it reasoned, and what it said out loud. */
@@ -193,6 +215,42 @@ export interface PhaseRecord {
     sender?: string;
     timestamp?: string;
   } | null;
+  /**
+   * Each round's model call as the loop timed it, oldest first; empty on a
+   * phase an engine that did not time rounds recorded, and on a coding run.
+   */
+  timedRounds: TimedRound[];
+  /**
+   * The round of the host phase a worker or a judge ran in (`host_round`),
+   * 0 where the record does not say — which nests a delegate's workers
+   * under the round that spawned them rather than beside it.
+   */
+  hostRound: number;
+  /** The share of `inputTokens` the provider's prompt cache served. */
+  cacheReadTokens: number;
+  /**
+   * The round cap currently granted, which an extension raises mid-phase;
+   * 0 where the record does not say.
+   */
+  maxRounds: number;
+  /**
+   * When the round in flight began its provider call, and the tool call
+   * running right now — a LIVE phase's only, "" / null otherwise.
+   */
+  roundStartedAt: string;
+  runningCall: { round: number; name: string; arguments: string; startedAt: string } | null;
+  /** The notes a person sent the turn that this phase read, and the round
+   *  whose provider call first saw each. */
+  steers: { round: number; noteId: string }[];
+  /** The node that ran the phase, off the live call; "" on a stored record,
+   *  whose row carries no node (the turn answer's `nodes` says it). */
+  node: string;
+  /**
+   * When the ENGINE says the phase began (`started_at` on the record), or ""
+   * where the record does not carry it. Read by the waterfall in preference
+   * to [phaseStart]'s landing-less-duration, which is one publish late.
+   */
+  clockStart: string;
   /** When the phase finished, or when the live call last moved. */
   at: string;
   /**
@@ -268,8 +326,27 @@ export function toolCalls(raw: unknown): ToolCall[] {
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",
+      startedAt: typeof rec.started_at === "string" ? rec.started_at : "",
     };
   });
+}
+
+/** Normalise the `rounds` list — each round's model call, as the loop timed it. */
+export function timedRounds(raw: unknown): TimedRound[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[])
+    .map((rec) => ({
+      round: num(rec.round),
+      startedAt: typeof rec.started_at === "string" ? rec.started_at : "",
+      durationMs: num(rec.duration_ms),
+      model: typeof rec.model === "string" ? rec.model : "",
+      inputTokens: num(rec.input_tokens),
+      outputTokens: num(rec.output_tokens),
+      cacheReadTokens: num(rec.cache_read_tokens),
+      toolCalls: num(rec.tool_calls),
+    }))
+    .filter((r) => r.round > 0)
+    .sort((a, b) => a.round - b.round);
 }
 
 /** Normalise the loose `round_narration` list into something typed. */
@@ -446,6 +523,22 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     launchId: "",
     transcript: "",
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
+    timedRounds: timedRounds(call.rounds),
+    hostRound: 0,
+    cacheReadTokens: call.cache_read_tokens ?? 0,
+    maxRounds: call.max_rounds ?? 0,
+    roundStartedAt: call.round_started_at ?? "",
+    runningCall: call.running_call
+      ? {
+          round: call.running_call.round,
+          name: call.running_call.name,
+          arguments: call.running_call.arguments,
+          startedAt: call.running_call.started_at,
+        }
+      : null,
+    steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
+    node: call.node ?? "",
+    clockStart: call.started_at ?? "",
     at: call.updated_at,
     startedAt: call.started_at || call.updated_at,
     // A running phase has not taken a length yet. Its elapsed time is read
@@ -524,6 +617,20 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     launchId,
     transcript: String(p.activity_transcript ?? ""),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
+    timedRounds: timedRounds(p.rounds),
+    hostRound: num(p.host_round),
+    cacheReadTokens: num(p.cache_read_tokens),
+    maxRounds: num(p.max_rounds),
+    roundStartedAt: "",
+    runningCall: null,
+    steers: Array.isArray(p.steers)
+      ? (p.steers as Record<string, unknown>[]).map((s) => ({
+          round: num(s.round),
+          noteId: String(s.note_id ?? ""),
+        }))
+      : [],
+    node: "",
+    clockStart: typeof p.started_at === "string" ? p.started_at : "",
     at: ev.timestamp,
     // A finished phase has one instant that matters — when it landed. How
     // long it took is a measurement rather than a second instant, and it

@@ -323,6 +323,13 @@ type Runner interface {
 
 	// Collect reads the finished job's result out of the box.
 	Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error)
+
+	// Peek reads what a job has said about itself SO FAR, without ending,
+	// pausing or otherwise touching it — the live output a person watching
+	// a run is shown ([Output]). Safe on a job in any state: one that has
+	// finished says so, and one that has said nothing yet answers an empty
+	// output rather than an error.
+	Peek(ctx context.Context, box Sandbox, handle RunHandle) (Output, error)
 }
 
 // RunRequest is one coding run's inputs.

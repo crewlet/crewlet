@@ -543,8 +543,12 @@ type Result struct {
 	// RoundStartedAt is when the latest round's provider call was made, in
 	// UTC, on a live snapshot: the round in flight while the model is still
 	// answering, and the round whose tools are running after it has. What a
-	// live view counts "this round has taken 40s" from. Zero on a finished
-	// Result, whose [Result.Rounds] carry every start.
+	// live view counts "this round has taken 40s" from. Every round's
+	// opening frame carries it, published the moment the call is made, so
+	// a snapshot whose RoundStartedAt is later than every [Round] in
+	// [Result.Rounds] is a round in flight and one equal to the last is
+	// that round's tools. Zero on a finished Result, whose [Result.Rounds]
+	// carry every start.
 	RoundStartedAt time.Time
 
 	// Narration is per-round what Text is in aggregate. Both are published:
@@ -805,7 +809,19 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		live := state(used)
 		if cfg.Progress != nil {
-			cfg.Progress.record(live)
+			// WHAT SERVED, never the placeholder. The live view is shown
+			// the configured identity while the first round is out (see
+			// where it is set below), but this is the record a FAILURE
+			// publishes, and a phase whose every provider refused before
+			// one round came back was served by nobody: naming the head
+			// there would charge it for a call it never answered. Every
+			// round's opening frame reaches here before its call, so the
+			// placeholder would otherwise be on every such record.
+			recorded := live
+			if len(rounds) == 0 {
+				recorded.Model, recorded.ProviderKey = "", ""
+			}
+			cfg.Progress.record(recorded)
 		}
 		if cfg.OnProgress != nil {
 			live.Partial = partial.clone()
@@ -836,13 +852,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: note.Message})
 				steers = append(steers, SteerMark{Round: roundsUsed, ID: note.ID})
 			}
-			// Published at once, so the live view shows the note taken
-			// while the model is still reading it, and a round whose
-			// provider call then fails still has the note on the record
-			// the caller publishes for it.
-			if len(notes) > 0 {
-				publish(roundsUsed, nil)
-			}
+			// Published with the round's opening frame below, so the live
+			// view shows the note taken while the model is still reading
+			// it, and a round whose provider call then fails still has the
+			// note on the record the caller publishes for it.
 		}
 
 		// Re-read every round, so a surface mutated by this round's own
@@ -939,6 +952,17 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// streamed round's frames can say how long it has been writing.
 		began := time.Now()
 		roundStarted = began.UTC()
+		// THE ROUND HAS OPENED, and the live view is told so now rather
+		// than when the model answers. Until this frame the last one
+		// published was the previous round's — its tools returned, its
+		// start still in RoundStartedAt — so for as long as this call ran
+		// (minutes, on a slow model) every reader saw round N-1 as the
+		// round in flight and had no instant for round N at all: a trace
+		// drew the running call from the previous round's start and a
+		// stepper named a round that had already finished. A streamed
+		// round's first fragment would say it too, but only once text
+		// arrives, and a unary one says nothing until it is over.
+		publish(roundsUsed, nil)
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages:   msgs,
 			Tools:      tools,

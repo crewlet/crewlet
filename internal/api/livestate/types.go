@@ -147,7 +147,9 @@ type LiveCall struct {
 
 	RoundNum int `json:"round_num"`
 
-	// RoundsUsed is how many rounds have come back, ONE-BASED — the same
+	// RoundsUsed is the round the phase is on, ONE-BASED: the rounds that
+	// have come back, and the one in flight from the frame the loop
+	// publishes as its provider call is made (see RoundStartedAt) — the same
 	// name and the same quantity the finished phase record carries, so a
 	// reader draws a running phase and a settled one from one field. It
 	// was `rounds` here while the record's `rounds` became the per-round
@@ -167,10 +169,11 @@ type LiveCall struct {
 	MaxRounds    int `json:"max_rounds,omitempty"`
 	RoundCeiling int `json:"round_ceiling,omitempty"`
 
-	// RoundStartedAt is when the round in flight began its provider call,
-	// so "how long has the model been thinking" is measured from the
-	// round rather than from the call's start. Empty when no round is
-	// open.
+	// RoundStartedAt is when the latest round began its provider call, so
+	// "how long has the model been thinking" is measured from the round
+	// rather than from the call's start. Later than every entry in Rounds
+	// while that call is out; equal to the last entry's start while the
+	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
 	// RunningCall is the tool call the phase is running RIGHT NOW —

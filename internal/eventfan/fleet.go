@@ -96,6 +96,14 @@ type TurnDetail struct {
 	Rows   []store.EventRecord
 	Total  int
 	Traces []string
+
+	// Nodes is every node whose OWN store holds part of this turn, sorted —
+	// which is where the turn RAN, since an event is written only to the
+	// store of the node that published it. More than one for a turn resumed
+	// on another node after a restart, or one whose seat moved while a
+	// coding run was out. A stored row carries no node of its own, so this
+	// is the only place the answer can say it.
+	Nodes []string
 }
 
 // TurnPage is a page of turns from the fleet.
@@ -423,7 +431,23 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	}
 	rows, total, traces := MergeTurn(g.parts())
 	f.report(QuestionTurn, g.coverage, started)
-	return TurnDetail{Rows: rows, Total: total, Traces: traces}, g.coverage, nil
+	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g)},
+		g.coverage, nil
+}
+
+// turnNodes is every node that answered with part of the turn.
+func turnNodes(self string, g gathered[turnPart]) []string {
+	var nodes []string
+	if g.mine.rows() > 0 || len(g.mine.Closing) > 0 {
+		nodes = append(nodes, self)
+	}
+	for _, p := range g.peers {
+		if p.part.rows() > 0 || len(p.part.Closing) > 0 {
+			nodes = append(nodes, p.node)
+		}
+	}
+	slices.Sort(nodes)
+	return slices.Compact(nodes)
 }
 
 // Phases answers the company's phase records, newest first, payload included —

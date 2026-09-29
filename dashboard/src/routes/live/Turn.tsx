@@ -47,8 +47,20 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useCallback, useMemo, type ReactNode } from "react";
-import { href, useNavigator } from "~/app/router.tsx";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
+import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
+import { useTab } from "~/app/frame/tabs.ts";
+import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
+import { useNow } from "~/lib/clock.ts";
+import { roundOf } from "~/lib/seats.ts";
+import { buildWaterfall, phaseLabel } from "~/lib/waterfall.ts";
+import type { Coverage } from "~/contract/coverage.ts";
+import { ToolsTab } from "./trace/Tools.tsx";
+import { useTurnOrdinal } from "./trace/useTurnOrdinal.ts";
+import { steerMarks, Waterfall } from "./trace/Waterfall.tsx";
 import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import {
@@ -60,7 +72,12 @@ import {
   EmptyState,
   Skeleton,
   Tag,
+  Menu,
   cx,
+  tabId,
+  useToast,
+  writeClipboard,
+  type MenuItem,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
@@ -72,25 +89,33 @@ import {
   SplitGlyph,
   LayersGlyph,
   BrainGlyph,
-  UserGlyph,
+  SquareKanbanGlyph,
+  EllipsisGlyph,
   ChartNoAxesGanttGlyph,
   TriangleAlertGlyph,
+  CopyGlyph,
+  PauseGlyph,
+  SaveGlyph,
 } from "@crewlethq/icons/glyphs";
-// STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` and `DownloadButton` are
-// bare ACTIONS over text derived at press time — `Copyable` renders the value
-// it copies and is named by it, and nothing over there saves a file at all.
+// STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` is a bare ACTION over
+// text derived at press time — `Copyable` renders the value it copies and is
+// named by it — and `downloadText` is the file save behind `DownloadButton`,
+// for a menu item: nothing over there saves a file at all.
 // `PhaseTag` has a real peer (`Tag` carries the three phase variants), but it
 // is a primitive in `~/ui`, so porting it is that file's half rather than a
 // copy inlined into a route. See the report.
-import { CopyButton, DownloadButton, PhaseTag, type Tone } from "~/ui/primitives.tsx";
+import { CopyButton, downloadText, PhaseTag, uiletTone, type Tone } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
   fmtCount,
   fmtDateTime,
   fmtDuration,
+  fmtElapsed,
+  fmtPct,
   fmtTime,
   oldestFirst,
+  plural,
   tsKey,
 } from "~/lib/format.ts";
 import {
@@ -120,10 +145,12 @@ import {
   type Story,
 } from "~/lib/turnstory.ts";
 import { TURN_STOP } from "~/contract/turnbands.ts";
-import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
-import type { EventRecord, TurnRow } from "~/protocol/index.ts";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { useAgents, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { seatOnTurn, UNSETTLED } from "~/lib/turns.ts";
+import type { EventRecord, LiveCall, TurnRow, TurnStage, WorkItemRef } from "~/protocol/index.ts";
+import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
@@ -279,8 +306,13 @@ export interface TurnView {
   running: boolean;
   /** The engine's own wall clock, or null where no record carries one. */
   durationMs: number | null;
-  /** The window everything this frame holds falls inside — see [turnSpan]. */
-  span: { from: number; to: number };
+  /**
+   * The window the turn is drawn over: the waterfall's own (`timed`), so the
+   * header's derived wall clock and the Turn row beneath it are one length;
+   * the span of the events in hand (see [turnSpan]) only where nothing the
+   * frame holds was timed.
+   */
+  span: { from: number; to: number; timed: boolean };
   /** The turn's own token bill, without the workers — see [turnFacts]. */
   tokens: number;
   workerTokens: number;
@@ -321,20 +353,72 @@ export interface TurnView {
    * taken here would count only what this page happened to load.
    */
   attempt: { index: number; total: number; rows: TurnRow[] } | null;
+  /** Which nodes the answer was assembled from — the coverage callout. */
+  coverage: Coverage | null;
+  /**
+   * Which nodes RAN the turn: the answer's own list (the nodes whose store
+   * holds part of it), or the live call's node while none has answered.
+   */
+  nodes: string[];
+  /** The one work item the turn is charged to, when it is on one. */
+  workItem: WorkItemRef | null;
+  /**
+   * Where in the turn the seat is, off the seat's own live overlay — ""
+   * where the seat is not on this turn. `parked` is the turn waiting on a
+   * detached coding run: running, and in nobody's loop but the run's.
+   */
+  stage: TurnStage | "";
+  parked: boolean;
+  /**
+   * Whether the live overlay is connected, so "no seat is on this turn" is an
+   * ANSWER rather than a view that cannot see the seats. Only then may a turn
+   * with no closing record be called not settled — see [UNSETTLED].
+   */
+  overlay: boolean;
+  /** When the turn began, as the engine stamped it; 0 where nothing says. */
+  startedAt: number;
+  /** The seat's handle — what a pause names — and whether it is paused now. */
+  handle: string;
+  paused: boolean;
+  /** The phase running now, as the seat's overlay carries it. */
+  liveCall: LiveCall | null;
 }
 
 export function useTurnView(turnId: string): TurnView {
   // GUARDED ON THE ID. A rail is opened from a pasted `peek=turn:` as often as
   // from a row, and an empty one would ask the engine for a turn with no id
   // and be refused on the way in.
-  const { data, loading, error } = useQuery(
+  const { data, loading, error, refetch } = useQuery(
     "turn",
     { turn_id: turnId },
     { enabled: turnId !== "" },
   );
 
   const agents = useAgents();
+  const { connected } = useConnection();
   const phaseEvents = usePhaseEvents();
+
+  // THE SEAT THIS TURN IS ON, off its live overlay: where in the turn it is,
+  // its node, and the call running now. `turn` is the overlay's own record of
+  // the turn a seat is on — a parked turn has no live call and still has it.
+  const seatRow = useMemo(() => seatOnTurn(agents, turnId), [agents, turnId]);
+  const stage: TurnStage | "" = seatRow?.turn?.turn_id === turnId ? seatRow.turn.stage : "";
+  const liveCall = seatRow?.live_call?.turn_id === turnId ? seatRow.live_call : null;
+
+  // THE ANSWER IS ASKED AGAIN when this turn moves on the stream: a phase of
+  // it lands, or its seat's stage changes. The `turn` query is answered once,
+  // and what the phases do not carry — a coding run's announcement, a note's
+  // `agent_turn_steered`, the reflection pass — arrives only in its answer.
+  const landed = useMemo(
+    () => phaseEvents.filter((ev) => fromPhaseEvent(ev)?.turnId === turnId).length,
+    [phaseEvents, turnId],
+  );
+  const moved = useRef({ landed, stage });
+  useEffect(() => {
+    if (moved.current.landed === landed && moved.current.stage === stage) return;
+    moved.current = { landed, stage };
+    refetch();
+  }, [landed, stage, refetch]);
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
 
@@ -439,7 +523,10 @@ export function useTurnView(turnId: string): TurnView {
   const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
   const workerCount = phases.filter((p) => p.hostPhase).length;
 
-  const running = phases.some((p) => p.live);
+  // RUNNING while a phase is live OR the seat's overlay says it is on this
+  // turn: a turn gathering its context has no phase yet, and a parked one
+  // has none in flight while its coding run works.
+  const running = phases.some((p) => p.live) || stage !== "";
   // THE TURN'S OPENING RECORD, which the engine publishes BEFORE the turn
   // gathers its context — so on a turn deep-linked while it does, or one
   // that died doing it, this is the only row the answer holds. The header
@@ -476,6 +563,40 @@ export function useTurnView(turnId: string): TurnView {
   const story = useMemo(() => tellStory(events), [events]);
   const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
 
+  const workItem =
+    seatRow?.turn?.turn_id === turnId && seatRow.turn.work_item
+      ? seatRow.turn.work_item
+      : ((field(rec.summary, "work_item") ??
+          field(opened, "work_item") ??
+          liveCall?.work_item ??
+          null) as WorkItemRef | null);
+  const role = phases[0]?.role ?? (rec.summary?.actor || str(opened, "role"));
+  const seat = seatRow ?? agents.find((a) => a.role === role);
+  const startedAt =
+    tsKey(str(opened, "started_at")) ||
+    (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
+  const nodes = data?.nodes?.length ? data.nodes : liveCall?.node ? [liveCall.node] : [];
+
+  // ONE WINDOW FOR THE HEADER AND THE WATERFALL. A turn with no closing
+  // record has no measured length, and the header used to derive one from
+  // its first and last EVENT while the Turn row under it spanned its timed
+  // work — "1m 2s" over a 416 ms bar on the same turn. The waterfall's window
+  // is the one both read now; the event span answers only where nothing is
+  // timed. `now` matters only while it runs, when the header counts from the
+  // start against the live clock instead.
+  const turnWindow = useMemo(() => {
+    const drawn = buildWaterfall({
+      events,
+      phases,
+      now: Date.now(),
+      running,
+      parked: stage === "parked",
+    });
+    return drawn.to > drawn.from
+      ? { from: drawn.from, to: drawn.to, timed: true }
+      : { ...turnSpan(events, phases), timed: false };
+  }, [events, phases, running, stage]);
+
   return {
     turnId,
     loading,
@@ -483,6 +604,17 @@ export function useTurnView(turnId: string): TurnView {
     events,
     cut,
     attempt,
+    coverage: data?.coverage ?? null,
+    nodes,
+    workItem:
+      workItem && typeof workItem === "object" && workItem.key !== undefined ? workItem : null,
+    stage,
+    parked: stage === "parked",
+    overlay: connected,
+    startedAt,
+    handle: seat?.handle ?? str(opened, "agent_handle"),
+    paused: !!seat?.paused,
+    liveCall,
     phases,
     own,
     nested,
@@ -490,7 +622,7 @@ export function useTurnView(turnId: string): TurnView {
     // THE PHASES FIRST, the opening record where none has landed — see
     // `opened` above. The two name the same seat and the same wake, so which
     // one answers changes nothing on a turn that has both.
-    role: phases[0]?.role ?? (rec.summary?.actor || str(opened, "role")),
+    role,
     trigger:
       phases.find((p) => p.trigger)?.trigger ??
       (field(opened, "trigger") as PhaseRecord["trigger"] | undefined) ??
@@ -498,7 +630,7 @@ export function useTurnView(turnId: string): TurnView {
     outcome: outcomeOf(rec),
     running,
     durationMs: typeof measured === "number" ? measured : null,
-    span: turnSpan(events, phases),
+    span: turnWindow,
     tokens: own.reduce((n, p) => n + p.totalTokens, 0),
     workerTokens,
     workerCount,
@@ -598,149 +730,197 @@ export function turnTitle(view: TurnView): string {
 }
 
 /**
- * The six facts a turn wears, in the one order.
+ * The facts a turn wears, in the one order — the strip under its title.
  *
  * ONE BUILDER FOR THE PAGE AND THE RAIL, which is `ObjectHeader`'s own rule
- * and the reason it exists: a reader who scans "seat, outcome, took" in the
+ * and the reason it exists: a reader who scans "tokens, cache, took" in the
  * rail must find them in that order on the page behind it.
  *
- * THE THREE COUNTS ARE ABSENT RATHER THAN ZERO until a phase record is in
- * hand. `FactLine` drops an empty value, and "0 phases · 0 rounds · 0 tokens"
- * is a claim that this turn did nothing — which is exactly what a turn still
- * loading, or one whose events fell out of the store's window, has NOT been
- * shown to have done.
+ * THE SEAT AND THE OUTCOME ARE NOT HERE any more: the seat is the trail's
+ * middle crumb (Live › {agent} › Turn n) and the outcome is the status beside
+ * the title, each said once.
  *
- * THREE OF THEM CARRY A NOTE, and they are the three a reader can reasonably
- * doubt: whether a duration was measured or derived, what a token figure
- * covers, and whose word an outcome is. The page used to answer that in a
- * four-tile strip directly under this line, which restated `Seat`, `Took`,
- * `Tokens` and `Outcome` at three times the size and — because a tile is
- * narrower than the line above it — ellipsed the seat name the line rendered
- * whole. Its fourth caption was filler ("ran this turn", under a seat's own
- * name); the other three are here, which is also how they reach the RAIL,
- * where no tile ever rendered and a reader had nothing at all.
+ * THE COUNTS ARE ABSENT RATHER THAN ZERO until a phase record is in hand.
+ * `FactLine` drops an empty value, and "0 tokens · 0 tool calls" is a claim
+ * that this turn did nothing — which is exactly what a turn still loading, or
+ * one whose events fell out of the store's window, has NOT been shown to have
+ * done. THE CACHE IS ABSENT, NOT 0%, when no phase reported a cache read: a
+ * provider that reports none and a cache that served nothing are one value on
+ * the wire, and "0%" would be a claim about the second made from the first.
+ *
+ * THE NOTES ARE ON WHAT A READER CAN REASONABLY DOUBT: whether a wall clock
+ * was measured or derived, and what a token figure covers.
  */
-export function turnFacts(view: TurnView): Fact[] {
+export function turnFacts(
+  view: TurnView,
+  now: number = Date.now(),
+  { seat = false }: { seat?: boolean } = {},
+): Fact[] {
   const counted = view.own.length > 0;
-  const { from, to } = view.span;
+  const { from, to, timed } = view.span;
   const spanned = view.durationMs == null && to > from;
+  const input = view.own.reduce((n, p) => n + p.inputTokens, 0);
+  const output = view.own.reduce((n, p) => n + p.outputTokens, 0);
+  const cached = view.own.reduce((n, p) => n + p.cacheReadTokens, 0);
+  const calls = view.own.reduce((n, p) => n + p.tools.length, 0);
+  const trigger = view.trigger;
+  const began = view.startedAt || from;
   return [
+    // THE SEAT, ON THE RAIL ONLY: the page's trail already names it as its
+    // middle crumb, and a rail has no trail. A turn is what the engine RUNS,
+    // and it never runs a human seat, so the chip is an agent's.
+    ...(seat
+      ? [
+          {
+            label: "Seat",
+            value: view.role ? (
+              <SeatChip name={view.role} handle={view.handle || view.role} kind="agent" />
+            ) : (
+              "the engine"
+            ),
+          },
+        ]
+      : []),
     {
-      label: "Seat",
-      // The chip is its own link, so the fact carries no `path`: an anchor
-      // inside the fact's own anchor is markup no browser agrees about.
-      //
-      // `agent` WITHOUT ASKING THE CHART, and it is a fact rather than a
-      // default: a turn is what the engine RUNS, and it never runs a human
-      // seat — so the seat on a turn is an agent seat by construction.
-      // Stated so the solid disc reads as the answer rather than as a kind
-      // nobody threaded.
-      value: view.role ? (
-        <SeatChip name={view.role} handle={view.role} kind="agent" />
-      ) : (
-        "the engine"
-      ),
+      label: "Trigger",
+      // THE KIND, SHORT, and no note: the prose is the Context tab's brief
+      // (and, on a turn with no plan summary yet, the title), and a sentence
+      // in a fact cell is the thing that wraps the strip to three lines.
+      value: trigger ? trigger.integration || trigger.type || "" : "",
+    },
+    { label: "Phase", ...phaseFact(view) },
+    {
+      label: "Tokens",
+      value: counted ? `${fmtCount(input)} in · ${fmtCount(output)} out` : "",
+      // THE TURN'S OWN PHASES, and the note is what says so. A worker's
+      // tokens are already charged through the shared meter, which is why the
+      // engine keeps them out of `total_tokens` and reports them as
+      // `subagent_tokens`.
+      note:
+        counted && view.workerTokens > 0
+          ? `+${fmtCount(view.workerTokens)} in ${plural(view.workerCount, "worker")}`
+          : undefined,
     },
     {
-      // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an empty
-      // word. A fact line has no tile to fill: the fact is dropped and the
-      // status beside the title says "running" — and the note goes with it,
-      // since a caption under nothing is a caption about nothing.
-      label: "Outcome",
-      value: view.outcome.word,
-      // WHOSE WORD THIS IS. `done` is the reviewer's verdict and `delivered`
-      // is the executor's own, and the badge renders one word for both — so
-      // without this a reader cannot tell a turn the reviewer passed from one
-      // that merely reported itself finished. On a failure it is the engine's
-      // `error_kind`, which is the difference between a turn that was stopped
-      // and one that decided against itself.
-      note: view.outcome.word ? view.outcome.sub || undefined : undefined,
+      label: "Cache",
+      value: counted && cached > 0 && input > 0 ? fmtPct(cached, input) : "",
+      note:
+        counted && cached > 0 && input > 0
+          ? `${fmtCount(cached)} of ${fmtCount(input)} input read from cache`
+          : undefined,
     },
+    { label: "Tool calls", value: counted ? calls : "" },
+    { label: "Workers", value: view.workerCount > 0 ? view.workerCount : "" },
+    { label: "Node", value: view.nodes.join(", ") },
     {
-      label: "Took",
-      // THE ENGINE'S OWN MEASUREMENT where a record carries one, and the
-      // window over everything this frame holds otherwise.
-      value:
-        view.durationMs != null
+      label: "Wall clock",
+      value: view.running
+        ? began > 0
+          ? fmtElapsed(now - began)
+          : ""
+        : view.durationMs != null
           ? fmtDuration(view.durationMs)
           : spanned
             ? fmtDuration(to - from)
             : "",
       // WHICH OF THE TWO THIS NUMBER IS. Only on the derived branch: a fact
       // that says "measured" under every duration teaches a reader to stop
-      // reading the line, and then the one time it says something else they
-      // miss it. A CUT VIEW HOLDS BOTH ENDS, so the span is the turn's real
-      // window — but it is still the window rather than the engine's own
-      // milliseconds, and on that branch the record carrying them is missing
-      // from a turn this page has both ends of.
-      note: spanned
-        ? view.cut
-          ? "spanning the turn's ends — its own record is not among them"
-          : "spanning the turn's first and last event"
-        : undefined,
-    },
-    { label: "Phases", value: counted ? view.own.length : "" },
-    { label: "Iterations", value: counted ? view.iterations : "" },
-    {
-      label: "Tokens",
-      value: counted ? fmtCount(view.tokens) : "",
-      // THE TURN'S OWN PHASES, and the note is what says so. A worker's
-      // tokens are already charged through the shared meter, which is why the
-      // engine keeps them out of `total_tokens` and reports them as
-      // `subagent_tokens` — so a figure summing every record disagreed with
-      // the very record shown further down this page. The split is also the
-      // only thing that answers "how much of this turn was fan-out" when a
-      // seat's spend jumps and its own rounds did not.
+      // reading the line. SHORT, because a fact's track is 7.5rem: the long
+      // forms wrapped mid-clause ("its timed spans — it / has no closing
+      // record") and pushed the strip's next line down.
       note:
-        counted && view.workerTokens > 0
-          ? `+${fmtCount(view.workerTokens)} in ${view.workerCount} worker${
-              view.workerCount === 1 ? "" : "s"
-            }`
+        !view.running && spanned
+          ? view.cut
+            ? "from its ends; record not shown"
+            : timed
+              ? "from its spans; no closing record"
+              : "first to last event"
           : undefined,
     },
   ];
 }
 
 /**
- * What state this turn is in, beside its own title.
+ * Where the turn is: the phase as the value — "Execute" while it runs,
+ * "Execute → Review" once it is over — and where in it as the note: "round 3
+ * of 25", "waiting on a coding run", "2 iterations".
  *
- * Everything in the fact line is settled when the turn ends — an outcome, a
- * duration, a bill — so a turn still in flight reads as a turn that recorded
- * none of them. These are the marks that answer the rest, and they carry the
- * only tones in this header, because each of them is a STATE where a seat, an
- * id and a token count are identity.
- *
- * THEY WERE IN THE PAGE BAR, portalled in beside Copy turn and Download turn,
- * and that is the mistake this replaces. The bar's own subject is "where you
- * are, and what you can do about it": five state chips in its action slot are
- * neither, they pushed a turn page's bar to ten items so it broke onto a
- * second line at 1587px, and the reader's eye had to travel to the far right
- * corner and back for a fact about the object named 40px below. `ObjectHeader`
- * has carried a `status` slot for exactly this all along — "a status glyph or
- * pill — state, never identity" — and one of these five was already in it.
- *
- * TWO OF THEM DID NOT MOVE, THEY WENT: the seat and the phase count were
- * `Agent CEO` and `7 phases` in the bar directly above `SEAT Agent CEO` and
- * `PHASES 7` in the fact line. A chip repeating the fact under it is not a
- * second reading of the turn, it is the same reading twice.
- *
- * ON THE VIEW, so the peek gets them too. A rail opened from a turns row
- * showed no problem badge at all — the one mark a reader opening a rail over
- * a failed turn is looking for — because the count lived on the page.
+ * THE QUALIFIER IS THE NOTE, not a clause of the value: "Execute · round 3 of
+ * 24" and "Execute → Review · 2 iterations" each wrapped to two lines in their
+ * track, and a fact that wraps pushes the whole strip's next line down with it.
  */
-function turnStatus(view: TurnView): ReactNode {
+function phaseFact(view: TurnView): { value: string; note?: string } {
+  const call = view.liveCall;
+  if (view.stage === "context") return { value: "Gathering its context" };
+  if (view.parked) {
+    const at = view.own[view.own.length - 1];
+    return { value: at ? phaseLabel(at) : "Execute", note: "waiting on a coding run" };
+  }
+  if (call) {
+    const round = roundOf(call);
+    const name = phaseLabel({ phase: call.phase, iteration: call.iteration });
+    return {
+      value: name,
+      note: call.max_rounds ? `round ${round} of ${call.max_rounds}` : `round ${round}`,
+    };
+  }
+  if (!view.own.length) return { value: "" };
+  const names = [...new Set(view.own.map((p) => phaseLabel({ phase: p.phase, iteration: 1 })))];
+  return {
+    value: names.join(" → "),
+    ...(view.iterations > 1 ? { note: plural(view.iterations, "iteration") } : {}),
+  };
+}
+
+/**
+ * What state this turn is in, beside its own title: "Running · 6m 12s", or
+ * how it ended — and the attempt it is and what went wrong.
+ *
+ * THESE CARRY THE ONLY TONES IN THIS HEADER, because each is a STATE where a
+ * seat, an id and a token count are identity. ON THE VIEW, so the peek gets
+ * them too: a rail opened from a turns row over a failed turn shows its
+ * problem badge.
+ */
+function turnStatus(view: TurnView, now: number): ReactNode {
   const { attempt } = view;
+  const began = view.startedAt || view.span.from;
+  const elapsed = began > 0 ? ` · ${fmtElapsed(now - began)}` : "";
+  const outcome = view.outcome;
   return (
     <>
-      {view.running && (
-        <Tag variant="info" dot>
-          running
+      {view.running &&
+        (view.parked ? (
+          <Tag variant="warning" dot title="the turn is parked on a coding run it launched">
+            Parked on a coding run{elapsed}
+          </Tag>
+        ) : (
+          <Tag variant="info" dot>
+            Running{elapsed}
+          </Tag>
+        ))}
+      {!view.running && outcome.word && (
+        <Tag variant={uiletTone(outcome.tone ?? "neutral")} title={outcome.sub || undefined}>
+          {outcome.word}
         </Tag>
       )}
-      {/* A RE-RUN SAYS SO, and says where the others are. Neutral, because
-          being a second attempt is a fact about the trigger rather than a
-          fault — the attempt that FAILED carries the problem badge beside
-          this one, which is the pairing a reader needs to see at once. */}
+      {/* NEITHER RUNNING NOR ENDED. No seat is on the turn and it published
+          no closing record — its node stopped, or it was abandoned, before
+          it ended — and that is a state of its own, worded as the turns list
+          words it ([UNSETTLED]). Only once the answer is in, and only while
+          the overlay is connected: a turn still loading has no record
+          because nothing has been read yet, and a disconnected view cannot
+          see the seat that may be running it. */}
+      {!view.running &&
+        !outcome.word &&
+        !view.loading &&
+        view.overlay &&
+        view.events.length > 0 && (
+          <Tag variant="warning" title={UNSETTLED.title}>
+            {UNSETTLED.word}
+          </Tag>
+        )}
+      {/* A RE-RUN SAYS SO. Neutral, because being a second attempt is a fact
+          about the trigger rather than a fault. */}
       {attempt && (
         <Tag
           appearance="outline"
@@ -752,11 +932,8 @@ function turnStatus(view: TurnView): ReactNode {
           attempt {attempt.index}/{attempt.total}
         </Tag>
       )}
-      {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records alone.
-          `phases.some(p => p.failed)` misses every turn the engine killed
-          BETWEEN phases — a refused charge, an exhausted chain, a guard that
-          fired — which are precisely the turns with no failed phase record to
-          find. */}
+      {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records alone —
+          see [problemCount]. */}
       {view.trouble > 0 && (
         <Tag variant="danger" leadingIcon={<CircleAlertGlyph size="xs" />}>
           {view.trouble === 1 ? "1 problem" : `${view.trouble} problems`}
@@ -771,10 +948,6 @@ function turnStatus(view: TurnView): ReactNode {
           nothing went wrong
         </Tag>
       )}
-      {/* WHAT THE VIEW IS MISSING, in the header, because every other badge
-          beside it is a claim made from these rows. The `trace` answer has
-          carried this flag all along and its screen renders it; `turn` did not
-          carry one at all, so a cut turn looked exactly like a short one. */}
       {view.cut && (
         <Tag
           variant="warning"
@@ -1303,59 +1476,91 @@ function Absorbed({ groups }: { groups: AbsorbedGroup[] }) {
   );
 }
 
+/** The tabs a turn's page has, in order; the first is where it opens. */
+export const TURN_TABS = ["timeline", "transcript", "context", "tools"] as const;
+export type TurnTab = (typeof TURN_TABS)[number];
+
+const TURN_TAB_LABELS: Record<TurnTab, string> = {
+  timeline: "Timeline",
+  transcript: "Transcript",
+  context: "Context",
+  tools: "Tools",
+};
+
+/**
+ * What the trail, the browser tab and the palette's recents call this turn.
+ *
+ * ON A TASK IT IS THE TASK'S OWN COUNT: "Turn 3 · ENG-42", the ordinal off
+ * the task's turn list (`work_item_turns`) — the name the task page gives the
+ * same turn, so a reader who came from there finds it. Before the ordinal is
+ * known it is "Turn · ENG-42", which still says which task and never guesses a
+ * number. Off a task it is the lead of what the turn did, as it always was —
+ * or the empty string where nothing has named it, so the trail keeps the id.
+ */
+export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
+  const key = view.workItem?.key;
+  if (key) return ordinal ? `Turn ${ordinal} · ${key}` : `Turn · ${key}`;
+  return turnName(view);
+}
+
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
+  const now = useNow();
   // ONE DERIVATION FOR THE PAGE AND THE RAIL — see [useTurnView]. What stays
-  // here is what only a page has room for: the story bands, the prompt
-  // weights, every trace the turn touched, and the JSON somebody attaches to
-  // a bug report.
+  // here is what only a page has room for: the waterfall, the story bands,
+  // the prompt weights, every trace the turn touched, and the JSON somebody
+  // attaches to a bug report.
   const view = useTurnView(turnId);
   const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs, story } = view;
+  const [tab, setTab] = useTab<TurnTab>("tab", TURN_TABS);
+  const [span, setSpan] = useParam("span", "", "filter");
+  const panelId = useId();
 
   const prefetch = useMemo(
     () => prefetchBlocks(story.given.find((e) => e.type === "prefetch_summary")),
     [story],
   );
-  // The other half of the `given` band, and until now the half nothing read.
   const weights = useMemo(() => promptWeights(story.given), [story]);
-  // WHAT IS NOT LISTED, so the page can account for its whole answer — see
-  // [Absorbed] below, and `Story.absorbed` for what this used to be instead.
   const absorbed = useMemo(() => absorbedGroups(story.absorbed), [story]);
 
-  // THE BREADCRUMB, THE BROWSER TAB AND THE PALETTE'S RECENTS, which all read
-  // the one label a screen publishes and otherwise fall back to the raw path
-  // segment — for a turn, its uuid. The page has had a name for this object
-  // all along and simply never said so, which is why a reader's recents read
-  // as three identical-looking hex strings.
-  //
-  // THE SCREEN'S OWN TITLE, never re-derived: `Recent.label` is documented as
-  // the label the screen showed, so what the header renders and what the
-  // palette offers are the same string by construction. The CSS bounds it —
-  // `.crumb-here` ellipsises and the palette row clamps — so a long lead
-  // sentence is cut where it is drawn rather than cut here, once, in a length
-  // nobody could defend.
-  const name = turnName(view);
-  usePageLabels(name ? { [turnId]: name } : {});
+  // THE CLOCK MOVES THE WATERFALL ONLY WHILE THE TURN RUNS. A settled turn's
+  // spans all have ends, so ticking it every second would rebuild the same
+  // model sixty times a minute for a screen that cannot change.
+  const clock = running ? now : 0;
+  const model = useMemo(
+    () =>
+      buildWaterfall({ events, phases, now: clock || Date.now(), running, parked: view.parked }),
+    [events, phases, clock, running, view.parked],
+  );
+  const marks = useMemo(() => steerMarks(events, turnId), [events, turnId]);
+  const calls = phases.reduce((n, p) => n + p.tools.length, 0);
+
+  // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
+  // `app/crumbs.ts` for the seat crumb, which leads back to what is running
+  // for that seat.
+  const ordinal = useTurnOrdinal(
+    view.workItem?.key ?? "",
+    turnId,
+    running,
+    view.startedAt || view.span.from,
+  );
+  const crumb = turnCrumbLabel(view, ordinal);
+  usePageLabels({
+    ...(crumb ? { [turnId]: crumb } : {}),
+    ...(role ? { [turnSeatKey(turnId)]: role } : {}),
+    ...(view.handle ? { [turnHandleKey(turnId)]: view.handle } : {}),
+  });
 
   const title = turnTitle(view);
-
   const traceIds = view.traceIds;
   const traceId = traceIds[0] ?? "";
-
   const conversation = str(rec.summary, "conversation_key") || phases[0]?.conversationKey || "";
 
-  // THE WHOLE SCREEN AS DATA, which is what somebody pasting a turn into a
-  // bug report actually needs — and the only copyable thing a RUNNING turn
-  // has, since the records below do not exist until the turn ends. Both
-  // records are nested rather than flattened, under the event type each one
-  // arrived as, so a reader can tell what the engine published from what this
-  // page assembled — and which of the two halves a field came from.
-  //
-  // A THUNK, not a memo. `phases` takes a new identity on every streamed
-  // frame — `agents` is pushed twice per tool round — so any memo over it
-  // would re-serialize every prompt, narration, tool argument and result of a
-  // running turn, twice a round, for a button nobody has clicked.
+  // THE WHOLE SCREEN AS DATA — a THUNK, not a memo: `phases` takes a new
+  // identity on every streamed frame, and serializing a running turn twice a
+  // round for a button nobody has clicked is waste. It carries the truncation
+  // flag, so a file attached to a bug report says what the page says.
   const turnJSON = useCallback(
     () =>
       JSON.stringify(
@@ -1365,16 +1570,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           trace_id: traceId || null,
           running,
           duration_ms: durationMs,
-          // WHAT THE SCREEN SAYS, THE FILE SAYS TOO. The page marks a capped
-          // turn with a badge and a banner because its opening and ending
-          // without its middle is indistinguishable from a turn that died
-          // early — which is the ambiguity this whole read exists to remove.
-          // Exported without the flag, the file reproduced it exactly: a
-          // reader attaches `turn-<id>.json` to a bug report and whoever
-          // opens it has no way to tell an incomplete turn from a complete
-          // one. Top level, beside `running`, because this is what the page
-          // assembled; `record` below is what the engine published.
           truncated: cut,
+          work_item: view.workItem,
+          nodes: view.nodes,
           record: {
             agent_turn_completed: rec.summary?.payload ?? null,
             turn_completed: rec.learning?.payload ?? null,
@@ -1385,10 +1583,110 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         null,
         2,
       ),
-    [turnId, role, traceId, running, durationMs, cut, rec, phases, events],
+    [
+      turnId,
+      role,
+      traceId,
+      running,
+      durationMs,
+      cut,
+      rec,
+      phases,
+      events,
+      view.workItem,
+      view.nodes,
+    ],
   );
-  // Memos here rather than thunks: both ARE rendered, so they are computed
-  // either way, and `rec` only changes when the turn ends.
+  // THE MENU'S ENTRIES, built once for the inline "···" and the phone's
+  // "More": one list, so an action cannot be offered in one and missing from
+  // the other. A menu item closes on its press and has no face left to say
+  // "Copied" on, so what happened is said in a toast.
+  const toast = useToast();
+  const [pausing, setPausing] = useState(false);
+  const itemKey = view.workItem?.key ?? "";
+  const openTask = useCallback(() => nav.to(["work", itemKey]), [nav, itemKey]);
+  const moreItems = useMemo<MenuItem[]>(
+    () => [
+      ...(attempt?.rows ?? [])
+        .map((row, i) => ({ row, i }))
+        .filter(({ row }) => row.turn_id !== turnId)
+        .map(({ row, i }) => ({
+          key: `attempt-${row.turn_id}`,
+          label: `Attempt ${i + 1}${row.failed ? " (failed)" : ""}`,
+          description: `attempt ${i + 1} of ${attempt!.total} at the same trigger`,
+          icon: <LayersGlyph size="sm" />,
+          onSelect: () => nav.to(["live", "turns", row.turn_id]),
+        })),
+      ...traceIds.map((id, i) => ({
+        key: `trace-${id}`,
+        label: traceIds.length > 1 ? `Trace ${i + 1} of ${traceIds.length}` : "Trace",
+        description: `every span of trace ${id.slice(0, 12)}…`,
+        icon: <SplitGlyph size="sm" />,
+        onSelect: () => nav.to(["live", "traces", id]),
+      })),
+      {
+        key: "copy-json",
+        label: "Copy turn as JSON",
+        description: "its record, its phases and everything else it published",
+        icon: <CopyGlyph size="sm" />,
+        onSelect: () => {
+          void writeClipboard(turnJSON()).then((ok) =>
+            ok
+              ? toast.ok("Copied the turn as JSON")
+              : toast.show({
+                  variant: "warning",
+                  title: "The browser refused the clipboard",
+                  message: "Download the turn as JSON instead.",
+                }),
+          );
+        },
+      },
+      {
+        key: "download-json",
+        label: "Download turn as JSON",
+        description: "the same JSON, saved as a file",
+        icon: <SaveGlyph size="sm" />,
+        onSelect: () => {
+          const { started, name } = downloadText(turnJSON(), `turn-${turnId}.json`);
+          if (started) toast.ok(`Download started — ${name}`);
+          else toast.show({ variant: "warning", title: "The browser refused the download" });
+        },
+      },
+    ],
+    [attempt, traceIds, turnId, nav, turnJSON, toast],
+  );
+  const pauseAccess = useWriteAccess("pause_seat");
+  usePageMenu([
+    ...(view.handle && !view.paused
+      ? [
+          {
+            key: "pause",
+            label: "Pause",
+            icon: <PauseGlyph size="sm" />,
+            onSelect: () => setPausing(true),
+            ...menuHold(pauseAccess),
+          },
+        ]
+      : []),
+    ...(itemKey
+      ? [
+          {
+            key: "task",
+            label: "Open task",
+            icon: <SquareKanbanGlyph size="sm" />,
+            onSelect: openTask,
+          },
+        ]
+      : []),
+    ...moreItems.map((item) => ({
+      key: item.key,
+      label: item.label,
+      icon: item.icon,
+      onSelect: item.onSelect,
+      ...(typeof item.description === "string" ? { description: item.description } : {}),
+    })),
+  ]);
+
   const summaryJSON = useMemo(
     () => JSON.stringify(rec.summary?.payload ?? {}, null, 2),
     [rec.summary],
@@ -1400,129 +1698,97 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
-      {/* WHAT THIS PAGE CAN DO — and nothing about what the turn IS. Five
-          state chips used to open this slot (the seat, the phase count, the
-          attempt, the problem count, "nothing went wrong"), which took the
-          bar to ten items and broke it onto a second line on a laptop. They
-          are the object header's `status` now; see [turnStatus]. */}
+      {/* WHAT A READER CAN DO ABOUT THIS TURN, in the order they reach for
+          it: talk to it while it runs, hold its seat, go to its task — and
+          everything else in one menu. On a phone Steer stays in view and the
+          rest fold into the frame's "More" (published above), where a bar of
+          seven controls was a line scrolled half off the screen. */}
       <PageActions>
-        {
-          <>
-            {role && (
+        <>
+          <SteerTurnButton
+            turnId={turnId}
+            seat={role || "the seat"}
+            running={running}
+            parked={view.parked}
+          />
+          {view.handle && (
+            <span className="page-action-folds">
+              <PauseSeatButton
+                handle={view.handle}
+                name={role || view.handle}
+                paused={view.paused}
+                working={running}
+                open={pausing}
+                onOpenChange={setPausing}
+              />
+            </span>
+          )}
+          {view.workItem?.key && (
+            <span className="page-action-folds">
               <Button
                 size="small"
                 variant="secondary"
-                leadingIcon={<UserGlyph size="xs" />}
-                onClick={() => nav.to(["agents", "seats", role])}
+                leadingIcon={<SquareKanbanGlyph size="xs" />}
+                onClick={openTask}
+                title={`the task this turn is charged to, ${view.workItem.key}`}
               >
-                The seat
+                Open task
               </Button>
-            )}
-            {/* THE OTHER ATTEMPTS, reachable rather than merely announced.
-                The header's badge says this is attempt 2 of 2; a reader who
-                has landed on the failed one needs to get to the one that worked,
-                and a deep link out of a tracker comment or an event payload
-                is exactly how they landed here. Each button says whether that
-                attempt failed, so the pair reads as the story it is. */}
-            {attempt?.rows.map((row, i) =>
-              row.turn_id === turnId ? null : (
-                <Button
-                  key={row.turn_id}
-                  size="small"
-                  variant="secondary"
-                  leadingIcon={<LayersGlyph size="xs" />}
-                  onClick={() => nav.to(["live", "turns", row.turn_id])}
-                  title={
-                    `attempt ${i + 1} of ${attempt.total} at the same trigger` +
-                    (row.failed ? ", which carried a failure" : "")
-                  }
-                >
-                  Attempt {i + 1}
-                  {row.failed ? " (failed)" : ""}
-                </Button>
-              ),
-            )}
-            {traceIds.length > 1 ? (
-              // NAMED, not collapsed. Two traces mean the turn was resumed
-              // somewhere else, and which one a reader wants depends on which
-              // half they are chasing.
-              <span className="row gap-1">
-                {traceIds.map((id, i) => (
-                  <Button
-                    key={id}
-                    size="small"
-                    variant="secondary"
-                    leadingIcon={<SplitGlyph size="xs" />}
-                    onClick={() => nav.to(["live", "traces", id])}
-                    title={`trace ${id}`}
-                  >
-                    Trace {i + 1} of {traceIds.length}
-                  </Button>
-                ))}
-              </span>
-            ) : (
-              traceId && (
-                <Button
-                  size="small"
-                  variant="secondary"
-                  leadingIcon={<SplitGlyph size="xs" />}
-                  onClick={() => nav.to(["live", "traces", traceId])}
-                >
-                  Trace
-                </Button>
-              )
-            )}
-            <CopyButton
-              text={turnJSON}
-              label="Copy turn"
-              title="the whole turn as JSON — its record, its phases and everything else it published"
+            </span>
+          )}
+          {/* THE WAYS OUT AND THE WAYS TO TAKE IT WITH YOU, in one menu: the
+              other attempts at this trigger, every trace the turn touched,
+              and the whole turn as JSON to paste or to attach. "Copy" sat
+              beside the frame's "Copy link" as a second copy meaning
+              something else, and with Download the bar held eight controls
+              where the page bars this product draws hold two or three. Each
+              attempt says whether it failed, so the pair reads as the story
+              it is; two traces are named, not collapsed, because which one a
+              reader wants depends on which half they are chasing. */}
+          <span className="page-action-folds">
+            <Menu
+              label="More on this turn"
+              icon={<EllipsisGlyph size="sm" />}
+              triggerVariant="ghost"
+              align="end"
+              items={moreItems}
             />
-            {/* THE SAME BYTES, out of the same thunk. A turn is pasted into a
-                thread and ATTACHED to a bug report, and the second one is not
-                a clipboard gesture: an incident is read weeks later, a
-                clipboard holds exactly one thing, and a self-iterating turn's
-                JSON is past what anyone wants inline. */}
-            <DownloadButton
-              text={turnJSON}
-              filename={`turn-${turnId}.json`}
-              label="Download turn"
-              title="the same JSON, saved as a file"
-            />
-          </>
-        }
+          </span>
+        </>
       </PageActions>
-      {/* THE OBJECT'S OWN HEADER, and the turn id with it. The id used to be
-          a lone `PageNote` under the page bar — a hand-rolled identity line,
-          which is exactly the eyebrow `ObjectHeader` draws — and the facts
-          beside it come out of the same builder the rail uses, so the six
-          things a reader scans are in one order wherever a turn appears. */}
-      <ObjectHeader
-        kind="Turn"
-        icon="layers"
-        identifier={turnId}
-        title={title}
-        status={turnStatus(view)}
-        facts={turnFacts(view)}
-      />
-      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header that is
-          drawn from the id and needs no answer to exist. Above it, it was six
-          rows of grey pushing the header down the page and then letting it
-          spring back the moment the query landed — so opening a turn moved
-          the one part of the screen that had been readable all along. The
-          screen is keyed on the turn id (`app/App.tsx`), so this runs on
-          every navigation between turns, not only on a cold open. */}
+      <header className="trace-head">
+        <ObjectHeader
+          kind="Turn"
+          icon="layers"
+          identifier={turnId}
+          title={title}
+          status={turnStatus(view, now)}
+          facts={turnFacts(view, now)}
+        />
+        <ObjectTabs
+          ariaLabel="The turn's sections"
+          className="trace-tabs"
+          value={tab}
+          onValueChange={(next) => setTab(next as TurnTab)}
+          panelId={panelId}
+          items={TURN_TABS.map((value) => ({
+            value,
+            label: TURN_TAB_LABELS[value],
+            ...(value === "tools" && calls > 0 ? { count: calls } : {}),
+          }))}
+        />
+      </header>
+      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header drawn
+          from the id that needs no answer to exist. */}
       {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
       <QueryState
         error={error}
         loading={loading}
-        // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone.
-        // `QueryState` renders this INSTEAD of its children, so a turn whose
-        // phases are all arriving on the stream — a turn deep-linked the
-        // moment it started, which answers the query with nothing — rendered
-        // "No events for this turn" while phase after phase streamed in
-        // behind it.
+        // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
+        // turn deep-linked the moment it started answers with nothing while
+        // phase after phase streams in.
         empty={
-          events.length || phases.length
+          events.length || phases.length || running
             ? undefined
             : {
                 title: "No events for this turn",
@@ -1530,11 +1796,10 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
         }
       >
-        {/* ABOVE EVERYTHING, because it is a statement about the rows every
-            panel below is built from rather than about the turn. Named
-            precisely: this is not "some events are missing", it is "the ones
-            that are missing are the ending", which is the difference between
-            a reader distrusting the page and a reader distrusting the turn. */}
+        {/* WHICH NODES DID NOT ANSWER. The turn is assembled from every
+            node's own store, and a silent node may hold the part of it this
+            page is missing. */}
+        <CoverageNote coverage={[view.coverage]} what="this turn" />
         {cut && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             This turn published more than the store returns for one turn. What is here is its{" "}
@@ -1545,12 +1810,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Callout>
         )}
 
-        <TurnBrief view={view} omit={title} />
-
-        {/* ABOVE the phases, because a turn that fell over is not something a
-            reader should have to scroll past three panels to discover. Absent
-            entirely on a healthy turn, which is the state the flat list could
-            never reach. */}
+        {/* ABOVE THE TABS, because a turn that fell over is not something a
+            reader should have to find a tab to discover. Absent entirely on a
+            healthy turn. */}
         {story.wentWrong.length > 0 && (
           <Card padding="none">
             <Card.Header
@@ -1564,177 +1826,193 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Card>
         )}
 
-        {(prefetch.length > 0 || weights.length > 0) && (
-          <Given blocks={prefetch} weights={weights} />
-        )}
+        <div
+          className="tabpanel trace-panel"
+          role="tabpanel"
+          id={panelId}
+          aria-labelledby={tabId(panelId, tab)}
+          tabIndex={0}
+        >
+          {tab === "timeline" && (
+            <Waterfall
+              model={model}
+              phases={phases}
+              marks={marks}
+              agent={role}
+              selected={span}
+              onSelect={setSpan}
+              now={clock || model.to}
+              turnId={turnId}
+            />
+          )}
 
-        <Card padding="sm">
-          <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
-            <Card.Title>Phases</Card.Title>
-          </Card.Header>
-          <div className="col gap-2">
-            {own.map((p, i) => (
-              <PhaseCard key={p.key} record={p} nested={nested.get(p.key)} defaultOpen={i === 0} />
-            ))}
-            {!own.length && (
-              <span className="t-caption">
-                No phase completed in this turn — it may have died before its first phase published.
-              </span>
-            )}
-          </div>
-        </Card>
+          {tab === "transcript" && (
+            <div className="col gap-4">
+              <Card padding="sm">
+                <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
+                  <Card.Title>Phases</Card.Title>
+                </Card.Header>
+                <div className="col gap-2">
+                  {own.map((p, i) => (
+                    <PhaseCard
+                      key={p.key}
+                      record={p}
+                      nested={nested.get(p.key)}
+                      defaultOpen={i === 0}
+                    />
+                  ))}
+                  {!own.length && (
+                    <span className="t-caption">
+                      No phase completed in this turn — it may have died before its first phase
+                      published.
+                    </span>
+                  )}
+                </div>
+              </Card>
 
-        {story.did.length > 0 && (
-          <Card padding="none">
-            <Card.Header
-              icon={<ZapGlyph size="sm" />}
-              count={story.did.length}
-              // "COLLEAGUES" IS A PROMISE AGAIN, and only because the wire
-              // can keep it now. This line used to advertise the three A2A
-              // audit records while none of them carried a `turn_id` — so the
-              // turn query, which is `WHERE turn_id = ?`, never returned one
-              // and the heading had never once drawn an ask. A subtitle naming
-              // a row the wire cannot deliver fails EMPTY, which reads as
-              // "this turn talked to nobody" rather than as a broken panel.
-              // The engine stamps the publishing turn on all three now
-              // (internal/a2a/service.go), which is what earns the word back;
-              // the gate in internal/events/types/turnbands_client_test.go is
-              // what would take it away again. See ./lib/turnstory.
-              subtitle="work outside the tool loop: coding runs, delegations, colleagues, skills"
-            >
-              <Card.Title>What else it did</Card.Title>
-            </Card.Header>
-            <EventList events={story.did} actor={role} />
-          </Card>
-        )}
-
-        {story.leftBehind.length > 0 && (
-          <Card padding="none">
-            <Card.Header
-              icon={<DatabaseGlyph size="sm" />}
-              count={story.leftBehind.length}
-              // "What it left behind" read as work abandoned rather than as
-              // memory written. This is the reflection pass — it runs AFTER the
-              // last phase, on auxiliary workers of its own, and everything in
-              // it is something the seat now knows that it did not before.
-              subtitle="the reflection pass, once the phases were done"
-            >
-              <Card.Title>What the seat learned</Card.Title>
-            </Card.Header>
-            <EventList events={story.leftBehind} actor={role} />
-          </Card>
-        )}
-
-        {story.rest.length > 0 && (
-          <Card padding="none">
-            <Card.Header
-              icon={<ChartNoAxesGanttGlyph size="sm" />}
-              count={story.rest.length}
-              subtitle="rows this build has no particular place for"
-            >
-              <Card.Title>Also published</Card.Title>
-            </Card.Header>
-            {/* THE SCREEN'S OWN ROW, like the three bands above it. This band
-                alone rendered the activity feed's row with the date forced
-                on, which is the exact shape `.turn-row` exists to replace: a
-                FOUR-column grid (time, actor, summary, tail) taking three
-                children, so the summary landed in the 132px actor track and a
-                full date wrapped to three lines inside the 62px time one.
-                Every row was three lines tall, in a different grid and a
-                different height from the panels above it, naming the same
-                seat on each. The `as unknown as FeedRow` cast was the tell —
-                an `EventRecord` is not a `FeedRow`. Nothing is lost: the row
-                carries the full instant in its title, and the header dates
-                the turn. */}
-            <EventList events={story.rest} actor={role} />
-          </Card>
-        )}
-
-        <Absorbed groups={absorbed} />
-
-        {(rec.summary || rec.learning) && (
-          <Card padding="sm">
-            <Card.Header
-              icon={<FileTextGlyph size="sm" />}
-              subtitle="the two events the engine closes every turn with"
-            >
-              <Card.Title>The turn&rsquo;s own record</Card.Title>
-            </Card.Header>
-            <div className="col gap-2">
-              {conversation && (
-                <PropertiesRail
-                  groups={[
-                    {
-                      properties: [
-                        {
-                          // LABELLED, and explained. It is the turn's
-                          // CONVERSATION IDENTITY, "{source}:{local}", and it
-                          // used to be an unexplained truncated string under
-                          // the seat's name.
-                          //
-                          // The local half is the surface's own answer to
-                          // "which ongoing conversation is this", not an
-                          // address: a thread in a shared channel is
-                          // "{channel}:{thread}" because there the thread IS
-                          // the conversation, while a direct message is the
-                          // bare "{channel}" however many threads run inside
-                          // it — one line with one person, which is what the
-                          // ledger and a parked sandbox answer are keyed on.
-                          label: "Conversation",
-                          value: (
-                            <span className="row gap-2 baseline">
-                              <code className="inline">{conversation}</code>
-                              <span className="t-caption">
-                                the external conversation this turn served
-                              </span>
-                            </span>
-                          ),
-                        },
-                      ],
-                    },
-                  ]}
-                />
+              {story.did.length > 0 && (
+                <Card padding="none">
+                  <Card.Header
+                    icon={<ZapGlyph size="sm" />}
+                    count={story.did.length}
+                    // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
+                    // carry the publishing turn (internal/a2a/service.go), and
+                    // internal/events/types/turnbands_client_test.go holds it.
+                    subtitle="work outside the tool loop: coding runs, delegations, colleagues, skills"
+                  >
+                    <Card.Title>What else it did</Card.Title>
+                  </Card.Header>
+                  <EventList events={story.did} actor={role} />
+                </Card>
               )}
-              {/* One expander per record, EACH with its own copy button. A
-                  single control in the panel head copied one of the two
-                  without saying which. */}
-              {rec.summary && (
-                <Disclosure
-                  title="agent_turn_completed — the dashboard's summary"
-                  actions={
-                    <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
-                  }
-                >
-                  <CodeBlock
-                    plain
-                    copyable={false}
-                    maxHeight={RECORD_MAX_HEIGHT}
-                    selectable
-                    label="agent_turn_completed, as JSON"
-                    code={summaryJSON}
-                  />
-                </Disclosure>
+
+              {story.leftBehind.length > 0 && (
+                <Card padding="none">
+                  <Card.Header
+                    icon={<DatabaseGlyph size="sm" />}
+                    count={story.leftBehind.length}
+                    subtitle="the reflection pass, once the phases were done"
+                  >
+                    <Card.Title>What the seat learned</Card.Title>
+                  </Card.Header>
+                  <EventList events={story.leftBehind} actor={role} />
+                </Card>
               )}
-              {rec.learning && (
-                <Disclosure
-                  title="turn_completed — the learning subsystem's record"
-                  actions={
-                    <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
-                  }
-                >
-                  <CodeBlock
-                    plain
-                    copyable={false}
-                    maxHeight={RECORD_MAX_HEIGHT}
-                    selectable
-                    label="turn_completed, as JSON"
-                    code={learningJSON}
-                  />
-                </Disclosure>
+
+              {story.rest.length > 0 && (
+                <Card padding="none">
+                  <Card.Header
+                    icon={<ChartNoAxesGanttGlyph size="sm" />}
+                    count={story.rest.length}
+                    subtitle="rows this build has no particular place for"
+                  >
+                    <Card.Title>Also published</Card.Title>
+                  </Card.Header>
+                  <EventList events={story.rest} actor={role} />
+                </Card>
+              )}
+
+              <Absorbed groups={absorbed} />
+
+              {(rec.summary || rec.learning) && (
+                <Card padding="sm">
+                  <Card.Header
+                    icon={<FileTextGlyph size="sm" />}
+                    subtitle="the two events the engine closes every turn with"
+                  >
+                    <Card.Title>The turn&rsquo;s own record</Card.Title>
+                  </Card.Header>
+                  <div className="col gap-2">
+                    {conversation && (
+                      <PropertiesRail
+                        groups={[
+                          {
+                            properties: [
+                              {
+                                // The turn's CONVERSATION IDENTITY,
+                                // "{source}:{local}" — the surface's own
+                                // answer to "which ongoing conversation is
+                                // this", not an address.
+                                label: "Conversation",
+                                value: (
+                                  <span className="row gap-2 baseline">
+                                    <code className="inline">{conversation}</code>
+                                    <span className="t-caption">
+                                      the external conversation this turn served
+                                    </span>
+                                  </span>
+                                ),
+                              },
+                            ],
+                          },
+                        ]}
+                      />
+                    )}
+                    {rec.summary && (
+                      <Disclosure
+                        title="agent_turn_completed — the dashboard's summary"
+                        actions={
+                          <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
+                        }
+                      >
+                        <CodeBlock
+                          plain
+                          copyable={false}
+                          maxHeight={RECORD_MAX_HEIGHT}
+                          selectable
+                          label="agent_turn_completed, as JSON"
+                          code={summaryJSON}
+                        />
+                      </Disclosure>
+                    )}
+                    {rec.learning && (
+                      <Disclosure
+                        title="turn_completed — the learning subsystem's record"
+                        actions={
+                          <CopyButton
+                            text={learningJSON}
+                            variant="ghost"
+                            title="copy this record"
+                          />
+                        }
+                      >
+                        <CodeBlock
+                          plain
+                          copyable={false}
+                          maxHeight={RECORD_MAX_HEIGHT}
+                          selectable
+                          label="turn_completed, as JSON"
+                          code={learningJSON}
+                        />
+                      </Disclosure>
+                    )}
+                  </div>
+                </Card>
               )}
             </div>
-          </Card>
-        )}
+          )}
+
+          {tab === "context" && (
+            <div className="col gap-4">
+              <TurnBrief view={view} omit={title} />
+              {prefetch.length > 0 || weights.length > 0 ? (
+                <Given blocks={prefetch} weights={weights} />
+              ) : (
+                <p className="t-caption">
+                  No record of what this turn&rsquo;s prompt was assembled from has arrived yet.
+                </p>
+              )}
+            </div>
+          )}
+
+          {tab === "tools" && (
+            <ToolsTab
+              phases={phases}
+              model={model}
+              onOpen={(id) => nav.to(["live", "turns", turnId], id ? { span: id } : {})}
+            />
+          )}
+        </div>
       </QueryState>
     </>
   );
@@ -1830,6 +2108,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
  */
 export function TurnPeek({ turnId }: { turnId: string }) {
   const view = useTurnView(turnId);
+  const now = useNow();
   // NOTHING HAS BEEN READ, which is three states and only one of them is an
   // empty rail: an answer that has not landed is a skeleton, a refusal is the
   // engine's own words, and a turn no event names is said plainly. A header
@@ -1857,8 +2136,8 @@ export function TurnPeek({ turnId }: { turnId: string }) {
         icon="layers"
         identifier={turnId}
         title={title}
-        status={turnStatus(view)}
-        facts={turnFacts(view)}
+        status={turnStatus(view, now)}
+        facts={turnFacts(view, now, { seat: true })}
       />
       <div className="col gap-3">
         {/* LOADING IS SETTLED ABOVE. The rail draws only once it holds

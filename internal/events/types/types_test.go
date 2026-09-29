@@ -331,7 +331,7 @@ var wireTags = map[string][]string{
 	"compaction_requested":            {"agent_handle", "raw_count", "threshold"},
 	"compaction_completed":            {"agent_handle", "clusters_compacted", "compacted_evicted", "consolidated_dropped", "non_terminal_dropped", "raw_replaced_by_compaction", "skipped_reason"},
 	"reflection_completed":            {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
-	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "role", "sandbox_id", "task", "turn_id", "work_item", "work_key"},
+	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "launch_id", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
 	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id", "work_item", "work_key"},

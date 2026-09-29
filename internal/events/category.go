@@ -152,7 +152,7 @@ var categories = map[string]string{
 // the next reader able to tell which one they are looking at — and the
 // completeness test prints it.
 var excluded = map[string]string{
-	"agent_turn_progress": "fires once per LLM round as a live-only signal; the " +
+	"agent_turn_progress": "fires as each LLM round opens, answers and runs its tools, as a live-only signal; the " +
 		"matching agent_phase_completed is its durable record, so persisting " +
 		"this would fill the log with intermediate states of rows it also " +
 		"holds finished",

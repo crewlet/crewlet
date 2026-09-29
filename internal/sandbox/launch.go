@@ -235,7 +235,19 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
 	}
 
+	// WHICH JOB THIS IS, read back from the row: the store minted the
+	// launch id, and the announcement is what a watcher pairs a start with
+	// its job's record by, and what a request for its live output names.
+	// Best effort like the announcement itself — a row that cannot be read
+	// back costs the pairing, not the run.
+	var launch LaunchRecord
+	if row, ok, err := store.Get(ctx, req.Turn.TurnID); err != nil {
+		log.WarnContext(ctx, "sandbox_launch_unread", "turn_id", req.Turn.TurnID, "error", err.Error())
+	} else if ok {
+		launch = row.LaunchFacts()
+	}
 	started := types.SandboxRunStarted{
+		LaunchID: launch.ID, StartedAt: launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,

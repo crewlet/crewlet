@@ -1185,19 +1185,34 @@ a.user-block-who:focus-visible {
   flex: 0 0 auto;
 }
 
+/* THE TRACK FLOOR IS 7.5rem, which is what fits a turn's seven facts on one
+   line at 1280: the fact line there is 984px, and seven 8rem tracks with
+   their six gaps needed 992 — so "Wall clock" took a row of its own on the
+   laptop width this product is designed at. 120px still holds every fact's
+   label and a two-line value. */
 .fact-line {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
   column-gap: var(--spacing-4);
   row-gap: var(--spacing-3);
   padding-top: var(--spacing-1);
 }
 
+/* TWO BANDS: the label, and the value with its footnotes under it. The
+   labels sit on one line across the row and every value's first line on the
+   next; a note stays under its own value (`.fact-body`) rather than on a band
+   of notes a neighbour's two-line value could push away from it. */
 .fact {
   display: grid;
   grid-template-rows: subgrid;
-  grid-row: span 4;
+  grid-row: span 2;
   row-gap: 0;
+  min-width: 0;
+}
+
+.fact-body {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
@@ -1922,9 +1937,16 @@ a.cell-seat:hover {
    — and a histogram filled with it both disagreed with every other chart in
    the workspace and spent the one colour that says "act here" on a picture.
    The accent is kept for the one bar the reader is pointing at, which is the
-   selection this control is about to make. */
+   selection this control is about to make.
+
+   A COLUMN THAT STACKS FROM ITS FOOT, so the failed share below sits at the
+   bottom of the fill it is part of — one rule, where a second `.histogram-fill`
+   used to override the first one's `display` further down the sheet. */
 .histogram-fill {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
   width: 63%;
   min-width: 2px;
   max-width: var(--spacing-7);
@@ -1934,12 +1956,6 @@ a.cell-seat:hover {
 
 /* THE FAILED FOOT of a bar (`Bar.failed`): the bottom of the same fill, in
    the danger tone every failure in the product wears. */
-.histogram-fill {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  overflow: hidden;
-}
 .histogram-failed {
   display: block;
   width: 100%;

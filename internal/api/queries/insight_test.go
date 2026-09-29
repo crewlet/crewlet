@@ -94,6 +94,17 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	if got["turn_id"] != "t-1" {
 		t.Errorf("answer does not name its turn: %v", got)
 	}
+	// WHERE IT RAN: both nodes' stores hold part of it, and a stored row
+	// carries no node of its own, so the answer is the only thing that can
+	// say so.
+	if nodes, _ := got["nodes"].([]any); len(nodes) != 2 || nodes[0] != "node-a" || nodes[1] != "node-b" {
+		t.Errorf("nodes = %#v; want both nodes that hold part of the turn", got["nodes"])
+	}
+	// AND ONLY THOSE: t-2 lives on node-b alone.
+	other := asMap(t, answer(t, queries.Sources{Events: fleet}, "turn", map[string]any{"turn_id": "t-2"}))
+	if nodes, _ := other["nodes"].([]any); len(nodes) != 1 || nodes[0] != "node-b" {
+		t.Errorf("nodes for t-2 = %#v; want node-b alone", other["nodes"])
+	}
 	// A SHORT TURN IS NOT A CUT ONE. The flag has to be present and false,
 	// or a client cannot tell "read to the end" from a build that predates
 	// the field — and would have to guess, which is what it was doing.

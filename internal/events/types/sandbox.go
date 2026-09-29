@@ -1,6 +1,10 @@
 package types
 
-import "github.com/crewlet/crewlet/internal/events"
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/events"
+)
 
 // Detached sandbox coding runs. The kick-off turn ends as soon as the job is
 // launched and the agent stays busy until the completion signal arrives, so
@@ -39,6 +43,15 @@ type SandboxRunStarted struct {
 	// Task is a short human-readable summary for the running-sandboxes panel;
 	// the full brief lives on the pending run, not on the wire.
 	Task string `json:"task"`
+	// LaunchID names THIS JOB — the sandbox.PendingRun row's launch id,
+	// minted by the store — and StartedAt is when the store recorded the
+	// launch. A turn can launch more than one job, and these are what pair
+	// a start with the job's own `agent_phase_completed{phase: sandbox}`
+	// record (which carries the same id) and what a live-output request
+	// (`sandbox_tail`) names. Absent on an announcement whose row could not
+	// be read back.
+	LaunchID  string    `json:"launch_id,omitempty"`
+	StartedAt time.Time `json:"started_at,omitzero"`
 }
 
 // EventType is the "sandbox_run_started" wire type.

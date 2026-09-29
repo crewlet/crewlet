@@ -489,6 +489,12 @@ type Engine struct {
 	memoryReads     *memread.Reader
 	stopMemoryServe queue.Unsubscribe
 
+	// sandboxTails answers a running coding run's live output from the node
+	// that owns it, and stopTailServe withdraws this node as one of its
+	// answerers. See sandboxtail.go.
+	sandboxTails  *sandbox.TailReader
+	stopTailServe queue.Unsubscribe
+
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
 	// runs, and rebuilding it on an apply would leave two loops racing for
@@ -1003,6 +1009,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err = e.armMemoryReads(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
 	}
+	// AND THE LIVE OUTPUT OF THE CODING RUNS IT OWNS, for the same reason
+	// and at the same point — see sandboxtail.go.
+	if err = e.armSandboxTails(ctx); err != nil {
+		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
+	}
 
 	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
 	// starts none of it: the seat host and its mailboxes, every duty, the
@@ -1462,6 +1473,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And a seat's memory, read from the store backends.Close is about to
 	// close.
 	e.stopMemoryReads(ctx)
+	// And a run's live output, read from boxes this node is about to stop
+	// driving.
+	e.stopSandboxTails(ctx)
 	if e.node != nil {
 		e.node.Stop(ctx)
 	}

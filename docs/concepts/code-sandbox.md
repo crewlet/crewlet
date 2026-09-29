@@ -519,6 +519,15 @@ Each entry is `{turn_id, role, agent_handle, agent_id, coding_agent, sandbox_id,
 
 Every node reads the same fleet-wide record, so every node's panel shows the fleet's runs. The dashboard's **Coding runs** screen reads the record directly (`sandbox_runs`). A run whose box has already been reclaimed is therefore still listed there, with the row's own facts that the panel does not carry.
 
+### Watching a run live
+
+Nothing a running job writes leaves its box until the run is collected, when the whole transcript rides the run's `agent_phase_completed{phase: sandbox}` record. While it runs, its live output is a **question**, asked only while somebody looks: `sandbox_tail{turn_id, launch_id}` (`GET /sandbox-runs/{turn_id}/tail?launch_id=…`). There is no event and no row behind it.
+
+- **It names the job, not only the run.** A turn can launch more than one job, so `sandbox_run_started` carries the job's `launch_id` (the one the run's record holds and its phase record repeats) and the instant the store recorded the launch (`started_at`). A request naming only the turn would show whichever job the record holds now.
+- **The node that owns the run answers it.** Every node serves `crewlet.observe.sandbox_tail`; the asker reads the run's record, and the incarnation it names as the owner (`PendingRun.Owner`) re-reads the record, reconnects to the box and reads what the runner has written so far (`Runner.Peek`): the parsed transcript, or the error stream for an agent that writes nothing parseable until it exits (Claude Code writes one JSON object at the end). Nothing in the box is written, signalled or cleared. The answer is the **last 8 KiB** (`sandbox.MaxLiveOutputBytes`), redacted, with the instant it was read and whether the job has finished and is waiting to be collected.
+- **Four outcomes, never an empty answer standing in for another.** `tail` is the output (possibly empty: a run that has written nothing yet says so). `not_running` names the record's own status — parked on a question, `replaced` by a later job on the same run, or no record at all because the run was collected. `owner_silent{node}` is an owner that did not answer inside the two-second fleet read budget, or a run no node holds right now, and it names the node. `owner_upgrading{node}` is an owner whose build does not advertise the `sandbox_tail` [feature](coordination.md#what-a-node-says-about-itself); it is not asked at all. A box the owner could not read is an error carrying the owner's own sentence.
+- **The dashboard polls it every three seconds, and only while a running run's span is open** on the turn trace. Three seconds is above the two-second budget, so at most one request is in flight per open span; closing the span or the run ending stops the poll.
+
 ---
 
 ## Budgets

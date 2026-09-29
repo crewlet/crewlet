@@ -128,6 +128,29 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 	}
 }
 
+// THE ANNOUNCEMENT NAMES ITS JOB: the launch id the store minted and when it
+// recorded the launch — what pairs the start with the job's own phase record,
+// and what a request for the running job's live output names. A turn can
+// launch more than one job, so without it a watcher could not say which of
+// them is still running.
+func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
+	rig := newWaiterRig(t)
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	run := rig.get("t1")
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	if started.LaunchID == "" || started.LaunchID != run.LaunchID {
+		t.Errorf("the announcement names launch %q; the row holds %q", started.LaunchID, run.LaunchID)
+	}
+	if !started.StartedAt.Equal(run.Launch.StartedAt) || started.StartedAt.IsZero() {
+		t.Errorf("the announcement says the job started at %v; the row says %v",
+			started.StartedAt, run.Launch.StartedAt)
+	}
+}
+
 // The full brief lives on the row; the wire carries a label for one panel row.
 func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
 	rig := newWaiterRig(t)

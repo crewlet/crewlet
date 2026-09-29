@@ -178,6 +178,49 @@ test("a turn nothing has named keeps its id rather than taking a placeholder", a
   expect(recents(), "a placeholder reached the palette").not.toContain("Turn");
 });
 
+// ON A TASK A TURN IS THE TASK'S OWN COUNT, under the seat that ran it: Live ›
+// CEO › Turn 3 · ENG-42 — the name the task page gives the same turn, and the
+// seat crumb leads back to what is running for that seat.
+test("a turn on a task is named by its place on the task, under its seat", async () => {
+  mount(`#/live/turns/${TURN}`, <TurnScreen turnId={TURN} />, {
+    turn: {
+      turn_id: TURN,
+      truncated: false,
+      events: [
+        event({
+          id: "opening",
+          type: "agent_turn_started",
+          payload: {
+            turn_id: TURN,
+            role: "CEO",
+            agent_handle: "ceo",
+            work_item: { backend: "native", id: "i-42", key: "ENG-42", project: "ENG" },
+            started_at: "2026-09-13T10:00:00Z",
+          },
+        }),
+        turnRecord("Cut the 0.2.0 release."),
+      ],
+    },
+    work_item_turns: {
+      item: "i-42",
+      key: "ENG-42",
+      complete: true,
+      turns: [
+        { turn_id: "later", ordinal: 4 },
+        { turn_id: TURN, ordinal: 3 },
+      ],
+    },
+  });
+  await settle();
+  await settle();
+
+  expect(here()).toBe("Turn 3 · ENG-42");
+  const seat = [...trail().querySelectorAll("a")].find((a) => a.textContent?.includes("CEO"));
+  expect(seat, "the trail names no seat").toBeTruthy();
+  expect(seat?.getAttribute("href")).toContain("#/live?seat=ceo");
+  expect(recents()).toEqual(["Turn 3 · ENG-42"]);
+});
+
 // ---------------------------------------------------------------------------
 // The other four objects under Activity
 // ---------------------------------------------------------------------------

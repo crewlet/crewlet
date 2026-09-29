@@ -75,6 +75,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/schedules/{scope_type}/{scope_id}/{name}/runs", what: "schedule_runs", path: map[string]string{"scope_type": "scope_type", "scope_id": "scope_id", "name": "name"}},
 	{method: "GET", pattern: "/fleet", what: "fleet"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
+	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
+	// one execution of a turn and may launch more than one job.
+	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
 	// The NATIVE backends. The literal segments beat the wildcards, as

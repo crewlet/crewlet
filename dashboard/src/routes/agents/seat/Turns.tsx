@@ -59,8 +59,8 @@ import {
 } from "~/lib/phases.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { phaseColor, spentOnly } from "~/lib/spend.ts";
-import { useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
-import { MAX_TURN_DAYS, runningNow } from "~/lib/turns.ts";
+import { useClient, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { MAX_TURN_DAYS, openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
@@ -93,6 +93,7 @@ export function Turns({
   // THE SEAT'S OWN LIVE ROW, the one overlay a running turn on this list can
   // be on.
   const running = useMemo(() => (agent ? [agent] : []), [agent]);
+  const { connected } = useConnection();
   // The ROLE NAME, which is what a phase record carries. Empty for a seat
   // that resolves to nothing, and the stream filter below reads it as "match
   // no phase" rather than "match every phase that named no role".
@@ -315,8 +316,13 @@ export function Turns({
                 // wrapper: a cell with no child nodes is what a phone's card
                 // drops (`.grid-cell:empty`), where an empty span left a
                 // "STATE" label alone on a line of every settled turn.
-                cell: (t) =>
-                  t.parked || !t.complete || t.failed ? (
+                cell: (t) => {
+                  // NO COMPLETION RECORD is running or not settled, read off
+                  // the seat's own overlay exactly as the turn's page reads
+                  // it ([openState]) — "running" for both disagreed with the
+                  // page one click away.
+                  const open = openState(t, running, connected);
+                  return t.parked || open === "running" || open === "unsettled" || t.failed ? (
                     <span className="row gap-1">
                       {/* A RUNNING TURN IS NOT A ZERO-LENGTH ONE: `complete`
                           tells a turn in flight from one that ended, and a
@@ -327,14 +333,20 @@ export function Turns({
                           parked
                         </Tag>
                       )}
-                      {!t.complete && !t.parked && (
-                        <Tag variant="info" title="no completion record — running, or it died">
+                      {open === "running" && (
+                        <Tag variant="info" title="this seat is running the turn now">
                           running
+                        </Tag>
+                      )}
+                      {open === "unsettled" && (
+                        <Tag variant="warning" title={UNSETTLED.title}>
+                          {UNSETTLED.word}
                         </Tag>
                       )}
                       {t.failed && <Tag variant="danger">failed</Tag>}
                     </span>
-                  ) : null,
+                  ) : null;
+                },
               },
             ]}
           />

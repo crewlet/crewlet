@@ -157,6 +157,13 @@ type Sources struct {
 	// rather than this node's. Nil leaves the question unregistered.
 	Sandbox PendingRuns
 
+	// SandboxTail is a running coding run's live output, ANSWERED BY THE
+	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
+	// reachable only through the node driving it, and what it has said so
+	// far is on no record anywhere until the run is collected. Nil leaves
+	// the question unregistered.
+	SandboxTail SandboxTails
+
 	// Config serves the config family, and every one of those is
 	// operator-gated: reading the document exposes the whole company.
 	Config *configapi.Service
@@ -426,6 +433,12 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
+	}
+	if s.SandboxTail != nil {
+		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
+		// running coding run's span is open, and nothing else does. There
+		// is no event and no row behind it — see [Sources.SandboxTail].
+		r.Register("sandbox_tail", s.sandboxTail)
 	}
 	if s.Retention != nil {
 		// OPERATOR-ONLY. The answer names every node in the fleet, its

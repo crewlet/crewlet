@@ -5,7 +5,7 @@
  *
  * `lib/format.ts` owns how a number, a count and a duration are SPELLED.
  * These cells wrote their own: `DurationCell` rendered "500ms" where
- * `fmtDuration` writes "500 ms", and `TokenCell` abbreviated five thousand as
+ * `fmtDuration` then wrote "500 ms", and `TokenCell` abbreviated five thousand as
  * "5.0k" where `fmtCount` writes "5,000". That is worse than a drift — it is
  * a trap, because adopting a cell would silently change every figure in the
  * column, so the module built to make the product consistent could not be

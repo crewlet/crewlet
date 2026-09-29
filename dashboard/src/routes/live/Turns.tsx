@@ -66,7 +66,7 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { useClient, useAgents, useOrg } from "~/lib/store-hooks.ts";
+import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
@@ -85,7 +85,7 @@ import {
   TurnWhatCell,
   UnsettledCell,
 } from "~/app/frame/cells.tsx";
-import { runningNow } from "~/lib/turns.ts";
+import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 
 /**
@@ -143,6 +143,7 @@ export function Turns() {
   const { socket } = useClient();
   // THE PUSH, for what a turn still running is doing (`runningNow`).
   const agents = useAgents();
+  const { connected } = useConnection();
   const { open: openPeek } = usePeekControls();
   // EVERY FILTER IS A FILTER, so it replaces the history entry: a reader
   // narrowing to one seat and then to the failures has walked one screen,
@@ -435,7 +436,9 @@ export function Turns() {
               shrink: true,
               // NOTHING AT ALL for a turn with no state to show, so a phone's
               // card drops the line rather than printing a bare label.
-              cell: (t) => <TurnState turn={t} reruns={reruns} />,
+              cell: (t) => (
+                <TurnState turn={t} reruns={reruns} open={openState(t, agents, connected)} />
+              ),
             },
             {
               key: "iterations",
@@ -510,9 +513,18 @@ export function barsOf(series: EventSeries | null | undefined): Bar[] {
 }
 
 /** What a turn IS beyond finished — re-run, parked, running, failed — or nothing. */
-function TurnState({ turn: t, reruns }: { turn: TurnRow; reruns: Map<string, number> }) {
+function TurnState({
+  turn: t,
+  reruns,
+  open,
+}: {
+  turn: TurnRow;
+  reruns: Map<string, number>;
+  /** What a turn with no completion record is — see [openState]. */
+  open: OpenState;
+}) {
   const rerun = !!t.work_key && (reruns.get(t.work_key) ?? 0) > 1;
-  if (!rerun && !t.parked && t.complete && !t.failed) return null;
+  if (!rerun && !t.parked && (open === "" || open === "unknown") && !t.failed) return null;
   return (
     <span className="row gap-1">
       {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger that failed
@@ -538,9 +550,19 @@ function TurnState({ turn: t, reruns }: { turn: TurnRow; reruns: Map<string, num
           parked
         </Tag>
       )}
-      {!t.complete && !t.parked && (
-        <Tag variant="info" title="no completion record — running, or it died mid-flight">
+      {/* NO COMPLETION RECORD is two states, and the overlay tells them apart
+          exactly as the turn's own page does ([seatOnTurn]): a seat on it is
+          running it; none, while the overlay can see the seats, means it
+          stopped before it ended. "running" for both put a turn its page
+          called not settled under a running chip on this list. */}
+      {open === "running" && (
+        <Tag variant="info" title="a seat is running this turn now">
           running
+        </Tag>
+      )}
+      {open === "unsettled" && (
+        <Tag variant="warning" title={UNSETTLED.title}>
+          {UNSETTLED.word}
         </Tag>
       )}
       {/* A FAILURE IS THE DANGER TONE, the one every failure mark wears. */}

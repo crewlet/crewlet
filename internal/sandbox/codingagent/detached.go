@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -343,6 +344,55 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	result.Transcript = redact.Secrets(result.Transcript)
 
 	return r.overlayAsk(ctx, box, result)
+}
+
+// Peek reads what the job has said about itself so far, for a person watching
+// the run live — see [sandbox.Output].
+//
+// THE SAME TWO ACCOUNTS COLLECT READS, in the same preference: the transcript
+// the runner's parser builds out of the streamed output, and the raw stderr for
+// an agent whose output cannot be read until it finishes (Claude Code writes
+// one JSON object at exit, so mid-run its stdout is empty and its stderr is
+// what it has said). Nothing is written, nothing is signalled and no marker is
+// cleared: a peek racing the completion poll changes neither's answer.
+//
+// THE TAIL, because what a watcher asks is what the agent is doing now; and
+// REDACTED here, at the box's boundary, for the reason Collect's own output is
+// — the box's environment holds the seat's credentials.
+func (r *Runner) Peek(ctx context.Context, box sandbox.Sandbox, _ sandbox.RunHandle) (sandbox.Output, error) {
+	paths := PathsFor(box)
+	marker, err := box.ReadFile(ctx, paths.Done())
+	if err != nil {
+		return sandbox.Output{}, err
+	}
+	stdout, err := readText(ctx, box, paths.Result())
+	if err != nil {
+		return sandbox.Output{}, err
+	}
+	stderr, err := readText(ctx, box, paths.Err())
+	if err != nil {
+		return sandbox.Output{}, err
+	}
+	out := sandbox.Output{
+		Source:   sandbox.SourceNone,
+		AsOf:     time.Now().UTC(),
+		Finished: len(marker) > 0 || (stdout != "" && r.cli.Finished(stdout)),
+	}
+	text := ""
+	if stdout != "" {
+		text = strings.TrimSpace(r.cli.Parse(stdout).Transcript)
+	}
+	if text != "" {
+		out.Source = sandbox.SourceTranscript
+	} else if text = strings.TrimSpace(stderr); text != "" {
+		out.Source = sandbox.SourceStderr
+	}
+	// REDACTED WHOLE, THEN CUT: a secret straddling the cut would otherwise
+	// survive as a fragment the pattern no longer recognises.
+	text = redact.Secrets(text)
+	out.Cut = len(text) > sandbox.MaxLiveOutputBytes
+	out.Text = textcut.Tail(text, sandbox.MaxLiveOutputBytes)
+	return out, nil
 }
 
 // overlayAsk surfaces a question the shim recorded, if there is one.

@@ -108,6 +108,11 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// WHICH NODES THE TURN WAS ASSEMBLED FROM. A node that did not
 		// answer may hold the part of the turn this page is missing.
 		"coverage": coverage,
+		// AND WHICH OF THEM RAN IT: the nodes whose own store held any of
+		// its events, since each node's store holds only what it
+		// published. Never null, so "ran nowhere this read could see" is
+		// an empty list rather than a missing key.
+		"nodes": nonNilStrings(detail.Nodes),
 	}, nil
 }
 

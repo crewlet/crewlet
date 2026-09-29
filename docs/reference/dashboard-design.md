@@ -1627,7 +1627,10 @@ files the outgoing position under it; an entry with NO key is exactly the test
 for "somewhere new", which is the only case that starts at the top. A restored
 position is re-applied for a short window while the rows arrive — a scroll is
 clamped to the height that exists, so one attempt lands short — and abandoned
-the moment the reader touches the page.
+the moment the reader touches the page. A REPLACE restores nothing: it stays on
+the entry the reader is looking at, so they are already where they are, and a
+restore there undid whatever the screen had scrolled into view in answer to its
+own filter.
 
 Both of these shipped wrong once, and neither is visible in a URL.
 
@@ -4344,6 +4347,122 @@ is one of the rules on this page applied to a tracker.
   cannot disagree about one row.
 
 ---
+
+## The turn trace: four tabs, one clock
+
+`#/live/turns/{id}` is where every deep link to a turn lands, and it is read
+in two ways: *what did this turn do, in order and how long*, and *what is it
+doing now*. So its header says where the turn is and what a reader can do
+about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
+
+- **The trail names the turn the way its task does.** On a work item it reads
+  *Live › {agent} › Turn n · KEY* — the ordinal off the task's own turn list
+  (`work_item_turns`, walked a page at a time until the turn is found; a turn
+  still running is the next one after the newest, and before any of that is
+  known it is *Turn · KEY*, never a guessed number). Off a task it is the lead
+  of what the turn did. The agent crumb leads to *Live* narrowed to that seat.
+- **The status is state, beside the title.** *Running · 6m 12s* off the turn's
+  own start, *Parked on a coding run* while a detached run holds it, how it
+  ended in the reviewer's or the executor's word, or *not settled* for a turn
+  no seat is running that published no closing record (its node stopped
+  before it ended — the turns list's *Not settled*) — plus the attempt, the
+  problem count and *middle not shown* for a capped read. The facts under it
+  are the trigger, where the turn is (*Execute* with *round 3 of 25* as its
+  note while it runs — the round its engine last ANNOUNCED, see the Timeline
+  below; *Execute → Review* once it is over, with its iterations as the note,
+  so the value holds one line in its track), its tokens in
+  and out with the workers outside them, the share of its input the prompt
+  cache served (**absent, not 0%, when no phase reported one** — a provider
+  that reports none and a cache that served nothing are one value on the
+  wire), its tool calls, its workers, the node that ran it (the turn answer's
+  `nodes`) and its wall clock — the engine's own measurement, or, on a turn
+  with no closing record, the waterfall's window, so the header and the Turn
+  row under it never print two lengths for one turn. A fact's note sits under
+  its own value (`.fact-body`), never on a band a neighbour's two-line value
+  can push away from it.
+- **The actions are the turn's.** *Steer* sends a note the turn reads at its
+  next round (`steer_turn`); it is held, with the reason, on a turn that has
+  ended and on one parked inside a coding agent's own loop, which reads no
+  notes. What became of a note is the turn's own `agent_turn_steered`, drawn
+  under the waterfall and at the round that read it — *delivered*, or
+  *expired — the turn finished before it read your note*. *Pause* is the seat's
+  (with *Also stop the current turn*), *Open task* its item, and one menu
+  (*More on this turn*) holds the other attempts, the traces, and the turn as
+  JSON — *Copy turn as JSON* and *Download turn as JSON*, each saying what it
+  did in a toast. A bare *Copy* beside the frame's *Copy link* was a second
+  copy meaning something else. On a phone Steer stays in view and everything
+  else folds into the frame's *More*.
+- **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
+  Every instant is one the engine measured — each round's model call, each
+  tool call, a phase, the prefetch, a coding run — and the model only arranges
+  them: rounds under their phase, a round's tool calls after its model call (a
+  call the engine timed but did not stamp is run serially from the model's
+  answer and says it was *placed*), a delegate's workers and the round-cap
+  judge under the round that spawned them (`host_round`), each coding run as
+  its own span keyed by its job's `launch_id`, the reflection pass after the
+  last phase, and *review pending* while an executor has finished and no
+  reviewer has started. The ROUND IN FLIGHT is drawn only from a start the
+  engine announced for it: every round publishes a frame as its provider call
+  is made, and `round_started_at` stays the previous round's while that
+  round's tools run — so a start no later than the last recorded round's is
+  that round's tools, never "the next round" drawn minutes early. The Turn row
+  ends at the turn's own measurement; the reflection pass, which runs after
+  it, trails the bar. A turn that parked is one turn: its executor's record
+  carries every round from both sides of the park, so the phase spans the run
+  it waited on. A record that cannot be placed is listed as **not placed on
+  this clock** rather than drawn at an invented place, and whether a call was
+  measured at all is one answer the Tools tab shares — a submission stamped
+  and done inside a millisecond is `0ms` on both, never "not timed" on one. The bars carry no hue of
+  their own — a model call solid, a tool call lighter, a container a thin rule
+  — and colour only says state: running (a drifting stripe, still under
+  reduced motion), failed, selected. The ruler counts offsets from the turn's
+  start on a 1-2-5 step, as many marks as its own measured width has room for
+  (64px a label), so a phone's track reads `0 · 50s` rather than six labels
+  run together, every label in the duration column's one format (`500ms`,
+  `1.5s`, `10s`, `1m 40s`) rather than `10 s` beside `1m 40s`; on a phone the indent halves and the model name beside a round
+  steps aside so the span's own name stays readable. `SpanBar`, `TimeAxis` and
+  `NowLine` (`components/time/`) are this product's compositions on the kit's
+  tokens.
+- **A span opens beside the waterfall** (`span=`) from a laptop's page width
+  (a 960px page container; the laptop's is about 1024), and under it on a
+  phone or with the peek open — where a span a reader opens is scrolled into
+  view and focused, since under a long waterfall it lands below the fold. The
+  rows are one tab stop: Up, Down, Home and End move between them, Enter
+  opens one, and Escape closes the open span and puts focus back on its row.
+  A span's kind is its eyebrow only where the title does not already say it.
+  It gives the span's offsets on the turn's clock and what only that kind has:
+  a model call's words and tokens; a tool call's input and output, with **Why
+  {agent} called it** — the narration of the ROUND that asked for it, labelled
+  *from round N*, and *this round asked for K calls* where it asked for more
+  than one, because a sentence quoted under one of four calls would otherwise
+  read as that call's alone; a coding run's box facts, and its transcript once
+  collected.
+- **A running coding run is watched, not replayed.** While its span is open
+  the trace asks the node that owns the run for its live output every three
+  seconds (`sandbox_tail`, see [Watching a run
+  live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
+  closing the span or the run stopping ends the poll. *Nothing to show yet*
+  and *the node that owns this run did not answer* are different sentences,
+  and the second names the node. A screen reader is told the tail's STATE —
+  one sentence in a status region, which changes only when the state does —
+  never the output or the "read 3s ago" clock, which change every poll.
+- **Notes sent to a turn** name their sender as a seat's name, the way every
+  other attribution does, and say what became of each — read at a round, or
+  expired — without assuming the reader sent it.
+- **A turn with no closing record** is *running* while a seat is on it and
+  *not settled* when none is — the same reading on the trace, the Live turns
+  list and a seat's Turns tab — and neither while the live view is
+  disconnected, when there are no seats to ask.
+- **Transcript** is the phase cards and the story bands above; **Context** is
+  what woke the turn and what its prompt was assembled from; **Tools** is every
+  execution with where it ran (built in, or the MCP server), each row opening
+  its span on the Timeline.
+- **The answer is the fleet's.** A node that did not answer the turn read is
+  named above the tabs; the answer is asked again whenever one of the turn's
+  phases lands on the stream or its seat's stage changes, because what the
+  phases do not carry — a run's announcement, a note's outcome, the
+  reflection — arrives only in the answer.
+
 
 ## Honest empty states
 

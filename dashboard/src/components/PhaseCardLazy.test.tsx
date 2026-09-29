@@ -56,6 +56,7 @@ function record() {
         durationMs: 0,
         origin: "builtin",
         server: "",
+        startedAt: "",
       },
     ],
     narration: [{ round: 1, reasoning: "", content: "Working." }],
@@ -88,6 +89,15 @@ function record() {
     durationMs: 0,
     eventId: "ev-1",
     stage: "",
+    timedRounds: [],
+    hostRound: 0,
+    cacheReadTokens: 0,
+    maxRounds: 0,
+    roundStartedAt: "",
+    runningCall: null,
+    steers: [],
+    node: "",
+    clockStart: "",
   };
 }
 

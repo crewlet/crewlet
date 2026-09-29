@@ -619,9 +619,11 @@ export function leadsInLine(index: OrgIndex, lead: string, handle: string): bool
 
 /**
  * The round a live call is on, ONE-BASED: `round_num` is the engine's
- * zero-based round in flight and `rounds_used` the rounds that have come
- * back, so the round is whichever of `round_num + 1` and `rounds_used` is
- * ahead — and never less than ONE while there is a call, 0 for none. Every
+ * zero-based round and `rounds_used` the same count one-based — the rounds
+ * that came back, and the one in flight from the frame the loop publishes as
+ * its provider call is made — so the round is whichever of `round_num + 1`
+ * and `rounds_used` is ahead, and never less than ONE while there is a call,
+ * 0 for none. Every
  * "round x of y" the product draws — the stepper, the peek, a task card's
  * strip — reads it here, because each that read `round_num` raw named a round
  * one lower than the others.

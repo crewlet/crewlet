@@ -74,6 +74,15 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     durationMs: 180_000,
     eventId: "ev-1",
     stage: "",
+    timedRounds: [],
+    hostRound: 0,
+    cacheReadTokens: 0,
+    maxRounds: 0,
+    roundStartedAt: "",
+    runningCall: null,
+    steers: [],
+    node: "",
+    clockStart: "",
     ...over,
   };
 }

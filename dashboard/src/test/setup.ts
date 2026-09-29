@@ -45,6 +45,15 @@ if (!("ResizeObserver" in globalThis)) {
   });
 }
 
+// jsdom lays nothing out, so it has no `scrollIntoView` at all — and a caller
+// that brings something into view (a span's detail stacked under the rows,
+// the list cursor) meets `undefined` and throws. A no-op is the honest
+// stand-in: there is no viewport to move. A suite that asserts the scroll
+// replaces it for itself. A suite in the node environment has no DOM at all.
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function scrollIntoView(): void {};
+}
+
 if (!("scrollTo" in globalThis)) {
   Object.defineProperty(globalThis, "scrollTo", { writable: true, value: () => {} });
 }

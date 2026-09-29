@@ -460,12 +460,23 @@ export function Router({ children }: { children: ReactNode }) {
   // not. A restored position is re-applied for a short window while the rows
   // arrive — a scroll is clamped to the height that exists, so one attempt
   // lands short — and abandoned the moment the reader touches the page.
+  //
+  // A REPLACE STAYS ON THE ENTRY THE READER IS LOOKING AT, so there is nothing
+  // to restore: they are already where they are. Restoring there set the
+  // position the replace had just filed straight back, for a dozen frames —
+  // AFTER the screen's own effects had run in the same commit — so a screen
+  // that scrolled something into view in answer to its own filter (a turn's
+  // span detail opened under the waterfall on a phone) was scrolled back out
+  // of view by the router, and the click seemed to do nothing.
+  const shown = useRef<string | null>(null);
   useEffect(() => {
     const key = stateKey();
     const el = screenScroller();
+    if (key !== null && key === shown.current) return;
+    shown.current = key;
     if (!el) return;
     if (!key) {
-      stampKey();
+      shown.current = stampKey();
       el.scrollTop = 0;
       return;
     }

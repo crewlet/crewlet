@@ -111,11 +111,12 @@ function mountWith(
   return { asked };
 }
 
-function mount(turns: TurnRow[]) {
+function mount(turns: TurnRow[], agents: unknown[] = []) {
   location.hash = "#/live/turns";
   const store = new Store();
   store.applyHealth({ status: "healthy" });
   store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  if (agents.length) store.applyAgents(agents);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(
@@ -134,7 +135,7 @@ function mount(turns: TurnRow[]) {
   );
 }
 
-const SUMMARIES = ["the finished one", "the parked one", "the running one"];
+const SUMMARIES = ["the finished one", "the parked one", "the running one", "the stopped one"];
 
 /** The widest element around one summary that holds no other row's — its row,
  *  whatever markup the table draws a row with. */
@@ -147,19 +148,29 @@ function rowOf(summary: string): HTMLElement {
   return at;
 }
 
-test("a parked turn is marked parked, never running or finished", async () => {
-  mount([
-    row("t-done", "the finished one", { complete: true, duration_ms: 4_000 }),
-    row("t-parked", "the parked one", { parked: true, duration_ms: 3_000 }),
-    row("t-live", "the running one", {}),
-  ]);
+// NO COMPLETION RECORD IS TWO STATES, told apart by the overlay exactly as
+// the turn's own page tells them: a seat on the turn is running it, and none
+// means it stopped before it ended. Both read "running" here, beside a turn
+// page calling the second "not settled".
+test("a parked turn is marked parked, and an open one running or not settled by its seat", async () => {
+  mount(
+    [
+      row("t-done", "the finished one", { complete: true, duration_ms: 4_000 }),
+      row("t-parked", "the parked one", { parked: true, duration_ms: 3_000 }),
+      row("t-live", "the running one", {}),
+      row("t-dead", "the stopped one", {}),
+    ],
+    [{ role: "CEO", activity: "working", turn: { turn_id: "t-live", stage: "phase" } }],
+  );
   await screen.findByText("the parked one");
 
   await waitFor(() => expect(rowOf("the parked one").textContent).toContain("parked"));
   expect(rowOf("the parked one").textContent).not.toContain("running");
   expect(rowOf("the running one").textContent).toContain("running");
-  expect(rowOf("the running one").textContent).not.toContain("parked");
-  expect(rowOf("the finished one").textContent).not.toMatch(/parked|running/);
+  expect(rowOf("the running one").textContent).not.toMatch(/parked|not settled/);
+  expect(rowOf("the stopped one").textContent).toContain("not settled");
+  expect(rowOf("the stopped one").textContent).not.toContain("running");
+  expect(rowOf("the finished one").textContent).not.toMatch(/parked|running|settled/);
 });
 
 /**

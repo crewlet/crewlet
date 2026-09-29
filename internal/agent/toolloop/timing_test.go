@@ -225,8 +225,9 @@ func TestTheRunningCallIsPublishedBeforeTheCallAndClearedAfter(t *testing.T) {
 		}
 	}
 	// CLEARED once the call returns: the next frame after the round's
-	// tools names nothing, and neither does the finished result.
-	afterTools := frames[3]
+	// tools names nothing, and neither does the finished result. (Frame 0
+	// is the round's opening, 1 the model's answer, 2 and 3 the calls.)
+	afterTools := frames[4]
 	if afterTools.Running != nil || len(afterTools.Executions) != 2 {
 		t.Errorf("the frame after the round's tools = running %+v, %d executions; want none running, 2 done",
 			afterTools.Running, len(afterTools.Executions))

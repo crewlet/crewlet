@@ -66,6 +66,15 @@ export const seatUnitKey = (handle: string) => `\u0000unit:${handle}`;
 export const seatPlaceKey = (handle: string) => `\u0000place:${handle}`;
 export const seatKindKey = (handle: string) => `\u0000kind:${handle}`;
 
+/**
+ * The label keys a turn's page publishes besides its own name: the seat that
+ * ran it, by name and by handle, which the trail draws as its middle crumb —
+ * Live › {agent} › Turn n · KEY — leading back to what is running for that
+ * seat. NUL-prefixed for the reason the seat keys are.
+ */
+export const turnSeatKey = (turnId: string) => `\u0000turn-seat:${turnId}`;
+export const turnHandleKey = (turnId: string) => `\u0000turn-handle:${turnId}`;
+
 /** A title for the browser tab, derived from the same trail. */
 export function titleOf(crumbs: Crumb[]): string {
   const last = crumbs[crumbs.length - 1];
@@ -173,8 +182,25 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     }
     case "turns":
       return sectionPage("turns");
-    case "turn":
-      return inside("turns", named(labels, where.id));
+    case "turn": {
+      // THE SEAT, where the page has said which: the trail reads Live ›
+      // {agent} › Turn n, and the agent crumb is what is running for that
+      // seat now. Until the page knows, the Turns section stands in, as it
+      // always did.
+      const seat = labels[turnSeatKey(where.id)];
+      const handle = labels[turnHandleKey(where.id)];
+      if (!seat) return inside("turns", named(labels, where.id));
+      return [
+        root(row, true),
+        {
+          label: seat,
+          path: ["live"],
+          ...(handle ? { query: { seat: handle } } : {}),
+          seat: { name: seat, kind: "agent" },
+        },
+        named(labels, where.id),
+      ];
+    }
     case "runs":
       return where.id ? inside("runs", named(labels, where.id)) : sectionPage("runs");
     case "a2a":

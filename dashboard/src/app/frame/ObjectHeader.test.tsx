@@ -99,7 +99,7 @@ test("draws the fact line a peek with no rail under it still needs", () => {
 });
 
 // A FACT GETS TWO LINES BEFORE IT IS CUT. At one line, "not running on this
-// node" in an 8rem track read "not running on this no…" at 1440 — the phrase
+// node" in an 8rem track (7.5rem now) read "not running on this no…" at 1440 — the phrase
 // was the whole fact and its ending was what went.
 test("a fact's value clamps at two lines rather than truncating at one", () => {
   const { container } = render(
@@ -108,4 +108,26 @@ test("a fact's value clamps at two lines rather than truncating at one", () => {
   const value = container.querySelector(".fact-value")!;
   expect(value.classList.contains("clamp")).toBe(true);
   expect(value.classList.contains("truncate")).toBe(false);
+});
+
+// A NOTE IS ITS VALUE'S. On a band of its own, a neighbour's value wrapping to
+// two lines pushed every note in the row down, and "37%" stood a blank line
+// above the note saying what it was 37% of. So the value and its footnotes
+// share one cell, and the fact is two bands: its label, then that cell.
+test("a fact's note and set-by sit in the same cell as its value", () => {
+  const { container } = render(
+    <FactLine
+      facts={[
+        { label: "Cache", value: "37%", note: "16.8k of 46.0k input read from cache", setBy: SET },
+      ]}
+    />,
+  );
+  const fact = container.querySelector(".fact")!;
+  expect([...fact.children].map((c) => c.className)).toEqual(["fact-label", "fact-body"]);
+  const body = fact.querySelector(".fact-body")!;
+  expect([...body.children].map((c) => c.className.split(" ")[0])).toEqual([
+    "fact-value",
+    "fact-note",
+    "fact-setby",
+  ]);
 });

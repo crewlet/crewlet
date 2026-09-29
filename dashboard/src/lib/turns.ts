@@ -65,11 +65,57 @@ export function runningNow(
   agents: readonly AgentRow[],
 ): { words: string; item: WorkItemRef | null } | null {
   if (turn.complete) return null;
-  const seat = agents.find((a) => (a.turn?.turn_id || a.live_call?.turn_id) === turn.turn_id);
+  const seat = seatOnTurn(agents, turn.turn_id);
   if (!seat) return null;
   const parked = seat.turn?.stage === "parked";
   return {
     words: `${parked ? "parked" : "running"} — ${doingWords(seat)}`,
     item: seat.live_call?.work_item ?? seat.turn?.work_item ?? null,
   };
+}
+
+/**
+ * The seat whose live overlay says it is on this turn — its turn record
+ * first, then its call in flight — or undefined when no seat is.
+ *
+ * ONE READING FOR EVERY SURFACE THAT ASKS "is anybody running this turn?",
+ * because two readings is how the same turn was "not settled" on its own page
+ * and "running" on the turns list beside it: the page asked the overlay and
+ * the list assumed that no completion record meant running.
+ */
+export function seatOnTurn(agents: readonly AgentRow[], turnId: string): AgentRow | undefined {
+  return (
+    agents.find((a) => a.turn?.turn_id === turnId) ??
+    agents.find((a) => a.live_call?.turn_id === turnId)
+  );
+}
+
+/**
+ * A turn that is neither running nor ended: no seat is on it and it published
+ * no closing record — its node stopped, or it was abandoned, before it ended.
+ * The word and its explanation, drawn identically wherever such a turn is.
+ */
+export const UNSETTLED = {
+  word: "not settled",
+  title:
+    "no seat is running this turn and it published no closing record — it stopped before it ended",
+} as const;
+
+/**
+ * What a listed turn with no completion record is: `running` while a seat is
+ * on it, `unsettled` when none is and the overlay can see the seats, and
+ * `unknown` while it cannot — a view with no live connection has no seats to
+ * ask, and calling the turn either would be a guess. "" for a turn that has a
+ * record, or is parked (which the store's row says itself).
+ */
+export type OpenState = "" | "running" | "unsettled" | "unknown";
+
+export function openState(
+  turn: Pick<TurnRow, "turn_id" | "complete" | "parked">,
+  agents: readonly AgentRow[],
+  connected: boolean,
+): OpenState {
+  if (turn.complete || turn.parked) return "";
+  if (seatOnTurn(agents, turn.turn_id)) return "running";
+  return connected ? "unsettled" : "unknown";
 }

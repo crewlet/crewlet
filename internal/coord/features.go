@@ -82,6 +82,14 @@ const (
 	// the incarnation a seat's lease names, and no other node's build has
 	// any bearing on whether it is answered.
 	FeatureHeldRead Feature = "held_read"
+
+	// FeatureSandboxTail — the node answers a request for the live output
+	// of a coding run it owns, addressed to it on the sandbox-tail scatter
+	// (internal/sandbox, `sandbox_tail`). An older build serves no such
+	// subject, so a person watching a run it owns would wait out the whole
+	// read budget on every poll and be told the owner "did not answer".
+	// Asked of the run's OWNER alone ([FeatureReader.OwnerFeature]).
+	FeatureSandboxTail Feature = "sandbox_tail"
 )
 
 // Features is every feature THIS build honours, which is exactly what a node
@@ -93,6 +101,7 @@ const (
 // fleet told it can do something it cannot.
 var Features = []Feature{
 	FeatureMCPStatus, FeatureAnswerRunByTurn, FeatureSeatPause, FeatureSteer, FeatureHeldRead,
+	FeatureSandboxTail,
 }
 
 // Valid reports whether this build knows the feature.

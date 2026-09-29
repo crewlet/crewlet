@@ -114,3 +114,12 @@ export function useWriteAccess(tool: ActionTool): WriteAccess {
   const held = useContext(Held);
   return writeAccess(tool, viewer, connected, held);
 }
+
+/**
+ * A write folded into a menu, held as its inline control is: disabled, with
+ * the sentence that says why. One helper because a page's inline control and
+ * its phone "More" entry for the same write must refuse in the same words.
+ */
+export function menuHold(access: WriteAccess): { disabled?: boolean; description?: string } {
+  return access.can ? {} : { disabled: true, description: access.reason };
+}

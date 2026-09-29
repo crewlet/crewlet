@@ -587,8 +587,10 @@ describe("the screens", () => {
       },
     ],
     [
+      // THE TRANSCRIPT TAB, where the phase's own record — the one carrying
+      // every name a price travels under — is drawn as its card.
       "the trace",
-      "#/live/turns/t-1",
+      "#/live/turns/t-1?tab=transcript",
       <TurnScreen turnId="t-1" />,
       {
         turn: {

@@ -318,9 +318,11 @@ export interface LiveCall {
   partial_round?: PartialRound | null;
   round_num: number;
   /**
-   * Rounds that have come back, ONE-BASED — the same name and quantity a
-   * finished phase record carries as `rounds_used`, so a running phase and a
-   * settled one are read from one field.
+   * The round the phase is on, ONE-BASED: the rounds that have come back, and
+   * the one in flight from the frame the loop publishes as its provider call
+   * is made — the same name and quantity a finished phase record carries as
+   * `rounds_used`, so a running phase and a settled one are read from one
+   * field.
    */
   rounds_used: number;
   /** Each round's own timing and tokens, as the loop recorded it. */
@@ -329,7 +331,12 @@ export interface LiveCall {
   max_rounds?: number;
   /** The most any extension may raise that cap to. */
   round_ceiling?: number;
-  /** When the round in flight began its provider call; absent when none is open. */
+  /**
+   * When the LATEST round began its provider call: later than every entry in
+   * `rounds` while that call is out, equal to the last one's start while the
+   * round's tools run, absent before the first round opens. Only the first
+   * case is a model call in flight — see `lib/waterfall.ts`.
+   */
   round_started_at?: string;
   /** The tool call running RIGHT NOW; absent between calls. */
   running_call?: RunningCall | null;
@@ -2987,6 +2994,43 @@ export interface TurnAnswer {
    *  has rows on both, and a node that did not answer may hold the missing
    *  part. */
   coverage?: Coverage;
+  /** Which of them RAN it: the nodes whose own store held any of its events,
+   *  sorted. Absent from an older node's answer. */
+  nodes?: string[];
+}
+
+/**
+ * What a running coding run has said so far, read from its box by the node
+ * that owns it (`sandbox.Output`). Redacted by the engine; the LAST 8 KiB.
+ */
+export interface SandboxOutput {
+  text: string;
+  /** Which of the job's two accounts of itself this is. */
+  source: "transcript" | "stderr" | "none";
+  /** The text lost its front to the bound. */
+  cut: boolean;
+  /** When the box was read, on the owning node's clock. */
+  as_of: string;
+  /** The job is over and waiting to be collected; it will not grow again. */
+  finished: boolean;
+}
+
+/**
+ * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
+ * tail of that job while it runs, `not_running` with the record's own status
+ * once it is not, or the owning node NAMED where it did not answer
+ * (`owner_silent`) or runs a build that cannot (`owner_upgrading`).
+ */
+export interface SandboxTailAnswer {
+  outcome: "tail" | "not_running" | "owner_silent" | "owner_upgrading";
+  turn_id: string;
+  launch_id: string;
+  /** The node that owns the run — the one that answered, or did not. */
+  node?: string;
+  /** Why the job is not running: the record's status, `replaced`, or absent
+   *  where no record is left. */
+  status?: string;
+  output?: SandboxOutput;
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -4126,6 +4170,7 @@ export interface QueryMap {
   schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
+  sandbox_tail: SandboxTailAnswer;
   retention: RetentionReport;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;

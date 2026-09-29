@@ -70,6 +70,15 @@ const ANIMATED: { selector: string; kind: Kind; why: string }[] = [
       "THIS task, so the push that ends the turn removes the row rather than playing anything.",
   },
   {
+    selector: ".span-bar.drifting",
+    kind: "steady",
+    why:
+      "The stripe on a turn trace's span that is running now. It drifts for as long as " +
+      "the span is open, and the push that closes the span removes the class rather " +
+      "than playing anything — and the component draws the stripe without it for a " +
+      "reader who asked for less motion.",
+  },
+  {
     selector: ".prose.stream::after",
     kind: "steady",
     why: "The caret on text being streamed: live for as long as the model is writing.",

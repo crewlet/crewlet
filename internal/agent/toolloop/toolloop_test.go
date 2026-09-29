@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -740,11 +741,12 @@ func TestTheFenceRunsBetweenARoundsCalls(t *testing.T) {
 
 // --- progress --------------------------------------------------------------
 
-func TestProgressIsPublishedTwicePerRoundAndOncePerCall(t *testing.T) {
+func TestProgressIsPublishedAsARoundOpensAnswersAndOncePerCall(t *testing.T) {
 	t.Parallel()
-	// Once the model has spoken — so its reasoning reaches the live view
-	// before the round's tools run — once BEFORE EACH CALL, naming it, and
-	// again once they return.
+	// As each round's provider call is MADE — so a reader knows the round
+	// is in flight before the model answers — once the model has spoken, so
+	// its reasoning reaches the live view before the round's tools run, once
+	// BEFORE EACH CALL, naming it, and again once they return.
 	p := &scriptedProvider{turns: []llm.Completion{
 		{Content: "working", ToolCalls: []llm.ToolCall{toolCall("1", "read"), toolCall("2", "read")}},
 		{Content: "done"},
@@ -753,19 +755,22 @@ func TestProgressIsPublishedTwicePerRoundAndOncePerCall(t *testing.T) {
 
 	var seen []int     // executions visible at each publish
 	var running []bool // whether a call was named in flight
+	var used []int     // the round each publish says the phase is on
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: s, MaxRounds: 5,
 		OnProgress: func(r toolloop.Result) {
 			seen = append(seen, len(r.Executions))
 			running = append(running, r.Running != nil)
+			used = append(used, r.RoundsUsed)
 		},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Round 1: the model (0), before call 1 (0), before call 2 (1), the
-	// tools returned (2). Round 2 asked for nothing: the model only.
-	want := []int{0, 0, 1, 2, 2}
+	// Round 1: opened (0), the model (0), before call 1 (0), before call 2
+	// (1), the tools returned (2). Round 2 asked for nothing: opened, the
+	// model.
+	want := []int{0, 0, 0, 1, 2, 2, 2}
 	if len(seen) != len(want) {
 		t.Fatalf("published %d times (%v), want %d (%v)", len(seen), seen, len(want), want)
 	}
@@ -774,14 +779,92 @@ func TestProgressIsPublishedTwicePerRoundAndOncePerCall(t *testing.T) {
 			t.Errorf("publish %d saw %d executions, want %d (all: %v)", i, seen[i], want[i], seen)
 		}
 	}
-	wantRunning := []bool{false, true, true, false, false}
+	wantRunning := []bool{false, false, true, true, false, false, false}
 	for i := range wantRunning {
 		if running[i] != wantRunning[i] {
 			t.Errorf("publish %d named a running call = %v, want %v", i, running[i], wantRunning[i])
 		}
 	}
+	// Round 2's opening frame already says round 2: the round it names is
+	// the round in flight, never the one before it.
+	wantUsed := []int{1, 1, 1, 1, 1, 2, 2}
+	for i := range wantUsed {
+		if used[i] != wantUsed[i] {
+			t.Errorf("publish %d said round %d, want %d (all: %v)", i, used[i], wantUsed[i], used)
+		}
+	}
 	if res.Running != nil {
 		t.Errorf("a finished result names a call in flight: %+v", res.Running)
+	}
+}
+
+// blockingProvider holds its second call open until the test has read the
+// frame published before it, so what a live view shows WHILE a round's model
+// call is out is observable rather than raced.
+type blockingProvider struct {
+	calls   int
+	opened  chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingProvider) Model() string { return "blocking" }
+
+func (p *blockingProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	p.calls++
+	if p.calls == 1 {
+		return &llm.Completion{Content: "reading", ToolCalls: []llm.ToolCall{toolCall("1", "read")}}, nil
+	}
+	close(p.opened)
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &llm.Completion{Content: "done"}, nil
+}
+
+// A ROUND IN FLIGHT HAS ITS OWN INSTANT on the live view. The loop used to
+// publish nothing between the previous round's tools returning and the model
+// answering, so for the whole of a slow call the newest frame named the
+// previous round, carried the previous round's start, and a trace drew the
+// running call from an instant that belonged to a round already finished.
+func TestARoundInFlightIsAnnouncedBeforeTheModelAnswers(t *testing.T) {
+	t.Parallel()
+	p := &blockingProvider{opened: make(chan struct{}), release: make(chan struct{})}
+	s := &fakeSurface{tools: []llm.ToolDef{def("read")}}
+	var mu sync.Mutex
+	var last toolloop.Result
+	done := make(chan error, 1)
+	go func() {
+		_, err := toolloop.Run(t.Context(), toolloop.Config{
+			Provider: p, Surface: s, MaxRounds: 4,
+			OnProgress: func(r toolloop.Result) {
+				mu.Lock()
+				last = r
+				mu.Unlock()
+			},
+		})
+		done <- err
+	}()
+	<-p.opened
+	mu.Lock()
+	frame := last
+	mu.Unlock()
+	close(p.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if frame.RoundsUsed != 2 || len(frame.Rounds) != 1 {
+		t.Fatalf("while round 2's call is out the live view says round %d with %d rounds recorded; want round 2, 1 recorded",
+			frame.RoundsUsed, len(frame.Rounds))
+	}
+	if !frame.RoundStartedAt.After(frame.Rounds[0].StartedAt) {
+		t.Errorf("round 2's frame carries start %v, not later than round 1's %v — the previous round's instant",
+			frame.RoundStartedAt, frame.Rounds[0].StartedAt)
+	}
+	if frame.Running != nil {
+		t.Errorf("a round's opening frame names a tool call in flight: %+v", frame.Running)
 	}
 }
 
@@ -804,9 +887,13 @@ func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {
 		t.Fatal("Run succeeded against a failing provider")
 	}
 
+	// THE ROUND IT DIED ON is the second: its provider call was made, and
+	// the round's opening frame recorded it before the call failed. One
+	// here would describe the failure as happening in the round that had
+	// already answered.
 	snap := prog.Snapshot()
-	if snap.RoundsUsed != 1 {
-		t.Errorf("rounds = %d, want the round it died on", snap.RoundsUsed)
+	if snap.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2, the round it died on", snap.RoundsUsed)
 	}
 	if len(snap.Executions) != 1 {
 		t.Errorf("executions = %+v, want the call that ran before the failure",

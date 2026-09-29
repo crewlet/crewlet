@@ -70,6 +70,15 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     durationMs: 0,
     eventId: "ev-1",
     stage: "",
+    timedRounds: [],
+    hostRound: 0,
+    cacheReadTokens: 0,
+    maxRounds: 0,
+    roundStartedAt: "",
+    runningCall: null,
+    steers: [],
+    node: "",
+    clockStart: "",
     ...over,
   };
 }
@@ -90,6 +99,7 @@ const TWO_ROUNDS = phase({
       durationMs: 0,
       origin: "builtin",
       server: "",
+      startedAt: "",
     },
     {
       name: "submit_work",
@@ -100,6 +110,7 @@ const TWO_ROUNDS = phase({
       durationMs: 0,
       origin: "builtin",
       server: "",
+      startedAt: "",
     },
   ],
 });
@@ -209,6 +220,7 @@ describe("a round is one block", () => {
               durationMs: 0,
               origin: "builtin",
               server: "",
+              startedAt: "",
             },
             {
               name: "submit_work",
@@ -219,6 +231,7 @@ describe("a round is one block", () => {
               durationMs: 0,
               origin: "builtin",
               server: "",
+              startedAt: "",
             },
           ],
         })}
@@ -249,6 +262,7 @@ describe("a failed tool call", () => {
         durationMs: 0,
         origin: "builtin",
         server: "",
+        startedAt: "",
       },
       {
         name: "submit_work",
@@ -259,6 +273,7 @@ describe("a failed tool call", () => {
         durationMs: 0,
         origin: "builtin",
         server: "",
+        startedAt: "",
       },
     ],
   });
@@ -426,6 +441,7 @@ describe("a tool call's arguments", () => {
           durationMs: 0,
           origin: "builtin",
           server: "",
+          startedAt: "",
         },
       ],
     });

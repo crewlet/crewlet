@@ -38,6 +38,7 @@ import {
   PauseGlyph,
   RotateCwGlyph,
   SearchGlyph,
+  CompassGlyph,
 } from "@crewlethq/icons/glyphs";
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
@@ -46,6 +47,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
+import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -1365,6 +1367,155 @@ function PauseSeatDialog({
               : "It is not on a turn now. Without it, a turn that starts before the pause lands finishes first."
           }
         />
+        <RefusalNote write={write} />
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A running turn's own control: a note it reads at its next round
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a turn cannot take a note now, or undefined when it can.
+ *
+ * A NOTE REACHES A TURN AT THE TOP OF ITS NEXT ROUND IN THE ENGINE'S OWN LOOP
+ * (`internal/agent/steer`), so it is offered only while that loop is running.
+ * A turn parked on a coding run is inside somebody else's loop — a run it
+ * launched, or an executor that runs as a coding agent — which reads no notes,
+ * and the engine would answer `steer_unsupported` or `not_running` one press
+ * too late. Each reason names what to do instead.
+ */
+function steerBlocked(state: { running: boolean; parked: boolean }): string | undefined {
+  if (state.parked) {
+    return (
+      "This turn is waiting inside a coding agent's own loop, which reads no notes. " +
+      "Answer the run, or write on the task."
+    );
+  }
+  if (!state.running) return "The turn has ended — a note reaches only a turn that is running.";
+  return undefined;
+}
+
+/**
+ * Steer a running turn: a short note the turn reads at its next round, after
+ * the tool call in flight returns, and keeps to for the rest of the turn.
+ *
+ * WHAT A PRESS PROMISES IS `pending`: the node running the turn took the note.
+ * What became of it — read at a round, or expired because the turn ended first
+ * — is the turn's own `agent_turn_steered`, which the trace draws at the round
+ * that read it. A retry of an unknown answer reuses the request id, and the
+ * request id IS the note's id, so the turn takes it once.
+ */
+export function SteerTurnButton({
+  turnId,
+  seat,
+  running,
+  parked,
+}: {
+  turnId: string;
+  /** Whose turn it is, by name, for the dialog's title and the toast. */
+  seat: string;
+  running: boolean;
+  parked: boolean;
+}) {
+  const write = useAct("steer_turn");
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <WriteButton
+        write={write}
+        size="small"
+        variant="secondary"
+        leadingIcon={<CompassGlyph />}
+        showRefusal={false}
+        blocked={steerBlocked({ running, parked })}
+        onPress={() => setOpen(true)}
+      >
+        Steer
+      </WriteButton>
+      {open && (
+        <SteerTurnDialog
+          turnId={turnId}
+          seat={seat}
+          write={write}
+          onClose={() => {
+            write.dismiss();
+            setOpen(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function SteerTurnDialog({
+  turnId,
+  seat,
+  write,
+  onClose,
+}: {
+  turnId: string;
+  seat: string;
+  write: ReturnType<typeof useAct<"steer_turn">>;
+  onClose: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const length = [...note.trim()].length;
+  const blocked =
+    length === 0
+      ? "Write the note first."
+      : length > STEER_NOTE_MAX_RUNES
+        ? `A note is at most ${STEER_NOTE_MAX_RUNES} characters — write anything longer on the task.`
+        : undefined;
+  const submit = async () => {
+    if (!pressable(write, blocked)) return;
+    const result = await write.run(
+      { turn_id: turnId, note: note.trim() },
+      { done: `Sent your note to ${seat}'s turn` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+  };
+  return (
+    <Modal
+      open
+      size="md"
+      title={`Steer ${seat}'s turn`}
+      icon={<CompassGlyph />}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={write.busy}>
+            Cancel
+          </Button>
+          <WriteButton
+            write={write}
+            variant="primary"
+            showRefusal={false}
+            onPress={() => void submit()}
+            blocked={blocked}
+          >
+            Send note
+          </WriteButton>
+        </>
+      }
+    >
+      <div className="col gap-3">
+        <FormField
+          label="Note"
+          htmlFor="steer-turn-note"
+          helper={`Read at the turn's next round, after the call in flight returns, and kept to for the rest of the turn. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
+        >
+          <Textarea
+            id="steer-turn-note"
+            rows={4}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+        </FormField>
         <RefusalNote write={write} />
       </div>
     </Modal>

@@ -174,8 +174,8 @@ describe("numbers", () => {
   });
 
   test("durations pick the shortest honest unit", () => {
-    expect(fmtDuration(420)).toBe("420 ms");
-    expect(fmtDuration(4_200)).toBe("4.2 s");
+    expect(fmtDuration(420)).toBe("420ms");
+    expect(fmtDuration(4_200)).toBe("4.2s");
     expect(fmtDuration(95_000)).toBe("1m 35s");
     expect(fmtDuration(null)).toBe(EMPTY_VALUE);
     expect(fmtDuration(-1)).toBe(EMPTY_VALUE);

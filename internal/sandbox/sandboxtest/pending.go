@@ -75,6 +75,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
 		{"CollectPublishesThePhase", testCollectPublishesThePhase},
+		{"LiveLaunchSaysWhetherAJobIsRunning", testLiveLaunchSaysWhetherAJobIsRunning},
 		{"ParkingCarriesTheBranch", testParkingCarriesTheBranch},
 		{"OwnershipIsNotStolenByAnOlderLease", testOwnershipIsNotStolenByAnOlderLease},
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
@@ -607,6 +608,43 @@ func testAnEndingIsNotAStatus(t *testing.T, s sandbox.PendingStore) {
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
 		t.Errorf("a refused status changed the record to %q", got.Status)
+	}
+}
+
+// A TAIL REQUEST ASKS ABOUT ONE JOB, and the store's record is what says
+// whether that job is running: while it runs it is, a later launch on the same
+// turn is a different job, a parked run is not running, and a run whose
+// record is gone — settled and reclaimed — says so rather than answering with
+// the empty output of a box nobody drives any more.
+func testLiveLaunchSaysWhetherAJobIsRunning(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	first := mustGet(t, s, "t1").LaunchID
+
+	if _, running, status, err := sandbox.LiveLaunch(ctx, s, "t1", first); err != nil ||
+		!running || status != "" {
+		t.Fatalf("a running launch read running=%v status=%q err=%v; want running", running, status, err)
+	}
+	if _, running, status, err := sandbox.LiveLaunch(ctx, s, "t1", "some-other-job"); err != nil ||
+		running || status != sandbox.StatusReplaced {
+		t.Errorf("another job's launch id read running=%v status=%q err=%v; want %q",
+			running, status, err, sandbox.StatusReplaced)
+	}
+
+	park(t, s, "t1")
+	if _, running, status, err := sandbox.LiveLaunch(ctx, s, "t1", first); err != nil ||
+		running || status != sandbox.StatusAwaiting {
+		t.Errorf("a parked launch read running=%v status=%q err=%v; want %q",
+			running, status, err, sandbox.StatusAwaiting)
+	}
+
+	if _, finished, err := s.Finish(ctx, "t1", sandbox.Fence{}, sandbox.Active); err != nil || !finished {
+		t.Fatalf("Finish = %v, %v", finished, err)
+	}
+	if _, running, status, err := sandbox.LiveLaunch(ctx, s, "t1", first); err != nil ||
+		running || status != "" {
+		t.Errorf("a finished run read running=%v status=%q err=%v; want not running, no record",
+			running, status, err)
 	}
 }
 

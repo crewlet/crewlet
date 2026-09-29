@@ -59,10 +59,6 @@ export const ABSORBED: Readonly<Record<string, string>> = {
   agent_phase_completed: "its own phase card",
   // Stream-only; never persisted, so it cannot be in a query answer anyway.
   agent_turn_progress: "the live phase card",
-  // The turn's opening record, published before its context is gathered.
-  // The header names the seat and what woke the turn off it until a phase
-  // lands, and off the phases after — the same seat and the same wake.
-  agent_turn_started: "the turn's header: its seat and what woke it",
   // The stat strip, the header and the turn record.
   agent_turn_completed: "the turn's header and record",
   turn_completed: "the turn's header and record",
@@ -119,12 +115,16 @@ export const TURN_STOP: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * What the turn was given to work from: what its prompt was assembled from
- * before the first phase ran, and a person's note it was handed mid-turn —
- * `agent_turn_steered`, which says whether the turn read the note or ended
- * before its next round.
+ * What the turn was given to work from: the work it opened on —
+ * `agent_turn_started`, published before its context is gathered, carrying the
+ * trigger that woke it and the item it is charged to, which the Context tab's
+ * brief and the trail read and the Timeline starts its clock from — what its
+ * prompt was assembled from before the first phase ran, and a person's note it
+ * was handed mid-turn — `agent_turn_steered`, which says whether the turn read
+ * the note or ended before its next round, drawn at the round that read it.
  */
 export const GIVEN: ReadonlySet<string> = new Set([
+  "agent_turn_started",
   "prefetch_summary",
   "prompt.size",
   "agent_turn_steered",
