@@ -97,7 +97,7 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	held := &watchedHolds{HoldRegister: fleet}
 
 	s := build(t, backup.Options{
-		Store: db, NodeID: "node-0", Holds: held, Backups: fleet,
+		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: held, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	if _, err := s.Take(t.Context(), filepath.Join(t.TempDir(), "b")); err != nil {
@@ -143,7 +143,7 @@ func TestABackupThatCannotPinTheLogIsRefused(t *testing.T) {
 	db := openStore(t)
 	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 5)
 	s := build(t, backup.Options{
-		Store: db, NodeID: "node-0", Holds: refusingHolds{}, Backups: memory.NewFleet(),
+		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: refusingHolds{}, Backups: memory.NewFleet(),
 		Now: func() time.Time { return clock },
 	})
 	dir := filepath.Join(t.TempDir(), "b")
@@ -382,7 +382,7 @@ func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
 
 	dir := filepath.Join(t.TempDir(), "b")
 	service := build(t, backup.Options{
-		Store: db, NodeID: "node-0", Holds: fleet, Backups: fleet,
+		Store: db, Partitions: holdsTheEstate, NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	if _, err := service.Take(t.Context(), dir); err != nil {

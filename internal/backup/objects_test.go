@@ -55,7 +55,7 @@ func TestABackupCarriesTheChunksItsCopyNames(t *testing.T) {
 	fileWithChunks(t, db, chunks...)
 	fleet := memory.NewFleet()
 	svc := build(t, backup.Options{
-		Store: db, NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 		Objects: &backup.Objects{Get: func(_ context.Context, h objstore.Hash) ([]byte, error) {
 			if b, ok := held[h]; ok {
@@ -114,7 +114,7 @@ func TestABackupMissingAChunkWritesNoManifest(t *testing.T) {
 			fileWithChunks(t, db, []byte("lost"))
 			fleet := memory.NewFleet()
 			svc := build(t, backup.Options{
-				Store: db, NodeID: "n", Holds: fleet, Backups: fleet,
+				Store: db, Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
 				Now: func() time.Time { return clock }, Objects: objects,
 			})
 			dir := filepath.Join(t.TempDir(), "incomplete")

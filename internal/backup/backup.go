@@ -237,6 +237,21 @@ type Options struct {
 	// [New] refuses to build without it.
 	Store *store.DB
 
+	// Partitions answers the partitions this node HOLDS, open or not at the
+	// instant it is asked — the engine's answer, never the store's list of
+	// what happens to be open. Required, and a node that holds none
+	// answers none.
+	//
+	// WHY NOT WHAT IS OPEN: a partition an adoption holds closed between
+	// its rename and its reopen, or one whose reopen failed, is still one
+	// the node holds, with rows no other artefact of this backup carries —
+	// and read off the open set it simply was not there, so the backup
+	// left it out and wrote a manifest claiming to be complete. Asked of
+	// the holding, it is a partition that must be copied and cannot be
+	// right now, which is a refusal ([store.ErrNoEstate]) rather than a
+	// smaller backup.
+	Partitions func() ([]store.PartitionFile, error)
+
 	// Conn is the broker connection the streams are snapshotted over.
 	//
 	// Nil on a node that DIALLED an external NATS cluster, which is a real
@@ -299,6 +314,7 @@ type Options struct {
 // Service takes backups.
 type Service struct {
 	store   *store.DB
+	held    func() ([]store.PartitionFile, error)
 	conn    *nats.Conn
 	api     jsapi.API
 	holds   coord.HoldRegister
@@ -339,6 +355,11 @@ func New(opts Options) (*Service, error) {
 	case opts.Store == nil:
 		return nil, errors.New("backup: Options.Store is required: a node's " +
 			"backup starts with its own store, which the engine opens")
+	case opts.Partitions == nil:
+		return nil, errors.New("backup: Options.Partitions is required: a " +
+			"backup copies every partition the node holds, and only the " +
+			"engine can say which those are — pass Engine.HeldPartitions, " +
+			"which answers none on a node without `data`")
 	case opts.Holds == nil:
 		return nil, errors.New("backup: Options.Holds is required: without the " +
 			"fleet's trim-hold register the trim can delete what the copy needs")
@@ -354,7 +375,7 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: opts.Store, conn: opts.Conn, api: opts.API, holds: opts.Holds,
+	return &Service{store: opts.Store, held: opts.Partitions, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
 		metrics: opts.Metrics, now: now}, nil
 }
@@ -414,7 +435,7 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// replicated estate alone it has the tracker and no audit log, no
 	// memory and no secret bootstrap. Either one restores into a company
 	// that is missing half of itself while looking like a backup.
-	files, err := estates(s.store)
+	files, err := s.estates()
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -550,35 +571,65 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 }
 
 // estates is every database handle a backup copies, in copy order: the node's
-// own store, then the partition it holds beside it — layout 0's one, the
-// whole replicated estate.
+// own store, then each partition the node HOLDS — layout 0's one, the whole
+// replicated estate, on a data node.
 //
-// A NODE HOLDING NO PARTITION copies its own file alone: it runs no state log,
-// so it holds nothing a log derives. A node holding any partition but layout
-// 0's is REFUSED, naming what it holds: a backup has one partition member,
-// named for the whole estate, and a copy of one partition of many filed under
-// that name would restore as a company missing every other partition's rows.
-func estates(db *store.DB) ([]*store.DB, error) {
-	out := []*store.DB{db}
-	held := db.OpenPartitions()
+// WHAT THE NODE HOLDS, NOT WHAT HAPPENS TO BE OPEN (see [Options.Partitions]).
+// A held partition that is not open is REFUSED with [store.ErrNoEstate],
+// naming it: the backup would otherwise be missing that partition's rows and
+// say nothing. And an open partition the node does not hold is refused too,
+// because a backup that copied what the engine says and skipped what is
+// actually open would be as silent the other way.
+//
+// A node holding any partition but layout 0's is REFUSED, naming what it
+// holds: a backup has one partition member, named for the whole estate, and a
+// copy of one partition of many filed under that name would restore as a
+// company missing every other partition's rows.
+func (s *Service) estates() ([]*store.DB, error) {
+	held, err := s.held()
+	if err != nil {
+		return nil, fmt.Errorf("backup: which partitions this node holds: %w", err)
+	}
+	holds := make(map[string]bool, len(held))
+	for _, f := range held {
+		holds[f.Name] = true
+	}
+	for _, name := range s.store.OpenPartitions() {
+		if !holds[name] {
+			return nil, fmt.Errorf("backup: the partition %s is open on this node, "+
+				"which does not hold it — a backup copies what the node holds, and "+
+				"this one would leave an open file out", name)
+		}
+	}
 	switch {
 	case len(held) == 0:
-		return out, nil
-	case len(held) > 1:
-		return nil, fmt.Errorf("backup: this node holds %d partitions (%v), and a "+
-			"backup copies one partition file, %s, which is layout 0's whole estate",
-			len(held), held, storeFileNames[store.EstatePartition])
+		return []*store.DB{s.store}, nil
+	case len(held) > 1 || held[0].Layout != 0:
+		return nil, fmt.Errorf("backup: this node holds %v, and a backup copies one "+
+			"partition file, %s, which is layout 0's whole estate",
+			names(held), storeFileNames[store.EstatePartition])
 	}
-	part, err := db.PartitionDB(held[0])
+	part, err := s.store.PartitionDB(held[0].Name)
 	if err != nil {
-		return nil, fmt.Errorf("backup: the partition %s: %w", held[0], err)
+		return nil, fmt.Errorf("backup: this node holds the partition %s and it is "+
+			"not open — an adoption is replacing its file, or reopening it failed; "+
+			"take the backup again once the node reports the partition serving: %w",
+			held[0].Name, err)
 	}
-	if part.File().Layout != 0 {
-		return nil, fmt.Errorf("backup: this node holds the partition %s of layout %d, "+
-			"and a backup copies one partition file, %s, which is layout 0's whole estate",
-			held[0], part.File().Layout, storeFileNames[store.EstatePartition])
+	if part.File() != held[0] {
+		return nil, fmt.Errorf("backup: the partition %s is open as %+v, and this "+
+			"node holds it as %+v", held[0].Name, part.File(), held[0])
 	}
-	return append(out, part), nil
+	return []*store.DB{s.store, part}, nil
+}
+
+// names is the partitions' names, for a refusal.
+func names(files []store.PartitionFile) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		out = append(out, f.Name)
+	}
+	return out
 }
 
 // emptyDir makes dir if it is absent, refuses it if it holds anything, and
@@ -660,7 +711,7 @@ func storeBytes(m Manifest) int64 {
 // A node holding no partition gets a no-op release and no pin: there is no
 // applier cursor to read a position from, so there is nothing to pin at.
 func (s *Service) hold(ctx context.Context) (func(), error) {
-	files, err := estates(s.store)
+	files, err := s.estates()
 	if err != nil {
 		return nil, err
 	}

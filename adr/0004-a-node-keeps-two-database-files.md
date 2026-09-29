@@ -13,9 +13,9 @@ A node keeps **two** databases: the NODE estate (the audit event log,
 learning memory, config revisions, the lexical search index, the bootstrap half
 of the secret store), which `store.OpenNode` brings up, and the REPLICATED
 estate beside it, which is everything a state log's applier writes — opened by
-the state-log runtime as the file of layout 0's one partition
-(`store.DB.OpenPartition`), because that is what the estate becomes when a
-layout divides it.
+the engine on every data node, from boot and whatever its company runs, as the
+file of layout 0's one partition (`store.DB.OpenPartition`), because that is
+what the estate becomes when a layout divides it.
 
 Two rules make that real, and both are enforced by a static walk rather than
 held as a convention: **no transaction spans the two, and no read joins across

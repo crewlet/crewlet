@@ -6,11 +6,12 @@
 //
 // A node keeps its OWN estate in one file, which [OpenNode] brings up at the
 // path it is given, and the REPLICATED estate — everything a state log's
-// applier derives — in one file PER PARTITION it holds, which the state-log
-// runtime opens and closes on the node's handle as partitions are joined and
-// left ([DB.OpenPartition]; partition.go says why a file each). Layout 0, the
-// estate before it was divided, is one partition, and its file is the one
-// [ReplicatedPath] has always named beside the node's own.
+// applier derives — in one file PER PARTITION it holds, which the engine
+// opens on the node's handle as the node comes to hold it and closes as it
+// stops ([DB.OpenPartition]; partition.go says why a file each). Layout 0, the
+// estate before it was divided, is one partition, which every data node holds
+// from boot, and its file is the one [ReplicatedPath] has always named beside
+// the node's own.
 //
 // The boundary is [Estate], and what rests on it is written there — a snapshot
 // is a copy of one file rather than a copy of everything with the rest's pages

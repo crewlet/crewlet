@@ -13,7 +13,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -93,9 +92,11 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 		BusyTimeout:    boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
-	// EVERY PARTITION OF THE LAYOUT THIS BUILD RUNS, which a data node
-	// holds all of — the files `crewlet run` opens beside the node's own.
-	partitions, err := layoutFiles(engine.LayoutZero())
+	// EVERY PARTITION THIS NODE HOLDS — the files `crewlet run` opens
+	// beside the node's own, by the one rule the engine opens them by: a
+	// node without `data` holds none, so this creates no file for it that
+	// nothing would ever open.
+	partitions, err := engine.HeldPartitions(boot)
 	if err != nil {
 		return err
 	}
@@ -333,19 +334,6 @@ func budgetsReset(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "Reset %d scope(s): %s\n",
 		answer.Cleared, strings.Join(answer.Scopes, ", "))
 	return nil
-}
-
-// layoutFiles is every partition of a layout as the store opens it.
-func layoutFiles(layout statelog.Layout) ([]store.PartitionFile, error) {
-	var out []store.PartitionFile
-	for _, p := range layout.Partitions() {
-		f, err := layout.File(p)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, f)
-	}
-	return out, nil
 }
 
 // schemaLabel names one file of a migration report: the node's own, or which

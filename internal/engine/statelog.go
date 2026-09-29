@@ -497,6 +497,64 @@ func (s *stateLog) estate(p statelog.PartitionID) store.PartitionHandle {
 	return s.db.PartitionHandle(p.String())
 }
 
+// HeldPartitions is every partition a node configured as b HOLDS: the files it
+// keeps open for as long as it runs, that a backup of it copies and that
+// `crewlet migrate` migrates while it is stopped.
+//
+// UNDER LAYOUT 0 A DATA NODE HOLDS THE WHOLE ESTATE — its one partition,
+// estate.000 — AND A NODE WITHOUT `data` HOLDS NOTHING, whatever the company
+// runs. Holding is a fact about the NODE, not about the revision it applies: a
+// company that moved its tracker to Jira leaves a data node's file on disk
+// with every row its log ever derived, and while the file was opened only by a
+// running state log, a backup of that node left the file out and called
+// itself complete. It is also the one answer three callers need — the engine
+// opening the files, the backup copying them and the operator's migration —
+// so each reads it here rather than deriving it.
+func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
+	if !holdsData(b) {
+		return nil, nil
+	}
+	layout := LayoutZero()
+	files := make([]store.PartitionFile, 0, len(layout.Partitions()))
+	for _, p := range layout.Partitions() {
+		f, err := layout.File(p)
+		if err != nil {
+			return nil, fmt.Errorf("engine: the partition %s this node holds: %w", p, err)
+		}
+		files = append(files, f)
+	}
+	return files, nil
+}
+
+// HeldPartitions is [HeldPartitions] for this node: the partitions it holds,
+// open or not at the instant of asking — the question a backup has to ask,
+// since one an adoption holds closed between its rename and its reopen is
+// still one the node holds.
+func (e *Engine) HeldPartitions() ([]store.PartitionFile, error) {
+	return HeldPartitions(e.boot)
+}
+
+// holdPartitions opens every partition this node holds, for the life of the
+// node: the store's Close takes them down with it.
+//
+// AT BOOT, BEFORE ANY COMPANY IS APPLIED, and not by the state-log runtime,
+// because holding does not depend on the company (see [HeldPartitions]): the
+// runtime runs the logs of what the node holds, and finds the files open.
+// Idempotent, so an engine started again over backends an earlier one used
+// finds them open already.
+func holdPartitions(ctx context.Context, db *store.DB, b *config.Bootstrap) error {
+	files, err := HeldPartitions(b)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if _, err := db.OpenPartition(ctx, f); err != nil {
+			return fmt.Errorf("engine: open the partition %s this node holds: %w", f.Name, err)
+		}
+	}
+	return nil
+}
+
 // openPartitions opens the file of every partition of this node's layout that
 // is not open already, and answers the ones it opened.
 //
@@ -522,18 +580,6 @@ func (s *stateLog) openPartitions(ctx context.Context) ([]statelog.PartitionID, 
 		opened = append(opened, p)
 	}
 	return opened, nil
-}
-
-// closePartitions closes every partition of this node's layout, once the loops
-// that wrote them have stopped — the half of a stop that gives the files back.
-func (s *stateLog) closePartitions() {
-	for _, p := range s.layout.Partitions() {
-		if err := s.db.ClosePartition(p.String()); err != nil {
-			log.Warn("statelog_partition_not_closed", "node", s.nodeID,
-				"partition", p.String(), "error", err.Error(),
-				"detail", "the file stays locked by this process until it exits")
-		}
-	}
 }
 
 // closedPartitions names every partition of the layout this node does not have
@@ -985,10 +1031,11 @@ func (s *stateLog) Stop() {
 			running.consumer.Close()
 		}
 	}
-	// AND THE FILES, once nothing writes them: the partitions are this
-	// runtime's to hold for as long as it runs their logs, and a node whose
-	// state log has stopped holds none.
-	s.closePartitions()
+	// AND NOT THE FILES: the NODE holds its partitions, whether or not a
+	// state log runs their logs ([HeldPartitions]), and the store's own
+	// Close takes them down with it. A state log that gave them back on
+	// its way out left a node whose company stopped running one holding
+	// nothing a backup would copy.
 }
 
 // applierRun is one domain's apply loop: what ends it, and what reports it

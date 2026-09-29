@@ -104,11 +104,82 @@ func openStore(t *testing.T) *store.DB {
 	return db
 }
 
+// holdsTheEstate is the holding of the node [openStore] opens: layout 0's one
+// partition, as a data node holds it.
+func holdsTheEstate() ([]store.PartitionFile, error) {
+	return []store.PartitionFile{storetest.LayoutZero(1)}, nil
+}
+
+// A BACKUP COPIES WHAT THE NODE HOLDS, NOT WHAT HAPPENS TO BE OPEN.
+//
+// A partition the node holds is one whose rows no other artefact of the backup
+// carries. While it is closed — an adoption between its rename and its reopen,
+// a reopen that failed — the backup must refuse, naming it, rather than write
+// a manifest for the node's own file alone and call that complete; and a
+// partition open on the node that its holding does not name is refused the
+// same way, since copying the one and skipping the other is as silent. A node
+// that holds nothing copies its own file, and that is complete.
+func TestABackupCopiesWhatTheNodeHolds(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	service := func(db *store.DB, held func() ([]store.PartitionFile, error)) *backup.Service {
+		return build(t, backup.Options{
+			Store: db, Partitions: held, NodeID: "n", Holds: fleet, Backups: fleet,
+			Now: func() time.Time { return clock },
+		})
+	}
+	holdsNothing := func() ([]store.PartitionFile, error) { return nil, nil }
+
+	t.Run("a held partition that is closed", func(t *testing.T) {
+		t.Parallel()
+		db := openStore(t)
+		if err := db.ClosePartition(storetest.LayoutZero(1).Name); err != nil {
+			t.Fatalf("close the partition: %v", err)
+		}
+		dir := filepath.Join(t.TempDir(), "b")
+		_, err := service(db, holdsTheEstate).Take(t.Context(), dir)
+		if !errors.Is(err, store.ErrNoEstate) {
+			t.Fatalf("a backup of a node whose held partition is closed = %v, want "+
+				"ErrNoEstate — it would otherwise be missing every row that "+
+				"partition holds", err)
+		}
+		if !strings.Contains(err.Error(), storetest.LayoutZero(1).Name) {
+			t.Errorf("the refusal does not name the partition: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, backup.ManifestName)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a refused backup wrote its manifest: %v", err)
+		}
+	})
+	t.Run("an open partition the node does not hold", func(t *testing.T) {
+		t.Parallel()
+		_, err := service(openStore(t), holdsNothing).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
+		if err == nil || !strings.Contains(err.Error(), storetest.LayoutZero(1).Name) {
+			t.Fatalf("a backup that would leave an open partition out = %v, want a "+
+				"refusal naming it", err)
+		}
+	})
+	t.Run("a node holding nothing", func(t *testing.T) {
+		t.Parallel()
+		node, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = node.Close() })
+		manifest, err := service(node, holdsNothing).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
+		if err != nil {
+			t.Fatalf("a backup of a node holding nothing: %v", err)
+		}
+		if len(manifest.Stores) != 1 || manifest.Stores[0].Estate != store.EstateNode {
+			t.Errorf("a node holding nothing backed up %+v, want its own file alone", manifest.Stores)
+		}
+	})
+}
+
 func service(t *testing.T, db *store.DB, nc *nats.Conn) *backup.Service {
 	t.Helper()
 	fleet := memory.NewFleet()
 	return build(t, backup.Options{
-		Store: db, Conn: nc, API: jsapi.Embedded(), NodeID: "node-0", Holds: fleet, Backups: fleet,
+		Store: db, Partitions: holdsTheEstate, Conn: nc, API: jsapi.Embedded(), NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 }
@@ -292,7 +363,7 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 	t.Parallel()
 	fleet := memory.NewFleet()
 	storeOnly := build(t, backup.Options{
-		Store: openStore(t), NodeID: "n", Holds: fleet, Backups: fleet,
+		Store: openStore(t), Partitions: holdsTheEstate, NodeID: "n", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	dir := filepath.Join(t.TempDir(), "store-only")
@@ -309,23 +380,28 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 	}
 }
 
-// A STORE, BOTH FLEET REGISTERS AND A NODE ID ARE REQUIRED, and a missing one
-// is refused by name.
+// A STORE, WHAT IT HOLDS, BOTH FLEET REGISTERS AND A NODE ID ARE REQUIRED, and
+// a missing one is refused by name.
 //
 // The engine beside every API holds all three registers, and a backup that did
 // less around a nil would be either missing the node's own estate or invisible
-// to the trim. A blank node id is the subtler one: it keys the hold and the
-// announced point, so every node that named itself through CREWLET_NODE_ID
-// would share one hold and announce a point the register refuses.
+// to the trim. Without the node's holding it could only copy what happens to
+// be open, which is how a data node whose company ran no state log backed up
+// without its partition. A blank node id is the subtler one: it keys the hold
+// and the announced point, so every node that named itself through
+// CREWLET_NODE_ID would share one hold and announce a point the register
+// refuses.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	fleet := memory.NewFleet()
+	held := holdsTheEstate
 	for field, opts := range map[string]backup.Options{
-		"Store":   {NodeID: "n", Holds: fleet, Backups: fleet},
-		"Holds":   {NodeID: "n", Store: db, Backups: fleet},
-		"Backups": {NodeID: "n", Store: db, Holds: fleet},
-		"NodeID":  {NodeID: "  ", Store: db, Holds: fleet, Backups: fleet},
+		"Store":      {NodeID: "n", Partitions: held, Holds: fleet, Backups: fleet},
+		"Partitions": {NodeID: "n", Store: db, Holds: fleet, Backups: fleet},
+		"Holds":      {NodeID: "n", Store: db, Partitions: held, Backups: fleet},
+		"Backups":    {NodeID: "n", Store: db, Partitions: held, Holds: fleet},
+		"NodeID":     {NodeID: "  ", Store: db, Partitions: held, Holds: fleet, Backups: fleet},
 	} {
 		svc, err := backup.New(opts)
 		if err == nil {

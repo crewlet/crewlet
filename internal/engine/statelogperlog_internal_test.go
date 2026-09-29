@@ -190,6 +190,12 @@ func aPartitionedStateLog(t *testing.T) (*Engine, *stateLog, natsjs.JetStream) {
 		t.Fatal("a node with no company runs a state log of its own, so the " +
 			"one below would contend with it for the store's writers")
 	}
+	// A DATA NODE HOLDS LAYOUT 0's PARTITION from boot, and a node's
+	// partitions are one layout's: this one is made a node holding the
+	// test layout instead, by giving layout 0's back first.
+	if err := closeEstateZero(e.backends.Store); err != nil {
+		t.Fatalf("give back layout 0's partition: %v", err)
+	}
 	s, err := e.startStateLogAt(t.Context(), &b, "node-p", nil, partitionedTestLayout())
 	if err != nil {
 		t.Fatalf("start the partitioned state log: %v", err)

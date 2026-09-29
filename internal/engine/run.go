@@ -709,6 +709,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}
 		ownsBackends = true
 	}
+	// THE PARTITIONS THIS NODE HOLDS, opened before anything can read or
+	// copy one — lent backends included, since holding is a fact about the
+	// node rather than about whoever opened its store.
+	if err = holdPartitions(ctx, backends.Store, opts.Bootstrap); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
+		}
+		return nil, err
+	}
 
 	e := &Engine{
 		boot: opts.Bootstrap,

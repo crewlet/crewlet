@@ -286,9 +286,9 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	return out, nil
 }
 
-// openStore opens this node's own database. Its partitions are opened on the
-// handle this returns by the state-log runtime, which is what knows the layout
-// the node runs and which of its partitions it holds ([stateLog.openPartitions]).
+// openStore opens this node's own database. The partitions it holds are
+// opened on the handle this returns when the engine is built
+// ([holdPartitions]), whichever caller opened the store.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
@@ -297,9 +297,9 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	}
 	// A NODE WITHOUT `data` HOLDS NO PARTITION and keeps nothing that has to
 	// outlive it. Its own file is discarded and recreated at every boot, and
-	// it runs no state log, so no partition is ever opened on it — a path
-	// that reaches for one is told [store.ErrNoEstate] rather than handed an
-	// empty database that reads as a company with nothing in it.
+	// it holds nothing ([HeldPartitions]), so no partition is ever opened on
+	// it — a path that reaches for one is told [store.ErrNoEstate] rather than
+	// handed an empty database that reads as a company with nothing in it.
 	if !holdsData(b) {
 		opts.Scratch = b.Store.Scratch
 	}
