@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -14,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -317,6 +320,20 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // next; the company last. An apply installs its company before the reconciler
 // records its epoch, so a company read after a matching epoch is that
 // revision's or a later one, and a later revision is only ever a truer roster.
+//
+// # And only when this node's CHART holds every hire
+//
+// The settings epoch is not where the seats come from any more: they are the
+// org chart's own log, which moves on every hire with no revision anywhere in
+// it, and a node's chart view is its own rows at whatever position its applier
+// has reached. Gated on the epoch alone, a duty holder behind the chart log —
+// lagging, or holding a hire's record it could not apply, which on a rolling
+// upgrade it holds until it is upgraded — stamped a seat hired on another node
+// absent, and after the grace retired its mail. So the chart log's END is read
+// before anything is derived from it, the rows are proved in their own
+// snapshot to hold every record up to it ([chart.Reader.Covers]), and the
+// company this node publishes must have been composed from rows that far
+// along; anything short of that is unknown, never absent.
 func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
@@ -334,10 +351,47 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 			"serves activation epoch %d", target.Epoch)
 	}
 	applied := r.Applied()
-	company := e.Company()
-	if applied != target.Epoch || company == nil {
+	if applied != target.Epoch {
 		return nil, fmt.Errorf("engine: this node serves activation epoch %d and the fleet is on %d; "+
 			"seats are judged once this node has applied it", applied, target.Epoch)
+	}
+	return e.chartRoster(ctx)
+}
+
+// chartRoster is the agent seats of the company this node publishes, known
+// only once that company holds every record the org chart's log holds — see
+// [Engine.activeSeats].
+//
+// THE CHART'S END BEFORE THE ROWS, and the rows before the company: a hire
+// landing between any two reads can only make the answer unknown. The rows
+// alone are not enough, because the company a node publishes is composed from
+// them AFTER they commit, so the one it serves can still be the one from
+// before the hire. A node with no chart runtime serves the settings document's
+// own tree, which the settings epoch already covers.
+func (e *Engine) chartRoster(ctx context.Context) ([]placement.Seat, error) {
+	reader := e.Chart()
+	var end uint64
+	if reader != nil {
+		var err error
+		if end, err = e.chartLogEnd(ctx); err != nil {
+			return nil, err
+		}
+		if err := reader.Covers(ctx, end); err != nil {
+			return nil, fmt.Errorf("engine: seats are judged once this node's chart rows "+
+				"hold every hire: %w", err)
+		}
+	}
+	company := e.Company()
+	if company == nil {
+		return nil, errors.New("engine: this node publishes no company yet; seats are " +
+			"judged once it does")
+	}
+	if reader != nil {
+		if at := statelog.Unpack(chart.Domain{}.Stream().Name, company.ChartAt); at.Seq < end {
+			return nil, fmt.Errorf("engine: this node's company was composed from chart "+
+				"position %d and the log holds %d; seats are judged once the view "+
+				"that carries every hire is published", at.Seq, end)
+		}
 	}
 	return company.Seats(), nil
 }

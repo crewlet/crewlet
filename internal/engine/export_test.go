@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
 // RefreshChartForTest brings this node's chart view up to its applier's cursor
@@ -42,6 +43,25 @@ func CollectChartSealsForTest(ctx context.Context, e *Engine, now time.Time) (in
 func SeatBoxSetupForTest(e *Engine, defaults []sandbox.SetupStep, handle string) []sandbox.SetupStep {
 	return e.boxSetup(defaults, handle, seatSandbox(e.Company(), handle))
 }
+
+// ChartRosterForTest is the mailbox sweep's roster past its settings-epoch
+// gate: the agent seats of the company this node publishes, or why this node
+// cannot vouch that it holds every hire.
+//
+// EXPORTED FOR A TEST ONLY: in production it is read by the retention sweep's
+// duty after the activation pointer and the reconciler agree, and a case about
+// the CHART's half would otherwise have to stand up a reconciler and an
+// activation to reach it.
+func ChartRosterForTest(ctx context.Context, e *Engine) ([]placement.Seat, error) {
+	return e.chartRoster(ctx)
+}
+
+// PublishForTest makes c the company this engine serves.
+//
+// EXPORTED FOR A TEST ONLY: what it builds is the window between a chart
+// record committing and the view that carries it being published, which in
+// production is a coalesced rebuild no test can hold open.
+func PublishForTest(e *Engine, c *Company) { e.epoch.current.Store(c) }
 
 // ForgetPersonBlinderForTest drops this node's resolved blinder, so the next
 // use resolves the company's key again.
