@@ -329,6 +329,89 @@ describe("live state reaches the screen", () => {
   });
 });
 
+describe("a link kept before a rename", () => {
+  /**
+   * `lead` was created as `pm`, and the `edge` unit as `platform`. A link
+   * somebody kept carries the old address: it used to open "No seat called"
+   * and "No unit", because both pages resolved the current address alone.
+   */
+  const renamed = {
+    name: "Acme",
+    roles: [{ name: "Product Lead", handle: "lead", goal: "Set direction" }],
+    units: [{ id: "edge", name: "Edge", purpose: "the edge" }],
+    derived: {
+      seats: [
+        {
+          handle: "lead",
+          name: "Product Lead",
+          kind: "agent",
+          manager: "",
+          managers: null,
+          reports: null,
+          auto_reports: null,
+          onboarding_chain: null,
+          origin_handle: "pm",
+          former_handles: ["pm"],
+        },
+      ],
+      units: [
+        {
+          id: "edge",
+          name: "Edge",
+          type: "team",
+          lead: "",
+          lead_inherited: false,
+          channel: "",
+          channel_inherited: false,
+          seats: null,
+          origin_key: "platform",
+          former_keys: ["platform"],
+        },
+      ],
+    },
+  };
+
+  const redraw = (view: ReturnType<typeof mount>) =>
+    view.view.rerender(
+      <ClientContext.Provider value={{ store: view.store, socket: view.socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+
+  test("a seat's old handle opens the seat and the address becomes its current one", () => {
+    location.hash = "#/company/people/pm?tab=overview";
+    const view = mount();
+    view.store.applyOrg(renamed);
+    redraw(view);
+    // REPLACED, with the query riding along: the same place, said the way
+    // the seat is known now.
+    expect(location.hash).toBe("#/company/people/lead?tab=overview");
+    expect(screen.queryByText(/No seat called/)).toBeNull();
+    expect(screen.getAllByText("Product Lead").length).toBeGreaterThan(0);
+  });
+
+  test("a peek at a seat's old handle moves to its current one", () => {
+    location.hash = "#/company/people?peek=seat:pm";
+    const view = mount();
+    view.store.applyOrg(renamed);
+    redraw(view);
+    const peek = new URLSearchParams(location.hash.split("?")[1] ?? "").get("peek");
+    expect(peek).toBe("seat:lead");
+  });
+
+  test("a unit's old key opens the unit and the address becomes its current one", () => {
+    location.hash = "#/company/units/platform";
+    const view = mount();
+    view.store.applyOrg(renamed);
+    redraw(view);
+    expect(location.hash).toBe("#/company/units/edge");
+    expect(screen.queryByText(/No unit/)).toBeNull();
+    expect(screen.getAllByText("the edge").length).toBeGreaterThan(0);
+  });
+});
+
 describe("a turn watched to its end", () => {
   /**
    * THE REPORTED BUG, end to end.

@@ -74,6 +74,14 @@ export interface Unit {
   id: string;
   /** What a person reads. Display only: nothing resolves a unit by it. */
   name: string;
+  /**
+   * The keys a rename moved this unit off, which still ADDRESS it: the key it
+   * was created under ("" until a rename moved it off it) and every key it has
+   * answered to since, newest first. [unitByKey] resolves through them in the
+   * engine's own order, so a link somebody kept opens the unit it named.
+   */
+  originKey: string;
+  formerKeys: string[];
   /** The EFFECTIVE type where the hierarchy is reported, else as written. */
   type: string;
   purpose: string;
@@ -130,6 +138,14 @@ export interface Seat {
    * that keys the seat's memory, so it never makes one up.
    */
   handle: string;
+  /**
+   * The handles a rename moved this seat off, which still ADDRESS it: the one
+   * it was created under ("" until a rename moved it off it) and every one it
+   * has answered to since, newest first. [seatByAddress] resolves through them
+   * in the engine's own order.
+   */
+  originHandle: string;
+  formerHandles: string[];
   kind: "agent" | "human";
   goal: string;
   backstory: string;
@@ -175,8 +191,6 @@ export interface OrgIndex {
   /** The outermost units, in document order. */
   topUnits: Unit[];
   byHandle: Map<string, Seat>;
-  /** The FIRST seat with each name. */
-  byName: Map<string, Seat>;
 }
 
 /**
@@ -214,7 +228,49 @@ export function unitPath(unit: Pick<Unit, "id">): string[] {
  */
 export function unitByKey(index: Pick<OrgIndex, "units">, key: string): Unit | null {
   if (!key) return null;
-  return index.units.find((u) => u.id === key) ?? null;
+  // A RETIRED KEY TOO, and only after every live one has missed — the engine's
+  // own order (`Organization.Unit`): the key a unit was created under, then
+  // the keys it has answered to since. A link somebody kept to a team that has
+  // since been re-keyed opened "No unit" when this matched the current key
+  // alone; the screen then replaces the route with the key it holds now.
+  return (
+    index.units.find((u) => u.id === key) ??
+    index.units.find((u) => u.originKey === key) ??
+    index.units.find((u) => u.formerKeys.includes(key)) ??
+    null
+  );
+}
+
+/**
+ * The seat a route's segment addresses, or null — resolved in the engine's own
+ * order (`Organization.Role`): every current handle, then the handle each seat
+ * was created under, then every handle a rename retired. A live handle never
+ * loses to another seat's retired one, which is why these are three passes and
+ * not one.
+ *
+ * NEVER A NAME, except for the one seat a name is the address of: a seat the
+ * engine reported no handle for, which [seatPath] links to by name. A name is
+ * prose and two seats may share it, so resolving any other link by name opened
+ * whichever namesake came first — a different person's page under a URL that
+ * looked right.
+ *
+ * A HANDLE IS LOWER CASE, so an address typed with capitals is read as the
+ * handle it spells rather than as nobody.
+ */
+export function seatByAddress(
+  index: Pick<OrgIndex, "seats" | "byHandle">,
+  address: string,
+): Seat | null {
+  if (!address) return null;
+  const found =
+    index.byHandle.get(address) ??
+    index.seats.find((s) => s.originHandle === address) ??
+    index.seats.find((s) => s.formerHandles.includes(address)) ??
+    index.seats.find((s) => s.handle === "" && s.name === address) ??
+    null;
+  if (found) return found;
+  const lower = address.toLowerCase();
+  return lower === address ? null : seatByAddress(index, lower);
 }
 
 const list = <T>(value: T[] | null | undefined): T[] => (Array.isArray(value) ? value : []);
@@ -244,6 +300,8 @@ function newUnit(raw: OrgUnit, at: number): Unit {
     key: `u${at}`,
     id: raw.id ?? "",
     name: raw.name ?? "",
+    originKey: "",
+    formerKeys: [],
     type: raw.type ?? "",
     purpose: raw.purpose ?? "",
     goals: list(raw.goals),
@@ -267,6 +325,8 @@ function newSeat(raw: OrgSeat, handle: string, key: string): Seat {
     key,
     name: raw.name ?? "",
     handle,
+    originHandle: "",
+    formerHandles: [],
     kind: raw.kind === "human" ? "human" : "agent",
     goal: raw.goal ?? "",
     backstory: raw.backstory ?? "",
@@ -325,6 +385,8 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     // name apart, and the name is what the tree draws.
     if (!d || (d.id ?? "") !== unit.id || d.name !== unit.name) return null;
     unit.type = d.type || unit.type;
+    unit.originKey = d.origin_key ?? "";
+    unit.formerKeys = list(d.former_keys);
     unit.channel = d.channel ?? "";
     unit.channelInherited = !!d.channel_inherited;
     unit.leadInherited = !!d.lead_inherited;
@@ -360,6 +422,8 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     // the wire this build does not know is the same value everywhere.
     seat.kind = d.kind === "human" ? "human" : "agent";
     seat.placedByRef = !!d.placed_by_ref;
+    seat.originHandle = d.origin_handle ?? "";
+    seat.formerHandles = list(d.former_handles);
     byHandle.set(d.handle, seat);
     seats.push(seat);
   }
@@ -417,7 +481,6 @@ function overlay(authored: Authored, derived: Derived | undefined): OrgIndex | n
     units,
     topUnits: units.filter((u) => !u.parent),
     byHandle,
-    byName: new Map(),
   };
 }
 
@@ -465,7 +528,6 @@ function authoredOnly(authored: Authored): OrgIndex {
     units,
     topUnits: units.filter((u) => !u.parent),
     byHandle,
-    byName: new Map(),
   };
 }
 
@@ -496,9 +558,6 @@ export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   // AFTER whichever half built the tree, because both build one and the pass
   // reads only `seats` and `children` — which both of them have set by here.
   fillSubtrees(built.units);
-  for (const seat of built.seats) {
-    if (!built.byName.has(seat.name)) built.byName.set(seat.name, seat);
-  }
   return built;
 }
 

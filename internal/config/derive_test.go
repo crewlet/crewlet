@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // regenerateDerived names the variable that writes the golden files instead of
@@ -107,5 +108,48 @@ func TestTheDerivedHierarchyWithoutPaths(t *testing.T) {
 	var empty config.Derived
 	if got := empty.WithoutPaths(); got.Seats != nil || got.Units != nil {
 		t.Errorf("an empty hierarchy gained lists: %+v", got)
+	}
+}
+
+// A RENAMED SEAT OR UNIT CARRIES THE ADDRESSES IT STILL ANSWERS TO.
+//
+// A link somebody kept names the address its seat or unit had when they kept
+// it. With only the current handle and key on the projection, a client opening
+// that link found nothing — and one falling back to the NAME opened whichever
+// namesake came first. The aliases are the engine's own ([org.Organization.Role]
+// and [org.Organization.Unit] resolve through them), stated only where a rename
+// made them aliases, and they survive the anonymous strip.
+func TestADerivedSeatAndUnitCarryTheAddressesARenameRetired(t *testing.T) {
+	t.Parallel()
+	renamed := &org.Role{Name: "Product Lead", DeclaredHandle: "lead",
+		OriginHandle: "pm", FormerHandles: []string{"pm-2", "pm"}}
+	never := &org.Role{Name: "Designer", DeclaredHandle: "designer", OriginHandle: "designer"}
+	moved := &org.Unit{Name: "Product", ID: "product",
+		OriginKey: "prod", FormerKeys: []string{"prod"}, Roles: []*org.Role{never}}
+	still := &org.Unit{Name: "Ops", ID: "ops", OriginKey: "ops"}
+	derived := config.DeriveFrom(&org.Organization{
+		Name: "Acme", Roles: []*org.Role{renamed}, Units: []*org.Unit{moved, still},
+	}).WithoutPaths()
+
+	seats := map[string]config.DerivedSeat{}
+	for _, s := range derived.Seats {
+		seats[s.Handle] = s
+	}
+	if got := seats["lead"]; got.OriginHandle != "pm" ||
+		!reflect.DeepEqual(got.FormerHandles, []string{"pm-2", "pm"}) {
+		t.Errorf("the renamed seat carries origin %q and former %v", got.OriginHandle, got.FormerHandles)
+	}
+	if got := seats["designer"]; got.OriginHandle != "" || got.FormerHandles != nil {
+		t.Errorf("a seat never renamed states an alias: %+v", got)
+	}
+	units := map[string]config.DerivedUnit{}
+	for _, u := range derived.Units {
+		units[u.ID] = u
+	}
+	if got := units["product"]; got.OriginKey != "prod" || !reflect.DeepEqual(got.FormerKeys, []string{"prod"}) {
+		t.Errorf("the renamed unit carries origin %q and former %v", got.OriginKey, got.FormerKeys)
+	}
+	if got := units["ops"]; got.OriginKey != "" || got.FormerKeys != nil {
+		t.Errorf("a unit never renamed states an alias: %+v", got)
 	}
 }

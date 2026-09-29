@@ -3254,6 +3254,17 @@ neither, so this whole answer — the `roles:` and `units:` above it as well as
 `name`, `mission`, `vision` and `policies` come from the revision, because
 those are the settings it does still hold.
 
+**A renamed seat or unit states the addresses it still answers to.** A derived
+seat carries `origin_handle` — the handle it was created under, present only
+once a rename has moved it off it — and `former_handles`, every handle it has
+answered to since, newest first; a derived unit carries `origin_key` and
+`former_keys` the same way. They resolve exactly as the engine resolves them:
+every current handle (or key) first, then every origin, then every former
+one. A link somebody kept names the address its seat or unit had when they
+kept it, and the dashboard opens that link on the object that holds the
+address now and replaces the route with the current one. A seat or unit never
+renamed carries none of the four.
+
 The fields above it stay as WRITTEN, so a reader can still tell a declared lead
 from an inherited one. Every list here may arrive as `null` (Go marshals a nil
 slice that way); a reader treats `null` as empty. The authored `path`,

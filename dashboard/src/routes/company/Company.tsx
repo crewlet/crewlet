@@ -30,8 +30,9 @@
  * its own tabs, and was one filter away from being lost.
  */
 
-import { useMemo, type CSSProperties } from "react";
-import { href } from "~/app/router.tsx";
+import { useEffect, useMemo, type CSSProperties } from "react";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
+import { usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { StateBadge, Section } from "~/components/common.tsx";
 import { Avatar, Callout, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
 import {
@@ -445,6 +446,14 @@ export function UnitScreen({ id }: { id: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
 
   const unit = unitByKey(index, id);
+  // A RETIRED KEY IS MOVED TO THE CURRENT ONE, by REPLACE — the same place
+  // said the way the unit is known now — so every link this page builds keys
+  // on the key the unit actually holds and Back skips the old spelling.
+  const nav = useNavigator();
+  const route = useRoute();
+  useEffect(() => {
+    if (unit?.id && unit.id !== id) nav.replace(unitPath(unit), route.query);
+  }, [unit, id, nav, route.query]);
   usePageLabels(unit ? { [id]: unit.name } : {});
 
   if (!unit) {
@@ -555,6 +564,11 @@ export function UnitPeek({ id }: { id: string }) {
   const { connected } = useConnection();
   const index = useMemo(() => indexOrg(org), [org]);
   const unit = unitByKey(index, id);
+  // A retired key moves to the current one, by the rail's replacing move.
+  const { move } = usePeekControls();
+  useEffect(() => {
+    if (unit?.id && unit.id !== id) move({ kind: "unit", id: unit.id });
+  }, [unit, id, move]);
 
   if (!unit) {
     if (!connected) return <Skeleton variant="text" rows={6} label="Loading the org tree" />;

@@ -2685,6 +2685,16 @@ rendered idle from the first phase to the last.
   the engine by the agent id that handle pairs with (`seatFilter`). Every one
   of these used to match on the name, so the second "Engineer" in a company
   wore the first one's state, live call, sandbox, turns and spend.
+- **A link kept before a rename still opens what it named.** A seat's page and
+  peek resolve an address through `lib/seats.ts`' `seatByAddress`, and a
+  unit's through `unitByKey`, in the engine's own order: every current handle
+  (or key) first, then the one each object was created under, then every one a
+  rename retired — the aliases the `org` projection's `derived` block states.
+  Once resolved, the route is REPLACED with the current address (the page by
+  `nav.replace`, a peek by the rail's replacing move), so every link the
+  screen builds keys on what the object is called now and Back does not land
+  on the old spelling. A name is never an address, except for a seat the
+  engine gave no handle, which `seatPath` links to by name.
 - **What a redacted document holds is shown as what it is.** A credential
   field arrives as one whole `${VAR}` reference, shown as the name it is, or
   as the engine's mask, shown as "A literal value is set (hidden)". The mask is

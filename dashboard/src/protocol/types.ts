@@ -1035,6 +1035,13 @@ export interface DerivedSeat {
   auto_reports: string[] | null;
   /** The unit names whose change makes this seat onboard again. */
   onboarding_chain: string[] | null;
+  /**
+   * The handle the seat was CREATED under, present only once a rename moved
+   * it off it; with `former_handles` (newest first), the addresses a kept link
+   * may still carry. Absent for a seat never renamed.
+   */
+  origin_handle?: string;
+  former_handles?: string[] | null;
 }
 
 export interface DerivedUnit {
@@ -1056,6 +1063,9 @@ export interface DerivedUnit {
   channel_inherited: boolean;
   /** Handles of the direct members, after root seats were attached. */
   seats: string[] | null;
+  /** `origin_handle` and `former_handles`, for a unit's key. */
+  origin_key?: string;
+  former_keys?: string[] | null;
 }
 
 /**

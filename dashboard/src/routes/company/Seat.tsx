@@ -5,8 +5,8 @@
  * them — and the tab is in the URL so a colleague can be sent the exact view.
  */
 
-import { useId, useMemo, useRef, type ReactNode } from "react";
-import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useEffect, useId, useMemo, useRef, type ReactNode } from "react";
+import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import {
   QueryState,
   RECORD_MAX_HEIGHT,
@@ -20,7 +20,7 @@ import {
 // exactly how the board came to know a task could be blocked while the
 // personal page did not.
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { Asks, Checklist, TaskBlock } from "~/routes/me/MyWork.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
@@ -93,6 +93,7 @@ import {
   mcpEnvOf,
   reportsCaption,
   sandboxFor,
+  seatByAddress,
   seatPath,
   seatReading,
   statusLine,
@@ -286,22 +287,21 @@ function ModelChain({ keys }: { keys: string[] }) {
 }
 
 /**
- * The seat a handle names, resolved the ONE way.
+ * The seat a handle names, resolved the ONE way — [seatByAddress], so the page
+ * and the peek can never disagree about which seat a `peek=` token names: the
+ * rail and the page its `Open ↗` leads to must be the same seat.
  *
- * Three lookups rather than one, because a handle reaches this screen spelled
- * three ways: a link built from the roster carries the handle, a link built
- * from a config field carries the ROLE NAME, and a pasted URL carries whatever
- * somebody typed. Written here rather than at each caller so the page and the
- * peek can never disagree about which seat a `peek=` token names — the rail
- * and the page its `Open ↗` leads to must be the same seat.
+ * It resolved a ROLE NAME too, for links "built from a config field", and no
+ * link is built that way any more; a name is prose two seats may share, so
+ * that arm opened whichever namesake came first under a URL that looked right.
+ * What it did NOT resolve was the one address a link genuinely carries after a
+ * rename — the handle the seat answered to when the link was kept — so every
+ * such link opened "No seat called". [seatByAddress] resolves those in the
+ * engine's order, and both callers then move the route to the handle the seat
+ * holds now.
  */
 function findSeat(index: OrgIndex, handle: string): Seat | null {
-  return (
-    index.byHandle.get(handle) ??
-    index.byName.get(handle) ??
-    [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
-    null
-  );
+  return seatByAddress(index, handle);
 }
 
 /**
@@ -523,6 +523,15 @@ export function SeatScreen({ handle }: { handle: string }) {
     [index],
   );
   const seat = findSeat(index, handle);
+  // A RETIRED ADDRESS IS MOVED TO THE CURRENT ONE, by REPLACE: it is the same
+  // place said the way the seat is known now, so Back does not land on the
+  // spelling the reader never chose, and every link this page builds, the
+  // chart read it makes and the crumb it publishes all key on the handle the
+  // seat actually holds. The query (the open tab, a thread) rides along.
+  const route = useRoute();
+  useEffect(() => {
+    if (seat?.handle && seat.handle !== handle) nav.replace(seatPath(seat), route.query);
+  }, [seat, handle, nav, route.query]);
   // THE TRAIL NAMES THE SEAT, not the slug the URL addresses it by. A handle is
   // DERIVED from the name — `agent-cto` for "Chief Technology Officer" — so with
   // nothing published the page bar read "Company / People / agent-cto" over a
@@ -540,8 +549,9 @@ export function SeatScreen({ handle }: { handle: string }) {
   //
   // KEYED ON THE RAW SEGMENT rather than on `seat.handle`: `seatPath` addresses
   // a seat the engine reported no handle for BY NAME, and `findSeat` also
-  // resolves a role name and a mis-cased handle, so the key has to be the string
-  // the URL actually carries or the lookup in `crumbsFor` misses.
+  // resolves a retired handle and a mis-cased one until the move above lands,
+  // so the key has to be the string the URL actually carries or the lookup in
+  // `crumbsFor` misses.
   //
   // AND NOTHING AT ALL FOR A SEAT WITH NO NAME. `labels` falls back to the
   // segment, which is an identifier a reader can still act on; publishing ""
@@ -2349,6 +2359,12 @@ export function SeatPeek({ handle }: { handle: string }) {
 
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = findSeat(index, handle);
+  // A RETIRED ADDRESS IS MOVED TO THE CURRENT ONE, as the page does — by the
+  // rail's own replacing move, so Back does not reopen the old spelling.
+  const { move } = usePeekControls();
+  useEffect(() => {
+    if (seat?.handle && seat.handle !== handle) move({ kind: "seat", id: seat.handle });
+  }, [seat, handle, move]);
   const agent = liveRowFor(agents, seat);
   // The AGENT ID, which is what a phase record names its seat by — never the
   // name, which a namesake shares. `agentId !== ""` below is load-bearing

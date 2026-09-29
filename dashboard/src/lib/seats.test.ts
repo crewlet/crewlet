@@ -25,6 +25,7 @@ import {
   runState,
   sandboxFor,
   seatAddress,
+  seatByAddress,
   seatFilter,
   seatPath,
   seatReading,
@@ -39,6 +40,8 @@ import {
   unitSeatsLabel,
   unitTally,
   UNIT_TOTAL_HINT,
+  type OrgIndex,
+  type Seat,
 } from "./seats.ts";
 import type { ChartReading } from "./chartReads.ts";
 import type {
@@ -140,6 +143,13 @@ const org: OrgProjection = {
 
 const index = indexOrg(org);
 
+/**
+ * The first seat carrying a name. A TEST convenience over fixtures whose names
+ * are unique: nothing in the product resolves a seat by name, because two
+ * seats may share one.
+ */
+const named = (i: OrgIndex, name: string): Seat | undefined => i.seats.find((s) => s.name === name);
+
 /** The same company, from an engine that reports no derived hierarchy. */
 const { derived: _omitted, ...older } = org;
 const authored = indexOrg(older);
@@ -162,31 +172,31 @@ describe("the engine's hierarchy", () => {
   // the handle keys a seat's memory — so a link pinning the client's version
   // pointed at nothing.
   test("a handle is the engine's, and is unknown where it did not say", () => {
-    expect(index.byName.get("Dev A")?.handle).toBe("dev-a");
-    expect(index.byName.get("CEO")?.handle).toBe("ceo");
+    expect(named(index, "Dev A")?.handle).toBe("dev-a");
+    expect(named(index, "CEO")?.handle).toBe("ceo");
     // Without the block, only a DECLARED handle is known.
-    expect(authored.byName.get("CEO")?.handle).toBe("ceo");
-    expect(authored.byName.get("Dev A")?.handle).toBe("");
+    expect(named(authored, "CEO")?.handle).toBe("ceo");
+    expect(named(authored, "Dev A")?.handle).toBe("");
     expect(authored.hierarchy).toBe(false);
   });
 
   // A LINK STILL REACHES A SEAT WITH NO REPORTED HANDLE: the seat screen
   // resolves a name as well as a handle, and the rule lives in one place.
   test("a seat with no reported handle is addressed by name", () => {
-    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["company", "people", "dev-a"]);
-    expect(seatPath(authored.byName.get("Dev A")!)).toEqual(["company", "people", "Dev A"]);
+    expect(seatPath(named(index, "Dev A")!)).toEqual(["company", "people", "dev-a"]);
+    expect(seatPath(named(authored, "Dev A")!)).toEqual(["company", "people", "Dev A"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
   // above every unit; its `unit:` reference put it in Backend.
   test("a root seat the engine placed sits in its unit, and says it was placed", () => {
-    const designer = index.byName.get("Designer")!;
+    const designer = named(index, "Designer")!;
     expect(designer.unit?.name).toBe("Backend");
     expect(designer.placedByRef).toBe(true);
     expect(index.rootSeats.map((s) => s.name).sort()).toEqual(["CEO", "Jane Founder"]);
     // Without the block it sits where it was WRITTEN, and nothing claims more.
-    expect(authored.byName.get("Designer")!.unit).toBeNull();
-    expect(authored.byName.get("Designer")!.placedByRef).toBe(false);
+    expect(named(authored, "Designer")!.unit).toBeNull();
+    expect(named(authored, "Designer")!.placedByRef).toBe(false);
   });
 
   test("a unit with no lead of its own takes the inherited one, marked", () => {
@@ -197,11 +207,8 @@ describe("the engine's hierarchy", () => {
     expect(backend.effectiveLead?.name).toBe("VP Engineering");
     expect(backend.leadInherited).toBe(true);
     expect(index.units.find((u) => u.name === "Engineering")!.leadInherited).toBe(false);
-    expect(index.byName.get("Dev A")?.unitLead).toBe("VP Engineering");
-    expect(index.byName.get("Dev A")?.unitChain.map((u) => u.name)).toEqual([
-      "Engineering",
-      "Backend",
-    ]);
+    expect(named(index, "Dev A")?.unitLead).toBe("VP Engineering");
+    expect(named(index, "Dev A")?.unitChain.map((u) => u.name)).toEqual(["Engineering", "Backend"]);
     // An INHERITED lead is the engine's conclusion, so without the block the
     // unit has none rather than one this client cascaded.
     expect(authored.units.find((u) => u.name === "Backend")!.effectiveLead).toBeNull();
@@ -212,16 +219,15 @@ describe("the engine's hierarchy", () => {
 
   test("reporting lines are the engine's, and unknown without them", () => {
     expect(
-      index.byName
-        .get("CEO")!
+      named(index, "CEO")!
         .reports.map((r) => r.name)
         .sort(),
     ).toEqual(["Dev A", "Dev B", "VP Engineering"]);
-    expect(index.byName.get("Dev A")!.manager?.name).toBe("CEO");
-    expect(index.byName.get("CEO")!.manager?.name).toBe("Jane Founder");
+    expect(named(index, "Dev A")!.manager?.name).toBe("CEO");
+    expect(named(index, "CEO")!.manager?.name).toBe("Jane Founder");
     // NOT NOBODY: the engine did not say.
-    expect(authored.byName.get("Dev A")!.manager).toBeNull();
-    expect(authored.byName.get("CEO")!.reports).toEqual([]);
+    expect(named(authored, "Dev A")!.manager).toBeNull();
+    expect(named(authored, "CEO")!.reports).toEqual([]);
   });
 
   // A BLOCK THAT DOES NOT DESCRIBE THIS TREE IS NOT HALF A HIERARCHY. A chart
@@ -232,7 +238,7 @@ describe("the engine's hierarchy", () => {
       derived: { ...org.derived!, seats: (org.derived!.seats ?? []).slice(0, 2) },
     });
     expect(mismatched.hierarchy).toBe(false);
-    expect(mismatched.byName.get("Dev A")!.manager).toBeNull();
+    expect(named(mismatched, "Dev A")!.manager).toBeNull();
 
     // And one naming a handle that belongs to no seat in it.
     const dangling = indexOrg({
@@ -279,7 +285,7 @@ describe("the engine's hierarchy", () => {
   test("a human seat holds a place in the hierarchy", () => {
     // Addressable-only: no runtime, no inbox, no LLM — but escalation has to
     // terminate at a person.
-    const founder = index.byName.get("Jane Founder");
+    const founder = named(index, "Jane Founder");
     expect(founder?.kind).toBe("human");
     expect(founder?.reports.map((r) => r.name)).toEqual(["CEO"]);
   });
@@ -386,6 +392,75 @@ describe("addressing a unit", () => {
     // one declares is not reachable under the name it shares.
     expect(unitByKey(twinIndex, "Platform")).toBeNull();
     expect(unitByKey(twinIndex, "")).toBeNull();
+  });
+});
+
+describe("a renamed seat or unit keeps its old addresses", () => {
+  /**
+   * `web` was created as `frontend` and answered to `site` in between; the
+   * `edge` unit was created as `platform`. A second seat now HOLDS `site` as
+   * its current handle — a live handle must win over a retired alias.
+   */
+  const renamed: OrgProjection = {
+    name: "Acme",
+    roles: [
+      { name: "Web", handle: "web" },
+      { name: "Site Reliability", handle: "site" },
+    ],
+    units: [{ id: "edge", name: "Edge", roles: [{ name: "Metal", handle: "metal" }] }],
+    derived: {
+      seats: [
+        seat({
+          handle: "web",
+          name: "Web",
+          origin_handle: "frontend",
+          former_handles: ["site", "frontend"],
+        }),
+        seat({ handle: "site", name: "Site Reliability" }),
+        seat({ handle: "metal", name: "Metal" }),
+      ],
+      units: [
+        {
+          id: "edge",
+          name: "Edge",
+          type: "team",
+          lead: "",
+          lead_inherited: false,
+          channel: "",
+          channel_inherited: false,
+          seats: ["metal"],
+          origin_key: "platform",
+          former_keys: ["platform"],
+        },
+      ],
+    },
+  };
+  const renamedIndex = indexOrg(renamed);
+
+  test("a link kept before a rename opens the seat that holds the address now", () => {
+    expect(renamedIndex.hierarchy).toBe(true);
+    expect(seatByAddress(renamedIndex, "frontend")?.handle).toBe("web");
+    expect(seatByAddress(renamedIndex, "web")?.handle).toBe("web");
+    // THE LIVE HANDLE WINS, however recently another seat gave it up.
+    expect(seatByAddress(renamedIndex, "site")?.handle).toBe("site");
+    // Typed with capitals, a handle is still the handle it spells.
+    expect(seatByAddress(renamedIndex, "FRONTEND")?.handle).toBe("web");
+    expect(seatByAddress(renamedIndex, "nobody")).toBeNull();
+  });
+
+  test("a seat's NAME is not its address", () => {
+    // Every seat here has a handle, so no name addresses one — the arm that
+    // resolved a name opened whichever namesake came first.
+    expect(seatByAddress(renamedIndex, "Site Reliability")).toBeNull();
+    // The one seat a name IS the address of: one the engine gave no handle,
+    // which `seatPath` links to by name.
+    const handleless = indexOrg({ name: "Acme", roles: [{ name: "Dev A" }] });
+    expect(seatByAddress(handleless, "Dev A")?.name).toBe("Dev A");
+  });
+
+  test("a link kept before a unit was re-keyed opens that unit", () => {
+    expect(unitByKey(renamedIndex, "platform")?.id).toBe("edge");
+    expect(unitByKey(renamedIndex, "edge")?.id).toBe("edge");
   });
 });
 
@@ -604,7 +679,7 @@ describe("what a seat is doing", () => {
       statusLine({ id: "a", agent_id: "id-a", role: "Dev A", state: "afk", afk_reason: "stall" }),
     ).toContain("no forward progress");
     expect(statusLine(undefined)).toBe("not running on this node");
-    expect(statusLine(null, { seat: index.byName.get("Jane Founder")! })).toContain("human");
+    expect(statusLine(null, { seat: named(index, "Jane Founder")! })).toContain("human");
   });
 });
 
