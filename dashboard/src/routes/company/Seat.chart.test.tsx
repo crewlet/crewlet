@@ -87,6 +87,7 @@ const projection: OrgProjection = {
     ],
     units: [
       {
+        id: "backend",
         name: "Backend",
         type: "team",
         // A HANDLE: the derived block's own vocabulary throughout, which is why

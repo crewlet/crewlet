@@ -7,111 +7,94 @@
  * leads this unit" and "who does this seat report to" must have one answer,
  * or the two views of one draft disagree. So both read this module, and so do
  * the editor and the dialogs for two facts a card also shows: the seat a
- * reported handle names, and the Datadog fallback. The third, a seat's
- * handle, is the model's (`document.knownHandles`), because the reducer
- * records operations by it; this module reads it there like every other
- * surface. It is pure: no React, no DOM, tested in a node environment.
+ * derived handle names, and the Datadog fallback. It is pure: no React, no
+ * DOM, tested in a node environment.
  *
- * THE DOCUMENT GIVES THE SHAPE, THE ENGINE GIVES THE MEANING. Units, their
- * seats and their children are drawn as the draft holds them, because that is
- * what an operation edits. Everything the engine derives (a root seat placed
- * in a unit by its `unit:` reference, the lead a unit inherits, a seat's
- * primary manager, the reporting forest) comes from the last check's
- * `derived` block, never from a second implementation of the engine's rules.
+ * THE DRAFT GIVES THE SHAPE, THE ENGINE GIVES THE MEANING. Units, their seats
+ * and their children are drawn as the draft holds them, because that is what
+ * an operation edits — and the chart's rows state where every seat sits, so
+ * there is nothing about placement to derive. What the engine derives from
+ * the whole organization (a seat's primary manager, the reporting forest,
+ * which follow from every `manages:` list with its unit entries expanded and
+ * every lead managing its unit's members) comes from the org projection's
+ * `derived` block, never from a second implementation of those rules.
  *
- * A DERIVATION IS READ THROUGH THE DOCUMENT IT DESCRIBES. Its paths are paths
- * in the document that check was sent, so they are turned into node keys with
- * that document's own path index (`state.check.sent`), never the draft's: the
- * operator may have moved a node since, and `units[1]` may name a different
- * unit now. And because the draft may have changed since that check, a
- * derived fact is used only while the fields it was derived from still hold
- * the values the check saw. A root seat is drawn in the unit its reference
- * resolved to only while it still names that unit by its current name; an
- * inherited lead is shown only while the unit still declares none and every
- * unit above it still sits and declares as it did, because the engine hands
- * a unit its parent's lead, and a unit moved under another parent inherits
- * another one. A seat's primary manager follows from the whole organization
- * (every `manages` list with its unit references expanded, every lead and
- * the order the engine walks seats in), so no field says it still holds: it
- * is shown only from a check of the draft as it stands. When the draft has
- * moved past what the check saw, the fact is left out until the next check
- * answers, rather than shown stale.
+ * ONE RULE IS RESTATED, and it is the one a unit's card cannot do without:
+ * a unit that declares no lead or channel takes the one its PARENT RESOLVED
+ * to (`org.propagateDownward`, one `cmp.Or` per field). It is read off the
+ * draft ([effectiveLeads]), because the lead a unit inherits is what its card
+ * and the dialogs about it state after every edit, and nothing derives a
+ * draft to say it.
  *
- * A CHECK THAT IS OUT MOVES NO CARD. The canvas lays cards out by their
- * measured size, and every edit sends a check. So a mark on a card that
- * comes from the engine (a reference that names nothing) is held to the same
- * rule as a placement: it stands while the node still writes what the last
- * check warned about, whatever generation that check was, rather than
- * vanishing with every edit and coming back a moment later.
+ * A DERIVATION DESCRIBES THE SAVED CHART, NOT THE DRAFT. The chart has no dry
+ * run: the one derivation there is, is the org push's, of the chart the engine
+ * holds, and the reducer keeps it only while it describes the chart the draft
+ * was made on (`document.describes`). So it is placed on the BASE draft's
+ * nodes, by the handles and keys the base holds (which a draft may have
+ * changed since), and it is used only while the draft's chart IS the saved
+ * one: a primary manager follows from the whole organization, so no one field
+ * says it still holds. Past that, the fact is said not to be derived yet,
+ * rather than shown stale.
  */
 
-import type { CompanyDocument, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
+import type { CompanyDocument, Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import type { TreeInput } from "@crewlethq/ui";
-import { checkedDocument, type BuilderState } from "./model/reducer.ts";
-import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
+import type { BuilderState } from "./model/reducer.ts";
+import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
-  allUnits,
+  addressIndex,
   locate,
-  seatNames as draftSeatNames,
+  sameChart,
   type Draft,
   type DraftSeat,
+  type DraftUnit,
 } from "./model/draft.ts";
 import {
   DATADOG_ROUTE_TO,
-  knownHandles,
   NO_DERIVATION,
-  nodeDataIn,
-  pathOfSegments,
   placeDerivation,
-  type CheckedDocument,
+  type PlacedDerivation,
 } from "./model/document.ts";
-import { getPath, isRecord } from "./model/json.ts";
+import { getPath } from "./model/json.ts";
 import { kindOf, type SeatKind } from "./model/operations.ts";
+import { referenceWarnings, type PlacedProblem } from "./model/problems.ts";
 import { reportingForest, type ReportingNode } from "./model/reporting.ts";
 
 /** What a chart is drawn from. */
 export interface ChartInputs {
   readonly draft: Draft;
-  /** The draft of the saved company: which seats exist and run today. */
+  /** The draft of the saved chart: which seats exist and run today, and what the derivation describes. */
   readonly baseDraft: Draft;
-  /** The document the last check was sent and its derivation, when it answered with one. */
-  readonly checked: CheckedDocument | null;
-  /** Whether that derivation describes the draft as it stands: no change since that check. */
+  /** The engine's derivation of the saved chart, as the org push carried it; `null` while there is none. */
+  readonly derivation: Derived | null;
+  /** That derivation, placed on the BASE draft's nodes. */
+  readonly derived: PlacedDerivation;
+  /** Whether the engine has described the saved chart at all. */
+  readonly known: boolean;
+  /** Whether the draft's chart is still the saved one, so every derived fact holds for it. */
   readonly current: boolean;
-  /** The warnings the last check placed on each node, whatever generation it answered. */
-  readonly warnings: ReadonlyMap<NodeKey, readonly ConfigWarning[]>;
 }
 
-/**
- * The chart inputs of a builder state. The check's own document and
- * derivation travel together, because the one is only readable through the
- * other (see the module doc).
- */
+/** The chart inputs of a builder state. */
 export function chartInputs(
-  state: Pick<BuilderState, "draft" | "baseDraft" | "check" | "generation">,
+  state: Pick<BuilderState, "draft" | "baseDraft" | "base">,
 ): ChartInputs {
-  const checked = checkedDocument(state.check);
-  const warnings = new Map<NodeKey, ConfigWarning[]>();
-  for (const [key, placed] of state.check.problems.byNode) {
-    const found = placed.filter((p) => p.severity === "warning");
-    if (found.length > 0)
-      warnings.set(
-        key,
-        found.map((p) => p.source as ConfigWarning),
-      );
-  }
+  const derived = state.base.derived;
   return {
     draft: state.draft,
     baseDraft: state.baseDraft,
-    checked,
-    current: checked !== null && state.check.generation === state.generation,
-    warnings,
+    derivation: derived,
+    derived: derived ? placeDerivation(state.baseDraft, derived) : NO_DERIVATION,
+    known: derived !== null,
+    current: derived !== null && sameChart(state.draft, state.baseDraft),
   };
 }
 
 /** A unit's lead as the chart shows it. */
 export interface LeadView {
-  /** The seat name, as a lead is written. */
+  /** The seat's handle, as a lead is written. */
+  readonly handle: string;
+  /** The seat's name, as a person reads it: its handle when it has none. */
   readonly name: string;
   /** Inherited from an ancestor unit rather than declared by this one. */
   readonly inherited: boolean;
@@ -121,7 +104,6 @@ export interface CompanyView {
   readonly type: "company";
   readonly key: NodeKey;
   readonly name: string;
-  /** Root seats drawn at the root: every one not placed in a unit by reference. */
   readonly seats: readonly NodeKey[];
   readonly units: readonly NodeKey[];
 }
@@ -129,28 +111,26 @@ export interface CompanyView {
 export interface UnitView {
   readonly type: "unit";
   readonly key: NodeKey;
+  /** The unit's key: the address every reference names it by. */
+  readonly address: string;
   readonly name: string;
   /**
-   * The type as written; else the engine's effective type, while the check
-   * saw the unit write none either; else "".
+   * The type as written; else the engine's effective type, while the saved
+   * unit writes none either; else "".
    */
   readonly unitType: string;
-  /** Declared or inherited; `null` when it has none, `undefined` until a check says what it inherits. */
-  readonly lead: LeadView | null | undefined;
+  /** Declared or inherited ([effectiveLeads]); `null` when it has none. */
+  readonly lead: LeadView | null;
   /**
    * What the unit would have with no lead of its own, marked inherited: its
    * parent's lead when it declares one, the lead it inherits when it does
-   * not. `null` when that is nothing, or not known.
+   * not. `null` when that is nothing.
    */
   readonly inheritable: LeadView | null;
-  /**
-   * The lead the unit declares that the last check found no seat for, while
-   * the unit still declares it and no seat of that name has been added since.
-   */
+  /** The lead the unit declares that names no seat of the draft. */
   readonly danglingLead: string | null;
-  /** The engine's sentence about `danglingLead`, when that check gave one. */
+  /** What the draft's own check says about `danglingLead`. */
   readonly danglingNote: string | undefined;
-  /** Seats drawn inside the unit: its own, then the root seats placed in it. */
   readonly seats: readonly NodeKey[];
   readonly units: readonly NodeKey[];
   readonly parent: NodeKey;
@@ -161,31 +141,23 @@ export interface SeatView {
   readonly key: NodeKey;
   readonly name: string;
   readonly kind: SeatKind;
+  /** The handle it is addressed by in the draft. */
+  readonly handle: string;
   /**
-   * The handle the engine runs it under: declared, carried by its key, or
-   * reported by the last check while the seat is still called what that
-   * check saw. `undefined` while no check has said.
+   * The seat as the saved chart holds it: the handle and name its own screen
+   * and its live state are found by, which a rename in this draft has not
+   * changed yet. `null` for a seat this draft created.
    */
-  readonly handle: string | undefined;
-  /**
-   * The seat as the saved company holds it: the handle and name its own
-   * screen and its live state are found by, which a rename or a handle chosen
-   * in this draft has not changed yet. `null` for a seat this draft created.
-   */
-  readonly saved: { readonly handle: string | undefined; readonly name: string } | null;
+  readonly saved: { readonly handle: string; readonly name: string } | null;
   /** A saved agent seat that is still an agent seat in the draft: it has a live state to show. */
   readonly running: boolean;
-  /** A root seat the engine placed in the unit it is drawn in, by its `unit:` reference. */
-  readonly placedByRef: boolean;
-  /** The `unit:` a root seat writes that the engine resolved to no unit. */
-  readonly danglingUnitRef: string | null;
-  /** The engine's sentence about `danglingUnitRef`, when the last check gave one. */
-  readonly danglingNote: string | undefined;
+  /** Its `manages:` entries that name no seat and no unit of the draft, as the check words them. */
+  readonly danglingNotes: readonly string[];
   /** The seat an alert that names nobody wakes (`integrations.datadog.route_to`, while enabled). */
   readonly datadogFallback: boolean;
   /**
-   * Its primary manager's name; `null` for none; `undefined` until a check
-   * of the draft as it stands says (see the module doc).
+   * Its primary manager's name; `null` for none; `undefined` while the draft's
+   * chart is not the saved one, or the engine has not described it.
    */
   readonly manager: string | null | undefined;
   /** The node it is drawn under: the company or a unit. */
@@ -205,20 +177,17 @@ export interface Structure {
 // ---------------------------------------------------------------------------
 
 /**
- * The key of the seat of the draft the last check gave `handle`, for reading
- * a handle the engine reported (a manager, a lead, an automatic report) as a
- * node. `undefined` when that check named no such seat or the seat is gone.
- * Whether the fact the handle came from still holds is the caller's to judge:
- * a manager only from a check of the draft as it stands, a lead while the
- * chain above it is as checked.
+ * The key of the seat a derived handle names — a manager, a lead, an
+ * automatic report — for reading it as a node of the draft. Derived handles
+ * are the SAVED chart's, so they are found on the base and the node read in
+ * the draft by its key, which follows a handle the draft has changed.
+ * `undefined` when the saved chart holds no such seat or the draft removed it.
  */
 export function keyOfHandle(
-  state: Pick<BuilderState, "draft" | "check">,
+  state: Pick<BuilderState, "draft" | "baseDraft" | "base">,
   handle: string,
 ): NodeKey | undefined {
-  const checked = checkedDocument(state.check);
-  if (!checked) return undefined;
-  const key = placeDerivation(checked.sent.index, checked.derived).keyOfHandle.get(handle);
+  const key = placeDerivation(state.baseDraft, state.base.derived).keyOfHandle.get(handle);
   return key !== undefined && locate(state.draft, key)?.kind === "seat" ? key : undefined;
 }
 
@@ -249,40 +218,90 @@ export function datadogEnabled(company: CompanyDocument): boolean {
   return getPath(company, [...DATADOG_ROUTE_TO.slice(0, -1), "enabled"]) === true;
 }
 
-/** The engine's facts about the last checked document, by node key. */
+const text = (value: unknown): string =>
+  typeof value === "string" && value.trim() !== "" ? value : "";
+
+/** The engine's facts about one derived node of the saved chart. */
 interface Engine {
-  readonly seatByKey: ReadonlyMap<NodeKey, DerivedSeat>;
-  readonly unitByKey: ReadonlyMap<NodeKey, DerivedUnit>;
-  readonly keyOfHandle: ReadonlyMap<string, NodeKey>;
-  /** The handle each seat of the draft runs under, where known (`document.knownHandles`). */
-  readonly handles: ReadonlyMap<NodeKey, string>;
-  /** The node's JSON in the document that was checked. */
-  readonly sentData: (key: NodeKey) => Record<string, unknown> | undefined;
-  /** The node it sat under in the document that was checked: a unit, the company, or unknown. */
-  readonly sentParent: (key: NodeKey) => NodeKey | undefined;
-  readonly checked: CheckedDocument | null;
+  readonly seat: (key: NodeKey) => DerivedSeat | undefined;
+  readonly unit: (key: NodeKey) => DerivedUnit | undefined;
+  /** The draft's seat a derived handle names; see [keyOfHandle]. */
+  readonly seatOfHandle: (handle: string) => DraftSeat | undefined;
 }
 
-function engineOf({ draft, checked }: ChartInputs): Engine {
-  const placed = checked ? placeDerivation(checked.sent.index, checked.derived) : NO_DERIVATION;
+function engineOf({ draft, derived }: ChartInputs): Engine {
   return {
-    ...placed,
-    handles: knownHandles(draft, checked),
-    sentData: (key) => (checked ? nodeDataIn(checked.sent, key) : undefined),
-    sentParent: (key) => {
-      // `units[i]` and `roles[i]` sit under the company; anything deeper sits
-      // under the unit two segments up (`...children[i]`, `...roles[i]`).
-      const segments = checked?.sent.index.segmentsOf.get(key);
-      if (!checked || !segments || segments.length < 2) return undefined;
-      if (segments.length === 2) return COMPANY_KEY;
-      return checked.sent.index.byPath.get(pathOfSegments(segments.slice(0, -2)));
+    seat: (key) => derived.seatByKey.get(key),
+    unit: (key) => derived.unitByKey.get(key),
+    seatOfHandle: (handle) => {
+      const key = derived.keyOfHandle.get(handle);
+      const found = key === undefined ? undefined : locate(draft, key);
+      return found?.kind === "seat" ? found.node : undefined;
     },
-    checked,
   };
 }
 
-const text = (value: unknown): string =>
-  typeof value === "string" && value.trim() !== "" ? value : "";
+/** A seat's name for a person: its handle when it has none. */
+const seatName = (seat: DraftSeat) => seat.data.name || seat.data.handle;
+
+/** A unit's resolved lead and channel, as the engine's cascade gives them. */
+export interface Resolved {
+  /** The lead's HANDLE, declared or inherited; "" for none. */
+  readonly lead: string;
+  readonly leadInherited: boolean;
+  readonly channel: string;
+  readonly channelInherited: boolean;
+}
+
+/**
+ * Every unit's lead and channel as the engine RESOLVES them: what the unit
+ * declares, else what its parent resolved to, down every chain.
+ *
+ * RESTATES `org.propagateDownward` — `u.Lead = cmp.Or(u.DeclaredLead,
+ * parentLead)`, and the same for the channel — which is the whole of the
+ * rule: a child inherits what its parent RESOLVED to, so a lead set on a
+ * division reaches a team three levels down through units that named nothing.
+ * A lead is a handle as written; whether it names a seat is the reader's to
+ * ask ([addressIndex]), exactly as the engine resolves it after the cascade.
+ */
+export function effectiveLeads(draft: Draft): ReadonlyMap<NodeKey, Resolved> {
+  const out = new Map<NodeKey, Resolved>();
+  const walk = (units: readonly DraftUnit[], lead: string, channel: string) => {
+    for (const unit of units) {
+      const ownLead = text(unit.data.lead);
+      const ownChannel = text(unit.data.channel);
+      const resolved: Resolved = {
+        lead: ownLead || lead,
+        leadInherited: ownLead === "" && lead !== "",
+        channel: ownChannel || channel,
+        channelInherited: ownChannel === "" && channel !== "",
+      };
+      out.set(unit.key, resolved);
+      walk(unit.children, resolved.lead, resolved.channel);
+    }
+  };
+  walk(draft.units, "", "");
+  return out;
+}
+
+/**
+ * The lead a unit resolves to, as the chart shows it: `null` for none, and for
+ * an INHERITED lead naming no seat, which the engine resolves to nobody (the
+ * unit that declares it carries the mark).
+ */
+function leadView(
+  resolved: Resolved | undefined,
+  seats: ReadonlyMap<string, DraftSeat>,
+): LeadView | null {
+  if (!resolved || resolved.lead === "") return null;
+  const seat = seats.get(resolved.lead);
+  if (!seat && resolved.leadInherited) return null;
+  return {
+    handle: resolved.lead,
+    name: seat ? seatName(seat) : resolved.lead,
+    inherited: resolved.leadInherited,
+  };
+}
 
 /** Builds the structure chart of a draft. */
 export function structure(inputs: ChartInputs): Structure {
@@ -290,204 +309,120 @@ export function structure(inputs: ChartInputs): Structure {
   const engine = engineOf(inputs);
   const nodes = new Map<NodeKey, NodeView>();
   const routeTo = datadogFallback(draft.company);
+  const { seats: seatsByAddress } = addressIndex(draft);
+  const resolved = effectiveLeads(draft);
 
-  const unitName = new Map<NodeKey, string>();
-  for (const { unit } of allUnits(draft)) unitName.set(unit.key, unit.data.name);
-  const unitNames = new Set(unitName.values());
-  const seatNames = new Set(draftSeatNames(draft));
-  /** The last check's warning about one of a node's references, by the reference it names. */
-  const warningOn = (key: NodeKey, ref: ConfigWarning["ref"]) =>
-    inputs.warnings.get(key)?.find((w) => w.kind === "dangling_reference" && w.ref === ref);
-
-  // WHERE A ROOT SEAT IS DRAWN. The engine says whether its reference placed
-  // it, and in which unit; the draft says whether that is still true. A
-  // reference the check found no unit for is dangling only while the draft
-  // still holds none of that name: a unit added or renamed to it since is
-  // one the engine will place the seat in, which the next check says.
-  const placedIn = new Map<NodeKey, NodeKey[]>();
-  const rootSeats: NodeKey[] = [];
-  const placement = new Map<NodeKey, { unit: NodeKey | null; dangling: string | null }>();
-  for (const seat of draft.roles) {
-    const ref = text(seat.data.unit);
-    const derived = engine.seatByKey.get(seat.key);
-    const checked = engine.sentData(seat.key);
-    let unit: NodeKey | null = null;
-    let dangling: string | null = null;
-    if (ref !== "" && derived) {
-      if (derived.placed_by_ref && derived.unit_path) {
-        const target = engine.checked?.sent.index.byPath.get(derived.unit_path);
-        if (target !== undefined && unitName.get(target) === ref) unit = target;
-      } else if (
-        !derived.placed_by_ref &&
-        checked &&
-        text(checked.unit) === ref &&
-        !unitNames.has(ref)
-      ) {
-        dangling = ref;
-      }
-    }
-    placement.set(seat.key, { unit, dangling });
-    if (unit === null) rootSeats.push(seat.key);
-    else placedIn.set(unit, [...(placedIn.get(unit) ?? []), seat.key]);
+  // THE DRAFT'S OWN CHECK OF ITS REFERENCES, taken here rather than read off
+  // the last check: it is a pure reading of the draft, so a mark stands for
+  // exactly as long as the reference it is about, and never lags an edit.
+  const warnings = new Map<NodeKey, PlacedProblem[]>();
+  for (const w of referenceWarnings(draft)) {
+    if (w.node !== null) warnings.set(w.node, [...(warnings.get(w.node) ?? []), w]);
   }
+  const refWarnings = (key: NodeKey, ref: "lead" | "manages") =>
+    (warnings.get(key) ?? []).filter((w) => "ref" in w.source && w.source.ref === ref);
 
-  // A PRIMARY MANAGER IS READ ONLY FROM A CHECK OF THIS VERY DRAFT. Any edit
-  // (a manages list, a lead, a move, a reorder, a rename a reference follows)
-  // can change it, and deciding which ones do would be the engine's rules
-  // written again, so until the next check answers it is unknown.
+  // A PRIMARY MANAGER IS READ ONLY WHILE THE DRAFT'S CHART IS THE SAVED ONE.
+  // Any edit (a manages list, a lead, a move, a new address a reference
+  // follows) can change it, and deciding which ones do would be the engine's
+  // rules written again.
   const managerName = (key: NodeKey): string | null | undefined => {
-    const derived = inputs.current ? engine.seatByKey.get(key) : undefined;
+    const derived = inputs.current ? engine.seat(key) : undefined;
     if (!derived) return undefined;
     if (!derived.manager) return null;
-    const managerKey = engine.keyOfHandle.get(derived.manager);
-    const found = managerKey === undefined ? undefined : locate(draft, managerKey);
-    return found?.kind === "seat" ? found.node.data.name : undefined;
+    const manager = engine.seatOfHandle(derived.manager);
+    return manager ? seatName(manager) : undefined;
   };
 
   const seatView = (seat: DraftSeat, parent: NodeKey): SeatView => {
     const kind = kindOf(seat.data);
-    const handle = engine.handles.get(seat.key);
     const base = locate(baseDraft, seat.key);
     const savedSeat =
-      base?.kind === "seat"
-        ? {
-            handle: text(base.node.data.handle) || handleOfKey(seat.key),
-            name: base.node.data.name,
-          }
-        : null;
+      base?.kind === "seat" ? { handle: base.node.data.handle, name: base.node.data.name } : null;
     const running = base?.kind === "seat" && kindOf(base.node.data) === "agent" && kind === "agent";
-    const placed = placement.get(seat.key);
-    return {
+    const view: SeatView = {
       type: "seat",
       key: seat.key,
       name: seat.data.name,
       kind,
-      handle,
+      handle: seat.data.handle,
       saved: savedSeat,
       running,
-      placedByRef: (placed?.unit ?? null) !== null,
-      danglingUnitRef: placed?.dangling ?? null,
-      danglingNote: placed?.dangling ? warningOn(seat.key, "unit")?.message : undefined,
-      datadogFallback: routeTo !== undefined && handle === routeTo,
+      danglingNotes: refWarnings(seat.key, "manages").map((w) => w.message),
+      datadogFallback: routeTo !== undefined && seat.data.handle === routeTo,
       manager: managerName(seat.key),
       parent,
     };
+    nodes.set(seat.key, view);
+    return view;
   };
 
-  /**
-   * The lead a unit that declares none has, as the engine derived it: `null`
-   * for none, `undefined` while unknown.
-   *
-   * A LEAD IS INHERITED DOWN A CHAIN, so the derivation of it holds only while
-   * every unit on that chain still sits where the check saw it and declares
-   * the lead the check saw. Change an ancestor's lead, or move a unit under
-   * another parent, and every unit below inherits something the check never
-   * saw, which the next check reports.
-   */
-  const inheritedLead = (key: NodeKey, chainAsChecked: boolean): LeadView | null | undefined => {
-    const derived = engine.unitByKey.get(key);
-    if (!derived || !chainAsChecked) return undefined;
-    if (!derived.lead || !derived.lead_inherited) return null;
-    const leadKey = engine.keyOfHandle.get(derived.lead);
-    const found = leadKey === undefined ? undefined : locate(draft, leadKey);
-    // The inherited lead removed since the check: what the unit inherits now
-    // is the next check's to say.
-    return found?.kind === "seat" ? { name: found.node.data.name, inherited: true } : undefined;
-  };
-
-  const tree: TreeInput[] = [];
   const visitUnits = (
-    units: Draft["units"],
+    units: readonly DraftUnit[],
     parent: NodeKey,
-    parentLead: LeadView | null | undefined,
-    parentAsChecked: boolean,
+    parentLead: LeadView | null,
   ): TreeInput[] =>
     units.map((unit) => {
       const declared = text(unit.data.lead);
-      const checked = engine.sentData(unit.key);
-      const asChecked =
-        parentAsChecked &&
-        checked !== undefined &&
-        engine.sentParent(unit.key) === parent &&
-        text(checked.lead) === declared;
-      const lead: LeadView | null | undefined =
-        declared !== "" ? { name: declared, inherited: false } : inheritedLead(unit.key, asChecked);
-      // A LEAD THAT NAMES NO SEAT is marked while the unit still declares the
-      // lead the check warned about and no seat of that name has come since,
-      // which the next check would resolve.
-      const leadWarning = warningOn(unit.key, "lead");
-      const danglingLead =
-        leadWarning &&
-        declared !== "" &&
-        checked !== undefined &&
-        text(checked.lead) === declared &&
-        !seatNames.has(declared)
-          ? declared
-          : null;
+      const saved = locate(baseDraft, unit.key);
+      const savedUnit = saved?.kind === "unit" ? saved.node.data : undefined;
+      const lead = leadView(resolved.get(unit.key), seatsByAddress);
+      const danglingLead = declared !== "" && !seatsByAddress.has(declared) ? declared : null;
       // With a lead of its own, the unit would inherit its parent's; without
       // one, it already does.
       const source = declared !== "" ? parentLead : lead;
-      const inheritable: LeadView | null = source ? { name: source.name, inherited: true } : null;
-      const seats = [...unit.roles.map((s) => s.key), ...(placedIn.get(unit.key) ?? [])];
-      const own = unit.roles.map((s) => seatView(s, unit.key));
-      const placed = (placedIn.get(unit.key) ?? []).map((k) =>
-        seatView(
-          draft.roles.find((s) => s.key === k)!,
-          unit.key,
-        ),
-      );
+      const inheritable: LeadView | null = source ? { ...source, inherited: true } : null;
       nodes.set(unit.key, {
         type: "unit",
         key: unit.key,
+        address: unit.data.key,
         name: unit.data.name,
         // The engine's type stands in for one the unit does not write only
-        // while the check saw none written either: a type cleared since is
-        // not the type that check reported.
+        // while the saved unit writes none either: a type cleared since is
+        // not the type the engine reported.
         unitType:
           text(unit.data.type) ||
-          (checked !== undefined && text(checked.type) === ""
-            ? (engine.unitByKey.get(unit.key)?.type ?? "")
+          (savedUnit !== undefined && text(savedUnit.type) === ""
+            ? (engine.unit(unit.key)?.type ?? "")
             : ""),
         lead,
         inheritable,
         danglingLead,
-        danglingNote: danglingLead !== null ? leadWarning?.message : undefined,
-        seats,
+        danglingNote: danglingLead !== null ? refWarnings(unit.key, "lead")[0]?.message : undefined,
+        seats: unit.roles.map((s) => s.key),
         units: unit.children.map((c) => c.key),
         parent,
       });
-      const seatItems = [...own, ...placed].map((view): TreeInput => {
-        nodes.set(view.key, view);
+      const seatItems = unit.roles.map((seat): TreeInput => {
+        const view = seatView(seat, unit.key);
         return { id: view.key, label: view.name };
       });
       return {
         id: unit.key,
         label: unit.data.name,
-        children: [...seatItems, ...visitUnits(unit.children, unit.key, lead, asChecked)],
+        children: [...seatItems, ...visitUnits(unit.children, unit.key, lead)],
       };
     });
 
-  const companySeats = rootSeats.map((key): TreeInput => {
-    const view = seatView(
-      draft.roles.find((s) => s.key === key)!,
-      COMPANY_KEY,
-    );
-    nodes.set(key, view);
-    return { id: key, label: view.name };
+  const companySeats = draft.roles.map((seat): TreeInput => {
+    const view = seatView(seat, COMPANY_KEY);
+    return { id: view.key, label: view.name };
   });
   const companyName = text(draft.company.name);
   nodes.set(COMPANY_KEY, {
     type: "company",
     key: COMPANY_KEY,
     name: companyName,
-    seats: rootSeats,
+    seats: draft.roles.map((s) => s.key),
     units: draft.units.map((u) => u.key),
   });
-  tree.push({
-    id: COMPANY_KEY,
-    label: companyName || "Company",
-    children: [...companySeats, ...visitUnits(draft.units, COMPANY_KEY, null, true)],
-  });
+  const tree: TreeInput[] = [
+    {
+      id: COMPANY_KEY,
+      label: companyName || "Company",
+      children: [...companySeats, ...visitUnits(draft.units, COMPANY_KEY, null)],
+    },
+  ];
   return { nodes, tree };
 }
 
@@ -500,18 +435,14 @@ export const CYCLE_GROUP = "reporting:cycles";
 
 /** One seat in the reporting chart. */
 export interface ReportingItem {
-  /** The node key when the seat is in the draft that was checked, else a position id. */
+  /** The node key when the seat is in the draft, else a position id. */
   readonly id: string;
-  /** The seat's node key; `null` when the derivation names a seat no key reaches. */
+  /** The seat's node key; `null` when the draft no longer holds the seat. */
   readonly key: NodeKey | null;
   readonly name: string;
   readonly kind: SeatKind;
-  /**
-   * The handle, read as the structure chart reads it for a seat still in the
-   * draft (`undefined` while no check has reported it), else the one the
-   * derivation carries.
-   */
-  readonly handle: string | undefined;
+  /** The handle: the draft's for a seat it still holds, else the one the derivation carries. */
+  readonly handle: string;
   /** No manager: a top of the forest. */
   readonly root: boolean;
   /** How many seats the cycle it belongs to holds; absent outside a cycle. */
@@ -520,8 +451,13 @@ export interface ReportingItem {
 }
 
 export interface Reporting {
-  /** Whether the engine has described this draft's reporting lines at all. */
+  /** Whether the engine has described the saved chart's reporting lines at all. */
   readonly known: boolean;
+  /**
+   * Whether those lines are the draft's own: its chart is still the saved
+   * one. When it is not, the lines drawn are the saved company's.
+   */
+  readonly current: boolean;
   readonly roots: readonly ReportingItem[];
   readonly cycles: readonly ReportingItem[];
   /** The roots, then the cycle group when there is one, as the tree model reads them. */
@@ -530,30 +466,28 @@ export interface Reporting {
 }
 
 /**
- * Builds the reporting chart from the last check's derivation, arranged by
- * the model's forest (primary managers, no-manager roots, the cycle group).
- * A seat's name and handle are its CURRENT ones in the draft, so a rename
- * since the check is not shown stale on a line that has not changed.
+ * Builds the reporting chart from the derivation of the saved chart, arranged
+ * by the model's forest (primary managers, no-manager roots, the cycle
+ * group). A seat's name and handle are its CURRENT ones in the draft, so a
+ * rename since is not shown stale on a line that has not changed.
  */
 export function reporting(inputs: ChartInputs): Reporting {
-  const { checked, draft } = inputs;
-  const engine = engineOf(inputs);
+  const { draft, derived, derivation } = inputs;
   const items = new Map<string, ReportingItem>();
-  if (!checked) {
-    return { known: false, roots: [], cycles: [], tree: [], items };
+  if (!derivation) {
+    return { known: false, current: false, roots: [], cycles: [], tree: [], items };
   }
-  const { sent, derived } = checked;
-  const forest = reportingForest(derived);
+  const forest = reportingForest(derivation);
   const convert = (node: ReportingNode, root: boolean): ReportingItem => {
-    const key = node.seat.path === undefined ? undefined : sent.index.byPath.get(node.seat.path);
+    const key = derived.keyOfHandle.get(node.seat.handle);
     const found = key === undefined ? undefined : locate(draft, key);
     const current = found?.kind === "seat" ? found.node : undefined;
     const item: ReportingItem = {
-      id: key ?? `reporting:${node.index}`,
-      key: current ? key! : null,
+      id: current ? current.key : `reporting:${node.index}`,
+      key: current ? current.key : null,
       name: current?.data.name ?? node.seat.name,
       kind: current ? kindOf(current.data) : node.seat.kind === "human" ? "human" : "agent",
-      handle: current ? engine.handles.get(current.key) : node.seat.handle,
+      handle: current?.data.handle ?? node.seat.handle,
       root,
       ...(node.cycle ? { cycleSize: node.cycle.length } : {}),
       reports: node.reports.map((r) => convert(r, false)),
@@ -572,5 +506,5 @@ export function reporting(inputs: ChartInputs): Reporting {
   if (cycles.length > 0) {
     tree.push({ id: CYCLE_GROUP, label: "Reporting cycle", children: cycles.map(input) });
   }
-  return { known: true, roots, cycles, tree, items };
+  return { known: true, current: inputs.current, roots, cycles, tree, items };
 }

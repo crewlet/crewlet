@@ -24,7 +24,7 @@
 import { isAbort, rest, RestError, type RestResponse } from "~/protocol/index.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import type { KeySource } from "./model/keys.ts";
-import type { Clock, ConfigTransport, HttpAnswer } from "./model/transport.ts";
+import type { Clock, EngineTransport, HttpAnswer } from "./model/transport.ts";
 
 /** What a request that never reached the engine answers: status 0 with its reason. */
 function unreachable(err: unknown): HttpAnswer {
@@ -53,11 +53,11 @@ export async function answerOf(call: Promise<RestResponse>): Promise<HttpAnswer>
   }
 }
 
-/** The configuration API over the dashboard's one REST path. */
-export const restTransport: ConfigTransport = {
+/** The settings and the org chart, over the dashboard's one REST path. */
+export const restTransport: EngineTransport = {
   send: (request, signal) =>
     answerOf(
-      rest.request(request.method, "/config", {
+      rest.request(request.method, request.path, {
         query: request.query,
         contentType: request.contentType,
         headers: request.headers,
@@ -65,9 +65,11 @@ export const restTransport: ConfigTransport = {
         signal,
       }),
     ),
-  current: (signal) => answerOf(rest.request("GET", "/config", { signal })),
+  settings: (signal) => answerOf(rest.request("GET", "/config", { signal })),
   revision: (id, signal) =>
     answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),
+  chart: (signal) =>
+    answerOf(rest.request("GET", "/chart", { query: { runtime: "true" }, signal })),
 };
 
 /** A monotonic clock and one-shot timers. */

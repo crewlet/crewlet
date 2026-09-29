@@ -6,12 +6,12 @@
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { fromDocument } from "./model/document.ts";
+import { chartPrint, fingerprint, fromChart } from "./model/document.ts";
 import { EMPTY_DRAFT } from "./model/draft.ts";
 import { OPERATIONS_VERSION, record, type Intent, type Operation } from "./model/operations.ts";
 import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/persistence.ts";
 import { templateIntent } from "./model/templates.ts";
-import { countingKeys, fixtureDerived } from "./model/testkit.ts";
+import { countingKeys } from "./model/testkit.ts";
 import { asReader, company, Engine, json, mountBuilder, rereadViewer } from "./testkit.tsx";
 
 beforeEach(() => {
@@ -29,11 +29,14 @@ afterEach(() => {
 
 /** An operation recorded against the fixture company, as a kept draft holds it. */
 function recorded(intent: Intent): Operation {
-  const doc = company();
-  const result = record(fromDocument(doc, fixtureDerived(doc)), intent);
+  const { settings, chart } = company();
+  const result = record(fromChart(settings, chart), intent);
   if (!result.ok) throw new Error(result.message);
   return result.op;
 }
+
+/** The fingerprint of the fixture company's chart, which a kept draft records beside the revision. */
+const fixturePrint = () => fingerprint(chartPrint(company().chart));
 
 const editCeo = (): Operation =>
   recorded({
@@ -47,6 +50,7 @@ function keep(draft: Partial<KeptDraft>): void {
     v: OPERATIONS_VERSION,
     mode: "edit",
     baseRevision: "r1",
+    basePrint: fixturePrint(),
     ops: [editCeo()],
     undone: [],
     savedAt: 1_000,
@@ -57,8 +61,15 @@ function keep(draft: Partial<KeptDraft>): void {
 
 const kept = () => sessionStorage.getItem(DRAFT_STORAGE_KEY);
 
-// ONLY THE LOG. The document holds contact identities, emails and policies,
-// and kept in storage it would outlive the operator's session.
+/** Whether the draft on screen holds changes: Review and save opens only then. */
+const holdsChanges = () =>
+  !(screen.getByRole("button", { name: "Review and save" }) as HTMLButtonElement).disabled;
+
+/** The Builder's one polite live region. */
+const liveRegion = () => document.querySelector("[data-live-region]")!;
+
+// ONLY THE LOG. The company holds contact identities, emails and policies,
+// and kept in storage they would outlive the operator's session.
 test("an edit is kept as its operation log and nothing of the document", async () => {
   const engine = new Engine(company());
   mountBuilder({ engine });
@@ -67,9 +78,10 @@ test("an edit is kept as its operation log and nothing of the document", async (
   await waitFor(() => expect(kept()).not.toBeNull());
   const value = JSON.parse(kept()!) as Record<string, unknown>;
   expect(Object.keys(value).sort()).toEqual(
-    ["baseRevision", "mode", "ops", "savedAt", "undone", "v"].sort(),
+    ["baseRevision", "basePrint", "mode", "ops", "savedAt", "undone", "v"].sort(),
   );
   expect(value.baseRevision).toBe("r1");
+  expect(value.basePrint).toBe(fixturePrint());
   expect(value.ops).toHaveLength(1);
   expect(kept()).not.toContain("Designer");
   expect(kept()).not.toContain("anthropic");
@@ -85,11 +97,10 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
   expect(kept()).not.toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
-  await waitFor(() =>
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-  );
+  await waitFor(() => expect(holdsChanges()).toBe(true));
   expect(screen.getByText("editable")).toBeDefined();
   expect(kept()).not.toBeNull();
+  expect(engine.chartWrites()).toHaveLength(0);
 });
 
 // A NEWER REVISION WHILE THE OFFER STANDS. The offer was made against the
@@ -101,27 +112,26 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
   const engine = new Engine(company());
   const { store } = mountBuilder({ engine });
   await screen.findByText(/This tab kept a draft with 1 change/);
-  await waitFor(() => expect(engine.checks()).toHaveLength(1));
-  const next = company();
-  next.roles![1]!.goal = "Design things";
-  engine.document = next;
-  engine.revision = "r2";
-  const reads = engine.sent("GET").length;
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
-  expect(await screen.findByText("The configuration changed")).toBeDefined();
-  // The base under the offer is not read again: a Keep pressed while a newer
-  // base waited for its first check would be refused, and the kept draft
-  // cleared with the refusal.
+  await screen.findByText("No problems");
+  engine.seats.find((s) => s.handle === "designer")!.goal = "Design things";
+  const reads = engine.chartReads().length;
+  act(() => store.applyOrg(engine.orgPush()));
+  expect(await screen.findByText("The company changed")).toBeDefined();
+  // The base under the offer is not read again — only the check's read went
+  // out: a Keep pressed while a newer base waited for its first check would be
+  // refused, and the kept draft cleared with the refusal.
   await new Promise((r) => setTimeout(r, 100));
-  expect(engine.sent("GET")).toHaveLength(reads);
+  expect(engine.chartReads()).toHaveLength(reads + 1);
 
   fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
   fireEvent.click(await screen.findByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
-  await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
-  expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
-  await waitFor(() => expect(JSON.parse(kept()!).baseRevision).toBe("r2"));
+  await screen.findByText("No problems");
+  expect(holdsChanges()).toBe(true);
+  // Kept again, now against the chart the colleague saved.
+  const moved = fingerprint(chartPrint(engine.chart()));
+  await waitFor(() => expect(JSON.parse(kept()!).basePrint).toBe(moved));
 });
 
 test("discarding a kept draft removes it and starts from the saved configuration", async () => {
@@ -131,33 +141,38 @@ test("discarding a kept draft removes it and starts from the saved configuration
   fireEvent.click(await screen.findByRole("button", { name: "Discard it" }));
   await waitFor(() => expect(kept()).toBeNull());
   expect(screen.getByText("editable")).toBeDefined();
-  expect(engine.checks().at(-1)!.body).toEqual({});
+  expect(holdsChanges()).toBe(false);
+  expect(engine.chartWrites()).toHaveLength(0);
 });
 
-// A DRAFT MUST SURVIVE A NEWER REVISION, which is exactly when it matters:
-// somebody saved while the operator was away.
-test("a kept draft of an older revision is restored through the update flow", async () => {
-  keep({ baseRevision: "r0" });
+// A DRAFT MUST SURVIVE A NEWER COMPANY, which is exactly when it matters:
+// somebody saved while the operator was away — the settings, or the chart.
+test.each([
+  ["settings revision", { baseRevision: "r0" }],
+  ["chart", { basePrint: "0000000000000000" }],
+] as const)("a kept draft of an older %s is restored through the update flow", async (_, older) => {
+  keep(older);
   const engine = new Engine(company());
   mountBuilder({ engine });
   const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Restore the draft" }));
-  await waitFor(() =>
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-  );
-  // Kept again, now against the revision it was restored onto.
-  await waitFor(() => expect(JSON.parse(kept()!).baseRevision).toBe("r1"));
+  await waitFor(() => expect(holdsChanges()).toBe(true));
+  // Kept again, now against the company it was restored onto.
+  await waitFor(() => {
+    const value = JSON.parse(kept()!) as KeptDraft;
+    expect([value.baseRevision, value.basePrint]).toEqual(["r1", fixturePrint()]);
+  });
 });
 
-test("declining to restore a kept draft onto a newer revision discards it", async () => {
+test("declining to restore a kept draft onto a newer company discards it", async () => {
   keep({ baseRevision: "r0" });
   const engine = new Engine(company());
   mountBuilder({ engine });
   const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Discard the kept draft" }));
   await waitFor(() => expect(kept()).toBeNull());
-  expect(engine.checks().at(-1)!.body).toEqual({});
+  expect(holdsChanges()).toBe(false);
 });
 
 test("a draft kept for creating a company is discarded, with a word, when a company exists", async () => {
@@ -165,7 +180,12 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
   if (!built.ok) throw new Error(built.message);
   const op = record(EMPTY_DRAFT, built.intent);
   if (!op.ok) throw new Error(op.message);
-  keep({ mode: "create", baseRevision: null, ops: [op.op] });
+  keep({
+    mode: "create",
+    baseRevision: null,
+    basePrint: fingerprint(chartPrint(null)),
+    ops: [op.op],
+  });
   const engine = new Engine(company());
   mountBuilder({ engine });
   expect(
@@ -186,13 +206,14 @@ test("a change of reader forgets the kept draft and keeps the one on screen", as
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(kept()).not.toBeNull());
-  const checks = engine.checks().length;
+  const reads = engine.chartReads().length;
   who = "sam.lee";
   rereadViewer(store);
   await waitFor(() => expect(kept()).toBeNull());
   // Checked again as the new reader, with the edit still in the draft.
-  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(checks));
-  expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+  await waitFor(() => expect(engine.chartReads().length).toBeGreaterThan(reads));
+  await screen.findByText("No problems");
+  expect(holdsChanges()).toBe(true);
 });
 
 test("a change of reader while a kept draft is offered withdraws the offer", async () => {
@@ -254,9 +275,9 @@ test("storage that refuses says the draft will not survive a reload", async () =
     ),
   ).toBeDefined();
   // The work goes on.
-  await waitFor(() =>
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-  );
+  await screen.findByText("No problems");
+  expect(holdsChanges()).toBe(true);
+  expect(engine.chartReads().length).toBeGreaterThan(1);
 });
 
 // A tab whose storage accessor throws has no storage at all, and loses the
@@ -266,9 +287,10 @@ test("no storage at all says the draft will not survive a reload", async () => {
   mountBuilder({ engine, storage: null });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await waitFor(() =>
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-  );
+  await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
+  await screen.findByText("No problems");
+  expect(holdsChanges()).toBe(true);
+  expect(engine.chartReads().length).toBeGreaterThan(1);
   expect(
     screen.getByText(
       "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
@@ -343,9 +365,8 @@ test("coming back to the lens restores this page's own draft without asking", as
   first.view.unmount();
 
   mountBuilder({ engine });
-  await waitFor(() =>
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-  );
+  await screen.findByText("No problems");
+  await waitFor(() => expect(holdsChanges()).toBe(true));
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
 });

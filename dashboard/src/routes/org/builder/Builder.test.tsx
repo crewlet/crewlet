@@ -1,7 +1,7 @@
 /**
  * The Builder lens decides its posture from what the engine answers, checks
- * every draft with a dry run of exactly the write a save would send, and
- * keeps the operator's work through a change of reader.
+ * every draft against the chart it was made on and the settings it would
+ * write, and keeps the operator's work through a change of reader.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -47,19 +47,31 @@ const liveRegion = () => document.querySelector("[data-live-region]")!;
 const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map(menuEntryLabel);
 
 describe("the posture table", () => {
-  test("a served configuration opens edit mode", async () => {
+  test("a served configuration and chart open edit mode", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     expect(await screen.findByText("CEO")).toBeDefined();
-    // The first check runs at once, on the draft with no operations, as the
-    // write a save would send: a PATCH conditional on the revision it read.
+    expect(await screen.findByText("No problems")).toBeDefined();
+    // The chart is read with its runtime half asked for, and the first check
+    // runs at once: it reads the chart again, and — the draft changing no
+    // setting — the settings, never a dry run of a write nobody asked for.
+    expect(engine.chartReads().length).toBeGreaterThanOrEqual(2);
+    expect(engine.chartReads().every((r) => r.query.get("runtime") === "true")).toBe(true);
+    expect(engine.checks()).toHaveLength(0);
+  });
+
+  test("a settings edit is checked as the merge patch a save would send", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(1));
     const check = engine.checks()[0]!;
+    // A PATCH conditional on the revision it read, carrying only what changed.
     expect(check.method).toBe("PATCH");
     expect(check.headers["If-Match"]).toBe('"r1"');
     expect(check.headers["Content-Type"]).toBe("application/merge-patch+json");
-    expect(check.body).toEqual({});
-    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(check.body).toEqual({ name: "Acme Labs" });
   });
 
   test("no active revision and no company in the org opens create mode", async () => {
@@ -178,8 +190,12 @@ describe("the posture table", () => {
   // without the coordination store that refusal described.
   test("a halted lens marks the toolbar's add entries unavailable", async () => {
     const engine = new Engine(company());
+    // The lens reads the company, and the check that follows is refused.
+    let reads = 0;
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
+      r.method === "GET" && r.path === "/chart" && ++reads > 1
+        ? json({ error: "forbidden" }, 403)
+        : null;
     mountBuilder({ engine, query: asReader(() => "reader.only") });
     expect(await screen.findByText("The engine refused the session")).toBeDefined();
 
@@ -226,9 +242,10 @@ describe("the views the lens hosts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
     expect(handle.collapseAll).toHaveBeenCalledTimes(1);
 
+    const reads = engine.chartReads().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(handle.focusNode).toHaveBeenCalledWith("seat:ceo"));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
     await screen.findByText("No problems");
     // An edit and its answer changed the state twice, and the view was not
     // registered again for either.
@@ -390,34 +407,39 @@ describe("the views the lens hosts", () => {
 });
 
 describe("checking the draft", () => {
-  test("an edit is checked as the merge patch a save would send", async () => {
+  // THE CHART HAS NO DRY RUN, so an edit of a seat is checked by reading the
+  // chart it would be written over, and a draft that changes no setting sends
+  // no settings write to validate.
+  test("an edit of a seat is checked against the chart, with no dry run", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
+    const reads = engine.chartReads().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
-    const patch = engine.checks()[1]!.body as { roles: { name: string; goal: string }[] };
-    expect(Object.keys(patch)).toEqual(["roles"]);
-    expect(patch.roles[0]).toMatchObject({ name: "CEO", goal: "Lead and more" });
+    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
+    await screen.findByText("No problems");
+    expect(engine.checks()).toHaveLength(0);
   });
 
-  test("problems the engine reports are placed on the seat they name", async () => {
+  test("what the chart would refuse is placed on the seat, and the settings' problems on the company", async () => {
     const engine = new Engine(company());
+    // A goal past the chart's cap, which a batch would refuse and no dry run exists to say.
+    engine.seats.find((s) => s.handle === "designer")!.goal = "x".repeat(16 * 1024 + 1);
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" && r.method === "PATCH" && "roles" in (r.body as object)
+      r.query.get("dry_run") === "true"
         ? refusal([
-            {
-              path: "roles[1].goal",
-              segments: ["roles", 1, "goal"],
-              kind: "invalid",
-              message: "roles[1].goal: too long",
-            },
+            { path: "name", segments: ["name"], kind: "invalid", message: "name: too long" },
           ])
         : null;
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     expect(await screen.findByText("1 problem")).toBeDefined();
+    expect(screen.getByTestId("problems Designer").textContent).toBe("1");
+    // The control: a seat whose fields fit carries none.
+    expect(screen.getByTestId("problems CEO").textContent).toBe("0");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    expect(await screen.findByText("2 problems")).toBeDefined();
+    // The settings' problem is the company's, never a seat's.
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
     expect(screen.getByTestId("problems CEO").textContent).toBe("0");
   });
@@ -432,15 +454,15 @@ describe("checking the draft", () => {
     // Ctrl or Command with Z, from anywhere in the page that is not a text
     // field. The region says the edit was undone: the bare sentence would
     // tell a screen reader it was just made.
+    const reads = engine.chartReads().length;
     fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
     await waitFor(() => expect(region().textContent).toBe("Undone: Edited CEO: goal."));
-    await waitFor(() => expect(engine.checks().at(-1)!.body).toEqual({}));
+    // Every generation is checked: the undone draft too.
+    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
     // And Shift with it redoes, saying so.
     fireEvent.keyDown(document.body, { key: "Z", code: "KeyZ", ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(region().textContent).toBe("Redone: Edited CEO: goal."));
-    await waitFor(() =>
-      expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
-    );
+    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 2));
   });
 
   test("undo is left to a text field that has focus", async () => {
@@ -448,12 +470,15 @@ describe("checking the draft", () => {
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
+    await screen.findByText("No problems");
+    const reads = engine.chartReads().length;
     const field = document.createElement("input");
     document.querySelector(".org-builder")!.appendChild(field);
     fireEvent.keyDown(field, { key: "z", code: "KeyZ", metaKey: true });
     await new Promise((r) => setTimeout(r, 400));
-    expect(engine.checks()).toHaveLength(2);
+    expect(engine.chartReads()).toHaveLength(reads);
+    expect(liveRegion().textContent).toBe("Edited CEO: goal.");
     field.remove();
   });
 });
@@ -463,7 +488,7 @@ describe("checking the draft", () => {
 // why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
   const without = company();
-  delete without.providers;
+  delete without.settings.providers;
   const engine = new Engine(without);
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
@@ -480,16 +505,36 @@ test("a company with no model provider is told so, and one with a provider is no
 });
 
 describe("the selection in the URL", () => {
-  test("a selected unit is named in the URL, and a rename rewrites it", async () => {
+  // BY ITS KEY, the address the chart resolves: a unit's name is prose two
+  // teams may share, and a link naming one by it opened whichever came first.
+  test("a selected unit is named in the URL by its key, which a new address rewrites", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering"));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
 
+    // The control: a new NAME is prose, and the address in the URL stays.
     fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
-    // The key is the unit's identity, so the name in the URL follows the draft.
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
+    await waitFor(() => expect(liveRegion().textContent).toContain("Engineering Two"));
+    expect(location.hash).toMatch(/unit=engineering$/);
+    fireEvent.click(screen.getByRole("button", { name: "Readdress Engineering Two" }));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering-two"));
+  });
+
+  test("a link naming a unit by its key selects it, and one naming it by its name does not", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&unit=engineering" });
+    await screen.findByText("No problems");
+    expect(await screen.findByRole("button", { name: "Engineering" })).toBeDefined();
+    cleanup();
+
+    mountBuilder({
+      engine: new Engine(company()),
+      hash: "#/company?lens=builder&view=visualization&unit=Engineering",
+    });
+    await screen.findByText("No problems");
+    expect(screen.queryByRole("button", { name: "Engineering" })).toBeNull();
   });
 
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
@@ -510,8 +555,9 @@ describe("the selection in the URL", () => {
 
     // And it survives the next answer about the draft, which is what a
     // locate-based reading of the selection did not.
+    const reads = engine.chartReads().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
     await screen.findByText("No problems");
     expect(screen.getByRole("button", { name: "Acme" })).toBeDefined();
   });
@@ -544,80 +590,74 @@ describe("the selection in the URL", () => {
     );
   });
 
-  // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
-  // at once, and a link built from that handle opened a seat the engine does
-  // not have; its kind, like any seat's, can still be changed.
+  // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. Its handle is typed with
+  // it, so the URL names it at once, and a link built from that handle would
+  // open a seat the engine does not have; its kind, like any seat's, can
+  // still be changed.
   test("a seat added in the draft is offered no screen, and can change kind", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
-    // First with no answer about the new seat, so no handle is known for it.
-    engine.script = (r) => (r.query.get("dry_run") === "true" ? json({ error: "bad" }, 502) : null);
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
-    await screen.findByText("Could not reach the engine to check");
-    fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
-    const actionsFor = async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
-      return screen.findByRole("menu", { name: "Actions for Analyst" });
-    };
-    let menu = await actionsFor();
+    fireEvent.click(await screen.findByRole("button", { name: "Select Analyst" }));
+    await waitFor(() => expect(location.hash).toContain("seat=analyst"));
+    fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
     const kind = within(menu).getByRole("menuitem", { name: "Change to human seat" });
     expect(kind.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.keyDown(menu, { key: "Escape" });
 
-    // Then once a check has derived its handle: the URL names it, and there
-    // is still no screen to open.
-    engine.script = () => null;
-    expect(await screen.findByText("No problems", {}, { timeout: 4000 })).toBeDefined();
-    await waitFor(() => expect(location.hash).toContain("seat=analyst"));
-    menu = await actionsFor();
-    expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    expect(within(menu).getByRole("menuitem", { name: "Change to human seat" })).toBeDefined();
+    // The control: a seat the chart holds is offered its screen.
+    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
+    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+    const saved = await screen.findByRole("menu", { name: "Actions for CEO" });
+    expect(within(saved).getByRole("menuitem", { name: "Open seat" })).toBeDefined();
   });
 });
 
-// A seat declaring no handle is keyed by its path until the first check
-// names its handle; a selection made in between follows it rather than
-// being dropped when that key goes.
-test("a selection made before the engine described the company follows the seat", async () => {
-  const engine = new Engine(company());
-  let answer: () => void = () => {};
-  engine.script = (r, e) =>
-    r.query.get("dry_run") === "true"
-      ? new Promise<Response>((resolve) => {
-          answer = () => resolve(e.answer(r));
-        })
-      : null;
-  mountBuilder({ engine });
-  await waitFor(() => expect(engine.checks()).toHaveLength(1));
-  fireEvent.click(await screen.findByRole("button", { name: "Select CEO" }));
-  expect(await screen.findByRole("button", { name: "CEO" })).toBeDefined();
-  engine.script = () => null;
-  act(() => answer());
-  await screen.findByText("No problems");
-  await waitFor(() => expect(location.hash).toContain("seat=ceo"));
-  expect(screen.getByRole("button", { name: "CEO" })).toBeDefined();
-});
+describe("a company saved by somebody else", () => {
+  /** The chart a colleague's save leaves: the Designer's goal rewritten. */
+  const colleagueSaves = (engine: Engine) => {
+    engine.seats.find((s) => s.handle === "designer")!.goal = "Design things";
+    engine.position += 1;
+  };
 
-describe("a revision saved by somebody else", () => {
   // NOTHING TO PROTECT, SO NOTHING TO ASK. A lens with no changes on it is
-  // stood on the newer revision; the conflict banner, and the pause that
+  // stood on the newer company; the conflict banner, and the pause that
   // comes with it, are for a draft that holds work.
-  test("an untouched draft is stood on the newer revision the org push reports", async () => {
+  test("an untouched draft is stood on the chart the org push reports", async () => {
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine });
     await screen.findByText("No problems");
-    const next = company();
-    next.roles![1]!.goal = "Design things";
-    engine.document = next;
-    engine.revision = "r2";
-    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+    colleagueSaves(engine);
+    act(() => store.applyOrg(engine.orgPush()));
 
-    await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
+    await waitFor(() => expect(screen.getByText("editable")).toBeDefined());
     expect(await screen.findByText("No problems")).toBeDefined();
-    expect(screen.queryByText("The configuration changed since you started editing.")).toBeNull();
-    expect(screen.getByText("editable")).toBeDefined();
+    expect(
+      screen.queryByText("Somebody changed the org chart since you started editing."),
+    ).toBeNull();
+  });
+
+  // AND ON A CHARTER A COLLEAGUE SAVED, though the draft changes no setting
+  // and so has no dry run to be refused: the check reads the settings too.
+  test("an untouched draft is stood on the settings revision a colleague saved", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine });
+    await screen.findByText("No problems");
+    engine.settings = { ...engine.settings, mission: "Make better things" };
+    engine.revision = "r2";
+    const reads = engine.sent("GET").length;
+    act(() => store.applyOrg(engine.orgPush()));
+    // The check's read finds the revision, and the update reads the company.
+    await waitFor(() => expect(engine.sent("GET").length).toBeGreaterThanOrEqual(reads + 2));
+    await screen.findByText("No problems");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    // The dry run the edit sends is conditional on the revision it now stands on.
+    await waitFor(() => expect(engine.checks().at(-1)?.headers["If-Match"]).toBe('"r2"'));
+    expect(screen.queryByText("The settings changed since you started editing.")).toBeNull();
   });
 
   test("a draft with work is not moved: the change is offered as an update", async () => {
@@ -625,35 +665,38 @@ describe("a revision saved by somebody else", () => {
     const { store } = mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
     await screen.findByText("No problems");
-    engine.document = company();
-    engine.revision = "r2";
-    const reads = engine.sent("GET").length;
-    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+    colleagueSaves(engine);
+    const settingsReads = engine.sent("GET").length;
+    act(() => store.applyOrg(engine.orgPush()));
 
-    expect(await screen.findByText("The configuration changed")).toBeDefined();
-    expect(engine.sent("GET")).toHaveLength(reads);
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+    expect(
+      await screen.findByText("Somebody changed the org chart since you started editing."),
+    ).toBeDefined();
+    // Nothing was loaded over the draft: the settings were not read to replace it.
+    expect(engine.sent("GET")).toHaveLength(settingsReads + 1);
+    expect(screen.getByText("read only")).toBeDefined();
   });
 });
 
 describe("a new reader mid-edit", () => {
-  test("keeps the draft, reads the configuration again and checks as the new reader", async () => {
+  test("keeps the draft, reads the company again and checks as the new reader", async () => {
     let who = "jane.doe";
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
-    const reads = engine.sent("GET").length;
+    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    const reads = engine.chartReads().length;
 
     who = "sam.lee";
     rereadViewer(store);
-    await waitFor(() => expect(engine.sent("GET").length).toBe(reads + 1));
-    await waitFor(() => expect(engine.checks()).toHaveLength(3));
+    // Read again (the chart once for the load and once for the check), and checked.
+    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 2));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
     // The edit is still in the draft that was checked.
-    expect(JSON.stringify(engine.checks()[2]!.body)).toContain("Lead and more");
+    expect(engine.checks()[1]!.body).toEqual({ name: "Acme Labs" });
   });
 
   // THE CONTROL: a viewer read again as the SAME person is not a new reader,
@@ -663,21 +706,19 @@ describe("a new reader mid-edit", () => {
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
     await screen.findByText("No problems");
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
-    const reads = engine.sent("GET").length;
+    const reads = engine.chartReads().length;
     rereadViewer(store);
     await new Promise((r) => setTimeout(r, 50));
-    expect(engine.sent("GET")).toHaveLength(reads);
-    expect(engine.checks()).toHaveLength(1);
+    expect(engine.chartReads()).toHaveLength(reads);
   });
 
-  test("a dry run refused for the new reader pauses editing while the configuration still reads", async () => {
+  test("a dry run refused for the new reader pauses editing while the company still reads", async () => {
     let who = "jane.doe";
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(1));
 
     // Reads are served, writes and dry runs are refused: the new reader lacks
     // the right to write, which only the check can find out.
@@ -689,7 +730,7 @@ describe("a new reader mid-edit", () => {
     rereadViewer(store);
     expect(await screen.findByText("The engine refused the session")).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
-    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+    expect(engine.checks().at(-1)!.body).toEqual({ name: "Acme Labs" });
   });
 
   test("a reader signed out elsewhere pauses editing without discarding the draft", async () => {
@@ -698,7 +739,7 @@ describe("a new reader mid-edit", () => {
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
 
     engine.script = () => (who === "" ? json({}, 401) : null);
     who = "";

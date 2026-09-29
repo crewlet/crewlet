@@ -1,30 +1,38 @@
 /**
- * After a save, the builder follows the revision until every node has applied
- * it, or says which node refused it, and the read lenses admit that they
- * still draw the revision before it.
+ * After a save, the builder follows what it wrote until every node has
+ * applied it — the settings revision by each node's epoch, the chart's writes
+ * by each node's applied position on the chart's log — or says which node
+ * refused it, and the read lenses admit that they still draw the company
+ * before it.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
+import {
+  LiveSocket,
+  Store,
+  type FleetAnswer,
+  type RetentionNode,
+  type RetentionReport,
+} from "~/protocol/index.ts";
 import { CompanyScreen } from "~/routes/company/Company.tsx";
-import { applyState } from "./AfterSaveStrip.tsx";
-import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
+import { applyState, chartApplyState } from "./AfterSaveStrip.tsx";
+import { clearSavedChanges, recordSavedChanges } from "./savedChanges.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
 import { toastText } from "~/testing.tsx";
 
 beforeEach(() => {
   sessionStorage.clear();
-  clearSavedRevision();
+  clearSavedChanges();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   sessionStorage.clear();
-  clearSavedRevision();
+  clearSavedChanges();
   location.hash = "#/";
 });
 
@@ -146,14 +154,79 @@ describe("what the strip says", () => {
   });
 });
 
+describe("what the strip says of the chart", () => {
+  const saved = { position: "CREWLET_CHART_LOG@2:40", appliedHere: false };
+  const at = (node_id: string, generation: number, applied_through: number): RetentionNode => ({
+    node_id,
+    counted: true,
+    live: true,
+    domains: { chart: { generation, seq: applied_through, applied_through } },
+  });
+  const report = (nodes: RetentionNode[]) => ({ nodes }) as unknown as RetentionReport;
+
+  test("every node through the writes' position is applied, and part way says how far", () => {
+    expect(chartApplyState(saved, report([at("a", 2, 40), at("b", 2, 41)]))).toMatchObject({
+      message: "Applied.",
+      resolved: true,
+    });
+    expect(chartApplyState(saved, report([at("a", 2, 40), at("b", 2, 39)]))).toMatchObject({
+      message: "Applied on 1 of 2 nodes.",
+      resolved: false,
+    });
+    expect(chartApplyState(saved, report([at("a", 2, 3)]))).toMatchObject({
+      message: "The nodes are applying it.",
+      resolved: false,
+    });
+  });
+
+  // A LOG RE-CREATED AFTER THE WRITES carries everything before it: a node on
+  // a later generation has applied them, however low its sequence.
+  test("a node on a later generation of the log has passed the writes", () => {
+    expect(chartApplyState(saved, report([at("a", 3, 1)]))).toMatchObject({
+      message: "Applied.",
+      resolved: true,
+    });
+    // The control: an earlier generation, however far along, has not.
+    expect(chartApplyState(saved, report([at("a", 1, 900)]))).toMatchObject({ resolved: false });
+  });
+
+  // WHERE THIS READER IS NOT SHOWN THE FLEET, the strip says what this node's
+  // own answer said, and says it as that.
+  test("without the fleet's positions it says what this node's answer said", () => {
+    expect(chartApplyState(saved, null)).toMatchObject({
+      message: "This node is applying it.",
+      resolved: false,
+    });
+    expect(chartApplyState({ ...saved, appliedHere: true }, null)).toMatchObject({
+      message: "Applied on this node.",
+      resolved: true,
+    });
+  });
+});
+
 describe("in the builder", () => {
-  async function save(engine: Engine, query: (what: string) => unknown) {
+  /** Saves an edit of the CEO, and a rename of the company with it when `settings`. */
+  async function save(
+    engine: Engine,
+    query: (what: string) => unknown,
+    { settings = false }: { settings?: boolean } = {},
+  ) {
     mountBuilder({ engine, query });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    if (settings) {
+      fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+      await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    }
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Review and save" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
+    if (settings) fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
   }
@@ -161,11 +234,15 @@ describe("in the builder", () => {
   test("the strip follows the saved revision and offers the diff", async () => {
     const engine = new Engine(company());
     let applied = 1;
-    await save(engine, (what) =>
-      what === "stream" ? { status: "ok", applied_epoch: applied } : null,
+    await save(
+      engine,
+      (what) => (what === "stream" ? { status: "ok", applied_epoch: applied } : null),
+      { settings: true },
     );
-    expect(await screen.findByText("The engine is applying it.")).toBeDefined();
-    expect(screen.getByText("r-saved")).toBeDefined();
+    const strip = () => screen.getByText(/Saved settings revision/);
+    await screen.findByText(/Saved settings revision/);
+    expect(strip().textContent).toContain("The engine is applying it.");
+    expect(within(strip()).getByText("r-saved")).toBeDefined();
     // What the save changed is the saved revision against the one it was
     // built on. Against the active revision, which the save now is, the diff
     // would be empty.
@@ -173,10 +250,60 @@ describe("in the builder", () => {
       "#/admin/config?lens=diff&revision=r-saved&against=r1",
     );
     applied = 2;
-    expect(await screen.findByText("Applied.", {}, { timeout: 8000 })).toBeDefined();
+    await waitFor(() => expect(strip().textContent).toContain("Applied."), { timeout: 8000 });
   }, 12_000);
 
-  test("Copy as YAML reads the company as YAML rather than as a refusal", async () => {
+  // THE CHART IS FOLLOWED ON ITS OWN LOG: the save's furthest position, and
+  // each node's applied position read off the retention report.
+  test("the strip follows the chart's writes to every node", async () => {
+    const engine = new Engine(company());
+    let through = 10;
+    const retention = () => ({
+      nodes: [
+        {
+          node_id: "a",
+          counted: true,
+          live: true,
+          domains: { chart: { generation: 1, seq: through, applied_through: through } },
+        },
+      ],
+    });
+    await save(engine, (what) => (what === "retention" ? retention() : null));
+    const strip = await screen.findByText(/Saved the org chart at/);
+    expect(strip.textContent).toContain("CREWLET_CHART_LOG@1:11");
+    expect(strip.textContent).toContain("The nodes are applying it.");
+    // A save that wrote no settings offers nothing about a revision.
+    expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy settings as YAML" })).toBeNull();
+    through = 11;
+    await waitFor(
+      () => expect(screen.getByText(/Saved the org chart at/).textContent).toContain("Applied."),
+      { timeout: 8000 },
+    );
+  }, 12_000);
+
+  test("Copy the chart reads the company export, credentials named and never valued", async () => {
+    const engine = new Engine(company());
+    engine.script = (r) =>
+      r.path === "/company/export"
+        ? new Response(
+            JSON.stringify({
+              seats: [{ handle: "ceo", runtime: { mcp_env: { t: { TOKEN: "${CHART_X}" } } } }],
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          )
+        : null;
+    await save(engine, () => null);
+    fireEvent.click(await screen.findByRole("button", { name: "Copy the chart" }));
+    const dialog = await screen.findByRole("dialog", { name: "The org chart" });
+    expect(await within(dialog).findByText(/CHART_X/)).toBeDefined();
+    expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
+  });
+
+  test("Copy settings as YAML reads the settings as YAML rather than as a refusal", async () => {
     const engine = new Engine(company());
     engine.script = (r) =>
       r.query.get("format") === "yaml"
@@ -185,9 +312,9 @@ describe("in the builder", () => {
             headers: { "Content-Type": "application/yaml", ETag: '"r-saved"' },
           })
         : null;
-    await save(engine, () => null);
-    fireEvent.click(await screen.findByRole("button", { name: "Copy as YAML" }));
-    const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
+    await save(engine, () => null, { settings: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Copy settings as YAML" }));
+    const dialog = await screen.findByRole("dialog", { name: "The settings as YAML" });
     expect(await within(dialog).findByText(/name: Acme/)).toBeDefined();
     expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
     // The caption reads as a sentence: JSX drops the line break before an
@@ -195,7 +322,7 @@ describe("in the builder", () => {
     expect(dialog.textContent).toContain("a reference keeps its ${NAME} form.");
   });
 
-  test("Copy as YAML says when what it read is a later revision", async () => {
+  test("Copy settings as YAML says when what it read is a later revision", async () => {
     const engine = new Engine(company());
     engine.script = (r) =>
       r.query.get("format") === "yaml"
@@ -204,9 +331,9 @@ describe("in the builder", () => {
             headers: { "Content-Type": "application/yaml", ETag: '"r-later"' },
           })
         : null;
-    await save(engine, () => null);
-    fireEvent.click(await screen.findByRole("button", { name: "Copy as YAML" }));
-    const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
+    await save(engine, () => null, { settings: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Copy settings as YAML" }));
+    const dialog = await screen.findByRole("dialog", { name: "The settings as YAML" });
     expect(await within(dialog).findByText(/which is active now/)).toBeDefined();
   });
 });
@@ -230,15 +357,27 @@ describe("the read lenses", () => {
     );
   }
 
+  const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
+
   test("say they still draw the previous revision until this node applies the saved one", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
+    recordSavedChanges({ settings, chart: null });
     mountCompany(3);
-    expect(await screen.findByText(/still applying revision/)).toBeDefined();
+    expect(await screen.findByText(/still applying settings revision/)).toBeDefined();
   });
 
   test("say nothing once the node has applied it", async () => {
-    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
+    recordSavedChanges({ settings, chart: null });
     mountCompany(4);
-    await waitFor(() => expect(screen.queryByText(/still applying revision/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/still applying/)).toBeNull());
+  });
+
+  test("name the chart's changes beside a revision this node has not applied", async () => {
+    recordSavedChanges({
+      settings,
+      chart: { position: "CREWLET_CHART_LOG@1:12", appliedHere: false },
+    });
+    mountCompany(3);
+    const note = await screen.findByText(/still applying settings revision/);
+    expect(note.textContent).toContain("and the org chart's changes");
   });
 });

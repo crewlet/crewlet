@@ -35,7 +35,6 @@ import { join } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { fixtureCompany } from "./model/testkit.ts";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
@@ -88,11 +87,7 @@ afterEach(() => {
 
 function mount() {
   return render(
-    <BuilderHarness
-      initial={checkedEdit(fixtureCompany())}
-      spies={builderSpies()}
-      probe={harnessProbe()}
-    >
+    <BuilderHarness initial={checkedEdit()} spies={builderSpies()} probe={harnessProbe()}>
       <TableView />
     </BuilderHarness>,
   );
@@ -185,12 +180,12 @@ test("the live state slot keeps its room on a drawn row", () => {
  * AND SO DOES A WIRING MARK. It rides the caption, which is the row's second
  * line: as a tag it was the row's own height and a seat's height depended on
  * its wiring. Its size comes from this screen and its place in the line from
- * the package, so both halves are read here.
+ * the package, so both halves are read here. The Datadog fallback wears one.
  */
 test("a wiring mark on a row neither grows nor shrinks the line it rides", () => {
   apply(PACKAGE, SCREEN);
   mount();
-  const mark = row("Designer").querySelector(".bnode-mark")!;
+  const mark = row("SRE").querySelector(".bnode-mark")!;
   expect(insidePart(mark, PART.caption)).toBe(true);
   const seen = getComputedStyle(mark);
   expect(seen.flexGrow).toBe("0");

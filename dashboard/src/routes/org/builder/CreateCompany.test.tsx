@@ -1,30 +1,54 @@
 /**
  * Creating the company: the form produces one template operation the engine
- * checks like any other draft, the save is create-only fleet-wide, and a
- * company that appeared meanwhile is never written over or replayed onto.
+ * checks like any other draft, the save creates the settings create-only
+ * fleet-wide and then writes the chart, and a company that appeared meanwhile
+ * is never written over or replayed onto.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
-import { clearSavedRevision } from "./savedRevision.ts";
+import { clearSavedChanges } from "./savedChanges.ts";
 import { company, Engine, mountBuilder, type SentRequest } from "./testkit.tsx";
 
 beforeEach(() => {
   sessionStorage.clear();
-  clearSavedRevision();
+  clearSavedChanges();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   sessionStorage.clear();
-  clearSavedRevision();
+  clearSavedChanges();
   location.hash = "#/";
 });
 
+/** The names a stand-in view lists under `label`. */
+const listed = (label: string) =>
+  within(screen.getByRole("list", { name: label }))
+    .getAllByRole("listitem")
+    .map((item) => item.querySelector("span")!.textContent);
+
+/** A company somebody else creates while the draft is open. */
+function createdElsewhere(engine: Engine) {
+  const { settings, chart } = company();
+  engine.settings = settings;
+  engine.revision = "r1";
+  engine.units = chart.units;
+  engine.seats = chart.seats;
+  engine.manages = chart.manages ?? {};
+}
+
 const isWrite = (r: SentRequest) =>
   r.path === "/config" && r.method === "PUT" && !r.query.has("dry_run");
+
+/** Opens the review and creates the company. */
+async function save() {
+  fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+  const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create the company" }));
+}
 
 /** Fills the create form and starts the company from a template. */
 async function startCompany(options: { template?: string; seat?: boolean; contact?: string } = {}) {
@@ -54,18 +78,13 @@ test("the form starts the company from a template, and the check is create-only"
   const check = engine.checks().at(-1)!;
   expect(check.method).toBe("PUT");
   expect(check.headers["If-None-Match"]).toBe("*");
-  const sent = check.body as CompanyDocument;
-  expect(sent.name).toBe("Nimbus");
-  expect(sent.mission).toBe("Ship weather.");
-  // The operator's own seat, with the one identity they gave, and the
-  // template's neutral titles below it.
-  expect(sent.roles?.[0]).toMatchObject({
-    name: "Founder",
-    kind: "human",
-    contact: { slack_user_id: "U0FOUNDER" },
-  });
-  expect(sent.roles?.[1]?.name).toBe("Chief Executive");
-  expect(sent.units?.map((u) => u.name)).toEqual(["Engineering", "Product", "Marketing"]);
+  // THE SETTINGS ONLY: the chart has no dry run, and the configuration
+  // refuses a body that carries one.
+  expect(check.body).toEqual({ name: "Nimbus", mission: "Ship weather." });
+  // The operator's own seat and the template's neutral titles, in the draft.
+  expect(listed("Seats")).toContain("Founder");
+  expect(listed("Seats")).toContain("Chief Executive");
+  expect(listed("Units")).toEqual(["Engineering", "Marketing", "Product"]);
   // And the whole start is one operation: undone, the form is back.
   fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
   expect(await screen.findByRole("button", { name: "Start the company" })).toBeDefined();
@@ -79,11 +98,30 @@ test("your own seat starts the company with no contact identity", async () => {
   const engine = new Engine(null);
   mountBuilder({ engine });
   await startCompany({ seat: true, contact: "" });
+  await screen.findByText("No problems");
+  await save();
 
-  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(1));
-  const sent = engine.checks().at(-1)!.body as CompanyDocument;
-  expect(sent.roles?.[0]).toMatchObject({ name: "Founder", kind: "human" });
-  expect(sent.roles?.[0]).not.toHaveProperty("contact");
+  await waitFor(() => expect(engine.seats.find((s) => s.handle === "founder")).toBeDefined());
+  const founder = engine.seats.find((s) => s.handle === "founder")!;
+  expect(founder).toMatchObject({ name: "Founder", kind: "human" });
+  expect(founder).not.toHaveProperty("runtime");
+});
+
+// AND WITH ONE, THE IDENTITY THEY GAVE rides the seat's runtime half, where
+// the chart keeps a seat's contact identities.
+test("your own seat carries the contact identity you gave", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await startCompany({ seat: true });
+  await screen.findByText("No problems");
+  await save();
+
+  await waitFor(() =>
+    expect(engine.seats.find((s) => s.handle === "founder")?.runtime).toBeDefined(),
+  );
+  expect(engine.seats.find((s) => s.handle === "founder")!.runtime).toEqual({
+    contact: { slack_user_id: "U0FOUNDER" },
+  });
 });
 
 // NOTHING TO UNDO, CHECK OR SAVE until a template is recorded, so the form
@@ -109,14 +147,12 @@ test("a company with no name is refused by the form, not by the engine", async (
   expect(engine.requests.length).toBe(before);
 });
 
-test("the save is a create-only PUT, and says what is left to do", async () => {
+test("the save creates the settings create-only, then the chart, and says what is left to do", async () => {
   const engine = new Engine(null);
   mountBuilder({ engine });
   await startCompany({});
   await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
-  const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Create the company" }));
+  await save();
 
   await waitFor(() => expect(engine.requests.filter(isWrite)).toHaveLength(1));
   const write = engine.requests.filter(isWrite)[0]!;
@@ -124,7 +160,21 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(write.headers["Content-Type"]).toBe("application/json");
   const body = write.body as CompanyDocument & { _summary: string };
   expect(body.name).toBe("Nimbus");
+  expect(body).not.toHaveProperty("roles");
+  expect(body).not.toHaveProperty("units");
   expect(body._summary).toMatch(/^Created Nimbus in the organization builder \(write [0-9a-f]+\)$/);
+  // THE SETTINGS FIRST: the company exists before its chart is written.
+  await waitFor(() =>
+    expect(engine.units.map((u) => u.key).sort()).toEqual(["engineering", "marketing", "product"]),
+  );
+  const firstChartWrite = engine.requests.findIndex(
+    (r) => r.path.startsWith("/chart/") && r.method !== "GET",
+  );
+  expect(engine.requests.indexOf(write)).toBeLessThan(firstChartWrite);
+  // Every chart write carries the operation id a retry would resend.
+  expect(engine.chartWrites().every((r) => /-\d+$/.test(r.headers["Idempotency-Key"] ?? ""))).toBe(
+    true,
+  );
 
   // The two steps the dashboard cannot take, with the command for the one
   // that has no screen at all.
@@ -132,7 +182,10 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
     "#/admin/integrations",
   );
-  expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
+  // A MERGE PATCH OF THE PROVIDERS, which changes nothing else: an import of
+  // a company file would write that file's org chart over the one just made.
+  expect(screen.getByText(/-X PATCH "\$CREWLET_URL\/config"/)).toBeDefined();
+  expect(screen.queryByText(/crewlet config import/)).toBeNull();
   expect(
     screen.getByText(/no agent seat takes a turn, and work sent to a seat waits/),
   ).toBeDefined();
@@ -149,8 +202,7 @@ test("a company created while the draft is open is found by the check, before an
   mountBuilder({ engine });
   await startCompany({});
   await screen.findByText("No problems");
-  engine.document = company();
-  engine.revision = "r1";
+  createdElsewhere(engine);
   // The next check of the draft is refused as already configured.
   fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
   expect(
@@ -166,9 +218,8 @@ test("a company another node creates is reported by the org push, with no edit",
   const { store } = mountBuilder({ engine });
   await startCompany({});
   await screen.findByText("No problems");
-  engine.document = company();
-  engine.revision = "r1";
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  createdElsewhere(engine);
+  act(() => store.applyOrg(engine.orgPush()));
   expect(
     await screen.findByRole("dialog", { name: "A company already exists on this engine" }),
   ).toBeDefined();
@@ -182,23 +233,41 @@ test("a company created meanwhile is offered instead of the draft, never written
   mountBuilder({ engine });
   await startCompany({});
   await screen.findByText("No problems");
-  engine.document = company();
-  engine.revision = "r1";
-  fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
-  const dialog = await screen.findByRole("dialog", { name: "Review and create the company" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Create the company" }));
+  createdElsewhere(engine);
+  await save();
 
   const refused = await screen.findByRole("dialog", {
     name: "A company already exists on this engine",
   });
-  // The company is untouched: the 412 is the only write that reached it.
-  expect(engine.document).toEqual(company());
+  // The company is untouched: the chart read before the first write found it,
+  // and nothing was written at all.
+  expect(engine.settings).toEqual(company().settings);
+  expect(engine.requests.filter(isWrite)).toHaveLength(0);
+  expect(engine.chartWrites()).toHaveLength(0);
   fireEvent.click(within(refused).getByRole("button", { name: "Discard it and open the company" }));
 
   // The company that exists is loaded, in edit mode, with nothing replayed.
   expect(await screen.findByText("CEO")).toBeDefined();
-  await waitFor(() => expect(engine.checks().at(-1)!.method).toBe("PATCH"));
-  expect(engine.checks().at(-1)!.body).toEqual({});
+  await screen.findByText("No problems");
+  expect(screen.queryByText("Chief Executive")).toBeNull();
+  // Nothing replayed: the company it opened is checked with no settings edit to dry-run.
+  expect(engine.checks().every((r) => r.method === "PUT")).toBe(true);
+});
+
+// AND WHERE ONLY THE SETTINGS APPEARED: the settings write is create-only
+// fleet-wide, so its 412 stops the save before a single chart write.
+test("a settings revision created meanwhile refuses the create before the chart is written", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await startCompany({});
+  await screen.findByText("No problems");
+  engine.settings = company().settings;
+  await save();
+
+  expect(
+    await screen.findByRole("dialog", { name: "A company already exists on this engine" }),
+  ).toBeDefined();
+  expect(engine.chartWrites()).toHaveLength(0);
 });
 
 // KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the lens is
@@ -209,8 +278,7 @@ test("a create draft kept after a company appeared still offers the company", as
   mountBuilder({ engine });
   await startCompany({});
   await screen.findByText("No problems");
-  engine.document = company();
-  engine.revision = "r1";
+  createdElsewhere(engine);
   fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
   const refused = await screen.findByRole("dialog", {
     name: "A company already exists on this engine",
@@ -223,6 +291,7 @@ test("a create draft kept after a company appeared still offers the company", as
   ).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Discard it and open the company" }));
   expect(await screen.findByText("CEO")).toBeDefined();
-  await waitFor(() => expect(engine.checks().at(-1)!.method).toBe("PATCH"));
+  await screen.findByText("No problems");
   expect(engine.requests.filter(isWrite)).toHaveLength(0);
+  expect(engine.chartWrites()).toHaveLength(0);
 });

@@ -29,15 +29,9 @@
  * seat a new id. So every text field first asks whether its box changed.
  */
 
-import type {
-  CompanyDocument,
-  ConfigRole,
-  ConfigUnit,
-  HumanContactKey,
-  PhaseLLM,
-  ScheduleSpec,
-} from "~/protocol/index.ts";
+import type { CompanyDocument, HumanContactKey, ScheduleSpec } from "~/protocol/index.ts";
 import type { NodeKey } from "./model/keys.ts";
+import type { SeatData, UnitData } from "./model/draft.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
 import type { EditPartIntent, FieldSet, Intent } from "./model/operations.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
@@ -55,49 +49,49 @@ export interface CompanyForm {
 
 export interface UnitForm {
   readonly name: string;
+  /** The unit's key: its address. A new one on a saved unit is the chart's rename. */
+  readonly key: string;
   readonly type: string;
   readonly purpose: string;
-  /** A seat name; "" for none. */
+  /** A seat's handle; "" for none. */
   readonly lead: string;
   readonly goals: readonly string[];
   readonly channel: string;
   readonly knowledge: readonly string[];
-  readonly jira: string;
-  readonly confluence: string;
+  /** The tracker project and knowledge-base space it works in (`project`, `space`). */
+  readonly project: string;
+  readonly space: string;
   /** Schedule name to whether it runs. */
   readonly schedules: Readonly<Record<string, boolean>>;
 }
 
 export interface SeatForm {
   readonly name: string;
-  /** Editable only on a seat this draft created. */
+  /** The seat's handle: its address. A new one on a saved seat is the chart's rename. */
   readonly handle: string;
   readonly email: string;
   readonly goal: string;
   readonly backstory: string;
   readonly responsibilities: readonly string[];
   readonly guidelines: readonly string[];
-  /** The explicit `manages` list: seat and unit names. */
+  /** The authored `manages` list: seat handles and unit keys. */
   readonly manages: readonly string[];
   readonly contact: Readonly<Record<HumanContactKey, string>>;
   readonly availability: string;
-  /**
-   * The model chain, provider keys in order; `null` when the seat's `llm` is
-   * a per-phase mapping, which the editor shows but does not edit.
-   */
-  readonly llm: readonly string[] | null;
+  /** The model chain, provider keys in order (`runtime.llm`). */
+  readonly llm: readonly string[];
   /** As typed: digits, or empty for unlimited. */
   readonly tokenBudget: string;
   readonly schedules: Readonly<Record<string, boolean>>;
   readonly githubTier: string;
   readonly githubRepos: readonly string[];
-  readonly slackChannel: string;
   readonly mattermostChannel: string;
   readonly mattermostUsername: string;
   /** The seat's own GitLab access level override; "" for the company default. */
   readonly accessLevel: string;
-  readonly jira: string;
-  readonly confluence: string;
+  /** The tracker project and knowledge-base space it works in (`project`, `space`). */
+  readonly project: string;
+  readonly space: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,17 +102,29 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 
+/**
+ * A model chain as the runtime half carries it, as the list of provider keys
+ * it is. `org.ProviderKeys` writes ONE key as a bare string and several as a
+ * list, and reads either, so a reader that took only the list read every seat
+ * pinned to one provider as a seat that names none.
+ */
+export function providerKeys(value: unknown): string[] {
+  if (typeof value === "string") return value.trim() === "" ? [] : [value];
+  return strings(value).filter((key) => key.trim() !== "");
+}
+
 /** Whether a schedule runs, as the engine reads `enabled` (unset and `null` run it). */
 export const scheduleRuns = (schedule: ScheduleSpec): boolean => schedule.enabled !== false;
 
-/** The schedules a unit or seat carries, those with a name only. */
-export function schedulesOf(data: ConfigRole | ConfigUnit): ScheduleSpec[] {
-  return (Array.isArray(data.schedules) ? data.schedules : []).filter(
+/** The schedules a unit or seat carries in its runtime half, those with a name only. */
+export function schedulesOf(data: SeatData | UnitData): ScheduleSpec[] {
+  const list = getPath(data, ["runtime", "schedules"]);
+  return (Array.isArray(list) ? list : []).filter(
     (s): s is ScheduleSpec => isRecord(s) && typeof s.name === "string" && s.name !== "",
   );
 }
 
-const scheduleToggles = (data: ConfigRole | ConfigUnit): Record<string, boolean> =>
+const scheduleToggles = (data: SeatData | UnitData): Record<string, boolean> =>
   Object.fromEntries(schedulesOf(data).map((s) => [s.name, scheduleRuns(s)]));
 
 export function companyForm(company: CompanyDocument): CompanyForm {
@@ -130,32 +136,26 @@ export function companyForm(company: CompanyDocument): CompanyForm {
   };
 }
 
-export function unitForm(data: ConfigUnit): UnitForm {
+export function unitForm(data: UnitData): UnitForm {
   return {
     name: text(data.name),
+    key: text(data.key),
     type: text(data.type),
     purpose: text(data.purpose),
     lead: text(data.lead),
     goals: strings(data.goals),
     channel: text(data.channel),
-    knowledge: strings(data.knowledge),
-    jira: text(getPath(data, ["integrations", "jira", "project"])),
-    confluence: text(getPath(data, ["integrations", "confluence", "space"])),
+    knowledge: strings(data.knowledge_refs),
+    project: text(data.project),
+    space: text(data.space),
     schedules: scheduleToggles(data),
   };
 }
 
-/** A seat's `llm` as an editable chain, or `null` for the per-phase mapping form. */
-export function llmChain(llm: PhaseLLM | undefined): string[] | null {
-  if (llm === undefined) return [];
-  if (typeof llm === "string") return llm.trim() === "" ? [] : [llm];
-  if (Array.isArray(llm)) return strings(llm);
-  return null;
-}
-
-export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
-  const contact = isRecord(data.contact) ? data.contact : {};
-  const budget = data.token_budget;
+export function seatForm(data: SeatData, accessLevel: string): SeatForm {
+  const runtime = (path: string[]) => getPath(data, ["runtime", ...path]);
+  const contact = runtime(["contact"]);
+  const budget = runtime(["token_budget"]);
   return {
     name: text(data.name),
     handle: text(data.handle),
@@ -166,20 +166,19 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
     guidelines: strings(data.behavioral_guidelines),
     manages: strings(data.manages),
     contact: Object.fromEntries(
-      CONTACT_IDENTITIES.map(({ key }) => [key, text(contact[key])]),
+      CONTACT_IDENTITIES.map(({ key }) => [key, text(isRecord(contact) ? contact[key] : "")]),
     ) as Record<HumanContactKey, string>,
-    availability: text(data.availability),
-    llm: llmChain(data.llm),
+    availability: text(runtime(["availability"])),
+    llm: providerKeys(runtime(["llm"])),
     tokenBudget: typeof budget === "number" && budget !== 0 ? String(budget) : "",
     schedules: scheduleToggles(data),
-    githubTier: text(getPath(data, ["integrations", "github", "tier"])),
-    githubRepos: strings(getPath(data, ["integrations", "github", "repos"])),
-    slackChannel: text(getPath(data, ["integrations", "slack", "channel"])),
-    mattermostChannel: text(getPath(data, ["integrations", "mattermost", "channel"])),
-    mattermostUsername: text(getPath(data, ["integrations", "mattermost", "username"])),
+    githubTier: text(runtime(["github", "tier"])),
+    githubRepos: strings(runtime(["github", "repos"])),
+    mattermostChannel: text(runtime(["mattermost", "channel"])),
+    mattermostUsername: text(runtime(["mattermost", "username"])),
     accessLevel,
-    jira: text(getPath(data, ["integrations", "jira", "project"])),
-    confluence: text(getPath(data, ["integrations", "confluence", "space"])),
+    project: text(data.project),
+    space: text(data.space),
   };
 }
 
@@ -264,16 +263,15 @@ export function editIntent(target: NodeKey, parts: readonly EditPartIntent[]): I
 
 /**
  * Whether a name box holds a rename: the operator changed it, AND what the
- * model would write (the trimmed value) differs from the name the document
- * has.
+ * model would write (the trimmed value) differs from the name the chart has.
  *
- * BOTH HALVES. A rename is not an ordinary field: it re-keys a unit's
- * schedules and onboarding pages and makes every agent under it onboard
- * again, so it may only ever come from somebody typing in the box. A stored
- * name that carries surrounding spaces differs from its own trimmed form, so
- * asking the trimmed question alone renamed such a node the moment anything
- * ELSE in its form was applied. And the model compares trimmed, so a box that
- * gained nothing but a trailing space is no rename either.
+ * BOTH HALVES. A rename is not an ordinary field: a unit's onboarding pages
+ * are looked up under its name, and renaming the company gives every agent
+ * seat a new id, so it may only ever come from somebody typing in the box. A
+ * stored name that carries surrounding spaces differs from its own trimmed
+ * form, so asking the trimmed question alone renamed such a node the moment
+ * anything ELSE in its form was applied. And the model compares trimmed, so a
+ * box that gained nothing but a trailing space is no rename either.
  */
 export function renames(initial: string, typed: string): boolean {
   return typed !== initial && typed.trim() !== initial;
@@ -296,13 +294,14 @@ export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): Edit
     parts.push({ type: "renameUnit", target: key, name: form.name });
   }
   const set = [
+    ...textPart(["key"], initial.key, form.key, line),
     ...textPart(["type"], initial.type, form.type, line),
     ...textPart(["purpose"], initial.purpose, form.purpose, prose),
     ...changed(["goals"], listValue(initial.goals), listValue(form.goals)),
     ...textPart(["channel"], initial.channel, form.channel, line),
-    ...changed(["knowledge"], listValue(initial.knowledge), listValue(form.knowledge)),
-    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
-    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
+    ...changed(["knowledge_refs"], listValue(initial.knowledge), listValue(form.knowledge)),
+    ...textPart(["project"], initial.project, form.project, line),
+    ...textPart(["space"], initial.space, form.space, line),
   ];
   if (set.length > 0) parts.push({ type: "updateUnit", target: key, set });
   if (form.lead !== initial.lead) {
@@ -312,20 +311,7 @@ export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): Edit
   return parts;
 }
 
-/** How a chain is written: one key as a string, unless the seat already wrote a list. */
-function llmValue(chain: readonly string[], wasList: boolean): PhaseLLM | undefined {
-  if (chain.length === 0) return undefined;
-  if (chain.length === 1 && !wasList) return chain[0]!;
-  return [...chain];
-}
-
-export function seatParts(
-  key: NodeKey,
-  data: ConfigRole,
-  initial: SeatForm,
-  form: SeatForm,
-  { editableHandle }: { editableHandle: boolean },
-): EditPartIntent[] {
+export function seatParts(key: NodeKey, initial: SeatForm, form: SeatForm): EditPartIntent[] {
   const parts: EditPartIntent[] = [];
   if (renames(initial.name, form.name)) {
     parts.push({ type: "renameSeat", target: key, name: form.name });
@@ -335,7 +321,7 @@ export function seatParts(
     return value === "" || Number(value) === 0 ? undefined : Number(value);
   };
   const set: FieldSet[] = [
-    ...(editableHandle ? textPart(["handle"], initial.handle, form.handle, line) : []),
+    ...textPart(["handle"], initial.handle, form.handle, line),
     ...textPart(["email"], initial.email, form.email, line),
     ...textPart(["goal"], initial.goal, form.goal, prose),
     ...textPart(["backstory"], initial.backstory, form.backstory, prose),
@@ -349,44 +335,37 @@ export function seatParts(
       listValue(initial.guidelines),
       listValue(form.guidelines),
     ),
+    ...textPart(["project"], initial.project, form.project, line),
+    ...textPart(["space"], initial.space, form.space, line),
     ...CONTACT_IDENTITIES.flatMap(({ key: identity }) =>
-      textPart(["contact", identity], initial.contact[identity], form.contact[identity], line),
+      textPart(
+        ["runtime", "contact", identity],
+        initial.contact[identity],
+        form.contact[identity],
+        line,
+      ),
     ),
-    ...textPart(["availability"], initial.availability, form.availability, prose),
-    ...(form.llm !== null && initial.llm !== null
-      ? changed(
-          ["llm"],
-          llmValue(initial.llm, Array.isArray(data.llm)),
-          llmValue(form.llm, Array.isArray(data.llm)),
-        )
-      : []),
-    ...changed(["token_budget"], budget(initial.tokenBudget), budget(form.tokenBudget)),
-    ...textPart(["integrations", "github", "tier"], initial.githubTier, form.githubTier, line),
+    ...textPart(["runtime", "availability"], initial.availability, form.availability, prose),
+    ...changed(["runtime", "llm"], listValue(initial.llm), listValue(form.llm)),
+    ...changed(["runtime", "token_budget"], budget(initial.tokenBudget), budget(form.tokenBudget)),
+    ...textPart(["runtime", "github", "tier"], initial.githubTier, form.githubTier, line),
     ...changed(
-      ["integrations", "github", "repos"],
+      ["runtime", "github", "repos"],
       listValue(initial.githubRepos),
       listValue(form.githubRepos),
     ),
     ...textPart(
-      ["integrations", "slack", "channel"],
-      initial.slackChannel,
-      form.slackChannel,
-      line,
-    ),
-    ...textPart(
-      ["integrations", "mattermost", "channel"],
+      ["runtime", "mattermost", "channel"],
       initial.mattermostChannel,
       form.mattermostChannel,
       line,
     ),
     ...textPart(
-      ["integrations", "mattermost", "username"],
+      ["runtime", "mattermost", "username"],
       initial.mattermostUsername,
       form.mattermostUsername,
       line,
     ),
-    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
-    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
   ];
   const levelChanged = form.accessLevel !== initial.accessLevel;
   if (set.length > 0 || levelChanged) {

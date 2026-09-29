@@ -1,47 +1,91 @@
 /**
- * The draft: the company document as a tree of keyed nodes.
+ * The draft: the company's org chart as a tree of keyed nodes, beside its
+ * settings document.
  *
- * THE SAME SHAPE AS THE DOCUMENT, with a key beside each entity. Root seats,
- * units, a unit's seats and its child units sit in exactly the lists and the
- * order the document holds them, so turning a draft back into a document is a
- * walk rather than a reconstruction, and the authored path of every node is
- * the path the engine will report a problem at. Where the ENGINE moves a node
- * (a root seat placed in a unit by its `unit:` reference) is not modelled
- * here: that is a derivation, and the builder reads it from the engine's
- * `derived` block rather than computing it again.
+ * THE CHART'S OWN SHAPE, with a key beside each node. A seat's `data` is the
+ * seat as `GET /chart` served it and a unit's is the unit, minus the two
+ * things the TREE holds instead: where a node sits (its unit, its parent) is
+ * the list it is in, so a move is a detach and an attach rather than a field
+ * edit. Everything else is the engine's JSON verbatim — prose, the relations
+ * authority is derived from, the structural `kind`, `lead` and `manages`,
+ * and the opaque RUNTIME half under `runtime` — so a key this build does not
+ * model survives every edit.
  *
- * AN ENTITY'S DATA IS ITS AUTHORED JSON, WHOLE. A seat's `data` is the role
- * object as `GET /config` served it, every key included; a unit's `data` is
- * the unit object without its `roles` and `children`, which the tree holds as
- * nodes instead. The company's `data` is the document without `roles` and
- * `units`. Nothing is typed away, so a field this build does not model
- * survives every edit.
+ * EVERY REFERENCE IS AN ADDRESS. A unit's `lead` is a seat's handle and a
+ * `manages:` entry a seat's handle or a unit's key, exactly as the chart
+ * stores them; a name is display only, and two seats may share one.
+ *
+ * `company` is the SETTINGS document — the revision `GET /config` serves,
+ * which carries no seats and no units. The builder edits its charter and the
+ * two integration values a seat edit reaches (the Datadog fallback, the GitLab
+ * access levels), and nothing else in it.
  *
  * Every function here is pure and returns a new draft that shares every branch
  * it did not change.
  */
 
-import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
+import type { CompanyDocument, SeatRuntime, UnitRuntime } from "~/protocol/index.ts";
+import { jsonEqual } from "./json.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 
-/** One seat: its key and its authored role object. */
-export interface DraftSeat {
-  readonly key: NodeKey;
-  readonly data: ConfigRole;
+/** One seat's data: the chart's seat, less the placement the tree holds. */
+export interface SeatData {
+  /**
+   * The seat's address. A new one on a seat the chart already holds is the
+   * chart's RENAME: the seat keeps its identity, and the old handle goes on
+   * resolving to it until something else takes it.
+   */
+  handle: string;
+  /** What holds the seat. Absent is an agent, as the engine reads it. */
+  kind?: string;
+  name: string;
+  email?: string;
+  goal?: string;
+  backstory?: string;
+  responsibilities?: string[];
+  behavioral_guidelines?: string[];
+  project?: string;
+  space?: string;
+  /** Seat handles and unit keys, as the chart stores them. */
+  manages?: string[];
+  /** The runtime half; absent where the seat has none OR this reader was not shown it. */
+  runtime?: SeatRuntime;
+  [key: string]: unknown;
 }
 
-/**
- * One unit: its key, its authored unit object WITHOUT `roles` and `children`,
- * and those two lists as nodes.
- */
+/** One unit's data: the chart's unit, less its parent and what it holds. */
+export interface UnitData {
+  /** The unit's address. A new one on a unit the chart holds is its rename, as a seat's is. */
+  key: string;
+  name: string;
+  type?: string;
+  purpose?: string;
+  goals?: string[];
+  /** The AUTHORED lead's handle; absent where the unit inherits one. */
+  lead?: string;
+  channel?: string;
+  project?: string;
+  space?: string;
+  knowledge_refs?: string[];
+  runtime?: UnitRuntime;
+  [key: string]: unknown;
+}
+
+/** One seat: its key and its data. */
+export interface DraftSeat {
+  readonly key: NodeKey;
+  readonly data: SeatData;
+}
+
+/** One unit: its key, its own data, and the seats and units it holds as nodes. */
 export interface DraftUnit {
   readonly key: NodeKey;
-  readonly data: ConfigUnit;
+  readonly data: UnitData;
   readonly roles: readonly DraftSeat[];
   readonly children: readonly DraftUnit[];
 }
 
-/** The whole draft. `company` is the document without `roles` and `units`. */
+/** The whole draft. `roles` and `units` are the ones at the org root. */
 export interface Draft {
   readonly company: CompanyDocument;
   readonly roles: readonly DraftSeat[];
@@ -53,16 +97,50 @@ export const EMPTY_DRAFT: Draft = { company: {}, roles: [], units: [] };
 
 /**
  * Where a node sits: under which parent (a unit, or [COMPANY_KEY] for the
- * root) and directly after which sibling of its own kind (`null` for first).
+ * root).
  *
- * NEVER AN INDEX. An index means something only in the list it was counted
- * in, and the list an operation replays into after a rebase can have gained
- * or lost a sibling before the node. A neighbour's identity either still
- * stands beside the slot or visibly does not.
+ * A PARENT AND NOTHING ELSE, because the chart keeps nothing else. A unit's
+ * seats and its child units are rows, served in ADDRESS order (a seat's handle,
+ * a unit's key) and stored in no other: there is no position a save could
+ * write and no order a reading could return but that one. So the draft holds
+ * every list in address order too ([compareAddress]), and "where a node sits"
+ * is only which list it is in. A draft that let somebody arrange siblings would
+ * be showing an arrangement the save silently drops.
  */
 export interface Placement {
   readonly parent: NodeKey;
-  readonly after: NodeKey | null;
+}
+
+/**
+ * The order the chart serves rows in: by address, compared code point by code
+ * point — which is the order of the addresses' UTF-8 bytes, the store's own
+ * binary collation. A plain `<` compares UTF-16 code units, which disagrees
+ * with the bytes for a character past the surrogate range.
+ */
+export function compareAddress(a: string, b: string): number {
+  const left = [...a];
+  const right = [...b];
+  for (let i = 0; i < Math.min(left.length, right.length); i++) {
+    const x = left[i]!.codePointAt(0)!;
+    const y = right[i]!.codePointAt(0)!;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return left.length - right.length;
+}
+
+/** A node's address: a seat's handle, a unit's key. */
+export function addressOf(node: DraftSeat | DraftUnit): string {
+  return "roles" in node ? node.data.key : node.data.handle;
+}
+
+/** A list in the chart's order. The same array when it already is. */
+export function inAddressOrder<T extends DraftSeat | DraftUnit>(list: readonly T[]): readonly T[] {
+  for (let i = 1; i < list.length; i++) {
+    if (compareAddress(addressOf(list[i - 1]!), addressOf(list[i]!)) > 0) {
+      return [...list].sort((x, y) => compareAddress(addressOf(x), addressOf(y)));
+    }
+  }
+  return list;
 }
 
 /** A node found in the tree, with where it sits. */
@@ -102,7 +180,7 @@ export function locate(draft: Draft, key: NodeKey): Located | undefined {
   return inSeats(draft.roles, COMPANY_KEY) ?? inUnits(draft.units, COMPANY_KEY);
 }
 
-/** Every unit, depth-first, parents before children: the document's own order. */
+/** Every unit, depth-first, parents before children, each list in the chart's own order. */
 export function* allUnits(draft: Draft): Generator<{ unit: DraftUnit; parent: NodeKey }> {
   function* walk(
     units: readonly DraftUnit[],
@@ -117,8 +195,8 @@ export function* allUnits(draft: Draft): Generator<{ unit: DraftUnit; parent: No
 }
 
 /**
- * Every seat, in the document's own walk order (root seats, then each unit's
- * seats before its children), with the key of the list that holds it.
+ * Every seat, in walk order (root seats, then each unit's seats before its
+ * children), with the key of the list that holds it.
  */
 export function* allSeats(draft: Draft): Generator<{ seat: DraftSeat; parent: NodeKey }> {
   for (const seat of draft.roles) yield { seat, parent: COMPANY_KEY };
@@ -142,6 +220,20 @@ export function isWithin(draft: Draft, key: NodeKey, ancestor: NodeKey): boolean
   return found?.kind === "unit" ? subtreeKeys(found.node).includes(key) : false;
 }
 
+/**
+ * Whether two drafts hold the same chart: the same nodes under the same keys,
+ * in the same places, with the same data. The settings are not compared.
+ *
+ * What says a derivation of one still describes the other: the engine's
+ * answers about a chart (who inherits which lead, who reports to whom) hold
+ * for exactly the rows they were derived from, so a draft that changed any of
+ * them is one no derivation has described yet.
+ */
+export function sameChart(a: Draft, b: Draft): boolean {
+  if (a.roles === b.roles && a.units === b.units) return true;
+  return jsonEqual(a.roles, b.roles) && jsonEqual(a.units, b.units);
+}
+
 /** Every key in the draft, company included. */
 export function allKeys(draft: Draft): Set<NodeKey> {
   const out = new Set<NodeKey>([COMPANY_KEY]);
@@ -154,7 +246,7 @@ export function allKeys(draft: Draft): Set<NodeKey> {
 export function updateSeatData(
   draft: Draft,
   key: NodeKey,
-  update: (data: ConfigRole) => ConfigRole,
+  update: (data: SeatData) => SeatData,
 ): Draft {
   const seats = (list: readonly DraftSeat[]): readonly DraftSeat[] => {
     const index = list.findIndex((s) => s.key === key);
@@ -164,7 +256,9 @@ export function updateSeatData(
     if (data === seat.data) return list;
     const next = [...list];
     next[index] = { key: seat.key, data };
-    return next;
+    // A NEW HANDLE moves the seat among its siblings: the list stays in the
+    // order the chart will serve it in.
+    return data.handle === seat.data.handle ? next : inAddressOrder(next);
   };
   const roles = seats(draft.roles);
   if (roles !== draft.roles) return { ...draft, roles };
@@ -179,20 +273,34 @@ export function updateSeatData(
 export function updateUnitData(
   draft: Draft,
   key: NodeKey,
-  update: (data: ConfigUnit) => ConfigUnit,
+  update: (data: UnitData) => UnitData,
 ): Draft {
+  let rekeyed = false;
   const units = mapUnits(draft.units, (unit) => {
     if (unit.key !== key) return unit;
     const data = update(unit.data);
+    if (data.key !== unit.data.key) rekeyed = true;
     return data === unit.data ? unit : { ...unit, data };
   });
-  return units === draft.units ? draft : { ...draft, units };
+  if (units === draft.units) return draft;
+  // A NEW KEY moves the unit among its siblings: the lists stay in the chart's order.
+  return { ...draft, units: rekeyed ? sortUnitLists(units) : units };
+}
+
+/** Every list of units in address order, sharing each list that already is. */
+function sortUnitLists(units: readonly DraftUnit[]): readonly DraftUnit[] {
+  return inAddressOrder(
+    mapUnits(units, (unit) => {
+      const children = inAddressOrder(unit.children);
+      return children === unit.children ? unit : { ...unit, children };
+    }),
+  );
 }
 
 /** A copy of the draft with `update` applied to every seat's data. */
 export function mapSeatData(
   draft: Draft,
-  update: (data: ConfigRole, key: NodeKey) => ConfigRole,
+  update: (data: SeatData, key: NodeKey) => SeatData,
 ): Draft {
   const seats = (list: readonly DraftSeat[]): readonly DraftSeat[] => {
     let changed = false;
@@ -215,7 +323,7 @@ export function mapSeatData(
 /** A copy of the draft with `update` applied to every unit's own data. */
 export function mapUnitData(
   draft: Draft,
-  update: (data: ConfigUnit, key: NodeKey) => ConfigUnit,
+  update: (data: UnitData, key: NodeKey) => UnitData,
 ): Draft {
   const units = mapUnits(draft.units, (unit) => {
     const data = update(unit.data, unit.key);
@@ -268,9 +376,9 @@ export function detach(draft: Draft, key: NodeKey): { draft: Draft; node: Locate
 }
 
 /**
- * A copy of the draft with a node inserted at a placement. The caller has
- * checked that the parent exists and the neighbour stands in it; an absent
- * neighbour here is a programming error, not a replay outcome.
+ * A copy of the draft with a node inserted under a parent, where its address
+ * puts it among its siblings. The caller has checked that the parent exists;
+ * an absent parent here is a programming error, not a replay outcome.
  */
 export function attach(
   draft: Draft,
@@ -278,13 +386,10 @@ export function attach(
   node: DraftSeat | DraftUnit,
   kind: "seat" | "unit",
 ): Draft {
-  const insert = <T extends { key: NodeKey }>(list: readonly T[], item: T): T[] => {
-    const at = placement.after === null ? 0 : list.findIndex((n) => n.key === placement.after) + 1;
-    if (at === 0 && placement.after !== null) {
-      throw new RangeError(`attach: ${placement.after} is not in ${placement.parent}`);
-    }
+  const insert = <T extends DraftSeat | DraftUnit>(list: readonly T[], item: T): readonly T[] => {
+    const at = list.findIndex((n) => compareAddress(addressOf(n), addressOf(item)) > 0);
     const next = [...list];
-    next.splice(at, 0, item);
+    next.splice(at < 0 ? next.length : at, 0, item);
     return next;
   };
   if (placement.parent === COMPANY_KEY) {
@@ -321,10 +426,7 @@ export function siblingsAt(
 
 /** Where a located node sits, as a [Placement]. */
 export function placementOf(found: Located): Placement {
-  return {
-    parent: found.parent,
-    after: found.index === 0 ? null : found.siblings[found.index - 1]!.key,
-  };
+  return { parent: found.parent };
 }
 
 /** Every seat name in the draft, in walk order, repeats included. */
@@ -335,4 +437,63 @@ export function seatNames(draft: Draft): string[] {
 /** Every unit name in the draft, depth-first, repeats included. */
 export function unitNames(draft: Draft): string[] {
   return [...allUnits(draft)].map(({ unit }) => unit.data.name);
+}
+
+/** Every seat handle in the draft, in walk order, repeats included. */
+export function seatHandles(draft: Draft): string[] {
+  return [...allSeats(draft)].map(({ seat }) => seat.data.handle);
+}
+
+/** Every unit key in the draft, depth-first, repeats included. */
+export function unitKeys(draft: Draft): string[] {
+  return [...allUnits(draft)].map(({ unit }) => unit.data.key);
+}
+
+/** What every address of a draft resolves to: see [addressIndex]. */
+export interface AddressIndex {
+  readonly seats: ReadonlyMap<string, DraftSeat>;
+  readonly units: ReadonlyMap<string, DraftUnit>;
+}
+
+/**
+ * The seat each handle and the unit each key resolves to, as the chart
+ * resolves a reference: by the address a node answers to NOW, and then by an
+ * address it USED to answer to (`former_handles`, `former_keys`) that nothing
+ * has claimed since — the chart keeps a retired address resolving until
+ * something else takes it (`org.Organization.Role`). The first holder wins
+ * where two nodes of a draft claim one address, which the draft's own check
+ * reports.
+ */
+export function addressIndex(draft: Draft): AddressIndex {
+  const seats = new Map<string, DraftSeat>();
+  const units = new Map<string, DraftUnit>();
+  const all = [...allSeats(draft)].map(({ seat }) => seat);
+  const allU = [...allUnits(draft)].map(({ unit }) => unit);
+  for (const seat of all) if (!seats.has(seat.data.handle)) seats.set(seat.data.handle, seat);
+  for (const unit of allU) if (!units.has(unit.data.key)) units.set(unit.data.key, unit);
+  const former = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  for (const seat of all) {
+    for (const address of former(seat.data.former_handles)) {
+      if (!seats.has(address)) seats.set(address, seat);
+    }
+  }
+  for (const unit of allU) {
+    for (const address of former(unit.data.former_keys)) {
+      if (!units.has(address)) units.set(address, unit);
+    }
+  }
+  return { seats, units };
+}
+
+/** The node a seat handle names in the draft, or `undefined`. */
+export function seatByHandle(draft: Draft, handle: string): DraftSeat | undefined {
+  for (const { seat } of allSeats(draft)) if (seat.data.handle === handle) return seat;
+  return undefined;
+}
+
+/** The node a unit key names in the draft, or `undefined`. */
+export function unitByKey(draft: Draft, key: string): DraftUnit | undefined {
+  for (const { unit } of allUnits(draft)) if (unit.data.key === key) return unit;
+  return undefined;
 }

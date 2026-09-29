@@ -1,23 +1,25 @@
 /**
- * The half of a seat only the company document holds, and what the screen says
- * when it cannot read it.
+ * The half of a seat only the org chart's own read carries, and what the
+ * screen says when it cannot read it.
  *
  * `/org` IS ANONYMOUSLY READABLE, so the projection was narrowed to a charter
  * and a tree: `internal/api/orgprojection.go` spells the public shape out field
  * by field, and `orgprojection_test.go` fails the build over a field of
- * `config.Role` or `config.Unit` nobody has classified. A seat's email, model
- * chain, token budget, contact identities and tool credentials are on the other
- * side of that line, behind the operator-gated `config` query.
+ * `config.Role` or `config.Unit` nobody has classified. A seat's model chain,
+ * token budget, contact identities and tool credentials are on the other side
+ * of that line: the RUNTIME half of its chart row, which `/chart` serves only
+ * to a reader who may read the company's configuration, and says when it did
+ * not (`runtime: false`).
  *
- * TWO THINGS GO WRONG IF A SCREEN FORGETS THAT, and both are here:
+ * THREE THINGS GO WRONG IF A SCREEN FORGETS THAT, and all three are here:
  *
  *  - it reads the fields off the projection, where they are simply absent, and
  *    draws "not set" over settings it was never given — a statement about
  *    somebody's company, and the wrong one;
- *  - it keeps what a token DID read after that token is cleared or refused,
- *    because `useQuery` holds its last good answer through a failed ask. That
- *    suits a poll and is wrong for a guarded read: the email and the budget
- *    stayed on screen beside a banner saying the answer needs a token.
+ *  - it keeps what a reader DID read after a later read is refused. That suits
+ *    a poll and is wrong for a guarded read: the budget stayed on screen
+ *    beside a banner saying the answer needs a grant;
+ *  - it reads the runtime half WITHHELD as a runtime half that is empty.
  */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -27,8 +29,15 @@ import { SeatPeek, SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
-import type { CompanyDocument, OrgProjection } from "~/protocol/index.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import type {
+  ChartAnswer,
+  ChartSeat,
+  ChartSeatRead,
+  ChartUnit,
+  ChartUnitRead,
+  OrgProjection,
+} from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -95,6 +104,7 @@ const projection: OrgProjection = {
     ],
     units: [
       {
+        id: "engineering",
         name: "Engineering",
         type: "department",
         lead: "",
@@ -107,49 +117,123 @@ const projection: OrgProjection = {
   },
 };
 
+const answer: ChartAnswer = { level: "consistent_prefix", position: "CREWLET_CHART_LOG@1:10" };
+
 /**
- * The company document as the guarded surface serves it: REDACTED, so a
- * credential field holds a whole `${VAR}` or the mask, never a value.
+ * The chart's rows as `GET /chart/seats/{handle}?runtime=true` serves them:
+ * MASKED, so a credential field — and a seat's address — holds a whole
+ * `${VAR}` reference or the mask, never a value.
  */
-const document_: CompanyDocument = {
-  name: "Acme",
-  roles: [
-    {
-      name: "CEO",
-      handle: "ceo",
-      email: "ceo@example.com",
-      token_budget: 250000,
-      llm: { default: ["fast", "backup"], review: "big" },
-      schedules: [{ name: "weekly-review", cron: "0 9 * * 1", task: "Review the week" }],
+const seats: Record<string, ChartSeat> = {
+  ceo: {
+    handle: "ceo",
+    name: "CEO",
+    // A SEALED ADDRESS: the chart keeps it in the secret store and serves the
+    // reference that names it.
+    email: "${CHART_SEAT_CEO_EMAIL_0A1B2C3D}",
+    runtime: { token_budget: 250000, llm: ["fast", "backup"], llm_review: "big" },
+  },
+  ada: {
+    handle: "ada",
+    name: "Ada Founder",
+    kind: "human",
+    // The mask: an address is set, and this reader is not shown it.
+    email: "__redacted__",
+    runtime: { contact: { slack_user_id: "U0ADA" }, availability: "CET business hours" },
+  },
+  "dev-a": {
+    handle: "dev-a",
+    name: "Dev A",
+    unit: "engineering",
+    runtime: {
+      contact: { slack_user_id: "U0FOUNDER" },
+      // AUTH_HEADER is what an engine whose redaction took any value
+      // CONTAINING `${` for a reference sent: its literal half intact.
+      mcp_env: {
+        tracker: { API_TOKEN: "__redacted__", AUTH_HEADER: "Bearer sk-live-${SUFFIX}" },
+      },
     },
-    {
-      name: "Ada Founder",
-      handle: "ada",
-      kind: "human",
-      email: "ada@example.com",
-      contact: { slack_user_id: "U0ADA" },
-    },
-  ],
-  units: [
-    {
-      name: "Engineering",
-      // A WHOLE REFERENCE, which is the only unmasked form a credential field
-      // ever carries: the engine redacts a literal in `mcp_env` server-side.
-      mcp_env: { github: { GITHUB_HOST: "${ENGINEERING_GITHUB_HOST}" } },
-      roles: [
-        {
-          name: "Dev A",
-          contact: { slack_user_id: "U0FOUNDER" },
-          // AUTH_HEADER is what an engine whose redaction took any value
-          // CONTAINING `${` for a reference sent: its literal half intact.
-          mcp_env: {
-            tracker: { API_TOKEN: "__redacted__", AUTH_HEADER: "Bearer sk-live-${SUFFIX}" },
-          },
-        },
-      ],
-    },
-  ],
+  },
 };
+
+const units: Record<string, ChartUnit> = {
+  engineering: {
+    key: "engineering",
+    name: "Engineering",
+    // A WHOLE REFERENCE, which is the only unmasked form a credential field
+    // ever carries: the engine masks a literal in `mcp_env` server-side.
+    runtime: { mcp_env: { github: { GITHUB_HOST: "${ENGINEERING_GITHUB_HOST}" } } },
+  },
+};
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
+/** How the engine answers one chart read. */
+type ChartAnswerer = (path: string, query: URLSearchParams) => Response;
+
+/** The chart serving every row whole, as it does a reader holding `config:read`. */
+const servingChart: ChartAnswerer = (path, query) => {
+  const runtime = query.get("runtime") === "true";
+  const seat = /^\/chart\/seats\/([^/]+)$/.exec(path);
+  if (seat) {
+    const row = seats[decodeURIComponent(seat[1]!)];
+    if (!row) return json({ error: "not_found", message: "Nothing by that name." }, 404);
+    const body: ChartSeatRead = { seat: row, manages: null, answer, runtime };
+    return json(body);
+  }
+  const unit = /^\/chart\/units\/([^/]+)$/.exec(path);
+  if (unit) {
+    const row = units[decodeURIComponent(unit[1]!)];
+    if (!row) return json({ error: "not_found", message: "Nothing by that name." }, 404);
+    const body: ChartUnitRead = { unit: row, children: [], seats: [], answer, runtime };
+    return json(body);
+  }
+  return json({ error: "not_found", message: "Nothing by that name." }, 404);
+};
+
+/** The chart serving the rows WITHOUT their runtime half, and saying so. */
+const strippingChart: ChartAnswerer = (path, query) => {
+  const whole = servingChart(path, query);
+  const strip = ({ runtime: _runtime, ...row }: { runtime?: unknown }) => row;
+  const seat = /^\/chart\/seats\/([^/]+)$/.exec(path);
+  const row = seat ? seats[decodeURIComponent(seat[1]!)] : undefined;
+  if (!row) return whole;
+  return json({ seat: strip(row), manages: null, answer, runtime: false });
+};
+
+/** A refusal on authority, as the router renders the table's own. */
+const refusing: ChartAnswerer = () =>
+  json(
+    {
+      error: "unauthorized",
+      message: "You may not do that.",
+      reason: "no_grant",
+      grants: ["state:read"],
+    },
+    403,
+  );
+
+let chartReads: { path: string; query: URLSearchParams }[] = [];
+
+/** Installs the engine's REST half as `fetch`, answering the chart reads. */
+function stubChart(answerer: () => ChartAnswerer) {
+  chartReads = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://engine.test");
+      if (url.pathname.startsWith("/chart/")) {
+        chartReads.push({ path: url.pathname, query: url.searchParams });
+        return answerer()(url.pathname, url.searchParams);
+      }
+      return json({});
+    }),
+  );
+}
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
@@ -161,7 +245,12 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function mount(hash: string, answer: (what: string) => Promise<unknown>) {
+function mount(
+  hash: string,
+  answer: (what: string) => Promise<unknown>,
+  chart: () => ChartAnswerer = () => servingChart,
+) {
+  stubChart(chart);
   location.hash = hash;
   const store = new Store();
   store.applyOrg(projection);
@@ -227,14 +316,12 @@ function mount(hash: string, answer: (what: string) => Promise<unknown>) {
 }
 
 const answering = (what: string) =>
-  what === "config"
-    ? Promise.resolve(document_)
-    : // THE SHAPE THE ENGINE ACTUALLY SENDS for a rollup. `totals` is not
-      // optional on that answer, and the Cost tab reads it without a guard — so
-      // a fixture answering `{}` for it crashed the tab rather than testing it.
-      what === "tokens"
-      ? Promise.resolve({ totals: { total_tokens: 0, calls: 0 }, by_model: [], by_turn: [] })
-      : Promise.resolve({ llm_history: [], next: "" });
+  // THE SHAPE THE ENGINE ACTUALLY SENDS for a rollup. `totals` is not optional
+  // on that answer, and the Cost tab reads it without a guard — so a fixture
+  // answering `{}` for it crashed the tab rather than testing it.
+  what === "tokens"
+    ? Promise.resolve({ totals: { total_tokens: 0, calls: 0 }, by_model: [], by_turn: [] })
+    : Promise.resolve({ llm_history: [], next: "" });
 
 /** Let every settled promise land, and the renders they cause. */
 async function settle() {
@@ -245,35 +332,52 @@ async function settle() {
   });
 }
 
-test("the settings the projection does not carry are read from the document", async () => {
+// READ BY THE HANDLE, from the chart, with the runtime half asked for: the
+// company document holds no seats any more, and a name is prose two seats may
+// share.
+test("the settings the projection does not carry are read from the chart, by handle", async () => {
   mount("#/company/people/ceo", answering);
 
-  expect(await screen.findByText("ceo@example.com")).toBeDefined();
-  // The chain, in the order the fallback walks it, out of the mapping form —
-  // which is the shape that used to throw during render and blank the page.
-  expect(screen.getByText("fast")).toBeDefined();
+  // The chain, in the order the fallback walks it.
+  expect(await screen.findByText("fast")).toBeDefined();
   expect(screen.getByText("backup")).toBeDefined();
+  const read = chartReads.find((r) => r.path === "/chart/seats/ceo");
+  expect(read?.query.get("runtime")).toBe("true");
+  // A root seat has no home unit to read.
+  expect(chartReads.some((r) => r.path.startsWith("/chart/units/"))).toBe(false);
 });
 
-// A REFUSAL CLEARS WHAT THE TOKEN HAD READ.
+// A SEAT'S ADDRESS IS SEALED, so the chart serves the reference that names it
+// or the mask, and neither is shown as though it were an address.
+test("a sealed address is shown as the reference it is, and a masked one as hidden", async () => {
+  mount("#/company/people/ceo", answering);
+  expect(await screen.findByText("${CHART_SEAT_CEO_EMAIL_0A1B2C3D}")).toBeDefined();
+  cleanup();
+
+  mount("#/company/people/ada", answering);
+  expect(await screen.findByText("A literal value is set (hidden)")).toBeDefined();
+  expect(document.body.textContent).not.toContain("__redacted__");
+});
+
+// A REFUSAL CLEARS WHAT AN EARLIER READ SHOWED.
 test("a refused re-read takes the guarded settings off the page", async () => {
   let refuse = false;
-  const { store } = mount("#/company/people/ceo", (what) =>
-    what === "config" && refuse ? Promise.reject(new Error("unauthorized")) : answering(what),
+  const { store } = mount("#/company/people/ceo", answering, () =>
+    refuse ? refusing : servingChart,
   );
-  expect(await screen.findByText("ceo@example.com")).toBeDefined();
+  expect(await screen.findByText("fast")).toBeDefined();
 
   refuse = true;
-  // A reconnect asks every query again, as a token change does.
-  act(() => store.setConnected(true));
+  // An org push is what follows a chart write, and it re-reads the chart.
+  act(() => store.applyOrg({ ...projection }));
 
   await screen.findByRole("tab", { name: "Cost" });
-  expect(screen.queryByText("ceo@example.com")).toBeNull();
+  await settle();
+  expect(screen.queryByText("fast")).toBeNull();
 
   // AND THE RECURRING WORK STAYS, which is the half that must NOT be cleared.
-  // It was read out of the guarded document and went with the email; it comes
-  // from the pushed rows now, which every reader gets, so a refused token
-  // takes the settings the token bought and nothing else.
+  // It comes from the pushed rows, which every reader gets, so a refused read
+  // takes the settings that read bought and nothing else.
   fireEvent.click(screen.getByRole("tab", { name: "Schedules" }));
   expect(screen.getByText("weekly-review")).toBeDefined();
 
@@ -282,6 +386,26 @@ test("a refused re-read takes the guarded settings off the page", async () => {
   // AND SAYS SO. "Unknown" is not "unlimited": a cap nobody was allowed to
   // read and a company with no cap are different facts.
   expect(screen.getByText("Unknown")).toBeDefined();
+});
+
+// A RUNTIME HALF WITHHELD IS NOT A RUNTIME HALF THAT IS EMPTY. The chart
+// serves the rows without it to a reader who may not read the configuration,
+// and says so; a screen that drew "unlimited" or "default provider" over that
+// would be describing a company it was never shown.
+test("a runtime half the chart withheld is said to be withheld, never drawn as empty", async () => {
+  mount("#/company/people/ceo", answering, () => strippingChart);
+  await settle();
+  expect(headerFacts()).toContain("not shown to you");
+  expect(headerFacts()).not.toContain("default provider");
+  fireEvent.click(screen.getByRole("tab", { name: "Cost" }));
+  expect(screen.queryByText("unlimited")).toBeNull();
+  expect(screen.getByText("Unknown")).toBeDefined();
+  cleanup();
+
+  // The control: the same seat served whole names its chain and its cap.
+  mount("#/company/people/ceo", answering);
+  await settle();
+  expect(headerFacts()).toContain("fast → backup");
 });
 
 // A CREDENTIAL FIELD SHOWS A WHOLE REFERENCE OR NOTHING, whatever the engine
@@ -296,8 +420,10 @@ test("a credential is never printed, and a reference is shown as the name it is"
   expect(document.body.textContent).not.toContain("__redacted__");
   expect(document.body.textContent).not.toContain("sk-live");
   // What the home unit gives the seat is merged in, the seat's own winning —
-  // and a reference NAMES a secret rather than being one, so it is shown.
-  expect(screen.getByText("${ENGINEERING_GITHUB_HOST}")).toBeDefined();
+  // and a reference NAMES a secret rather than being one, so it is shown. The
+  // unit is read by its KEY, which is what the seat's row names it by.
+  expect(await screen.findByText("${ENGINEERING_GITHUB_HOST}")).toBeDefined();
+  expect(chartReads.some((r) => r.path === "/chart/units/engineering")).toBe(true);
 });
 
 // A UNIT SCHEDULE IS THIS SEAT'S RECURRING WORK TOO.
@@ -408,15 +534,14 @@ function headerFacts(): string {
 
 // THE HEADER IS A PROPERTY OF THE SEAT, NOT OF THE OPEN TAB.
 //
-// The guarded document read was gated on `tab === "overview" | "cost" |
-// "access"` and the header that reads the model chain out of it renders on all
-// eight tabs. So a reader WITH a token was shown the chain on three and told
+// The guarded read was gated on `tab === "overview" | "cost" | "access"` and
+// the header that reads the model chain out of it renders on all eight tabs. So a reader WITH a token was shown the chain on three and told
 // "needs an operator token" on Work, Turns, Conversations, Memory and Schedules
 // — the same seat, the same header, one click apart.
 test("the model fact is the same on every tab", async () => {
   mount("#/company/people/ceo", answering);
   await settle();
-  expect(headerFacts()).toContain("fast → backup → big");
+  expect(headerFacts()).toContain("fast → backup");
 
   for (const name of [
     "Work",
@@ -430,34 +555,29 @@ test("the model fact is the same on every tab", async () => {
   ]) {
     fireEvent.click(screen.getByRole("tab", { name }));
     await settle();
-    expect(headerFacts(), name).toContain("fast → backup → big");
+    expect(headerFacts(), name).toContain("fast → backup");
     expect(headerFacts(), name).not.toContain("needs an operator token");
   }
 });
 
-// A REFUSED DOCUMENT NAMES THE GRANT IT NAMED, AND A NODE CATCHING UP IS NOT A
+// A REFUSED READ NAMES THE GRANT IT NAMED, AND A NODE CATCHING UP IS NOT A
 // REFUSAL.
 //
-// Every failed read of the company document printed "needs an operator
-// token": to a person signed in without `config:read`, who lacks a grant
-// rather than a token, and to every reader of every seat while a node was
-// still catching up after a restart — a claim about the READER made by an
-// answer about the NODE.
+// Every failed read of the seat's settings printed "needs an operator token":
+// to a person signed in without the grant, who lacks a grant rather than a
+// token, and to every reader of every seat while a node was still catching up
+// after a restart — a claim about the READER made by an answer about the NODE.
 test("the model fact names a refusal's grant, and an unavailable read claims nothing about the reader", async () => {
-  mount("#/company/people/ceo", (what) =>
-    what === "config"
-      ? Promise.reject(
-          new QueryRefusedError("unauthorized", { reason: "no_grant", grants: ["config:read"] }),
-        )
-      : answering(what),
-  );
+  mount("#/company/people/ceo", answering, () => refusing);
   await settle();
-  expect(headerFacts()).toContain("needs config:read");
+  expect(headerFacts()).toContain("needs state:read");
   expect(headerFacts()).not.toContain("operator token");
   cleanup();
 
-  mount("#/company/people/ceo", (what) =>
-    what === "config" ? Promise.reject(new Error("unavailable")) : answering(what),
+  mount(
+    "#/company/people/ceo",
+    answering,
+    () => () => json({ error: "unavailable", message: "Try again shortly." }, 503),
   );
   await settle();
   expect(headerFacts()).toContain("could not be read just now");
@@ -502,7 +622,8 @@ test("the seat rail states no model rather than claiming a missing token", async
 test("a human seat's configured panel carries no model row", async () => {
   mount("#/company/people/ada", answering);
   await settle();
-  expect(screen.getByText("ada@example.com")).toBeTruthy();
+  // The address row is there, for either kind.
+  expect(screen.getByText("A literal value is set (hidden)")).toBeTruthy();
   expect(screen.queryByText("default provider")).toBeNull();
   expect(screen.queryByText("none, reflection uses the default")).toBeNull();
   expect(screen.queryByText("Auxiliary model")).toBeNull();

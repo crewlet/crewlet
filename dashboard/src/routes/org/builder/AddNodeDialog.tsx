@@ -10,37 +10,51 @@
  * is one piece of code (`useAddNode`, `AddNodeFields`), because there is one
  * answer to what can be added under a parent and it must not come apart.
  *
- * A NAME THAT IS FREE FROM THE START. Seat names are unique and so are unit
- * names, because a lead or a `manages` entry names exactly one seat, and a
- * `manages` entry or a unit reference exactly one unit. People routinely want
- * several seats with one role title, and learning the rule from the next check
- * means inventing a second name after the fact. So the name is pre-filled with
- * one not yet taken, and a typed name that is taken offers the next free one
- * ("Software Engineer 2"). That is a convenience rather than a second
- * validator: the engine still decides, and a name the draft already holds is
- * refused by the check like any other.
+ * A NAME AND AN ADDRESS. The name is prose people read, and two seats may
+ * share one; the ADDRESS — a seat's handle, a unit's key — is what every
+ * reference names the node by and what the chart creates it under, for good:
+ * it is the node's identity, which no rename moves and the chart never issues
+ * twice. So the form asks for both, and suggests the address from the name
+ * (`document.suggestAddress`) until the operator types their own: free in the
+ * draft, and never one the saved chart holds, since a removed node's address
+ * is refused for ever and a held one is somebody else's. The name is
+ * pre-filled with one not yet taken, which is a convenience rather than a rule.
  *
  * THE KEY IS MINTED HERE, in the event handler, never in the reducer (see
- * `model/keys.ts`), from the Builder's one key source, and the new node goes
- * at the end of its parent's list.
+ * `model/keys.ts`), from the Builder's one key source, and the new node takes
+ * its place among its siblings by its address, which is the only order the
+ * chart keeps.
  * Nothing is dispatched until the reducer's own recording door has said it
  * will take the operation, so a refusal stays where the operator is working.
  */
 
 import { useState } from "react";
-import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.ts";
+import type { HumanContactKey } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder, type AddKind } from "./BuilderContext.tsx";
 import {
+  ADDRESS_HELP,
   ContactField,
+  NAME_HELP,
   ReadOnlyNote,
   Refusal,
-  UNIQUE_NAME_HELP,
   UnitTypeField,
 } from "./dialogParts.tsx";
-import { suggestUniqueName } from "./model/document.ts";
-import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
-import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
+import { suggestAddress, suggestUniqueName } from "./model/document.ts";
+import {
+  allSeats,
+  allUnits,
+  locate,
+  seatHandles,
+  seatNames,
+  unitKeys,
+  unitNames,
+  type Draft,
+  type SeatData,
+  type UnitData,
+} from "./model/draft.ts";
+import { handleProblem, unitKeyProblem } from "./model/problems.ts";
+import { COMPANY_KEY, handleOfKey, mintKey, unitKeyOf, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
 import { AddGlyph } from "@crewlethq/icons/glyphs";
@@ -87,20 +101,49 @@ export interface AddProps {
   onClose: () => void;
 }
 
+/**
+ * Every address a new node may not take: what the draft holds, what the SAVED
+ * chart holds — a node this draft removed keeps its address for ever, since
+ * the chart never issues a removed one again — and the address every saved
+ * node was CREATED under, which the chart keeps as that node's identity
+ * however long ago it was renamed away from it (`problems.reservedAddresses`,
+ * which a check would otherwise report only after the add). Seats' and units'
+ * together, so a `manages:` entry naming the new node never reads as the other
+ * kind. A retired address a node merely used to answer to is not here: a
+ * creation may take one, which is how the chart lets an alias go.
+ */
+function takenAddresses(draft: Draft, base: Draft): Set<string> {
+  const identities = [
+    ...[...allSeats(base)].map(({ seat }) => handleOfKey(seat.key)),
+    ...[...allUnits(base)].map(({ unit }) => unitKeyOf(unit.key)),
+  ].filter((address): address is string => address !== undefined);
+  return new Set([
+    ...seatHandles(draft),
+    ...unitKeys(draft),
+    ...seatHandles(base),
+    ...unitKeys(base),
+    ...identities,
+  ]);
+}
+
 /** What the fields draw and what the foot submits: one add, asked in two places. */
 interface AddForm {
   kind: AddKind;
   chooseKind: (next: AddKind) => void;
   name: string;
   setName: (next: string) => void;
+  address: string;
+  setAddress: (next: string) => void;
+  /** Why the address cannot be taken, or `null`. */
+  addressProblem: string | null;
+  /** Whether a contact identity can be given: it lives in the runtime half. */
+  runtimeVisible: boolean;
   type: string;
   setType: (next: string) => void;
   identity: HumanContactKey;
   setIdentity: (next: HumanContactKey) => void;
   contact: string;
   setContact: (next: string) => void;
-  clash: boolean;
-  suggestion: string;
   trimmed: string;
   refusal: string | null;
   /** The reason nothing can be recorded, drawn wherever the form is drawn. */
@@ -129,29 +172,47 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
     suggestUniqueName(taken(initialKind), DEFAULT_NAMES[initialKind]),
   );
   const [named, setNamed] = useState(false);
+  const addresses = takenAddresses(state.draft, state.baseDraft);
+  const suggest = (forName: string, forKind: AddKind) =>
+    suggestAddress(addresses, forName, forKind === "unit" ? "unit" : "seat");
+  const [address, setAddress] = useState(() =>
+    suggest(suggestUniqueName(taken(initialKind), DEFAULT_NAMES[initialKind]), initialKind),
+  );
+  const [addressed, setAddressed] = useState(false);
   const [type, setType] = useState("");
   const [identity, setIdentity] = useState<HumanContactKey>("slack_user_id");
   const [contact, setContact] = useState("");
   const [refusal, setRefusal] = useState<string | null>(null);
 
   const trimmed = name.trim();
-  const clash = trimmed !== "" && taken(kind).has(trimmed);
   const missingParent = parentKey !== COMPANY_KEY && parentNode?.kind !== "unit";
+  const chosenAddress = address.trim();
+  const addressProblem =
+    (kind === "unit" ? unitKeyProblem(chosenAddress) : handleProblem(chosenAddress)) ??
+    (addresses.has(chosenAddress)
+      ? `${chosenAddress} is taken: something in this company holds it, or held it.`
+      : null);
+  const runtimeVisible = state.base.runtimeVisible;
 
   function add() {
-    if (trimmed === "" || api.readOnly || missingParent) return;
-    const siblings = siblingsAt(state.draft, parentKey, kind === "unit" ? "unit" : "seat") ?? [];
-    const placement = { parent: parentKey, after: siblings.at(-1)?.key ?? null };
+    if (trimmed === "" || api.readOnly || missingParent || addressProblem !== null) return;
+    const placement = { parent: parentKey };
     const key = mintKey(api.keys);
     let intent: Intent;
     if (kind === "unit") {
-      const data: ConfigUnit = { name: trimmed, ...(type.trim() ? { type: type.trim() } : {}) };
+      const data: UnitData = {
+        key: chosenAddress,
+        name: trimmed,
+        ...(type.trim() ? { type: type.trim() } : {}),
+      };
       intent = { type: "addUnit", key, placement, data };
     } else {
-      const data: ConfigRole = { name: trimmed };
+      const data: SeatData = { handle: chosenAddress, name: trimmed };
       if (kind === "human") {
         data.kind = "human";
-        if (contact.trim()) data.contact = { [identity]: contact.trim() };
+        if (runtimeVisible && contact.trim()) {
+          data.runtime = { contact: { [identity]: contact.trim() } };
+        }
       }
       intent = { type: "addSeat", key, placement, data };
     }
@@ -168,29 +229,39 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
     kind,
     chooseKind: (next) => {
       setKind(next);
-      // A default nobody typed over follows the kind; a typed name is kept.
-      if (!named) setName(suggestUniqueName(taken(next), DEFAULT_NAMES[next]));
+      // A default nobody typed over follows the kind; a typed one is kept.
+      const nextName = named ? name : suggestUniqueName(taken(next), DEFAULT_NAMES[next]);
+      if (!named) setName(nextName);
+      if (!addressed) setAddress(suggest(nextName, next));
       setRefusal(null);
     },
     name,
     setName: (next) => {
       setName(next);
       setNamed(true);
+      // THE ADDRESS FOLLOWS THE NAME until the operator types one of their own.
+      if (!addressed) setAddress(suggest(next, kind));
       setRefusal(null);
     },
+    address,
+    setAddress: (next) => {
+      setAddress(next);
+      setAddressed(true);
+      setRefusal(null);
+    },
+    addressProblem,
+    runtimeVisible,
     type,
     setType,
     identity,
     setIdentity,
     contact,
     setContact,
-    clash,
-    suggestion: clash ? suggestUniqueName(taken(kind), trimmed) : "",
     trimmed,
     refusal,
     missingParent,
     readOnly: api.readOnly,
-    blocked: trimmed === "" || api.readOnly || missingParent,
+    blocked: trimmed === "" || api.readOnly || missingParent || addressProblem !== null,
     action: `Add ${KINDS.find((k) => k.value === kind)!.label.toLowerCase()}`,
     add,
   };
@@ -206,6 +277,10 @@ function useAddNode({ parent, kind: initialKind = "agent", onClose }: AddProps):
  */
 function AddNodeFields({ form }: { form: AddForm }) {
   const noun = form.kind === "unit" ? "unit" : "seat";
+  // A problem with the address is said once the operator has an address to
+  // judge: the suggestion is free by construction, so this only ever speaks
+  // about one they typed.
+  const addressError = form.address.trim() === "" ? undefined : (form.addressProblem ?? undefined);
   return (
     <>
       {form.readOnly && <ReadOnlyNote />}
@@ -223,27 +298,17 @@ function AddNodeFields({ form }: { form: AddForm }) {
         options={KINDS}
         onValueChange={form.chooseKind}
       />
+      <ConfigField label="Name" value={form.name} onChange={form.setName} help={NAME_HELP[noun]} />
       <ConfigField
-        label="Name"
-        value={form.name}
-        onChange={form.setName}
-        help={UNIQUE_NAME_HELP[form.kind === "unit" ? "unit" : "seat"]}
+        label={noun === "unit" ? "Key" : "Handle"}
+        kind="id"
+        value={form.address}
+        onChange={form.setAddress}
+        help={ADDRESS_HELP[noun].created}
+        error={addressError}
       />
-      {/* BESIDE THE FIELD, NOT INSIDE ITS DESCRIPTION: the way out of a
-          collision is a control, and a button inside the text a screen reader
-          reads as the field's description is a control nobody is told about. */}
-      {form.clash && (
-        <p className="row wrap builder-note">
-          <span>
-            A {noun} named {form.trimmed} already exists.
-          </span>
-          <Button variant="secondary" size="small" onClick={() => form.setName(form.suggestion)}>
-            {`Use ${form.suggestion}`}
-          </Button>
-        </p>
-      )}
       {form.kind === "unit" && <UnitTypeField value={form.type} onChange={form.setType} />}
-      {form.kind === "human" && (
+      {form.kind === "human" && form.runtimeVisible && (
         <>
           <ContactField
             identity={form.identity}

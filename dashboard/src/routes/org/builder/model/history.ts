@@ -30,30 +30,58 @@
  * review re-runs it after every choice and always shows the outcome the
  * confirmation will adopt.
  *
- * WHAT "THE SAME ENTITY" MEANS is the engine's identity, carried by the key
- * (see `keys.ts`): a seat's handle and a unit's name. An operation recorded
+ * WHAT THE BASE ALREADY SAYS IS NOT A CONFLICT. An operation whose every
+ * differing value differs only because the base already holds THIS
+ * operation's own value — a save that landed part of the draft and failed on
+ * the rest, or a colleague who made the same change — is not held for a
+ * person to choose: it is recorded again over the values that are there, which
+ * keeps whatever part of it the base does not hold yet (a kind already set
+ * whose forbidden fields are still there) and drops it when nothing is left.
+ * The review lists it as already in the chart.
+ *
+ * AN ADD THE CHART ALREADY HOLDS is the one conflict with a third reading.
+ * The chart names nodes by address and never holds two under one, so a seat
+ * this draft created that the chart now holds under the same handle is either
+ * this draft's own (a save that created it, then failed) or a colleague's.
+ * "Keep theirs" drops the add, and every later operation on the node it would
+ * have made reports its target gone. "Keep mine" writes this draft's node
+ * over the one that holds the address ([restateOnto]) and RE-KEYS every later
+ * operation from the key this draft minted to that node's address, so an edit
+ * of the created seat lands on the seat the chart holds.
+ *
+ * A SAVE THAT FAILED PART WAY names its own creations ([rebase]'s `aliases`):
+ * each node this draft created that the save did create, by the key the draft
+ * minted and the address the chart now holds it under. That is its FINAL
+ * address, which need not be the one its add recorded (a created seat's handle
+ * can change after the add), so the add is resolved onto that node before
+ * anything is evaluated, and listed as already in the chart.
+ *
+ * WHAT "THE SAME ENTITY" MEANS is the chart's identity, carried by the key
+ * (see `keys.ts`): a seat's handle and a unit's key. An operation recorded
  * against a seat never lands on a different seat that merely shares its name,
- * because a different seat has a different handle and therefore a different
- * key. A seat the engine gives the SAME handle is, to every subsystem that
- * attaches to a seat (its memory, its mailbox, its masked credentials), the
- * same seat, and an operation on it is held to its recorded values like any
- * other.
+ * because a name is prose and the key is the address.
  *
  * The redo stack does not survive a rebase: its operations were recorded
  * against a draft that no longer exists, and nothing in the review offers to
  * choose for them.
  */
 
-import type { Draft } from "./draft.ts";
+import { jsonEqual } from "./json.ts";
+import type { NodeKey } from "./keys.ts";
+import { locate, type Draft } from "./draft.ts";
 import {
   apply,
   evaluate,
+  holderOf,
   intentOf,
   record,
+  rekeyOperation,
+  restateOnto,
+  type AddSeat,
+  type AddUnit,
   type ApplyReport,
   type Conflict,
   type Operation,
-  type RecordContext,
 } from "./operations.ts";
 
 /** Every operation applied, and every operation undone (most recent last). */
@@ -136,6 +164,7 @@ export type RebaseEntry =
       readonly outcome: "applies";
       /** Position in the log that was rebased. */
       readonly index: number;
+      /** The operation as it was applied: re-keyed where an earlier add was resolved onto a node. */
       readonly op: Operation;
     }
   | {
@@ -146,6 +175,18 @@ export type RebaseEntry =
       readonly reason: string;
     }
   | {
+      /**
+       * Every value it recorded differs only because the base already holds
+       * this operation's own value. `resolved` is what was left to apply,
+       * recorded again over the base's values; absent when nothing was.
+       */
+      readonly outcome: "already";
+      readonly index: number;
+      readonly op: Operation;
+      readonly conflicts: readonly Conflict[];
+      readonly resolved?: readonly Operation[];
+    }
+  | {
       readonly outcome: "conflict";
       readonly index: number;
       readonly op: Operation;
@@ -153,11 +194,12 @@ export type RebaseEntry =
       /** Absent until a person chooses. */
       readonly choice?: Choice;
       /**
-       * For "mine": the operation recorded again over their values, or absent
-       * when their values already are this operation's, so nothing is left to
-       * apply.
+       * For "mine": the operations recorded again over their values (for an
+       * add the chart holds, the ones that write this draft's node over it),
+       * or absent when their values already are this operation's, so nothing
+       * is left to apply.
        */
-      readonly resolved?: Operation;
+      readonly resolved?: readonly Operation[];
     };
 
 /** A rebased log. */
@@ -172,25 +214,39 @@ export interface Rebased {
   readonly entries: readonly RebaseEntry[];
   /** How many conflicts still wait for a choice. The rebase can be adopted only at zero. */
   readonly pending: number;
+  /**
+   * The minted key of every add resolved onto a node the base already held,
+   * and that node's key: what a surface still holding the minted key (a
+   * selection, an open dialog) reads the node through.
+   */
+  readonly rekeyed: ReadonlyMap<NodeKey, NodeKey>;
+}
+
+/** The node an add's address conflict names, in the draft it was evaluated against. */
+function addressHolder(draft: Draft, op: AddSeat | AddUnit): NodeKey | undefined {
+  const kind = op.type === "addSeat" ? "seat" : "unit";
+  const address = op.type === "addSeat" ? op.data.handle : op.data.key;
+  return holderOf(draft, kind, address)?.node.key;
 }
 
 /**
  * Sorts a log against a newer base, applying what still applies and the
  * conflicts a person resolved. See the module doc for the rules.
  *
- * `ctx` is the recording context of the NEWER base (the handles its last
- * check reported), used when "keep mine" records an operation again.
+ * `aliases` maps the key this draft minted for a node a save created to that
+ * node's key in `base` (see the module doc).
  */
 export function rebase(
   base: Draft,
   ops: readonly Operation[],
   choices: ReadonlyMap<number, Choice> = new Map(),
-  ctx: RecordContext = {},
+  aliases: ReadonlyMap<NodeKey, NodeKey> = new Map(),
 ): Rebased {
   let draft = base;
   const applied: Operation[] = [];
   const reports: ApplyReport[] = [];
   const entries: RebaseEntry[] = [];
+  const rekeyed = new Map<NodeKey, NodeKey>();
   let pending = 0;
 
   const adopt = (op: Operation) => {
@@ -199,8 +255,34 @@ export function rebase(
     applied.push(op);
     reports.push(next.report);
   };
+  /** The same request, recorded over the values that are there now, and applied. */
+  const recordAgain = (op: Operation): Operation[] | string | null => {
+    const again = record(draft, intentOf(op));
+    if (again.ok) {
+      adopt(again.op);
+      return [again.op];
+    }
+    return again.refusal === "no_change" ? null : again.message;
+  };
 
-  ops.forEach((op, index) => {
+  ops.forEach((original, index) => {
+    const op = rekeyOperation(original, rekeyed);
+    const alias = op.type === "addSeat" || op.type === "addUnit" ? aliases.get(op.key) : undefined;
+    if (alias !== undefined && (op.type === "addSeat" || op.type === "addUnit")) {
+      if (locate(draft, alias)) {
+        const resolved = restateOnto(draft, op, alias);
+        for (const part of resolved) adopt(part);
+        rekeyed.set(op.key, alias);
+        entries.push({
+          outcome: "already",
+          index,
+          op,
+          conflicts: [],
+          ...(resolved.length > 0 ? { resolved } : {}),
+        });
+        return;
+      }
+    }
     const outcome = evaluate(draft, op);
     if (outcome.kind === "applies") {
       adopt(op);
@@ -211,37 +293,44 @@ export function rebase(
       entries.push({ outcome: "gone", index, op, reason: outcome.reason });
       return;
     }
-    const choice = choices.get(index);
+    const { conflicts } = outcome;
+    const already = conflicts.every((c) => jsonEqual(c.theirs, c.mine));
+    const isAdd = op.type === "addSeat" || op.type === "addUnit";
+    const holder = isAdd && conflicts.some((c) => c.address) ? addressHolder(draft, op) : undefined;
+    const choice = already ? "mine" : choices.get(index);
+
     if (choice === undefined) {
       pending++;
-      entries.push({ outcome: "conflict", index, op, conflicts: outcome.conflicts });
+      entries.push({ outcome: "conflict", index, op, conflicts });
       return;
     }
     if (choice === "theirs") {
-      entries.push({ outcome: "conflict", index, op, conflicts: outcome.conflicts, choice });
+      entries.push({ outcome: "conflict", index, op, conflicts, choice });
       return;
     }
-    // Keep mine: the same request, recorded over the values that are there
-    // now. A placement whose neighbour moved lands at the end of the list,
-    // which is the only reading of "put it where I put it" a changed list
-    // still supports.
-    const again = record(draft, intentOf(op), ctx, { lenientPlacement: true });
-    if (again.ok) {
-      adopt(again.op);
-      entries.push({
-        outcome: "conflict",
-        index,
-        op,
-        conflicts: outcome.conflicts,
-        choice,
-        resolved: again.op,
-      });
-    } else if (again.refusal === "no_change") {
-      entries.push({ outcome: "conflict", index, op, conflicts: outcome.conflicts, choice });
+    let resolved: Operation[] | string | null;
+    if (isAdd && holder !== undefined) {
+      // Keep mine of an add the chart holds: write this draft's node over the
+      // one holding its address, and let every later operation on the node
+      // this add would have made name that one.
+      resolved = restateOnto(draft, op, holder);
+      for (const part of resolved) adopt(part);
+      rekeyed.set(op.key, holder);
+      if (resolved.length === 0) resolved = null;
     } else {
-      entries.push({ outcome: "gone", index, op, reason: again.message });
+      resolved = recordAgain(op);
     }
+    if (typeof resolved === "string") {
+      entries.push({ outcome: "gone", index, op, reason: resolved });
+      return;
+    }
+    const outcomeKind = already ? "already" : "conflict";
+    entries.push(
+      outcomeKind === "already"
+        ? { outcome: "already", index, op, conflicts, ...(resolved ? { resolved } : {}) }
+        : { outcome: "conflict", index, op, conflicts, choice, ...(resolved ? { resolved } : {}) },
+    );
   });
 
-  return { draft, ops: applied, reports, entries, pending };
+  return { draft, ops: applied, reports, entries, pending, rekeyed };
 }

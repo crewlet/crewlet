@@ -10,10 +10,10 @@
  * that is present in the tree, passes its own 39 files of tests, and cannot
  * be opened by anybody.
  *
- * It is also where the read lenses' revision note belongs: the builder draws
- * a DRAFT and the two read lenses draw the projection this node has APPLIED,
- * so the note that says "still applying" must appear on those two and not on
- * the builder, where it would be describing a document that is not on screen.
+ * It is also where the read lenses' apply note belongs: the builder draws a
+ * DRAFT and the two read lenses draw the projection this node has APPLIED, so
+ * the note that says "still applying" must appear on those two and not on the
+ * builder, where it would be describing a company that is not on screen.
  */
 
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
@@ -23,12 +23,12 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CompanyScreen } from "~/routes/company/Company.tsx";
 import { company, Engine, InertWebSocket } from "./testkit.tsx";
-import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
+import { clearSavedChanges, recordSavedChanges } from "./savedChanges.ts";
 
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
-  clearSavedRevision();
+  clearSavedChanges();
 });
 
 afterEach(() => {
@@ -36,11 +36,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
-  clearSavedRevision();
+  clearSavedChanges();
   location.hash = "#/";
 });
 
-/** The company screen at `hash`, against a scripted configuration surface. */
+/** The company screen at `hash`, against a scripted engine. */
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
@@ -91,18 +91,33 @@ test("the builder lens mounts the builder, and the read lenses do not", async ()
 
 /*
  * A SAVE IS NOT AN APPLY. Between the two, the projection the read lenses
- * draw is the previous revision — a chart that has not moved, which reads as
- * a save that did nothing unless something says otherwise. The builder draws
- * the draft itself and needs no such sentence.
+ * draw is the company before the save — a chart that has not moved, which
+ * reads as a save that did nothing unless something says otherwise. The
+ * builder draws the draft itself and needs no such sentence.
  */
-test("the read lenses say they still draw the previous revision; the builder does not", async () => {
-  recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
+test("the read lenses say they still draw the company before the save; the builder does not", async () => {
+  const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
+  recordSavedChanges({ settings, chart: null });
   mount("#/company?lens=chart");
-  expect(await screen.findByText(/still applying revision/)).toBeDefined();
+  expect(await screen.findByText(/still applying settings revision/)).toBeDefined();
   cleanup();
 
-  recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
+  // The chart's writes, which this node has not applied yet.
+  const chart = { position: "CREWLET_CHART_LOG@1:12", appliedHere: false };
+  recordSavedChanges({ settings: null, chart });
+  mount("#/company?lens=charter");
+  expect(await screen.findByText(/still applying the org chart's changes/)).toBeDefined();
+  cleanup();
+
+  // The control: writes this node has applied need no note.
+  recordSavedChanges({ settings: null, chart: { ...chart, appliedHere: true } });
+  mount("#/company?lens=chart");
+  await waitFor(() => expect(screen.getByRole("radiogroup", { name: "Org view" })).toBeDefined());
+  expect(screen.queryByText(/still applying/)).toBeNull();
+  cleanup();
+
+  recordSavedChanges({ settings, chart });
   mount("#/company?lens=builder");
   await screen.findByRole("toolbar", { name: "Organization builder" });
-  expect(screen.queryByText(/still applying revision/)).toBeNull();
+  expect(screen.queryByText(/still applying/)).toBeNull();
 });

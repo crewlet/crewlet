@@ -22,30 +22,26 @@
  * the tree's wires, the two-line name group, the strip of row controls and the
  * split add pill are the design system's `OrgTable`, so this screen's table is
  * the console's table. What is here is only what the engine knows: what a row
- * IS, what its handle and its manager are, what the last dry run placed on it,
+ * IS, what its address and its manager are, what the last check placed on it,
  * and what each action MEANS to the draft.
  *
  * EVERY ACTION IS THE CHART'S OWN LIST (`nodeMenu`), AND EACH HAS ONE OWNER.
  * The console's row draws an add pill, a pencil and a trash, so those three
  * are the row's own controls here; the menu at the end of the row carries what
- * has no button of its own (Open seat, Edit reports, Change kind, Move to, and
- * the two moves among the siblings), and a row whose menu would be empty draws
- * none. They were drawn BOTH ways once: on the company's row every entry of
+ * has no button of its own (Open seat, Edit reports, Change kind, Move to),
+ * and a row whose menu would be empty draws none. They were drawn BOTH ways once: on the company's row every entry of
  * the menu was already a button 32 pixels to its left. Read-only disables all
  * of them and never hides them, exactly as on the canvas.
  *
- * MOVING A ROW AMONG ITS SIBLINGS is Alt with an arrow, and the same two
- * entries in the row's menu. It has a consequence: the engine's primary
- * manager of a seat is the FIRST seat that lists it, so passing a sibling can
- * change who a seat reports to with nothing about reporting edited, which is
- * why `reorder` announces it when it happens.
+ * ROWS ARE IN THE CHART'S ORDER, by address, and there is no moving one among
+ * its siblings: the chart keeps no other order (`model/draft.Placement`).
  */
 
-import { useCallback, useMemo, useRef, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
-import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import type { NodeKey } from "./model/keys.ts";
 import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
@@ -59,7 +55,6 @@ import {
   unitTypeLabel,
 } from "./nodeMarks.tsx";
 import { nodeTone } from "./nodeTone.ts";
-import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
 import { DeleteGlyph, EditGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
 import {
@@ -71,7 +66,6 @@ import {
   OrgTableAdd,
   OrgTableName,
   Tag,
-  type MenuEntry,
   type TreeGridColumn,
   type TreeGridContext,
   type TreeItemAction,
@@ -82,8 +76,8 @@ import {
  * What a row says, beside its name.
  *
  * THE OUTLINE'S OWN COLUMNS, which the design guide names: what kind of thing
- * this is, the handle the engine runs it under, who leads or manages it, and
- * what the last dry run placed on it. The console's table has none of them,
+ * this is, the address the chart holds it under (a seat's handle, a unit's
+ * key), who leads or manages it, and what the draft's check placed on it. The console's table has none of them,
  * because a node there holds nothing else; a Crewlet seat does, and a table
  * that dropped them would be a chart with the cards taken away.
  */
@@ -96,7 +90,7 @@ const COLUMNS: readonly TreeGridColumn[] = [
   // the console writes it and where the chart's own cards write it, and a
   // column repeating that word cost 145px of a 1269px table to say it twice.
   { key: "name", header: "Name", width: "minmax(0, 5.25fr)" },
-  { key: "handle", header: "Handle", width: "minmax(0, 1.75fr)" },
+  { key: "address", header: "Address", width: "minmax(0, 1.75fr)" },
   { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
   { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
   // Read but not seen: the strip at the end of a row is drawn where every
@@ -129,7 +123,7 @@ const REFUSED = "This draft is read-only here.";
 
 /** Which column is which, so a cell is never drawn by its number alone. */
 const NAME = 1;
-const HANDLE = 2;
+const ADDRESS = 2;
 const LEAD = 3;
 const PROBLEMS = 4;
 const ACTIONS = 5;
@@ -149,7 +143,6 @@ export function TableView() {
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
-  const reorder = useReorder(api, structure);
 
   /*
    * THE VIEW ON SCREEN IS WHAT FOCUSES A NODE. Which node to focus after an
@@ -211,15 +204,15 @@ export function TableView() {
          * one column and "Not a seat or unit" in the next, two phrasings of
          * one idea written out as sentences on the first row a reader meets.
          * The dash is drawn and the meaning is spoken, and it stays distinct
-         * from the different fact that no check has answered yet.
+         * from the different fact that the engine has not derived a value.
+         *
+         * A SEAT'S ADDRESS IS ITS HANDLE AND A UNIT'S ITS KEY, the two things
+         * every reference in the chart names them by; the company has none.
          */
-        case HANDLE:
-          if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
-          return view.handle ? (
-            handleLabel(view.handle)
-          ) : (
-            <span className="muted">{handleLabel(undefined)}</span>
-          );
+        case ADDRESS:
+          if (view.type === "seat") return handleLabel(view.handle);
+          if (view.type === "unit") return view.address;
+          return <EmptyValue label="Not applicable" />;
         case LEAD:
           if (view.type === "unit") return leadLabel(view);
           if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
@@ -237,10 +230,10 @@ export function TableView() {
           );
         }
         default:
-          return <RowControls api={api} grid={context} open={open} reorder={reorder} view={view} />;
+          return <RowControls api={api} grid={context} open={open} view={view} />;
       }
     },
-    [api, open, reorder, structure],
+    [api, open, structure],
   );
 
   /*
@@ -263,16 +256,6 @@ export function TableView() {
     [api, structure],
   );
 
-  /* Alt with an arrow moves a row among the siblings it is drawn beside. */
-  const onRowKeyDown = useCallback(
-    (id: string, event: KeyboardEvent<HTMLElement>) => {
-      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
-      reorder.move(id as NodeKey, event.key === "ArrowUp" ? -1 : 1);
-      return true;
-    },
-    [reorder],
-  );
-
   return (
     <OrgTable
       label="Organization"
@@ -291,14 +274,13 @@ export function TableView() {
       renderCell={cell}
       cellHasControl={(_id, column) => column === ACTIONS}
       onRowKey={onRowKey}
-      onRowKeyDown={onRowKeyDown}
       // A REAL PREDICATE, because the row draws the actions the console draws
       // and the menu carries the rest: the company's would be empty, and an
       // empty menu is a control that opens onto nothing for a pointer and a
       // ContextMenu key that answers with a blank surface.
       hasRowMenu={(id) => {
         const node = structure.nodes.get(id as NodeKey);
-        return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
+        return node !== undefined && rowMenu(api, node, open).length > 0;
       }}
       // SELECTION IS THE BUILDER'S, so the row a link names is marked here and
       // the toolbar acts on whatever the reader last touched, exactly as it
@@ -330,17 +312,15 @@ function RowControls({
   api,
   grid,
   open,
-  reorder,
   view,
 }: {
   api: BuilderApi;
   grid: TreeGridContext;
   open: OpenScreen;
-  reorder: Reorder;
   view: NodeView;
 }) {
   const name = view.name || "the company";
-  const menu = rowMenu(api, view, open, reorder);
+  const menu = rowMenu(api, view, open);
   return (
     <>
       {/* OUTSIDE THE STRIP, because it is not one of the quiet controls: the

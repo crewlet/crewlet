@@ -1,80 +1,75 @@
 /**
- * A newer revision found by a check is offered as an update of the draft,
- * never replayed over silently: what applies is replayed onto the revision
- * the node serves, and a value somebody else changed waits for a choice.
+ * A newer company found by a check is offered as an update of the draft,
+ * never replayed over silently: what applies is replayed onto the chart and
+ * the settings revision the node serves now, and a value somebody else
+ * changed waits for a choice.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { CompanyDocument } from "~/protocol/index.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
 import type { Conflict } from "./model/operations.ts";
+import { clearSavedChanges } from "./savedChanges.ts";
 import { company, Engine, json, mountBuilder } from "./testkit.tsx";
 import { conflictCells } from "./UpdateDraftDialog.tsx";
 
 beforeEach(() => {
   sessionStorage.clear();
+  clearSavedChanges();
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   sessionStorage.clear();
+  clearSavedChanges();
   location.hash = "#/";
 });
 
-/** The company as a colleague saved it: `change` applied to the fixture. */
-function upstream(change: (doc: CompanyDocument) => void): CompanyDocument {
-  const doc = company();
-  change(doc);
-  return doc;
-}
+const CHART_MOVED = "Somebody changed the org chart since you started editing.";
 
-/** Opens the builder, lets a colleague save `next` as r2, and edits the CEO. */
-async function editAfterUpstreamSave(next: CompanyDocument) {
+/** The Builder's one polite live region. */
+const liveRegion = () => document.querySelector("[data-live-region]")!;
+
+/** Opens the builder, lets a colleague change the chart, and edits the CEO. */
+async function editAfterColleague(change: (engine: Engine) => void) {
   const engine = new Engine(company());
   mountBuilder({ engine });
   await screen.findByText("No problems");
-  engine.document = next;
-  engine.revision = "r2";
+  change(engine);
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  expect(await screen.findByText("The configuration changed")).toBeDefined();
+  expect(await screen.findByText(CHART_MOVED)).toBeDefined();
   return engine;
 }
 
-test("an edit that still applies is replayed onto the newer revision", async () => {
-  const engine = await editAfterUpstreamSave(
-    upstream((doc) => {
-      doc.roles![1]!.goal = "Design things";
-    }),
-  );
-  // The banner links to what changed between the draft's base and now: the
-  // newer revision against the base, read forwards.
-  expect(screen.getByRole("link", { name: "Show what changed" }).getAttribute("href")).toBe(
-    "#/admin/config?lens=diff&revision=r2&against=r1",
-  );
+const seat = (engine: Engine, handle: string) => engine.seats.find((s) => s.handle === handle)!;
+
+test("an edit that still applies is replayed onto the newer chart, and saving keeps the colleague's change", async () => {
+  const engine = await editAfterColleague((e) => {
+    seat(e, "designer").goal = "Design things";
+  });
+  // A chart has no revision to diff against, so no link to one is offered.
+  expect(screen.queryByRole("link", { name: "Show what changed" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
-
-  await waitFor(() => {
-    const last = engine.checks().at(-1)!;
-    expect(last.headers["If-Match"]).toBe('"r2"');
-  });
-  const patch = engine.checks().at(-1)!.body as { roles: { goal: string }[] };
-  expect(patch.roles[0]!.goal).toBe("Lead and more");
-  // The colleague's change is part of the base now, not overwritten.
-  expect(patch.roles[1]!.goal).toBe("Design things");
   expect(await screen.findByText("No problems")).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+  const review = await screen.findByRole("dialog", { name: "Review and save" });
+  expect(within(review).getByText("Edits CEO: goal.")).toBeDefined();
+  // The colleague's change is part of the base now, and not a change of this draft's.
+  expect(within(review).queryByText(/Designer/)).toBeNull();
+  fireEvent.click(within(review).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(seat(engine, "ceo").goal).toBe("Lead and more"));
+  expect(seat(engine, "designer").goal).toBe("Design things");
 });
 
 test("a value somebody else changed waits for a choice, and keeping theirs drops mine", async () => {
-  const engine = await editAfterUpstreamSave(
-    upstream((doc) => {
-      doc.roles![0]!.goal = "Lead well";
-    }),
-  );
+  const engine = await editAfterColleague((e) => {
+    seat(e, "ceo").goal = "Lead well";
+  });
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
   const row = within(dialog).getByRole("row", { name: /goal/ });
@@ -88,26 +83,59 @@ test("a value somebody else changed waits for a choice, and keeping theirs drops
   expect((confirm as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(confirm);
 
-  await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
-  expect(engine.checks().at(-1)!.body).toEqual({});
+  // Nothing of the draft is left: the chart's value is the one kept.
+  expect(await screen.findByText("No problems")).toBeDefined();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Review and save" }) as HTMLButtonElement).disabled,
+    ).toBe(true),
+  );
+  expect(engine.chartWrites()).toHaveLength(0);
 });
 
-test("a node still serving the draft's base is not updated onto", async () => {
-  const engine = await editAfterUpstreamSave(
-    upstream((doc) => {
-      doc.roles![1]!.goal = "Design things";
-    }),
-  );
-  // This node answers reads with the old revision while the conflict named r2.
-  engine.script = (r) =>
-    r.method === "GET" && r.path === "/config" ? json(company(), 200, { ETag: '"r1"' }) : null;
-  fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
-  expect(
-    await screen.findByText(
-      "This node has not caught up with the newer revision yet. Try again in a moment.",
-    ),
-  ).toBeDefined();
-  expect(screen.queryByRole("dialog")).toBeNull();
+describe("a settings revision saved by somebody else", () => {
+  /** Opens the builder, renames the company, and lets a colleague save r2 first. */
+  async function renameAfterColleague() {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    engine.settings = { ...engine.settings, mission: "Make better things" };
+    engine.revision = "r2";
+    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    expect(
+      await screen.findByText("The settings changed since you started editing."),
+    ).toBeDefined();
+    return engine;
+  }
+
+  test("is offered with a link to what changed, and replayed onto that revision", async () => {
+    const engine = await renameAfterColleague();
+    // The newer revision against the draft's base, read forwards.
+    expect(screen.getByRole("link", { name: "Show what changed" }).getAttribute("href")).toBe(
+      "#/admin/config?lens=diff&revision=r2&against=r1",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
+    const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
+    await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
+    expect(engine.checks().at(-1)!.body).toEqual({ name: "Acme Labs" });
+  });
+
+  test("a node still serving the draft's base is not updated onto", async () => {
+    const engine = await renameAfterColleague();
+    // This node answers reads with the old revision while the conflict named r2.
+    engine.script = (r) =>
+      r.method === "GET" && r.path === "/config"
+        ? json(company().settings, 200, { ETag: '"r1"' })
+        : null;
+    fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
+    expect(
+      await screen.findByText(
+        "This node has not caught up with the newer settings revision yet. Try again in a moment.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 });
 
 test("a draft of a configuration that is no longer active offers to discard and reload", async () => {
@@ -116,7 +144,7 @@ test("a draft of a configuration that is no longer active offers to discard and 
   await screen.findByText("No problems");
   engine.script = (r) =>
     r.query.get("dry_run") === "true" ? json({ error: "no_active_revision" }, 412) : null;
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
   expect(
     await screen.findByText(
       "The configuration this draft edits is no longer active on this engine, so the draft cannot be saved.",
@@ -125,21 +153,22 @@ test("a draft of a configuration that is no longer active offers to discard and 
   engine.script = () => null;
   const reads = engine.sent("GET").length;
   fireEvent.click(screen.getByRole("button", { name: "Discard and reload" }));
-  await waitFor(() => expect(engine.sent("GET").length).toBe(reads + 1));
+  await waitFor(() => expect(engine.sent("GET").length).toBeGreaterThan(reads));
   expect(await screen.findByText("No problems")).toBeDefined();
-  expect(engine.checks().at(-1)!.body).toEqual({});
+  // Discarded: nothing is left to dry-run.
+  expect(engine.checks()).toHaveLength(1);
 });
 
 // A CONFLICT IS SHOWN AS A PERSON READS IT. The builder's own structures
-// (node keys, placements, a removed node, a kind change's stripped fields)
-// were printed as JSON, which put internal keys and credential masks in a
-// table an operator decides from.
+// (node keys, a removed node, a kind change's stripped fields, an address
+// somebody else took) were printed as JSON, which put internal keys and
+// credential masks in a table an operator decides from.
 describe("a conflict's values", () => {
   const names: Record<string, string> = {
     "seat:dev": "Dev",
     "seat:qa": "QA",
-    "unit:Engineering": "Engineering",
-    "unit:Sales": "Sales",
+    "unit:engineering": "Engineering",
+    "unit:sales": "Sales",
   };
   const nameOf = (key: string) => names[key] ?? null;
   const cells = (conflict: Conflict) => conflictCells(conflict, nameOf);
@@ -158,46 +187,52 @@ describe("a conflict's values", () => {
     );
   });
 
-  test("a position names the nodes it is between, never their keys", () => {
-    expect(
-      cells({
-        subject: "position",
-        shape: "sibling",
-        base: "seat:dev",
-        theirs: null,
-        mine: "seat:dev",
-      }),
-    ).toEqual({ base: "After Dev", theirs: "Not there", mine: "After Dev" });
+  test("where a node sits names the unit it is in, never its key", () => {
     expect(
       cells({
         subject: "where it sits",
         shape: "parent",
-        base: "unit:Engineering",
+        base: "unit:engineering",
         theirs: COMPANY_KEY,
-        mine: "unit:Sales",
+        mine: "unit:sales",
       }),
     ).toEqual({ base: "Engineering", theirs: "The top of the organization", mine: "Sales" });
     expect(
-      cells({
-        subject: "position",
-        shape: "placement",
-        base: { parent: "unit:Engineering", after: null },
-        theirs: { parent: "unit:Engineering", after: "seat:qa" },
-        mine: { parent: "unit:Engineering", after: "new:gone" },
-      }),
+      cells({ subject: "where it sits", shape: "parent", base: "new:gone", theirs: "unit:sales" }),
     ).toEqual({
-      base: "Engineering, first",
-      theirs: "Engineering, after QA",
-      mine: "Engineering, after a node no longer in the organization",
+      base: "a node no longer in the organization",
+      theirs: "Sales",
+      mine: "Not set",
     });
+  });
+
+  test("an address somebody else took names both holders, never the address's key", () => {
+    expect(
+      cells({
+        subject: "the address qa",
+        shape: "snapshot",
+        address: "qa",
+        base: undefined,
+        theirs: { handle: "qa", name: "Quality" },
+        mine: { handle: "qa", name: "QA" },
+      }),
+    ).toEqual({ base: "Free", theirs: "Held by Quality", mine: "This draft's QA" });
   });
 
   test("a removed node reads as the fields that changed, and stripped fields by name only", () => {
     const removal = cells({
       subject: "the whole seat",
       shape: "snapshot",
-      base: { name: "Dev", goal: "Build", mcp_env: { tracker: { TOKEN: "__redacted__" } } },
-      theirs: { name: "Dev", goal: "Ship", mcp_env: { tracker: { TOKEN: "__redacted__" } } },
+      base: {
+        name: "Dev",
+        goal: "Build",
+        runtime: { mcp_env: { tracker: { TOKEN: "__redacted__" } } },
+      },
+      theirs: {
+        name: "Dev",
+        goal: "Ship",
+        runtime: { mcp_env: { tracker: { TOKEN: "__redacted__" } } },
+      },
     });
     expect(removal).toEqual({ base: "As it was", theirs: "Changed: goal", mine: "Removed" });
 
@@ -205,32 +240,23 @@ describe("a conflict's values", () => {
       subject: "fields the new kind removes",
       shape: "fields",
       base: [
-        { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["integrations", "jira"], before: { project: "OPS" } },
+        { path: ["runtime", "mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
+        { path: ["project"], before: "OPS" },
       ],
       theirs: [
-        { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["integrations", "jira"], before: { project: "SUP" } },
+        { path: ["runtime", "mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
+        { path: ["project"], before: "SUP" },
         { path: ["email"], before: "dev@example.com" },
       ],
     });
     expect(stripped).toEqual({
-      base: "mcp_env, integrations.jira",
-      theirs: "mcp_env, integrations.jira (changed), email (added)",
+      base: "mcp_env, project",
+      theirs: "mcp_env, project (changed), email (added)",
       mine: "Removed",
     });
     const shown = JSON.stringify([removal, stripped]);
     expect(shown).not.toContain("__redacted__");
     expect(shown).not.toContain("OPS");
-
-    expect(
-      cells({
-        subject: "seats placed in it by reference",
-        shape: "placed",
-        base: [{ key: "seat:dev", json: { name: "Dev" } }],
-        theirs: [],
-      }),
-    ).toEqual({ base: "Dev", theirs: "None", mine: "None" });
   });
 });
 
@@ -239,13 +265,10 @@ test("a removal somebody else edited first names what they changed", async () =>
   const { store } = mountBuilder({ engine });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Remove Designer" }));
-  await waitFor(() => expect(engine.checks()).toHaveLength(2));
+  await waitFor(() => expect(liveRegion().textContent).toContain("Designer"));
   await screen.findByText("No problems");
-  engine.document = upstream((doc) => {
-    doc.roles![1]!.goal = "Design things";
-  });
-  engine.revision = "r2";
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  seat(engine, "designer").goal = "Design things";
+  act(() => store.applyOrg(engine.orgPush()));
   fireEvent.click(await screen.findByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
   const row = within(dialog).getByRole("row", { name: /the whole seat/ });

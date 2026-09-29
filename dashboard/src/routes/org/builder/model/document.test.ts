@@ -1,17 +1,18 @@
 // @vitest-environment node
 /**
- * Keys, the draft and the document, in both directions.
+ * Keys, the chart and the draft, and the settings a save writes.
  *
- * What these protect: a node's key is the engine's identity and survives a
- * reload of the same document; the draft keeps every key it does not model;
- * the path index names exactly the document it was built beside; and a merge
- * patch names only what changed, removing a key with an explicit `null`
+ * What these protect: a node's key is its address in the chart and survives a
+ * second reading of the same rows; the draft keeps every key it does not
+ * model, and holds every list in the order the chart serves it; "the chart
+ * has not changed" is judged on the rows alone, never on the position every
+ * read moves; a derivation is placed only on the chart it describes; and a
+ * merge patch names only what changed, removing a key with an explicit `null`
  * because a merge patch keeps every key it does not name.
  */
 
 import { describe, expect, test } from "vitest";
-import type { CompanyDocument } from "~/protocol/index.ts";
-import { REDACTED } from "~/lib/format.ts";
+import type { ChartRead } from "~/protocol/index.ts";
 import { cloneJson, getPath, jsonEqual, setPath } from "./json.ts";
 import {
   COMPANY_KEY,
@@ -20,32 +21,40 @@ import {
   isNodeKey,
   mintKey,
   seatKey,
-  seatPathKey,
   unitKey,
-  unitPathKey,
+  unitKeyOf,
 } from "./keys.ts";
-import { allSeats, allUnits, locate } from "./draft.ts";
+import { addressIndex, allSeats, allUnits, compareAddress, locate, sameChart } from "./draft.ts";
 import {
-  buildPatch,
-  fromDocument,
-  knownHandles,
-  maskedCredentialPaths,
-  NO_DERIVATION,
-  pathOfSegments,
+  chartPrint,
+  describes,
+  fingerprint,
+  fromChart,
   placeDerivation,
   rekeying,
+  settingsPatch,
+  slugOf,
+  suggestAddress,
   suggestUniqueName,
-  toDocument,
 } from "./document.ts";
-import { countingKeys, fixtureCompany, fixtureDerived } from "./testkit.ts";
+import { apply, record } from "./operations.ts";
+import {
+  chartOf,
+  chartOfDraft,
+  countingKeys,
+  fixtureChart,
+  fixtureDerived,
+  fixtureSettings,
+} from "./testkit.ts";
 
 describe("keys", () => {
-  test("an existing node is keyed by the engine's identity, a created one by a minted token", () => {
+  test("an existing node is keyed by its address, a created one by a minted token", () => {
     expect(seatKey("dev")).toBe("seat:dev");
-    expect(unitKey("Engineering")).toBe("unit:Engineering");
+    expect(unitKey("engineering")).toBe("unit:engineering");
     expect(handleOfKey("seat:dev")).toBe("dev");
     expect(handleOfKey(unitKey("dev"))).toBeUndefined();
-    expect(handleOfKey(seatPathKey("roles[0]"))).toBeUndefined();
+    expect(unitKeyOf("unit:sales")).toBe("sales");
+    expect(unitKeyOf("seat:sales")).toBeUndefined();
     const key = mintKey(countingKeys("n"));
     expect(key).toBe("new:n1");
     expect(isMintedKey(key)).toBe(true);
@@ -56,17 +65,12 @@ describe("keys", () => {
     expect(() => mintKey({ next: () => "has space" })).toThrow(RangeError);
     expect(() => mintKey({ next: () => "" })).toThrow(RangeError);
     expect(() => mintKey({ next: () => "x".repeat(65) })).toThrow(RangeError);
+    // Control: a token of the documented shape mints.
+    expect(mintKey({ next: () => "a_b-1" })).toBe("new:a_b-1");
   });
 
   test("only shapes this module produces are keys", () => {
-    for (const good of [
-      COMPANY_KEY,
-      "seat:a",
-      "unit:A b",
-      "seat@roles[0]",
-      "unit@units[1]",
-      "new:abc_-1",
-    ]) {
+    for (const good of [COMPANY_KEY, "seat:a", "unit:a-b", "new:abc_-1"]) {
       expect(isNodeKey(good), good).toBe(true);
     }
     for (const bad of [
@@ -76,6 +80,7 @@ describe("keys", () => {
       "new:",
       "new:a b",
       "company2",
+      "seat@roles[0]",
       7,
       null,
       undefined,
@@ -95,12 +100,12 @@ describe("json", () => {
   });
 
   test("setPath removes and prunes the objects a removal emptied, and shares untouched branches", () => {
-    const record = { integrations: { jira: { project: "OPS" } }, keep: { deep: true } };
-    const removed = setPath(record, ["integrations", "jira", "project"], undefined);
+    const record = { runtime: { github: { tier: "developer" } }, keep: { deep: true } };
+    const removed = setPath(record, ["runtime", "github", "tier"], undefined);
     expect(removed).toEqual({ keep: { deep: true } });
     expect(removed.keep).toBe(record.keep);
-    const added = setPath({}, ["integrations", "github", "tier"], "developer");
-    expect(added).toEqual({ integrations: { github: { tier: "developer" } } });
+    const added = setPath({}, ["runtime", "github", "tier"], "developer");
+    expect(added).toEqual({ runtime: { github: { tier: "developer" } } });
     expect(setPath(record, ["missing", "x"], undefined)).toBe(record);
   });
 
@@ -111,257 +116,237 @@ describe("json", () => {
     expect(copy.a).not.toBe(source.a);
   });
 
-  test("a key named __proto__ stays a key: it never becomes a prototype nobody sees in the document", () => {
+  test("a key named __proto__ stays a key: it never becomes a prototype nobody sees", () => {
     // What storage hands back: `JSON.parse` makes the key an own property.
-    const role = JSON.parse('{"name":"Ops","__proto__":{"kind":"human"}}') as Record<
+    const seat = JSON.parse('{"name":"Ops","__proto__":{"kind":"human"}}') as Record<
       string,
       unknown
     >;
-    const copy = cloneJson(role);
+    const copy = cloneJson(seat);
     expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
     expect(copy.kind).toBeUndefined();
-    expect(JSON.parse(JSON.stringify(copy))).toEqual(role);
+    expect(JSON.parse(JSON.stringify(copy))).toEqual(seat);
     expect(Object.keys(copy)).toEqual(["name", "__proto__"]);
-
-    // Reading and editing go through own properties only.
     expect(getPath({ name: "Ops" }, ["__proto__"])).toBeUndefined();
     expect(getPath(copy, ["__proto__", "kind"])).toBe("human");
     expect(jsonEqual({}, JSON.parse('{"__proto__":{}}'))).toBe(false);
-    expect(setPath({ name: "Ops" }, ["__proto__", "x"], undefined)).toEqual({ name: "Ops" });
   });
 });
 
-describe("fromDocument", () => {
-  test("keys seats by the handle the engine derived, and units by name", () => {
-    const doc = fixtureCompany();
-    const draft = fromDocument(doc, fixtureDerived(doc));
-    expect(draft.roles.map((s) => s.key)).toEqual(["seat:ceo", "seat:designer"]);
-    expect([...allUnits(draft)].map(({ unit }) => unit.key)).toEqual([
-      "unit:Engineering",
-      "unit:Platform",
-      "unit:Sales",
-    ]);
-    expect([...allSeats(draft)].map(({ seat }) => seat.key)).toContain("seat:vp-engineering");
+describe("reading the chart", () => {
+  test("keys every seat by its handle and every unit by its key, where the chart places it", () => {
+    const draft = fromChart(fixtureSettings(), fixtureChart());
+    expect(draft.roles.map((s) => s.key)).toEqual(["seat:ceo"]);
+    expect(draft.units.map((u) => u.key)).toEqual(["unit:engineering", "unit:sales"]);
+    expect(locate(draft, "seat:sre")?.parent).toBe("unit:platform");
+    expect(locate(draft, "unit:platform")?.parent).toBe("unit:engineering");
+    // The tree holds the placement; the data does not repeat it.
+    const sre = locate(draft, "seat:sre");
+    expect(sre?.kind === "seat" && sre.node.data).toEqual({
+      handle: "sre",
+      name: "SRE",
+      goal: "Keep it up",
+      project: "OPS",
+    });
+    // `manages` is read beside the seat it belongs to.
+    const ceo = locate(draft, "seat:ceo");
+    expect(ceo?.kind === "seat" && ceo.node.data.manages).toEqual(["engineering", "designer"]);
   });
 
-  test("the same document keys identically every time it is read", () => {
-    const doc = fixtureCompany();
-    const a = fromDocument(doc, fixtureDerived(doc));
-    const b = fromDocument(cloneJson(doc), fixtureDerived(doc));
+  test("every list is in the order the chart serves it, however the answer listed its rows", () => {
+    const chart = fixtureChart();
+    const shuffled: ChartRead = {
+      ...chart,
+      seats: [...chart.seats].reverse(),
+      units: [...chart.units].reverse(),
+    };
+    const a = fromChart(null, chart);
+    const b = fromChart(null, shuffled);
     expect(b).toEqual(a);
+    expect(sameChart(a, b)).toBe(true);
+    const engineering = locate(a, "unit:engineering");
+    expect(
+      engineering?.kind === "unit" && engineering.node.roles.map((s) => s.data.handle),
+    ).toEqual(["dev", "vp-engineering"]);
+    // The byte order of the addresses, not the UTF-16 order of a plain `<`.
+    expect(compareAddress("\u{1F600}", "￿")).toBe(1);
+    expect("\u{1F600}" < "￿").toBe(true);
   });
 
-  test("without a derivation a seat is keyed by its declared handle, or else by its path", () => {
-    const doc: CompanyDocument = {
+  test("every key the builder does not model survives, and an empty value reads as absent", () => {
+    const draft = fromChart(
+      null,
+      chartOf({
+        seats: [
+          {
+            handle: "x",
+            name: "X",
+            goal: "",
+            responsibilities: [],
+            kind: "agent",
+            future_field: { kept: true },
+            runtime: { future_runtime_key: 1 },
+          } as never,
+        ],
+      }),
+    );
+    expect(draft.roles[0]!.data).toEqual({
+      handle: "x",
       name: "X",
-      roles: [{ name: "A", handle: "alpha" }, { name: "B" }],
-    };
-    const draft = fromDocument(doc, null);
-    expect(draft.roles.map((s) => s.key)).toEqual(["seat:alpha", seatPathKey("roles[1]")]);
+      future_field: { kept: true },
+      runtime: { future_runtime_key: 1 },
+    });
   });
 
-  test("a repeated unit name or handle is keyed by path, so neither twin silently wins the identity", () => {
-    const doc: CompanyDocument = {
-      name: "X",
-      roles: [
-        { name: "A", handle: "same" },
-        { name: "B", handle: "same" },
-      ],
-      units: [
-        { name: "Platform" },
-        { name: "Ops", children: [{ name: "Platform" }] },
-        { name: "" },
-      ],
-    };
-    const draft = fromDocument(doc, null);
-    expect(draft.roles.map((s) => s.key)).toEqual([
-      seatPathKey("roles[0]"),
-      seatPathKey("roles[1]"),
-    ]);
-    expect([...allUnits(draft)].map(({ unit }) => unit.key)).toEqual([
-      unitPathKey("units[0]"),
-      unitKey("Ops"),
-      unitPathKey("units[1].children[0]"),
-      unitPathKey("units[2]"),
-    ]);
+  test("a unit whose parent the reading does not hold is drawn at the root rather than lost", () => {
+    const draft = fromChart(
+      null,
+      chartOf({
+        units: [{ key: "orphan", name: "Orphan", parent: "gone" }],
+        seats: [{ handle: "s", name: "S", unit: "gone" }],
+      }),
+    );
+    expect(draft.units.map((u) => u.key)).toEqual(["unit:orphan"]);
+    expect(draft.roles.map((s) => s.key)).toEqual(["seat:s"]);
   });
 
-  test("every key the builder does not model survives into the draft and back out", () => {
-    const doc = fixtureCompany();
-    const out = toDocument(fromDocument(doc, fixtureDerived(doc))).document;
-    expect(out).toEqual(doc);
-    expect(out.future_setting).toEqual({ kept: true });
-  });
-
-  test("a null document is the empty draft of create mode", () => {
-    expect(fromDocument(null, null)).toEqual({ company: {}, roles: [], units: [] });
+  test("the settings a stored revision still carries a chart in are read without it", () => {
+    const draft = fromChart({ name: "Acme", roles: [{ name: "Old" }], units: [] } as never, null);
+    expect(draft.company).toEqual({ name: "Acme" });
+    expect(draft.roles).toEqual([]);
   });
 });
 
-describe("toDocument", () => {
-  test("indexes every node at the path the engine reports a problem at, both ways", () => {
-    const doc = fixtureCompany();
-    const { index } = toDocument(fromDocument(doc, fixtureDerived(doc)));
-    expect(index.byPath.get("")).toBe(COMPANY_KEY);
-    expect(index.byPath.get("roles[1]")).toBe("seat:designer");
-    expect(index.byPath.get("units[0].children[0]")).toBe("unit:Platform");
-    expect(index.byPath.get("units[0].children[0].roles[0]")).toBe("seat:sre");
-    expect(index.pathOf.get("seat:dev")).toBe("units[0].roles[1]");
-    expect(index.segmentsOf.get("seat:dev")).toEqual(["units", 0, "roles", 1]);
-    for (const [key, segments] of index.segmentsOf)
-      expect(pathOfSegments(segments)).toBe(index.pathOf.get(key));
-  });
-
-  test("an empty list is left out, as the engine writes a document", () => {
-    const draft = fromDocument({ name: "X", units: [{ name: "U" }] }, null);
-    expect(toDocument(draft).document).toEqual({ name: "X", units: [{ name: "U" }] });
-  });
-});
-
-describe("placeDerivation", () => {
-  test("places each derived seat and unit on the node at its path in the sent document", () => {
-    const doc = fixtureCompany();
-    const sent = toDocument(fromDocument(doc, null));
-    const placed = placeDerivation(sent.index, fixtureDerived(doc));
-    expect(placed.seatByKey.get(seatPathKey("roles[0]"))?.handle).toBe("ceo");
-    expect(placed.keyOfHandle.get("ceo")).toBe(seatPathKey("roles[0]"));
-    expect(placed.unitByKey.get(unitKey("Sales"))?.name).toBe("Sales");
-    expect(placeDerivation(sent.index, null)).toEqual(NO_DERIVATION);
-  });
-
-  // A refused draft can give one handle to two seats; the reading of a
-  // reported handle as a node must not change with the order a map is built.
-  test("a handle two seats share names the first", () => {
-    const doc: CompanyDocument = { name: "X", roles: [{ name: "Dev" }, { name: "dev" }] };
-    const sent = toDocument(fromDocument(doc, null));
-    const placed = placeDerivation(sent.index, fixtureDerived(doc));
-    expect(placed.keyOfHandle.get("dev")).toBe(sent.index.byPath.get("roles[0]"));
-  });
-});
-
-describe("rekeying", () => {
-  test("follows each path key to the handle the engine gave the node at that path", () => {
-    const doc = fixtureCompany();
-    const before = fromDocument(doc, null);
-    const after = fromDocument(doc, fixtureDerived(doc));
-    const moved = rekeying(before, after);
-    expect(moved.get(seatPathKey("roles[0]"))).toBe(seatKey("ceo"));
-    // A unit is keyed by its name either way, and is not listed.
-    expect(moved.has(unitKey("Sales"))).toBe(false);
-    expect(rekeying(after, after).size).toBe(0);
-  });
-});
-
-describe("knownHandles", () => {
-  const checkedOf = (draft: ReturnType<typeof fromDocument>) => {
-    const sent = toDocument(draft);
-    return { sent, derived: fixtureDerived(sent.document) };
-  };
-
-  test("a declared handle, then the one a key carries, then the one a check derived", () => {
-    const doc = fixtureCompany();
-    const draft = fromDocument(doc, fixtureDerived(doc));
-    const withNew = {
-      ...draft,
-      roles: [
-        ...draft.roles,
-        { key: "new:a", data: { name: "Quality Lead" } },
-        { key: "new:b", data: { name: "Ops", handle: "ops-lead" } },
-      ],
+describe("the chart's print", () => {
+  test("is the rows alone: the position every read moves is not part of it", () => {
+    const chart = fixtureChart();
+    const later: ChartRead = {
+      ...chart,
+      answer: { level: "linearizable", position: "CREWLET_CHART_LOG@1:99" },
     };
-    const handles = knownHandles(withNew, null);
-    expect(handles.get(seatKey("ceo"))).toBe("ceo");
-    expect(handles.get("new:b")).toBe("ops-lead");
-    // No check has described the created seat, and the client never derives one.
-    expect(handles.has("new:a")).toBe(false);
-    expect(knownHandles(withNew, checkedOf(withNew)).get("new:a")).toBe("quality-lead");
-  });
-
-  // The engine derives an undeclared handle from the seat's own name and
-  // nothing else, so a check of an older draft still names it while the name
-  // holds, and names nothing once the seat is renamed or declares a handle.
-  test("a checked handle holds exactly while the seat keeps the name that check saw", () => {
-    const base = fromDocument({ name: "X", roles: [{ name: "CEO" }] }, null);
-    const draft = { ...base, roles: [{ key: "new:a", data: { name: "Quality Lead" } }] };
-    const checked = checkedOf(draft);
-    const edited = {
-      ...draft,
-      roles: [{ key: "new:a", data: { name: "Quality Lead", goal: "Test it" } }],
+    expect(chartPrint(later)).toBe(chartPrint(chart));
+    expect(fingerprint(chartPrint(later))).toBe(fingerprint(chartPrint(chart)));
+    // Control: a changed row is a different print.
+    const changed: ChartRead = {
+      ...chart,
+      seats: chart.seats.map((s) => (s.handle === "dev" ? { ...s, goal: "Ship" } : s)),
     };
-    expect(knownHandles(edited, checked).get("new:a")).toBe("quality-lead");
-    const renamed = { ...draft, roles: [{ key: "new:a", data: { name: "QA Lead" } }] };
-    expect(knownHandles(renamed, checked).has("new:a")).toBe(false);
-    const declaredSince = {
-      ...draft,
-      roles: [{ key: "new:a", data: { name: "Quality Lead", handle: "qa" } }],
-    };
-    expect(knownHandles(declaredSince, checked).get("new:a")).toBe("qa");
+    expect(fingerprint(chartPrint(changed))).not.toBe(fingerprint(chartPrint(chart)));
+    // Key order and row order are not changes either.
+    const reordered: ChartRead = { ...chart, seats: [...chart.seats].reverse() };
+    expect(chartPrint(reordered)).toBe(chartPrint(chart));
   });
 });
 
-describe("buildPatch", () => {
-  const base = fixtureCompany();
-
-  test("an unchanged draft patches nothing", () => {
-    expect(buildPatch(base, cloneJson(base))).toEqual({});
+describe("the engine's derivation", () => {
+  test("is placed on the node holding each handle and each unit key", () => {
+    const chart = fixtureChart();
+    const draft = fromChart(null, chart);
+    const derived = fixtureDerived(chart, { seats: { dev: { manager: "vp-engineering" } } });
+    const placed = placeDerivation(draft, derived);
+    expect(placed.seatByKey.get("seat:dev")?.manager).toBe("vp-engineering");
+    expect(placed.unitByKey.get("unit:platform")?.name).toBe("Platform");
+    expect(placed.keyOfHandle.get("sre")).toBe("seat:sre");
   });
 
-  test("names only the changed top-level keys it edits, whole", () => {
-    const draft = cloneJson(base);
-    draft.mission = "Make better things.";
-    draft.roles![0]!.goal = "Lead well";
-    draft.providers = { llm: { changed: true } };
-    const patch = buildPatch(base, draft);
-    expect(Object.keys(patch).sort()).toEqual(["mission", "roles"]);
-    expect(patch.roles).toEqual(draft.roles);
+  test("describes a chart only when it holds the same seats, units and declared leads", () => {
+    const chart = fixtureChart();
+    const draft = fromChart(null, chart);
+    expect(describes(draft, fixtureDerived(chart))).toBe(true);
+    expect(describes(draft, null)).toBe(false);
+    const gained = chartOf({
+      units: chart.units,
+      seats: [...chart.seats, { handle: "qa", name: "QA" }],
+    });
+    expect(describes(draft, fixtureDerived(gained))).toBe(false);
+    expect(
+      describes(draft, fixtureDerived(chart, { units: { engineering: { lead: "dev" } } })),
+    ).toBe(false);
+    // An inherited lead is the derivation's own answer, not a declaration to match.
+    expect(
+      describes(
+        draft,
+        fixtureDerived(chart, {
+          units: { platform: { lead: "vp-engineering", lead_inherited: true } },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("identity", () => {
+  test("a renamed node keeps the key of the address it was created under", () => {
+    const draft = fromChart(
+      null,
+      chartOf({
+        units: [{ key: "rnd", name: "R&D", origin_key: "engineering" }],
+        seats: [{ handle: "chief-tech", name: "CTO", unit: "rnd", origin_handle: "cto" }],
+      }),
+    );
+    expect(draft.units[0]!.key).toBe("unit:engineering");
+    expect(draft.units[0]!.roles[0]!.key).toBe("seat:cto");
+    // The identity is the key's, not the data's: nothing edits it.
+    expect(draft.units[0]!.roles[0]!.data).toEqual({ handle: "chief-tech", name: "CTO" });
+    // Control: a node never renamed is keyed by its address, which is its identity.
+    expect(fromChart(null, fixtureChart()).roles[0]!.key).toBe("seat:ceo");
   });
 
-  test("a removed charter field or list is an explicit null", () => {
-    const draft = cloneJson(base);
-    delete draft.mission;
-    delete draft.roles;
-    expect(buildPatch(base, draft)).toEqual({ mission: null, roles: null });
-  });
-
-  test("an empty list and an absent one are the same document", () => {
-    expect(buildPatch({ name: "X" }, { name: "X", roles: [] })).toEqual({});
-  });
-
-  test("the Datadog fallback is sent as its one value, or null when removed", () => {
-    const moved = cloneJson(base);
-    (moved.integrations as { datadog: { route_to?: string } }).datadog.route_to = "dev";
-    expect(buildPatch(base, moved)).toEqual({ integrations: { datadog: { route_to: "dev" } } });
-    const cleared = cloneJson(base);
-    delete (cleared.integrations as { datadog: { route_to?: string } }).datadog.route_to;
-    expect(buildPatch(base, cleared)).toEqual({ integrations: { datadog: { route_to: null } } });
-  });
-
-  test("a removed GitLab access level is null by handle, and the remaining entries are not resent", () => {
-    const draft = cloneJson(base);
-    const levels = (
-      draft.integrations as { gitlab: { provisioning: { access_levels: Record<string, string> } } }
-    ).gitlab.provisioning.access_levels;
-    delete levels.dev;
-    levels["account-executive"] = "developer";
-    expect(buildPatch(base, draft)).toEqual({
-      integrations: {
-        gitlab: {
-          provisioning: { access_levels: { dev: null, "account-executive": "developer" } },
-        },
+  test("a save moves a created node from its minted key to its identity, and a renamed one nowhere", () => {
+    const base = fromChart(null, fixtureChart());
+    let draft = base;
+    for (const intent of [
+      {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:sales" },
+        data: { handle: "qa", name: "QA" },
       },
-    });
-  });
-
-  test("with no base, every present edited key is named", () => {
-    expect(buildPatch(null, { name: "New", units: [{ name: "U" }], other: 1 })).toEqual({
-      name: "New",
-      units: [{ name: "U" }],
-    });
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["handle"], value: "zed" }] },
+    ] as const) {
+      const recorded = record(draft, intent);
+      if (!recorded.ok) throw new Error(recorded.message);
+      draft = apply(draft, recorded.op).draft;
+    }
+    const saved = fromChart(null, chartOfDraft(draft));
+    expect([...allSeats(saved)].map(({ seat }) => seat.key)).toEqual(
+      expect.arrayContaining(["seat:qa", "seat:dev"]),
+    );
+    expect(rekeying(draft, saved)).toEqual(new Map([["new:qa", "seat:qa"]]));
+    const zed = locate(saved, "seat:dev");
+    expect(zed?.kind === "seat" && zed.node.data.handle).toBe("zed");
+    expect([...allUnits(saved)].map(({ unit }) => unit.key)).toEqual(
+      [...allUnits(draft)].map(({ unit }) => unit.key),
+    );
   });
 });
 
-describe("suggestUniqueName", () => {
-  test("keeps a free name and numbers a taken one past every number in use", () => {
+describe("addresses", () => {
+  test("an address a node used to answer to resolves to it until something else claims it", () => {
+    const draft = fromChart(
+      null,
+      chartOf({
+        seats: [
+          { handle: "lead", name: "Lead", former_handles: ["boss", "chief"] } as never,
+          { handle: "chief", name: "Chief" },
+        ],
+      }),
+    );
+    const index = addressIndex(draft);
+    expect(index.seats.get("boss")?.data.name).toBe("Lead");
+    // Somebody took `chief` since: it names them now.
+    expect(index.seats.get("chief")?.data.name).toBe("Chief");
+  });
+
+  test("an address is suggested from a name, folded, bounded and free", () => {
+    expect(slugOf("Ingénierie & Ops")).toBe("ingenierie-ops");
+    expect(slugOf("—")).toBe("");
+    expect(slugOf("x".repeat(80))).toHaveLength(64);
+    expect(suggestAddress(["sales"], "Sales", "unit")).toBe("sales-2");
+    expect(suggestAddress([], "—", "unit")).toBe("unit");
+    expect(suggestAddress(["x".repeat(64)], "x".repeat(80), "seat")).toBe(`${"x".repeat(62)}-2`);
+  });
+
+  test("a name is suggested free, numbered past every number in use", () => {
     expect(suggestUniqueName(["A"], " Software Engineer ")).toBe("Software Engineer");
     expect(suggestUniqueName(["Software Engineer"], "Software Engineer")).toBe(
       "Software Engineer 2",
@@ -373,29 +358,54 @@ describe("suggestUniqueName", () => {
   });
 });
 
-describe("maskedCredentialPaths", () => {
-  test("lists the renamed unit's own masked credentials by path, never a value, and nothing a seat inside restores by handle", () => {
-    const doc = fixtureCompany();
-    const engineering = doc.units![0]!;
-    engineering.mcp_env = { tracker: { TOKEN: REDACTED, URL: "${TRACKER_URL}" } };
-    engineering.roles![1]!.mcp_env = { tracker: { TOKEN: REDACTED } };
-    const draft = fromDocument(doc, fixtureDerived(doc));
-    expect(maskedCredentialPaths(draft, "unit:Engineering")).toEqual([
-      "units[0].mcp_env.tracker.TOKEN",
-    ]);
-    expect(maskedCredentialPaths(draft, "unit:Sales")).toEqual([]);
-    expect(maskedCredentialPaths(draft, "seat:dev")).toEqual([]);
-  });
-});
+describe("the settings patch", () => {
+  const base = fixtureSettings();
 
-describe("locate", () => {
-  test("finds a node anywhere with the list it sits in", () => {
-    const doc = fixtureCompany();
-    const draft = fromDocument(doc, fixtureDerived(doc));
-    const found = locate(draft, "seat:sre");
-    expect(found?.kind).toBe("seat");
-    expect(found?.parent).toBe("unit:Platform");
-    expect(found?.index).toBe(0);
-    expect(locate(draft, "seat:nobody")).toBeUndefined();
+  test("an unchanged draft patches nothing, and nothing outside what the builder edits is named", () => {
+    expect(settingsPatch(base, cloneJson(base))).toEqual({});
+    const draft = cloneJson(base);
+    draft.future_setting = { changed: true };
+    expect(settingsPatch(base, draft)).toEqual({});
+  });
+
+  test("a changed or removed charter field is named, a removal as an explicit null", () => {
+    const draft = cloneJson(base);
+    draft.mission = "Make better things.";
+    delete draft.policies;
+    expect(settingsPatch(base, draft)).toEqual({ mission: "Make better things.", policies: null });
+    // An empty list and an absent one are the same document.
+    expect(settingsPatch({ name: "X" }, { name: "X", policies: [] })).toEqual({});
+  });
+
+  test("the Datadog fallback is sent as its one value, or null when removed", () => {
+    const moved = cloneJson(base);
+    (moved.integrations as { datadog: { route_to?: string } }).datadog.route_to = "dev";
+    expect(settingsPatch(base, moved)).toEqual({ integrations: { datadog: { route_to: "dev" } } });
+    const cleared = cloneJson(base);
+    delete (cleared.integrations as { datadog: { route_to?: string } }).datadog.route_to;
+    expect(settingsPatch(base, cleared)).toEqual({ integrations: { datadog: { route_to: null } } });
+  });
+
+  test("a removed GitLab access level is null by handle, and the remaining entries are not resent", () => {
+    const draft = cloneJson(base);
+    const levels = (
+      draft.integrations as { gitlab: { provisioning: { access_levels: Record<string, string> } } }
+    ).gitlab.provisioning.access_levels;
+    delete levels.dev;
+    levels["account-executive"] = "developer";
+    expect(settingsPatch(base, draft)).toEqual({
+      integrations: {
+        gitlab: {
+          provisioning: { access_levels: { dev: null, "account-executive": "developer" } },
+        },
+      },
+    });
+  });
+
+  test("with no base, every present edited value is named", () => {
+    expect(settingsPatch(null, { name: "New", mission: "M", other: 1 })).toEqual({
+      name: "New",
+      mission: "M",
+    });
   });
 });

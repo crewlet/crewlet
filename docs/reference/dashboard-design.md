@@ -2891,7 +2891,7 @@ rendered idle from the first phase to the last.
 
 `routes/org/builder/Builder.tsx` is the one component with a lifetime in the
 builder: the reducer over the pure model in `routes/org/builder/model/`, the
-dry-run check, the live region, the shortcuts, the selection and the dialog
+check, the save, the live region, the shortcuts, the selection and the dialog
 that is open. Its views and dialogs are handed in (`BuilderSurfaces`, bound
 in `routes/org/builder/surfaces.ts`) and reach all of it through
 `BuilderContext`, so no view or dialog starts a request or touches storage.
@@ -2899,21 +2899,31 @@ Every surface is required: a Builder suite stands a view in with a fake,
 while the screen binds the real canvas, outline, editor and dialogs, and
 `surfaces.test.tsx` mounts the lens with exactly those.
 
-- **The posture is what the engine answers.** `GET /config` is read on mount
-  and whenever the reader changes, and its answer decides edit mode, create
-  mode, a node that has not caught up, a request to sign in, a process that
-  does not serve the configuration, or an unreachable engine
+- **The company is two reads, and the posture is what the engine answers.**
+  `GET /config` (the settings) and `GET /chart?runtime=true` (the org chart,
+  with each object's runtime half where the reader may have it) are read on
+  mount and whenever the reader changes, and the answers decide edit mode,
+  create mode, a node that has not caught up, a request to sign in, a process
+  that does not serve the configuration, or an unreachable engine
   ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
   Being signed in is never the test: it says nothing about whether this
-  person's grants reach the configuration, and the only thing that can answer
-  is the engine. The reader changes when the viewer's login does — another
-  tab signing in as somebody else, because the cookie is the browser's — and a
+  person's grants reach the company, and the only thing that can answer is
+  the engine. The reader changes when the viewer's login does — another tab
+  signing in as somebody else, because the cookie is the browser's — and a
   change mid-edit keeps the draft on screen, forgets the kept copy and checks
-  it again.
-- **Every draft is a dry run of the write a save would send.** The same
-  `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
-  plus `dry_run=true` and without the audit summary. A draft that changes
-  moves its generation, and an answer for an older generation is dropped.
+  it again. A runtime half the chart withheld (`runtime: false`) is never
+  drawn as an empty one: the fields that live there are left out with a
+  sentence saying why, and a save states none, which keeps what each object
+  has.
+- **A check asks what can be asked without writing.** The chart has no dry
+  run, so `model/scheduler.ts` reads the chart and compares its rows with the
+  draft's base (a content write is full post-state with no precondition, so
+  this is where a colleague's change is caught), sends the settings write as
+  a dry run when the draft changes the settings and otherwise reads them and
+  compares the revision with the base, and adds `problems.preflight` — the
+  rules a chart write refuses on before it reads a row, restated at that
+  boundary. A draft that changes moves its generation, and an answer for an
+  older generation is dropped.
 - **The canvas is handed the chart it draws.** `chart=structure|reporting` is
   the Builder's own section param, chosen in its toolbar, so the canvas is
   given the answer as a prop rather than reading the URL a second time.
@@ -2928,16 +2938,18 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   render inside it, because a fullscreen element renders only its subtree.
   The control is not drawn where the Fullscreen API is missing. The sign-in
   is a screen outside the frame, so asking to sign in leaves fullscreen first.
-- **The selection is in the URL, and the toolbar mirrors it.** `unit=` and
-  `seat=` are filters that name the selected node; a link naming one selects
-  it, a rename rewrites it, and a removed node clears it. The toolbar carries
-  the selected node's own actions, because a canvas tree item may contain no
-  tab stops of its own, and they are the card's and the row's own list
-  (`nodeActions.nodeMenu`) rather than a copy: the same entries, order, names
-  and icons, Edit reports included. Open seat is offered only for a seat the
-  saved company has. A node's key can move under whatever holds it: the first
-  check keys a loaded base by the engine's handles, and a save keys the nodes
-  it created. The reducer lists what moved (`state.rekeyed`), and the
+- **The selection is in the URL, by address, and the toolbar mirrors it.**
+  `unit=` names the selected unit by its key and `seat=` the selected seat by
+  its handle — never a name, which two units may share; a link naming one
+  selects it, a new address rewrites it, and a removed node clears it. The
+  toolbar carries the selected node's own actions, because a canvas tree item
+  may contain no tab stops of its own, and they are the card's and the row's
+  own list (`nodeActions.nodeMenu`) rather than a copy: the same entries,
+  order, names and icons, Edit reports included. Open seat is offered only for
+  a seat the saved company has. A node's key is its IDENTITY — the address the
+  chart created it under — so a rename never moves it; only a node the draft
+  created moves, from the key the draft minted to its identity, once a save
+  has created it. The reducer lists what moved (`state.rekeyed`), and the
   selection and an open dialog read their node through that list in the very
   render the keys change. Each dialog is mounted once per opening, never keyed
   by its node, so a key that moves under an open editor keeps its drawer, its
@@ -2949,81 +2961,88 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   (`useBuilderView`).
 - **Undo and redo are Ctrl or Command with Z**, and Shift with it, anywhere in
   the builder except a text field, and never under a modal.
-- **A newer revision is an update, never an overwrite.** A check answering
-  `409` (or a dry run validated against another base) halts checking and
-  offers Update my draft. A draft holding no work is updated at once instead,
-  an update of nothing confirmed as it lands, and never by reading the
-  configuration again: a plain read keys the seats that declare no handle by
-  their paths until the next check, so an open editor lost its node, typed
-  form and all, and the selection was cleared. The update is read only from a
-  node serving the conflict's revision or a descendant of it, with the
-  engine's description of it, and `UpdateDraftDialog.tsx` shows what still
-  applies, what is dropped and every conflict with its three values;
-  confirming waits for a choice on each. A value is shown as a person reads
-  it: the model tags a conflict over its own structures with their shape, so
-  a node key reads as the node's name, a removed node as the fields that
-  changed, a kind change's stripped fields by name only, and a credential's
-  mask as "A literal value is set (hidden)", never as the marker or as JSON.
+- **A moved company is an update, never an overwrite.** A check that finds
+  the chart's rows moved, or a newer settings revision, halts checking and
+  offers Update my draft; a draft holding no work is updated at once instead,
+  an update of nothing confirmed as it lands. The settings are read only from
+  a node serving the conflict's revision or a descendant of it, and
+  `UpdateDraftDialog.tsx` shows what still applies, what the company already
+  holds, what is dropped and every conflict with its three values; confirming
+  waits for a choice on each. A value is shown as a person reads it: the
+  model tags a conflict over its own structures with their shape, so a node
+  key reads as the node's name, a removed node as the fields that changed, a
+  kind change's stripped fields by name only, and a credential's mask as "A
+  literal value is set (hidden)", never as the marker or as JSON.
 - **Only the operation log is kept, and nothing is written before it is
-  decided.** `useDraftKeeping.ts` reads the kept draft once the base is keyed,
-  offers Keep or Discard for the same revision (read-only until answered),
-  restores through the update flow for another, and discards one kept for the
-  other mode. It writes nothing before that decision, because the plan for an
-  empty log is to clear. A change of reader or a refused credential clears it and
+  decided.** `useDraftKeeping.ts` reads the kept draft once the company is
+  loaded, offers Keep or Discard for the same company (the same settings
+  revision and chart rows; read-only until answered), restores through the
+  update flow for a company that moved, and discards one kept for the other
+  mode. It writes nothing before that decision, because the plan for an empty
+  log is to clear. A change of reader or a refused credential clears it and
   withdraws an offer, and a sign-out empties the tab's storage before it
-  reloads. A draft with changes asks the browser's prompt before
-  the tab goes (session storage does not outlive the tab), and one that
-  storage cannot keep at all asks before the lens is left, since that loses it
-  too; a move within the lens keeps the Builder and asks nothing.
-- **A save is the checked write, signed, and never believed blindly.**
-  `useSave.ts` sends the model's save request with the audit summary signed by
-  a write id minted when the review opens and kept for as long as the draft
-  does not change, so a second press after a lost answer carries the same id.
-  A lost answer is settled from the revision history before anything else
-  happens; while it is unknown the lens records nothing. A write in flight is
-  never aborted, and a save that lands after the lens was left still records
-  the revision and clears the kept draft. The kept log is marked with the
-  write id before the save is sent and unmarked once the save is known not to
-  have landed, so an answer lost after the lens was left, or across a reload,
-  is settled on the next visit (`useSave.resume`) before the kept log is
-  offered: replayed onto its own revision it would apply every change twice.
-  A save this page still has out when the lens opens again is waited for
-  first, because the engine may not have stored it yet and settling it then
-  would read as not landed. Such a save is not the draft on screen, so the revision it stored is read
-  like any newer revision rather than made the base. A save of the draft on
-  screen makes that draft the base, keyed by the save's answer, and the
-  stored document is then read back, never over an edit made while that read
-  is out: such an edit already stands on the saved revision.
-  `ReviewSaveDialog.tsx` states every change and consequence and gates the
+  reloads. A draft with changes asks the browser's prompt before the tab goes
+  (session storage does not outlive the tab), and one that storage cannot keep
+  at all asks before the lens is left, since that loses it too; a move within
+  the lens keeps the Builder and asks nothing.
+- **A save is a plan of writes, each named before it is sent.** `model/save.ts`
+  turns the draft into steps — in create mode the settings first (`PUT` with
+  `If-None-Match: *`), then the chart's structure as `POST /chart/batch`
+  batches of at most 500 operations, the removals in batches of their own,
+  one content `PATCH` per changed unit and seat, and in edit mode the settings
+  last — and `useSave.ts` sends them in order after reading the chart once
+  more to confirm the base. Every step's id derives from a write id minted
+  when the review opens, and a chart step sends it as `Idempotency-Key`, so a
+  RETRY of a step whose outcome is unknown resends the same operation and the
+  chart's ledger answers the first arrival's outcome rather than writing
+  twice; the settings step signs its audit summary with it, and a lost
+  settings answer is settled from the revision history. The run stops at the
+  first step that does not land and pauses editing while one is unknown; what
+  landed stays landed, so the company is read back and the rest of the draft
+  carried onto it through the update flow. A write in flight is never
+  aborted. Before the first write the kept log is marked with the write id
+  and the nodes the save creates, so a reload mid-save carries the log onto
+  whatever landed rather than creating those nodes twice, and a page that
+  mounts while a run of its own is still out waits for it
+  (`useSave.saveInFlight`), editing paused, before deciding anything about the
+  kept log. `ReviewSaveDialog.tsx` states every change and consequence, lists
+  every step with the engine's answer as it arrives, and gates the
   irreversible ones on an acknowledgement, whose sentences (`dialogParts`'s
   `ACKNOWLEDGEMENT_TEXT`) the editor's company rename shares.
 - **Create mode is a form, one template operation, and a create-only write.**
   `CreateCompany.tsx` collects the charter, the starting shape and an optional
   seat for the operator, and records the model's `applyTemplate` (refused
   outside create mode), so the start is a single undo and is checked like any
-  other draft. The save is `PUT` with `If-None-Match: *`; a company that
-  appeared meanwhile is offered instead, and the draft is discarded rather
-  than replayed onto it.
+  other draft. The save is `PUT` with `If-None-Match: *`, then the chart; a
+  company that appeared meanwhile — a settings revision, or seats and units in
+  the chart — is offered instead, and the draft is discarded rather than
+  replayed onto it.
 - **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
-  keeps `{revision_id, epoch}` in a tab-lived store outside any screen
-  (`savedRevision.ts`), watches the `stream` query's `applied_epoch` and the
-  `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
-  N of M nodes, or the node that refused it with a link to the Fleet screen.
-  Its View changes opens the saved revision against its parent
-  (`against=`), since against the active revision a save that is active now
-  differs from nothing; the conflict banner's Show what changed is the newer
-  revision against the draft's base for the same reason. Until this node
-  applies it, the Company screen's read lenses carry a note that they draw the
-  previous revision.
+  keeps what the save wrote — the settings' `{revision_id, epoch}` and the
+  chart's furthest position — in a tab-lived store outside any screen
+  (`savedChanges.ts`). It follows the settings on the `stream` query's
+  `applied_epoch` and the `fleet` query, resolving to Applied, Applied on N of
+  M nodes, or the node that refused it with a link to the Fleet screen, and
+  the chart on the `retention` report's per-node applied positions for the
+  chart's log, which only a fleet operator is shown — for anybody else it says
+  what this node's own answer said — all on `recheck.ts`'s cadence. Its View
+  changes opens the saved settings revision against its parent (`against=`),
+  since against the active revision a save that is active now differs from
+  nothing; the conflict banner's Show what changed is the newer revision
+  against the draft's base for the same reason. Copy the chart reads
+  `/company/export`, the document `crewlet chart export` writes. Until this
+  node applies both, the Company screen's read lenses carry a note that they
+  draw the previous organization.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
   machine decides the status only while a check is out or before any answer.
 - **A read-only lens records nothing.** The guarded and read-only postures, a
-  conflict and a base the engine has not keyed yet all refuse operations at
-  the one door every view goes through, and say why in the live region. The
-  actions themselves are DISABLED rather than hidden, so an operator still
-  reads what the builder does; Edit and Open seat change no draft and stay
-  available.
+  conflict, a kept draft waiting for Keep or Discard, a save being written or
+  read back, a save whose outcome is unknown and a save from this page still
+  out all refuse operations at the one door every view goes through, and say
+  why in the live region. The actions themselves are DISABLED rather than
+  hidden, so an operator still reads what the builder does; Edit and Open
+  seat change no draft and stay available.
 
 ### The org builder draws the engine's organization
 
@@ -3032,43 +3051,34 @@ read one module (`routes/org/builder/chartModel.ts`), so they can never
 disagree about where a seat is drawn, who leads a unit or who a seat reports
 to.
 
-- **The document gives the shape, the engine gives the meaning.** Units,
-  their seats and their children are drawn as the draft holds them, because
-  that is what an operation edits. Every derived fact comes from the last
-  check's `derived` block, read through the document that check was sent: a
-  root seat the engine placed in a unit by its `unit:` reference is drawn in
-  that unit and marked "Placed by unit reference", a reference that keys no
-  unit stays at the root marked with the engine's warning, a unit with no lead
-  of its own shows the lead it inherits, and a seat shows its primary manager.
-  A derived fact is shown only while the draft still holds the values the
-  check saw (for an inherited lead, that includes where each unit above sits);
-  after an edit the chart says it is waiting for the check rather than showing
-  a placement or a lead the engine has not confirmed. A seat's primary
-  manager follows from the whole organization, so no single field says it
-  still holds: it is shown only from a check of the draft as it stands. A
-  value the engine has not given yet reads "Lead after the check", "Manager
-  after the check" or "Handle after the check", never that a check is
-  running: whether one is on its way, or the engine cannot be reached at all,
-  is the toolbar's check status to say, and a card cannot know. A seat's
-  handle is one rule for every surface and for the reducer that records by it
-  (`model/document.knownHandles`): declared, else the one its key carries,
-  else the one a check derived while the seat keeps the name that check saw,
-  since the engine derives an undeclared handle from the name alone. The
-  editor and the dialogs read it, the seat a reported handle names and the
-  Datadog fallback from `chartModel.ts` too, so a card and the dialog it opens
-  never name a seat two ways. The reporting
-  chart, drawn from the last check while the draft has moved past it, says so
-  in a note over the canvas.
+- **The draft gives the shape, the engine gives the meaning.** Units, their
+  seats and their children are drawn as the draft holds them, because that is
+  what an operation edits, and the chart's rows state where every seat sits,
+  so there is no placement to derive. One rule is restated, because a unit's
+  card cannot do without it: a unit that declares no lead or channel takes the
+  one its parent resolved to (`org.propagateDownward`), read off the draft
+  after every edit (`chartModel.effectiveLeads`). What follows from the whole
+  organization — a seat's primary manager and the reporting forest — is the
+  engine's, from the org push's `derived` block, and that block describes
+  the SAVED chart: the chart has no dry run. So it is placed on the base
+  draft's nodes and used only while the draft's chart is still the saved one;
+  past that, the outline's manager reads "Not derived yet" and the reporting
+  chart carries a note over the canvas that it draws the saved company's
+  lines, rather than showing a line the engine has not given. Before the node
+  has pushed a description at all, the reporting chart says it appears once
+  the engine describes the company. The Datadog fallback is read from the
+  settings the same way for every surface, so a card and the dialog it opens
+  never name the seat two ways.
 - **The canvas is a tree of cards.** The structure chart has the company card
   at the root, root seats as cards and units as cards with their seats
   stacked inside as rows. The reporting chart is the engine's forest: seats
-  with no manager at the top, marked "No manager", and seats that manage each
-  other in a loop under one "Reporting cycle" group, each loop drawn from its
-  first seat in the engine's order. The reporting chart is read-only, because
-  a reporting line is not written anywhere as such; "Edit reports" (and Enter
-  on a reporting card) opens the seat's editor at its Manages field, where
-  `manages` is. The Builder's `openEditor` names the part of the form to start
-  on (`EditorSectionName`), so an action about one field lands on it: a lead
+  with no manager at the top, and seats that manage each other in a loop under
+  one "Reporting cycle" group, each loop drawn from its first seat in the
+  engine's order. The reporting chart is read-only, because a reporting line
+  is not written anywhere as such; "Edit reports" (and Enter on a reporting
+  card) opens the seat's editor at its Manages field, where `manages` is. The
+  Builder's `openEditor` names the part of the form to start on
+  (`EditorSectionName`), so an action about one field lands on it: a lead
   chip's "Choose another seat" opens the unit's editor at its lead.
 - **A card holds no control a keyboard has to reach.** Each card header and
   each seat row is a `treeitem` with its level, position and expansion, and
@@ -3087,7 +3097,7 @@ to.
 - **Colour stays state.** A card is neutral whatever it holds. A human seat
   has the dashed edge every human seat on the dashboard has, a problem count
   takes the critical tone, a reference that names nothing takes the caution
-  tone, and the Datadog fallback seat carries a neutral badge while Datadog is
+  tone, and the Datadog fallback seat carries a neutral glyph while Datadog is
   enabled, the only time the engine routes an alert to it.
 - **A live push never moves a card, and neither does a check.** A saved agent
   seat shows the same `StateBadge` as every other screen, in a slot that
@@ -3095,36 +3105,34 @@ to.
   live state is no input to the layout, so a push changes a word and never a
   measured height. The problem count, which is the current draft's and so is
   absent while the check of every edit is out, has a slot of its own on the
-  same first line, which is as tall with it as without it. A mark the engine
-  gave (a lead or a unit reference that resolves to nothing) is held by the chart
-  like a placement, while the node still writes what the check warned about,
-  rather than leaving with each check and coming back with its answer.
+  same first line, which is as tall with it as without it. A caution for a
+  reference that names nothing (a lead, or a `manages` entry) is read off the
+  draft itself (`problems.referenceWarnings`), so it holds for exactly as long
+  as the node writes the reference rather than leaving with each check and
+  coming back with its answer.
 - **The outline is a treegrid of rows.** The same structure as rows with
-  navigable cells: Name, Kind or type, Handle, Lead or reports to, Problems
-  and the row's actions. A row's keys are a card's keys; Right opens a row or
-  steps into its cells, Left steps back out, Up and Down keep the column, and
-  a cell holding a control (the lead choice, the actions menu, an add button)
-  focuses the control, which becomes the grid's one tab stop. A press that
-  opens such a control moves that tab stop too, because the control keeps the
-  focus and hands it back when its menu closes; the row's chevron, which is
-  hidden from assistive technology, takes no focus at all and hands the press
-  to the row. Navigation keys are the grid's before they are the control's, so
-  ArrowDown on a menu button moves to the next row rather than opening the
-  menu. The grid scrolls sideways in its own box at narrow widths, and that
-  box is the containing block of everything in it: a scroller clips only the
-  descendants placed inside it, and a screen-reader label placed against the
-  frame instead gave the page a sideways overflow as wide as the grid. A box
-  that scrolls on one axis clips on both, so a row's menus open in a
-  `.popup-layer` over the grid, placed from their trigger, and follow a
-  sideways scroll (or close once their trigger has left the frame) rather than
-  being cut off under the last rows. An inline add row closes each unit's rows
-  and the company's while the draft can change. Alt+Up and Alt+Down move a row
-  among its siblings of the same kind, past the row drawn beside it: a root
-  seat the engine placed in a unit by its reference is drawn in that unit, so
-  the root seats around it step over it rather than make a move nobody can
-  see. Because the engine's primary manager is the first seat that lists a
-  seat, the reporting lines the next check reports are compared with the ones
-  before, and a changed primary manager is announced.
+  navigable cells: Name (with what the row is written under it), Address,
+  Lead or reports to, Problems and the row's actions. A row's keys are a
+  card's keys; Right opens a row or steps into its cells, Left steps back out,
+  Up and Down keep the column, and a cell holding a control (the lead choice,
+  the actions menu, an add button) focuses the control, which becomes the
+  grid's one tab stop. A press that opens such a control moves that tab stop
+  too, because the control keeps the focus and hands it back when its menu
+  closes; the row's chevron, which is hidden from assistive technology, takes
+  no focus at all and hands the press to the row. Navigation keys are the
+  grid's before they are the control's, so ArrowDown on a menu button moves to
+  the next row rather than opening the menu. The grid scrolls sideways in its
+  own box at narrow widths, and that box is the containing block of everything
+  in it: a scroller clips only the descendants placed inside it, and a
+  screen-reader label placed against the frame instead gave the page a
+  sideways overflow as wide as the grid. A box that scrolls on one axis clips
+  on both, so a row's menus open in a `.popup-layer` over the grid, placed
+  from their trigger, and follow a sideways scroll (or close once their
+  trigger has left the frame) rather than being cut off under the last rows.
+  An inline add row closes each unit's rows and the company's while the draft
+  can change. Rows are in the chart's own order, by address: the chart keeps
+  no other order among siblings, so a row offers no move among them, and
+  where a node sits is its unit, which Move to changes.
 
 ---
 

@@ -3,31 +3,30 @@
  *
  * A DELETE REACHES PAST THE CHART, and the dialog says how far before it
  * happens. Inside the chart the model clears what named the removed nodes (a
- * lead, a `manages` entry, a root seat's unit reference), and the dialog
- * previews the very operation it will dispatch, so the references it lists
- * are the ones the operation clears. Outside the chart:
+ * lead, a `manages` entry), and the dialog previews the very operation it will
+ * dispatch, so the references it lists are the ones the operation clears.
+ * And a removal is the one structural change nothing undoes once it is saved:
+ * the chart TOMBSTONES the address, so it is never given to anything again.
+ * Outside the chart:
  *
  * - A removed Datadog fallback seat must be replaced, because the engine
  *   refuses a Datadog block whose `route_to` names no agent seat, and
  *   nowhere else in the builder could fix that refusal. So the dialog asks
  *   for the replacement and writes it with the removal.
  * - A removed seat's GitLab access level is removed with it: the entry is
- *   keyed by handle, and left behind it would grant its level to the next
- *   seat the engine gives that handle.
+ *   keyed by handle, and left behind it would be a setting about nobody.
  * - What exists for the seat at the vendors (a GitHub App, a Slack app, a
  *   Mattermost bot, the GitLab, Datadog or Atlassian account it is enrolled
  *   for) and the secret store entries it references stay until someone
  *   decommissions them, and the dialog lists them by name
  *   (`vendorIdentities`).
  * - The seat's mailbox is retired 24 hours after the engine applies the
- *   removal, its coding runs are ended then, and its memory is kept and
- *   reattaches to a seat added later under the same handle
- *   (`docs/concepts/seat-ownership.md`, "The removed seat").
+ *   removal, its coding runs are ended then, and its memory is kept under an
+ *   identity no later seat can have (`docs/concepts/seat-ownership.md`, "The
+ *   removed seat").
  *
- * Root seats placed in a removed unit by their `unit:` reference are the
- * operator's to decide (the chart draws them inside the unit, the document
- * holds them at the root), and a removal of more than half the saved
- * company's seats needs its own acknowledgement.
+ * A removal of more than half the saved company's seats needs its own
+ * acknowledgement.
  */
 
 import { useState, type ReactNode } from "react";
@@ -46,22 +45,18 @@ import {
   type LeftBehind,
 } from "./dialogParts.tsx";
 import { allSeats, locate, type DraftSeat } from "./model/draft.ts";
-import { isRecord } from "./model/json.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
 import { kindOf, type Intent, type ReferenceEffect } from "./model/operations.ts";
-import { handlesOf, recordIntent, type BuilderState } from "./model/reducer.ts";
+import { recordIntent, type BuilderState } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
-import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
+import { isWorking, referenceNames, savedHandleOf, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { DeleteGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, Modal, SegmentedControl } from "@crewlethq/ui";
-
-type PlacedChoice = "keep" | "remove";
+import { Button, Callout, Checkbox, Modal } from "@crewlethq/ui";
 
 export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
   const { state } = api;
-  const [placedSeats, setPlacedSeats] = useState<PlacedChoice>("keep");
   const [routeTo, setRouteTo] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -88,34 +83,30 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
     );
   }
 
-  const name = found.node.data.name;
+  const name =
+    found.kind === "seat"
+      ? found.node.data.name || found.node.data.handle
+      : found.node.data.name || found.node.data.key;
   const company = state.draft.company;
 
   // What the removal takes, before a replacement fallback is chosen: the
   // replacement cannot be one of the seats it removes.
-  const bare = simulate(state, { type: "remove", target: nodeKey, placedSeats });
+  const bare = simulate(state, { type: "remove", target: nodeKey });
   const removing = bare.ok ? removedSeats(state.draft, bare.after) : [];
-  const handles = handlesOf(state);
   const fallback = datadogFallback(company);
   const fallbackSeat =
-    fallback === undefined
-      ? undefined
-      : removing.find((seat) => handles.get(seat.key) === fallback);
+    fallback === undefined ? undefined : removing.find((seat) => seat.data.handle === fallback);
   const replacements = [...allSeats(state.draft)]
     .map(({ seat }) => seat)
-    .filter((seat) => kindOf(seat.data) === "agent" && !removing.includes(seat))
-    .map((seat) => ({ seat, handle: handles.get(seat.key) }))
-    .filter((c): c is { seat: DraftSeat; handle: string } => c.handle !== undefined);
-  // A CHOICE COUNTS ONLY WHILE IT IS STILL ON OFFER. The replacements follow
-  // the removal, and "Delete them too" can take the seat that was chosen, so
-  // a stale choice would write a fallback naming a seat this very removal
-  // deletes: the next check refuses it, and nothing in the builder fixes it.
-  const replacement = replacements.some((c) => c.handle === routeTo) ? routeTo : "";
+    .filter((seat) => kindOf(seat.data) === "agent" && !removing.includes(seat));
+  // A CHOICE COUNTS ONLY WHILE IT IS STILL ON OFFER: a choice the replacements
+  // no longer hold would write a fallback naming a seat this very removal
+  // deletes, which nothing in the builder could fix afterwards.
+  const replacement = replacements.some((seat) => seat.data.handle === routeTo) ? routeTo : "";
 
   const intent: Intent = {
     type: "remove",
     target: nodeKey,
-    placedSeats,
     ...(fallbackSeat && replacement !== "" ? { routeTo: replacement } : {}),
   };
   const preview = simulate(state, intent);
@@ -128,8 +119,8 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   const mass = preview.ok ? massRemoval(state.baseDraft, after) : null;
   const agents = seats.filter((seat) => kindOf(seat.data) === "agent");
   const working = seats
-    .filter((seat) => isWorking(handles.get(seat.key), api.agents, api.sandboxes))
-    .map((seat) => seat.data.name);
+    .filter((seat) => isWorking(savedHandleOf(state, seat.key), api.agents, api.sandboxes))
+    .map((seat) => seat.data.name || seat.data.handle);
 
   const blocked =
     !preview.ok ||
@@ -197,42 +188,27 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
                 .filter(Boolean)
                 .join(" and ")} inside it.`
           : `Deletes the ${kindOf(found.node.data) === "human" ? "human" : "agent"} seat ${name}.`}{" "}
-        Undo brings it back until the draft is saved.
+        Undo brings it back until the draft is saved. Once it is saved nothing brings it back: the
+        chart never gives{" "}
+        {found.kind === "unit" ? "a removed unit's key" : "a removed seat's handle"} to anything
+        again.
       </p>
-
-      {bare.ok && bare.op.type === "remove" && bare.op.placed.length > 0 && (
-        <EditorSection
-          title="Seats placed here by unit reference"
-          hint="These seats are declared at the top level with a unit reference to this unit, so the chart draws them inside it."
-        >
-          <NameList
-            names={bare.op.placed.map((p) =>
-              isRecord(p.json) && typeof p.json.name === "string" ? p.json.name : p.key,
-            )}
-          />
-          <SegmentedControl<PlacedChoice>
-            label="Seats placed here by unit reference"
-            semantics="radio"
-            value={placedSeats}
-            onValueChange={setPlacedSeats}
-            options={[
-              { value: "keep", label: "Keep them at the top level" },
-              { value: "remove", label: "Delete them too" },
-            ]}
-          />
-        </EditorSection>
-      )}
 
       <ClearedReferences
         state={state}
-        cleared={cleared.filter((c) => c.kind !== "gitlab_access_level")}
+        cleared={cleared.filter((c) => c.kind === "lead" || c.kind === "manages")}
       />
 
       <OutsideTheChart
         state={state}
         agents={agents}
         fallbackSeat={fallbackSeat}
-        replacements={replacements.map((c) => ({ value: c.handle, label: c.seat.data.name }))}
+        replacements={replacements.map((seat) => ({
+          value: seat.data.handle,
+          label: seat.data.name
+            ? `${seat.data.name} (@${seat.data.handle})`
+            : `@${seat.data.handle}`,
+        }))}
         routeTo={replacement}
         onRouteTo={setRouteTo}
         accessLevels={op?.accessLevels ?? []}
@@ -259,7 +235,10 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
 function holderName(state: BuilderState, key: NodeKey): string {
   if (key === COMPANY_KEY) return "The company";
   const found = locate(state.draft, key);
-  return found ? found.node.data.name : key;
+  if (!found) return key;
+  return found.kind === "seat"
+    ? found.node.data.name || `@${found.node.data.handle}`
+    : found.node.data.name || found.node.data.key;
 }
 
 function ClearedReferences({
@@ -274,11 +253,9 @@ function ClearedReferences({
     const holder = holderName(state, effect.holder);
     switch (effect.kind) {
       case "lead":
-        return `${holder} no longer has ${effect.from} as its lead.`;
+        return `${holder} no longer has @${effect.from} as its lead.`;
       case "manages":
         return `${holder} no longer manages ${effect.from}.`;
-      case "unit":
-        return `${holder} loses its unit reference to ${effect.from} and stays at the top level.`;
       default:
         return `${holder} no longer refers to ${effect.from}.`;
     }
@@ -313,9 +290,9 @@ function OutsideTheChart({
   const identities: LeftBehind[] = saved
     .map((seat) => ({
       key: seat.key,
-      name: seat.data.name,
+      name: seat.data.name || `@${seat.data.handle}`,
       made: vendorIdentities(state, seat),
-      references: referenceNames(seat.data),
+      references: referenceNames(seat.data.runtime),
     }))
     .filter((entry) => entry.made.length > 0 || entry.references.length > 0);
   const parts: ReactNode[] = [];
@@ -352,13 +329,19 @@ function OutsideTheChart({
         key="gitlab"
         names={accessLevels.map(
           (level) =>
-            `The GitLab access level for ${level.handle}${level.before ? ` (${level.before})` : ""} is removed, so it cannot pass to a seat added later under that handle.`,
+            `The GitLab access level for @${level.handle}${level.before ? ` (${level.before})` : ""} is removed with the seat.`,
         )}
       />,
     );
   }
-  if (identities.length > 0) {
-    parts.push(<StaysUntilDecommissioned key="vendors" entries={identities} />);
+  if (identities.length > 0 || (saved.length > 0 && !state.base.runtimeVisible)) {
+    parts.push(
+      <StaysUntilDecommissioned
+        key="vendors"
+        entries={identities}
+        runtimeHidden={!state.base.runtimeVisible}
+      />,
+    );
   }
   if (saved.length > 0) {
     const one = saved.length === 1;
@@ -369,8 +352,8 @@ function OutsideTheChart({
           : "Their mailboxes, and the mail still addressed to them, are"}{" "}
         kept for 24 hours after the engine applies the change and then retired, and any coding runs{" "}
         {one ? "it still has are" : "they still have are"} ended then.{" "}
-        {one ? "Its memory is" : "Their memory is"} kept, and a seat added later with the same
-        handle reattaches to it.
+        {one ? "Its memory is" : "Their memory is"} kept under {one ? "an identity" : "identities"}{" "}
+        no seat added later can have.
       </p>,
     );
   }

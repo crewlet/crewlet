@@ -84,6 +84,7 @@ import {
 } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { chartSeatPath, chartUnitPath, useChartRead, WITH_RUNTIME } from "~/lib/chartReads.ts";
 import {
   awaitingPerson,
   indexOrg,
@@ -92,14 +93,12 @@ import {
   reportsCaption,
   seatPath,
   seatReading,
-  seatSettings,
   statusLine,
   afkReason,
   runState,
   type OrgIndex,
   type Seat,
   type SeatReading,
-  type SeatSettings,
 } from "~/lib/seats.ts";
 import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -115,8 +114,9 @@ import {
 } from "~/lib/phases.ts";
 import type {
   AgentRow,
-  CompanyDocument,
-  ConfigRole,
+  ChartSeat,
+  ChartSeatRead,
+  ChartUnitRead,
   ConversationEntry,
   CounterpartyProfile,
   EventRecord,
@@ -172,72 +172,76 @@ type Tab = (typeof AGENT_TABS)[number];
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
 /**
- * The operator-gated half of a seat, said precisely when it cannot be shown.
+ * The guarded half of a seat, said precisely when it cannot be shown.
  *
- * `QueryState` covers a refused or failed read, which includes the guarded
- * banner with its Sign in button. The three states after it are this
- * screen's own: no configuration is active, the document has no seat by this
- * name (the projection and the document can disagree for a moment either side
- * of an apply), and a name held by two seats in a revision stored before names
- * had to be unique.
+ * EVERY OUTCOME OF THE CHART READ HAS ITS OWN SENTENCE ([SeatReading]): a
+ * read still out, a refusal naming the grants that would admit the reader, a
+ * node that could not answer, a chart that holds no seat by this handle (the
+ * roster and the chart can disagree for a moment either side of an apply),
+ * and a runtime half the chart withheld from this reader.
  *
  * NONE OF THEM IS AN EMPTY VALUE. "Not set" over a field nobody was allowed to
  * read is a statement about the company, and it is the wrong one.
  */
 function SettingsState({
-  error,
-  loading,
-  doc,
-  settings,
+  reading,
   seat,
   children,
 }: {
-  error: string | null;
-  loading: boolean;
-  doc: CompanyDocument | null;
-  settings: SeatSettings | null;
+  reading: SeatReading;
   seat: Seat;
   children: ReactNode;
 }) {
-  if (loading && !doc && !error) {
-    return <Skeleton variant="text" rows={3} label="Loading the company document" />;
+  switch (reading.state) {
+    case "unread":
+      return <Skeleton variant="text" rows={3} label="Loading this seat from the org chart" />;
+    case "refused":
+      // THE SHARED BANNER, which names the grants the engine did and carries
+      // the way to sign in as somebody who holds one — a 401, where nothing
+      // the engine accepted was presented, is the plain "sign in" banner.
+      return (
+        <QueryState
+          error="unauthorized"
+          refusal={
+            reading.reason !== "" ? { reason: reading.reason, grants: [...reading.grants] } : null
+          }
+          loading={false}
+        />
+      );
+    case "failed":
+      return (
+        <EmptyState
+          size="compact"
+          icon={<KeyGlyph size={32} />}
+          title="The org chart could not be read just now"
+          description="The engine did not answer. This panel fills in when it does."
+        />
+      );
+    case "absent":
+      return (
+        <EmptyState
+          size="compact"
+          icon={<KeyGlyph size={32} />}
+          title={`The org chart holds no seat @${seat.handle}`}
+          description="The roster and the chart can disagree for a moment while a change is applied."
+        />
+      );
+    case "stripped":
+      return (
+        <EmptyState
+          size="compact"
+          icon={<KeyGlyph size={32} />}
+          title="This seat's runtime half was not shown to you"
+          description="Its model, budget, contact identities and tool credentials are read with the grant that reads the company's configuration."
+        />
+      );
+    case "read":
+      return <>{children}</>;
   }
-  if (error) return <QueryState error={error} loading={loading} />;
-  if (!doc) {
-    return (
-      <EmptyState
-        size="compact"
-        icon={<KeyGlyph size={32} />}
-        title="No company configuration is active"
-        description="This seat's settings live in the company document, and none is active on this engine."
-      />
-    );
-  }
-  if (settings?.state === "missing") {
-    return (
-      <EmptyState
-        size="compact"
-        icon={<KeyGlyph size={32} />}
-        title={`The active configuration has no seat named ${seat.name}`}
-        description="The org chart and the configuration can disagree for a moment while a new revision is applied."
-      />
-    );
-  }
-  if (settings?.state === "ambiguous") {
-    return (
-      <EmptyState
-        size="compact"
-        icon={<KeyGlyph size={32} />}
-        title={`More than one seat is named ${seat.name}`}
-        description="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
-      />
-    );
-  }
-  return <>{children}</>;
 }
 
 /**
- * A value from the redacted document, in the form it may be shown.
+ * A value from a seat's runtime half, in the form it may be shown.
  *
  * NEVER A CREDENTIAL: a literal in a credential field arrives as the mask and
  * says only that something is set, and a whole `${VAR}` names an entry in the
@@ -397,15 +401,16 @@ function modelFact(reading: SeatReading): string {
   switch (reading.state) {
     case "read": {
       // AN EMPTY ARRAY IS TRUTHY, which is why this is a length test.
-      const chain = llmChain(reading.role.llm);
+      const chain = llmChain(reading.seat.runtime?.llm);
       return chain.length > 0 ? chain.join(" → ") : "default provider";
     }
     case "absent":
-      return "not in the active revision";
+      return "not in the org chart";
+    case "stripped":
+      return "not shown to you";
     case "refused":
-      // THE GRANT THE ENGINE NAMED — `config:read`, for the company
-      // document — and never "an operator token", which sent a signed-in
-      // reader to find a credential they have no use for.
+      // THE GRANT THE ENGINE NAMED, and never "an operator token", which
+      // sent a signed-in reader to find a credential they have no use for.
       return reading.grants.length > 0
         ? `needs ${reading.grants.join(" or ")}`
         : "needs a credential the engine accepts";
@@ -423,16 +428,17 @@ function modelFact(reading: SeatReading): string {
  * ONE SENTENCE PER OUTCOME, shared by the tile's note and the meter's callout so
  * the two can never disagree about one seat. Both printed "needs an operator
  * token" for every outcome that was not a value — a claim about the READER,
- * wrong for a document still in flight, wrong for a revision whose roles do
- * not name this seat, and wrong for a reader signed in without `config:read`,
- * who lacks a grant rather than a token.
+ * wrong for a read still in flight, wrong for a chart that does not hold this
+ * seat, and wrong for a reader who lacks a grant rather than a token.
  */
 function capNote(reading: SeatReading): string {
   switch (reading.state) {
     case "read":
       return "";
     case "absent":
-      return "the active revision has no single seat by this name";
+      return "the org chart holds no seat by this handle";
+    case "stripped":
+      return "it is in the runtime half, which was not shown to you";
     case "refused":
       return reading.grants.length > 0
         ? `it needs ${reading.grants.join(" or ")}`
@@ -445,8 +451,8 @@ function capNote(reading: SeatReading): string {
 }
 
 /**
- * What the company document configures for this seat — and ONLY what can apply
- * to it.
+ * What the org chart configures for this seat — and ONLY what can apply to
+ * it.
  *
  * THE MODEL ROWS ARE AN AGENT'S. `org.Role.humanForbidden` refuses `llm` and
  * every per-phase chain on a human seat and `Organization.Validate` runs it over
@@ -461,18 +467,17 @@ function capNote(reading: SeatReading): string {
  * already make: a row that cannot have content is not an empty state, it is a
  * claim that the reader is missing something.
  *
- * EMAIL IS ON BOTH KINDS, and survives the same refusal: a human seat's address
- * is indexed so work addressed to it resolves to the person.
+ * EMAIL IS ON BOTH KINDS: a human seat's address is indexed so work addressed
+ * to it resolves to the person.
  */
-function configuredProperties(role: ConfigRole | null, human: boolean): Property[] {
-  const email: Property = { label: "Email", value: <ConfigValue value={role?.email} /> };
+function configuredProperties(seat: ChartSeat, human: boolean): Property[] {
+  const email: Property = { label: "Email", value: <ConfigValue value={seat.email} /> };
   if (human) return [email];
-  // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or a per-phase mapping,
-  // so this is the flattened order the provider chain actually walks — and an
-  // empty ARRAY is truthy, which is why the fallback is an explicit length test
-  // rather than `||`.
-  const chain = llmChain(role?.llm);
-  const auxiliary = llmChain(role?.llm_auxiliary);
+  // A CHAIN, DRAWN AS ONE, in the order the provider chain actually walks —
+  // and an empty ARRAY is truthy, which is why the fallback is an explicit
+  // length test rather than `||`.
+  const chain = llmChain(seat.runtime?.llm);
+  const auxiliary = llmChain(seat.runtime?.llm_auxiliary);
   return [
     email,
     {
@@ -656,50 +661,47 @@ export function SeatScreen({ handle }: { handle: string }) {
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
     { enabled: tab === "cost" && !!seat },
   );
-  // THE GUARDED HALF. A seat's email, model chain, token budget, contact
-  // identities, tool credentials, integrations and schedules are NOT on the
-  // anonymous org projection — `internal/api/orgprojection.go` spells out what
-  // is, field by field, and everything else stays behind `config:read` — so
-  // this screen reads them from the company document.
-  // ...AND ON EVERY TAB, because the HEADER reads the model chain out of this
-  // same answer and renders above the strip on all eight of them. `enabled` is
-  // the guard for a question whose PARAMETER is not chosen yet; gating it on
+  // THE GUARDED HALF. A seat's model chain, token budget, contact identities
+  // and tool credentials are NOT on the anonymous org projection —
+  // `internal/api/orgprojection.go` spells out what is, field by field — so
+  // this screen reads them from the ORG CHART, by the seat's HANDLE, with the
+  // runtime half where this reader may have it. It was the company document,
+  // found by the seat's NAME, and the document holds no seats any more: the
+  // chart left it for a log of its own, so that lookup found nothing for
+  // every seat.
+  //
+  // ON EVERY TAB, because the HEADER reads the model chain out of this same
+  // answer and renders above the strip on all eight of them. Gating it on
   // which panel is open made the object describe itself by what was below it,
-  // and the five tabs that did not ask rendered the absence as "needs an
-  // operator token" to a reader already holding one.
+  // and the tabs that did not ask rendered the absence as "needs an operator
+  // token" to a reader already holding one. A header is a property of the
+  // OBJECT.
   //
-  // Leaving the gate and having the header say nothing on those five tabs is
-  // the smaller change and it is the wrong one: a fact that appears on Overview
-  // and vanishes on Work is still a header that moves when the panel does. A
-  // header is a property of the OBJECT.
-  //
-  // It costs no extra asking either — it saves it. Toggling `enabled` re-runs
-  // the effect and clears the answer, so Overview → Work → Overview used to
-  // fetch the whole document twice.
-  const config = useQuery("config", undefined, { enabled: !!seat });
-  // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL. `useQuery` keeps its last good
-  // answer through a failed ask, which suits a poll and is wrong for a guarded
-  // read: once a token is cleared or refused, the email, model, budget and
-  // schedules it had been allowed to read stayed on the overview and the cost
-  // tab, beside a banner saying the answer needs a token.
-  const settings = useMemo<SeatSettings | null>(
-    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
-    [seat, config.data, config.error],
+  // RE-READ ON EVERY ORG PUSH, which is what follows a chart write that
+  // landed. The home unit is read beside it for the credentials its direct
+  // agent members inherit.
+  const seatRead = useChartRead<ChartSeatRead>(
+    seat?.handle ? chartSeatPath(seat.handle) : null,
+    WITH_RUNTIME,
+    org,
+  );
+  const homeKey = seatRead.state === "read" ? (seatRead.value.seat.unit ?? "") : "";
+  const unitRead = useChartRead<ChartUnitRead>(
+    homeKey !== "" ? chartUnitPath(homeKey) : null,
+    WITH_RUNTIME,
+    org,
   );
   // WHAT THIS READER CAN SAY ABOUT THE GUARDED HALF, as a named outcome rather
-  // than a nullable role: [seatReading] carries the four this screen has to tell
-  // apart, and `configured` is the one of them that holds a document.
+  // than a nullable seat: [seatReading] carries the six this screen has to
+  // tell apart, and `configured` is the one of them that holds the runtime.
   const reading = useMemo(
-    () => seatReading(settings, config.error, config.refusal),
-    [settings, config.error, config.refusal],
+    () => seatReading(seatRead, homeKey !== "" ? unitRead : null),
+    [seatRead, unitRead, homeKey],
   );
-  const configured = reading.state === "read" ? reading.role : null;
-  const credentials = useMemo(
-    () => (settings && seat ? mcpEnvOf(settings, seat.kind) : {}),
-    [settings, seat],
-  );
-  /** The seat's configured cap. 0 or absent is unlimited; no document at all is unknown. */
-  const budget = configured?.token_budget ?? 0;
+  const configured = reading.state === "read" ? reading.seat : null;
+  const credentials = useMemo(() => (seat ? mcpEnvOf(reading, seat.kind) : {}), [reading, seat]);
+  /** The seat's configured cap. 0 or absent is unlimited; an unread runtime is unknown. */
+  const budget = configured?.runtime?.token_budget ?? 0;
   // THIS SEAT'S RECURRING WORK, FROM THE RESOLVED ROWS.
   //
   // It was `schedulesOf(settings)`, which reads the `schedules:` a seat
@@ -1178,38 +1180,31 @@ export function SeatScreen({ handle }: { handle: string }) {
                 />
               </Card>
 
-              {/* THE DOCUMENT'S HALF, BEHIND THE TOKEN. Email, the model chain
-                  and the auxiliary chain are not on the anonymous projection,
-                  so they are read from the company document and the panel says
-                  so when it could not be read — rather than drawing "not set"
-                  over a setting nobody was allowed to see. */}
+              {/* THE CHART'S GUARDED HALF. Email, the model chain and the
+                  auxiliary chain are not on the anonymous projection, so they
+                  are read from the org chart and the panel says so when they
+                  could not be — rather than drawing "not set" over a setting
+                  nobody was allowed to see. */}
               <Card>
-                <Card.Header
-                  icon={<NeurologyGlyph size="sm" />}
-                  subtitle="from the company document"
-                >
+                <Card.Header icon={<NeurologyGlyph size="sm" />} subtitle="from the org chart">
                   <Card.Title>Configured</Card.Title>
                 </Card.Header>
-                <SettingsState
-                  error={config.error}
-                  loading={config.loading}
-                  doc={config.data ?? null}
-                  settings={settings}
-                  seat={seat}
-                >
+                <SettingsState reading={reading} seat={seat}>
                   <div className="col gap-3">
-                    <PropertiesRail
-                      groups={[{ properties: configuredProperties(configured, human) }]}
-                    />
+                    {configured && (
+                      <PropertiesRail
+                        groups={[{ properties: configuredProperties(configured, human) }]}
+                      />
+                    )}
                     {human && (
                       // WHY THE PANEL IS SHORT. An absent row must not read as
                       // one this token was not allowed to see — telling those
                       // two apart is the rest of this card's job — so the reason
                       // is written where the rows would have been.
                       <p className="t-caption">
-                        A human seat runs no model: the engine never spawns one, so the document
-                        refuses <code className="inline">llm</code> and every per-phase chain on it.
-                        Their contact identities are on Access.
+                        A human seat runs no model: the engine never spawns one, so it refuses{" "}
+                        <code className="inline">llm</code> and every per-phase chain on it. Their
+                        contact identities are on Access.
                       </p>
                     )}
                   </div>
@@ -2026,12 +2021,12 @@ export function SeatScreen({ handle }: { handle: string }) {
               <StatCard
                 icon={<TargetGlyph size="xs" />}
                 label="Configured budget"
-                // UNKNOWN IS NOT UNLIMITED, and WHY it is unknown is four
-                // answers rather than one. `token_budget` is on the guarded
-                // document, so a reader without a token is told the cap could
-                // not be read rather than shown "unlimited" — a statement about
-                // the company nothing on the wire supports. A read still in
-                // flight and a document that does not name this seat are
+                // UNKNOWN IS NOT UNLIMITED, and WHY it is unknown is five
+                // answers rather than one. `token_budget` is in the seat's
+                // runtime half, so a reader who was not shown it is told the cap
+                // could not be read rather than shown "unlimited" — a statement
+                // about the company nothing on the wire supports. A read still
+                // in flight and a chart that does not hold this seat are
                 // absences too, and telling either reader to fetch a token they
                 // may already hold is that same wrong statement aimed at them
                 // instead.
@@ -2041,8 +2036,8 @@ export function SeatScreen({ handle }: { handle: string }) {
                 sub={
                   reading.state === "read"
                     ? budget
-                      ? "token_budget on this role in the company config"
-                      : "token_budget is 0 or unset on this role"
+                      ? "token_budget in this seat's runtime half"
+                      : "token_budget is 0 or unset on this seat"
                     : `token_budget could not be read: ${capNote(reading)}`
                 }
               />
@@ -2099,8 +2094,8 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Callout variant="neutral">
                 {reading.state === "read"
                   ? budget
-                    ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
-                    : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."
+                    ? "This seat has a token_budget, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
+                    : "No per-seat budget meter. This seat has no token_budget, so its spend is bounded only by the company-wide one."
                   : `No engine is reporting a meter for this seat, and its configured cap could not be read: ${capNote(reading)}.`}
               </Callout>
             )}
@@ -2211,27 +2206,23 @@ export function SeatScreen({ handle }: { handle: string }) {
         {tab === "access" && (
           <div className="col gap-4">
             <Card>
-              <Card.Header icon={<LinkGlyph size="sm" />} subtitle="from the company document">
+              <Card.Header icon={<LinkGlyph size="sm" />} subtitle="from the org chart">
                 <Card.Title>Identity on other surfaces</Card.Title>
               </Card.Header>
-              <SettingsState
-                error={config.error}
-                loading={config.loading}
-                doc={config.data ?? null}
-                settings={settings}
-                seat={seat}
-              >
-                {Object.keys(configured?.contact ?? {}).length ? (
+              <SettingsState reading={reading} seat={seat}>
+                {Object.keys(configured?.runtime?.contact ?? {}).length ? (
                   <PropertiesRail
                     groups={[
                       {
-                        properties: Object.entries(configured?.contact ?? {}).map(([k, v]) => ({
-                          label: k.replace(/_/g, " "),
-                          // NOT A CREDENTIAL. A contact identity is a public
-                          // handle at a vendor — a Slack member id, a GitHub
-                          // login — so a literal is the value and is shown.
-                          value: <ConfigValue value={v} />,
-                        })),
+                        properties: Object.entries(configured?.runtime?.contact ?? {}).map(
+                          ([k, v]) => ({
+                            label: k.replace(/_/g, " "),
+                            // NOT A CREDENTIAL. A contact identity is a public
+                            // handle at a vendor — a Slack member id, a GitHub
+                            // login — so a literal is the value and is shown.
+                            value: <ConfigValue value={v} />,
+                          }),
+                        ),
                       },
                     ]}
                   />
@@ -2261,13 +2252,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 >
                   <Card.Title>Tool credentials</Card.Title>
                 </Card.Header>
-                <SettingsState
-                  error={config.error}
-                  loading={config.loading}
-                  doc={config.data ?? null}
-                  settings={settings}
-                  seat={seat}
-                >
+                <SettingsState reading={reading} seat={seat}>
                   {Object.keys(credentials).length ? (
                     <div className="col gap-3">
                       {Object.entries(credentials).map(([server, vars]) => (
@@ -2294,8 +2279,8 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                       <p className="t-caption">
                         These are the <code className="inline">${"{VAR}"}</code> references the
-                        config carries, not resolved values: the engine resolves them when it builds
-                        this seat&rsquo;s MCP children, and the API redacts anything literal.
+                        seat&rsquo;s runtime half carries, not resolved values: the engine resolves
+                        them when it builds this seat&rsquo;s MCP children.
                       </p>
                     </div>
                   ) : (

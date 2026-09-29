@@ -40,6 +40,7 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { needsSentence } from "~/lib/refusal.ts";
 import { useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import type { Capability } from "~/lib/tools.ts";
@@ -50,7 +51,8 @@ import {
   hintsAdvertised,
   schemaFields,
 } from "~/lib/tools.ts";
-import type { ConfigUnit, ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
+import type { ChartRead, ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
+import { useChartRead, WITH_RUNTIME } from "~/lib/chartReads.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -182,8 +184,8 @@ function holdersOf(
   tool: ToolRow,
   seats: Seat[],
   shared: boolean | null,
-  /** Which seats declare credentials for a per-seat server, or null when the
-   *  company document could not be read. */
+  /** Which seats declare credentials for a per-seat server, by HANDLE, or
+   *  null when the org chart's runtime half could not be read. */
   holdersByServer: Map<string, Set<string>> | null,
 ): Holders | null {
   const agents = seats.filter((s) => s.kind === "agent");
@@ -212,13 +214,14 @@ function holdersOf(
   // AND THE CREDENTIALS ARE GUARDED TOO. `mcp_env` is not on the anonymous org
   // projection — the classification in `internal/api/orgprojection_test.go`
   // calls it "tool credentials inherited by members" — so which seats declare
-  // one is a question the company document answers and an anonymous reader
-  // cannot. Unanswered is null, exactly as an unread `shared` is, rather than
-  // an empty list somebody would act on.
+  // one is a question the org chart's runtime half answers and an anonymous
+  // reader cannot. Unanswered is null, exactly as an unread `shared` is,
+  // rather than an empty list somebody would act on. By HANDLE, because two
+  // seats may share a name and only one of them may hold the credential.
   if (!holdersByServer) return null;
   const declared = holdersByServer.get(server) ?? new Set<string>();
   return {
-    seats: agents.filter((s) => declared.has(s.name)),
+    seats: agents.filter((s) => s.handle !== "" && declared.has(s.handle)),
     everyone: false,
     why: `${server} is a per-seat template, so an instance is launched only for a seat that declares credentials for it under mcp_env.`,
   };
@@ -309,26 +312,38 @@ function useServerSharing(server: string): {
 }
 
 /**
- * Which seats declare credentials for a per-seat MCP server, by SEAT NAME.
+ * Which seats declare credentials for a per-seat MCP server, by HANDLE.
  *
- * THE COMPANY DOCUMENT ANSWERS THIS AND THE PROJECTION CANNOT. `mcp_env` is
- * guarded — it holds tool credentials — so the anonymous org projection
- * carries none of it, and a reader without `config:read` simply does not
- * know which seats a per-seat server is launched for. Null says exactly that,
- * for the same reason an unread `shared` is null: an empty list here reads as
- * "nobody holds this tool", which is a claim about somebody's company.
+ * THE ORG CHART ANSWERS THIS AND THE PROJECTION CANNOT. `mcp_env` is in a
+ * seat's RUNTIME half — it holds tool credentials — so the anonymous org
+ * projection carries none of it, and the chart serves it only to a reader who
+ * may read the company's configuration. A reader it was withheld from simply
+ * does not know which seats a per-seat server is launched for, and null says
+ * exactly that, for the same reason an unread `shared` is null: an empty list
+ * here reads as "nobody holds this tool", which is a claim about somebody's
+ * company. It was the company document, which holds no seats any more.
  *
  * A unit's own `mcp_env` counts, because its direct AGENT members inherit it —
  * that is `org.MCPEnv`'s rule and the merge `lib/seats.ts` performs for the
  * seat screen. A human member inherits none: it runs no tools.
  *
  * Read only for a server, because a builtin and an A2A tool have none to ask
- * about — the same reason [useServerSharing] is gated the same way.
+ * about — the same reason [useServerSharing] is gated the same way — and
+ * re-read on every org push, which follows a chart write that landed.
+ *
+ * `unanswered` SAYS WHY `byServer` IS NULL, because the four reasons are four
+ * different facts: a runtime half withheld from this reader, a refusal naming
+ * the grant it wanted, an engine that did not answer, and a read not back yet.
+ * The panel said "the active configuration did not answer" for all of them —
+ * about a read of the org chart, and while the configuration had answered.
  */
-function useServerHolders(server: string): Map<string, Set<string>> | null {
-  const doc = useQuery("config", undefined, { enabled: server !== "" });
-  return useMemo(() => {
-    if (server === "" || doc.error || !doc.data) return null;
+function useServerHolders(
+  server: string,
+  org: unknown,
+): { byServer: Map<string, Set<string>> | null; unanswered: string } {
+  const chart = useChartRead<ChartRead>(server !== "" ? "/chart" : null, WITH_RUNTIME, org);
+  const byServer = useMemo(() => {
+    if (server === "" || chart.state !== "read" || !chart.value.runtime) return null;
     const out = new Map<string, Set<string>>();
     const add = (seat: string, env: Record<string, Record<string, string>> | undefined) => {
       for (const name of Object.keys(env ?? {})) {
@@ -337,17 +352,33 @@ function useServerHolders(server: string): Map<string, Set<string>> | null {
         out.set(name, held);
       }
     };
-    const visit = (unit: ConfigUnit): void => {
-      for (const role of unit.roles ?? []) {
-        add(role.name, role.mcp_env);
-        if (role.kind !== "human") add(role.name, unit.mcp_env);
-      }
-      for (const child of unit.children ?? []) visit(child);
-    };
-    for (const role of doc.data.roles ?? []) add(role.name, role.mcp_env);
-    for (const unit of doc.data.units ?? []) visit(unit);
+    const unitEnv = new Map(
+      (chart.value.units ?? []).map((unit) => [unit.key, unit.runtime?.mcp_env]),
+    );
+    for (const seat of chart.value.seats ?? []) {
+      add(seat.handle, seat.runtime?.mcp_env);
+      if (seat.kind !== "human" && seat.unit) add(seat.handle, unitEnv.get(seat.unit));
+    }
     return out;
-  }, [server, doc.data, doc.error]);
+  }, [server, chart]);
+  const which = "Which seats hold this depends on the credentials they declare for it";
+  let unanswered: string;
+  switch (chart.state) {
+    case "read":
+      unanswered = `${which}, and those are in the org chart's runtime half, which was not shown to you.`;
+      break;
+    case "refused":
+      unanswered = needsSentence("Reading which seats declare credentials for it", chart.grants);
+      break;
+    case "absent":
+    case "failed":
+      unanswered = `${which}, and the org chart could not be read just now.`;
+      break;
+    case "unread":
+      unanswered = `${which}, and the org chart has not answered yet.`;
+      break;
+  }
+  return { byServer, unanswered };
 }
 
 /**
@@ -366,7 +397,10 @@ function ToolBody({ name }: { name: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const { matches, tool, server, cold } = useTool(name);
   const { shared, entity } = useServerSharing(server);
-  const holdersByServer = useServerHolders(server);
+  const { byServer: holdersByServer, unanswered: holdersUnanswered } = useServerHolders(
+    server,
+    org,
+  );
 
   // THE CATALOGUE HAS NOT ARRIVED YET, which is not the same screen as a tool
   // that does not exist. An engine registers its builtins at boot, so an empty
@@ -470,9 +504,18 @@ function ToolBody({ name }: { name: string }) {
             a configuration read that failed must not blank them. */}
         <QueryState error={entity.error} loading={entity.loading}>
           {holders === null ? (
+            // WHICH READ WENT UNANSWERED, named: whether the server is shared
+            // is the configuration's answer, and which seats declare its
+            // credentials is the org chart's — two reads, two reasons.
             <p className="t-body muted">
-              Who holds this depends on whether <span className="mono">{server}</span> is shared,
-              and the active configuration did not answer.
+              {shared === null ? (
+                <>
+                  Who holds this depends on whether <span className="mono">{server}</span> is
+                  shared, and the active configuration did not answer.
+                </>
+              ) : (
+                holdersUnanswered
+              )}
             </p>
           ) : holders.everyone ? (
             <>

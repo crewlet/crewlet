@@ -1,27 +1,32 @@
 /**
- * Updating a draft onto a newer revision: what still applies, what is
- * dropped, and a choice for every change somebody else also made.
+ * Updating a draft onto the company as it is now: what still applies, what is
+ * already there, what is dropped, and a choice for every change somebody else
+ * also made.
  *
  * NOTHING IS REPLAYED OVER A CHANGED VALUE WITHOUT A PERSON CHOOSING. The
  * reducer's pending update is `history.rebase` of the draft's log onto the
- * revision the engine holds now, and every operation lands in one of three
- * places this dialog shows: it still applies; its target is gone, so it is
- * dropped with the reason; or a value it recorded was changed upstream, and
- * the operator keeps their value or the one now saved. The rebase is re-run
- * on every choice, so the counts on screen are always what confirming adopts,
+ * company the engine holds now — its chart and its settings — and every
+ * operation lands in one of four places this dialog shows: it still applies;
+ * the company already holds it (a save that landed part of the draft, or a
+ * colleague who made the same change); its target is gone, so it is dropped
+ * with the reason; or a value it recorded was changed upstream, and the
+ * operator keeps their value or the one now saved. The rebase is re-run on
+ * every choice, so the counts on screen are always what confirming adopts,
  * and confirming waits until every conflict has a choice.
  *
- * The same dialog restores a kept draft onto a revision that moved while the
- * tab was away; there, cancelling discards the kept draft rather than leaving
- * a draft on an older revision.
+ * The same dialog restores a kept draft onto a company that moved while the
+ * tab was away, and carries the rest of a save that stopped part way onto the
+ * company that save left; there, cancelling a restore discards the kept draft
+ * rather than leaving a draft on a company that is gone.
  *
  * A VALUE IS SHOWN AS A PERSON READS IT, NEVER AS THE BUILDER HOLDS IT. A
- * conflict about a field carries that field's values; one about a position,
- * a removal or a kind change carries node keys, placements, whole nodes or
- * the stripped fields themselves, which the model tags with their shape. Node
- * keys become names, a whole node becomes the fields that differ, stripped
- * fields are named and never valued, and a credential's mask reads as a
- * literal that is set, never as the marker, as everywhere else on the page.
+ * conflict about a field carries that field's values; one about where a node
+ * sits, a removal, an address somebody else now holds or a kind change
+ * carries node keys, whole nodes or the stripped fields themselves, which the
+ * model tags with their shape. Node keys become names, a whole node becomes
+ * the fields that differ, stripped fields are named and never valued, and a
+ * credential's mask reads as a literal that is set, never as the marker, as
+ * everywhere else on the page.
  */
 
 import { configValueKind, plural } from "~/lib/format.ts";
@@ -73,19 +78,22 @@ export function conflictCells(conflict: Conflict, nameOf: NameOf): ConflictCells
     mine: show(conflict.mine),
   });
   switch (conflict.shape) {
-    case "sibling":
-      return each((key) =>
-        key === null || key === undefined ? "Not there" : `After ${name(key)}`,
-      );
     case "parent":
       return each((key) => (key === undefined ? NOT_SET : where(key)));
-    case "placement":
-      return each((value) => {
-        if (!isRecord(value)) return NOT_SET;
-        const parent = where(value.parent);
-        return value.after === null ? `${parent}, first` : `${parent}, after ${name(value.after)}`;
-      });
     case "snapshot": {
+      // AN ADDRESS SOMEBODY ELSE NOW HOLDS: this draft created a node under
+      // it, and the company holds one there already.
+      if (conflict.address !== undefined) {
+        const label = (value: unknown) =>
+          isRecord(value) && typeof value.name === "string" && value.name !== ""
+            ? value.name
+            : conflict.address!;
+        return {
+          base: "Free",
+          theirs: `Held by ${label(conflict.theirs)}`,
+          mine: `This draft's ${label(conflict.mine)}`,
+        };
+      }
       const before = isRecord(conflict.base) ? conflict.base : {};
       const now = isRecord(conflict.theirs) ? conflict.theirs : {};
       const changed = [...new Set([...Object.keys(before), ...Object.keys(now)])].filter(
@@ -97,18 +105,6 @@ export function conflictCells(conflict: Conflict, nameOf: NameOf): ConflictCells
         mine: "Removed",
       };
     }
-    case "placed":
-      return each((value) =>
-        Array.isArray(value) && value.length > 0
-          ? value
-              .map((entry) =>
-                isRecord(entry) && isRecord(entry.json) && typeof entry.json.name === "string"
-                  ? entry.json.name
-                  : name(isRecord(entry) ? entry.key : undefined),
-              )
-              .join(", ")
-          : "None",
-      );
     case "fields": {
       // Named, never valued: these are the fields a kind change strips, and
       // several of them are credentials.
@@ -159,6 +155,9 @@ export function UpdateDraftDialog({
 }) {
   const { entries, pending } = update.result;
   const applies = entries.filter((e) => e.outcome === "applies");
+  const already = entries.filter(
+    (e): e is Extract<RebaseEntry, { outcome: "already" }> => e.outcome === "already",
+  );
   const gone = entries.filter(
     (e): e is Extract<RebaseEntry, { outcome: "gone" }> => e.outcome === "gone",
   );
@@ -194,14 +193,32 @@ export function UpdateDraftDialog({
     >
       <p>
         {update.restoring
-          ? "The configuration changed since this draft was kept. Each change in it is replayed onto the configuration as it is now."
-          : "Another revision was saved since you started editing. Each of your changes is replayed onto it."}
+          ? "The company changed since this draft was kept. Each change in it is replayed onto the company as it is now."
+          : "The company changed since you started editing. Each of your changes is replayed onto it as it is now."}
       </p>
       <p className="t-caption">
-        {applies.length === entries.length
+        {applies.length + already.length === entries.length
           ? "Every change still applies."
-          : `${applies.length} of ${plural(entries.length, "change")} still ${applies.length === 1 ? "applies" : "apply"}.`}
+          : `${applies.length + already.length} of ${plural(entries.length, "change")} still ${applies.length + already.length === 1 ? "applies" : "apply"}.`}
       </p>
+
+      {already.length > 0 && (
+        <section className="col gap-1" aria-label="Changes the company already holds">
+          <strong>Already in the company</strong>
+          <ul className="org-builder-list">
+            {already.map((entry) => (
+              <li key={entry.index}>
+                {describe(entry.op)}{" "}
+                <span className="muted">
+                  {entry.resolved && entry.resolved.length > 0
+                    ? "Part of it is saved already; the rest is kept."
+                    : "It is saved already."}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {gone.length > 0 && (
         <section className="col gap-1" aria-label="Dropped changes">

@@ -3,17 +3,18 @@
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being
- * signed in proves nothing about what the configuration answers the person
- * (their grants may not reach it), so `GET /config` is read on mount and again
+ * signed in proves nothing about what the engine answers the person (their
+ * grants may not reach it), so the company is read on mount and again
  * whenever the reader changes — another tab signing in as somebody else
- * changes this tab's cookie too — and its answer decides:
+ * changes this tab's cookie too — its settings from `GET /config` and its org
+ * chart from `GET /chart` — and the answers decide:
  *
  * | `GET /config` answers                            | The lens shows |
  * |---|---|
- * | 200                                              | edit mode |
+ * | 200, and the chart is read                       | edit mode |
  * | 404 `no_active_revision`, no company in the org  | create mode |
  * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
- * | 401 or 403                                       | the grants the refusal named, or else a request for a credential |
+ * | 401 or 403 (either read)                         | the grants the refusal named, or else a request for a credential |
  * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
@@ -22,8 +23,9 @@
  * and a refusal pauses editing rather than throwing the work away.
  *
  * WHAT THIS COMPONENT OWNS is everything with a lifetime: the reducer, the
- * dry-run check (`useCheck.ts`), the live region, the shortcuts, the
- * selection in the URL, the fullscreen container and which dialog is open.
+ * check (`useCheck.ts`), the save (`useSave.ts`), the live region, the
+ * shortcuts, the selection in the URL, the fullscreen container and which
+ * dialog is open.
  * The views and dialogs it hosts are handed in as [BuilderSurfaces] and reach
  * all of it through `BuilderContext`, so none of them starts a request.
  *
@@ -56,7 +58,7 @@ import { needsSentence } from "~/lib/refusal.ts";
 import { goSignIn } from "~/lib/session.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { refusedGrants } from "~/protocol/index.ts";
-import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
+import type { ChartRead, ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
 import {
   BuilderContext,
@@ -67,28 +69,28 @@ import {
   type ChartKind,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
-import { allUnits, locate, type Draft } from "./model/draft.ts";
-import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
+import { allSeats, allUnits, locate, type Draft } from "./model/draft.ts";
+import { chartPrint, fingerprint } from "./model/document.ts";
+import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
   builderReducer,
-  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
-  isBaseKeyed,
   type BuilderAction,
   type BuilderState,
   type LastChange,
 } from "./model/reducer.ts";
 import { describeOperation } from "./model/operations.ts";
 import type { CheckOutcome, CheckStatus } from "./model/scheduler.ts";
-import { readyToUpdate } from "./model/writes.ts";
+import { readCompany, readUpdate } from "./model/writes.ts";
 import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
 import {
   revisionOfEtag,
+  settingsChanged,
   type Clock,
-  type ConfigTransport,
+  type EngineTransport,
   type HttpAnswer,
 } from "./model/transport.ts";
 import type { DraftStorage } from "./model/persistence.ts";
@@ -100,9 +102,14 @@ import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
 import { CreateCompany, NextSteps } from "./CreateCompany.tsx";
-import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
+import {
+  clearSavedChanges,
+  markChartAppliedHere,
+  recordSavedChanges,
+  useSavedChanges,
+} from "./savedChanges.ts";
 import { browserClock, randomKeys, restTransport, sessionDraftStorage } from "./runtime.ts";
-import { useSave, type SaveEvents } from "./useSave.ts";
+import { useSave, type Finished, type SaveEvents, type Stopped } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
@@ -127,7 +134,6 @@ import {
   MoreVertGlyph,
   RedoGlyph,
   RefreshGlyph,
-  RemoveGlyph,
   SaveGlyph,
   UndoGlyph,
   WarningGlyph,
@@ -258,8 +264,9 @@ export type Posture =
       readonly kind: "edit";
       readonly document: Record<string, unknown>;
       readonly revision: string;
+      readonly chart: ChartRead;
     }
-  | { readonly kind: "create" }
+  | { readonly kind: "create"; readonly chart: ChartRead | null }
   | { readonly kind: "behind" }
   | {
       readonly kind: "guarded";
@@ -281,10 +288,28 @@ export interface OrgKnowledge {
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** Decides the lens posture from `GET /config`'s answer and the org snapshot. */
-export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boolean): Posture {
+/** A chart the read answered with, or `null` for any other answer. */
+function chartOf(answer: HttpAnswer): ChartRead | null {
+  return answer.status === 200 && isRecord(answer.body) && Array.isArray(answer.body.seats)
+    ? (answer.body as unknown as ChartRead)
+    : null;
+}
+
+/**
+ * Decides the lens posture from the two reads — `GET /config` and `GET
+ * /chart` — and the org snapshot. The settings decide the mode; the chart is
+ * required to edit, and its refusal is the reader's posture as much as the
+ * settings' would be.
+ */
+export function postureOf(
+  answer: HttpAnswer,
+  chartAnswer: HttpAnswer,
+  org: OrgKnowledge,
+  signedIn: boolean,
+): Posture {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  const chart = chartOf(chartAnswer);
   if (answer.status === 200) {
     const revision = revisionOfEtag(answer.etag);
     if (!isRecord(answer.body) || revision === null) {
@@ -294,7 +319,21 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boole
           "The engine answered without naming its active revision, so a save could not be conditional on it.",
       };
     }
-    return { kind: "edit", document: answer.body, revision };
+    if (chart) return { kind: "edit", document: answer.body, revision, chart };
+    if (chartAnswer.status === 401 || chartAnswer.status === 403) {
+      return { kind: "guarded", signedIn, grants: refusedGrants(chartAnswer.body) };
+    }
+    const chartBody = isRecord(chartAnswer.body) ? chartAnswer.body : {};
+    if (chartAnswer.status === 0) {
+      return { kind: "unreachable", detail: text(chartBody.detail) };
+    }
+    return {
+      kind: "failed",
+      detail:
+        text(chartBody.detail) ||
+        text(chartBody.error) ||
+        `The engine answered the org chart's read with status ${chartAnswer.status}.`,
+    };
   }
   if (answer.status === 401 || answer.status === 403) {
     return { kind: "guarded", signedIn, grants: refusedGrants(answer.body) };
@@ -307,7 +346,7 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boole
     // here would be refused at best. Until the snapshot has arrived, the
     // answer is not known either way.
     if (!org.known) return { kind: "loading" };
-    return org.name ? { kind: "behind" } : { kind: "create" };
+    return org.name ? { kind: "behind" } : { kind: "create", chart };
   }
   if (answer.status === 0) {
     return { kind: "unreachable", detail: text(body.detail) };
@@ -383,7 +422,7 @@ function statusLook(
     case "unreachable":
       return { label: "Could not reach the engine to check", tone: "warning", icon: CableGlyph };
     case "conflict":
-      return { label: "The configuration changed", tone: "warning", icon: WarningGlyph };
+      return { label: "The company changed", tone: "warning", icon: WarningGlyph };
     case "guarded":
       return { label: guarded.label, tone: "danger", icon: KeyGlyph };
   }
@@ -409,7 +448,14 @@ function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "confl
 // Selection in the URL
 // ---------------------------------------------------------------------------
 
-/** The URL filters that name a node: a unit by name, a seat by handle. */
+/**
+ * The URL filters that name a node, each by its ADDRESS: a unit by its key, a
+ * seat by its handle — the two names the chart resolves.
+ *
+ * NEVER A UNIT'S NAME. The name is prose the chart holds no rule about, so two
+ * teams may both be "Platform", and a link naming one by it opened whichever
+ * the walk met first.
+ */
 interface SelectionParams {
   readonly unit: string;
   readonly seat: string;
@@ -434,24 +480,24 @@ function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
   const found = locate(state.draft, key);
   if (!found) return null;
   if (found.kind === "unit") {
-    const name = found.node.data.name;
-    return name ? { unit: name, seat: "" } : null;
+    const address = found.node.data.key;
+    return address ? { unit: address, seat: "" } : null;
   }
-  const handle = handlesOf(state).get(key);
+  const handle = found.node.data.handle;
   return handle ? { unit: "", seat: handle } : null;
 }
 
 /** The node the filters name, or `null`. */
 function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | null {
   if (params.seat) {
-    const direct = seatKey(params.seat);
-    if (locate(state.draft, direct)) return direct;
-    for (const [key, handle] of handlesOf(state)) if (handle === params.seat) return key;
+    for (const { seat } of allSeats(state.draft)) {
+      if (seat.data.handle === params.seat) return seat.key;
+    }
     return null;
   }
   if (params.unit) {
     for (const { unit } of allUnits(state.draft)) {
-      if (unit.data.name === params.unit) return unit.key;
+      if (unit.data.key === params.unit) return unit.key;
     }
   }
   return null;
@@ -532,7 +578,7 @@ export function Builder({
 }: {
   surfaces: BuilderSurfaces;
   /** Injected by a suite; the browser bindings otherwise. */
-  transport?: ConfigTransport;
+  transport?: EngineTransport;
   clock?: Clock;
   /** Where the draft's log is kept; the tab's session storage otherwise. */
   storage?: DraftStorage | null;
@@ -573,7 +619,7 @@ function Lens({
   container,
 }: {
   surfaces: BuilderSurfaces;
-  transport: ConfigTransport;
+  transport: EngineTransport;
   clock: Clock;
   storage: DraftStorage | null;
   keys: KeySource;
@@ -622,9 +668,13 @@ function Lens({
   const live = useLiveRegion();
   const { announce } = live;
 
-  // ---- Reading the configuration -----------------------------------------
+  // ---- Reading the company -------------------------------------------------
 
-  const [read, setRead] = useState<{ answer: HttpAnswer; seq: number } | null>(null);
+  const [read, setRead] = useState<{
+    answer: HttpAnswer;
+    chart: HttpAnswer;
+    seq: number;
+  } | null>(null);
   const reading = useRef<{ seq: number; controller: AbortController } | null>(null);
   const readSeq = useRef(0);
   // A save loads the stored revision even though it names the base the draft
@@ -638,11 +688,11 @@ function Lens({
       const controller = new AbortController();
       reading.current = { seq, controller };
       if (force) forceLoad.current = true;
-      transport.current(controller.signal).then(
-        (answer) => {
+      Promise.all([transport.settings(controller.signal), transport.chart(controller.signal)]).then(
+        ([answer, chart]) => {
           if (reading.current?.seq !== seq) return;
           reading.current = null;
-          setRead({ answer, seq });
+          setRead({ answer, chart, seq });
         },
         () => {
           // Aborted by a newer read or by the unmount, which own the answer.
@@ -665,7 +715,7 @@ function Lens({
   const posture = useMemo(
     (): Posture =>
       read
-        ? postureOf(read.answer, { known: orgKnown, name: orgName }, signedIn)
+        ? postureOf(read.answer, read.chart, { known: orgKnown, name: orgName }, signedIn)
         : { kind: "loading" },
     [read, orgKnown, orgName, signedIn],
   );
@@ -683,28 +733,33 @@ function Lens({
     const force = forceLoad.current;
     forceLoad.current = false;
     // A DRAFT WITH WORK ON IT STAYS ON ITS BASE, whatever the read found. A
-    // newer revision is the check's to report as a conflict, and the operator
+    // newer company is the check's to report as a conflict, and the operator
     // decides what happens to the work; without work there is nothing to lose
-    // by standing on it. A forced read is no exception: it reads back what a
-    // save stored, whose own answer already keyed the base and left the lens
-    // editable, so an edit made while that read was out stands on the saved
-    // revision already, and reading the same revision over it would throw the
-    // edit away unasked for a document that differs from the one sent only by
-    // the engine's own normalization.
+    // by standing on it.
     if (posture.kind === "edit") {
-      const stale = current.mode !== "edit" || current.base.revision !== posture.revision;
+      const stale =
+        current.mode !== "edit" ||
+        current.base.revision !== posture.revision ||
+        current.base.print !== fingerprint(chartPrint(posture.chart));
       if (!loaded || ((force || stale) && !hasWork)) {
         dispatchRaw({
           type: "load",
           mode: "edit",
-          document: posture.document,
+          settings: posture.document,
           revision: posture.revision,
+          chart: posture.chart,
         });
         setLoaded(true);
       }
     } else if (posture.kind === "create") {
       if (!loaded || ((force || current.mode !== "create") && !hasWork)) {
-        dispatchRaw({ type: "load", mode: "create", document: null, revision: null });
+        dispatchRaw({
+          type: "load",
+          mode: "create",
+          settings: null,
+          revision: null,
+          chart: posture.chart,
+        });
         setLoaded(true);
       }
     }
@@ -728,13 +783,17 @@ function Lens({
     load();
   }, [viewer.loading, viewer.login, requestReset, load]);
 
-  // An org push follows every apply, so the configuration may have moved
-  // under the draft: check again rather than wait for the next edit. A create
-  // draft has no configuration to move, and hears only of one appearing: a
-  // push that names a company is exactly that, and its check is the refusal
-  // that says so.
+  // An org push follows every apply, so the company may have moved under the
+  // draft: check again rather than wait for the next edit. A create draft has
+  // no company to move, and hears only of one appearing: a push that names a
+  // company is exactly that, and its check is the refusal that says so.
+  //
+  // THE PUSH ALSO CARRIES THE ENGINE'S DERIVATION of the chart it describes
+  // — who reports to whom, the lead a unit inherits — which the reducer
+  // keeps only while it describes the base's own rows.
   const lastOrg = useRef(org);
   useEffect(() => {
+    dispatchRaw({ type: "derived", derived: org?.derived ?? null });
     if (lastOrg.current === org) return;
     lastOrg.current = org;
     if (!loaded) return;
@@ -760,24 +819,61 @@ function Lens({
     if (posture.kind === "guarded") forget();
   }, [posture.kind, forget]);
 
-  // What a save's answer leads to. A ref, because a save outlives the render
-  // that started it, and may outlive the Builder.
+  // What a save leads to. A ref, because a save outlives the render that
+  // started it, and may outlive the Builder.
   const saveEvents = useRef<SaveEvents>({
     onSending: () => {},
-    onNotLanded: () => {},
-    onLanded: () => {},
+    onSettled: () => {},
+    onFinished: () => {},
+    onStopped: () => {},
     onConflict: () => {},
-    onRefused: () => {},
   });
   const save = useSave({ stateRef, transport, keys, events: saveEvents });
+  const saving =
+    save.phase.kind === "confirming" ||
+    save.phase.kind === "saving" ||
+    save.phase.kind === "settling";
 
-  // A SAVE A PREVIOUS VISIT NEVER HEARD BACK FROM is settled before its kept
-  // log is offered: it may have landed, and the log replayed onto its own
-  // revision would apply every operation twice (see `useDraftKeeping`).
-  const { resume } = save;
-  useEffect(() => {
-    if (keeping.unsettled) resume(keeping.unsettled);
-  }, [keeping.unsettled, resume]);
+  // ---- Reading back what a save wrote -------------------------------------------
+
+  /**
+   * WHAT A SAVE WROTE IS READ BACK, NEVER ASSUMED. The engine may normalise
+   * what it stores, the chart's rows are what the next check compares with,
+   * and a save that stopped part way leaves a company that is neither the
+   * draft's base nor the draft. So after every save that wrote anything the
+   * company is read again — the chart linearizably, so the answer includes
+   * every write before it — and either becomes the base (every step landed)
+   * or the base the rest of the draft is carried onto (`updateBegin` with
+   * what landed). Editing waits for it, and a read that fails says so and
+   * offers the read again rather than leaving a base nobody read.
+   */
+  type ReadBackThen =
+    { readonly kind: "saved" } | { readonly kind: "stopped"; readonly landed: Stopped["landed"] };
+  const [readBack, setReadBack] = useState<{
+    readonly then: ReadBackThen;
+    readonly failed: string | null;
+  } | null>(null);
+  const readBackRun = useRef<AbortController | null>(null);
+  useEffect(() => () => readBackRun.current?.abort(), []);
+  const readBackCompany = useCallback(
+    async (then: ReadBackThen) => {
+      readBackRun.current?.abort();
+      const controller = new AbortController();
+      readBackRun.current = controller;
+      setReadBack({ then, failed: null });
+      const result = await readCompany(transport, controller.signal).catch(() => null);
+      if (controller.signal.aborted || result === null) return;
+      if (result.kind === "failed") {
+        setReadBack({ then, failed: result.detail });
+        return;
+      }
+      setReadBack(null);
+      markChartAppliedHere();
+      if (then.kind === "saved") dispatchRaw({ type: "saved", ...result.reading });
+      else dispatchRaw({ type: "updateBegin", ...result.reading, landed: then.landed });
+    },
+    [transport],
+  );
 
   // WHAT WAS REFUSED, from whichever answer refused it: the read of the
   // configuration, or the check of the draft against it.
@@ -789,20 +885,26 @@ function Lens({
         : [];
   const guarded = guardedWords(signedIn, refusedFor);
   const readOnlyReason = useMemo((): string | null => {
-    if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
+    if (saving) return "a save is being written";
+    if (save.unsettled) return "whether a write of the last save landed is not known yet";
+    if (readBack) {
+      return readBack.failed === null
+        ? "what the save wrote is being read back"
+        : "what the save wrote could not be read back";
+    }
+    if (keeping.waiting) return "a save sent from this tab is still being written";
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
     if (posture.kind === "guarded" || status === "guarded") return guarded.reason;
-    if (status === "conflict") return "the configuration changed since this draft was started";
-    if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
+    if (status === "conflict") return "the company changed since this draft was started";
     return null;
   }, [
+    saving,
     save.unsettled,
-    keeping.unsettled,
+    readBack,
+    keeping.waiting,
     keeping.offer,
     posture.kind,
     status,
-    loaded,
-    state,
     guarded.reason,
   ]);
   const readOnly = !loaded || readOnlyReason !== null;
@@ -974,34 +1076,30 @@ function Lens({
   const updateRead = useRef<AbortController | null>(null);
   useEffect(() => () => updateRead.current?.abort(), []);
 
-  // Reads the revision the engine holds now, and hands the reducer the update
-  // only once this node serves that revision or a later one: a node behind a
-  // load balancer can still answer with the draft's own base, and rebasing
-  // onto that would lose the change the conflict was about. `stand` is the
-  // lens with no work moving onto that revision (see below): an update of
-  // nothing, confirmed at once, so nothing is offered for review.
+  // Reads the company the engine holds now, and hands the reducer the update
+  // only once this node serves the settings revision the conflict named or a
+  // later one: a node behind a load balancer can still answer with the
+  // draft's own base, and rebasing onto that would lose the change the
+  // conflict was about. The chart needs no such wait — every read of it is
+  // linearizable. `stand` is the lens with no work moving onto that company
+  // (see below): an update of nothing, confirmed at once, so nothing is
+  // offered for review.
   const beginUpdate = useCallback(
     async (conflictRevisionId: string | null, stand = false) => {
-      const base = stateRef.current.base.revision;
-      if (base === null) return;
+      if (stateRef.current.mode !== "edit") return;
       updateRead.current?.abort();
       const controller = new AbortController();
       updateRead.current = controller;
       setUpdateNote({ busy: true, message: null });
       try {
-        const ready = await readyToUpdate(
+        const ready = await readUpdate(
           transport,
-          { baseRevision: base, conflictRevisionId },
+          { baseRevision: stateRef.current.base.revision, conflictRevisionId },
           controller.signal,
         );
         if (controller.signal.aborted) return;
         if (ready.kind === "ready") {
-          dispatchRaw({
-            type: "updateBegin",
-            document: ready.document,
-            revision: ready.revisionId,
-            derived: ready.derived,
-          });
+          dispatchRaw({ type: "updateBegin", ...ready.reading });
           // Only while there is still nothing to carry over: confirming an
           // update that carries work would drop any operation whose target
           // is gone without the operator seeing it listed.
@@ -1015,7 +1113,7 @@ function Lens({
             busy: false,
             message:
               ready.kind === "behind"
-                ? "This node has not caught up with the newer revision yet. Try again in a moment."
+                ? "This node has not caught up with the newer settings revision yet. Try again in a moment."
                 : ready.detail,
           });
         }
@@ -1030,10 +1128,12 @@ function Lens({
   const creating = state.mode === "create";
   const templateApplied = state.log.ops.some((op) => op.type === "applyTemplate");
   useEffect(() => {
-    if (conflict?.reason === "already_configured") setCompanyExists(true);
+    if (conflict?.reason === "already_configured" || conflict?.reason === "chart_exists") {
+      setCompanyExists(true);
+    }
   }, [conflict]);
 
-  // A DRAFT WITH NO WORK STANDS ON THE NEWER REVISION. The conflict flow
+  // A DRAFT WITH NO WORK STANDS ON THE NEWER COMPANY. The conflict flow
   // exists to protect the operator's changes; with none (a lens somebody is
   // only reading when a colleague saves, which the org push reports at
   // once) it would pause editing behind a banner offering to update nothing.
@@ -1041,26 +1141,25 @@ function Lens({
   // against this base, and moving the base under the offer would refuse its
   // Keep.
   //
-  // THROUGH THE UPDATE, NEVER A PLAIN READ. A document read from `GET
-  // /config` keys the seats that declare no handle by their paths until the
-  // next check answers, so every node something held lost its key for that
-  // moment: an open editor with a typed, unapplied form was drawn as gone
-  // and mounted again empty, and the selection was cleared. The update reads
-  // the newer revision with the engine's description of it
-  // (`writes.readyToUpdate`), so the base is keyed by handle at once and an
-  // existing seat keeps its key across the two revisions.
+  // THROUGH THE UPDATE, NEVER A PLAIN READ, so everything a selection or an
+  // open editor holds is carried across by the one rebase every update takes
+  // (`reducer.rekeyed`), rather than a load that starts the lens over.
   const draftIsEmpty = state.log.ops.length === 0 && state.log.undone.length === 0;
   const keptPending = keeping.pending || keeping.offer !== null;
   useEffect(() => {
     if (!conflict || !draftIsEmpty || keptPending) return;
-    if (conflict.reason === "revision_advanced" || conflict.reason === "base_moved") {
+    if (
+      conflict.reason === "revision_advanced" ||
+      conflict.reason === "base_moved" ||
+      conflict.reason === "chart_moved"
+    ) {
       void beginUpdate(conflict.currentRevisionId, true);
     }
   }, [conflict, draftIsEmpty, keptPending, beginUpdate]);
 
   // ---- Saving -------------------------------------------------------------------
 
-  const savedRevision = useSavedRevision();
+  const savedChanges = useSavedChanges();
   const [created, setCreated] = useState(false);
   // A company that appeared while a create draft was being written: the draft
   // cannot be applied to it, and must never be replayed onto it.
@@ -1104,58 +1203,59 @@ function Lens({
   saveEvents.current = {
     // These run even when the Builder has gone away while the save was out,
     // so each works on storage and the tab-lived store directly.
-    onSending: (attempt) => keeping.markWrite(attempt.writeId),
-    onNotLanded: () => keeping.markWrite(null),
-    onLanded: (landed) => {
+    onSending: (pending) => keeping.markWrite(pending),
+    onSettled: () => keeping.markWrite(null),
+    onFinished: (finished: Finished) => {
       // Recorded and cleared first: a kept log of a saved draft would be
-      // offered for replay onto its own revision.
-      recordSavedRevision({
-        revisionId: landed.revisionId,
-        parentRevisionId: landed.parentRevisionId,
-        epoch: landed.epoch,
+      // offered for replay onto the company it made.
+      recordSavedChanges({
+        settings: finished.settings,
+        chart:
+          finished.chartPosition === null
+            ? null
+            : { position: finished.chartPosition, appliedHere: finished.chartAppliedHere },
       });
       clearDraft(storage);
-      keeping.markWrite(null);
-      // A SAVE A PREVIOUS VISIT SENT IS NOT THE DRAFT ON SCREEN: this visit
-      // stands on that save's base with nothing restored, so making the draft
-      // the base would label the old document with the new revision. The
-      // revision it stored is read like any newer one instead (unforced, so
-      // it is never read over work), and a save of this visit's own draft
-      // makes that draft the base until the stored document is read back.
-      if (!landed.resumed) {
-        dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
-      }
       setReviewing(false);
-      if (landed.mode === "create") setCreated(true);
+      if (finished.mode === "create") setCreated(true);
       // THE TOAST IS THE ANNOUNCEMENT: its host is a polite live region of
       // its own, so saying the same sentence through the Builder's region as
       // well had a screen reader read it twice.
-      toast.ok(
-        landed.resumed
-          ? "The last save from this tab was stored. The engine is applying it."
-          : "Saved. The engine is applying it.",
-      );
-      load(!landed.resumed);
+      toast.ok("Saved. The engine is applying it.");
+      void readBackCompany({ kind: "saved" });
+    },
+    onStopped: (stopped: Stopped) => {
+      // WHAT LANDED STAYS LANDED. It is recorded like any save, and the rest
+      // of the draft is carried onto the company as it now is; the review
+      // stays open on the reason the save stopped.
+      recordSavedChanges({
+        settings: stopped.settings,
+        chart:
+          stopped.chartPosition === null
+            ? null
+            : { position: stopped.chartPosition, appliedHere: stopped.chartAppliedHere },
+      });
+      void readBackCompany({ kind: "stopped", landed: stopped.landed });
     },
     onConflict: ({ reason, currentRevisionId }) => {
       setReviewing(false);
       reset();
-      if (reason === "already_configured") setCompanyExists(true);
-      if (reason === "revision_advanced" || reason === "base_moved") {
+      if (reason === "already_configured" || reason === "chart_exists") setCompanyExists(true);
+      if (reason === "revision_advanced" || reason === "base_moved" || reason === "chart_moved") {
         reviewAfterUpdate.current = true;
         void beginUpdate(currentRevisionId);
       }
     },
-    onRefused: (settled) => {
-      // The refusal is the engine's answer about exactly this draft, so it is
-      // placed like a check's; asking again would only repeat it.
-      if (settled.generation === stateRef.current.generation) {
-        dispatchRaw({ type: "checked", settled });
-      } else {
-        reset();
-      }
-    },
   };
+
+  // AN UPDATE WAITING FOR CHOICES CLOSES THE REVIEW, and the review opens again
+  // once it is confirmed: the one a save that stopped part way leads to, when
+  // somebody else's writes met its rest, is a dialog over the review otherwise.
+  useEffect(() => {
+    if (!state.update || !reviewing) return;
+    setReviewing(false);
+    reviewAfterUpdate.current = true;
+  }, [state.update, reviewing]);
 
   // An update that started from a refused save goes back to the review once
   // it is confirmed: the operator was saving, and still is.
@@ -1183,11 +1283,9 @@ function Lens({
       ((byNode.get(key) ?? []) as readonly PlacedProblem[])
         .filter((p) => p.severity === severity)
         .map((p) => p.source);
-    const derived = problemsCurrent ? state.check.derived : null;
     return {
       state,
       dispatch,
-      derived: derived ? { seats: derived.seats ?? [], units: derived.units ?? [] } : null,
       problemsFor: (key) => sources(key, "problem") as ConfigProblem[],
       warningsFor: (key) => sources(key, "warning") as ConfigWarning[],
       documentProblems: problemsCurrent
@@ -1249,7 +1347,7 @@ function Lens({
   const Canvas = surfaces.canvas;
   const Table = surfaces.table;
   const fill = view === "visualization";
-  const providers = state.base.document?.providers;
+  const providers = state.base.settings?.providers;
   const llm = isRecord(providers) ? providers.llm : undefined;
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
   // providers.llm and places its seats, then holds every delivery on the
@@ -1493,7 +1591,7 @@ function Lens({
               variant="primary"
               leadingIcon={<SaveGlyph />}
               onClick={openReview}
-              disabled={!rules.review || save.unsettled}
+              disabled={!rules.review || save.unsettled || saving || readBack !== null}
               title={rules.reason ?? undefined}
             >
               Review and save
@@ -1518,8 +1616,8 @@ function Lens({
         )}
         {posture.kind === "unreachable" && (
           <Callout variant="warning" icon={<CableGlyph />}>
-            The engine could not be reached to read the configuration again. Your draft is kept on
-            this page.
+            The engine could not be reached to read the company again. Your draft is kept on this
+            page.
           </Callout>
         )}
         {(posture.kind === "failed" ||
@@ -1533,27 +1631,29 @@ function Lens({
               </Button>
             }
           >
-            The configuration could not be read again, so this draft stands on the revision it was
-            started from.
+            The company could not be read again, so this draft stands on the company it was started
+            from.
           </Callout>
         )}
         {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
             refused while the lens is read-only over it, so the way on stays
             on screen after the dialog that first offered it is closed. */}
-        {conflict && conflict.reason === "already_configured" && !companyExists && (
-          <Callout
-            variant="warning"
-            icon={<WarningGlyph />}
-            action={
-              <Button size="small" variant="primary" onClick={openExistingCompany}>
-                Discard it and open the company
-              </Button>
-            }
-          >
-            A company was created on this engine while this draft was being written, so this draft
-            cannot be saved.
-          </Callout>
-        )}
+        {conflict &&
+          (conflict.reason === "already_configured" || conflict.reason === "chart_exists") &&
+          !companyExists && (
+            <Callout
+              variant="warning"
+              icon={<WarningGlyph />}
+              action={
+                <Button size="small" variant="primary" onClick={openExistingCompany}>
+                  Discard it and open the company
+                </Button>
+              }
+            >
+              A company was created on this engine while this draft was being written, so this draft
+              cannot be saved.
+            </Callout>
+          )}
         {conflict && conflict.reason === "no_active_revision" && (
           <Callout
             variant="warning"
@@ -1575,50 +1675,50 @@ function Lens({
             cannot be saved.
           </Callout>
         )}
-        {conflict && state.mode === "edit" && conflict.reason !== "no_active_revision" && (
-          <Callout
-            variant="warning"
-            icon={<WarningGlyph />}
-            action={
-              <span className="row gap-1 wrap">
-                {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
+        {conflict &&
+          state.mode === "edit" &&
+          conflict.reason !== "no_active_revision" &&
+          conflict.reason !== "chart_exists" &&
+          conflict.reason !== "already_configured" && (
+            <Callout
+              variant="warning"
+              icon={<WarningGlyph />}
+              action={
+                <span className="row gap-1 wrap">
+                  {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
                     against that base. The Configuration screen compares with
                     the active revision unless told otherwise, and the base
                     against the active one reads every change backwards. */}
-                {state.base.revision && conflict.currentRevisionId && (
-                  <ButtonLink
+                  {state.base.revision && conflict.currentRevisionId && (
+                    <ButtonLink
+                      size="small"
+                      variant="tertiary"
+                      href={href(screenPath("config"), {
+                        lens: "diff",
+                        revision: conflict.currentRevisionId,
+                        against: state.base.revision,
+                      })}
+                    >
+                      Show what changed
+                    </ButtonLink>
+                  )}
+                  <Button
                     size="small"
-                    variant="tertiary"
-                    href={href(screenPath("config"), {
-                      lens: "diff",
-                      revision: conflict.currentRevisionId,
-                      against: state.base.revision,
-                    })}
+                    variant="primary"
+                    disabled={updateNote.busy}
+                    onClick={() => void beginUpdate(conflict.currentRevisionId)}
                   >
-                    Show what changed
-                  </ButtonLink>
-                )}
-                <Button
-                  size="small"
-                  variant="primary"
-                  disabled={updateNote.busy}
-                  onClick={() => void beginUpdate(conflict.currentRevisionId)}
-                >
-                  Update my draft
-                </Button>
-              </span>
-            }
-          >
-            The configuration changed since you started editing.
-            {updateNote.message && <span className="org-builder-note">{updateNote.message}</span>}
-          </Callout>
-        )}
-        {loaded && !isBaseKeyed(state) && status === "unreachable" && (
-          <Callout variant="warning" icon={<CableGlyph />}>
-            The engine could not be reached to describe this company. Editing starts once it
-            answers.
-          </Callout>
-        )}
+                    Update my draft
+                  </Button>
+                </span>
+              }
+            >
+              {conflict.reason === "chart_moved"
+                ? "Somebody changed the org chart since you started editing."
+                : "The settings changed since you started editing."}
+              {updateNote.message && <span className="org-builder-note">{updateNote.message}</span>}
+            </Callout>
+          )}
         {keeping.offer && (
           <Callout
             variant="info"
@@ -1655,8 +1755,8 @@ function Lens({
           <Callout variant="warning" icon={<MemoryGlyph />}>
             No model provider is configured, so no agent seat takes a turn: work sent to a seat
             waits on its inbox until one is added. The dashboard does not write providers: add one
-            with <InlineCode>crewlet config import</InlineCode> or{" "}
-            <InlineCode>PATCH /config</InlineCode>.
+            with a merge patch of <InlineCode>providers</InlineCode> to{" "}
+            <InlineCode>PATCH /config</InlineCode>, which changes nothing else.
           </Callout>
         )}
         {refusal && (
@@ -1673,28 +1773,43 @@ function Lens({
         )}
         {documentProblems.length > 0 && <DocumentProblems problems={documentProblems} />}
 
-        {savedRevision && <AfterSaveStrip saved={savedRevision} onDismiss={clearSavedRevision} />}
+        {savedChanges && <AfterSaveStrip saved={savedChanges} onDismiss={clearSavedChanges} />}
 
         {save.unsettled && !reviewing && (
           <Callout
             variant="warning"
             action={
               <span className="row gap-1 wrap">
-                <Button variant="secondary" size="small" onClick={() => void save.checkAgain()}>
-                  Check again
+                <Button variant="secondary" size="small" onClick={() => void save.retry()}>
+                  Retry
                 </Button>
-                {/* A save a previous visit sent has no draft on screen to
-                    review: its log waits in storage until the save is known. */}
-                {changed && (
-                  <Button size="small" variant="primary" onClick={openReview}>
-                    Open the review
-                  </Button>
-                )}
+                <Button size="small" variant="primary" onClick={() => setReviewing(true)}>
+                  Open the review
+                </Button>
               </span>
             }
           >
-            The engine did not confirm whether the last save was stored. Editing is paused until it
-            does.
+            The engine did not confirm whether a write of the last save landed. Editing is paused
+            until it does: Retry sends the same write again, which the engine answers rather than
+            writes twice.
+          </Callout>
+        )}
+        {readBack?.failed && (
+          <Callout
+            variant="warning"
+            icon={<CableGlyph />}
+            action={
+              <Button
+                variant="secondary"
+                size="small"
+                onClick={() => void readBackCompany(readBack.then)}
+              >
+                Read it again
+              </Button>
+            }
+          >
+            The save was written, and reading back what it wrote failed: {readBack.failed} Editing
+            waits for the read, so the draft stands on what the engine holds.
           </Callout>
         )}
 
@@ -1738,9 +1853,7 @@ function Lens({
             status={status}
             rules={rules}
             writeId={save.writeId}
-            phase={save.phase}
-            onSave={(summary) => void save.save(summary)}
-            onCheckAgain={() => void save.checkAgain()}
+            save={save}
             onClose={() => {
               save.acknowledge();
               setReviewing(false);
@@ -1850,36 +1963,44 @@ function ReviewPanel({
   status,
   rules,
   writeId,
-  phase,
-  onSave,
-  onCheckAgain,
+  save,
   onClose,
 }: {
   state: BuilderState;
   status: CheckStatus;
   rules: ReturnType<typeof saveRules>;
   writeId: string;
-  phase: Parameters<typeof ReviewSaveDialog>[0]["phase"];
-  onSave: (summary: string) => void;
-  onCheckAgain: () => void;
+  save: ReturnType<typeof useSave>;
   onClose: () => void;
 }) {
   const current = state.check.generation === state.generation;
   const changes = useMemo(
     () =>
       deriveChanges({
-        base: { draft: state.baseDraft, derived: state.base.derived },
-        next: { draft: state.draft, derived: current ? state.check.derived : null },
+        base: state.baseDraft,
+        next: state.draft,
         ops: state.log.ops,
         reports: state.reports,
       }),
-    [state, current],
+    [state],
   );
   const outcome = current ? state.check.outcome : null;
+  // A PERSON'S CONTACT IS IN THE RUNTIME HALF, so a reader the chart did not
+  // show that half cannot tell a seat with none from one they were not shown.
   const withoutContact = useMemo(
     () =>
-      seatsWithoutContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
-    [state.draft],
+      state.base.runtimeVisible
+        ? seatsWithoutContact(state.draft).map(
+            (key) => locate(state.draft, key)?.node.data.name ?? "",
+          )
+        : [],
+    [state.draft, state.base.runtimeVisible],
+  );
+  const nameOf = useCallback(
+    (key: NodeKey) =>
+      nameIn(key, [state.draft, state.baseDraft]) ??
+      (key === COMPANY_KEY ? "the company" : "an unnamed node"),
+    [state.draft, state.baseDraft],
   );
   return (
     <ReviewSaveDialog
@@ -1887,17 +2008,35 @@ function ReviewPanel({
       changes={changes}
       rules={rules}
       status={status}
-      warnings={outcome?.status === "clean" ? outcome.warnings : []}
+      warnings={
+        outcome?.status === "clean" || outcome?.status === "problems"
+          ? outcome.findings.filter((f) => f.severity === "warning")
+          : []
+      }
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
       withoutContact={withoutContact}
+      writesSettings={hasSettingsWrite(state)}
+      runtimeVisible={state.base.runtimeVisible}
       writeId={writeId}
-      phase={phase}
-      onSave={onSave}
-      onCheckAgain={onCheckAgain}
+      phase={save.phase}
+      run={save.run}
+      nameOf={nameOf}
+      onSave={(summary) => void save.save(summary)}
+      onRetry={() => void save.retry()}
       onClose={onClose}
     />
   );
+}
+
+/** Whether a save of the state writes the settings: always to create a company, else when they changed. */
+function hasSettingsWrite(state: BuilderState): boolean {
+  return settingsChanged({
+    mode: state.mode,
+    baseRevision: state.base.revision,
+    base: state.base.settings,
+    draft: state.draft.company,
+  });
 }
 
 /**

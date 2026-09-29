@@ -1,12 +1,12 @@
 /**
  * The marks a builder node carries, on a chart node and in a table cell.
  *
- * NEUTRAL, EXCEPT WHERE A MARK IS A STATE. A seat's kind, its placement by a
- * unit reference and its Datadog fallback role are facts about identity and
- * wiring, so they are drawn in the neutral ink like every other identity on
- * the dashboard (design rule 1). A problem count is a state and takes the
- * critical tone; a reference that names no unit is a caution; a seat's live
- * state is the `StateBadge` every other screen uses.
+ * NEUTRAL, EXCEPT WHERE A MARK IS A STATE. A seat's kind and its Datadog
+ * fallback role are facts about identity and wiring, so they are drawn in the
+ * neutral ink like every other identity on the dashboard (design rule 1). A
+ * problem count is a state and takes the critical tone; a reference that
+ * names nothing is a caution; a seat's live state is the `StateBadge` every
+ * other screen uses.
  *
  * ONE DRAWING OF ONE FACT, on both surfaces. A wiring mark is a fixed-size
  * glyph riding the caption, named for a reader who cannot see it and titled
@@ -19,10 +19,11 @@
  * badge and the problem count sit in slots that keep their room whether or not
  * they hold anything (`.bnode-state` and `.bnode-count`, and the chart node's
  * own trailing slot), every glyph mark is a fixed size, and the marks of a
- * reference that names nothing come from the chart, which holds them while the
- * node still writes what the check warned about. So a push twice per tool-loop
- * round, and a check after every edit, change a badge's text and never a
- * node's measured size, which is what the canvas lays out by.
+ * reference that names nothing come from the chart's own reading of the draft,
+ * which holds them for exactly as long as the node writes the reference. So a
+ * push twice per tool-loop round, and a check after every edit, change a
+ * badge's text and never a node's measured size, which is what the canvas lays
+ * out by.
  */
 
 import type { ReactNode } from "react";
@@ -43,7 +44,6 @@ import {
   AccountTreeGlyph,
   ApartmentGlyph,
   CycleGlyph,
-  LinkGlyph,
   NotificationsGlyph,
   PersonGlyph,
   WarningGlyph,
@@ -113,14 +113,19 @@ export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSiz
   return <CrewletIcon width={side} height={side} />;
 }
 
-/** A seat's handle as written beside its name, or what stands in for one not reported yet. */
-export function handleLabel(handle: string | undefined): string {
-  return handle ? `@${handle}` : "Handle after the check";
+/** A seat's handle as written beside its name. */
+export function handleLabel(handle: string): string {
+  return `@${handle}`;
 }
 
-/** A seat's primary manager, "No manager", or what stands in while no check of this draft has said. */
+/**
+ * A seat's primary manager, "No manager", or what stands in while the engine
+ * has not derived it for this draft: it derives the SAVED chart only, so a
+ * draft that changed it has a manager nobody has worked out yet
+ * (`chartModel.ts`).
+ */
 export function managerLabel(manager: string | null | undefined): string {
-  if (manager === undefined) return "Manager after the check";
+  if (manager === undefined) return "Not derived yet";
   return manager ?? "No manager";
 }
 
@@ -161,9 +166,9 @@ export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeK
 }
 
 /**
- * The live state of a saved agent seat. Looked up by the handle and name the
- * SAVED company gives it, because that is what the running seat is called
- * until this draft is saved and applied.
+ * The live state of a saved agent seat. Looked up by the handle the SAVED
+ * chart gives it, because that is what the running seat answers to until this
+ * draft is saved and applied.
  */
 export function LiveState({
   api,
@@ -184,10 +189,11 @@ export function LiveState({
   compact?: boolean;
 }) {
   if (!view.running || !view.saved) return null;
-  const { handle, name } = view.saved;
-  const agent =
-    (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
-    api.agents.find((a) => a.role === name);
+  // BY THE SAVED HANDLE, which is what the running seat answers to: a handle
+  // this draft changed is not one the engine knows yet, and a name is prose
+  // two seats may share.
+  const { handle } = view.saved;
+  const agent = api.agents.find((a) => a.handle === handle);
   if (compact) {
     const state = runState(agent, api.sandboxes);
     const said = stateLabel(state);
@@ -213,21 +219,16 @@ export function unitMarkNotes(view: UnitView): string[] {
 
 /** What a seat's marks say, as sentences: one list, drawn two ways. */
 export function seatMarkNotes(view: SeatView): string[] {
-  const notes: string[] = [];
-  if (view.placedByRef) notes.push("Declared at the root with a unit reference");
-  if (view.danglingUnitRef) {
-    notes.push(view.danglingNote ?? `No unit named ${view.danglingUnitRef}`);
-  }
+  const notes: string[] = [...view.danglingNotes];
   if (view.datadogFallback) notes.push("Alerts that name no seat wake this seat");
   return notes;
 }
 
 /**
- * A unit's lead that names no seat, as the engine warned. The lead chip shows
- * the name as written, and a name that reads like a seat must not look like
- * one that resolves. Read from the chart (`UnitView.danglingLead`), which
- * holds it while the unit still writes what the check warned about, so a
- * check going out does not take it off the node and change its size.
+ * A unit's lead that names no seat. The lead chip shows the handle as
+ * written, and a handle that reads like a seat's must not look like one that
+ * resolves. Read from the chart (`UnitView.danglingLead`), which holds it for
+ * exactly as long as the unit writes it.
  *
  * A GLYPH, because this is drawn on a chart node one rank tall. It is named
  * for a reader who cannot see it, so the warning is not carried by the drawing
@@ -238,18 +239,17 @@ export function UnitMarks({ view }: { view: UnitView }) {
   return <Mark note={view.danglingNote ?? "Lead names no seat"} glyph={WarningGlyph} />;
 }
 
-/** The wiring marks of a seat, as glyphs: see [UnitMarks]. */
+/**
+ * The wiring marks of a seat, as glyphs: see [UnitMarks]. A `manages:` entry
+ * that names nothing is ONE mark however many there are, carrying every
+ * sentence: a node one rank tall has room for a fixed number of glyphs.
+ */
 export function SeatMarks({ view }: { view: SeatView }) {
-  const dangling = view.danglingUnitRef;
-  if (!view.placedByRef && !dangling && !view.datadogFallback) return null;
+  const dangling = view.danglingNotes;
+  if (dangling.length === 0 && !view.datadogFallback) return null;
   return (
     <>
-      {view.placedByRef && (
-        <Mark note="Declared at the root with a unit reference" glyph={LinkGlyph} />
-      )}
-      {dangling && (
-        <Mark note={view.danglingNote ?? `No unit named ${dangling}`} glyph={WarningGlyph} />
-      )}
+      {dangling.length > 0 && <Mark note={dangling.join(" ")} glyph={WarningGlyph} />}
       {view.datadogFallback && (
         <Mark note="Alerts that name no seat wake this seat" glyph={NotificationsGlyph} />
       )}

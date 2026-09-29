@@ -5,32 +5,29 @@
  * A KEY IS AN ORIGIN, NOT A POSITION AND NOT A NAME. An operation says which
  * node it acts on, and it has to keep meaning the same node when the draft is
  * rebuilt from its base (every undo), when the base is replaced by a newer
- * revision (a rebase), and when the log is read back from storage after a
- * reload. So:
+ * reading of the chart (a rebase), and when the log is read back from storage
+ * after a reload. So:
  *
- * - A node that exists in the base is keyed by the identity the ENGINE gives
- *   it: `seat:<handle>` with the handle the engine derived, `unit:<name>`.
- *   Those are the identities its memory, mailbox, schedules, onboarding pages
- *   and masked credentials attach to, so two revisions that hold "the same
- *   seat" in the engine's sense hold it under the same key, wherever it sits.
- *   A name is never the key of a seat: a rename keeps the handle (the builder
- *   pins it), and a different seat created under an old name gets a different
- *   handle and therefore a different key, so an operation recorded against
- *   the original never lands on it.
- * - The authored path is the key only where the engine's identity cannot
- *   name one node: a base stored before unit names had to be unique that holds
- *   two units of one name, a unit with no name, and a seat whose handle the
- *   engine has not reported. Such a key is honest for that one base and names
- *   nothing after a rebase, which then reports the operation's target as gone
- *   rather than guessing.
+ * - A node that exists in the base is keyed by its IDENTITY in the org chart:
+ *   the address it was CREATED under, `seat:<handle>` and `unit:<key>` — the
+ *   chart's `origin_handle` / `origin_key`, or its address where it has never
+ *   been renamed. Not its current address: a rename keeps the object and moves
+ *   the address, and a retired alias may later be claimed by a NEW object, so
+ *   a key that followed the address would carry an edit of the renamed seat
+ *   onto the newcomer. The identity is what the engine keys the seat's
+ *   mailbox, memory and agent id on, and what it never issues twice, so two
+ *   readings of the chart that hold "the same seat" hold it under the same key
+ *   wherever it sits and whatever it is called. A NAME is never a key: it is
+ *   prose a person reads, and the chart lets two seats share one.
  * - A node an operation created is keyed by a value MINTED IN THE EVENT
  *   HANDLER and written into that operation. Never in a reducer (React may
  *   run a reducer twice) and never during replay (a replay must rebuild the
- *   same keys every time, or the operations after it address nothing).
+ *   same keys every time, or the operations after it address nothing). It is
+ *   not its handle, because a handle chosen for a seat this draft created may
+ *   still change before the save.
  *
- * Keys live only in the builder. They are never written into the
- * configuration document: the engine has no field for them, and a document
- * carrying one would be refused as an unknown field.
+ * Keys live only in the builder. They are never written to the engine: the
+ * chart has no field for them.
  */
 
 /** A builder node's stable name. */
@@ -41,33 +38,26 @@ export const COMPANY_KEY: NodeKey = "company";
 
 const SEAT = "seat:";
 const UNIT = "unit:";
-const SEAT_AT = "seat@";
-const UNIT_AT = "unit@";
 const MINTED = "new:";
 
-/** An existing seat, by the handle the engine derived or the document declares. */
-export function seatKey(handle: string): NodeKey {
-  return SEAT + handle;
+/** An existing seat, by the handle it was created under (its identity). */
+export function seatKey(origin: string): NodeKey {
+  return SEAT + origin;
 }
 
-/** An existing unit, by its name. */
-export function unitKey(name: string): NodeKey {
-  return UNIT + name;
+/** An existing unit, by the key it was created under (its identity). */
+export function unitKey(origin: string): NodeKey {
+  return UNIT + origin;
 }
 
-/** An existing seat the engine's identity cannot name, by its authored path in the base. */
-export function seatPathKey(path: string): NodeKey {
-  return SEAT_AT + path;
-}
-
-/** An existing unit the engine's identity cannot name, by its authored path in the base. */
-export function unitPathKey(path: string): NodeKey {
-  return UNIT_AT + path;
-}
-
-/** The handle an existing seat's key carries, or `undefined` for any other key. */
+/** The identity an existing seat's key carries, or `undefined` for any other key. */
 export function handleOfKey(key: NodeKey): string | undefined {
   return key.startsWith(SEAT) ? key.slice(SEAT.length) : undefined;
+}
+
+/** The identity an existing unit's node key carries, or `undefined` for any other key. */
+export function unitKeyOf(key: NodeKey): string | undefined {
+  return key.startsWith(UNIT) ? key.slice(UNIT.length) : undefined;
 }
 
 /** Whether a key was minted for a node an operation created. */
@@ -87,7 +77,7 @@ export function isNodeKey(value: unknown): value is NodeKey {
   if (typeof value !== "string") return false;
   if (value === COMPANY_KEY) return true;
   if (MINTED_PATTERN.test(value)) return true;
-  for (const prefix of [SEAT, UNIT, SEAT_AT, UNIT_AT]) {
+  for (const prefix of [SEAT, UNIT]) {
     if (value.startsWith(prefix) && value.length > prefix.length) return true;
   }
   return false;

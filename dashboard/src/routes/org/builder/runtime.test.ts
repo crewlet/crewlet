@@ -53,7 +53,7 @@ test("a refusal resolves with the engine's status and body", async () => {
 
 test("a request that never reached the engine resolves as status 0", async () => {
   stub(() => Promise.reject(new TypeError("Failed to fetch")));
-  const answer = await restTransport.current(new AbortController().signal);
+  const answer = await restTransport.settings(new AbortController().signal);
   expect(answer.status).toBe(0);
 });
 
@@ -69,14 +69,14 @@ test("an aborted request rejects rather than resolving as unreachable", async ()
       ),
   );
   const controller = new AbortController();
-  const pending = restTransport.current(controller.signal);
+  const pending = restTransport.settings(controller.signal);
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 });
 
 test("a success carries the entity tag that names the revision", async () => {
   stub(async () => json({ name: "Acme" }, 200, { ETag: '"r1"' }));
-  const answer = await restTransport.current(new AbortController().signal);
+  const answer = await restTransport.settings(new AbortController().signal);
   expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"r1"' });
 });
 
@@ -84,6 +84,34 @@ test("a revision is read by its id, encoded into the path", async () => {
   const calls = stub(async () => json({ revision_id: "a/b" }, 200));
   await restTransport.revision("a/b", new AbortController().signal);
   expect(new URL(calls[0]!.url).pathname).toBe("/config/revisions/a%2Fb");
+});
+
+test("the chart is read with its runtime half asked for, which the engine serves where the reader may see it", async () => {
+  const calls = stub(async () => json({ units: [], seats: [], runtime: true }, 200));
+  await restTransport.chart(new AbortController().signal);
+  const url = new URL(calls[0]!.url);
+  expect(url.pathname).toBe("/chart");
+  expect(url.searchParams.get("runtime")).toBe("true");
+});
+
+test("a chart write carries the operation id a retry must resend", async () => {
+  const calls = stub(async () =>
+    json({ outcome: "applied", position: "L@1:2", op_id: "w-1" }, 200),
+  );
+  await restTransport.send(
+    {
+      method: "PATCH",
+      path: "/chart/seats/dev",
+      query: {},
+      contentType: "application/json",
+      headers: { "Idempotency-Key": "w-1" },
+      body: { goal: "Ship" },
+    },
+    new AbortController().signal,
+  );
+  const { url, init } = calls[0]!;
+  expect(new URL(url).pathname).toBe("/chart/seats/dev");
+  expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("w-1");
 });
 
 test("the dry run and the save carry exactly the request the model built", async () => {

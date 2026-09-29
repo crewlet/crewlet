@@ -33,7 +33,8 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { documentUnits, indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { useChartRead } from "~/lib/chartReads.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { needsSentence } from "~/lib/refusal.ts";
@@ -44,7 +45,7 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { DateCell, NumberCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { isLogRefusal, type PageContainer, type PageSummary } from "~/protocol/index.ts";
+import type { ChartRead, PageContainer, PageSummary } from "~/protocol/index.ts";
 // THE BROWSE'S OWN SPELLING of a page's address and of a link that peeks,
 // rather than a second one here: a hit, a grid row and a container's page list
 // must resolve to the same `peek=` token, or the stepper walks past the page
@@ -388,9 +389,9 @@ function containerFacts({
   /** The page list has not answered — it is still in flight, or it failed. */
   unread: boolean;
   /**
-   * The units whose `space:` names this container, or NULL when the company
-   * document could not be read: `space` is guarded, so an anonymous reader
-   * does not know who files here, and an empty list would say nobody does.
+   * The units whose `space:` names this container, or NULL when the org chart
+   * could not be read: `space` is guarded, so an anonymous reader does not
+   * know who files here, and an empty list would say nobody does.
    */
   units: { name: string }[] | null;
   /** Why [units] is null, as the sentence the fact shows in its place. */
@@ -426,7 +427,7 @@ function containerFacts({
       note: capped ? "newest of the pages this read returned" : undefined,
     },
     {
-      // WHO WRITES HERE, from the CONFIG rather than from the pages: a unit's
+      // WHO WRITES HERE, from the CHART rather than from the pages: a unit's
       // `space:` is what sends its seats' pages into this container, so it
       // answers the question even for a container nobody has written in yet.
       // The panel below answers the other half — who actually has.
@@ -500,34 +501,34 @@ export function ContainerPeek({ id }: { id: string }) {
   // WHO FILES HERE IS GUARDED. A unit's `space:` is the knowledge container
   // it owns, and `internal/api/orgprojection_test.go` classifies it as guarded
   // ("a knowledge container key: where this unit's pages are written"), so the
-  // anonymous org projection carries none of it and this is read from the
-  // company document. NULL rather than an empty list when it could not be:
-  // "no unit files here" is a fact about the company and an unread document is
-  // not evidence for it.
+  // anonymous org projection carries none of it and this is read from the org
+  // chart, which states it on every unit row — the runtime half is not needed.
+  // It was the company document, which holds no units any more: the chart
+  // left it for a log of its own, so the list was empty for every container.
+  // NULL rather than an empty list when it could not be read: "no unit files
+  // here" is a fact about the company and an unread chart is not evidence for
+  // it. Re-read on every org push, which follows a chart write that landed.
   //
   // A UNIT'S `space:` IS CASE-INSENSITIVE against the key, because the engine
-  // upper-cases a container key on the way in and a config file says whatever
-  // its author typed.
-  const doc = useQuery("config", undefined, { enabled: id !== "" });
+  // upper-cases a container key on the way in and whoever wrote the unit wrote
+  // whatever they typed.
+  const chart = useChartRead<ChartRead>(id !== "" ? "/chart" : null, undefined, org);
   const units = useMemo(() => {
-    if (doc.error || !doc.data) return null;
-    return documentUnits(doc.data)
+    if (chart.state !== "read") return null;
+    return (chart.value.units ?? [])
       .filter((u) => (u.space ?? "").toUpperCase() === id.toUpperCase())
-      .map((u) => ({ name: u.name }));
-  }, [doc.data, doc.error, id]);
+      .map((u) => ({ name: u.name || u.key }));
+  }, [chart, id]);
   // WHY THERE IS NO ANSWER, said three ways because they are three facts. It
   // printed "Needs an operator token to read" for all of them: to a reader
-  // signed in without `config:read` (who lacks a grant, not a token), to a
-  // node still catching up, and to a read that simply had not come back.
+  // who lacks a grant rather than a token, to a node still catching up, and to
+  // a read that simply had not come back.
   const unitsWithheld =
-    doc.error === "unauthorized"
-      ? needsSentence(
-          "Reading who files here",
-          doc.refusal && !isLogRefusal(doc.refusal) ? doc.refusal.grants : [],
-        )
-      : doc.error
-        ? "The company document could not be read just now"
-        : "The company document has not answered yet";
+    chart.state === "refused"
+      ? needsSentence("Reading who files here", chart.grants)
+      : chart.state === "failed"
+        ? "The org chart could not be read just now"
+        : "The org chart has not answered yet";
 
   return (
     <>

@@ -10,15 +10,14 @@
 
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
+import type { AgentRow, ChartRead, ChartSeat } from "~/protocol/index.ts";
 import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { locate } from "./model/draft.ts";
 import { getPath } from "./model/json.ts";
-import { builderReducer, type BuilderState } from "./model/reducer.ts";
-import { fixtureCompany } from "./model/testkit.ts";
-import { toDocument } from "./model/document.ts";
+import type { BuilderState } from "./model/reducer.ts";
+import { chartOf, fixtureChart, fixtureSettings, strippedChart } from "./model/testkit.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
-import { keyedState } from "./testState.ts";
+import { checkedEdit, record } from "./testState.ts";
 import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
@@ -36,31 +35,47 @@ function open(state: BuilderState, key: string, options: HarnessOptions = {}) {
 const confirm = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 const toHuman = () => confirm("Change to human seat");
 
-function withFields(): CompanyDocument {
-  const doc = fixtureCompany();
-  doc.units![0]!.roles![1] = {
+/** The fixture chart with Dev's seat replaced by `dev`. */
+function withDev(dev: Omit<ChartSeat, "handle" | "unit">): ChartRead {
+  const chart = fixtureChart();
+  chart.seats = chart.seats.map((s) =>
+    s.handle === "dev" ? { handle: "dev", unit: "engineering", ...dev } : s,
+  );
+  return chart;
+}
+
+/** Dev carrying what a human seat may not: a model, a budget, and its tools' credentials. */
+function withFields(): ChartRead {
+  return withDev({
     name: "Dev",
     goal: "Build",
-    llm: "fast",
-    token_budget: 10,
     behavioral_guidelines: ["Be kind"],
-    mcp_env: { tracker: { TOKEN: "__redacted__" } },
-    integrations: {
+    runtime: {
+      llm: "fast",
+      token_budget: 10,
+      mcp_env: { tracker: { TOKEN: "__redacted__" } },
       slack: { bot_token: "${DEV_SLACK}", signing_secret: "${DEV_SIGN}", channel: "C1" },
       github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_KEY}" },
     },
-  };
-  return doc;
+  });
 }
 
+const devData = (state: BuilderState) => {
+  const seat = locate(state.draft, "seat:dev");
+  return seat?.kind === "seat" ? seat.node.data : undefined;
+};
+
 test("the fields the change removes are named, the credential ones as gone for good", () => {
-  const view = open(keyedState(withFields()), "seat:dev");
+  const view = open(checkedEdit(withFields()), "seat:dev");
   expect(screen.getByText("llm")).toBeDefined();
   expect(screen.getByText("token_budget")).toBeDefined();
-  for (const credential of ["integrations.slack", "mcp_env", "integrations.github"]) {
+  expect(screen.getByText("behavioral_guidelines")).toBeDefined();
+  for (const credential of ["slack", "mcp_env", "github"]) {
     const item = screen.getByText(credential).closest("li") as HTMLElement;
     expect(item.textContent).toContain("holds credentials, which are gone for good");
   }
+  // The control: a field that is not a credential is not called one.
+  expect(screen.getByText("llm").closest("li")!.textContent).not.toContain("credentials");
   expect(
     screen.getByText("Dev stops running. Its memory is kept but unused while it is a human seat."),
   ).toBeDefined();
@@ -71,7 +86,7 @@ test("the fields the change removes are named, the credential ones as gone for g
 // stay, and so do the entries its removed fields referenced, exactly as for a
 // deleted seat. A seat this draft created was never saved and has none.
 test("what stays at the vendors and in the secret store is named, and nothing for a new seat", () => {
-  const view = open(keyedState(withFields()), "seat:dev");
+  const view = open(checkedEdit(withFields()), "seat:dev");
   const entry = screen.getByText(/the GitHub App acme-dev/);
   expect(entry.textContent).toContain("its Slack app");
   for (const name of ["DEV_KEY", "DEV_SLACK", "DEV_SIGN"])
@@ -80,17 +95,14 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
   expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
   cleanup();
 
-  const added = builderReducer(keyedState(fixtureCompany()), {
-    type: "record",
-    intent: {
-      type: "addSeat",
-      key: "new:qa",
-      placement: { parent: "unit:Sales", after: null },
-      data: {
-        name: "QA",
-        mcp_env: { tracker: { TOKEN: "${QA_TRACKER}" } },
-        integrations: { slack: { channel: "C9" } },
-      },
+  const added = record(checkedEdit(), {
+    type: "addSeat",
+    key: "new:qa",
+    placement: { parent: "unit:sales" },
+    data: {
+      handle: "qa",
+      name: "QA",
+      runtime: { mcp_env: { tracker: { TOKEN: "${QA_TRACKER}" } }, slack: { channel: "C9" } },
     },
   });
   open(added, "new:qa");
@@ -107,7 +119,7 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
 // only through the dashboard has none to give — so the dialog must not demand
 // one, and a change made without one writes no contact block at all.
 test("a human seat is made without a contact identity, and writes no contact block", () => {
-  const view = open(keyedState(withFields()), "seat:dev");
+  const view = open(checkedEdit(withFields()), "seat:dev");
   expect(toHuman().disabled).toBe(false);
   fireEvent.click(toHuman());
   expect(view.state().log.ops[0]).toMatchObject({
@@ -116,55 +128,56 @@ test("a human seat is made without a contact identity, and writes no contact blo
     after: "human",
   });
   expect(view.state().log.ops[0]).not.toHaveProperty("contact");
-  const seat = locate(view.state().draft, "seat:dev");
-  expect(seat?.kind === "seat" && seat.node.data).toEqual({
-    name: "Dev",
-    kind: "human",
-    goal: "Build",
-  });
+  const data = devData(view.state());
+  expect(data).toMatchObject({ handle: "dev", name: "Dev", kind: "human", goal: "Build" });
+  expect(getPath(data, ["runtime", "contact"])).toBeUndefined();
+  expect(getPath(data, ["runtime", "llm"])).toBeUndefined();
+  expect(data).not.toHaveProperty("behavioral_guidelines");
 });
 
 test("a contact identity given to a human seat is recorded in one operation", () => {
-  const view = open(keyedState(withFields()), "seat:dev");
+  const view = open(checkedEdit(withFields()), "seat:dev");
   pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "dev" } });
   expect(toHuman().disabled).toBe(false);
   fireEvent.click(toHuman());
+  expect(view.state().log.ops).toHaveLength(1);
   expect(view.state().log.ops[0]).toMatchObject({
     type: "changeKind",
     target: "seat:dev",
     after: "human",
     contact: { github_login: "dev" },
   });
-  const seat = locate(view.state().draft, "seat:dev");
-  expect(seat?.kind === "seat" && seat.node.data).toEqual({
+  expect(devData(view.state())).toEqual({
+    handle: "dev",
     name: "Dev",
     kind: "human",
     goal: "Build",
-    contact: { github_login: "dev" },
+    runtime: { contact: { github_login: "dev" } },
   });
   expect(view.onClose).toHaveBeenCalledTimes(1);
 });
 
 test("the Datadog fallback cannot become a human seat without a replacement", () => {
-  const view = open(keyedState(fixtureCompany()), "seat:sre");
+  const view = open(checkedEdit(), "seat:sre");
   pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "sre" } });
   expect(toHuman().disabled).toBe(true);
   expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
-  pick(screen.getByLabelText("Datadog fallback"), "Dev");
+  pick(screen.getByLabelText("Datadog fallback"), "Dev (@dev)");
   fireEvent.click(toHuman());
-  expect(
-    getPath(toDocument(view.state().draft).document, ["integrations", "datadog", "route_to"]),
-  ).toBe("dev");
+  expect(getPath(view.state().draft.company, ["integrations", "datadog", "route_to"])).toBe("dev");
 });
 
 // A switched-off Datadog wakes nobody and the engine requires no fallback of
 // it, so the seat its route_to names changes kind like any other.
 test("a seat named by a switched-off Datadog becomes human with no replacement", () => {
-  const off = fixtureCompany();
-  off.integrations = { ...off.integrations, datadog: { enabled: false, route_to: "sre" } };
-  const view = open(keyedState(off), "seat:sre");
+  const settings = fixtureSettings();
+  settings.integrations = {
+    ...settings.integrations,
+    datadog: { enabled: false, route_to: "sre" },
+  };
+  const view = open(checkedEdit(fixtureChart(), {}, settings), "seat:sre");
   expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
   pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText(/^GitHub login/), { target: { value: "sre" } });
@@ -176,12 +189,14 @@ test("a seat named by a switched-off Datadog becomes human with no replacement",
 // only agent seat would otherwise leave a button that never becomes available
 // beside a picker with nothing in it.
 test("the company's only agent seat is told why it cannot become human, not offered an empty choice", () => {
-  const doc: CompanyDocument = {
-    name: "X",
-    integrations: { datadog: { enabled: true, route_to: "only" } },
-    roles: [{ name: "Only" }, { name: "Pat", kind: "human", contact: { github_login: "pat" } }],
-  };
-  open(keyedState(doc), "seat:only");
+  const chart = chartOf({
+    seats: [
+      { handle: "only", name: "Only" },
+      { handle: "pat", name: "Pat", kind: "human", runtime: { contact: { github_login: "pat" } } },
+    ],
+  });
+  const settings = { name: "X", integrations: { datadog: { enabled: true, route_to: "only" } } };
+  open(checkedEdit(chart, {}, settings), "seat:only");
   expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
   expect(
     screen.getByText(
@@ -194,32 +209,35 @@ test("the company's only agent seat is told why it cannot become human, not offe
 });
 
 test("a schedule the change strands, and the seat's work in flight, are said first", () => {
-  const doc: CompanyDocument = {
-    name: "X",
+  const chart = chartOf({
     units: [
       {
+        key: "team",
         name: "Team",
-        lead: "Lead",
-        schedules: [{ name: "standup", cron: "0 9 * * *", task: "Standup", target: "lead" }],
-        roles: [{ name: "Lead" }, { name: "Member" }],
+        lead: "lead",
+        runtime: {
+          schedules: [{ name: "standup", cron: "0 9 * * *", task: "Standup", target: "lead" }],
+        },
       },
     ],
-  };
+    seats: [
+      { handle: "lead", name: "Lead", unit: "team" },
+      { handle: "member", name: "Member", unit: "team" },
+    ],
+  });
   const agents: AgentRow[] = [{ id: "1", role: "Lead", handle: "lead", state: "working" }];
-  open(keyedState(doc), "seat:lead", { agents });
+  open(checkedEdit(chart), "seat:lead", { agents });
   expect(screen.getByText(/Schedule standup on Team would have no runner/)).toBeDefined();
   expect(screen.getByText(/Lead is working now/)).toBeDefined();
 });
 
 test("a human seat becomes an agent seat again, losing the fields an agent may not carry", () => {
-  const doc = fixtureCompany();
-  doc.units![0]!.roles![1] = {
+  const chart = withDev({
     name: "Dev",
     kind: "human",
-    contact: { github_login: "dev" },
-    availability: "Weekdays",
-  };
-  const view = open(keyedState(doc), "seat:dev");
+    runtime: { contact: { github_login: "dev" }, availability: "Weekdays" },
+  });
+  const view = open(checkedEdit(chart), "seat:dev");
   expect(
     screen.getByText(
       "Dev starts running as an agent once the engine applies the change, on the company's model providers.",
@@ -228,14 +246,29 @@ test("a human seat becomes an agent seat again, losing the fields an agent may n
   expect(screen.getByText("contact")).toBeDefined();
   expect(screen.getByText("availability")).toBeDefined();
   fireEvent.click(confirm("Change to agent seat"));
-  const seat = locate(view.state().draft, "seat:dev");
-  expect(seat?.kind === "seat" && seat.node.data).toEqual({ name: "Dev" });
+  const data = devData(view.state());
+  expect(data).toMatchObject({ handle: "dev", name: "Dev" });
+  expect(data).not.toHaveProperty("kind");
+  expect(getPath(data, ["runtime", "contact"])).toBeUndefined();
+});
+
+// THE KIND CHANGE STRIPS FIELDS IN THE RUNTIME HALF, so a reader the chart did
+// not show that half cannot tell what it would strip, and is refused rather
+// than handed a change that silently discards what they cannot see.
+test("a reader who was not shown the runtime half is refused the change", () => {
+  const view = open(checkedEdit(strippedChart(withFields())), "seat:dev");
+  expect(toHuman().disabled).toBe(true);
+  fireEvent.click(toHuman());
+  expect(view.state().log.ops).toHaveLength(0);
 });
 
 test("a read-only builder changes nothing, and says why the button is unavailable", () => {
-  const doc = fixtureCompany();
-  doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
-  open(keyedState(doc), "seat:dev", { readOnly: true });
+  const chart = withDev({
+    name: "Dev",
+    kind: "human",
+    runtime: { contact: { github_login: "dev" } },
+  });
+  open(checkedEdit(chart), "seat:dev", { readOnly: true });
   expect(confirm("Change to agent seat").disabled).toBe(true);
   expect(
     screen.getByText(

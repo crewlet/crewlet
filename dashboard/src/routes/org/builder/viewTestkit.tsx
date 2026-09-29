@@ -25,12 +25,7 @@ import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } fr
 import { vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
-import {
-  BuilderContext,
-  type BuilderApi,
-  type BuilderDerived,
-  type BuilderViewHandle,
-} from "./BuilderContext.tsx";
+import { BuilderContext, type BuilderApi, type BuilderViewHandle } from "./BuilderContext.tsx";
 import type { NodeKey } from "./model/keys.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { builderReducer, type BuilderAction, type BuilderState } from "./model/reducer.ts";
@@ -119,16 +114,11 @@ export function BuilderHarness({
           .filter((p) => p.severity === severity)
           .map((p) => p.source)
       : [];
-  const derived: BuilderDerived | null =
-    current && state.check.derived
-      ? { seats: state.check.derived.seats ?? [], units: state.check.derived.units ?? [] }
-      : null;
 
   const api = useMemo<BuilderApi>(
     () => ({
       state,
       dispatch,
-      derived,
       problemsFor: (key) => placed(key, "problem") as ConfigProblem[],
       warningsFor: (key) => placed(key, "warning") as ConfigWarning[],
       documentProblems: [],

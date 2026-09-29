@@ -7,16 +7,17 @@
  * NOTHING IS WRITTEN UNTIL THE KEPT DRAFT IS DECIDED. A freshly loaded
  * Builder has an empty log, and the storage plan for an empty log is to
  * clear, so writing before the decision would erase the very draft about to
- * be offered. The decision waits for a base the engine has keyed (in edit
- * mode, the first check's derivation), because a log recorded against
- * handles replays onto nothing else.
+ * be offered. The decision waits for the company to be loaded, because a log
+ * replays onto nothing else.
  *
  * WHAT THE DECISION IS (spec 3.3):
- * - the same revision offers Keep or Discard, and the Builder records nothing
- *   until the operator picks one;
- * - a different revision runs the update-my-draft flow through the reducer's
+ * - the same company (settings revision and chart rows) offers Keep or
+ *   Discard, and the Builder records nothing until the operator picks one;
+ * - a moved company runs the update-my-draft flow through the reducer's
  *   `restore`, and the kept draft stays stored until that flow ends;
- * - a draft kept for the other mode is discarded, and the operator is told;
+ * - a draft kept for the other mode is discarded, and the operator is told —
+ *   except a create draft whose save was out, which is carried onto the
+ *   company that save made;
  * - a draft this page itself kept a moment ago (the operator switched lens
  *   and came back) is restored without asking: the offer exists for a draft
  *   somebody may have walked away from, not for a lens switch.
@@ -26,14 +27,16 @@
  * of reader or a refused credential), which also withdraws an offer still on
  * screen.
  *
- * A KEPT DRAFT A SAVE WAS SENT FOR IS SETTLED BEFORE IT IS DECIDED. A save
- * marks the kept log with its write id before it goes (`markWrite`), and
- * the mark stays until the save is known not to have landed. A draft found
- * still marked is a save whose answer this tab lost, perhaps after the
- * operator left the lens, and it may have landed: offered as an update onto
- * its own revision it would replay every operation a second time. So the
- * decision waits (`unsettled`) while the Builder settles that save through
- * the model's lost-answer resolution, and resumes once it is known.
+ * A KEPT DRAFT A SAVE WAS SENT FOR IS CARRIED ONTO WHAT LANDED. A save marks
+ * the kept log with its write id and the nodes it creates before its first
+ * write (`markWrite`), and the mark comes off once nothing about the save is
+ * unknown. A draft found still marked is a save whose outcome this tab lost,
+ * perhaps after the operator left the lens, and part of it may have landed:
+ * it is restored as an update, never offered as Keep, and the rebase resolves
+ * its own creations onto the nodes the chart holds (`history.rebase`). A run
+ * this page still has OUT is waited for first (`useSave.saveInFlight`): its
+ * writes may not have landed yet, and deciding beside it would carry the log
+ * onto a company that is still changing under it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -46,9 +49,10 @@ import {
   restoreOffer,
   type DraftStorage,
   type KeptDraft,
+  type PendingWrite,
 } from "./model/persistence.ts";
-import { isBaseKeyed, type BuilderAction, type BuilderState } from "./model/reducer.ts";
-import type { SaveAttempt } from "./model/writes.ts";
+import type { BuilderAction, BuilderState } from "./model/reducer.ts";
+import { saveInFlight } from "./useSave.ts";
 
 /**
  * When this page last kept a draft, by its `savedAt`. Module state, because a
@@ -73,17 +77,18 @@ export interface DraftKeeping {
   /** True until the kept draft, if any, is decided. */
   readonly pending: boolean;
   /**
-   * A save of the kept draft whose answer a previous visit lost, which the
-   * Builder settles before the draft is decided; `null` otherwise.
+   * A save this page sent before the lens was left is still out, and the
+   * decision waits for it. Editing waits too: the kept draft is what that save
+   * is carried onto if it stops part way, and a new log written over it
+   * meanwhile would lose whatever of it did not land.
    */
-  readonly unsettled: SaveAttempt | null;
+  readonly waiting: boolean;
   /**
-   * Marks the kept draft with the write id of a save being sent, or clears
-   * the mark once the save is known not to have landed (`null`), which also
-   * lets a draft held for it be decided. Works on storage directly, so a save
-   * settling after the lens was left still marks what it must.
+   * Marks the kept draft with a save being sent, or clears the mark once
+   * nothing about the save is unknown (`null`). Works on storage directly, so
+   * a save settling after the lens was left still marks what it must.
    */
-  markWrite(write: string | null): void;
+  markWrite(pending: PendingWrite | null): void;
   readonly notice: KeepNotice | null;
   keep(): void;
   discard(): void;
@@ -114,10 +119,11 @@ export function useDraftKeeping({
 }): DraftKeeping {
   const [decided, setDecided] = useState(false);
   const [offer, setOffer] = useState<KeptDraft | null>(null);
-  const [unsettled, setUnsettled] = useState<SaveAttempt | null>(null);
-  // The write id every keep carries while a save of the log is out, so a
-  // rewrite of the log never drops the mark the save set.
-  const pendingWrite = useRef<string | null>(null);
+  // A run of this page's own still out: the decision waits for it.
+  const [waiting, setWaiting] = useState(false);
+  // The save every keep carries while it is out, so a rewrite of the log
+  // never drops the mark the save set.
+  const pendingWrite = useRef<PendingWrite | null>(null);
   // Two notices, because they end differently: what the decision found stays
   // until dismissed, and what storage refused lasts until storage accepts.
   const [decisionNotice, setDecisionNotice] = useState<KeepNotice | null>(null);
@@ -134,10 +140,16 @@ export function useDraftKeeping({
     [dispatch, state],
   );
 
-  // Decide the kept draft once the base can take it.
+  // Decide the kept draft once the company is loaded, and once no run of this
+  // page's own is still writing to it.
   useEffect(() => {
-    if (decided || offer || unsettled || restoringFrom.current || !loaded || !isBaseKeyed(state))
+    if (decided || offer || waiting || restoringFrom.current || !loaded) return;
+    const running = saveInFlight();
+    if (running) {
+      setWaiting(true);
+      void running.then(() => setWaiting(false));
       return;
+    }
     const restored = restoreDraft(storage);
     switch (restored.kind) {
       case "none":
@@ -162,11 +174,11 @@ export function useDraftKeeping({
         return;
       case "restored": {
         const kept = restored.kept;
-        if (kept.write !== undefined) {
-          setUnsettled({ writeId: kept.write, mode: kept.mode, baseRevision: kept.baseRevision });
-          return;
-        }
-        const decision = restoreOffer(kept, { mode: state.mode, revision: state.base.revision });
+        const decision = restoreOffer(kept, {
+          mode: state.mode,
+          revision: state.base.revision,
+          print: state.base.print,
+        });
         if (decision.kind === "discard_mode_changed") {
           clearDraft(storage);
           setDecisionNotice({
@@ -186,7 +198,7 @@ export function useDraftKeeping({
         setOffer(kept);
       }
     }
-  }, [decided, offer, unsettled, loaded, state, storage, restore]);
+  }, [decided, offer, waiting, loaded, state, storage, restore]);
 
   // Read a restore's outcome: adopted, refused, or an update that has ended.
   useEffect(() => {
@@ -218,9 +230,10 @@ export function useDraftKeeping({
       {
         mode: state.mode,
         baseRevision: state.base.revision,
+        basePrint: state.base.print,
         log: state.log,
         keep: state.keep,
-        write: pendingWrite.current,
+        pending: pendingWrite.current,
       },
       now(),
     );
@@ -238,9 +251,19 @@ export function useDraftKeeping({
             }
           : null,
     );
-    // `state.log`, `keep`, `mode` and the base revision are what the plan
-    // reads; a check answer, or the base being keyed, moves none of them.
-  }, [loaded, decided, state.log, state.keep, state.mode, state.base.revision, storage, now]);
+    // `state.log`, `keep`, `mode` and the base's identity are what the plan
+    // reads; a check answer, or a new derivation, moves none of them.
+  }, [
+    loaded,
+    decided,
+    state.log,
+    state.keep,
+    state.mode,
+    state.base.revision,
+    state.base.print,
+    storage,
+    now,
+  ]);
 
   const keep = useCallback(() => {
     if (!offer) return;
@@ -257,16 +280,14 @@ export function useDraftKeeping({
   const forget = useCallback(() => {
     clearDraft(storage);
     setOffer(null);
-    setUnsettled(null);
     restoringFrom.current = null;
     setDecided(true);
   }, [storage]);
 
   const markWrite = useCallback(
-    (write: string | null) => {
-      pendingWrite.current = write;
-      markPendingWrite(storage, write);
-      if (write === null) setUnsettled(null);
+    (pending: PendingWrite | null) => {
+      pendingWrite.current = pending;
+      markPendingWrite(storage, pending);
     },
     [storage],
   );
@@ -277,7 +298,7 @@ export function useDraftKeeping({
     offer,
     survives: storageNotice === null,
     pending: !decided,
-    unsettled,
+    waiting,
     notice: storageNotice ?? decisionNotice,
     keep,
     discard,

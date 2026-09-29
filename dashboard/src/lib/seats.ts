@@ -28,11 +28,11 @@
  * a chart that lies.
  *
  * THE GUARDED HALF IS NOT HERE EITHER. `/org` is anonymously readable, so the
- * projection carries a charter and a tree and nothing else: a seat's email,
- * model chain, token budget, contact identities, tool credentials,
- * integrations and schedules are read from the company document through the
- * operator-gated `config` query, which is what [seatSettings] and
- * [unitSettings] below are for.
+ * projection carries a charter and a tree and nothing else: a seat's model
+ * chain, token budget, contact identities, tool credentials and schedules are
+ * the org chart's RUNTIME half, read through `GET /chart/seats/{handle}` where
+ * the reader may have it (`lib/chartReads.ts`), and [seatReading] below says
+ * what that read answered.
  *
  * Resolved ONCE, into an index, and screens consume seats. Doing it per screen
  * is how the previous dashboard ended up walking the whole roster once per
@@ -41,23 +41,19 @@
  */
 
 import { plural } from "./format.ts";
-import { isLogRefusal } from "~/protocol/index.ts";
+import type { ChartReading } from "./chartReads.ts";
 import type {
   AgentRow,
-  CompanyDocument,
-  ConfigRole,
-  ConfigUnit,
+  ChartSeat,
+  ChartSeatRead,
+  ChartUnit,
+  ChartUnitRead,
   Derived,
   OrgProjection,
   OrgSeat,
   OrgUnit,
-  PhaseLLM,
   ProviderKeys,
-  LogRefusal,
-  QueryErrorCode,
-  QueryRefusal,
   SandboxEntry,
-  ScheduleSpec,
 } from "~/protocol/index.ts";
 
 /** One unit, as the projection wrote it and as the engine resolved it. */
@@ -72,8 +68,8 @@ export interface Unit {
    * durable key rather than a name: everything filed against the unit keys on
    * it and nobody reads it, while the chart draws Name" — so the anonymous
    * projection carries no id at all, and a link built from one would be a
-   * link built from a value this screen was never given. Read it through
-   * [unitSettings] where a token allows and something actually needs the key.
+   * link built from a value this screen was never given. Read it through the
+   * chart (`lib/chartReads.ts`) where a reader may and something needs the key.
    */
   name: string;
   /** The EFFECTIVE type where the hierarchy is reported, else as written. */
@@ -604,130 +600,79 @@ export function roundLabel(roundNum: number | null | undefined): {
 }
 
 // ---------------------------------------------------------------------------
-// The guarded half: what only the company document says
+// The guarded half: what only the org chart's own read says
 // ---------------------------------------------------------------------------
 
-/** What the company document holds for one seat, or why it cannot be said. */
-export type SeatSettings =
-  | { state: "found"; role: ConfigRole; unit: ConfigUnit | null }
-  | { state: "missing" }
-  | { state: "ambiguous" };
-
 /**
- * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF.
+ * WHAT THIS READER CAN SAY ABOUT A SEAT'S GUARDED HALF, read off the org
+ * chart (`GET /chart/seats/{handle}`, and the home unit's
+ * `GET /chart/units/{key}` for the credentials its members inherit).
  *
- * FIVE OUTCOMES, NOT A NULLABLE ROLE. The company document is behind a grant
- * (`config:read`), so "this seat is not in the active revision", "you may not
- * read it", "the engine could not answer", "the read has not come back yet"
- * and "here it is" are five different facts — and a `ConfigRole | null`
- * collapses the first four into one. Every screen that did that printed the
+ * SIX OUTCOMES, NOT A NULLABLE SEAT. "The chart holds no seat by this handle",
+ * "you may not read the chart", "you may read the chart and not the seat's
+ * runtime half", "the engine could not answer", "the read has not come back
+ * yet" and "here it is" are six different facts — and a `ChartSeat | null`
+ * collapses five of them into one. Every screen that did that printed the
  * same sentence for all of them, and the sentence it picked was the reader's:
  * the seat header's MODEL fact read "needs an operator token" on five of
  * eight tabs, because those tabs simply did not ask.
  *
- * ONLY `unauthorized` IS A REFUSAL. Every error used to read as one, so a
- * node still catching up after a restart told every reader of every seat that
- * THEY were missing a credential — a claim about the reader, made by an
- * answer about the node. And a refusal carries the grants the engine named,
- * because what a signed-in reader lacks is a grant, never "an operator
- * token".
+ * ONLY `refused` IS A REFUSAL, and `stripped` is not one: the chart served
+ * the seat's rows without the runtime half — its model chain, budget, contact
+ * identities, tool credentials and schedules — because reading that half
+ * takes the grant that reads the company's configuration, and it SAID so
+ * (`runtime: false`). A refusal carries the grants the engine named, because
+ * what a signed-in reader lacks is a grant, never "an operator token".
  *
- * THE ERROR IS CHECKED FIRST, and that order is the whole of it. `useQuery`
- * keeps its last good answer through a failed ask — which suits a poll and is
- * exactly wrong for a guarded read: once a token is cleared or refused, the
- * document it had been allowed to read is still in hand, so a reading that
- * looked at the answer first would keep printing a revoked reader's model,
- * budget and schedules beside a banner saying the answer needs a token.
+ * IT WAS THE COMPANY DOCUMENT, found by the seat's NAME. The document holds
+ * no seats any more — the org chart left it for a log of its own — so that
+ * lookup found nothing for every seat in every company, and a name was never
+ * an address anyway: two seats may share one. The chart is read by the
+ * HANDLE, which is what every reference names a seat by.
  */
 export type SeatReading =
-  | { state: "read"; role: ConfigRole; unit: ConfigUnit | null }
-  /** The revision answered and names no single seat by this name. */
+  | { state: "read"; seat: ChartSeat; unit: ChartUnit | null }
+  /** The chart answered without the runtime half: the reader may not read it. */
+  | { state: "stripped"; seat: ChartSeat }
+  /** The chart holds no seat by this handle. */
   | { state: "absent" }
   /**
    * The engine refused the read on authority. `grants` are the ones it named,
    * any ONE of which would admit this reader — empty for a 401, where nothing
-   * the engine accepted was presented.
+   * the engine accepted was presented — and `reason` the deciding rule's.
    */
-  | { state: "refused"; grants: readonly string[] }
+  | { state: "refused"; grants: readonly string[]; reason: string }
   /** The engine could not answer: a node catching up, a socket gone, a fault. */
   | { state: "failed" }
   /** Nothing has been asked, or nothing has come back. Never a claim. */
   | { state: "unread" };
 
+/**
+ * The seat reading from the two chart reads it is made of: the seat's own,
+ * and — when it sits in a unit — that unit's, which carries the tool
+ * credentials its direct agent members inherit.
+ *
+ * THE UNIT IS PART OF THE ANSWER, so a unit read still out is an answer still
+ * out: a seat's credentials drawn without the ones it inherits would be a
+ * list that shrinks when the second read lands. A unit the chart no longer
+ * holds (a row a record left dangling) is no unit rather than a failure.
+ */
 export function seatReading(
-  settings: SeatSettings | null | undefined,
-  error?: QueryErrorCode | null,
-  refusal?: QueryRefusal | LogRefusal | null,
+  seat: ChartReading<ChartSeatRead>,
+  unit: ChartReading<ChartUnitRead> | null,
 ): SeatReading {
-  if (error === "unauthorized") {
-    return { state: "refused", grants: refusal && !isLogRefusal(refusal) ? refusal.grants : [] };
+  if (seat.state !== "read") return seat;
+  const row = seat.value.seat;
+  if (!seat.value.runtime) return { state: "stripped", seat: row };
+  if (!row.unit || unit === null) return { state: "read", seat: row, unit: null };
+  switch (unit.state) {
+    case "read":
+      return { state: "read", seat: row, unit: unit.value.unit };
+    case "absent":
+      return { state: "read", seat: row, unit: null };
+    default:
+      return unit;
   }
-  if (error) return { state: "failed" };
-  if (!settings) return { state: "unread" };
-  if (settings.state === "found") {
-    return { state: "read", role: settings.role, unit: settings.unit };
-  }
-  // `missing` AND `ambiguous` ARE ONE ANSWER HERE. Both mean the revision
-  // holds no single entry this page may attribute to this seat, and the second
-  // is only reachable from a revision stored before names had to be unique —
-  // so a distinct sentence for it would be a sentence nobody will ever read.
-  return { state: "absent" };
-}
-
-/** Every unit in a company document, depth first, parents before children. */
-export function documentUnits(doc: CompanyDocument | null | undefined): ConfigUnit[] {
-  const out: ConfigUnit[] = [];
-  const visit = (unit: ConfigUnit): void => {
-    out.push(unit);
-    for (const child of list(unit.children)) visit(child);
-  };
-  for (const unit of list(doc?.units)) visit(unit);
-  return out;
-}
-
-/**
- * The document's own entry for a seat, from the operator-gated `config` answer.
- *
- * Contact identities, email, the model chain, the token budget, schedules, the
- * seat's integration blocks and its tool credential names are not on the
- * anonymous projection, so every screen that shows one reads it here.
- *
- * The seat is found by NAME, which is the identity the document itself
- * addresses a seat by. Two seats with one name can only come from a revision
- * stored before names had to be unique, and attributing either one's settings
- * to the page would be a guess — so that answer is `ambiguous` rather than the
- * first match.
- *
- * `unit` is the document's entry for the seat's home unit, whose `mcp_env` its
- * direct agent members inherit. Null at the root, and null where the unit name
- * repeats, for the same reason.
- */
-export function seatSettings(doc: CompanyDocument | null | undefined, seat: Seat): SeatSettings {
-  const roles: ConfigRole[] = [...list(doc?.roles)];
-  const units = documentUnits(doc);
-  for (const unit of units) for (const role of list(unit.roles)) roles.push(role);
-
-  const matches = roles.filter((r) => r.name === seat.name);
-  if (matches.length === 0) return { state: "missing" };
-  if (matches.length > 1) return { state: "ambiguous" };
-  const home = seat.unit ? units.filter((u) => u.name === seat.unit?.name) : [];
-  return { state: "found", role: matches[0]!, unit: home.length === 1 ? home[0]! : null };
-}
-
-/**
- * The document's own entry for a unit: its stable id, the tracker project and
- * knowledge container it owns, and the credentials its members inherit.
- *
- * Guarded for the reasons `internal/api/orgprojection_test.go` records against
- * each field, so it is null without a token — never an empty value, which
- * would read as a unit that owns nothing.
- */
-export function unitSettings(
-  doc: CompanyDocument | null | undefined,
-  unit: Pick<Unit, "name">,
-): ConfigUnit | null {
-  const matches = documentUnits(doc).filter((u) => u.name === unit.name);
-  return matches.length === 1 ? matches[0]! : null;
 }
 
 /**
@@ -736,76 +681,41 @@ export function unitSettings(
  *
  * Per VARIABLE rather than per server, which is `org.MCPEnv`'s own rule: a seat
  * that overrides one header must not silently drop the token beside it. A
- * human seat inherits none, because it runs no tools.
+ * human seat inherits none, because it runs no tools (`org.inheritMCPEnv`).
  */
 export function mcpEnvOf(
-  settings: SeatSettings,
+  reading: SeatReading,
   kind: Seat["kind"],
 ): Record<string, Record<string, string>> {
-  if (settings.state !== "found") return {};
+  if (reading.state !== "read") return {};
   const out: Record<string, Record<string, string>> = {};
   if (kind === "agent") {
-    for (const [server, vars] of Object.entries(settings.unit?.mcp_env ?? {})) {
+    for (const [server, vars] of Object.entries(reading.unit?.runtime?.mcp_env ?? {})) {
       out[server] = { ...(out[server] ?? {}), ...vars };
     }
   }
-  for (const [server, vars] of Object.entries(settings.role.mcp_env ?? {})) {
+  for (const [server, vars] of Object.entries(reading.seat.runtime?.mcp_env ?? {})) {
     out[server] = { ...(out[server] ?? {}), ...vars };
   }
   return out;
 }
 
-/** A seat's schedules, from the document. Empty where the document did not answer. */
-export function schedulesOf(settings: SeatSettings): ScheduleSpec[] {
-  return settings.state === "found" ? list(settings.role.schedules) : [];
-}
-
 /**
- * The provider keys a seat's `llm:` names, in declaration order.
+ * The provider keys one phase's chain names, first choice first.
  *
- * THREE SHAPES REACH THIS BROWSER, because `config.PhaseLLM` accepts three:
- * `llm: fast`, `llm: [fast, backup]`, and `llm: {default: fast, judge: tiny}`.
- * The type declared a string, so the other two were rendered by whatever
- * happened to be asked of them — an array as `fast,backup`, a mapping as
- * `[object Object]` — and any consumer that called a string method on one
- * threw on a config the engine accepts.
+ * TWO SHAPES REACH THIS BROWSER, because `org.ProviderKeys` marshals as a
+ * string for one provider and an array for a fallback chain. The type once
+ * declared a string, so a chain rendered as `fast,backup` and any consumer
+ * that called a string method on one threw on a seat the engine accepts.
  *
- * The mapping form flattens in PHASE ORDER with `default` first, because the
- * question a reader has on a seat page is "which models does this seat run
- * on", not "which model runs its judge". Duplicates are dropped: a chain that
- * lists one key twice is one key, and the same key reached through two phases
- * is not two models.
- *
- * `phase` picks one phase out of the mapping instead, falling back to
- * `default` exactly as the engine does.
+ * An empty key is dropped rather than listed — a seat that names nothing takes
+ * the default provider, which is not a provider called "" — and a key listed
+ * twice is one model.
  */
-export function llmChain(
-  llm: PhaseLLM | undefined,
-  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "sandbox",
-): string[] {
-  const keys = (value: ProviderKeys | undefined): string[] =>
-    typeof value === "string"
-      ? value
-        ? [value]
-        : []
-      : Array.isArray(value)
-        ? value.filter(Boolean)
-        : [];
+export function llmChain(llm: ProviderKeys | undefined): string[] {
   if (llm == null) return [];
-  if (typeof llm === "string" || Array.isArray(llm)) return dedupe(keys(llm));
-  const mapping = llm as Record<string, ProviderKeys | undefined>;
-  if (phase) {
-    const own = keys(mapping[phase]);
-    return dedupe(own.length ? own : keys(mapping["default"]));
-  }
-  return dedupe([
-    ...keys(mapping["default"]),
-    ...keys(mapping["review"]),
-    ...keys(mapping["subagent"]),
-    ...keys(mapping["auxiliary"]),
-    ...keys(mapping["judge"]),
-    ...keys(mapping["sandbox"]),
-  ]);
+  const keys = typeof llm === "string" ? [llm] : Array.isArray(llm) ? llm : [];
+  return dedupe(keys.filter((key) => typeof key === "string" && key !== ""));
 }
 
 function dedupe(keys: string[]): string[] {

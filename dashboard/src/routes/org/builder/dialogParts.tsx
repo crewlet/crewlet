@@ -218,17 +218,62 @@ export function HueFact({ nodeKey }: { nodeKey: string }) {
 }
 
 /**
- * Why a name has to be free, said where one is typed.
+ * What a name is and what an address is, said where each is typed.
  *
- * WHAT NAMES WHAT. A unit's lead and a `manages` entry name a seat, so a seat
- * name must pick out one seat; a `manages` entry and a root seat's `unit:`
- * reference name a unit, so a unit name must pick out one unit. A lead never
- * names a unit, so it is no reason for a unit's name to be unique.
+ * A NAME IS PROSE AND AN ADDRESS IS WHAT NAMES A NODE. Every reference in the
+ * chart — a unit's lead, a `manages:` entry, a route, a mention — names a seat
+ * by its handle and a unit by its key, so two seats may share a name and a
+ * name may change freely. An address is what changes carefully: a new one is
+ * the chart's rename, which keeps the node and every reference to it.
  */
-export const UNIQUE_NAME_HELP = {
-  seat: "Seat names are unique: a lead or a manages entry names exactly one seat.",
-  unit: "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
+export const NAME_HELP = {
+  seat: "What people read. Every reference names a seat by its handle, so two seats may share a name.",
+  unit: "What people read. Every reference names a unit by its key, so two units may share a name.",
 } as const;
+
+/** What an address field says, for a node the chart holds and for one this draft creates. */
+export const ADDRESS_HELP = {
+  seat: {
+    saved:
+      "The address every lead, manages entry and mention names this seat by. A new handle keeps the seat, its memory and its mailbox, and the old one goes on reaching it until something else takes it.",
+    created:
+      "The address every lead, manages entry and mention names this seat by. Lowercase letters, digits and hyphens.",
+  },
+  unit: {
+    saved:
+      "The address every manages entry and seat placement names this unit by. A new key keeps the unit, and the old one goes on reaching it until something else takes it.",
+    created: "The address every manages entry and seat placement names this unit by.",
+  },
+} as const;
+
+/**
+ * Where the parts of a node the builder shows and does not edit are written:
+ * its RUNTIME half, which the chart carries opaquely and a company file
+ * states whole. The builder edits the few runtime fields it draws; the rest is
+ * written by `crewlet config import` from a company file, or by
+ * `PATCH /chart/seats/{handle}` with its `runtime`.
+ */
+export const RUNTIME_ELSEWHERE =
+  "It is in the runtime half, which the builder shows and does not edit: crewlet config import writes it from a company file.";
+
+/**
+ * What a form says about a runtime half its reader was not shown. The chart
+ * serves that half only to a reader holding the grant that reads the
+ * company's configuration, and says when it was withheld, so the fields that
+ * live there are not drawn rather than drawn empty.
+ */
+export function RuntimeHidden({ what }: { what: "seat" | "unit" }) {
+  return (
+    <Callout variant="neutral">
+      This {what}&apos;s runtime half was not shown to you:{" "}
+      {what === "seat"
+        ? "its model, credentials, schedules and contact identities"
+        : "its tool credentials and schedules"}{" "}
+      are read with the grant that reads the company&apos;s configuration, so those fields are not
+      drawn here.
+    </Callout>
+  );
+}
 
 /**
  * The sentence each acknowledgement asks the operator to accept, wherever it
@@ -237,17 +282,16 @@ export const UNIQUE_NAME_HELP = {
  * one consequence two ways.
  *
  * EACH STATES WHAT THE ENGINE KEYS ON, because that is what is lost. An agent
- * seat's id is a UUIDv5 over the company name and the seat's handle
- * (`org.DeriveAgentID`): the diary and the onboarding marker are keyed by
- * that id, while the mailbox (`topics.AgentInbox`) and the episodes are keyed
- * by the handle. So a company rename orphans the first two and keeps the
- * rest, and a handle change loses all of them.
+ * seat's id is a UUIDv5 over the company name and the handle the seat was
+ * CREATED under (`org.Organization.AgentIDFor`), and everything durable the
+ * seat owns is keyed on that id: its mailbox, its lease, its diary, its
+ * onboarding marker and its schedule ledger. A new handle is the chart's
+ * rename and keeps all of it, so it asks for nothing; a company rename
+ * re-derives every id and leaves all of it behind.
  */
 export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   company_rename:
-    "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
-  handle_change:
-    "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
+    "An agent seat's id is derived from the company name, so renaming the company gives every agent seat a new id. What the engine keeps under the old id — each seat's mailbox and anything still waiting in it, its diary, its onboarding progress and its schedule ledger — is no longer read, and every agent seat starts over with an empty inbox and onboards again. Handles are unchanged.",
   kind_change:
     "Changing a seat's kind removes the fields listed above, and a removed credential cannot be recovered from the dashboard.",
   credential_servers: "The tool credentials the seats listed above receive will change.",
@@ -425,12 +469,31 @@ export interface LeftBehind {
 
 /**
  * What stays at the vendors and in the secret store once a seat is deleted or
- * stops being an agent. Removing configuration tears nothing down at a
- * vendor, so each is named, never by value, with the screens that
- * decommission them.
+ * stops being an agent. Removing a seat tears nothing down at a vendor, so
+ * each is named, never by value, with the screens that decommission them.
+ *
+ * ALL OF IT IS IN THE RUNTIME HALF, so a reader the chart did not show that
+ * half is told there may be some and why it cannot be listed, rather than
+ * shown an empty list that reads as "nothing".
  */
-export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBehind[] }) {
-  if (entries.length === 0) return null;
+export function StaysUntilDecommissioned({
+  entries,
+  runtimeHidden = false,
+}: {
+  entries: readonly LeftBehind[];
+  runtimeHidden?: boolean;
+}) {
+  if (entries.length === 0 && !runtimeHidden) return null;
+  if (entries.length === 0) {
+    return (
+      <p className="t-body">
+        What the removed seats hold at the vendors and in the secret store is in their runtime half,
+        which was not shown to you, so it is not listed here. It stays until somebody decommissions
+        it. <ScreenLink to="integrations">Open Integrations</ScreenLink>{" "}
+        <ScreenLink to="secrets">Open Secrets</ScreenLink>
+      </p>
+    );
+  }
   return (
     <div className="col gap-2">
       <p className="t-body">

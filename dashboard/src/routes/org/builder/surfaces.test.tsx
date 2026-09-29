@@ -39,11 +39,25 @@ afterEach(() => {
 });
 
 test("the canvas view draws the structure chart and the reporting chart", async () => {
-  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
+  const engine = new Engine(company());
+  // The reporting lines are the engine's derivation, which the org push carries.
+  mountBuilder({ engine, org: engine.orgPush(), surfaces: builderSurfaces });
   expect(await screen.findByRole("tree", { name: "Structure chart" })).toBeDefined();
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
   expect(await screen.findByRole("tree", { name: "Reporting chart" })).toBeDefined();
+});
+
+// THE CONTROL: with no derivation there are no lines to draw, and the chart
+// says where they come from rather than drawing a forest nobody derived.
+test("the reporting chart waits for the engine's derivation", async () => {
+  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
+  expect(
+    await screen.findByText("Reporting lines appear once the engine describes the company"),
+  ).toBeDefined();
+  expect(screen.queryByRole("tree", { name: "Reporting chart" })).toBeNull();
 });
 
 test("the table view draws a row per node, and a row's Edit opens the node editor", async () => {
@@ -282,20 +296,21 @@ test("Back within the lens asks nothing, and the editor keeps what was typed", a
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });
 
-// Until the first check answers, a seat that declares no handle is keyed by
-// its path, and the answer re-keys it by the handle the engine gives it. An
-// editor opened in between used to lose its node at that moment.
-test("an editor opened before the engine described the company keeps its node", async () => {
+// A CHECK'S ANSWER MOVES NOTHING AN EDITOR HOLDS. A node is keyed by the
+// identity the chart serves, so the answer that arrives while an editor is
+// open finds the same key there, and the editor its node.
+test("an editor opened before the first check answers keeps its node", async () => {
   const engine = new Engine(company());
   let answer: () => void = () => {};
+  let reads = 0;
   engine.script = (r, e) =>
-    r.query.get("dry_run") === "true"
+    r.method === "GET" && r.path === "/chart" && ++reads === 2
       ? new Promise<Response>((resolve) => {
           answer = () => resolve(e.answer(r));
         })
       : null;
   mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/company?lens=builder&view=table" });
-  await waitFor(() => expect(engine.checks()).toHaveLength(1));
+  await waitFor(() => expect(engine.chartReads()).toHaveLength(2));
   await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
 
@@ -327,9 +342,9 @@ test("every opening of the editor builds its own node's form", async () => {
 });
 
 // A COLLEAGUE'S SAVE IS NO REASON TO LOSE A FORM. A lens with no work in its
-// draft stands on the newer revision, and did it by reading the document
-// again, which keys a seat declaring no handle by its path until the next
-// check: the open editor lost its node for that moment and came back empty.
+// draft stands on the newer company through the one rebase every update
+// takes, which carries every key an open editor holds across it; a plain load
+// would start the lens over and the editor would come back empty.
 test("a colleague's save leaves an open editor and its typed form, which then applies", async () => {
   const engine = new Engine(company());
   const { store } = mountBuilder({
@@ -339,16 +354,13 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   });
   await screen.findByText("No problems");
   const editor = await typeIntoTheEditor();
-  const next = company();
-  next.roles![1]!.goal = "Design things";
-  engine.document = next;
-  engine.revision = "r2";
-  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  engine.seats.find((s) => s.handle === "designer")!.goal = "Design things";
+  const reads = engine.chartReads().length;
+  act(() => store.applyOrg(engine.orgPush()));
 
-  // Stood on the newer revision, and checked there.
-  await waitFor(() =>
-    expect(engine.checks().some((c) => c.headers["If-Match"] === '"r2"')).toBe(true),
-  );
+  // Stood on the newer chart — the check's read, the update's, and the check
+  // that follows it — and clean there.
+  await waitFor(() => expect(engine.chartReads().length).toBeGreaterThanOrEqual(reads + 3));
   await screen.findByText("No problems");
   expect(screen.queryByText("This node is no longer in the draft")).toBeNull();
   expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
@@ -357,11 +369,12 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   expect(location.hash).toContain("seat=ceo");
 
   fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
-  await waitFor(() => {
-    const last = engine.checks().at(-1)!;
-    expect(last.headers["If-Match"]).toBe('"r2"');
-    expect(JSON.stringify(last.body)).toContain("Grow");
-  });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+  const review = await screen.findByRole("dialog", { name: "Review and save" });
+  // The typed form is the draft's only change, and the colleague's is the base.
+  expect(within(review).getByText("Edits CEO: goal.")).toBeDefined();
+  expect(within(review).queryByText(/Designer/)).toBeNull();
 });
 
 /*
@@ -383,7 +396,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   await screen.findByText("No problems");
   const node = orgNodeParts();
   const table = orgTableParts();
-  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:Engineering"]')!;
+  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:engineering"]')!;
   const onChart = {
     // The caption under the name, which is where both surfaces write the type.
     caption: drawnPart(card, node.caption)?.textContent,
@@ -393,7 +406,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   fireEvent.click(screen.getByRole("tab", { name: "Table" }));
   const row = await waitFor(() => {
     const found = view.container.querySelector<HTMLElement>(
-      '[role="row"][data-tree-id="unit:Engineering"]',
+      '[role="row"][data-tree-id="unit:engineering"]',
     );
     if (!found) throw new Error("no row for the unit");
     return found;

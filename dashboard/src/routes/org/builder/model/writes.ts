@@ -1,5 +1,13 @@
 /**
- * Saving, and settling a save whose answer never arrived.
+ * The settings write of a save: signing it, and settling one whose answer
+ * never arrived — and reading the company a draft stands on.
+ *
+ * THE CHART'S WRITES NEED NONE OF THIS. Each carries an operation id the
+ * chart's ledger recognises (`save.ts`), so an unknown outcome is resolved by
+ * sending the same step again, and the ledger answers the first arrival's
+ * outcome. The settings surface has no such ledger: its write is conditional
+ * on a revision and signed in its audit summary, and what follows is how a
+ * lost answer is settled from the revision history instead.
  *
  * A WRITE CAN LAND WITHOUT ITS ANSWER. A PATCH that activated a revision and
  * then lost its connection is, to the browser, indistinguishable from one
@@ -31,31 +39,25 @@
  * revision would call such a write not landed, and the conflict flow would
  * then replay every operation onto a document that already holds them.
  *
- * AN UPDATE WAITS FOR THE NODE TO CATCH UP. A 409 names the revision the node
- * holds, and the document the draft is rebased onto has to be that revision
- * or a later one. A node behind a load balancer, or one still applying, can
- * answer `GET /config` with an older document, and rebasing onto that would
- * lose the very change the conflict was about. [readyToUpdate] reads the
- * active document and accepts it only when it is the conflict's revision or a
- * descendant of it.
+ * AN UPDATE WAITS FOR THE NODE TO CATCH UP. A settings 409 names the revision
+ * the node holds, and the document the draft is rebased onto has to be that
+ * revision or a later one. A node behind a load balancer, or one still
+ * applying, can answer `GET /config` with an older document, and rebasing onto
+ * that would lose the very change the conflict was about. [readyToUpdate]
+ * reads the active document and accepts it only when it is the conflict's
+ * revision or a descendant of it. The chart needs no such wait: every chart
+ * read is linearizable, so the answer is at least as new as anything this
+ * node was told.
  */
 
-import type {
-  ConfigRevision,
-  ConfigWarning,
-  Derived,
-  CompanyDocument,
-  WriteResult,
-} from "~/protocol/index.ts";
+import type { ChartRead, CompanyDocument, ConfigRevision } from "~/protocol/index.ts";
 import { isRecord } from "./json.ts";
 import type { KeySource } from "./keys.ts";
-import { fromDocument, toDocument } from "./document.ts";
-import { classifyCheck, type CheckOutcome } from "./scheduler.ts";
+import type { CompanyReading } from "./reducer.ts";
 import {
-  checkRequest,
   revisionOfEtag,
   type BuilderMode,
-  type ConfigTransport,
+  type EngineTransport,
   type HttpAnswer,
 } from "./transport.ts";
 
@@ -99,74 +101,6 @@ export interface SaveAttempt {
   readonly baseRevision: string | null;
 }
 
-/** What a save's answer means. */
-export type SaveOutcome =
-  | {
-      readonly kind: "saved";
-      readonly revisionId: string;
-      readonly epoch: number;
-      readonly warnings: readonly ConfigWarning[];
-      readonly derived: Derived | null;
-    }
-  /** Refused, with the same meaning a check's answer would have. */
-  | { readonly kind: "refused"; readonly outcome: CheckOutcome }
-  /**
-   * Whether it landed is not known yet: settle it with [settleUnknownWrite].
-   * `detail` is what the answer said, if it said anything, for a failure
-   * that settles as not landed and would otherwise be reported with no cause.
-   */
-  | {
-      readonly kind: "unknown";
-      readonly currentRevisionId: string | null;
-      readonly detail: string;
-    };
-
-/**
- * Classifies a save's answer. `afterUnknown` says the outcome of the previous
- * attempt of this draft was unknown, which is what makes a 409 or 412
- * ambiguous.
- */
-export function classifySave(
-  answer: HttpAnswer,
-  attempt: SaveAttempt,
-  afterUnknown: boolean,
-): SaveOutcome {
-  const body = isRecord(answer.body) ? answer.body : {};
-  if (answer.status === 201) {
-    const result = body as Partial<WriteResult>;
-    return {
-      kind: "saved",
-      revisionId: typeof result.revision_id === "string" ? result.revision_id : "",
-      epoch: typeof result.epoch === "number" ? result.epoch : 0,
-      warnings: Array.isArray(result.warnings) ? result.warnings : [],
-      derived: isRecord(result.derived) ? (result.derived as unknown as Derived) : null,
-    };
-  }
-  const detail =
-    typeof body.detail === "string" && body.detail !== ""
-      ? body.detail
-      : typeof body.error === "string"
-        ? body.error
-        : "";
-  // THE ONE 5xx THAT IS CERTAIN. The drain gate refuses a write before the
-  // handler runs (internal/api's drainGate wraps the mux), so a `503
-  // draining` stored nothing and needs no settling read — where every other
-  // 5xx may have been raised after the revision was stored.
-  const refusedBeforeStoring = answer.status === 503 && body.error === "draining";
-  if (answer.status === 0 || (answer.status >= 500 && !refusedBeforeStoring)) {
-    return { kind: "unknown", currentRevisionId: null, detail };
-  }
-  if (afterUnknown && (answer.status === 409 || answer.status === 412)) {
-    const current = body.current_revision_id;
-    return {
-      kind: "unknown",
-      currentRevisionId: typeof current === "string" && current !== "" ? current : null,
-      detail,
-    };
-  }
-  return { kind: "refused", outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision) };
-}
-
 /** Whether a revision is the one a save wrote. */
 export function isRevisionOfWrite(
   revision: Pick<ConfigRevision, "parent_revision_id" | "summary">,
@@ -203,14 +137,14 @@ export type Settlement =
  * sit, and gives up as unknown past [UPDATE_ANCESTRY_LIMIT].
  */
 export async function settleUnknownWrite(
-  transport: ConfigTransport,
+  transport: EngineTransport,
   attempt: SaveAttempt,
   currentRevisionId: string | null,
   signal: AbortSignal,
 ): Promise<Settlement> {
   let current = currentRevisionId;
   if (current === null) {
-    const answer = await transport.current(signal);
+    const answer = await transport.settings(signal);
     if (
       answer.status === 404 &&
       isRecord(answer.body) &&
@@ -274,44 +208,35 @@ function unanswered(answer: HttpAnswer): string {
  */
 export const UPDATE_ANCESTRY_LIMIT = 25;
 
-/** Whether the node can serve the document a conflicted draft is updated onto. */
+/** Whether the node can serve the settings a conflicted draft is updated onto. */
 export type UpdateReadiness =
-  | {
-      readonly kind: "ready";
-      readonly revisionId: string;
-      readonly document: CompanyDocument;
-      /**
-       * The engine's derivation of that document, from a dry run of it with no
-       * changes. The draft is rebased onto nodes keyed by the engine's handles,
-       * and without it a seat declaring no handle could only be keyed by its
-       * path, which names nothing the log recorded.
-       */
-      readonly derived: Derived;
-    }
+  | { readonly kind: "ready"; readonly revisionId: string; readonly document: CompanyDocument }
   /** The node still serves the draft's base or an older revision. */
   | { readonly kind: "behind" }
   | { readonly kind: "unknown"; readonly detail: string };
 
 /**
- * Reads the active document and accepts it as the base to update a draft onto
- * only when it is `conflictRevisionId` or descends from it. A conflict that
- * named no revision accepts any active revision other than the draft's base.
+ * Reads the active settings and accepts them as the base to update a draft
+ * onto only when they are `conflictRevisionId` or descend from it. A conflict
+ * that named no revision — the chart moved, not the settings — accepts
+ * whatever is active.
  */
 export async function readyToUpdate(
-  transport: ConfigTransport,
+  transport: EngineTransport,
   conflict: { readonly baseRevision: string; readonly conflictRevisionId: string | null },
   signal: AbortSignal,
 ): Promise<UpdateReadiness> {
-  const answer = await transport.current(signal);
+  const answer = await transport.settings(signal);
   if (answer.status !== 200 || !isRecord(answer.body))
     return { kind: "unknown", detail: unanswered(answer) };
   const active = revisionOfEtag(answer.etag);
   if (active === null)
     return { kind: "unknown", detail: "The engine did not name its active revision." };
   const document = answer.body as CompanyDocument;
-  if (active === conflict.baseRevision) return { kind: "behind" };
   const target = conflict.conflictRevisionId;
-  let descends = target === null || active === target;
+  if (target === null) return { kind: "ready", revisionId: active, document };
+  if (active === conflict.baseRevision) return { kind: "behind" };
+  let descends = active === target;
 
   let at: string | null = active;
   for (let step = 0; !descends && step < UPDATE_ANCESTRY_LIMIT && at !== null; step++) {
@@ -323,29 +248,106 @@ export async function readyToUpdate(
     if (at === target) descends = true;
     else if (at === conflict.baseRevision) return { kind: "behind" };
   }
-  if (!descends) return { kind: "behind" };
+  return descends ? { kind: "ready", revisionId: active, document } : { kind: "behind" };
+}
 
-  const request = checkRequest({
-    mode: "edit",
-    baseRevision: active,
-    base: document,
-    sent: toDocument(fromDocument(document, null)),
-  });
-  const checked = classifyCheck(await transport.send(request, signal), "edit", active);
-  if ((checked.status === "clean" || checked.status === "problems") && checked.derived) {
-    return { kind: "ready", revisionId: active, document, derived: checked.derived };
+/** A chart reading, or why there is none. */
+export type ChartReading =
+  | { readonly kind: "read"; readonly chart: ChartRead }
+  | { readonly kind: "refused"; readonly answer: HttpAnswer };
+
+/**
+ * Reads the whole chart, runtime half included where this reader may see it.
+ * Any answer but a 200 carrying a chart is handed back as it came, for the
+ * caller to say what it means in its own place.
+ */
+export async function readChart(
+  transport: EngineTransport,
+  signal: AbortSignal,
+): Promise<ChartReading> {
+  const answer = await transport.chart(signal);
+  if (answer.status === 200 && isRecord(answer.body) && Array.isArray(answer.body.seats)) {
+    return { kind: "read", chart: answer.body as unknown as ChartRead };
   }
-  if (checked.status === "conflict") {
+  return { kind: "refused", answer };
+}
+
+/** The company as the engine holds it now, or why it could not be read. */
+export type CompanyRead =
+  | { readonly kind: "read"; readonly reading: CompanyReading }
+  | { readonly kind: "failed"; readonly detail: string };
+
+/**
+ * Reads the company whole: the active settings revision (none, in a company
+ * that has no settings yet) and the chart. What a save reads back, and what a
+ * draft that stopped part way is carried onto.
+ */
+export async function readCompany(
+  transport: EngineTransport,
+  signal: AbortSignal,
+): Promise<CompanyRead> {
+  const [settings, chart] = await Promise.all([
+    transport.settings(signal),
+    readChart(transport, signal),
+  ]);
+  if (chart.kind !== "read") return { kind: "failed", detail: unanswered(chart.answer) };
+  if (
+    settings.status === 404 &&
+    isRecord(settings.body) &&
+    settings.body.error === "no_active_revision"
+  ) {
+    return { kind: "read", reading: { settings: null, revision: null, chart: chart.chart } };
+  }
+  const revision = revisionOfEtag(settings.etag);
+  if (settings.status !== 200 || !isRecord(settings.body) || revision === null) {
     return {
-      kind: "unknown",
-      detail: "The configuration changed again while it was being read. Try again.",
+      kind: "failed",
+      detail:
+        settings.status === 200
+          ? "The engine did not name its active revision."
+          : unanswered(settings),
     };
   }
   return {
-    kind: "unknown",
-    detail:
-      checked.status === "unreachable"
-        ? checked.detail || "The engine could not be reached."
-        : "The engine did not describe the organization.",
+    kind: "read",
+    reading: { settings: settings.body as CompanyDocument, revision, chart: chart.chart },
+  };
+}
+
+/** What an update of a draft can be carried onto. */
+export type UpdateRead =
+  | { readonly kind: "ready"; readonly reading: CompanyReading }
+  | { readonly kind: "behind" }
+  | { readonly kind: "unknown"; readonly detail: string };
+
+/**
+ * The company a conflicted draft is updated onto: the settings once this node
+ * serves the revision the conflict named or a later one ([readyToUpdate]),
+ * and the chart as it stands.
+ */
+export async function readUpdate(
+  transport: EngineTransport,
+  conflict: { readonly baseRevision: string | null; readonly conflictRevisionId: string | null },
+  signal: AbortSignal,
+): Promise<UpdateRead> {
+  // A CREATE DRAFT HAS NO REVISION TO WAIT FOR: whatever the company holds
+  // now is what it is carried onto, read whole — the chart once, not twice.
+  if (conflict.baseRevision === null) {
+    const whole = await readCompany(transport, signal);
+    return whole.kind === "read"
+      ? { kind: "ready", reading: whole.reading }
+      : { kind: "unknown", detail: whole.detail };
+  }
+  const chart = await readChart(transport, signal);
+  if (chart.kind !== "read") return { kind: "unknown", detail: unanswered(chart.answer) };
+  const settings = await readyToUpdate(
+    transport,
+    { baseRevision: conflict.baseRevision, conflictRevisionId: conflict.conflictRevisionId },
+    signal,
+  );
+  if (settings.kind !== "ready") return settings;
+  return {
+    kind: "ready",
+    reading: { settings: settings.document, revision: settings.revisionId, chart: chart.chart },
   };
 }

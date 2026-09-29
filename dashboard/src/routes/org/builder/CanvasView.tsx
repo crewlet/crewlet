@@ -3,10 +3,8 @@
  * tree canvas, in two arrangements.
  *
  * - STRUCTURE: the company at the root, its root seats and units hanging off
- *   it, each unit's seats and child units hanging off that. A root seat the
- *   engine placed in a unit by its `unit:` reference hangs off that unit,
- *   marked; one whose reference names no unit stays at the root, marked with
- *   the engine's warning.
+ *   it, each unit's seats and child units hanging off that, every list in
+ *   the chart's own order (by address).
  * - REPORTING: who each seat reports to, as the engine derived it: the seats
  *   with no manager as the tops of a forest, and the seats that manage each
  *   other in a loop under a "Reporting cycle" group. Read-only, because a
@@ -72,15 +70,7 @@
  * `nodeActions.tsx`, and which hue a seat takes is `nodeTone.ts`.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import {
   useBuilder,
@@ -106,14 +96,11 @@ import {
   leadChipLabel,
   leadMenu,
   leadSentence,
-  moveKey,
   reportingMenu,
   type OpenScreen,
 } from "./nodeActions.tsx";
 import {
-  LiveState,
   NodeGlyph,
-  ProblemCount,
   ReportingMarks,
   SeatMarks,
   UnitMarks,
@@ -123,7 +110,6 @@ import {
   unitTypeLabel,
 } from "./nodeMarks.tsx";
 import { nodeTone, seatTone } from "./nodeTone.ts";
-import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
   AccountTreeGlyph,
@@ -271,7 +257,6 @@ function StructureChart({
   about: string | null;
   adding: Adding | null;
 }) {
-  const reorder = useReorder(api, structure);
   /*
    * THE GHOST OF THE NODE ABOUT TO EXIST. The parent is a card of this chart,
    * so a ghost is only asked for where the parent is still in the draft: an
@@ -338,14 +323,6 @@ function StructureChart({
       cards={cards}
       cardOf={(id) => id}
       onNodeKey={onNodeKey}
-      /*
-       * ALT WITH AN ARROW MOVES A NODE among the siblings it is drawn beside,
-       * which is the key the outline already binds. This is the view where a
-       * reader reaches for it first: a chart draws siblings left to right in
-       * exactly the order the move changes, and passing one can change which
-       * seat manages this one (`reorder.ts`).
-       */
-      onNodeKeyDown={(id, event) => !api.readOnly && moveKey(reorder, id as NodeKey, event)}
       isNode={(id) => structure.nodes.has(id)}
       hasNodeMenu={(id) => structure.nodes.has(id)}
       // A HUMAN SEAT WEARS THE DASHED EDGE every human seat on this dashboard
@@ -357,14 +334,7 @@ function StructureChart({
       // AN AGENT SEAT CARRIES A HUE, derived from its key: see `nodeTone.ts`.
       cardTone={(id) => nodeTone(structure.nodes.get(id))}
       renderCard={(id, card) => (
-        <StructureCard
-          api={api}
-          structure={structure}
-          id={id}
-          card={card}
-          open={open}
-          reorder={reorder}
-        />
+        <StructureCard api={api} structure={structure} id={id} card={card} open={open} />
       )}
       // THE ADD IS ON THE BRANCH, under the node whose children it makes, and
       // it is ALONE there. It used to be a third button crowding the node's
@@ -423,8 +393,8 @@ function ReportingChart({
     return (
       <EmptyState
         icon={<AccountTreeGlyph />}
-        title="Reporting lines appear after the check"
-        description="Who reports to whom is derived by the engine. It is drawn here once the engine has checked this draft."
+        title="Reporting lines appear once the engine describes the company"
+        description="Who reports to whom is derived by the engine from the saved org chart, so it is drawn here once the engine has described the company this draft was made on. A company that has not been saved yet has nothing to describe."
       />
     );
   }
@@ -437,7 +407,6 @@ function ReportingChart({
       />
     );
   }
-  const stale = api.state.check.generation !== api.state.generation;
   return (
     <Chart
       label="Reporting chart"
@@ -445,11 +414,15 @@ function ReportingChart({
       about={about}
       overlay={
         // Over the canvas rather than above it: a note that came and went
-        // with every check would resize the viewport under the operator.
-        stale && (
+        // with every edit would resize the viewport under the operator.
+        //
+        // THE SAVED COMPANY'S LINES, because nothing derives a draft: the
+        // chart has no dry run, so who reports to whom after a change is the
+        // engine's to say once the change is saved (`chartModel.ts`).
+        !chart.current && (
           <p className="bchart-note">
-            These reporting lines are from the last check. Changes made since then appear after the
-            next one.
+            These are the saved company&apos;s reporting lines. The changes in this draft appear
+            here once it is saved.
           </p>
         )
       }
@@ -510,7 +483,6 @@ function Chart({
   cardOutline,
   cardTone,
   onNodeKey,
-  onNodeKeyDown,
   hasNodeMenu,
   isNode,
   overlay,
@@ -528,7 +500,6 @@ function Chart({
   cardOutline?: (id: string) => boolean;
   cardTone?: (id: string) => TreeCardTone | undefined;
   onNodeKey: (id: string, action: Exclude<TreeItemAction, "menu">) => boolean;
-  onNodeKeyDown?: (id: string, event: KeyboardEvent<HTMLElement>) => boolean;
   hasNodeMenu: (id: string) => boolean;
   /** Whether an id names a node of the draft, which is what a selection can hold. */
   isNode: (id: string) => boolean;
@@ -579,7 +550,6 @@ function Chart({
         cardOutline={cardOutline}
         cardTone={cardTone}
         onNodeKey={onNodeKey}
-        onNodeKeyDown={onNodeKeyDown}
         hasNodeMenu={hasNodeMenu}
         // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
         // being decided has the part of the chart it is about behind it rather
@@ -621,14 +591,12 @@ function StructureCard({
   id,
   card,
   open,
-  reorder,
 }: {
   api: BuilderApi;
   structure: Structure;
   id: string;
   card: TreeCardContext;
   open: OpenScreen;
-  reorder: Reorder;
 }) {
   const view = structure.nodes.get(id);
   if (!view) return null;
@@ -653,15 +621,7 @@ function StructureCard({
           <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
         <ToggleButton card={card} id={id} name={view.name} />
-        <NodeActions
-          api={api}
-          card={card}
-          id={id}
-          label={view.name}
-          view={view}
-          open={open}
-          reorder={reorder}
-        />
+        <NodeActions api={api} card={card} id={id} label={view.name} view={view} open={open} />
       </>
     );
   }
@@ -685,7 +645,6 @@ function StructureCard({
           label={view.name || "the company"}
           view={view}
           open={open}
-          reorder={reorder}
         />
       </>
     );
@@ -704,15 +663,7 @@ function StructureCard({
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
       <ToggleButton card={card} id={id} name={view.name} />
-      <NodeActions
-        api={api}
-        card={card}
-        id={id}
-        label={view.name}
-        view={view}
-        open={open}
-        reorder={reorder}
-      />
+      <NodeActions api={api} card={card} id={id} label={view.name} view={view} open={open} />
       <LeadChip api={api} structure={structure} unit={view} card={card} />
     </>
   );
@@ -818,7 +769,7 @@ function nameOfItem(chart: { items: ReadonlyMap<string, ReportingItem> }, id: st
  * (Enter, Delete), so they are the pair a pointer gets without opening
  * anything, and two is also what a node one rank tall can split into cells a
  * finger can hit. Everything else (Add, Move to, Open seat, Edit reports,
- * Change kind, Move up and Move down) is one list, in `nodeActions`, and it is
+ * Change kind) is one list, in `nodeActions`, and it is
  * reached three ways that are all still here: the ContextMenu key or Shift+F10
  * on the node, the toolbar, which mirrors the selected node, and the Add on
  * the branch below.
@@ -842,7 +793,6 @@ function NodeActions({
   label,
   view,
   open,
-  reorder,
 }: {
   api: BuilderApi;
   card: TreeCardContext;
@@ -850,7 +800,6 @@ function NodeActions({
   label: string;
   view: NodeView;
   open: OpenScreen;
-  reorder: Reorder;
 }) {
   const deletable = isDeletable(view) && !api.readOnly;
   return (
@@ -883,14 +832,12 @@ function NodeActions({
         THE MENU IS WHAT THIS CARD DOES NOT ALREADY REACH (`cardMenu`), which
         is the question the table's row asks through the same subtraction.
         Written out as `nodeMenu` itself, it opened with an Edit drawn two
-        inches to its left and ended with the Delete beside it, and dropped the
-        Move up and Move down the row offered: one node, two menus, on two
-        views of one draft. The three ADDS stay, because this is a tree and a
+        inches to its left and ended with the Delete beside it. The three ADDS stay, because this is a tree and a
         tree item may hold no tab stop: the pill on the branch is pointer-only,
         so its kinds have nowhere else a key reaches. The toolbar draws no
         control of its own and keeps the whole list.
       */}
-      <KeyboardMenu card={card} id={id} label={label} items={cardMenu(api, view, open, reorder)} />
+      <KeyboardMenu card={card} id={id} label={label} items={cardMenu(api, view, open)} />
     </div>
   );
 }
@@ -1072,20 +1019,15 @@ function LeadChip({
   // own column keeps `leadLabel`, which says the name alone, because there the
   // word is already the column heading and the pill's wording would double it.
   //
-  // THE PILL IS DRAWN EMPTY where the unit has no lead, and it still SAYS
-  // which of the two nothings it is. The chart this is drawn from writes
-  // "Lead" in every pill with nothing in it; this builder has a third answer
-  // that chart has no idea of, because the lead a unit inherits is derived by
-  // the engine: "No lead" and "Lead after the check" are different facts, and
-  // a pill reading "Lead" for both would hide a check that has not answered
-  // behind a unit that declares nothing.
-  const none = unit.lead === null || unit.lead === undefined;
+  // THE PILL IS DRAWN EMPTY where the unit has no lead, declared or
+  // inherited, as the chart this is drawn from draws it.
+  const none = unit.lead === null;
   // WHAT THE X CLEARS IS A DECLARED LEAD. A lead the engine derived from an
   // ancestor is not written on this unit, so there is nothing here to take
   // away: the control is drawn where a press would change the draft and
   // nowhere else, rather than drawn everywhere and refusing on two thirds of
   // the units in the chart.
-  const declared = unit.lead !== null && unit.lead !== undefined && !unit.lead.inherited;
+  const declared = unit.lead !== null && !unit.lead.inherited;
   return (
     <div aria-hidden="true" {...card.press(unit.key)}>
       <OrgNodeLead

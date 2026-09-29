@@ -1,5 +1,5 @@
 /**
- * The dry-run check, driven by the draft.
+ * The check, driven by the draft.
  *
  * `model/scheduler.ts` is the state machine and its driver; this hook owns
  * the driver's lifetime and tells it when the draft moved. One runner per
@@ -14,14 +14,15 @@
  * dispatches `tokenChanged`, and the reset rides the state change that
  * follows.
  *
- * WHAT IS SENT is built from the state as it stands when the request leaves,
+ * WHAT IS ASKED is built from the state as it stands when the check leaves,
  * never from a state captured earlier: `prepare` reads the latest state, and
  * answers `null` for a generation the draft has already left, which the
- * runner treats as superseded.
+ * runner treats as superseded. The settings are asked about only when the
+ * draft changes them (always in create mode): a dry run of nothing would be a
+ * request that validates the whole settings document to report no change.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { toDocument } from "./model/document.ts";
 import { checkTrigger, type BuilderAction, type BuilderState } from "./model/reducer.ts";
 import {
   CheckRunner,
@@ -29,25 +30,32 @@ import {
   type CheckState,
   type PreparedCheck,
 } from "./model/scheduler.ts";
-import { checkRequest, type Clock, type ConfigTransport } from "./model/transport.ts";
+import {
+  settingsChanged,
+  settingsCheckRequest,
+  type Clock,
+  type EngineTransport,
+} from "./model/transport.ts";
 
-/** The check request for `generation` of `state`, or `null` when there is nothing to check. */
+/** What to check for `generation` of `state`, or `null` when there is nothing to check. */
 export function prepareCheck(state: BuilderState, generation: number): PreparedCheck | null {
   if (state.generation !== generation) return null;
-  if (state.mode === "edit" && (state.base.document === null || state.base.revision === null)) {
+  if (state.mode === "edit" && (state.base.settings === null || state.base.revision === null)) {
     return null;
   }
-  const sent = toDocument(state.draft);
-  return {
-    request: checkRequest({
-      mode: state.mode,
-      baseRevision: state.base.revision,
-      base: state.base.document,
-      sent,
-    }),
-    sent,
+  const settings = {
     mode: state.mode,
     baseRevision: state.base.revision,
+    base: state.base.settings,
+    draft: state.draft.company,
+  };
+  return {
+    mode: state.mode,
+    baseRevision: state.base.revision,
+    basePrint: state.base.print,
+    draft: state.draft,
+    baseDraft: state.baseDraft,
+    settings: settingsChanged(settings) ? settingsCheckRequest(settings) : null,
   };
 }
 
@@ -73,7 +81,7 @@ export function useCheck({
   dispatch: (action: BuilderAction) => void;
   /** False until the first company (or its absence) is loaded: nothing is checked before. */
   loaded: boolean;
-  transport: ConfigTransport;
+  transport: EngineTransport;
   clock: Clock;
 }): Check {
   const runner = useRef<CheckRunner | null>(null);

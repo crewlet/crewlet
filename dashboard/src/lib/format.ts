@@ -515,67 +515,8 @@ function wallFormatter(tz: string): Intl.DateTimeFormat {
 }
 
 // ---------------------------------------------------------------------------
-// Values read out of the company document
+// Values read out of a redacted answer
 // ---------------------------------------------------------------------------
-
-/**
- * The order the engine declares a seat's per-phase chains in
- * (`config.PhaseLLM`), so a mapping renders in the order its reader wrote it
- * against rather than in whatever order a JSON object happened to arrive.
- *
- * `LLM_` in the name deliberately: `PHASE_ORDER` on the Integrations screen is
- * the order a SETUP runs its steps in, `lib/phaseOrder.test.ts` holds that one
- * to a single declaration, and two unrelated things called `PHASE_ORDER` is
- * how one of them gets changed in the other's name.
- */
-const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "sandbox"];
-
-/** One row of a seat's model setting: which phase, and the chain it runs on. */
-export interface PhaseChain {
-  /** The mapping key, or "" when one chain covers every phase. */
-  phase: string;
-  /** The provider keys, first choice first, joined for reading. */
-  chain: string;
-}
-
-/**
- * A seat's `llm:` field as rows a person reads.
- *
- * THREE SHAPES, ONE READING. A key and a chain are one row covering every
- * phase; a per-phase mapping is one row per phase it names. The seat screen
- * used to render the field as a React child, which drew a chain as its keys
- * glued together and threw on the mapping, taking the whole page with it.
- *
- * A fallback chain reads as "first, then second": the order is the whole
- * meaning of a chain, and a bare comma list reads as a set.
- *
- * `unknown` in, because this is the one reader standing between a field a
- * newer engine may shape differently and a render that must not throw.
- */
-export function formatPhaseLLM(llm: unknown): PhaseChain[] {
-  const chain = (keys: unknown): string => {
-    if (typeof keys === "string") return keys.trim();
-    if (!Array.isArray(keys)) return "";
-    return keys
-      .filter((k): k is string => typeof k === "string" && k.trim() !== "")
-      .map((k) => k.trim())
-      .join(", then ");
-  };
-  if (typeof llm === "string" || Array.isArray(llm)) {
-    const only = chain(llm);
-    return only ? [{ phase: "", chain: only }] : [];
-  }
-  if (!llm || typeof llm !== "object") return [];
-  const rank = (phase: string) => {
-    const at = LLM_PHASE_ORDER.indexOf(phase);
-    return at < 0 ? LLM_PHASE_ORDER.length : at;
-  };
-  return Object.entries(llm as Record<string, unknown>)
-    .map(([phase, keys], i) => ({ phase, chain: chain(keys), i }))
-    .filter((row) => row.chain !== "")
-    .sort((a, b) => rank(a.phase) - rank(b.phase) || a.i - b.i)
-    .map(({ phase, chain: joined }) => ({ phase, chain: joined }));
-}
 
 /**
  * The mask the engine writes in place of a credential it will not send.

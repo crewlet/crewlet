@@ -17,24 +17,25 @@ import type { BuilderState } from "./model/reducer.ts";
 import type { OpenScreen } from "./nodeActions.tsx";
 
 /**
- * The structure chart of the current draft. A reading of the draft, the saved
- * base and the last check and of nothing else, so a live push, a refusal or a
- * pending update leaves it (and every layout built on it) as it was.
+ * The structure chart of the current draft. A reading of the draft and the
+ * saved base (its chart and the engine's derivation of it) and of nothing
+ * else, so a check, a refusal or a pending update leaves it (and every layout
+ * built on it) as it was.
  */
 export function useStructure(state: BuilderState): Structure {
-  const { draft, baseDraft, check, generation } = state;
+  const { draft, baseDraft, base } = state;
   return useMemo(
-    () => structure(chartInputs({ draft, baseDraft, check, generation })),
-    [draft, baseDraft, check, generation],
+    () => structure(chartInputs({ draft, baseDraft, base })),
+    [draft, baseDraft, base],
   );
 }
 
 /** The reporting chart of the current draft, on the same terms as [useStructure]. */
 export function useReporting(state: BuilderState): Reporting {
-  const { draft, baseDraft, check, generation } = state;
+  const { draft, baseDraft, base } = state;
   return useMemo(
-    () => reporting(chartInputs({ draft, baseDraft, check, generation })),
-    [draft, baseDraft, check, generation],
+    () => reporting(chartInputs({ draft, baseDraft, base })),
+    [draft, baseDraft, base],
   );
 }
 

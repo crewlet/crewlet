@@ -1,50 +1,51 @@
 /**
- * Between the engine's document and the builder's draft, in both directions,
- * and the merge patch a save sends.
+ * Between the engine's two answers and the builder's draft.
  *
- * `fromDocument` keys a fetched document (see `keys.ts` for why a key is the
- * engine's identity for the node). The engine's `derived` block supplies the
- * handle of every seat by authored path: the client never derives a handle,
- * because a divergent derivation names a different seat and orphans the
- * memory of the one it meant.
+ * TWO SOURCES, ONE DRAFT. The company is two things with two lifecycles now:
+ * its SETTINGS are a revision `GET /config` serves (the charter, the
+ * integrations, every company-wide value), and its ORG CHART is a log of its
+ * own that `GET /chart` serves (the units, the seats, who leads and manages
+ * whom). [fromChart] keys the chart into the draft's tree beside the settings
+ * document; the save divides the draft again (`save.ts`).
  *
- * `toDocument` walks the draft back into a document and returns, beside it,
- * THE PATH INDEX OF THAT EXACT DOCUMENT: which node sits at `units[0].roles[1]`.
- * A problem the engine reports names a path in the document it validated, so
- * the index is only meaningful together with the bytes it was built beside,
- * and the dry-run scheduler carries the two as one value.
+ * THE CHART NEEDS NO DESCRIBING. Every seat it serves carries its handle and
+ * every unit its key, and a renamed one the address it was created under — its
+ * identity, which is what a node is keyed by (`keys.ts`) — so the base is
+ * keyed the moment it is read: there is no derivation to wait for and no path
+ * to fall back on. What the engine DERIVES
+ * from the chart (the lead a unit inherits, a seat's primary manager) comes
+ * from the org projection's `derived` block and is placed on the nodes by
+ * handle and by unit key ([placeDerivation]).
  *
- * `buildPatch` names only the top-level keys the builder edits, and only when
- * they changed. `roles` and `units` are sent whole when anything in them
- * changed, because a JSON merge patch replaces an array wholesale and cannot
- * address one element; the engine merges back what the element held that this
- * build cannot represent. The two integration keys a seat edit reaches are
- * sent as the single values they are, with `null` for a removed key, because
- * a merge patch keeps every key it does not name: sending the access level map
- * of the seats that remain would leave a removed seat's entry in place, and
- * that entry grants its level to the next seat that derives the same handle.
+ * WHAT "SOMEBODY ELSE SAVED FIRST" MEANS for the chart is that its ROWS
+ * changed, not that its position moved: every chart read is linearizable, and
+ * a linearizable read appends a barrier record to the log, so the position an
+ * answer reports moves on every read anybody makes. [chartPrint] is the rows
+ * alone, canonical, and a check compares that.
  */
 
 import type {
+  ChartRead,
+  ChartSeat,
+  ChartUnit,
   CompanyDocument,
-  ConfigRole,
-  ConfigUnit,
   Derived,
   DerivedSeat,
   DerivedUnit,
 } from "~/protocol/index.ts";
-import { REDACTED } from "~/lib/format.ts";
 import { cloneJson, getPath, isRecord, jsonEqual, setPath, type JsonRecord } from "./json.ts";
+import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./keys.ts";
 import {
-  COMPANY_KEY,
-  handleOfKey,
-  seatKey,
-  seatPathKey,
-  unitKey,
-  unitPathKey,
-  type NodeKey,
-} from "./keys.ts";
-import { allSeats, allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./draft.ts";
+  allSeats,
+  allUnits,
+  inAddressOrder,
+  locate,
+  type Draft,
+  type DraftSeat,
+  type DraftUnit,
+  type SeatData,
+  type UnitData,
+} from "./draft.ts";
 
 /** One step of a document path: a key, or a list index. */
 export type Segment = string | number;
@@ -52,36 +53,16 @@ export type Segment = string | number;
 /** The charter fields: the company node's own editable keys. */
 export const CHARTER_FIELDS = ["name", "mission", "vision", "policies"] as const;
 
-/** Where the Datadog fallback seat lives in the document. */
+/** Where the Datadog fallback seat lives in the settings document. */
 export const DATADOG_ROUTE_TO: readonly string[] = ["integrations", "datadog", "route_to"];
 
-/** Where the per-handle GitLab access levels live in the document. */
+/** Where the per-handle GitLab access levels live in the settings document. */
 export const GITLAB_ACCESS_LEVELS: readonly string[] = [
   "integrations",
   "gitlab",
   "provisioning",
   "access_levels",
 ];
-
-/**
- * Which node sits at which authored path in one document, both ways.
- *
- * The company is indexed at the empty path. Paths are spelled the way the
- * engine spells them (`units[0].children[1].roles[2]`), and segments are the
- * same place split, so a problem's `segments` can be matched without parsing
- * its `path`.
- */
-export interface PathIndex {
-  readonly byPath: ReadonlyMap<string, NodeKey>;
-  readonly pathOf: ReadonlyMap<NodeKey, string>;
-  readonly segmentsOf: ReadonlyMap<NodeKey, readonly Segment[]>;
-}
-
-/** A document and the index of its own paths. */
-export interface IndexedDocument {
-  readonly document: CompanyDocument;
-  readonly index: PathIndex;
-}
 
 /** Renders segments as the engine renders a path: dotted keys, bracketed indexes. */
 export function pathOfSegments(segments: readonly Segment[]): string {
@@ -93,156 +74,199 @@ export function pathOfSegments(segments: readonly Segment[]): string {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Reading the chart
+// ---------------------------------------------------------------------------
+
 /**
- * Keys a fetched document into a draft.
- *
- * `derived` is the engine's derivation of THIS document (the answer to a dry
- * run of it). Without one, a seat is keyed by the handle it declares or else
- * by its authored path, and a unit whose name is missing or repeated is keyed
- * by its path: see `keys.ts` for what such a key can and cannot survive.
+ * Whether a served value is one the draft keeps. An empty string and an empty
+ * list are how the chart serves a field nobody set — its views omit them, and
+ * an older answer may not — so they are read as absent: a draft holding "" for
+ * a goal the chart never had would read as an edit nobody made.
  */
-export function fromDocument(doc: CompanyDocument | null, derived: Derived | null): Draft {
-  if (!doc) return { company: {}, roles: [], units: [] };
-  const source = cloneJson(doc);
+const kept = (value: unknown): boolean =>
+  value !== undefined &&
+  value !== null &&
+  value !== "" &&
+  !(Array.isArray(value) && value.length === 0);
 
-  const handleByPath = new Map<string, string>();
-  for (const seat of derived?.seats ?? []) {
-    if (seat.path && seat.handle) handleByPath.set(seat.path, seat.handle);
+/**
+ * A seat's data as the draft holds it, from the seat the chart served and its
+ * authored `manages:` list.
+ *
+ * AN AGENT'S KIND IS LEFT UNWRITTEN, as the builder writes every agent seat: a
+ * seat is an agent unless it says it is a person, so "agent" and absent are one
+ * value, and holding the two spellings apart would read a kind change and its
+ * undo as an edit. A kind this build does not know is kept as served.
+ *
+ * WHERE IT SITS IS THE TREE'S, so `unit` is left out, and the addresses it used
+ * to answer to are kept for the screens that explain a stale reference.
+ */
+export function seatDataOf(seat: ChartSeat, manages: readonly string[] | undefined): SeatData {
+  // THE IDENTITY IS THE KEY'S, not the data's: nothing edits it, and no write
+  // states it.
+  const {
+    unit: _unit,
+    origin_handle: _origin,
+    handle,
+    kind,
+    name,
+    runtime,
+    ...rest
+  } = cloneJson(seat);
+  const data: SeatData = { handle, name: typeof name === "string" ? name : "" };
+  if (typeof kind === "string" && kept(kind) && kind !== "agent") data.kind = kind;
+  for (const [field, value] of Object.entries(rest)) if (kept(value)) data[field] = value;
+  if (manages && manages.length > 0) data.manages = [...manages];
+  if (isRecord(runtime) && Object.keys(runtime).length > 0) data.runtime = runtime;
+  return data;
+}
+
+/** A unit's data as the draft holds it, from the unit the chart served. */
+export function unitDataOf(unit: ChartUnit): UnitData {
+  const { parent: _parent, origin_key: _origin, key, name, runtime, ...rest } = cloneJson(unit);
+  const data: UnitData = { key, name: typeof name === "string" ? name : "" };
+  for (const [field, value] of Object.entries(rest)) if (kept(value)) data[field] = value;
+  if (isRecord(runtime) && Object.keys(runtime).length > 0) data.runtime = runtime;
+  return data;
+}
+
+/**
+ * Keys a chart reading into a draft beside the settings document.
+ *
+ * ADDRESS ORDER, which is the only order the chart keeps (see
+ * `draft.Placement`): every list is sorted here rather than trusted to arrive
+ * sorted, so two readings of one chart build one draft. A unit whose parent the
+ * reading does not hold (a row a record left dangling) is placed at the root
+ * rather than dropped: a node the draft cannot show is one the save would read
+ * as removed.
+ */
+export function fromChart(settings: CompanyDocument | null, chart: ChartRead | null): Draft {
+  const company = settings ? stripChart(cloneJson(settings)) : {};
+  if (!chart) return { company, roles: [], units: [] };
+  const manages = chart.manages ?? {};
+  const unitsByKey = new Map<string, ChartUnit>();
+  for (const unit of chart.units ?? []) unitsByKey.set(unit.key, unit);
+  const childKeys = new Map<string, string[]>();
+  const rootUnits: string[] = [];
+  for (const unit of chart.units ?? []) {
+    const parent = unit.parent && unitsByKey.has(unit.parent) ? unit.parent : "";
+    if (parent === "") rootUnits.push(unit.key);
+    else childKeys.set(parent, [...(childKeys.get(parent) ?? []), unit.key]);
   }
-
-  // Collect every seat's identity first, so two seats claiming one handle
-  // (which the engine never stores, but a caller could hand in) both fall
-  // back to their paths rather than one silently winning the key.
-  const seatHandles = new Map<string, string | undefined>();
-  const unitNamesSeen = new Map<string, number>();
-  walkDocument(source, {
-    seat: (role, path) => {
-      seatHandles.set(path, handleByPath.get(path) ?? declaredHandle(role));
-    },
-    unit: (unit) => {
-      if (typeof unit.name === "string" && unit.name !== "") {
-        unitNamesSeen.set(unit.name, (unitNamesSeen.get(unit.name) ?? 0) + 1);
-      }
-    },
+  const seatsIn = new Map<string, ChartSeat[]>();
+  const rootSeats: ChartSeat[] = [];
+  for (const seat of chart.seats ?? []) {
+    const home = seat.unit && unitsByKey.has(seat.unit) ? seat.unit : "";
+    if (home === "") rootSeats.push(seat);
+    else seatsIn.set(home, [...(seatsIn.get(home) ?? []), seat]);
+  }
+  const seatNode = (seat: ChartSeat): DraftSeat => ({
+    key: seatKey(seat.origin_handle || seat.handle),
+    data: seatDataOf(seat, manages[seat.handle]),
   });
-  const handleCount = new Map<string, number>();
-  for (const handle of seatHandles.values()) {
-    if (handle) handleCount.set(handle, (handleCount.get(handle) ?? 0) + 1);
-  }
-
-  const seatNode = (role: ConfigRole, path: string): DraftSeat => {
-    const handle = seatHandles.get(path);
-    const key = handle && handleCount.get(handle) === 1 ? seatKey(handle) : seatPathKey(path);
-    return { key, data: role };
-  };
-  const unitNode = (unit: ConfigUnit, path: string): DraftUnit => {
-    const { roles = [], children = [], ...data } = unit;
-    const name = typeof unit.name === "string" ? unit.name : "";
-    const key = name !== "" && unitNamesSeen.get(name) === 1 ? unitKey(name) : unitPathKey(path);
+  const placed = new Set<string>();
+  const unitNode = (key: string): DraftUnit => {
+    placed.add(key);
+    const unit = unitsByKey.get(key)!;
     return {
-      key,
-      data: data as ConfigUnit,
-      roles: (Array.isArray(roles) ? roles : []).map((r, i) => seatNode(r, `${path}.roles[${i}]`)),
-      children: (Array.isArray(children) ? children : []).map((c, i) =>
-        unitNode(c, `${path}.children[${i}]`),
+      key: unitKey(unit.origin_key || key),
+      data: unitDataOf(unit),
+      roles: inAddressOrder((seatsIn.get(key) ?? []).map(seatNode)),
+      children: inAddressOrder(
+        (childKeys.get(key) ?? []).filter((k) => !placed.has(k)).map(unitNode),
       ),
     };
   };
-
-  const { roles = [], units = [], ...company } = source;
+  const units = rootUnits.map(unitNode);
+  // A CYCLE THE ROWS SHOULD NEVER HOLD is still drawn rather than lost: every
+  // unit no walk from the root reached goes to the root, as the engine's own
+  // view builder places it.
+  for (const unit of chart.units ?? []) if (!placed.has(unit.key)) units.push(unitNode(unit.key));
   return {
-    company: company as CompanyDocument,
-    roles: (Array.isArray(roles) ? roles : []).map((r, i) => seatNode(r, `roles[${i}]`)),
-    units: (Array.isArray(units) ? units : []).map((u, i) => unitNode(u, `units[${i}]`)),
+    company,
+    roles: inAddressOrder(rootSeats.map(seatNode)),
+    units: inAddressOrder(units),
   };
-}
-
-/** Visits every seat and unit of a raw document with its authored path. */
-function walkDocument(
-  doc: CompanyDocument,
-  visit: {
-    seat: (role: ConfigRole, path: string) => void;
-    unit: (unit: ConfigUnit, path: string) => void;
-  },
-): void {
-  const units = (list: unknown, path: string) => {
-    if (!Array.isArray(list)) return;
-    list.forEach((unit: ConfigUnit, i) => {
-      const here = `${path}[${i}]`;
-      visit.unit(unit, here);
-      if (Array.isArray(unit.roles))
-        unit.roles.forEach((r, j) => visit.seat(r, `${here}.roles[${j}]`));
-      units(unit.children, `${here}.children`);
-    });
-  };
-  if (Array.isArray(doc.roles)) doc.roles.forEach((r, i) => visit.seat(r, `roles[${i}]`));
-  units(doc.units, "units");
 }
 
 /**
- * The document a draft stands for, and the path index of that document.
- *
- * An empty list is left out, as the engine itself writes a document: a
- * `roles: []` the base never had would read as an edit.
+ * The settings document without the two keys a settings revision no longer
+ * holds. A revision stored before the chart left the document still carries
+ * them, and the builder draws the chart from the chart alone.
  */
-export function toDocument(draft: Draft): IndexedDocument {
-  const byPath = new Map<string, NodeKey>([["", COMPANY_KEY]]);
-  const pathOf = new Map<NodeKey, string>([[COMPANY_KEY, ""]]);
-  const segmentsOf = new Map<NodeKey, readonly Segment[]>([[COMPANY_KEY, []]]);
-  const record = (key: NodeKey, segments: Segment[]) => {
-    const path = pathOfSegments(segments);
-    byPath.set(path, key);
-    pathOf.set(key, path);
-    segmentsOf.set(key, segments);
-  };
-
-  const seat = (node: DraftSeat, segments: Segment[]): ConfigRole => {
-    record(node.key, segments);
-    return node.data;
-  };
-  const unit = (node: DraftUnit, segments: Segment[]): ConfigUnit => {
-    record(node.key, segments);
-    const out: ConfigUnit = { ...node.data };
-    if (node.roles.length > 0)
-      out.roles = node.roles.map((s, i) => seat(s, [...segments, "roles", i]));
-    if (node.children.length > 0) {
-      out.children = node.children.map((c, i) => unit(c, [...segments, "children", i]));
-    }
-    return out;
-  };
-
-  const document: CompanyDocument = { ...draft.company };
-  if (draft.roles.length > 0) document.roles = draft.roles.map((s, i) => seat(s, ["roles", i]));
-  if (draft.units.length > 0) document.units = draft.units.map((u, i) => unit(u, ["units", i]));
-  return { document, index: { byPath, pathOf, segmentsOf } };
+function stripChart(settings: CompanyDocument): CompanyDocument {
+  const { roles: _roles, units: _units, ...rest } = settings;
+  return rest;
 }
 
 /**
- * A document a check was sent and the derivation the engine answered with.
- *
- * THE TWO TRAVEL TOGETHER, because each is readable only through the other:
- * a derivation names seats and units by their paths in the document it
- * describes, and the draft may have moved a node since, so `units[1]` may be
- * another unit now. Its paths become node keys through the path index built
- * beside that very document, never the draft's.
+ * The chart's rows, canonical: what "the chart has not changed" is compared
+ * on. Keys sorted at every depth and the seats and units in address order, so
+ * two readings of the same rows are the same string however the answer happened
+ * to list them; the answer's own position and level are left out, because every
+ * read moves the position (see the module doc).
  */
-export interface CheckedDocument {
-  readonly sent: IndexedDocument;
-  readonly derived: Derived;
+export function chartPrint(chart: ChartRead | null): string {
+  if (!chart) return "";
+  const byAddress = <T>(list: readonly T[], address: (t: T) => string) =>
+    [...list].sort((a, b) => (address(a) < address(b) ? -1 : address(a) > address(b) ? 1 : 0));
+  return canonical({
+    units: byAddress(chart.units ?? [], (u) => u.key),
+    seats: byAddress(chart.seats ?? [], (s) => s.handle),
+    manages: chart.manages ?? {},
+    leads: chart.leads ?? {},
+  });
 }
 
-/** A derivation placed on the nodes of the document it describes. */
+/**
+ * A short, stable name for a print: what a kept draft records of the chart it
+ * was made on, so a restore can tell "the same chart" from "a changed one"
+ * without keeping the chart — its model chains, its contact identities and
+ * its credential names — in browser storage.
+ *
+ * TWO INDEPENDENT 32-BIT FNV-1a HASHES over the UTF-16 code units, sixty-four
+ * bits together: this names one chart among the handful a tab ever meets,
+ * against nobody choosing the input, so a cryptographic digest (async, in
+ * this browser) would buy nothing a comparison needs.
+ */
+export function fingerprint(print: string): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ 0x9e3779b9;
+  for (let i = 0; i < print.length; i++) {
+    const c = print.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193);
+    b = Math.imul(b ^ c, 0x01000197);
+  }
+  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
+  return hex(a) + hex(b);
+}
+
+/** JSON with every object's keys sorted, so key order never reads as a change. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (isRecord(value)) {
+    const keys = Object.keys(value)
+      .filter((k) => value[k] !== undefined)
+      .sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+// ---------------------------------------------------------------------------
+// The engine's derivation, placed
+// ---------------------------------------------------------------------------
+
+/** A derivation placed on the nodes of the draft it describes. */
 export interface PlacedDerivation {
   readonly seatByKey: ReadonlyMap<NodeKey, DerivedSeat>;
   readonly unitByKey: ReadonlyMap<NodeKey, DerivedUnit>;
-  /**
-   * The seat the derivation gives each handle. The first, where a draft the
-   * engine refused gives one handle to two seats.
-   */
+  /** The node each derived handle names. */
   readonly keyOfHandle: ReadonlyMap<string, NodeKey>;
 }
 
-/** A derivation that places nothing: what a draft no check has described reads. */
+/** A derivation that places nothing: what a draft no derivation describes reads. */
 export const NO_DERIVATION: PlacedDerivation = {
   seatByKey: new Map(),
   unitByKey: new Map(),
@@ -250,127 +274,105 @@ export const NO_DERIVATION: PlacedDerivation = {
 };
 
 /**
- * Places a derivation on the keys of the document it describes. ONE PLACING
- * for every reader (the charts, the dialogs, the review's changes, the
- * problems and the reducer's handles), so no two of them can map one path to
- * two nodes. A seat or unit the derivation carries no path for (an answer
- * from an engine that omits paths) is simply absent.
+ * Places the engine's derivation on the nodes of a draft: a derived seat on the
+ * node holding its handle, a derived unit on the node holding its key.
+ *
+ * ONE PLACING for every reader (the charts, the dialogs, the review's changes),
+ * so no two of them can put one derived fact on two nodes. A derived seat or
+ * unit the draft holds no node for is simply absent.
  */
-export function placeDerivation(index: PathIndex, derived: Derived | null): PlacedDerivation {
+export function placeDerivation(draft: Draft, derived: Derived | null): PlacedDerivation {
+  if (!derived) return NO_DERIVATION;
+  const seatNodes = new Map<string, NodeKey>();
+  for (const { seat } of allSeats(draft)) seatNodes.set(seat.data.handle, seat.key);
+  const unitNodes = new Map<string, NodeKey>();
+  for (const { unit } of allUnits(draft)) unitNodes.set(unit.data.key, unit.key);
   const seatByKey = new Map<NodeKey, DerivedSeat>();
   const unitByKey = new Map<NodeKey, DerivedUnit>();
   const keyOfHandle = new Map<string, NodeKey>();
-  for (const seat of derived?.seats ?? []) {
-    const key = seat.path ? index.byPath.get(seat.path) : undefined;
-    if (key === undefined || key === COMPANY_KEY) continue;
+  for (const seat of derived.seats ?? []) {
+    const key = seatNodes.get(seat.handle);
+    if (key === undefined) continue;
     seatByKey.set(key, seat);
-    if (seat.handle && !keyOfHandle.has(seat.handle)) keyOfHandle.set(seat.handle, key);
+    keyOfHandle.set(seat.handle, key);
   }
-  for (const unit of derived?.units ?? []) {
-    const key = unit.path ? index.byPath.get(unit.path) : undefined;
-    if (key !== undefined && key !== COMPANY_KEY) unitByKey.set(key, unit);
+  for (const unit of derived.units ?? []) {
+    const key = unit.id ? unitNodes.get(unit.id) : undefined;
+    if (key !== undefined) unitByKey.set(key, unit);
   }
   return { seatByKey, unitByKey, keyOfHandle };
 }
 
-/** A node's JSON as it stood in an indexed document, or `undefined` when it held no such node. */
-export function nodeDataIn(
-  indexed: IndexedDocument,
-  key: NodeKey,
-): Record<string, unknown> | undefined {
-  const segments = indexed.index.segmentsOf.get(key);
-  if (!segments) return undefined;
-  let at: unknown = indexed.document;
-  for (const segment of segments) {
-    if (typeof segment === "number") at = Array.isArray(at) ? at[segment] : undefined;
-    else at = isRecord(at) && Object.hasOwn(at, segment) ? at[segment] : undefined;
+/**
+ * Whether a derivation describes exactly the chart a draft was keyed from:
+ * the same seats, the same units, and every unit's declared lead the one the
+ * derivation resolved when it declares one.
+ *
+ * THE ORG PUSH AND THE CHART READ ARE TWO ANSWERS, and the push can trail the
+ * read by an apply. A derivation of a chart that has since gained a seat or
+ * moved a lead would put facts about one chart on another's nodes, so a
+ * derivation that does not match is not used at all — the charts then draw what
+ * the draft itself says, as they do for a draft that has changed.
+ */
+export function describes(draft: Draft, derived: Derived | null): boolean {
+  if (!derived) return false;
+  const handles = new Set([...allSeats(draft)].map(({ seat }) => seat.data.handle));
+  const derivedHandles = new Set((derived.seats ?? []).map((s) => s.handle));
+  if (handles.size !== derivedHandles.size) return false;
+  for (const handle of handles) if (!derivedHandles.has(handle)) return false;
+  const units = new Map([...allUnits(draft)].map(({ unit }) => [unit.data.key, unit.data]));
+  const derivedUnits = derived.units ?? [];
+  if (units.size !== derivedUnits.length) return false;
+  for (const unit of derivedUnits) {
+    const data = unit.id ? units.get(unit.id) : undefined;
+    if (!data) return false;
+    if (data.lead && !unit.lead_inherited && unit.lead !== data.lead) return false;
   }
-  return isRecord(at) ? at : undefined;
+  return true;
 }
 
-/**
- * The handle a seat declares, or `undefined` when it declares none.
- *
- * ONE READING FOR RECORD, EVALUATE, APPLY AND DISPLAY. Whether a rename pins
- * the handle is decided three times (when it is recorded, when its
- * preconditions are checked, when it is applied), and the three must agree on
- * what "declares a handle" means or an operation that just recorded fails to
- * apply, which throws inside the reducer; a screen that read it another way
- * would name a handle the operation does not write.
- */
-export function declaredHandle(data: Readonly<Record<string, unknown>>): string | undefined {
-  return typeof data.handle === "string" && data.handle !== "" ? data.handle : undefined;
+/** A node's data in a draft, or `undefined` when it holds no such node. */
+export function nodeDataIn(draft: Draft, key: NodeKey): Record<string, unknown> | undefined {
+  if (key === COMPANY_KEY) return draft.company;
+  return locate(draft, key)?.node.data;
 }
 
-/**
- * The handle each seat of `draft` runs under, where one is known.
- *
- * The one it declares; else the one its key carries (a seat of the saved
- * company, whose handle every rename pins); else the one `checked` derived
- * for it, while the seat still declares none and is still called what that
- * check saw. The engine derives an undeclared handle from the seat's own name
- * and from nothing else (`org.Role.Handle` over `org.Slugify`), so that
- * derivation holds exactly as long as the name does: a seat this draft
- * created and then renamed runs under a handle no check has reported yet,
- * and naming the old one would name a seat that will never exist.
- *
- * WHICHEVER CHECK SAW THE NAME. A check of an older draft still vouches for
- * every seat whose name has not changed since, so a handle stays known while
- * the next check is out rather than blinking away on every edit. One rule for
- * the reducer that records an operation by it, the charts that draw it and
- * the dialogs that offer it, so none of them offers a handle another refuses.
- */
-export function knownHandles(draft: Draft, checked: CheckedDocument | null): Map<NodeKey, string> {
-  const derived = checked ? placeDerivation(checked.sent.index, checked.derived).seatByKey : null;
+/** The handle each seat of a draft runs under: the one its data carries. */
+export function knownHandles(draft: Draft): Map<NodeKey, string> {
   const out = new Map<NodeKey, string>();
-  for (const { seat } of allSeats(draft)) {
-    const handle =
-      declaredHandle(seat.data) ??
-      handleOfKey(seat.key) ??
-      (checked && derived ? checkedHandle(seat, checked, derived) : undefined);
-    if (handle) out.set(seat.key, handle);
-  }
+  for (const { seat } of allSeats(draft)) out.set(seat.key, seat.data.handle);
   return out;
 }
 
-/** The handle `checked` derived for a seat that declared none, while its name is unchanged. */
-function checkedHandle(
-  seat: DraftSeat,
-  checked: CheckedDocument,
-  derived: ReadonlyMap<NodeKey, DerivedSeat>,
-): string | undefined {
-  const handle = derived.get(seat.key)?.handle;
-  const was = nodeDataIn(checked.sent, seat.key);
-  if (!handle || !was || declaredHandle(was) !== undefined || was.name !== seat.data.name) {
-    return undefined;
-  }
-  return handle;
-}
-
 /**
- * Where each node of `before` is in `after`, for two drafts of ONE document
- * keyed two ways: the base before and after it is keyed, when the engine's
- * first description of it moves the seats that declare no handle from their
- * path keys to their handles, or a save moves the nodes it created from the
- * keys they were minted with. Each key is followed to the key of the node at
- * the same authored path; only keys that changed are listed.
+ * Where each node of `before` is in `after`, for two drafts of ONE chart keyed
+ * two ways: a save moves the nodes it created from the keys they were minted
+ * with to the identities the chart gave them — the address each was created
+ * under, which is the one it holds when the save reads the chart back. Matched
+ * by handle and by unit key; only keys that changed are listed, so a node the
+ * chart already held keeps its key through its own rename.
  */
 export function rekeying(before: Draft, after: Draft): Map<NodeKey, NodeKey> {
-  const was = toDocument(before).index;
-  const now = toDocument(after).index;
+  const seats = new Map([...allSeats(after)].map(({ seat }) => [seat.data.handle, seat.key]));
+  const units = new Map([...allUnits(after)].map(({ unit }) => [unit.data.key, unit.key]));
   const out = new Map<NodeKey, NodeKey>();
-  for (const [key, path] of was.pathOf) {
-    const moved = now.byPath.get(path);
-    if (moved !== undefined && moved !== key) out.set(key, moved);
+  for (const { seat } of allSeats(before)) {
+    const moved = seats.get(seat.data.handle);
+    if (moved !== undefined && moved !== seat.key) out.set(seat.key, moved);
+  }
+  for (const { unit } of allUnits(before)) {
+    const moved = units.get(unit.data.key);
+    if (moved !== undefined && moved !== unit.key) out.set(unit.key, moved);
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// The settings a save writes
+// ---------------------------------------------------------------------------
 
 /** A JSON merge patch (RFC 7396): `null` removes a key, an object merges, anything else replaces. */
 export type MergePatch = JsonRecord;
-
-/** The top-level keys a patch may name whole. */
-const WHOLE_KEYS = ["name", "mission", "vision", "policies", "roles", "units"] as const;
 
 /** A list the engine never writes empty reads as absent. */
 function normalized(value: unknown): unknown {
@@ -378,12 +380,19 @@ function normalized(value: unknown): unknown {
 }
 
 /**
- * The merge patch that turns `base` into `draft`, naming only what the builder
- * edits and only what changed. An empty object when nothing did.
+ * The merge patch that turns the base settings into the draft's, naming only
+ * what the builder edits and only what changed: the charter, the Datadog
+ * fallback, and the GitLab access levels. An empty object when nothing did.
+ *
+ * The two integration keys are sent as the single values they are, with
+ * `null` for a removed key, because a merge patch keeps every key it does not
+ * name: sending the access level map of the seats that remain would leave a
+ * removed seat's entry in place, and that entry would grant its level to the
+ * next seat given the same handle.
  */
-export function buildPatch(base: CompanyDocument | null, draft: CompanyDocument): MergePatch {
+export function settingsPatch(base: CompanyDocument | null, draft: CompanyDocument): MergePatch {
   let patch: MergePatch = {};
-  for (const key of WHOLE_KEYS) {
+  for (const key of CHARTER_FIELDS) {
     const before = normalized(base?.[key]);
     const after = normalized(draft[key]);
     if (!jsonEqual(before, after)) patch[key] = after === undefined ? null : after;
@@ -410,13 +419,17 @@ export function buildPatch(base: CompanyDocument | null, draft: CompanyDocument)
   return patch;
 }
 
+// ---------------------------------------------------------------------------
+// Names and addresses
+// ---------------------------------------------------------------------------
+
 /**
  * A name not yet taken, starting from the one the operator typed.
  *
- * A convenience, not a validator: seat names and unit names must each be
- * unique (a lead or a `manages` entry names exactly one), and pre-filling
- * "Software Engineer 2" saves a round trip to the engine to learn that. The
- * engine still decides.
+ * A convenience, not a rule: the chart lets two seats share a name, because a
+ * name is prose and every reference is a handle. Pre-filling "Software Engineer
+ * 2" beside an existing "Software Engineer" still spares a reader two cards
+ * they cannot tell apart.
  */
 export function suggestUniqueName(taken: Iterable<string>, desired: string): string {
   const names = new Set(taken);
@@ -429,31 +442,42 @@ export function suggestUniqueName(taken: Iterable<string>, desired: string): str
   return `${stem} ${n}`;
 }
 
+/** The longest address the chart takes, in bytes: a handle is a subject token and a login's width. */
+export const MAX_ADDRESS = 64;
+
 /**
- * The authored paths of the masked literal credentials a unit rename strands,
- * in the document the draft stands for. Paths only, never values.
+ * An address made from a name: lowercase letters and digits, runs of anything
+ * else as one hyphen, trimmed, at most [MAX_ADDRESS] bytes.
  *
- * ONLY THE UNIT'S OWN FIELDS. The engine restores a masked value by the
- * identity of the entity holding it, over the whole prior document: a unit by
- * its name, a seat by its handle. Renaming a unit changes the identity of that
- * unit alone, so its own masks can no longer be matched and the save is
- * refused naming them, while a child unit (its own name) and every seat inside
- * (its handle) still restore. Listing the subtree would send the operator to
- * move credentials that were never at risk.
+ * A SUGGESTION, NEVER A DERIVATION. The engine derives nothing from a name any
+ * more: a seat is created under the handle the request states and a unit under
+ * the key, so what this produces is only what the add form offers first, and
+ * the operator may type any other. Accents are folded to their base letter so
+ * "Ingénierie" suggests `ingenierie` rather than `ing-nierie`.
  */
-export function maskedCredentialPaths(draft: Draft, key: NodeKey): string[] {
-  const found = locate(draft, key);
-  if (found?.kind !== "unit") return [];
-  const { index } = toDocument(draft);
-  const base = index.pathOf.get(key) ?? "";
-  const out: string[] = [];
-  const walk = (value: unknown, segments: Segment[]) => {
-    if (value === REDACTED) out.push(pathOfSegments(segments));
-    else if (Array.isArray(value)) value.forEach((v, i) => walk(v, [...segments, i]));
-    else if (isRecord(value)) for (const [k, v] of Object.entries(value)) walk(v, [...segments, k]);
-  };
-  for (const [k, v] of Object.entries(found.node.data)) walk(v, [k]);
-  return out.map((p) => (p.startsWith("[") ? base + p : `${base}.${p}`));
+export function slugOf(name: string): string {
+  const folded = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const slug = folded
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.slice(0, MAX_ADDRESS).replace(/-+$/, "");
+}
+
+/**
+ * A free address for a new node, from its name: the slug, or the slug with the
+ * first free number after it. `fallback` stands in for a name that slugs to
+ * nothing ("—", or a name in a script with no Latin letters).
+ */
+export function suggestAddress(taken: Iterable<string>, name: string, fallback: string): string {
+  const used = new Set(taken);
+  const stem = slugOf(name) || fallback;
+  if (!used.has(stem)) return stem;
+  for (let n = 2; ; n++) {
+    const suffix = `-${n}`;
+    const candidate = stem.slice(0, MAX_ADDRESS - suffix.length).replace(/-+$/, "") + suffix;
+    if (!used.has(candidate)) return candidate;
+  }
 }
 
 /** Every unit of the draft by key, for the modules that look units up often. */

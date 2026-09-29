@@ -23,7 +23,7 @@ import {
   mcpEnvOf,
   runState,
   seatPath,
-  seatSettings,
+  seatReading,
   seatTone,
   statusLine,
   staleness,
@@ -31,12 +31,16 @@ import {
   STALLED_MS,
   unitDirectLabel,
   unitSeatsLabel,
-  unitSettings,
   unitTally,
   UNIT_TOTAL_HINT,
 } from "./seats.ts";
+import type { ChartReading } from "./chartReads.ts";
 import type {
-  CompanyDocument,
+  ChartAnswer,
+  ChartSeat,
+  ChartSeatRead,
+  ChartUnit,
+  ChartUnitRead,
   DerivedSeat,
   OrgProjection,
   SandboxEntry,
@@ -103,6 +107,7 @@ const org: OrgProjection = {
     ],
     units: [
       {
+        id: "engineering",
         name: "Engineering",
         type: "department",
         lead: "vpe",
@@ -112,6 +117,7 @@ const org: OrgProjection = {
         seats: ["vpe"],
       },
       {
+        id: "backend",
         name: "Backend",
         type: "team",
         lead: "vpe",
@@ -267,78 +273,114 @@ describe("the engine's hierarchy", () => {
 // The guarded half
 // ---------------------------------------------------------------------------
 
-// EVERYTHING BELOW IS OFF THE COMPANY DOCUMENT, not the projection. `/org` is
-// anonymously readable, so email, the model chain, the token budget, contact
-// identities, `mcp_env`, `space:` and `id:` are not on it at all.
-const doc: CompanyDocument = {
-  name: "Acme",
-  roles: [
-    { name: "Jane Founder", kind: "human", contact: { slack_user_id: "U0FOUNDER" } },
-    { name: "CEO", handle: "ceo", email: "ceo@example.com", token_budget: 250000 },
-  ],
-  units: [
-    {
-      name: "Engineering",
-      id: "eng",
-      mcp_env: { github: { GITHUB_HOST: "example.com" } },
-      roles: [{ name: "VP Engineering", handle: "vpe" }],
-      children: [
-        {
-          name: "Backend",
-          space: "ENG",
-          mcp_env: { github: { GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
-          roles: [
-            { name: "Dev A", mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } } },
-            { name: "Dev B" },
-          ],
-        },
-      ],
-    },
-  ],
+// EVERYTHING BELOW IS OFF THE ORG CHART'S OWN READ, not the projection. `/org`
+// is anonymously readable, so the model chain, the token budget, contact
+// identities and `mcp_env` are not on it at all; the chart serves them as a
+// row's RUNTIME half, and only to a reader who may read the configuration.
+const answer: ChartAnswer = { level: "consistent_prefix", position: "CREWLET_CHART_LOG@1:10" };
+
+const backend: ChartUnit = {
+  key: "backend",
+  name: "Backend",
+  parent: "engineering",
+  runtime: {
+    mcp_env: { github: { GITHUB_HOST: "example.com", GITHUB_TOKEN: "${BACKEND_TOKEN}" } },
+  },
 };
+const devA: ChartSeat = {
+  handle: "dev-a",
+  name: "Dev A",
+  unit: "backend",
+  runtime: { token_budget: 250000, mcp_env: { github: { GITHUB_TOKEN: "${DEV_A_TOKEN}" } } },
+};
+const ceo: ChartSeat = { handle: "ceo", name: "CEO", runtime: { llm: "fast" } };
 
-describe("what only the company document says", () => {
-  test("a seat is found by the name the document addresses it by", () => {
-    const found = seatSettings(doc, index.byName.get("CEO")!);
-    expect(found.state).toBe("found");
-    expect(found.state === "found" && found.role.email).toBe("ceo@example.com");
-    expect(found.state === "found" && found.role.token_budget).toBe(250000);
+const seatRead = (row: ChartSeat, runtime = true): ChartReading<ChartSeatRead> => ({
+  state: "read",
+  value: { seat: row, manages: null, answer, runtime },
+});
+const unitRead = (row: ChartUnit): ChartReading<ChartUnitRead> => ({
+  state: "read",
+  value: { unit: row, children: [], seats: [], answer, runtime: true },
+});
+
+describe("what only the org chart's own read says", () => {
+  test("a seat read with its runtime half is read, together with its home unit", () => {
+    const reading = seatReading(seatRead(devA), unitRead(backend));
+    expect(reading.state).toBe("read");
+    expect(reading.state === "read" && reading.seat.runtime?.token_budget).toBe(250000);
+    expect(reading.state === "read" && reading.unit?.key).toBe("backend");
   });
 
-  // THE PROJECTION AND THE DOCUMENT CAN DISAGREE for a moment either side of
-  // an apply, and a seat that is in one and not the other is a state to say
-  // rather than a blank panel.
-  test("a seat the document does not hold is missing, not empty", () => {
-    expect(seatSettings(doc, index.byName.get("Designer")!).state).toBe("missing");
-    expect(seatSettings(null, index.byName.get("CEO")!).state).toBe("missing");
+  // A RUNTIME HALF WITHHELD IS NOT A REFUSAL: the chart served the rows and
+  // said it left the half out, so the reading keeps the seat and says so.
+  test("a seat served without its runtime half is stripped, not refused and not empty", () => {
+    const reading = seatReading(
+      seatRead({ handle: "dev-a", name: "Dev A", unit: "backend" }, false),
+      unitRead(backend),
+    );
+    expect(reading).toEqual({
+      state: "stripped",
+      seat: { handle: "dev-a", name: "Dev A", unit: "backend" },
+    });
+    // Its credentials are unknown to this reader, never an empty set it was shown.
+    expect(mcpEnvOf(reading, "agent")).toEqual({});
+    // The control: the same seat served whole is read.
+    expect(seatReading(seatRead(devA), unitRead(backend)).state).toBe("read");
   });
 
-  // TWO SEATS WITH ONE NAME can only come from a revision stored before names
-  // had to be unique, and attributing either one's settings to the page would
-  // be a guess.
-  test("a name held by two seats is ambiguous rather than the first match", () => {
-    const twice: CompanyDocument = { ...doc, roles: [...(doc.roles ?? []), { name: "CEO" }] };
-    expect(seatSettings(twice, index.byName.get("CEO")!).state).toBe("ambiguous");
+  // FIVE FACTS THE CHART CAN ANSWER, and a reading carries each as itself:
+  // folded into one, a reader who lacked a grant was told the seat had
+  // nothing to show.
+  test("an absent, refused, failed or unread seat read is that answer, whatever the unit said", () => {
+    expect(seatReading({ state: "absent" }, unitRead(backend))).toEqual({ state: "absent" });
+    expect(
+      seatReading({ state: "refused", grants: ["state:read"], reason: "needs a grant" }, null),
+    ).toEqual({ state: "refused", grants: ["state:read"], reason: "needs a grant" });
+    expect(seatReading({ state: "failed" }, null)).toEqual({ state: "failed" });
+    expect(seatReading({ state: "unread" }, unitRead(backend))).toEqual({ state: "unread" });
   });
 
-  test("mcp_env merges DOWN the unit chain with the seat's own winning", () => {
-    const env = mcpEnvOf(seatSettings(doc, index.byName.get("Dev A")!), "agent").github;
-    expect(env?.GITHUB_HOST).toBeUndefined();
+  // THE UNIT IS PART OF THE ANSWER: a seat's credentials drawn before its
+  // unit's arrive would be a list that grows when the second read lands.
+  test("a unit read still out, refused or failed is the seat reading's own answer", () => {
+    expect(seatReading(seatRead(devA), { state: "unread" }).state).toBe("unread");
+    expect(seatReading(seatRead(devA), { state: "failed" }).state).toBe("failed");
+    expect(
+      seatReading(seatRead(devA), { state: "refused", grants: ["config:read"], reason: "" }),
+    ).toEqual({ state: "refused", grants: ["config:read"], reason: "" });
+    // A unit the chart no longer holds is no unit rather than a failure.
+    expect(seatReading(seatRead(devA), { state: "absent" })).toEqual({
+      state: "read",
+      seat: devA,
+      unit: null,
+    });
+  });
+
+  test("a seat at the root reads no unit, and needs none", () => {
+    expect(seatReading(seatRead(ceo), null)).toEqual({ state: "read", seat: ceo, unit: null });
+  });
+
+  test("mcp_env merges the home unit's DOWN, the seat's own winning per variable", () => {
+    const env = mcpEnvOf(seatReading(seatRead(devA), unitRead(backend)), "agent").github;
+    // Per VARIABLE: the seat overrides the token and keeps the unit's host.
     expect(env?.GITHUB_TOKEN).toBe("${DEV_A_TOKEN}");
-    const inherited = mcpEnvOf(seatSettings(doc, index.byName.get("Dev B")!), "agent").github;
+    expect(env?.GITHUB_HOST).toBe("example.com");
+    const inherited = mcpEnvOf(
+      seatReading(seatRead({ handle: "dev-b", name: "Dev B", unit: "backend" }), unitRead(backend)),
+      "agent",
+    ).github;
     expect(inherited?.GITHUB_TOKEN).toBe("${BACKEND_TOKEN}");
   });
 
   // A HUMAN SEAT RUNS NO TOOLS, so it inherits none of its unit's credentials.
   test("a human seat inherits no tool credentials", () => {
-    const found = seatSettings(doc, index.byName.get("Dev B")!);
-    expect(Object.keys(mcpEnvOf(found, "human"))).toEqual([]);
-  });
-
-  test("a unit's guarded fields are read from the document, and only from it", () => {
-    expect(unitSettings(doc, { name: "Engineering" })?.id).toBe("eng");
-    expect(unitSettings(doc, { name: "Backend" })?.space).toBe("ENG");
-    expect(unitSettings(null, { name: "Backend" })).toBeNull();
+    const human = { handle: "dev-b", name: "Dev B", unit: "backend", kind: "human" };
+    expect(mcpEnvOf(seatReading(seatRead(human), unitRead(backend)), "human")).toEqual({});
+    // The control: the same unit hands an agent seat its credentials.
+    expect(Object.keys(mcpEnvOf(seatReading(seatRead(human), unitRead(backend)), "agent"))).toEqual(
+      ["github"],
+    );
   });
 });
 
@@ -427,19 +469,17 @@ describe("staleness", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The model chain, in every shape the config accepts
+// The model chain, in both shapes the chart serves
 // ---------------------------------------------------------------------------
 
-// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
-// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
-// client declared a string, so an array rendered as `fast,backup` and a
-// mapping as `[object Object]`, and any consumer calling a string method on
-// one threw on a config the engine accepts.
+// `org.ProviderKeys` marshals as a STRING for one provider and an ARRAY for a
+// fallback chain. The client declared a string, so an array rendered as
+// `fast,backup` and any consumer calling a string method on one threw on a
+// seat the engine accepts.
 describe("llmChain", () => {
-  test("reads all three shapes the engine marshals", () => {
+  test("reads both shapes the engine marshals, first choice first", () => {
     expect(llmChain("fast")).toEqual(["fast"]);
     expect(llmChain(["fast", "backup"])).toEqual(["fast", "backup"]);
-    expect(llmChain({ default: "big", judge: "tiny" })).toEqual(["big", "tiny"]);
   });
 
   // A SEAT THAT SAYS NOTHING takes the default provider, and that is not the
@@ -448,27 +488,11 @@ describe("llmChain", () => {
     expect(llmChain(undefined)).toEqual([]);
     expect(llmChain("")).toEqual([]);
     expect(llmChain([])).toEqual([]);
-    expect(llmChain({})).toEqual([]);
+    expect(llmChain(["", "fast"])).toEqual(["fast"]);
   });
 
-  // THE SAME KEY REACHED THROUGH TWO PHASES IS NOT TWO MODELS. Without this
-  // the common mapping — one strong model for most phases, a cheap one for the
-  // judge — reads as five models on the seat page.
-  test("one key named by several phases is listed once", () => {
-    expect(
-      llmChain({ default: "big", review: "big", judge: "tiny", sandbox: ["big", "tiny"] }),
-    ).toEqual(["big", "tiny"]);
-  });
-
-  // A PHASE FALLS BACK TO `default`, exactly as the engine's own resolution
-  // does — so asking for the judge of a seat that never named one answers the
-  // model the judge will actually run on.
-  test("a named phase falls back to default", () => {
-    const llm = { default: "big", judge: "tiny" };
-    expect(llmChain(llm, "judge")).toEqual(["tiny"]);
-    expect(llmChain(llm, "review")).toEqual(["big"]);
-    // And a flat chain answers the same for every phase, because it is one.
-    expect(llmChain(["fast", "backup"], "judge")).toEqual(["fast", "backup"]);
+  test("one key listed twice is one model", () => {
+    expect(llmChain(["big", "tiny", "big"])).toEqual(["big", "tiny"]);
   });
 });
 

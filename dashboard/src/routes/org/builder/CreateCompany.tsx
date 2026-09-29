@@ -6,7 +6,8 @@
  * their own. Everything else a template writes (units, neutral role titles,
  * who manages whom) is in `model/templates.ts`, and what it produces is one
  * `applyTemplate` operation, so the whole start is a single undo and is
- * checked by the engine exactly like any other draft.
+ * checked exactly like any other draft. Saved, it is two writes: the settings
+ * as the company's first revision, then the org chart (`model/save.ts`).
  *
  * NO INVENTED IDENTITY. A human seat reaches people through a contact
  * identity, and a template never writes one it was not given: the only
@@ -248,7 +249,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
             Until one is configured no agent seat takes a turn, and work sent to a seat waits on its
             inbox until it is. No dashboard screen writes <InlineCode>providers.llm</InlineCode>.
             Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
-            then either import a company file or patch the configuration:
+            then patch the settings, which adds the provider and changes nothing else:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} maxHeight={RECORD_MAX_HEIGHT} />
         </div>
@@ -257,13 +258,16 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/** The exact commands the step above names. */
-const PROVIDER_SNIPPET = `# Either: edit the company file and import it
-crewlet config import company.yaml
-
-# Or: patch the running configuration
-curl -X PATCH "$CREWLET_URL/config" \\
-  -H "Authorization: Bearer $CREWLET_TOKEN" \\
+/**
+ * The exact command the step above names.
+ *
+ * THE PATCH, NOT AN IMPORT. `crewlet config import` writes a whole company
+ * file — its settings AND its org chart — so for a company just created here,
+ * which no file describes, it would put back whatever a file said over the
+ * chart this screen wrote. A merge patch of `providers` changes nothing else.
+ */
+const PROVIDER_SNIPPET = `curl -X PATCH "$CREWLET_URL/config" \\
+  -H "Authorization: Bearer $CREWLET_API_TOKEN" \\
   -H "Content-Type: application/merge-patch+json" \\
   -H "X-Summary: add a model provider" \\
   -d '{"providers":{"llm":{"default":{"type":"anthropic",

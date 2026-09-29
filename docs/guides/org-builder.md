@@ -2,41 +2,60 @@
 
 The dashboard's Company screen has a **Builder** lens
 (`#/company?lens=builder`) for editing the organization of a running company, and
-for creating the company on an engine that has none. It edits the same
-company document `GET /config` serves and `PATCH /config` writes, so every
-change it makes is an ordinary configuration revision: stored, activated,
-audited, and applied by every node on its own tick.
+for creating the company on an engine that has none. A company is two things
+the engine keeps apart, and the builder edits both:
 
-The engine is the validator. The builder checks every draft by sending the
-engine a dry run of exactly the write a save would send, and draws the
-problems, warnings and derived hierarchy the engine answers with. It does not
-implement any configuration rule of its own.
+- the **settings** — the charter, providers, integrations and the rest of the
+  company document — which `GET /config` serves and `PATCH /config` writes as
+  a stored, activated, audited revision;
+- the **org chart** — its units, its seats, who leads and who manages whom —
+  which `GET /chart` serves and the chart's own routes write, one record at a
+  time, each with its own author and history
+  ([The org chart domain](../concepts/chart-domain.md)).
 
 Every change is made to a draft in the browser. Nothing reaches the engine
-until you review the draft and save it, and the builder keeps every field of
-the document it does not show. What it shows and what it can change is listed
-under [Editing a node](#editing-a-node), field by field.
+until you review the draft and save it, and the builder keeps every field it
+does not show. What it shows and what it can change is listed under
+[Editing a node](#editing-a-node), field by field.
+
+A save is a **sequence of writes**, because the chart is arbitrated per object
+rather than written whole: the changes to the chart's structure go in batches,
+each changed unit or seat is written on its own, and the settings are one
+revision. The review lists every write with what the engine answered, and a
+save that stops part way says what landed
+([Reviewing and saving](#reviewing-and-saving)).
 
 ## Opening the builder
 
-The configuration is guarded, reads included, so the builder needs what any
-other configuration client needs: a credential carrying `config:read` to open
-it and `config:write` to save — a person signed in with those grants, or an
-API token that carries them, exchanged for a session on the dashboard's
-sign-in screen. There is no posture in which it does not — `api.auth.disabled` is retired, and
-`crewlet run -dev-principal` is a flag on a node reached over loopback rather
-than a configuration a browser can meet. What the lens shows is
-decided from what the engine answers, never from whether somebody is signed
+The builder reads both halves, so it needs what any other client of them
+needs: `config:read` to read the settings, and the board's read (`state:read`)
+to read the chart. The chart's **runtime half** — model chains, tool
+credentials, contact identities, schedules — is asked for too, and served only
+to a reader holding `config:read`; the others get the chart without it, and
+the builder says so rather than drawing those fields empty. Saving takes what
+each write takes: `config:write` for the settings and the chart's structure
+(and `fleet:operate` beside it for a removal), `config:write` for a changed
+runtime half or a changed relation (a seat's email, a unit's channel, the
+project or knowledge space either one owns), and for the rest of an object's
+content either `config:write` or leading that object. A write may ask you to
+confirm your password first, as every chart and configuration write does.
+
+The credential is a person signed in with those grants, or an API token that
+carries them, exchanged for a session on the dashboard's sign-in screen.
+There is no posture in which it is not needed — `api.auth.disabled` is
+retired, and `crewlet run -dev-principal` is a flag on a node reached over
+loopback rather than a configuration a browser can meet. What the lens shows
+is decided from what the engine answers, never from whether somebody is signed
 in:
 
-| The engine answers `GET /config` with | The lens shows |
+| The engine answers | The lens shows |
 |---|---|
-| the active revision | the organization, ready to edit |
-| `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
-| `404 no_active_revision`, while the organization names a company | "This node has not caught up with the fleet's configuration yet." Try again once the node has applied the fleet's revision, or use another node |
-| `403` naming grants | "Editing the organization needs *grant*, which the credential you presented does not carry." — the grants the refusal named, any one of which would do |
-| `401` | "The engine refused this browser's session." when somebody is signed in, and otherwise a request for a credential — **Sign in**, which comes back to the builder |
-| a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
+| `GET /config` with the active revision, and `GET /chart` with the chart | the organization, ready to edit |
+| `GET /config` with `404 no_active_revision`, and the organization the node pushes names no company | creating the company |
+| `GET /config` with `404 no_active_revision`, while the organization names a company | "This node has not caught up with the fleet's configuration yet." Try again once the node has applied the fleet's revision, or use another node |
+| either read with `403` naming grants | "Editing the organization needs *grant*, which the credential you presented does not carry." — the grants the refusal named, any one of which would do |
+| either read with `401` | "The engine refused this browser's session." when somebody is signed in, and otherwise a request for a credential — **Sign in**, which comes back to the builder |
+| `GET /config` with a plain `404`, or an answer that is not JSON | "This process does not serve the configuration." The process has no configuration store; open the dashboard on a node running the engine |
 | nothing | the engine could not be reached, with **Retry** |
 
 A node that has not caught up is never offered create mode: its own store is
@@ -46,14 +65,14 @@ refused.
 A node that is draining refuses every check and save with `503 draining`,
 and the builder treats it as a node it could not reach: the draft is kept,
 and the check retries until a peer or the restarted node answers. Nothing is
-written by a refused save, so there is nothing to settle afterwards.
+written by a refused write, so there is nothing to settle afterwards.
 
 Signing in as somebody else — in another tab, since the session cookie is the
 browser's — while a draft is open keeps the draft on screen. The builder reads
-the configuration again and checks the draft as the new reader, and forgets the
+the company again and checks the draft as the new reader, and forgets the
 copy it kept for the last one; if the engine refuses it, editing pauses until
-somebody whose grants reach the configuration signs in. Signing out empties
-the tab's kept draft too.
+somebody whose grants reach the company signs in. Signing out empties the
+tab's kept draft too.
 
 ## Creating the company
 
@@ -78,22 +97,25 @@ keeps reporting it as `seat_unreachable` until an identity is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
-creates the company with `PUT /config` and `If-None-Match: *`, which is
-refused if a company exists anywhere in the fleet. If one was created while
-you were writing yours (the builder hears of it as soon as the node reports
-the new organization, not only when you save), the builder says so and
-offers to discard your draft and open the company: a draft that starts a
-company is never applied to one that exists, and never replayed onto it.
-**Keep my draft** leaves it on screen to read, read-only, with the same offer
-beside it.
+creates the company: first the settings, with `PUT /config` and
+`If-None-Match: *`, which is refused if a company exists anywhere in the
+fleet, and then the org chart it holds. If a company was created while you
+were writing yours — its settings, or seats and units in its chart (the
+builder hears of it as soon as the node reports the new organization, not only
+when you save) — the builder says so and offers to discard your draft and
+open the company: a draft that starts a company is never applied to one that
+exists, and never replayed onto it. **Keep my draft** leaves it on screen to
+read, read-only, with the same offer beside it.
 
 After a successful create, two steps remain that the dashboard cannot take:
 connecting chat and trackers on the Integrations screen, and adding a model
 provider, which no dashboard screen writes. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
-exists. The panel gives the exact `crewlet config import` and `PATCH /config`
-commands for it.
+exists. The panel gives the exact `PATCH /config` for it — a merge patch of
+`providers`, which changes nothing else. A `crewlet config import` would write
+a whole company file instead, its org chart included, over the chart you just
+made.
 
 ## Reading the organization
 
@@ -103,38 +125,38 @@ structure as rows and columns. Below 860 pixels wide the lens opens on the
 outline. The view, the chart and the selected unit or seat are in the URL, so
 a link opens the builder where it was.
 
-Both views draw the draft as it stands, and take everything the engine
-derives from its last check of it: where a seat declared at the top level
-with a unit reference is placed, the lead a unit inherits, and who each seat
-reports to. A derived value is shown only while the draft still holds what
-the check saw, so just after a change a card can read "Handle after the
-check", "Lead after the check" or "Manager after the check" for a moment
-rather than show an answer the engine has not given. Colour is state, never
-identity: a human seat has a dashed edge, and a card is otherwise neutral
-whatever it holds.
+Both views draw the draft as it stands. The chart's rows state where every
+seat sits and who leads each unit, so that is drawn straight from the draft,
+and so is the lead a unit inherits: a unit that names no lead takes the one
+the unit above it resolved to, after every change. Who each seat **reports
+to** follows from the whole organization — every `manages` list, with its unit
+entries expanded, and every lead managing its unit's members — and only the
+engine derives it, from the chart it holds: the builder shows it from the
+engine's description of the **saved** company, and, once the draft has moved
+past that, says the lines are the saved ones rather than guessing the new
+ones. Colour is state, never identity: a human seat has a dashed edge, and a
+card is otherwise neutral whatever it holds.
 
 ### The canvas
 
-The structure chart has the company at the root, the seats declared at the
-top level as cards beneath it, and each unit as a card with its seats stacked
-inside as rows and its child units below it. A card or a row shows its name,
-its kind or type and its handle, and the marks that apply:
+The structure chart has the company at the root, the seats at the top level as
+cards beneath it, and each unit as a card with its seats stacked inside as rows
+and its child units below it. A card or a row shows its name, its kind or
+type and its address (a seat's handle, a unit's key), and the marks that
+apply:
 
 | Mark | Meaning |
 |---|---|
 | a live state | a saved agent seat's current state, as every other screen shows it |
-| *N problems* | the last check of the draft refused something about this node |
-| Placed by unit reference | a seat declared at the top level that its `unit:` reference places in this unit |
-| No unit named *X* | a `unit:` reference the engine resolved to no unit; the seat stays at the top level |
-| Lead names no seat | the unit's lead names no seat of the company |
-| Datadog fallback | the seat an alert that names no seat wakes, while Datadog is enabled |
+| *N problems* | the last check of the draft found something about this node |
+| a caution | a reference that names nothing in the draft: a unit's lead that names no seat, or a `manages` entry that names no seat and no unit. The chart keeps such a reference as written, so it is a warning rather than a problem |
+| Alerts that name no seat wake this seat | the Datadog fallback seat, while Datadog is enabled |
 
 The live state and the problem count never change the size of a card: they
 sit beside the name, which is shortened instead, so the chart does not move
-while seats work or while a check is on its way. A mark about wiring (a
-placement, or a reference that names nothing) stays for as long as the node
-still writes what the check found, so a check on its way does not take it off
-the card either.
+while seats work or while a check is on its way. A caution stays for as long
+as the node still writes the reference, so a check on its way does not take
+it off the card either.
 
 A unit's card carries its **lead chip**: the lead it declares, the one it
 inherits from the unit above (marked inherited), or "No lead". Pressing the
@@ -164,64 +186,88 @@ act on has to be revealed.
 **Reporting** draws who each seat reports to, as the engine derives it from
 `manages`, unit leads and the unit tree: a seat's primary manager is the first
 seat, in the engine's order, that manages it. The seats with no manager are
-the tops of the chart, marked "No manager", and seats that manage each other
-in a loop are drawn under one **Reporting cycle** group, each loop from its
-first seat in the engine's order. The chart is read-only, because a reporting
-line is not written anywhere as such: **Edit reports** on a seat (Enter on its
-card) opens its editor at **Manages**, where the lines are changed. Until the
-first check answers the chart says the lines appear after it, and while the
-check of later changes is on its way it says that it shows the lines of the
-last one.
+the tops of the chart, and seats that manage each other in a loop are drawn
+under one **Reporting cycle** group, each loop from its first seat in the
+engine's order. The chart is read-only, because a reporting line is not
+written anywhere as such: **Edit reports** on a seat (Enter on its card) opens
+its editor at **Manages**, where the lines are changed.
+
+The lines are the engine's description of the saved company. Until the node
+has pushed one — a company not saved yet has nothing to describe — the chart
+reads "Reporting lines appear once the engine describes the company", and
+while the draft holds changes to the chart it says "These are the saved
+company's reporting lines. The changes in this draft appear here once it is
+saved."
 
 ### The outline
 
 The outline is the structure as a grid of rows, with the columns **Name**,
-**Kind or type**, **Handle**, **Lead or reports to** (a unit's lead chip, or a
-seat's primary manager), **Problems** and the row's actions. A row takes the
-same keys as a card on the canvas, and Right also steps from a row into its
-cells, Left back out; in a cell, Up and Down keep the column, and a cell that
-holds a control (the lead chip, the actions menu, an add button) puts focus on
-the control itself. At narrow widths the grid scrolls sideways in its own box,
-never the page.
+**Address**, **Lead or reports to** (a unit's lead chip, or a seat's primary
+manager — "Not derived yet" once the draft has moved past the saved chart),
+**Problems** and the row's actions. A row takes the same keys as a card on the
+canvas, and Right also steps from a row into its cells, Left back out; in a
+cell, Up and Down keep the column, and a cell that holds a control (the lead
+chip, the actions menu, an add button) puts focus on the control itself. At
+narrow widths the grid scrolls sideways in its own box, never the page.
 
 While the draft can be changed, the rows of each unit and of the company end
 in an add row with **Add agent seat**, **Add human seat** and **Add unit**.
 
-**Alt+Up** and **Alt+Down** move a row among its siblings of the same kind (a
-seat among its unit's seats, a unit among its parent's units), past the row
-drawn beside it. A seat placed in a unit by its unit reference is declared at
-the top level, so it is not reordered inside that unit; move it into the unit
-first. Order matters to the engine: a seat's primary manager is the first seat
-that manages it, so when the check of a reordered draft reports that a seat
-now reports to someone else, the builder says so.
+Rows are listed in the chart's own order, by address. The chart keeps no other
+order among a unit's seats or units, so there is nothing to reorder: where a
+node sits is its unit, which **Move to** changes.
 
 ### Selecting a node
 
-Selecting a unit or a seat names it in the URL (`unit=` and `seat=`), and the
-toolbar carries that node's own actions: the same menu as its card and its
-row, so every action is reachable from the keyboard. **Open seat** is offered
-only for a seat the saved company has: a seat added in the draft has no
-screen until it is saved. A rename rewrites the name in the URL rather than
-leaving a link pointing at something that no longer exists. Selecting the
-company itself carries the charter's **Edit** and the same **Add** menu; it
-names no filter, because the lens is already about that company. Where the
-builder cannot write (a guarded or read-only posture, or a draft waiting to be
-updated) the actions stay in the menu and are marked unavailable, so what the
-builder does is still legible.
+Selecting a unit or a seat names it in the URL by its address — `unit=` with
+the unit's key and `seat=` with the seat's handle, never a name, since two
+units may share one — and the toolbar carries that node's own actions: the
+same menu as its card and its row, so every action is reachable from the
+keyboard. **Open seat** is offered only for a seat the saved company has: a
+seat added in the draft has no screen until it is saved. A new address
+rewrites the URL rather than leaving a link pointing at something that no
+longer answers to it. Selecting the company itself carries the charter's
+**Edit** and the same **Add** menu; it names no filter, because the lens is
+already about that company. Where the builder cannot write (a guarded or
+read-only posture, or a draft waiting to be updated) the actions stay in the
+menu and are marked unavailable, so what the builder does is still legible.
 
 ### The check
 
-The check status beside the view controls says what the engine made of the
-current draft:
+The org chart has no dry run: a batch and a content write are decided when
+they are written. So a check asks the engine what can be asked without
+writing, and restates the rest:
+
+- **Is the chart still the one the draft was made on?** The chart is read and
+  its rows compared with the ones the draft started from. A content write
+  replaces the whole object and carries no precondition of its own, so a draft
+  saved over rows somebody else changed would put back what they wrote; this
+  is where that is caught. In create mode the question is whether the chart
+  is still empty.
+- **Would the settings be taken?** When the draft changes them (always in
+  create mode), the settings write a save would send is sent as a dry run and
+  its problems are placed on the nodes they name. When it changes none, the
+  settings are read, and a newer revision is found here rather than at the
+  first settings edit.
+- **What does the draft's own shape say?** The rules a chart write refuses on
+  before it reads a row — an address's grammar and length, a reserved word, a
+  field past its cap, two nodes of this draft on one address, a person's seat
+  carrying a model chain — and an address the chart will not give to a node
+  of this draft: one a node this draft removes held, the one another node was
+  created under, or, for a rename, one that still reaches the node that used
+  to answer to it. A node somebody removed earlier is not served, so its
+  address is the save's to refuse. A reference that names nothing is a
+  warning.
+
+The check status beside the view controls says what it found:
 
 | Status | Meaning |
 |---|---|
-| Checking | a dry run of the current draft is on its way |
-| No problems | the engine would accept the draft as it stands |
-| *N problems* | the engine would refuse it; each problem is marked on the unit or seat it names, and problems about the whole document are listed above the chart |
-| Could not reach the engine to check | the dry run got no answer; the builder retries with an increasing wait |
-| Read-only here | this process cannot write the configuration |
-| The configuration changed | another revision was activated after this draft was started |
+| Checking | a check of the current draft is on its way |
+| No problems | nothing the check can see stops the draft; the writes themselves are still decided where they land |
+| *N problems* | each problem is marked on the unit or seat it names, and problems about the whole company are listed above the chart |
+| Could not reach the engine to check | the check got no answer; the builder retries with an increasing wait |
+| The company changed | somebody changed the chart's rows, or saved a newer settings revision, after this draft was started |
 | Needs *grant* | the credential presented was accepted and does not carry the grant the refusal named; sign in as somebody who holds it |
 | The engine refused the session | the session this browser holds was not accepted — it ended, or was revoked; sign in again to continue |
 | Needs a credential | nobody is signed in; sign in |
@@ -234,20 +280,24 @@ engine applies such a company and places its seats, but no agent seat takes a
 turn until a provider exists: work sent to a seat waits on its inbox and runs
 once one is added
 ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
-The dashboard does not write providers. Add one with `crewlet config import`
-or `PATCH /config` ([Configure via the API](configure-via-api.md)).
+The dashboard does not write providers. Add one with a merge patch of
+`providers` to `PATCH /config` ([Configure via the API](configure-via-api.md)).
 
 ## Adding a unit or a seat
 
 **Add unit**, **Add agent seat** and **Add human seat** on the company or a
 unit (from its menu, the toolbar or the outline's add row) open the Add
-dialog, which adds the new node at the end of that unit, or at the top level
-of the company. Seat names are unique, because a lead or a `manages` entry
-names exactly one seat, and so are unit names, because a `manages` entry or a
-unit reference names exactly one unit. The dialog starts with a name nobody
-holds, and when you type a name that is taken it offers the next free one,
-such as "Software Engineer 2". A human seat's contact identity is optional: the
-dialog offers it, it can be added later in the seat's editor, and without one
+dialog, which adds the new node to that unit, or at the top level of the
+company. A name is prose, and two seats or two units may share one: every
+reference names a seat by its **handle** and a unit by its **key**, and the
+dialog asks for that address beside the name. It follows the name until you
+type one, and it is never an address a node of the saved chart or the draft
+holds — one this draft removes included — nor the one a renamed node was
+created under, which stays that node's identity. The chart never gives out the
+address of a node removed earlier either, and a save that asks for one is
+refused, naming it. A human
+seat's contact identity is optional: the dialog offers it (to a reader shown
+the runtime half), it can be added later in the seat's editor, and without one
 the person is reached through the dashboard only.
 
 ## Editing a node
@@ -265,21 +315,24 @@ links, the browser's Back or Forward to another screen or lens, or a reload.
 builder's own views (Back from the outline to the canvas, say) keeps the
 editor open with your changes, so it asks nothing.
 
-If the engine refused something about the node at the last check, the problem
-is shown beside the field it names. Problems that name no field in the editor
-are listed at its top. A warning (a lead that names no seat, for example)
-does not stop a save, so it is listed at the top as a caution with the path
-it names, never shown as a field's error.
+If the last check found something about the node, the problem is shown beside
+the field it names. Problems that name no field in the editor are listed at
+its top. A warning (a lead that names no seat, for example) does not stop a
+save, so it is listed at the top as a caution, never shown as a field's error.
+
+A node's **runtime half** is edited only by a reader the chart showed it to.
+For anybody else the editor leaves those fields out and says why, and a save
+leaves that half as it is on every node.
 
 ### The charter
 
 | You can change | Notes |
 |---|---|
-| Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged. |
+| Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name, so every agent seat gets a new id: what the engine keeps under the old id — each seat's mailbox and anything still waiting in it, its diary, its onboarding progress and its schedule ledger — is no longer read, and every agent seat starts over with an empty inbox and onboards again. Handles are unchanged. |
 | Mission, vision, policies | Policies are an ordered list. |
 
-Everything else in the company document (providers, integrations, workers,
-MCP servers, sandbox and scheduling settings) is edited in the configuration
+Everything else in the settings (providers, integrations, workers, MCP
+servers, sandbox and scheduling settings) is edited in the configuration
 document, not in the builder.
 
 A company has no lead. The reporting chart's roots are the seats no one
@@ -290,48 +343,44 @@ not a field somebody sets.
 
 | You can change | Notes |
 |---|---|
-| Name | Unit names are unique. Renaming an existing unit re-keys what is attached to its name: agent seats in it and in its units onboard again, onboarding pages are looked up under the new name, and its schedules get a new identity, so a run due that minute may fire again. |
+| Name | Prose; two units may share a name. Onboarding pages are looked up under a unit's name, so the seats in it read the pages under the new one. |
+| Key | The address every `manages` entry and seat placement names the unit by. A new key is the chart's rename: the unit keeps its identity, and the old key goes on reaching it until something else takes it. |
 | Type | One of the well-known types or a custom one. It is informational; an empty type is `team`. |
 | Purpose, goals | |
-| Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
-| Channel | An empty channel inherits the one above it. |
+| Lead | Any seat. The empty choice shows the lead the unit would inherit from the unit above it. |
+| Channel | An empty channel inherits the one above it. Changing it takes `config:write`. |
 | Knowledge | Free-text references, not a read scope. |
-| Owns: Jira project, Confluence space | Where unrouted work for the unit goes. Not a permission. Shown only when the company has connected Jira or Confluence. |
-| Schedules: enabled | Each schedule can be switched on or off. |
+| Owns: project, knowledge space | Where unrouted work for the unit goes and where it files its own, whichever backend runs the tracker and the knowledge base. Not a permission. Changing either takes `config:write`, because a lead's authority is derived from them. |
+| Schedules: enabled | Each schedule can be switched on or off. Runtime half. |
 
 Shown and not changed: each schedule's cron, timezone, runner and task, and the
-unit's tool credentials as server and variable names. Schedules and tool
-credentials are written in the configuration document.
-
-**Renaming a unit that holds literal credentials.** The engine never sends a
-credential to the dashboard: a literal value arrives masked, and a save that
-carries the mask back is restored from the stored unit of the same name. A
-renamed unit has no stored unit of its new name, so the engine refuses the
-save. Before you rename such a unit, the editor lists the paths of its masked
-credentials. Move each one to the secret store (**Secrets**) and reference it
-as `${NAME}` first; a reference is a name, so it survives the rename.
+unit's tool credentials as server and variable names. They are in the runtime
+half, which `crewlet config import` writes from a company file.
 
 ### A seat
 
 | You can change | Notes |
 |---|---|
-| Name | Seat names are unique. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
-| Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle once a check has seen the seat under the name it has now. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
-| Email, goal, backstory, responsibilities | |
+| Name | Prose; two seats may share a name. An agent seat that is renamed keeps its handle, its memory and its mailbox. |
+| Handle | The address every lead, `manages` entry and mention names the seat by. A new handle on a saved seat is the chart's rename: the seat keeps its identity — the one its mailbox, diary and schedules are keyed on — and the old handle goes on reaching it until something else takes it. |
+| Email | Sealed: the engine keeps a seat's address in the secret store and serves the reference it is sealed under, never the address, so the editor says "An address is set" and offers **Replace**. A replaced address is sent as typed and sealed by the engine; an address left as it was is sent back as it was read, which changes nothing. Changing it takes `config:write`. |
+| Goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
-| Contact identities, availability | Human seats. Contact identities are optional: a seat with none is reached through the dashboard only, and the chart check reports it as `seat_unreachable`. |
-| Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order chosen; to change the order, remove a provider and choose it again. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
-| Token budget | Agent seats. Empty or 0 is unlimited. |
-| Schedules: enabled | Agent seats. |
+| Contact identities, availability | Human seats; runtime half. Contact identities are optional: a seat with none is reached through the dashboard only, and the chart check reports it as `seat_unreachable`. |
+| Model | Agent seats; runtime half. An ordered chain of the company's `providers.llm` keys, tried in the order shown, which you reorder in place. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. |
+| Token budget | Agent seats; runtime half. Empty or 0 is unlimited. |
+| Schedules: enabled | Agent seats; runtime half. |
 | Integrations | Agent seats; see below. |
-| Owns: Jira project, Confluence space | Agent seats. Where unrouted work for the seat goes. Not a permission. |
+| Owns: project, knowledge space | Where unrouted work for the seat goes and where it files its own. Not a permission. Changing either takes `config:write`. |
 
-Shown with the reason they are not changed here: per-phase models
-(`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
-workers, placement, learning, tool credentials (names only) and whether the
-seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
-each depend on a company-level block the builder does not edit.
+Shown with the reason they are not changed here: the models of the other
+phases (`llm_review` and the other `llm_*` fields), sandbox (enabled, where it
+runs), workers, placement, learning, tool credentials (names only) and whether
+the seat is the Datadog fallback. They are in the runtime half, which
+`crewlet config import` writes from a company file; sandbox, placement,
+workers and tool credentials each depend on a settings block the builder does
+not edit.
 
 A seat's kind is changed with **Change to human seat** or **Change to agent
 seat**, in its menu or in the editor, which is its own step because it
@@ -353,24 +402,22 @@ credential is ever shown.
   block enrols the seat in GitHub; create its app from Integrations. A seat's
   app permissions are fixed when the app is created, so after changing the tier
   of a seat whose app exists, raise the app's permissions at GitHub as well.
-- **Slack:** the default channel ID, for a seat that has its own Slack app.
 - **Mattermost:** the default channel name, for a seat that has its own bot.
   The engine provisions a bot only where the seat's `bot_token` is a whole
   `${NAME}` reference, so for such a seat the bot username is read-only:
   changing it would make the provisioner find or create a second bot. A seat
   whose token is a literal is a bot somebody manages by hand, and its username
-  stays editable. Empty means the provisioning username prefix and the seat's
-  handle, lowercased.
+  stays editable. Empty means the provisioning username prefix and the handle
+  the seat was created under, lowercased.
 - **GitLab:** the access level (developer or maintainer) the seat's account
-  joins with, when GitLab provisioning is set up. Access levels are kept by
-  handle, so a seat added in this draft can have one once a check has
-  reported its handle, and renaming it waits for the next check: the engine
-  derives the handle from the name.
+  joins with, when GitLab provisioning is set up. Access levels are kept in
+  the settings by handle, so a new handle carries its level with it.
 
-Not in the builder: per-seat allow or block lists for GitLab, Atlassian,
-Datadog or Mattermost (the engine provisions every agent seat), a per-seat
-Datadog role, GitLab tiers beyond developer and maintainer, and flags that
-grant access to everything (an empty repository list already does).
+Not in the builder: a seat's own Slack channel, per-seat allow or block lists
+for GitLab, Atlassian, Datadog or Mattermost (the engine provisions every
+agent seat), a per-seat Datadog role, GitLab tiers beyond developer and
+maintainer, and flags that grant access to everything (an empty repository
+list already does).
 
 Two more things the builder deliberately does not have. A seat has no colour
 of its own: colour on the dashboard shows state, never identity, so seats are
@@ -381,16 +428,16 @@ toward the pointer.
 
 ## Moving a node
 
-**Move to** moves a seat or a unit (with everything inside it) to the end of
-another unit, or to the top level of the company. A unit is never offered a
+**Move to** moves a seat or a unit (with everything inside it) to another
+unit, or to the top level of the company. A unit is never offered a
 destination inside itself. Before you confirm, the dialog shows what the move
-changes, read from the engine's check of the draft as it stands. While that
-check is still on its way (just after another change, say), the dialog says
-so rather than reading an older answer:
+changes:
 
-- who a moved seat reports to before the move, and whether that ends with
-  it: a unit's lead manages the unit's direct members, so a seat managed only
-  that way stops reporting to the lead of the unit it leaves;
+- who a moved seat reports to today, and whether that ends with the move: a
+  unit's lead manages the unit's direct members, so a seat managed only that
+  way stops reporting to the lead of the unit it leaves. This is the engine's
+  description of the saved company, so it is shown only while the draft's
+  chart is still the saved one;
 - the lead of the destination, who manages its direct members unless another
   member manages the seat;
 - the lead and the channel a moved unit, and the units inside it that declare
@@ -399,31 +446,26 @@ so rather than reading an older answer:
 - the tool credential servers a moved agent seat gains or loses from its home
   unit's `mcp_env` (names only).
 
-The next check confirms the result, and the review lists it before you save.
+The review lists the move before you save.
 
-A unit's lead is a seat's name, so a seat that leads a unit **stays its lead**
-wherever it moves. The dialog says so and offers **Clear lead** to remove it as
-part of the move. A seat placed in a unit by its `unit:` reference is written
-into the destination and the reference is removed.
+A unit's lead is a seat's handle, not a position, so a seat that leads a unit
+**stays its lead** wherever it moves. The dialog says so and offers **Clear
+lead** to remove it as part of the move.
 
-The dialog also names any unit schedule the move would leave with no runner
-(a schedule for members needs a direct agent member, and a schedule for the
-lead fails when the effective lead is a human seat), because the engine refuses
-the save until the schedule is disabled or has a runner, and says when a seat
-being moved is working: its current turn continues on the previous
-configuration until the engine applies the change.
+The dialog also names any unit schedule the move would leave with no runner (a
+schedule for members needs a direct agent member, and a schedule for the lead
+fails when the effective lead is a human seat), and says when a seat being
+moved is working: its current turn continues on the organization it started
+with until the engine applies the change.
 
 ## Deleting a node
 
 **Delete** removes a seat, or a unit with every unit and seat inside it, from
-the draft. Undo brings it back until the draft is saved. The dialog lists what
-the removal clears inside the chart (a unit's lead, a `manages` entry, a root
-seat's unit reference), the unit schedules it would leave with no runner, and
-the seats that are working now.
-
-Root seats declared at the top level with a `unit:` reference to the unit being
-deleted are drawn inside it, so the dialog asks whether to delete them too or
-keep them at the top level with the reference cleared.
+the draft. Undo brings it back until the draft is saved. Once saved, a removal
+is the one change nothing undoes: the chart **retires the address** and never
+gives it to anything again. The dialog lists what the removal clears inside
+the chart (a unit's lead, a `manages` entry), the unit schedules it would
+leave with no runner, and the seats that are working now.
 
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.
@@ -442,44 +484,43 @@ seat goes:
   that is switched off wakes nobody and requires no fallback, so its
   `route_to` asks nothing of a removal.
 - **A GitLab access level.** The per-handle override is removed with the seat,
-  because an entry left behind would grant its level to the next seat that
-  derives the same handle.
+  because an entry left behind would be a setting about nobody.
 - **Vendor identities and sealed credentials.** The seat's GitHub App, Slack
   app and Mattermost bot, the GitLab, Datadog and Atlassian accounts it is
   enrolled for (it holds a credential for that tool's `mcp_env` server, or its
-  unit does), and the secret store entries its config references, stay until
-  you decommission them. They are listed by name, never by value, with links to
-  **Integrations** and **Secrets**. A seat added in this draft was never saved,
-  so nothing exists for it outside the chart.
+  unit does), and the secret store entries its runtime half references, stay
+  until you decommission them. They are listed by name, never by value, with
+  links to **Integrations** and **Secrets**. A seat added in this draft was
+  never saved, so nothing exists for it outside the chart.
 - **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
-  the mail still addressed to it, is kept for 24 hours after the engine applies
-  the change and then retired, together with any coding runs it still has. Its
-  memory (diary, episodes, counterparty profiles, onboarding markers) is kept,
-  and a seat added later under the same handle reattaches to it. See
+  the mail still addressed to it, is kept for 24 hours after the engine
+  applies the removal and then retired, together with any coding runs it still
+  has. Its memory is kept, under an identity no later seat can have. See
   [Seat Ownership](../concepts/seat-ownership.md#the-removed-seat).
 
 ## Changing a seat's kind
 
 **Change to human seat** and **Change to agent seat** are their own step,
 because the change removes fields: the engine refuses a human seat every
-runtime field (models, token budget, workers, learning, schedules, chat app
-blocks, Jira and Confluence ownership, tool credentials, behavioral guidelines
-and its own GitHub App), and refuses an agent seat `contact` and
-`availability`. The dialog lists the fields by name before anything is
-recorded, and calls out the ones that hold credentials: the builder never shows
-a credential, so it cannot type one back in and the value is gone for good once
-the change is saved. Removing a field tears nothing down at a vendor, so the
-seat's apps, bots and accounts, and the secret store entries the removed fields
-referenced, are listed as they are for a deleted seat.
+field an agent runs on (models, token budget, workers, learning, schedules,
+chat app blocks, tool credentials, behavioral guidelines and its own GitHub
+App), and refuses an agent seat `contact` and `availability`. All of them are
+in the runtime half, so a reader the chart did not show that half cannot
+change a kind: nothing could say what would go. The dialog lists the fields by
+name before anything is recorded, and calls out the ones that hold
+credentials: the builder never shows a credential, so it cannot type one back
+in and the value is gone for good once the change is saved. Removing a field
+tears nothing down at a vendor, so the seat's apps, bots and accounts, and the
+secret store entries the removed fields referenced, are listed as they are for
+a deleted seat.
 
 Becoming a human seat offers a contact identity without requiring one, and
 cannot be done to the Datadog fallback (while Datadog is enabled) without
-choosing the agent seat that takes over. Where the
-seat is the company's only agent seat, the dialog says so and the change waits
-until another agent seat exists or Datadog is disconnected. The
-schedules the change would strand, and a turn the seat is running now, are
-named first. A seat that becomes human stops running; its memory is kept but
-unused while it is a human seat.
+choosing the agent seat that takes over. Where the seat is the company's only
+agent seat, the dialog says so and the change waits until another agent seat
+exists or Datadog is disconnected. The schedules the change would strand, and
+a turn the seat is running now, are named first. A seat that becomes human
+stops running; its memory is kept but unused while it is a human seat.
 
 ## Reviewing and saving
 
@@ -488,119 +529,189 @@ would do before it does it:
 
 - **What changes:** the units and seats added, removed, renamed, moved and
   edited, and the charter fields.
-- **What follows:** the consequences the engine attaches to those changes,
-  computed from the hierarchy it derives for the base and for the draft:
-  seats that onboard again (and why), handle changes, reporting lines and
-  leads that move (including a reorder that only changes which manager comes
-  first), channels, where unrouted Jira and Confluence work goes, the tool
+- **What follows:** the consequences a reader can work out from the chart's
+  own rows: a new address for a seat or a unit (which keeps its identity, and
+  whose old address goes on reaching it), seats that onboard again and why,
+  where onboarding pages are looked up after a unit is renamed, the tool
   credentials a seat gains or loses (names only), fields a kind change
   removes, references a removal clears, the Datadog fallback seat and GitLab
-  access levels, and a new seat that takes a removed seat's handle and with it
-  its memory.
-- **Warnings** the engine gave for exactly this save.
+  access levels. Who reports to whom, the lead and channel a unit inherits
+  and where unrouted work goes are derived by the engine once the chart is
+  saved, so they are not listed.
+- **Warnings** the last check found.
 
-A company rename, a handle change, a kind change, a change of tool
-credentials and removing more than half of the seats each need an
-acknowledgement before **Save** enables. While the engine reports problems
-the review opens so you can read it, with Save disabled until they are fixed.
-While a check is out, Save waits for it. If the engine could not be reached to
-check, saving is still allowed: the write itself is validated.
+A company rename, a kind change, a change of tool credentials and removing
+more than half of the seats each need an acknowledgement before **Save**
+enables. While the check reports problems the review opens so you can read
+it, with Save disabled until they are fixed. While a check is out, Save waits
+for it. If the engine could not be reached to check, saving is still allowed:
+a save reads the chart first, and every write is decided where it lands. A
+reader the chart did not show the runtime half is told the save leaves that
+half as it is.
+
+### What a save sends
+
+A save is a plan of writes, made when you press Save and sent in an order
+each one can land in:
+
+1. **In create mode, the settings first** — `PUT /config` with
+   `If-None-Match: *` — because that write is what makes the company exist.
+2. **The chart's structure**, as `POST /chart/batch` batches of at most 500
+   operations each: new addresses first, then new units, units moved (in an
+   order that never closes a loop), new and moved seats, kind changes, leads,
+   and every changed `manages` list, stated whole.
+3. **Removals**, in batches of their own, deepest first, once what the draft
+   moved out of a unit has gone.
+4. **Each changed unit, then each changed seat**, one `PATCH` each with the
+   object's whole content. A runtime half the reader was not shown is left
+   out of the body, which keeps what the object has.
+5. **In edit mode, the settings last** — `PATCH /config`, a merge patch of
+   what changed with `If-Match` naming the revision the draft was started
+   from — because the Datadog fallback and the GitLab access levels name seats
+   by handle, and those are the chart's once its structure has landed.
+
+Before the first write the chart is read once more and compared with the rows
+the draft started from, so a save never writes over somebody else's change to
+the chart. Every chart write carries an `Idempotency-Key`, an operation id
+derived from the save's own **write id**; the settings write carries the write
+id in its audit summary. The review lists every write as it goes, with what
+the engine answered:
+
+| A write reads | Meaning |
+|---|---|
+| Written as revision `<id>` | the settings revision was stored and activated |
+| Written at `<position>` | the chart write landed, and this node has applied it |
+| Written at `<position>`; this node is still applying it | the chart write is durable at that position, and this node has not applied it yet |
+| Not confirmed (operation `<id>`) | nothing could establish whether it landed |
+| Refused: *reason* | the engine will not take it as sent — for a batch, naming the operation and its node |
+| Somebody else's write got there first | a newer settings revision, or another write to the same object, landed first |
+
+A save **stops at the first write that does not land**, because the writes
+after it may depend on it (a seat's content on a seat whose creation did not
+land). What landed before it stays landed — each write is its own record — so
+the builder reads the company back and carries the rest of the draft onto it,
+and the review says the draft now holds only what is left to save. A refusal
+is placed on the node it names, beside the step it stopped at.
 
 The **audit summary** is prefilled from the changes and recorded with the
-revision, followed by a write id such as
-`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`. A save is the
-same request as its checks: a `PATCH /config` merge patch of what changed,
-with `If-Match` naming the revision the draft was started from, so a newer
-revision is refused (and offered as an update) rather than overwritten.
+settings revision, followed by the write id, such as
+`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`. A save that writes no settings
+asks for no summary: the chart records who made each change on its own.
 
 ### When the answer does not arrive
 
-A save whose answer is lost (a dropped connection, a gateway timeout) may
-still have been stored. The builder never assumes either way: it reads the
-revision history and treats the save as done when it finds a revision whose
-parent is the draft's base and whose summary carries the write id. If the
-save did not land, it says so and offers to save again. If the engine cannot
-be asked, editing pauses and the review offers **Check again** and **Save
-again**; a second save carries the same write id, so a first save that did
-land is recognized as yours rather than replayed on top of itself.
+A write whose answer is lost (a dropped connection, a gateway timeout) may
+still have landed. The builder never assumes either way:
+
+- **A chart write** is "Not confirmed", editing pauses, and **Retry** sends the
+  same write under the same operation id. The chart's ledger recognizes an id
+  it has seen and answers with the first arrival's outcome rather than writing
+  twice, so a retry is always safe. Nothing after it is sent until it is
+  known.
+- **The settings write** is settled from the revision history: the save counts
+  as done when a revision whose parent is the draft's base carries the write
+  id in its summary. If nothing was stored the builder says so, and **Retry**
+  sends it again under the same write id; if somebody else's revision was
+  stored instead, the draft is updated onto it, as below; and while the
+  engine cannot be asked, editing pauses with **Retry**.
 
 The same holds when you leave the builder, or the tab reloads, before the
-answer arrives. The kept draft is marked with the save's write id before the
-save is sent, so the next time the builder opens in this tab it settles that
-save first: if it landed, the builder says "The last save from this tab was
-stored" and does not offer the draft again (replaying it onto its own revision
-would apply every change twice); if it did not, the draft comes back as any
-kept draft does. While the engine still cannot say, editing stays paused, with
-**Check again**. Coming back to the builder while that save is still on its
-way, the builder waits for the save's own answer before it settles anything.
+answers arrive. The kept draft is marked with the save's write id and the
+nodes it creates before the first write is sent, so the next time the builder
+opens in this tab it carries the draft onto whatever landed rather than
+creating those nodes twice: the restore dialog says which changes are saved
+already. Coming back to the builder while a save from this page is still on
+its way, the builder waits for it, with editing paused, before it decides
+anything about the kept draft.
 
 ### After saving
 
-A save stores and activates a revision. It does not apply it: every node
-applies on its own reconcile tick (about every fifteen seconds, spread a
-little per node so a fleet does not apply at once), and a node can refuse a
-revision and go on serving the previous one. Until this node has
-applied it, the Chart and Charter lenses still draw the previous
-organization, and say so.
+A save is not an apply. A settings revision is stored and activated, and every
+node applies it on its own reconcile tick (about every fifteen seconds, spread
+a little per node so a fleet does not apply at once); a node can refuse a
+revision and go on serving the previous one. A chart write is durable once it
+answers, and every node applies it from the chart's log in its own time. Until
+this node has applied both, the Chart and Charter lenses still draw the
+previous organization, and say so.
 
-The strip under the toolbar follows the revision:
+The strip under the toolbar follows each half:
 
 | It reads | Meaning |
 |---|---|
-| Saved revision `<id>`. The engine is applying it. | stored and activated; no node has reported this epoch yet |
-| Applied on N of M nodes. | the fleet is converging |
-| Applied. | every node reported this epoch |
-| Node `<id>` refused this revision: `<reason>`. | that node kept the previous epoch. **Open the fleet** for the rest |
+| Saved settings revision `<id>`. The engine is applying it. | stored and activated; no node has reported this epoch yet |
+| … Applied on N of M nodes. | the fleet is converging |
+| … Applied. | every node reported the epoch, or applied the chart through the save's position |
+| … Node `<id>` refused this revision: `<reason>`. | that node kept the previous epoch. **Open the fleet** for the rest |
+| Saved the org chart at `<position>`. The nodes are applying it. | no node has reported applying the chart's log that far yet |
+| Saved the org chart at `<position>`. Applied on this node. / This node is applying it. | what this node's own answer said, for a reader the fleet's positions are not shown to |
 
-Beside it: **View changes**, which opens what the save changed on the
-Configuration screen (the saved revision against the one the draft was
+Where each node stands on the chart's log comes from the retention report,
+which only a reader who may operate the fleet is shown.
+
+Beside it: **View changes**, which opens what the save changed in the settings
+on the Configuration screen (the saved revision against the one the draft was
 started from; after creating the company it is **View the configuration**,
-since a first revision has nothing to differ from), and **Copy as YAML**,
-which reads the active company as YAML (credentials redacted, as every
-configuration read is) so a `company.yaml` kept in a repository can be
-brought back in step. `crewlet config import company.yaml` writes it back.
+since a first revision has nothing to differ from), **Copy settings as YAML**,
+which reads the active settings as YAML (credentials redacted, as every
+configuration read is), and **Copy the chart**, which reads the org chart as
+the document `crewlet chart export` writes — every unit, every seat with its
+runtime half and every `manages` list, its credentials masked. Together they
+are what keeps a company file in a repository in step with what the builder
+wrote.
 
 ### Keeping a company file in sync
 
 A company kept as `company.yaml` in a repository and a company edited in the
-builder are two writers of one document, and the flag a node starts with
-decides which one wins a restart
+builder are two writers of one company, and how the file is applied decides
+which one wins
 ([Configuration](../concepts/configuration.md)):
 
-- `crewlet run -company company.yaml` only fills an empty store. Once a
-  company exists the file is ignored, so a restart never undoes a builder
-  save.
-- `crewlet run -import-company company.yaml` makes the file the company again
-  at every start. A restart with it replaces whatever the builder saved since
-  the file last changed.
+- `crewlet run -company company.yaml` fills an empty store and seeds an empty
+  org chart. Once a company exists the file is ignored, so a restart never
+  undoes a builder save.
+- `crewlet run -import-company company.yaml` makes the file's **settings** the
+  active revision again at every start. It does not touch a chart that has
+  been written, so a restart with it replaces the settings the builder saved
+  and keeps its chart changes.
+- `crewlet config import company.yaml` through a running node writes **both**
+  halves: the settings as a new revision, and the file's whole org chart over
+  the one the builder saved.
 
-So after a save, **Copy as YAML** and commit it to the file, and the next
-import writes back what the builder wrote rather than undoing it. Credentials
-in the copy read as `__redacted__` (a whole `${NAME}` reference is shown as it
-is). Importing the file over the running company restores each masked value
-from the active revision by the identity of what holds it (a seat by its
-handle, a unit by its name); a store with no active revision has nothing to
-restore from, which is one more reason a file kept in a repository should
-hold `${NAME}` references rather than values.
+So after a save, **Copy settings as YAML** and **Copy the chart** and commit
+them to the file, and the next import writes back what the builder wrote
+rather than undoing it. Credentials in the copies read as `__redacted__`, or
+as the whole `${NAME}` reference they are stored under — a seat's address
+included, which the engine seals into the secret store as a `${CHART_…}`
+reference — and importing the file back into the same deployment restores
+each masked value from what is stored. Another deployment holds nothing under
+those names, which is one more reason a file kept in a repository should hold
+`${NAME}` references rather than values.
 
 ## A draft survives a reload
 
-The builder keeps the draft's list of changes (never the document itself,
-which holds contact identities and policies) in the tab's session storage, so
-a reload or a trip to another screen does not lose the work. When the builder
-opens and finds a kept draft:
+The builder keeps the draft's list of changes (never the company itself) in
+the tab's session storage, so a reload or a trip to another screen does not
+lose the work. The list holds what you typed into it, so the storage belongs
+to the tab and is emptied when you sign out. When the builder opens and finds
+a kept draft:
 
-- **Made against the revision that is still active:** a banner offers **Keep
-  the draft** or **Discard it**, and nothing can be edited until you choose.
-  Coming back to the lens from another lens of the same page restores the
-  draft without asking.
-- **Made against an older revision:** the draft is restored through the same
-  update described below, and **Discard the kept draft** removes it instead.
+- **Made against the company as it still is** (the same settings revision and
+  the same chart rows): a banner offers **Keep the draft** or **Discard it**,
+  and nothing can be edited until you choose. Coming back to the lens from
+  another lens of the same page restores the draft without asking.
+- **Made against a company that has moved since:** the draft is restored
+  through the same update described below, in a dialog titled **Restore the
+  kept draft**, and **Discard the kept draft** removes it instead.
+- **Made while a save from this tab was on its way:** it is restored as an
+  update, never offered as it was, and the changes the save landed are marked
+  "It is saved already."
 - **Made for creating a company, where a company now exists** (or the other
-  way around): it is discarded, and the lens says so.
+  way around): it is discarded, and the lens says so — except a create draft
+  whose own save was on its way, which is carried onto the company that save
+  made.
 
-The kept draft is removed when you save, when you discard, when the operator
-token changes, and when the engine refuses the token, because each of those
+The kept draft is removed when you save, when you discard, when the reader
+changes, and when the engine refuses the credential, because each of those
 may mean the tab has changed hands. Session storage does not outlive the tab,
 so while the draft holds changes the browser asks before the tab closes. It
 asks on a reload too, because a browser cannot tell the two apart; the draft
@@ -613,46 +724,49 @@ draft. A draft of more than 500 changes is not kept either; save it in steps.
 
 ## When somebody else saves first
 
-Every check is conditional on the revision the draft was started from, so a
-revision saved by somebody else (another operator, `crewlet config import`, a
-setup flow on the Integrations screen) is found at the next check, not at the
-save. The status reads "The configuration changed", editing pauses, and a
-banner offers **Show what changed** (the newer revision against the one the
-draft was started from) and **Update my draft**. A lens with no changes on it
-has nothing to update: it moves onto the newer revision by itself and goes
-on. An editor you have open keeps what you typed in it, and the selected unit
-or seat stays selected, so an edit you had not applied yet applies to the
-newer revision.
+Every check compares the draft's base with the company the engine holds, so a
+change somebody else saved — another operator, a lead editing their own team
+through the chart's routes, `crewlet config import`, a setup flow on the
+Integrations screen — is found at the next check, not at the save. The status
+reads "The company changed", editing pauses, and a banner says which half
+moved ("Somebody changed the org chart since you started editing." or "The
+settings changed since you started editing.") and offers **Update my draft**,
+with **Show what changed** (the newer settings revision against the one the
+draft was started from) where the settings moved. A lens with no changes on it
+has nothing to update: it moves onto the newer company by itself and goes on.
+An editor you have open keeps what you typed in it, and the selected unit or
+seat stays selected, so an edit you had not applied yet applies to the newer
+company.
 
-Updating replays each change of the draft onto the revision the engine holds
-now, and sorts every change into one of three outcomes:
+Updating replays each change of the draft onto the company the engine holds
+now, and sorts every change into one of four outcomes:
 
 - **Still applies:** replayed as it was made.
+- **Saved already:** the company already holds it — a save that landed part
+  of the draft, or a colleague who made the same change.
 - **Dropped:** what it changed no longer exists (the seat was removed, the unit
   it moved into is gone), with the reason.
 - **Changed by somebody else as well:** a value it recorded was changed in the
-  newer revision. The dialog shows the value when you started, the value saved
+  newer company. The dialog shows the value when you started, the value saved
   now and yours, and you choose **Keep mine** or **Keep theirs** for each. A
   change is never replayed over somebody else's value without that choice.
   Where a change is about a whole seat or unit (a removal) the dialog names
-  the fields somebody changed, a position reads as where the node sits, and a
-  kind change lists the fields it would remove by name; a credential is never
-  shown, only that a literal value is set.
+  the fields somebody changed, a position reads as where the node sits, an
+  address somebody else now holds is named, and a kind change lists the
+  fields it would remove by name; a credential is never shown, only that a
+  literal value is set.
 
-"The same seat" means what it means to the engine: a seat is its handle and a
-unit is its name, because those are what its memory, mailbox, schedules and
-credentials attach to. A seat removed and created again with a different
-handle is a different seat, and a change made to the original is dropped
-rather than applied to it. One created again under the same handle, or a unit
-under the same name, is the same one to the engine, so a change made to it is
-held to the values it recorded like any other: a field somebody set
-differently is a conflict for you to decide.
+"The same seat" means what it means to the engine: a seat or a unit is the
+address it was **created** under, which no rename moves and the chart never
+gives to anything else — that is what its memory, mailbox and schedules are
+keyed on. A seat renamed by somebody else is still the seat your change was
+about, and the change follows it to its new handle.
 
-If this node still serves the older revision (it has not applied the newer one
-yet, or a load balancer sent the read to a node that has not), the update
-waits: "This node has not caught up with the newer revision yet." Try again in
-a moment. If the configuration the draft edits is no longer active at all, the
-banner offers **Discard and reload**.
+If this node still serves the older settings revision (it has not applied the
+newer one yet, or a load balancer sent the read to a node that has not), the
+update waits: "This node has not caught up with the newer settings revision
+yet." Try again in a moment. If the configuration the draft edits is no
+longer active at all, the banner offers **Discard and reload**.
 
 ## Undo, redo and the keyboard
 
@@ -664,8 +778,8 @@ keys undo typing. Each change is announced to screen readers (an undo or a
 redo says it undid or redid the change), and focus moves to the unit or seat
 it touched: an added node, the node before a deleted one (or its unit), a
 moved node where it went. **Discard changes** throws the whole draft away
-after a confirmation; the saved configuration is not touched. The keys of the
-chart and the outline are described under
+after a confirmation; the saved company is not touched. The keys of the chart
+and the outline are described under
 [Reading the organization](#reading-the-organization).
 
 At narrow widths Undo, Redo, Discard changes, Expand all and Collapse all move

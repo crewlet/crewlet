@@ -10,22 +10,29 @@
  *
  * SCHEDULE RUNNERS ARE THE ONE RULE RESTATED, and only as a warning. A move,
  * a removal or a kind change can leave a schedule nothing could ever run, and
- * the engine refuses the whole company for it (`ErrUnrunnableSchedule`), often
- * on a unit the operator never touched. The builder authors no schedules, so
- * the refusal would arrive with no way out in view. The two rules are
- * `org.Unit.Validate` (an enabled schedule fanning out to members needs a
- * DIRECT agent member, a root seat placed in the unit by its `unit:`
- * reference included) and `org.Organization.validateLeadSchedules` (an
- * enabled schedule for the unit lead fails when the EFFECTIVE lead is a human
- * seat). They are read here on the draft before and after, and only a
- * schedule the operation strands is named. The engine still validates the
- * result: if the two readings ever differ, the check says so.
+ * nothing refuses that: the chart takes a structural write without reading the
+ * schedules in a unit's runtime half, which is opaque to it, and the engine
+ * builds the organization from the rows it holds. So a stranded schedule
+ * simply never fires, often on a unit the operator never touched. The two
+ * rules are `org.Unit.Validate` (an enabled schedule fanning out to members
+ * needs a DIRECT agent member) and `org.Organization.validateLeadSchedules`
+ * (an enabled schedule for the unit lead fails when the EFFECTIVE lead is a
+ * human seat). They are read here on the draft before and after, and only a
+ * schedule the operation strands is named. A schedule is in the runtime half,
+ * so a reader who was not shown that half is told of none.
  */
 
 import type { ScheduleSpec } from "~/protocol/index.ts";
-import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { allSeats, allUnits, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
+import type { NodeKey } from "./model/keys.ts";
 import { isRecord } from "./model/json.ts";
+import {
+  addressIndex,
+  allSeats,
+  allUnits,
+  type Draft,
+  type DraftSeat,
+  type DraftUnit,
+} from "./model/draft.ts";
 import {
   apply,
   kindOf,
@@ -35,6 +42,7 @@ import {
 } from "./model/operations.ts";
 import { recordIntent, type BuilderState, type RecordAnswer } from "./model/reducer.ts";
 import { deriveChanges } from "./model/changes.ts";
+import { effectiveLeads } from "./chartModel.ts";
 
 /** An operation recorded against the state and applied to a copy of its draft. */
 export type Simulated =
@@ -67,55 +75,26 @@ export interface StrandedSchedule {
   readonly reason: "members" | "lead";
 }
 
-/** Every enabled unit schedule in the draft that nothing could run, in the document's order. */
+/** Every enabled unit schedule in the draft that nothing could run, depth-first. */
 export function strandedSchedules(draft: Draft): StrandedSchedule[] {
-  const units = [...allUnits(draft)];
-  const firstUnitNamed = (name: string) => units.find(({ unit }) => unit.data.name === name)?.unit;
-
-  // Root seats the engine places in a unit by their `unit:` reference are
-  // that unit's direct members (`attachRootSeats`), and leave the root.
-  const attached = new Map<NodeKey, DraftSeat[]>();
-  const placed = new Set<NodeKey>();
-  for (const seat of draft.roles) {
-    const ref = seat.data.unit;
-    const target = typeof ref === "string" && ref !== "" ? firstUnitNamed(ref) : undefined;
-    if (!target) continue;
-    attached.set(target.key, [...(attached.get(target.key) ?? []), seat]);
-    placed.add(seat.key);
-  }
-  const membersOf = (unit: DraftUnit) => [...unit.roles, ...(attached.get(unit.key) ?? [])];
-
-  // A lead names a seat by its name, the first seat of that name in the
-  // engine's order: root seats that stayed at the root, then each unit's
-  // members depth-first.
-  const seatNamed = (name: string): DraftSeat | undefined =>
-    draft.roles.find((s) => !placed.has(s.key) && s.data.name === name) ??
-    units.flatMap(({ unit }) => membersOf(unit)).find((s) => s.data.name === name);
-
-  const parentOf = new Map(units.map(({ unit, parent }) => [unit.key, parent]));
-  const byKey = new Map(units.map(({ unit }) => [unit.key, unit]));
-  const effectiveLead = (unit: DraftUnit): string => {
-    const declared = unit.data.lead;
-    if (typeof declared === "string" && declared !== "") return declared;
-    const parent = parentOf.get(unit.key);
-    const up = parent === undefined || parent === COMPANY_KEY ? undefined : byKey.get(parent);
-    return up ? effectiveLead(up) : "";
-  };
-
+  const seats = addressIndex(draft).seats;
+  const resolved = effectiveLeads(draft);
   const out: StrandedSchedule[] = [];
-  for (const { unit } of units) {
-    const schedules = (Array.isArray(unit.data.schedules) ? unit.data.schedules : []).filter(
-      (s): s is ScheduleSpec => isRecord(s) && typeof s.name === "string",
-    );
-    for (const schedule of schedules) {
+  for (const { unit } of allUnits(draft)) {
+    for (const schedule of unitSchedules(unit)) {
       if (schedule.enabled === false) continue;
       const stranded = (reason: StrandedSchedule["reason"]) =>
-        out.push({ unit: unit.key, unitName: unit.data.name, schedule: schedule.name, reason });
+        out.push({
+          unit: unit.key,
+          unitName: unit.data.name || unit.data.key,
+          schedule: schedule.name,
+          reason,
+        });
       if (schedule.target === "lead") {
-        const leadName = effectiveLead(unit);
-        const lead = leadName === "" ? undefined : seatNamed(leadName);
+        const leadHandle = resolved.get(unit.key)?.lead ?? "";
+        const lead: DraftSeat | undefined = leadHandle === "" ? undefined : seats.get(leadHandle);
         if (lead && kindOf(lead.data) === "human") stranded("lead");
-      } else if (!membersOf(unit).some((seat) => kindOf(seat.data) === "agent")) {
+      } else if (!unit.roles.some((seat) => kindOf(seat.data) === "agent")) {
         stranded("members");
       }
     }
@@ -123,10 +102,18 @@ export function strandedSchedules(draft: Draft): StrandedSchedule[] {
   return out;
 }
 
+/** A unit's named schedules, as its runtime half holds them. */
+function unitSchedules(unit: DraftUnit): ScheduleSpec[] {
+  const list = unit.data.runtime?.schedules;
+  return (Array.isArray(list) ? list : []).filter(
+    (s): s is ScheduleSpec => isRecord(s) && typeof s.name === "string",
+  );
+}
+
 /**
  * The schedules an operation strands: nothing could run them after it, and
- * something could before. A schedule that was already stranded is the
- * check's to report, not this operation's consequence.
+ * something could before. A schedule that was already stranded is not this
+ * operation's consequence.
  */
 export function newlyStranded(before: Draft, after: Draft): StrandedSchedule[] {
   const id = (s: StrandedSchedule) => `${s.unit}\u0000${s.schedule}`;
@@ -140,7 +127,7 @@ export function strandedSentence(s: StrandedSchedule): string {
     s.reason === "lead"
       ? "it runs as the unit's lead, and the lead would be a human seat"
       : "it runs on the unit's direct agent members, and the unit would have none";
-  return `Schedule ${s.schedule} on ${s.unitName} would have no runner: ${why}. The engine refuses the save until it is disabled or has a runner.`;
+  return `Schedule ${s.schedule} on ${s.unitName} would have no runner: ${why}. Nothing refuses the save, so it would simply never run: disable it, or give it a runner.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,12 +142,7 @@ export function massRemoval(
   baseDraft: Draft,
   after: Draft,
 ): { removed: number; total: number } | null {
-  return deriveChanges({
-    base: { draft: baseDraft, derived: null },
-    next: { draft: after, derived: null },
-    ops: [],
-    reports: [],
-  }).massRemoval;
+  return deriveChanges({ base: baseDraft, next: after, ops: [], reports: [] }).massRemoval;
 }
 
 /** The seats of `before` that `after` no longer holds, in the document's order. */
