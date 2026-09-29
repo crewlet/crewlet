@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -379,6 +380,14 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 // It publishes the seat's runtime document WHOLE, re-encoded from the seat the
 // engine is running: a content write replaces the object, so anything left out
 // would be a field the rotation silently cleared.
+//
+// "CARRY" MEANS RESOLVE, NEVER HOLD. The chart seals every credential into the
+// company's secret store before its record is formed, so the published seat
+// holds a `${CHART_…}` reference and never the token itself — and a company
+// holding the literal would be the leak the sealing exists to close, so that
+// is refused here too. What the rotation has to reach is this node's
+// RESOLUTION of that reference, which is what every consumer of the
+// credential reads.
 func rotateSeatToken(t *testing.T, n *node, handle, server, key, token string) {
 	t.Helper()
 	writer := n.engine.ChartWriter()
@@ -405,8 +414,16 @@ func rotateSeatToken(t *testing.T, n *node, handle, server, key, token string) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		got := n.engine.Company().Org.Role(handle)
-		if got != nil && got.MCPEnv[server][key] == token {
-			return
+		if got != nil {
+			held := got.MCPEnv[server][key]
+			if held == token {
+				t.Fatalf("the published company holds %s's %s credential in "+
+					"the clear; the chart must seal it and carry a reference",
+					handle, server)
+			}
+			if envref.Has(held) && envref.Resolve(held, n.engine.LookupSecret) == token {
+				return
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the rotation never reached this node's published company")
