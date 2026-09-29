@@ -671,7 +671,7 @@ func TestTheCurveIsBounded(t *testing.T) {
 // strips the header the source is derived from — locks every person in the
 // company out at once, which is an outage the throttle caused. What still
 // bounds that caller is the password cost and the verify cap. And a
-// credential that names nobody — an invitation link or a founder's code — has
+// credential that names nobody — an invitation link — has
 // no pair to key, and keyed on its source alone it was a way to hold every
 // invitation redeemed at an address shut. Either ticket is nil, and does
 // nothing. Mutation: count a subject-less attempt against its source and the
