@@ -105,6 +105,28 @@ import (
 // different change can cause. A put there would be the rotation this section
 // exists to close, reached by the one path the name does not.
 //
+// # A sealed reference restated is a value this write NAMES AGAIN
+//
+// A `${CHART_…}` reference travels: a read serves one, `/company/export`
+// writes one into a file, and an import writes it back. The row being replaced
+// may not name it any more — the field was cleared or rotated since the file
+// was taken, or the reference was copied from another object — and a value no
+// row names is one the orphan sweep deletes. Written back verbatim, a
+// reference to a value already collected was ACCEPTED and resolved to nothing
+// on every node, and the value was unrecoverable, because the file only ever
+// held its name. And a reference to a value not collected YET was named again
+// by a record the sweep could delete it underneath, since the sweep had judged
+// it before the record landed.
+//
+// So a write that states a name of this domain's shape the replaced row does
+// not already name HOLDS it first ([Sealer]): a value the store still holds
+// has its version moved, which spares it from any sweep that judged it before
+// and starts the sweep's grace again, and one the store no longer holds is
+// REFUSED naming the field — the file's reference is stale, and the remedy
+// (send the credential itself, or store the name first) is the caller's to
+// choose rather than an empty credential to discover later. A reference the
+// row already names needs neither: every sweep sees it named.
+//
 // # Why the predicate is envref.Whole everywhere, and envref.Split beside it
 //
 // "Is this a credential or a pointer at one" is asked in four places, and a
@@ -150,6 +172,13 @@ type Sealer interface {
 	// NODE the write happened to land on, so every credential a founder put
 	// into a seat read as set by a machine nobody chose.
 	Seal(ctx context.Context, name, value string, by secrets.Author) error
+
+	// Hold confirms a value is stored under name and moves its row's version
+	// without changing anything else about it, reporting false where
+	// nothing is stored. It is how a write that states an existing sealed
+	// reference the replaced row does not name makes any sweep that judged
+	// the value nobody's lose its delete — see seal.go's header.
+	Hold(ctx context.Context, name string) (bool, error)
 }
 
 // ErrSealTaken is a [Sealer]'s answer to a seal whose name already holds a
@@ -254,6 +283,46 @@ func varToken(in string) string {
 	return b.String()
 }
 
+// sealing is one write's seal: the object it is about, the identity its names
+// derive from, its operation, and every sealed name the row it replaces
+// already references.
+type sealing struct {
+	// object names the field in a refusal.
+	object ObjectRef
+
+	// as is the identity names are derived from — the address the object
+	// was created under, which no rename moves.
+	as ObjectRef
+
+	// opID is the write's operation, which names derive from as well.
+	opID string
+
+	// named is every name of this domain's shape the replaced row
+	// references; restating one of those holds nothing, since every sweep
+	// sees it named.
+	named map[string]bool
+}
+
+// sealingFor is the seal of one content write over a row whose address and
+// runtime half are given.
+//
+// A HALF THAT DOES NOT DECODE NAMES NOTHING this can read, so every sealed
+// reference the write states is held as though it were new — the direction
+// that asks the store rather than trusting a row it cannot read.
+func sealingFor(object, as ObjectRef, opID, email string,
+	runtime json.RawMessage) sealing {
+
+	named := map[string]bool{}
+	names, err := sealedIn(email, runtime)
+	if err != nil {
+		names, _ = sealedIn(email, nil)
+	}
+	for _, name := range names {
+		named[name] = true
+	}
+	return sealing{object: object, as: as, opID: opID, named: named}
+}
+
 // sealValue is the one place a secret-tagged value is decided about.
 //
 // FOUR ANSWERS, and the middle two are why the function exists:
@@ -261,6 +330,10 @@ func varToken(in string) string {
 //   - A WHOLE `${VAR}` is stored VERBATIM. It names a credential rather than
 //     being one, it is what an operator edits, and sealing it would put a
 //     pointer inside the store and a pointer to that pointer on the record.
+//     One naming a value this domain sealed that the replaced row does not
+//     name is HELD first, and refused where the store no longer holds it
+//     ([Writer.holdRestated]); every reference in a composite is treated
+//     the same way.
 //   - AN EMPTY VALUE is stored verbatim too, and is a real setting: an
 //     operator who deliberately cleared a credential has said something, and
 //     sealing "" would store an empty secret and hand back a reference that
@@ -279,15 +352,19 @@ func varToken(in string) string {
 // expands nothing inside a body. Cut into runs, a file reached the box as the
 // chart's own references strung together.
 //
-// OBJECT names the field in a refusal; SEALAS is the identity the names are
-// derived from, and OPID the write's operation.
-func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
-	opID string, path []string, content bool, value string) (string, error) {
+// S is the write's seal: what it is about, whose names it derives and what
+// the replaced row already names.
+func (w *Writer) sealValue(ctx context.Context, s sealing, path []string,
+	content bool, value string) (string, error) {
 
 	if value == "" {
 		return "", nil
 	}
+	field := strings.Join(path, ".")
 	if _, whole := envref.Whole(value); whole {
+		if err := w.holdRestated(ctx, s, field, value); err != nil {
+			return "", err
+		}
 		return value, nil
 	}
 	parts := envref.Split(value)
@@ -300,19 +377,21 @@ func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
 			literals++
 		}
 	}
+	if err := w.holdRestated(ctx, s, field, value); err != nil {
+		return "", err
+	}
 	if literals == 0 {
 		// NOTHING BUT REFERENCES — a value this writer sealed before, or
 		// one an operator composed from their own variables. There is no
 		// literal text in it to keep off the log.
 		return value, nil
 	}
-	field := strings.Join(path, ".")
 	if w.seal == nil {
 		return "", fmt.Errorf("chart: %s on %s holds a literal credential and "+
 			"this node has no secret store to seal it into — the value is "+
 			"REFUSED rather than written to the log, which every node applies "+
 			"and every snapshot copies. Configure the secret store, or give "+
-			"the field a ${VAR} reference", field, object)
+			"the field a ${VAR} reference", field, s.object)
 	}
 	by := secrets.Author{Name: w.Actor, Kind: string(w.ActorKind), OperatorID: w.OperatorID}
 	var out strings.Builder
@@ -331,38 +410,70 @@ func (w *Writer) sealValue(ctx context.Context, object, sealAs ObjectRef,
 			run++
 			at = append(slices.Clone(path), "#"+strconv.Itoa(run))
 		}
-		name := SecretName(sealAs, opID, at...)
+		name := SecretName(s.as, s.opID, at...)
 		err := w.seal.Seal(ctx, name, part.Text, by)
 		if errors.Is(err, ErrSealTaken) {
 			return "", fmt.Errorf("chart: %s on %s: operation %q already sealed "+
 				"a different value for this field — an operation id names one "+
 				"write, and its retry must carry what the first attempt did. "+
-				"Send this change under a new one: %w", field, object, opID,
+				"Send this change under a new one: %w", field, s.object, s.opID,
 				ErrRefused)
 		}
 		if err != nil {
-			return "", fmt.Errorf("chart: seal %s on %s: %w", field, object, err)
+			return "", fmt.Errorf("chart: seal %s on %s: %w", field, s.object, err)
 		}
 		out.WriteString("${" + name + "}")
 	}
 	return out.String(), nil
 }
 
+// holdRestated holds every value this domain sealed that value names and the
+// replaced row does not, refusing the write — naming the field — where the
+// store no longer holds one. See seal.go's header.
+func (w *Writer) holdRestated(ctx context.Context, s sealing, field, value string) error {
+	for _, name := range envref.Names(value) {
+		if !OwnsSecret(name) || s.named[name] {
+			continue
+		}
+		if w.seal == nil {
+			return fmt.Errorf("chart: %s on %s names ${%s}, a value the org "+
+				"chart sealed, and this node has no secret store to confirm it "+
+				"still holds one — refused rather than written as a reference "+
+				"that may resolve to nothing: %w", field, s.object, name, ErrRefused)
+		}
+		held, err := w.seal.Hold(ctx, name)
+		if err != nil {
+			return fmt.Errorf("chart: confirm ${%s} for %s on %s: %w", name, field,
+				s.object, err)
+		}
+		if !held {
+			return fmt.Errorf("chart: %s on %s names ${%s}, a value the org "+
+				"chart sealed that this deployment's secret store does not hold — "+
+				"it collects one once no row has named it for an hour, so a file "+
+				"exported before the field was cleared or rotated names a value "+
+				"that is gone, and one exported from another deployment names a "+
+				"value this one never held. Send the credential itself, or store "+
+				"the name first with `crewlet secrets set %s`: %w",
+				field, s.object, name, name, ErrRefused)
+		}
+	}
+	return nil
+}
+
 // sealRuntime seals every literal credential in an object's runtime half and
 // answers the half carrying references in their place.
-func (w *Writer) sealRuntime(ctx context.Context, object, sealAs ObjectRef,
-	opID string, runtime json.RawMessage) (json.RawMessage, error) {
+func (w *Writer) sealRuntime(ctx context.Context, s sealing,
+	runtime json.RawMessage) (json.RawMessage, error) {
 
 	if len(runtime) == 0 {
 		return runtime, nil
 	}
-	sealed, err := w.runtime.Credentials(object.Kind, runtime,
+	sealed, err := w.runtime.Credentials(s.object.Kind, runtime,
 		func(path secrets.Path, value string) (string, error) {
-			return w.sealValue(ctx, object, sealAs, opID, runtimePath(path),
-				path.Content(), value)
+			return w.sealValue(ctx, s, runtimePath(path), path.Content(), value)
 		})
 	if err != nil {
-		return nil, fmt.Errorf("chart: seal the runtime half of %s: %w", object, err)
+		return nil, fmt.Errorf("chart: seal the runtime half of %s: %w", s.object, err)
 	}
 	return sealed, nil
 }
@@ -371,7 +482,7 @@ func (w *Writer) sealRuntime(ctx context.Context, object, sealAs ObjectRef,
 // value the row's own half holds at the same place.
 //
 // THE MASK IS THE STORED VALUE HANDED BACK, exactly as it is for the address
-// ([Writer.resolveMasked]): every surface that serves the runtime half masks
+// ([restoreMasked]): every surface that serves the runtime half masks
 // its credentials, so GET-edit-PUT hands the marker back constantly, and a
 // write that stored it would replace a working credential with twelve
 // characters. It is restored VERBATIM — the row's value is already a

@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -138,5 +139,30 @@ func TestTheSweepCollectsASealedValueNothingNames(t *testing.T) {
 		if !stored(name) {
 			t.Errorf("the sweep deleted %s, which a row still names", name)
 		}
+	}
+
+	// A FILE EXPORTED BEFORE THE ROTATION names the collected value. Written
+	// back, it was accepted and the seat resolved an empty credential with the
+	// value unrecoverable; it is refused, naming the field.
+	_, err := writer.WriteSeat(t.Context(), "test:content:cfo:stale", chart.SeatContent{
+		Handle: "cfo", Name: "CFO", Email: emailRef,
+		Runtime: json.RawMessage(`{"llm":["zulu"],"mcp_env":{"tracker":` +
+			`{"SEAT_TOKEN":"` + firstRef + `"}}}`),
+	})
+	if !errors.Is(err, chart.ErrRefused) {
+		t.Errorf("writing back a reference to a collected value answered %v, "+
+			"want a refusal naming the field", err)
+	}
+	// AND ONE WHOSE VALUE IS STILL HELD — the rotation undone by restoring the
+	// old file before the sweep took anything — lands and resolves.
+	give("test:content:cfo:3", emailRef, "${CFO_TOKEN}")
+	named("cfo", func(_, token string) bool { return token == "${CFO_TOKEN}" })
+	if n := sweep(time.Now()); n != 0 {
+		t.Fatalf("a sweep inside the grace collected %d values", n)
+	}
+	give("test:content:cfo:restore", emailRef, secondRef)
+	named("cfo", func(_, token string) bool { return token == secondRef })
+	if got := e.Resolve(secondRef); got != "cfo-token-rotated" {
+		t.Errorf("the restored reference resolves to %q, want the value it names", got)
 	}
 }

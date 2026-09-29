@@ -2,6 +2,7 @@ package chart_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,8 @@ type fakeSealer struct {
 	// afterSeal, when set, runs once a value is stored — a case's way of
 	// making something happen between a write's seal and its publish.
 	afterSeal func()
+	// held is every name a write held, in order.
+	held []string
 }
 
 func newSealer(t *testing.T) *fakeSealer {
@@ -55,6 +58,30 @@ func (f *fakeSealer) Seal(_ context.Context, name, value string, by secrets.Auth
 		after()
 	}
 	return nil
+}
+
+// Hold reports whether a value is stored under name, recording that it was
+// asked.
+func (f *fakeSealer) Hold(_ context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, found := f.sealed[name]
+	f.held = append(f.held, name)
+	return found, nil
+}
+
+// holds is every name a write held so far.
+func (f *fakeSealer) holds() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.held)
+}
+
+// forget drops a stored value, as the orphan sweep does.
+func (f *fakeSealer) forget(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.sealed, name)
 }
 
 // author is who the value under name records.

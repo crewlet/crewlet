@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -515,4 +516,79 @@ func TestAWriteThatDoesNotLandChangesNoCredentialARowNames(t *testing.T) {
 		}
 		unchanged(t, "sarah-chen", row)
 	})
+}
+
+// A SEALED REFERENCE A WRITE STATES AGAIN IS HELD, AND ONE THE STORE NO LONGER
+// HOLDS IS REFUSED.
+//
+// A `${CHART_…}` reference travels — a read serves it, an export writes it into
+// a file, an import writes it back — and the row it lands on may not be the
+// row, or the moment, it was sealed for. The store collects a value once no
+// row has named it for an hour, so a file taken before a rotation names one
+// that may be gone: written back as it was, the reference was accepted and
+// resolved to nothing on every node, with the value itself unrecoverable. So a
+// reference the replaced row does not already name is HELD — confirmed, and
+// its version moved so no sweep that judged it can delete it under the record
+// about to name it — and refused, naming the field, where nothing holds it. A
+// reference the row already names is asked nothing.
+func TestARestatedSealedReferenceIsHeldOrRefused(t *testing.T) {
+	t.Parallel()
+	r := newWriteRig(t)
+	r.batch("op-seats", seatOp(chart.SeatAgent, "sarah-chen", ""),
+		seatOp(chart.SeatAgent, "bo-lee", ""))
+	runtime := func(token string) json.RawMessage {
+		return json.RawMessage(`{"mcp_env": {"github": {"GITHUB_TOKEN": "` + token + `"}}}`)
+	}
+	sarah := chart.ObjectRef{Kind: chart.KindSeat, ID: "sarah-chen"}
+	first := chart.SecretName(sarah, "op-one", "mcp_env", "github", "GITHUB_TOKEN")
+	second := chart.SecretName(sarah, "op-two", "mcp_env", "github", "GITHUB_TOKEN")
+	for _, w := range []struct{ op, token string }{
+		{"op-one", "tok-one"}, {"op-two", "tok-two"},
+	} {
+		if _, err := r.seat(w.op, chart.SeatContent{Handle: "sarah-chen",
+			Name: "Sarah", Runtime: runtime(w.token)}); err != nil {
+			t.Fatalf("write %s: %v", w.op, err)
+		}
+	}
+	// THE ROTATION LEFT THE FIRST VALUE NAMED BY NOTHING, and the sweep took it.
+	r.sealer.forget(first)
+
+	_, err := r.seat("op-stale", chart.SeatContent{Handle: "bo-lee", Name: "Bo",
+		Runtime: runtime("${" + first + "}")})
+	if !errors.Is(err, chart.ErrRefused) || !strings.Contains(err.Error(),
+		"mcp_env.github.GITHUB_TOKEN") || !strings.Contains(err.Error(), first) {
+		t.Fatalf("a reference to a value the store no longer holds answered %v, "+
+			"want a refusal naming the field and the name — accepted, the seat "+
+			"resolves an empty credential and nothing says why", err)
+	}
+	if got := r.runtimeOf("bo-lee"); strings.Contains(got, first) {
+		t.Errorf("the refused reference reached the row: %s", got)
+	}
+
+	before := len(r.sealer.holds())
+	if _, err := r.seat("op-copy", chart.SeatContent{Handle: "bo-lee", Name: "Bo",
+		Runtime: runtime("${" + second + "}")}); err != nil {
+		t.Fatalf("a reference to a value the store holds was refused: %v", err)
+	}
+	if got := r.sealer.holds()[before:]; !slices.Equal(got, []string{second}) {
+		t.Errorf("stating a sealed reference the row did not name held %v, want "+
+			"%s — unheld, a sweep that judged it nobody's deletes it under the "+
+			"record about to name it", got, second)
+	}
+	if got := r.resolvedRuntime("bo-lee")["mcp_env.github.GITHUB_TOKEN"]; got != "tok-two" {
+		t.Errorf("the restated reference resolves to %q, want tok-two", got)
+	}
+
+	// AND THE ROW'S OWN REFERENCE, restated beside a change, asks nothing.
+	before = len(r.sealer.holds())
+	if _, err := r.seat("op-extend", chart.SeatContent{Handle: "sarah-chen",
+		Name: "Sarah", Runtime: json.RawMessage(`{"mcp_env": {"github": {` +
+			`"GITHUB_TOKEN": "${` + second + `}", "GITHUB_HOST": "${GH_HOST}"}}}`),
+	}); err != nil {
+		t.Fatalf("restate the row's own reference beside a change: %v", err)
+	}
+	if got := r.sealer.holds()[before:]; len(got) != 0 {
+		t.Errorf("restating the row's own reference held %v — every sweep sees "+
+			"a value its row names, so there is nothing to hold", got)
+	}
 }

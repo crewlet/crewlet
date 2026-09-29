@@ -502,10 +502,15 @@ every unit, every seat with its runtime half, and every seat's `manages:` list
 under `manages`, keyed by handle — the list is structure, so it sits beside the
 seats rather than on them. Its credentials are **masked** as every read of the
 runtime half is: a sealed one exports as the `${CHART_…}` reference it is
-stored under, which round-trips unchanged into this deployment (another one
-holds no value under that name until you store it there), and anything else as
-`__redacted__`, which an import back into this deployment restores from the row
-and an import into one holding no such row refuses, naming the field.
+stored under, and anything else as `__redacted__`, which an import back into
+this deployment restores from the row and an import into one holding no such
+row refuses, naming the field. A `${CHART_…}` reference is good for **as long
+as a row of the chart names it**: once a field is cleared or its credential
+rotated, the value it named is collected an hour later, so importing an older
+file that names it is **refused**, naming the field, rather than accepted as a
+credential that resolves to nothing — send the credential itself, or store the
+name first with `crewlet secrets set`. Another deployment holds no value under
+that name until you store it there, and is refused the same way.
 `-out PATH` writes it at `0600`, because it carries the names of every
 credential the company holds.
 

@@ -271,9 +271,9 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 			// rename moves, and this write's OPERATION, so nothing the
 			// row names now is written over — see seal.go.
 			if runtimeChanges {
-				sealAs := ObjectRef{Kind: KindUnit, ID: prior.Origin()}
-				if payload.Runtime, err = w.sealRuntime(ctx, object, sealAs,
-					opID, runtime); err != nil {
+				seal := sealingFor(object, ObjectRef{Kind: KindUnit, ID: prior.Origin()},
+					opID, "", prior.Runtime)
+				if payload.Runtime, err = w.sealRuntime(ctx, seal, runtime); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
@@ -398,16 +398,16 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 			// written over — see seal.go. Only what CHANGES is sealed: a
 			// runtime half carried from the row, or an address handed
 			// back as the row holds it, is the row's own bytes.
-			sealAs := ObjectRef{Kind: KindSeat, ID: prior.Origin()}
+			seal := sealingFor(object, ObjectRef{Kind: KindSeat, ID: prior.Origin()},
+				opID, prior.Email, prior.Runtime)
 			if runtimeChanges {
-				if payload.Runtime, err = w.sealRuntime(ctx, object, sealAs,
-					opID, runtime); err != nil {
+				if payload.Runtime, err = w.sealRuntime(ctx, seal, runtime); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
 			if email != prior.Email {
-				if payload.Email, err = w.sealValue(ctx, object, sealAs, opID,
-					[]string{"email"}, false, email); err != nil {
+				if payload.Email, err = w.sealValue(ctx, seal, []string{"email"},
+					false, email); err != nil {
 					return statelog.Decision{}, err
 				}
 			}

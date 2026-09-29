@@ -154,6 +154,15 @@ So the chart makes its own trade, and states it rather than inheriting one:
   again in between survives. A value you stored yourself is never touched: the
   sweep deletes only what the chart wrote (source `chart`), under a name of
   the shape it derives.
+- **A `${CHART_…}` reference is good while a row names it.** A read or an
+  export hands the reference out, and nothing stops a file holding it longer
+  than the value lives. So a chart write stating a `${CHART_…}` reference its
+  row does not already name confirms it first: a value still stored is
+  accepted and its row's version moved, so no sweep that judged it nobody's
+  can delete it under the record about to name it; a value already collected
+  — or never stored on this deployment — is **refused**, naming the field,
+  rather than written as a reference that resolves to nothing. Send the
+  credential itself, or `crewlet secrets set` the name first.
 
 At boot the engine loads every record into a process-local snapshot and installs it as the **secret source**. From then on `${VAR}` resolution asks the store first and falls back to the process environment:
 

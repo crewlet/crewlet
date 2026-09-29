@@ -26,10 +26,19 @@ import (
 // Every credential in the runtime half, and a seat's address, is served as
 // GET /config serves the settings' — a whole `${VAR}` as itself and anything
 // else as the mask ([chart.MaskRuntime]). The writer seals every literal, so a
-// sealed credential exports as the reference it is stored under and round-
-// trips unchanged; a mask sent back to this deployment is restored from the
-// row it patches, and one sent to a deployment that holds no such row is
-// refused naming the field rather than stored as the marker.
+// sealed credential exports as the `${CHART_…}` reference it is stored under;
+// a mask sent back to this deployment is restored from the row it patches, and
+// one sent to a deployment that holds no such row is refused naming the field
+// rather than stored as the marker.
+//
+// A SEALED REFERENCE IS GOOD FOR AS LONG AS A ROW NAMES IT, and no longer: the
+// chart collects a value once no row has named it for an hour, so a file taken
+// before a field was cleared or rotated can name a value that is gone. Written
+// back, such a reference is refused naming the field (internal/chart's
+// seal.go) rather than accepted as one that resolves to nothing, and a
+// reference whose value is still held is held again, so the sweep cannot take
+// it from under the import. The file can only ever carry the name — which is
+// the point of masking it — so what it cannot carry is the value itself.
 //
 // # What it deliberately does not carry
 //

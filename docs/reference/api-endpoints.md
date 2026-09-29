@@ -726,9 +726,13 @@ from or the value sits in a list member with no name of its own. The same holds
 for a file `GET /company/export` produced, because an import's content writes
 are these `PATCH`es: imported back into this deployment every mask is restored,
 and imported into one that holds no such row it is refused rather than storing
-the marker. A `${CHART_…}` reference imports as written, so on another
-deployment it names a value that deployment does not hold until you store it
-there.
+the marker. A `${CHART_…}` reference the row being written does not already
+name is **confirmed** against the secret store: one whose value is still held
+is accepted (and kept from the sweep), and one whose value is not — collected
+an hour after the last row stopped naming it, or never stored on this
+deployment — is refused `422 refused`, naming the field and the name, rather
+than written as a reference that resolves to nothing. So a sealed reference in
+an exported file is good only while some row still names it.
 
 **A content write never creates its object.** A `PATCH` naming a unit or a seat
 the chart does not hold is refused (`422 refused`), and nothing is published. The

@@ -336,6 +336,14 @@ func (c *chartSealer) Seal(ctx context.Context, name, value string,
 		"to confirm %d times over; write the field again", name, sealAttempts)
 }
 
+// Hold confirms a value the chart sealed is still stored, moving its row's
+// version so an orphan sweep that judged it nobody's loses its delete
+// ([chart.Sealer]).
+func (c *chartSealer) Hold(ctx context.Context, name string) (bool, error) {
+	_, held, err := c.store.Hold(ctx, name)
+	return held, err
+}
+
 // PersonSealer is what this node seals and opens a person's own values with:
 // their name, their address, an invitation's address and a second factor's
 // seed, all under the fleet keyring ([iamdomain.Sealer]).
