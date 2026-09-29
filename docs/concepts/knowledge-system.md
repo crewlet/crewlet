@@ -5,6 +5,15 @@ The knowledge system (`internal/knowledge`) is the read path agents use to find 
 - **Shared knowledge** — the team knowledge base. **Exactly one backend per company**, chosen by `knowledge.backend`, behind a `knowledge.Searcher` seam that every consumer reads through. A `Searcher` takes plain text — never a backend fragment, never a space key — and answers ranked hits; the turn-start prefetch translates the trigger into that plain text once per turn with the auxiliary LLM, and the executor can re-run the same search itself with `search_knowledge`.
 - **`agent_diary`** (vector-indexed) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id (the two halves are 50 each, so the union is the bound), then handed to an aux-LLM relevance filter.
 
+**A diary is read where it is kept current.** An agent's diary is written to
+the store of the node running the agent and follows the agent when placement
+moves it, so the dashboard's **Knowledge › Agent diaries** reads every diary
+from the node HOLDING its agent — the list (`memory_overview`) counts every
+agent in the chart at its holder in one round, and one agent's page
+(`agent_memory`) is its holder's answer, naming that node. An agent no node
+holds shows nothing rather than a copy of unknown age. See
+[seat ownership](seat-ownership.md#a-seats-memory-follows-it).
+
 **One backend, and that is a rule rather than a limitation.** "What do we already know about this" must not depend on which searcher was asked, so the config refuses a company that wires two.
 
 ## The two backends

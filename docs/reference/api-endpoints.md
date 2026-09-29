@@ -1964,6 +1964,7 @@ REST route calls, so the two surfaces cannot diverge:
 |--------|----------|--------------|
 | `agent` | `{id}` | `GET /agents/{id}` — config + live state + `llm_history` |
 | `agent_memory` | `{id, limit}` | `GET /agents/{id}/memory`. ANSWERED BY THE NODE HOLDING THE SEAT, which it names (`held_by`, or `none` with an empty answer for a seat no node holds; `unavailable` while the holder is silent, still taking the seat, or on a build that cannot answer) — every node keeps a copy of a seat's memory and only the holder keeps it current. Four collections, each a page (`limit`, at most 50) with its counted total beside it: the diary (`diary_total`), the episodes (`episodes_total`), the synthesized skills (`skills_total`) and the COUNTERPARTY PROFILES (`counterparties_total`) — what this seat has learned about the colleagues it works with, both instants carried because `last_updated_at` moves on every interaction and `last_corroborated_at` only when the traits changed. Plus `latest_reflection` (the newest live diary entry, whatever the page) and `onboarded_at`. See [the route](#get-agentsidmemory) |
+| `memory_overview` | `{}` | EVERY AGENT SEAT'S memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. Every agent in the chart, handle order, no cap. See [the section](#memory_overview) |
 | `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The listing is a page (default 50, at most 200) with `conversations_total` beside it. ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`). Same scope rule as `work_my_work` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, since, until, before_id, before_time}` | `GET /events`. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on a detached coding run: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle is a **400**, and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — every event that names the seat as its actor, role, target, recipient or sender, plus every event sharing a trace with one — and takes the name those fields hold. `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, a coding run it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), whose backfill gives the rows already stored their item from the payload; their stored `tags` are not rewritten, so the column, not `tags.work_item`, is what answers for history. Rows written before migration `0029` carry the work key in `turn_id`, and that migration backfills it into the COLUMN, so history answers both. Every row answers with its own `work_key` read off that column rather than out of its `tags`, which is the one promoted value that is not a copy of a tag: the backfill deliberately does not rewrite a stored tags blob, since those record what the writer extracted from an event whose JSON carried no such field |
@@ -3389,6 +3390,45 @@ when the diary holds none.
 **Every key is present on every answer**, as an empty list or a zero rather
 than an absent one: a caller cannot tell "this seat has learned nothing" from
 "this answer does not carry that half" if the key is simply not there.
+
+### `memory_overview`
+
+Every agent seat's memory at a glance — the list **Knowledge › Agent diaries**
+draws. A socket query with no parameters (there is no REST route: it is a
+screen's list, and `GET /agents/{id}/memory` is the one seat's record).
+
+```json
+{
+  "seats": [
+    { "handle": "swe", "diary_total": 142, "episodes_total": 38,
+      "skills_total": 4, "last_reflection_at": "2026-09-28T16:02:11Z",
+      "latest_reflection": { "id", "content", "…": "a diary row" },
+      "held_by": "node-2", "unavailable": "" }
+  ],
+  "coverage": { "nodes": [{ "id": "node-1", "answered": true, "error": "" }],
+                "complete": true }
+}
+```
+
+**Every agent seat in the chart, in handle order, and no cap** — a person keeps
+no memory the engine writes and is not listed. Each row is counted by the node
+HOLDING the seat, under exactly the rules of `agent_memory` above, but gathered
+in ONE round: the serving node lists every seat lease once, groups the seats by
+the incarnation holding them, reads its own from its store and puts ONE request
+on `crewlet.held.read` naming each holder's seats; every holder answers for its
+own in one reply, inside the same 2 s budget. So a row is one of three things:
+
+| Row | Meaning |
+|---|---|
+| `held_by` a node, `unavailable` empty | counted by that node — the totals are the ones `agent_memory` carries |
+| `held_by: "none"` | no node holds the seat; nothing is counted, because no copy anywhere is current |
+| `held_by` a node, `unavailable` set | that node did not answer, runs a build that cannot, or is still taking the seat — the reason is here and the zeros beside it are not a count |
+
+`coverage` is the shape every fleet answer carries: this node and every holder
+that was asked, each `answered` or with its `error`, and `complete` only when
+all of them answered. A lease table that cannot be read fails the whole answer
+as `unavailable`, since without it every row would be a guess at who holds
+what.
 
 The rows are **projected** by `internal/learning/memread` rather than being
 the learning package's own structs marshalled directly: those are domain types

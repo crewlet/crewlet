@@ -738,6 +738,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change: the document, who read it and how, what links to it, its revisions and thread; edited as you | `edit=1` · `version=` (one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
+| `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
 | `#/spend` | **Spend › Overview** — tokens over time, then by phase, model, seat, and the costliest turns (tokens only) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
 | `#/spend/budgets` | **Budgets** — each window's ceiling and what it is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
@@ -4687,6 +4688,20 @@ read with the listing rather than per row — and the total the listing counts,
 with Load more past a window. **Learned** (`kind=learned&seat=`) is one agent
 seat's synthesized skills from `agent_memory`, answered by the node holding
 the seat, with "n of total" when the page is cut.
+
+### Agent diaries
+
+`#/knowledge/diaries` lists EVERY agent seat in the chart — the old Knowledge
+home stopped at a dozen — from `memory_overview`: each agent's newest note,
+when it was written, and its entry, episode and skill TOTALS, counted by the
+node holding the agent, which the row names. An agent no node holds says so
+and shows no counts, since no copy of its memory is current; an agent whose
+holder did not answer says that instead of drawing zeros, and the partial
+callout every fleet answer draws names the node and why. The tree's **Agent
+diaries** row counts the agents listed. `#/knowledge/diaries/{handle}` is one
+agent's diary and episodes — the same two cards its profile's Memory tab
+draws, from the same holder-answered `agent_memory` — with the node that
+answered, or the reason nothing is shown, and the way to its whole memory.
 
 ## Honest empty states
 

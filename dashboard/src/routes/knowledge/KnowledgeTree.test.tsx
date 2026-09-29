@@ -460,3 +460,21 @@ test("the Agent skills row carries the engine's total of tool skills", async () 
     limit: 1,
   });
 });
+
+// THE AGENT DIARIES ROW COUNTS THE AGENTS `memory_overview` LISTS — every agent
+// seat in the chart, which is what its screen draws — and it is current on one
+// agent's diary as on the list.
+test("the Agent diaries row counts every agent the overview lists", async () => {
+  location.hash = "#/knowledge/diaries/swe";
+  const seats = Array.from({ length: 15 }, (_, i) => ({ handle: `agent-${i}` }));
+  mount({
+    knowledge: everyMode,
+    containers: () => ({ containers: [] }),
+    pages: () => ({ pages: [], limit: 1, total: 0 }),
+    memory_overview: () => ({ seats, coverage: { nodes: [], complete: true } }),
+  });
+  const row = await screen.findByRole("link", { name: /Agent diaries/ });
+  await waitFor(() => expect(row.textContent).toContain("15"));
+  expect(row.getAttribute("href")).toBe("#/knowledge/diaries");
+  expect(row.getAttribute("aria-current")).toBe("page");
+});

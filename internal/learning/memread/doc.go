@@ -39,6 +39,14 @@
 // A node with no broker has no peer, and its store is the only copy there is:
 // it answers every read itself.
 //
+// # Every seat at once is one round, not one per seat
+//
+// The overview ([Reader.Overview], `memory_overview`) is the same question for
+// every agent seat, cut to the totals and the newest note: one listing of the
+// seat leases, one scatter naming each holder's seats, one reply per holder.
+// A row whose holder did not answer carries the reason rather than zeros, and
+// the answer's coverage names that holder. See overview.go.
+//
 // # Not the queries package's, because every node answers
 //
 // The API is served on ingress nodes only, and a seat may be held by a node

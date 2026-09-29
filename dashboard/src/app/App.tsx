@@ -68,6 +68,8 @@ const Knowledge = lazyScreen("knowledge", (m) => m.Knowledge);
 const Pages = lazyScreen("knowledge", (m) => m.Pages);
 const PageView = lazyScreen("knowledge", (m) => m.PageView);
 const Skills = lazyScreen("knowledge", (m) => m.Skills);
+const Diaries = lazyScreen("knowledge", (m) => m.Diaries);
+const Diary = lazyScreen("knowledge", (m) => m.Diary);
 const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const General = lazyScreen("settings", (m) => m.General);
@@ -138,6 +140,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <PageView key={route.id} id={route.id} />;
     case "skills":
       return <Skills />;
+    case "diaries":
+      return <Diaries />;
+    case "diary":
+      return <Diary key={route.handle} handle={route.handle} />;
     case "spend":
       return <Spend />;
     case "budgets":

@@ -403,6 +403,13 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["knowledge", "skills"],
         hint: "The tool skills the engine offers agents, who loaded each, and what each agent learned",
       },
+      {
+        key: "diaries",
+        label: "Agent diaries",
+        icon: "brain",
+        path: ["knowledge", "diaries"],
+        hint: "Every agent's diary and episodes, read from the node holding the agent",
+      },
     ],
   },
   {

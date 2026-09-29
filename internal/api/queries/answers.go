@@ -554,6 +554,10 @@ func Register(r *Registry, s Sources) {
 		// ANSWERED BY THE HOLDER, and saying which node that was — see
 		// [Sources.Memory].
 		r.Register("agent_memory", s.agentMemory)
+		// EVERY AGENT SEAT'S TOTALS IN ONE ANSWER, each counted by its
+		// holder in one scatter — what the diaries list draws, where a
+		// read per seat would be a lease read and a scatter per row.
+		r.Register("memory_overview", s.memoryOverview)
 		// SCOPED, like every other per-seat question — see
 		// [Sources.viewerParty].
 		r.Register("conversations", s.conversations)

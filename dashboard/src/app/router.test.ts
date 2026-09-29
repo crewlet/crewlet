@@ -325,7 +325,19 @@ describe("the resolver", () => {
     });
     // `skills` is the section it was reserved for, and never a container.
     expect(resolve(["knowledge", "skills"])).toMatchObject({ screen: "skills" });
-    for (const word of ["diaries", "eng", "Eng"]) {
+    // `diaries` is the other, and a handle under it is one agent's diary —
+    // a handle lives there as it does under `seats/`, so a reserved word is one.
+    expect(resolve(["knowledge", "diaries"])).toMatchObject({ screen: "diaries" });
+    expect(resolve(["knowledge", "diaries", "swe"])).toMatchObject({
+      screen: "diary",
+      handle: "swe",
+    });
+    expect(resolve(["knowledge", "diaries", "skills"])).toMatchObject({
+      screen: "diary",
+      handle: "skills",
+    });
+    expect(resolve(["knowledge", "diaries", "swe", "x"]).resolved).toBe(false);
+    for (const word of ["diary", "eng", "Eng"]) {
       expect(resolve(["knowledge", word]).resolved, word).toBe(false);
     }
   });

@@ -797,6 +797,31 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	return s.Memory.Memory(ctx, s.seatHandleOf(id), p.Int("limit", 0))
 }
 
+// memoryOverview answers every agent seat's memory totals — its diary, its
+// episodes, the skills it drafted — and its newest reflection, each counted by
+// the node holding the seat, with the `coverage` naming every holder asked.
+//
+// EVERY AGENT SEAT IN THE CHART, in handle order, and no cap: the list this
+// answers is the company's agents, which the chart already bounds, and a list
+// cut at a dozen (the old Knowledge home's) hid exactly the seats a reader went
+// looking for. A seat no node holds is still a row — `held_by: none`, nothing
+// counted — because a seat missing from the list reads as a seat that does not
+// exist.
+func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
+	organization := s.organization()
+	var handles []string
+	if organization != nil {
+		for role := range organization.AllRoles() {
+			if role.IsAgent() && role.Handle() != "" {
+				handles = append(handles, role.Handle())
+			}
+		}
+	}
+	slices.Sort(handles)
+	handles = slices.Compact(handles)
+	return s.Memory.Overview(ctx, handles)
+}
+
 // countOrNil renders an outcome count, or null when nothing was counted.
 func countOrNil(counts map[string]int, kind string) any {
 	if counts == nil {

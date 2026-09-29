@@ -50,11 +50,19 @@ export function missingFrom(coverages: readonly (Coverage | null | undefined)[])
 export function CoverageNote({
   coverage,
   what,
+  lost = "what each of them published is not here",
 }: {
   /** Every answer the screen drew from. */
   coverage: readonly (Coverage | null | undefined)[];
   /** What the answer is, as the note's subject: "this list", "these turns". */
   what: string;
+  /**
+   * What a missing node COSTS this answer, as the clause after the count. A
+   * history answer loses what the node published; an answer each node gives
+   * about the seats it HOLDS (the diaries) loses those seats' counts, and
+   * saying "published" there would send a reader looking for the wrong gap.
+   */
+  lost?: string;
 }) {
   const { nodes, incomplete } = missingFrom(coverage);
   if (!incomplete && nodes.length === 0) return null;
@@ -65,8 +73,8 @@ export function CoverageNote({
       ) : (
         <>
           {what.charAt(0).toUpperCase() + what.slice(1)}{" "}
-          {nodes.length === 1 ? "is missing one node" : `is missing ${nodes.length} nodes`}, and
-          what each of them published is not here:
+          {nodes.length === 1 ? "is missing one node" : `is missing ${nodes.length} nodes`}, and{" "}
+          {lost}:
           <ul className="coverage-nodes">
             {nodes.map((n) => (
               <li key={n.id}>

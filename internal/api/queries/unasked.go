@@ -42,6 +42,7 @@ type WorkSearcher interface {
 type SeatMemory interface {
 	Memory(ctx context.Context, handle string, limit int) (memread.Memory, error)
 	Threads(ctx context.Context, handle, conversation string, limit int) (memread.Threads, error)
+	Overview(ctx context.Context, handles []string) (memread.Overview, error)
 }
 
 // DefaultSearchLimit is what a caller that names none gets.

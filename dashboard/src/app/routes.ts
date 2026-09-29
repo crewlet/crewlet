@@ -101,6 +101,8 @@ export type Screen =
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
   | { screen: "skills" }
+  | { screen: "diaries" }
+  | { screen: "diary"; handle: string }
   | { screen: "spend" }
   | { screen: "budgets" }
   | { screen: "general" }
@@ -317,6 +319,13 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
   }
   // THE SKILLS AGENTS ARE GIVEN, a list that links to each skill's one page.
   if (first === "skills" && tail.length === 0) return screen({ screen: "skills" });
+  // EVERY AGENT'S DIARY, and one agent's, by its handle — which lives here as
+  // it does under `seats/`, so a handle may equal a reserved word.
+  if (first === "diaries") {
+    if (tail.length === 0) return screen({ screen: "diaries" });
+    if (tail.length === 1 && tail[0]) return screen({ screen: "diary", handle: tail[0] });
+    return missing("knowledge", under("Knowledge"), "a diary is opened from the diaries list");
+  }
   // A CONTAINER BY ITS SHAPE, like a project: a lowercase segment here is a
   // reserved word or nothing, and never a container the engine could have
   // minted — so a knowledge section that has not landed yet answers Not Found

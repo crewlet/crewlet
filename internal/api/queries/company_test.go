@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1411,6 +1412,57 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 		subjects = append(subjects, subject)
 	}
 	holdShape(t, "CounterpartySubject", subjects, false)
+
+	// THE DIARIES LIST'S ANSWER, over the same memory: one row per agent
+	// seat in the chart, each with its totals and its newest note.
+	overview := asMap(t, answer(t, queries.Sources{
+		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
+		Company: func() *config.Company { return company(t) },
+	}, "memory_overview", nil))
+	holdShape(t, "MemoryOverview", []map[string]any{overview}, false)
+	seats := rowsOf(t, overview["seats"])
+	holdShape(t, "MemoryOverviewSeat", seats, false)
+	var reflections []map[string]any
+	for _, seat := range seats {
+		if r, ok := seat["latest_reflection"].(map[string]any); ok {
+			reflections = append(reflections, r)
+		}
+	}
+	holdShape(t, "DiaryEntry", reflections, false)
+}
+
+// THE OVERVIEW LISTS EVERY AGENT SEAT, and no person.
+//
+// The Knowledge home once drew a dozen diaries and stopped, so the thirteenth
+// agent had no diary anywhere a reader could find it. Fourteen agents and a
+// person: fourteen rows, in handle order, the person absent — a human seat
+// keeps no memory the engine writes.
+func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
+	t.Parallel()
+	var doc strings.Builder
+	doc.WriteString("name: Acme\nproviders:\n  llm:\n    z: {type: anthropic, model: m, api_keys: [\"${K}\"]}\nroles:\n")
+	for i := range 14 {
+		fmt.Fprintf(&doc, "  - name: Agent %02d\n    handle: agent-%02d\n    llm: z\n", i, 13-i)
+	}
+	doc.WriteString("  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
+	cfg, err := config.ParseCompany([]byte(doc.String()))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	stores := &memread.Stores{AgentID: func(h string) string { return "agent-" + h }}
+	body := asMap(t, answer(t, queries.Sources{
+		Memory:  &memread.Reader{Owner: "node-a:1", Local: stores},
+		Company: func() *config.Company { return cfg },
+	}, "memory_overview", nil))
+	seats := rowsOf(t, body["seats"])
+	if len(seats) != 14 {
+		t.Fatalf("%d rows, want all 14 agent seats", len(seats))
+	}
+	for i, seat := range seats {
+		if want := fmt.Sprintf("agent-%02d", i); seat["handle"] != want {
+			t.Errorf("row %d is %v, want %s — every agent, in handle order", i, seat["handle"], want)
+		}
+	}
 }
 
 // stubProfiles is what a seat learned about its colleagues, as fixtures.

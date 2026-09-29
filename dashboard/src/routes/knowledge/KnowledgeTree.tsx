@@ -49,14 +49,15 @@
  * The artboard's rows under the spaces are sections of this workspace with
  * addresses of their own. Agent skills is one, its count the TOOL-SKILL total
  * the engine answers (`pages{skills}.total`) — never the length of a window.
- * Agent diaries lands with its screen; a row pointing at an address that does
- * not resolve would be a link to Not Found.
+ * Agent diaries is the other, its count the agents `memory_overview` lists —
+ * every agent seat in the chart, which is what its screen draws.
  */
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, cx, Input, Skeleton } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
+  BrainGlyph,
   ChevronDownGlyph,
   ChevronRightGlyph,
   FileTextGlyph,
@@ -384,8 +385,9 @@ function Spaces({
 
 /**
  * The workspace's sections under the spaces: Agent skills, with the engine's
- * count of tool skills. Not drawn where the pages are a vendor wiki's — there
- * is no skill page on this engine to count.
+ * count of tool skills, and Agent diaries, with how many agents keep one. Agent
+ * skills is not drawn where the pages are a vendor wiki's — there is no skill
+ * page on this engine to count; a diary is the engine's own whatever the wiki.
  */
 function Sections({ current }: { current: string }) {
   const skills = useQuery(
@@ -395,28 +397,63 @@ function Sections({ current }: { current: string }) {
       pollMs: TREE_POLL_MS,
     },
   );
-  if (skills.error === "unknown_query") return null;
-  const here = current === "skills";
+  const diaries = useQuery("memory_overview", undefined, { pollMs: TREE_POLL_MS });
   return (
     <ul className="ktree-list ktree-sections" role="list">
-      <li>
-        <div className={cx("ktree-row", here && "is-current")} style={depthStyle(0)}>
-          <a
-            className="ktree-link"
-            href={href(["knowledge", "skills"])}
-            aria-current={here ? "page" : undefined}
-          >
-            <WandSparklesGlyph size="sm" className="ktree-mark" />
-            <span className="ktree-title">Agent skills</span>
-            {skills.data && (
-              <span className="ktree-count" title="Tool-skill pages">
-                {skills.data.total.toLocaleString()}
-              </span>
-            )}
-          </a>
-        </div>
-      </li>
+      {skills.error !== "unknown_query" && (
+        <SectionRow
+          path={["knowledge", "skills"]}
+          here={current === "skills"}
+          mark={<WandSparklesGlyph size="sm" className="ktree-mark" />}
+          label="Agent skills"
+          count={skills.data?.total}
+          countTitle="Tool-skill pages"
+        />
+      )}
+      {diaries.error !== "unknown_query" && (
+        <SectionRow
+          path={["knowledge", "diaries"]}
+          // THE LIST AND ONE AGENT'S DIARY BOTH SIT UNDER THIS ROW.
+          here={current === "diaries" || current === "diary"}
+          mark={<BrainGlyph size="sm" className="ktree-mark" />}
+          label="Agent diaries"
+          count={diaries.data?.seats.length}
+          countTitle="Agents"
+        />
+      )}
     </ul>
+  );
+}
+
+function SectionRow({
+  path,
+  here,
+  mark,
+  label,
+  count,
+  countTitle,
+}: {
+  path: string[];
+  here: boolean;
+  mark: ReactNode;
+  label: string;
+  count: number | undefined;
+  countTitle: string;
+}) {
+  return (
+    <li>
+      <div className={cx("ktree-row", here && "is-current")} style={depthStyle(0)}>
+        <a className="ktree-link" href={href(path)} aria-current={here ? "page" : undefined}>
+          {mark}
+          <span className="ktree-title">{label}</span>
+          {count !== undefined && (
+            <span className="ktree-count" title={countTitle}>
+              {count.toLocaleString()}
+            </span>
+          )}
+        </a>
+      </div>
+    </li>
   );
 }
 

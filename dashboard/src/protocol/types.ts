@@ -35,7 +35,7 @@ import type {
   ReconcileFinding,
   ReconcileStatus,
 } from "../contract/integrations.ts";
-import type { AgentMemory } from "../contract/memory.ts";
+import type { AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type {
   LinkedFromStatus,
   PageBacklinks,
@@ -4195,6 +4195,7 @@ export interface QueryMap {
   work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
   agent_memory: AgentMemory;
+  memory_overview: MemoryOverview;
   events: EventsPage;
   event_series: EventSeries;
   event: EventRecord & { coverage: Coverage };

@@ -245,6 +245,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     }
     case "skills":
       return sectionPage("skills");
+    case "diaries":
+      return sectionPage("diaries");
+    case "diary":
+      return inside("diaries", named(labels, where.handle));
     case "budgets":
       return sectionPage("budgets");
     case "integrations":

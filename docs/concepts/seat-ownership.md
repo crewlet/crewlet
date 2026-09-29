@@ -247,7 +247,13 @@ asker reads the holding incarnation's advertised
 that does not advertise `held_read` is named as an older build at once rather
 than waited on for the whole two-second budget, on every poll, during a rolling
 upgrade. Every node answers for the seats it holds, including a node that
-serves no API. See `internal/learning/memread`.
+serves no API. The list of every agent's memory (`memory_overview`) follows the
+same rule in one round rather than one per seat: the asker lists every seat
+lease once, reads its own seats from its store, and puts one request on the
+broker naming each holder's seats — so a fifty-agent company is one scatter,
+not fifty — and a holder that did not answer is named in the answer's coverage
+while its seats say so rather than reading as empty. See
+`internal/learning/memread`.
 
 **Deletes are deliberately not replicated.** The learning lifecycle drops rows
 constantly, and carrying a tombstone for each would double the protocol to

@@ -19,6 +19,8 @@
  * profile is, because the seat page draws one per row.
  */
 
+import type { Coverage } from "./coverage.ts";
+
 /** One diary entry: something the seat chose to remember. */
 interface DiaryEntry {
   id: string;
@@ -138,4 +140,32 @@ export interface AgentMemory {
    *  current — or `none` for a seat no node holds, whose answer is empty
    *  because no copy anywhere is current. */
   held_by: string;
+}
+
+/** One agent seat's row of `memory_overview`: its totals and newest note,
+ *  counted by the node holding it. */
+export interface MemoryOverviewSeat {
+  handle: string;
+  diary_total: number;
+  episodes_total: number;
+  skills_total: number;
+  /** When the newest live diary entry was written, or "" with none. */
+  last_reflection_at: string;
+  /** That entry, or null. */
+  latest_reflection: DiaryEntry | null;
+  /** The node holding the seat, or `none` — then nothing is counted,
+   *  because no copy anywhere is current. */
+  held_by: string;
+  /** Why the holder's count is NOT here — it did not answer, runs a build
+   *  that cannot, or is still taking the seat — or "" when it is. A row
+   *  with a reason carries zeros that are not a count; never draw them as
+   *  one. */
+  unavailable: string;
+}
+
+/** `memory_overview`: EVERY agent seat in the chart, in handle order — no
+ *  cap — with the fleet `coverage` naming each holder that was asked. */
+export interface MemoryOverview {
+  seats: MemoryOverviewSeat[];
+  coverage: Coverage;
 }

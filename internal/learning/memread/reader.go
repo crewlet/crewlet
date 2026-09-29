@@ -51,14 +51,23 @@ const (
 	QuestionMemory Question = "memory"
 	// QuestionThreads is a seat's conversation ledger: [Threads].
 	QuestionThreads Question = "threads"
+	// QuestionOverview is several seats' totals at once: [Overview]. The
+	// one question addressed to MANY incarnations — every holder named in
+	// the request's `seats` answers for its own.
+	QuestionOverview Question = "overview"
 )
 
 // Valid reports whether this build can answer q.
-func (q Question) Valid() bool { return q == QuestionMemory || q == QuestionThreads }
+func (q Question) Valid() bool {
+	return q == QuestionMemory || q == QuestionThreads || q == QuestionOverview
+}
 
-// Leases reads one seat's lease — the half of [coord.Backend] a read needs.
+// Leases reads which incarnation holds a seat — one seat's lease for a read of
+// its memory, every seat's for the overview — the half of [coord.Backend] a
+// read needs.
 type Leases interface {
 	Get(ctx context.Context, resource string) (*coord.Lease, error)
+	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 }
 
 // Asker scatters one read — the half of [queue.EventQueue] a read needs.
@@ -271,14 +280,16 @@ func NodeOf(owner string) string {
 }
 
 // request is one read, addressed to the incarnation the asker's lease read
-// named.
+// named — or, for an overview, to every incarnation `Seats` names, each asked
+// about the seats listed under it.
 type request struct {
-	Version      int      `json:"v"`
-	Question     Question `json:"q"`
-	Handle       string   `json:"handle"`
-	Owner        string   `json:"owner"`
-	Limit        int      `json:"limit,omitempty"`
-	Conversation string   `json:"conversation,omitempty"`
+	Version      int                 `json:"v"`
+	Question     Question            `json:"q"`
+	Handle       string              `json:"handle,omitempty"`
+	Owner        string              `json:"owner,omitempty"`
+	Limit        int                 `json:"limit,omitempty"`
+	Conversation string              `json:"conversation,omitempty"`
+	Seats        map[string][]string `json:"seats,omitempty"`
 }
 
 // reply is the addressed incarnation's answer, or why it could not give one.
@@ -307,11 +318,18 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []string
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("memread: a request this build cannot read: %w", err)
 		}
-		if req.Owner != owner {
-			return nil, errNotAddressed
-		}
 		refuse := func(why string) ([]byte, error) {
 			return json.Marshal(reply{Version: WireVersion, Owner: owner, Error: why})
+		}
+		if req.Question == QuestionOverview {
+			seats, addressed := req.Seats[owner]
+			if !addressed {
+				return nil, errNotAddressed
+			}
+			return serveOverview(ctx, owner, seats, attached(), local, refuse)
+		}
+		if req.Owner != owner {
+			return nil, errNotAddressed
 		}
 		if !req.Question.Valid() {
 			return refuse(fmt.Sprintf("this node's build cannot answer a %q read", req.Question))
@@ -335,22 +353,58 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []string
 				"seat", req.Handle, "error", err)
 			return refuse("its store could not be read: " + err.Error())
 		}
-		body, err := json.Marshal(answer)
-		if err != nil {
-			return nil, fmt.Errorf("memread: encode an answer: %w", err)
-		}
-		// A REPLY THE TRANSPORT CANNOT CARRY IS NOT SENT AT ALL, and the
-		// asker would read the broker's refusal as a holder that never
-		// answered. Every collection is paged, so this is a guard against
-		// a bug rather than a size a seat reaches — and it says so.
-		out, err := json.Marshal(reply{Version: WireVersion, Owner: owner, Answer: body})
-		if err != nil {
-			return nil, fmt.Errorf("memread: encode a reply: %w", err)
-		}
-		if len(out) > queue.MaxPayloadBytes {
-			return refuse(fmt.Sprintf("its answer is %d bytes, past the transport's %d",
-				len(out), queue.MaxPayloadBytes))
-		}
-		return out, nil
+		return answerWith(owner, answer, refuse)
 	})
+}
+
+// serveOverview answers an overview for the seats this incarnation was asked
+// about. A seat it holds and has not attached — taking it, or letting it go —
+// is sent with that reason rather than counted from a copy still arriving.
+func serveOverview(ctx context.Context, owner string, seats, attached []string, local *Stores,
+	refuse func(string) ([]byte, error),
+) ([]byte, error) {
+	var ready []string
+	arriving := map[string]bool{}
+	for _, h := range seats {
+		if slices.Contains(attached, h) {
+			ready = append(ready, h)
+		} else {
+			arriving[h] = true
+		}
+	}
+	rows, err := local.Overview(ctx, ready)
+	if err != nil {
+		log.WarnContext(ctx, "held_read_failed", "question", string(QuestionOverview),
+			"seats", len(ready), "error", err)
+		return refuse("its store could not be read: " + err.Error())
+	}
+	for _, h := range seats {
+		if arriving[h] {
+			rows = append(rows, OverviewSeat{Handle: h, Unavailable: "the node holding it " +
+				"does not have it attached — it is taking the seat or letting it go"})
+		}
+	}
+	return answerWith(owner, rows, refuse)
+}
+
+// answerWith encodes an answer as this incarnation's reply.
+func answerWith(owner string, answer any, refuse func(string) ([]byte, error)) ([]byte, error) {
+	body, err := json.Marshal(answer)
+	if err != nil {
+		return nil, fmt.Errorf("memread: encode an answer: %w", err)
+	}
+	// A REPLY THE TRANSPORT CANNOT CARRY IS NOT SENT AT ALL, and the asker
+	// would read the broker's refusal as a holder that never answered. Every
+	// collection is paged and an overview row is three counts and one
+	// bounded note, so this is a guard against a bug rather than a size a
+	// seat reaches — and it says so.
+	out, err := json.Marshal(reply{Version: WireVersion, Owner: owner, Answer: body})
+	if err != nil {
+		return nil, fmt.Errorf("memread: encode a reply: %w", err)
+	}
+	if len(out) > queue.MaxPayloadBytes {
+		return refuse(fmt.Sprintf("its answer is %d bytes, past the transport's %d",
+			len(out), queue.MaxPayloadBytes))
+	}
+	return out, nil
 }

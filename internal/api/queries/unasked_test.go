@@ -233,6 +233,7 @@ type stubMemory struct {
 
 	handle, conversation string
 	limit                int
+	handles              []string
 }
 
 func (s *stubMemory) Memory(_ context.Context, handle string, limit int) (memread.Memory, error) {
@@ -245,6 +246,11 @@ func (s *stubMemory) Threads(_ context.Context, handle, conversation string, lim
 
 	s.handle, s.conversation, s.limit = handle, conversation, limit
 	return s.threads, s.err
+}
+
+func (s *stubMemory) Overview(_ context.Context, handles []string) (memread.Overview, error) {
+	s.handles = handles
+	return memread.Overview{}, s.err
 }
 
 // SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads the seat their own
