@@ -32,7 +32,8 @@ func TestTheIndexDutyAsksEveryNodeTheVectorLogCounts(t *testing.T) {
 
 	vectors := s.Domain(search.Domain{}.Name())
 	duty := &embedDuty{engine: e, log: vectors, register: s.positions,
-		leases: e.backends.Coord, identity: s.identityDomains(), db: e.backends.Store}
+		holders:  presenceHolders{leases: e.backends.Coord},
+		identity: s.identityDomains(), db: e.backends.Store}
 	standing, err := duty.standing(t.Context())
 	if err != nil {
 		t.Fatal(err)

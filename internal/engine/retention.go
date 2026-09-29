@@ -81,6 +81,12 @@ type retention struct {
 	fleet  coord.Fleet
 	leases coord.Backend
 	state  *stateLog
+
+	// holders is who holds each partition, the half of every log's counted
+	// set that is not the positions register ([partitionHolders]). Nil
+	// counts nobody beyond the register.
+	holders partitionHolders
+
 	db     *store.DB
 	cfg    config.TrackerRetention
 	claim  schedule.DutyFunc
@@ -196,6 +202,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	r := &retention{
 		fleet:       e.backends.Fleet,
 		leases:      e.backends.Coord,
+		holders:     presenceHolders{leases: e.backends.Coord},
 		state:       s,
 		db:          e.backends.Store,
 		cfg:         boot.Stream.TrackerRetention,
@@ -339,8 +346,11 @@ type fleetInputs struct {
 	readable  bool
 	holds     []coord.TrimHold
 	backups   []coord.BackupPoint
-	live      []statelog.Presence
 	previous  map[string]coord.TrimFloor
+
+	// holders is who holds each partition of the layout, read once for
+	// every log the tick evaluates.
+	holders map[statelog.PartitionID][]statelog.Presence
 }
 
 // read fetches the fleet-wide half of the inputs.
@@ -374,16 +384,26 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	for _, f := range floors {
 		in.previous[f.Domain] = f
 	}
-	// THE PRESENCE LEASES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS
-	// FIRST HEARTBEAT — which is exactly a node adopting a snapshot. It
-	// counts at position zero and blocks, which is correct: trimming past
-	// a node that is joining is deleting what it is about to replay.
-	if r.leases != nil {
-		if in.live, err = livePresences(ctx, r.leases); err != nil {
-			return in, err
+	// THE HOLDERS ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
+	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
+	// position zero and blocks, which is correct: trimming past a node that
+	// is joining is deleting what it is about to replay.
+	if r.holders != nil {
+		if in.holders, err = r.holders.Holders(ctx, r.state.layout.Partitions()); err != nil {
+			return in, fmt.Errorf("read who holds each partition: %w", err)
 		}
 	}
 	return in, nil
+}
+
+// counted is who the trim counts on one log: the positions register's rows
+// naming it, every holder of its partition, less the tombstones past their
+// window ([statelog.CountedSet]) — the partition's holders and no other
+// partition's, so a node offline on one partition pins that partition's logs
+// and nobody else's.
+func (shared fleetInputs) counted(running *runningLog, tombs []statelog.Tombstone) []statelog.NodePosition {
+	return statelog.CountedSet(shared.at, reportedPositions(shared.positions, running.key),
+		shared.holders[running.id.Partition], tombs)
 }
 
 // domain evaluates and applies one log's trim.
@@ -413,8 +433,7 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 	// direction for the trim: a node it could not establish was gone stays
 	// counted. The report is the one reader that has to say so as well.
 	tombs, _ := r.tombstones(ctx, running, generation)
-	in.Counted = statelog.CountedSet(shared.at,
-		reportedPositions(shared.positions, name), shared.live, tombs)
+	in.Counted = shared.counted(running, tombs)
 	in.Holds = holdsFor(shared.holds, running.spec.Name)
 	in.BackupFloor, in.BackupAt, in.BackupFloorGen, in.HasBackupFloor =
 		r.backupTerm(shared.backups, running.spec.Name)

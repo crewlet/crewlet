@@ -132,15 +132,16 @@ func (k EvictionKind) Reason() Reason {
 	return ReasonEvicted
 }
 
-// Presence is a node holding a live lease, whether or not it has reported a
-// position yet.
+// Presence is a node the fleet says is there, whether or not it has reported a
+// position yet: one holding a live lease, which the eviction gate refuses to
+// evict, or one holding a log's partition, which that log's counted set counts.
 type Presence struct {
 	NodeID string
 }
 
-// CountedSet is who the trim counts: the positions register's own keys, UNION
-// the live presence leases, MINUS any eviction tombstone older than the fence
-// window.
+// CountedSet is who the trim counts on ONE LOG: the positions register's rows
+// naming the log, UNION every node holding the log's partition, MINUS any
+// eviction or release tombstone older than the fence window.
 //
 // # Each of the three does something the others cannot
 //
@@ -148,26 +149,32 @@ type Presence struct {
 // is deliberate, and is why an offline node pins the floor rather than
 // vanishing from it.
 //
-// The presence leases are what catch a node between boot and its first
-// heartbeat — which is exactly a node adopting a snapshot. It counts at
-// position ZERO and blocks every term derived from the set, for at most one
-// heartbeat, and the operator surface renders it as counted with no position
-// yet so the block has a visible cause.
+// The holders are what catch a node between boot and its first heartbeat, or
+// between beginning to join a partition and its first report there — which is
+// exactly a node adopting a snapshot. It counts at position ZERO and blocks
+// every term derived from the set, for at most one heartbeat, and the operator
+// surface renders it as counted with no position yet so the block has a
+// visible cause. The PARTITION's holders and no other partition's, because
+// they are the nodes that apply the log: a holder of another partition applies
+// none of it, and counting it would let one node offline there pin this log as
+// well as its own.
 //
 // The tombstones are what let an operator advance a floor an absent node is
-// pinning, and they take effect only after the window — because a node that
-// has not yet noticed is a node still writing.
-func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs []Tombstone) []NodePosition {
-	byID := make(map[string]NodePosition, len(reported)+len(live))
+// pinning, and a node that left the partition take itself out; they take
+// effect only after the window — because a node that has not yet noticed is a
+// node still writing. An eviction and a release are subtracted alike
+// ([EvictionRow.Kind]): each is a node whose later records apply nowhere.
+func CountedSet(now time.Time, reported []NodePosition, holders []Presence, tombs []Tombstone) []NodePosition {
+	byID := make(map[string]NodePosition, len(reported)+len(holders))
 	for _, n := range reported {
 		byID[n.NodeID] = n
 	}
-	for _, p := range live {
+	for _, p := range holders {
 		if _, known := byID[p.NodeID]; !known {
-			// A NODE WITH A LIVE LEASE AND NO POSITION YET COUNTS AT
-			// ZERO and blocks. It is a node between boot and its first
-			// heartbeat — which is a node adopting a snapshot — and
-			// treating it as absent would let the trim advance past
+			// A HOLDER WITH NO POSITION YET COUNTS AT ZERO and blocks.
+			// It is a node between boot, or the start of its join, and
+			// its first report — which is a node adopting a snapshot —
+			// and treating it as absent would let the trim advance past
 			// the tail it is about to replay.
 			byID[p.NodeID] = NodePosition{NodeID: p.NodeID}
 		}

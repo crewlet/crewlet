@@ -57,6 +57,16 @@ never a horizon.
 | `feed_ack_floor` | how far **that log's own** wake feed has acknowledged |
 | `age_floor` | the newest sequence older than `min_age` |
 
+The **counted set** of a log is every node the trim waits for there: each node
+that has reported a position on the log, and each node that **holds the log's
+partition** — today every live data node, since every data node holds the one
+partition — even before its first report, when it counts at position zero
+because it is about to replay what the trim would otherwise delete. A node
+evicted from the log, or one that released it as it left the partition, stops
+being counted about a minute after that record lands. It is the partition's
+holders and no other partition's, so a node that is offline pins only the logs
+of the partitions it holds.
+
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
 `CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on

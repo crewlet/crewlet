@@ -102,12 +102,12 @@ type embedDuty struct {
 	metrics   *metrics.Recorder
 
 	// log is the vector log this duty embeds into, whose runner and stream
-	// the index step's standing is read from, and register and leases the
-	// positions register — as this node's layout reads it — and the
-	// presence leases its counted set is.
+	// the index step's standing is read from, and register and holders the
+	// positions register — as this node's layout reads it — and who holds
+	// the log's partition, which its counted set is.
 	log      *runningLog
 	register func(context.Context) ([]coord.NodePositions, error)
-	leases   liveLeases
+	holders  partitionHolders
 
 	// identity is every log whose domain claims identity, whose eviction
 	// records are how the fleet says a node is gone — the vector log
@@ -151,7 +151,7 @@ func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 		metrics:    e.metrics,
 		log:        running,
 		register:   s.positions,
-		leases:     e.backends.Coord,
+		holders:    presenceHolders{leases: e.backends.Coord},
 		identity:   s.identityDomains(),
 		db:         e.backends.Store,
 		renewEvery: search.EmbedInterval,
@@ -357,8 +357,8 @@ func (d *embedDuty) keepClaimed(ctx context.Context, cancel context.CancelFunc) 
 // current either: its rows are the log's minus that record.
 //
 // THE READERS ARE THE COUNTED SET — the positions register's rows for this
-// log, and every live data node that has not reported yet — because that is
-// every node that applies the log, less every node the fleet has EVICTED
+// log, and every holder of its partition that has not reported yet — because
+// that is every node that applies the log, less every node the fleet has EVICTED
 // ([embedDuty.evicted]): an operator's word that a node is not coming back,
 // and without it an old build's row on a machine nobody will start again would
 // hold the index back for the life of the deployment.
@@ -375,18 +375,21 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	if err != nil {
 		return out, fmt.Errorf("read the positions register: %w", err)
 	}
-	var live []statelog.Presence
-	if d.leases != nil {
-		if live, err = livePresences(ctx, d.leases); err != nil {
-			return out, err
+	var holders []statelog.Presence
+	if d.holders != nil {
+		partition := d.log.id.Partition
+		held, heldErr := d.holders.Holders(ctx, []statelog.PartitionID{partition})
+		if heldErr != nil {
+			return out, fmt.Errorf("read who holds %s: %w", partition, heldErr)
 		}
+		holders = held[partition]
 	}
 	tombs, err := d.evicted(ctx)
 	if err != nil {
 		return out, err
 	}
 	out.Readers = statelog.Readers(statelog.CountedSet(time.Now().UTC(),
-		reportedPositions(rows, d.log.key), live, tombs))
+		reportedPositions(rows, d.log.key), holders, tombs))
 	return out, nil
 }
 
