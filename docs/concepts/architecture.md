@@ -544,9 +544,11 @@ What each of the four holds, in full:
 
 **Every node, identically — the replicated store.**
 
-One file per node, written by a state log's applier: records arrive in one
-order from the log, every node applies the same ones, and the rows plus this
-node's position on the log commit in a single transaction. There is no leader
+One file per partition a node holds — today one, `estate.000`, the whole
+estate, which every data node holds — written by a state log's applier:
+records arrive in one order from the log, every node applies the same ones,
+and the rows plus this node's position on the log commit in a single
+transaction. There is no leader
 and no node whose copy is the real one.
 
 **Two writes in the engine are not records**, and each is a column or a row
