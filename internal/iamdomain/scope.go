@@ -304,6 +304,28 @@ func (s ScopeSet) Resolve(subject Subject) statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: paths}.Normalised()
 }
 
+// Covers reports whether every bucket other names is one this scope names too —
+// always, for the root, and never for another root unless this is one.
+//
+// What a writer that read a scope ahead of its snapshot asks once it is
+// inside: the scope published is the one read, and the apply writes what the
+// snapshot names, so a snapshot naming more than the scope covers is a record
+// whose apply would write where its declared blast radius does not reach.
+func (s ScopeSet) Covers(other ScopeSet) bool {
+	if s.Root {
+		return true
+	}
+	if other.Root {
+		return false
+	}
+	for _, b := range other.Buckets {
+		if !slices.Contains(s.Buckets, b) {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate refuses a scope a writer could not have meant.
 //
 // It is the WRITE-SIDE half of the widening rule: [ScopeSet.UnmarshalJSON]

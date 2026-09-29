@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -294,9 +295,20 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
 				t.Logf("record %d gated: %s", seq, reason)
 				return nil
 			}
+			before, err := bucketedRows(t.Context(), tx)
+			if err != nil {
+				return err
+			}
 			if _, err := applier.Apply(t.Context(), tx, record,
 				statelog.ApplyOptions{Now: now, StoredAt: storedAt}); err != nil {
 				return err
+			}
+			after, err := bucketedRows(t.Context(), tx)
+			if err != nil {
+				return err
+			}
+			if err := withinScope(env, before, after); err != nil {
+				return fmt.Errorf("record %d: %w", seq, err)
 			}
 			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO iam_ops (op_id, subject, position, applied_at)
@@ -334,6 +346,113 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
 		}
 	}
 	return consumed, nil
+}
+
+// EVERY ROW AN APPLY WRITES IS IN A BUCKET ITS RECORD DECLARED.
+//
+// A record's scope is the complete set of buckets its apply may write, and it
+// is what a node that could not apply an EARLIER record in one of those
+// buckets holds this one back by. An apply that writes outside it is applied
+// ahead of the record it should have waited for, and when that record is
+// reprocessed it writes over the later one's work on that node alone — a
+// removal's erasure undone by the invitation it erased, an invitation spent
+// and then written back unspent — so the node's rows differ from every peer's
+// for good. So the rig asks it of EVERY record every case here applies, rather
+// than of the two that were found: a row inserted, changed or deleted by the
+// apply must carry a bucket the record named.
+
+// bucketedRows is every row of every identity table that carries a bucket, as
+// the row's whole content keyed to its bucket.
+func bucketedRows(ctx context.Context, tx *sql.Tx) (map[string]int64, error) {
+	tables, err := tx.QueryContext(ctx, `SELECT name FROM sqlite_master
+		WHERE type = 'table' AND name LIKE 'iam\_%' ESCAPE '\'`)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for tables.Next() {
+		var name string
+		if err := tables.Scan(&name); err != nil {
+			_ = tables.Close()
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	if err := tables.Close(); err != nil {
+		return nil, err
+	}
+	out := map[string]int64{}
+	for _, table := range names {
+		if err := bucketedIn(ctx, tx, table, out); err != nil {
+			return nil, fmt.Errorf("read %s: %w", table, err)
+		}
+	}
+	return out, nil
+}
+
+// bucketedIn adds one table's rows to out, when the table carries a bucket.
+func bucketedIn(ctx context.Context, tx *sql.Tx, table string, out map[string]int64) error {
+	rows, err := tx.QueryContext(ctx, `SELECT * FROM `+table)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	at := slices.Index(columns, "bucket")
+	if at < 0 {
+		return nil
+	}
+	for rows.Next() {
+		cells := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range cells {
+			targets[i] = &cells[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return err
+		}
+		var key strings.Builder
+		key.WriteString(table)
+		for _, cell := range cells {
+			fmt.Fprintf(&key, "\x00%T:%v", cell, cell)
+		}
+		bucket, ok := cells[at].(int64)
+		if !ok {
+			return fmt.Errorf("a bucket of %T", cells[at])
+		}
+		out[key.String()] = bucket
+	}
+	return rows.Err()
+}
+
+// withinScope refuses an apply that changed a row in a bucket its record did not
+// declare.
+func withinScope(env iamdomain.RecordEnvelope, before, after map[string]int64) error {
+	if env.Scope.Root || env.Subject.Kind.RootScoped() {
+		return nil
+	}
+	check := func(rows, other map[string]int64, what string) error {
+		for key, bucket := range rows {
+			if _, same := other[key]; same {
+				continue
+			}
+			if !slices.Contains(env.Scope.Buckets, iamdomain.Bucket(bucket)) {
+				table, _, _ := strings.Cut(key, "\x00")
+				return fmt.Errorf("the %s on %s %s a row of %s in bucket %d, and "+
+					"its scope declares %v — a node holding back an earlier "+
+					"record in that bucket applies this one ahead of it", env.Op,
+					env.Subject, what, table, bucket, env.Scope.Buckets)
+			}
+		}
+		return nil
+	}
+	if err := check(before, after, "changed or removed"); err != nil {
+		return err
+	}
+	return check(after, before, "wrote")
 }
 
 func (r *writeRig) drainSafely() {

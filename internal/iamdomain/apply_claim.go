@@ -178,9 +178,7 @@ func (a *Applier) writeToken(ctx context.Context, tx *sql.Tx, at applyContext,
 		// tombstone before any later bind, and every node stamps the same
 		// id.
 		retired, err := tx.ExecContext(ctx, `
-			UPDATE iam_removed SET seat_rebound_by = ?
-			WHERE seat_rebound_by = ''
-			  AND json_extract(claims_json, '$.seat_id') = ?`,
+			UPDATE iam_removed SET seat_rebound_by = ? WHERE `+reboundRemovals,
 			at.record.OpID, at.record.Subject.ID)
 		if err != nil {
 			return int(written), fmt.Errorf("iamdomain: end the removals' say "+
@@ -335,6 +333,40 @@ func (a *Applier) redeemInvitation(ctx context.Context, tx *sql.Tx,
 
 	bound, err := a.writeToken(ctx, tx, at, KindEmail)
 	return int(written) + bound, err
+}
+
+// reboundRemovals selects the removal tombstones a bind of one seat speaks
+// for: every removal that released the seat and that no bind since has.
+//
+// ONE CLAUSE FOR BOTH ITS READERS — the bind's apply, which stamps them, and
+// its writer, which declares their people's buckets in the record's scope
+// ([leaversOf]) — because a tombstone is filed under the LEAVER's bucket, and a
+// bind whose scope named only its own person wrote where no node holding back
+// an earlier record about the leaver would wait for it.
+const reboundRemovals = `seat_rebound_by = ''
+	AND json_extract(claims_json, '$.seat_id') = ?`
+
+// leaversOf is the people whose removal tombstones a bind of seatID would
+// stamp ([reboundRemovals]), sorted.
+func leaversOf(ctx context.Context, tx *sql.Tx, seatID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT person_id FROM iam_removed WHERE `+reboundRemovals+`
+		 ORDER BY person_id`, seatID)
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: read the removals that released "+
+			"seat %s: %w", seatID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var person string
+		if err := rows.Scan(&person); err != nil {
+			return nil, fmt.Errorf("iamdomain: read the removals that released "+
+				"seat %s: %w", seatID, err)
+		}
+		out = append(out, person)
+	}
+	return out, rows.Err()
 }
 
 // claimColumn is the value one column takes for a claim of a given kind: the

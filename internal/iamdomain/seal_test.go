@@ -473,6 +473,47 @@ func TestARemovalLeavesNoValueOfTheirsThatOpens(t *testing.T) {
 	}
 }
 
+// AND A REMOVAL REACHES THE ADDRESS THEY WERE INVITED AT, ONCE IT IS NOT THEIRS.
+//
+// An invitation and the trail row its record wrote are about an ADDRESS, and
+// name nobody — so the erasure finds them by address. It used to look only at
+// the address the removal released, so somebody whose address changed after
+// they redeemed their invitation left the trail row of that invitation holding
+// the old address, sealed and opening under the keyring every node holds. The
+// addresses a removal erases are every one the person was invited at as well
+// ([iamdomain] erasedBlinds), and its record declares all of their buckets.
+//
+// Mutation: erase only the released address and the invitation's trail row
+// still opens.
+func TestARemovalErasesTheAddressTheyWereInvitedAt(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	sarah := joinWithSeed(t, rig, "sarah.chen@example.com", "Sarah Chen")
+	// HER ADDRESS MOVES: a claim of the new one takes the column off the old.
+	if err := rig.claim(iamdomain.KindEmail, blindOf(t, "s.okoro@example.com"),
+		sarah.person, "op-new-address"); err != nil {
+		t.Fatalf("claim the new address: %v", err)
+	}
+	rig.drain()
+	if before := openable(t, rig.db, rig.sealer, sarah); before["iam_history"] == 0 {
+		t.Fatalf("before the removal the trail holds nothing of Sarah's that "+
+			"opens (%v), so this case cannot see the invitation's row", before)
+	}
+
+	if err := rig.during(func() error {
+		_, err := rig.writer.Remove(t.Context(), sarah.person, "op-remove",
+			"left the company")
+		return err
+	}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	rig.drain()
+	if after := openable(t, rig.db, rig.sealer, sarah); len(after) > 0 {
+		t.Errorf("after removing somebody whose address changed, these tables "+
+			"still hold values of theirs that open: %v", after)
+	}
+}
+
 // equalCounts reports whether two per-table counts are the same.
 func equalCounts(a, b map[string]int) bool {
 	if len(a) != len(b) {
