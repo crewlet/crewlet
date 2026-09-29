@@ -63,6 +63,16 @@ no list of turns and a chart has no hourly column. The costliest turns over a
 window are the turn list sorted by tokens (`GET /turns?sort=-tokens`), which
 reads the fleet's own event logs and so reaches back as far as those do.
 
+The dashboard's Spend screen reads named windows only — 7, 30 or 90 company
+days (it opens on 30), or two dates you name on the company's clock — so every
+figure on it is the company's and every card says which window it is of. A
+window the engine refuses is shown once, in the engine's own sentence, with no
+figures under it — and the two refusals say different things, because they
+have different fixes: a window longer than ninety days is told to narrow its
+dates wherever it lies, and one starting behind the history's floor is told
+the first day it may start on. See
+[Dashboard design § Spend](../reference/dashboard-design.md#spend-tokens-by-phase-agent-and-model).
+
 ## How far back
 
 | History | Reaches back | Bounded by |

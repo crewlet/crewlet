@@ -32,6 +32,14 @@ export interface QueryResult<T> {
    *  typecheck. */
   error: QueryErrorCode | null;
   /**
+   * The engine's own sentence on a `bad_params` refusal — which parameter to
+   * change, and what it accepts — and absent on every other answer. The one
+   * refusal written for the reader: a window past the spend history is the
+   * READER's choice to change, and "the engine refused this request" with no
+   * word of why left them nothing to change it to.
+   */
+  detail?: string;
+  /**
    * Ask again now.
    *
    * For the moment a screen KNOWS the answer has changed, which no poll
@@ -113,6 +121,7 @@ export function useQuery<K extends QueryName>(
     data: QueryMap[K] | null;
     loading: boolean;
     error: QueryErrorCode | null;
+    detail?: string;
   }>({ data: null, loading: enabled, error: null });
 
   // The params object is a fresh literal on every render, so it cannot be a
@@ -150,6 +159,7 @@ export function useQuery<K extends QueryName>(
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
         retryMs = retryDelayMs(code, err);
+        const detail = err instanceof QueryError && err.detail ? err.detail : undefined;
         setState((prev) => ({
           // KEEP the last good answer. A screen that blanks on one failed poll
           // tells the reader less than one that shows the last reading and
@@ -157,6 +167,7 @@ export function useQuery<K extends QueryName>(
           data: prev.data,
           loading: false,
           error: code,
+          ...(detail ? { detail } : {}),
         }));
       } finally {
         // THE SOONER OF THE TWO. A poll keeps its own cadence; a refusal

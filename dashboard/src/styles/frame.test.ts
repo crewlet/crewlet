@@ -1329,22 +1329,6 @@ test("the crumb floor is the last part's alone", () => {
   expect(block(css, ".crumb-part:last-child > .crumb-here")).toMatch(/min-width:\s*5ch/);
 });
 
-// A TIME-SERIES BAR IS A BAR, NOT ITS SLOT. Filled edge to edge, a one-day
-// spend window was one column the width of the card — a solid block. The bar
-// takes the kit's own proportion (63% of the slot, capped at `--spacing-7`,
-// as `.crewlet-stacked-columns__column` does), centred, and the ghost sits
-// over the bar rather than the slot; and a segment that exists has a pixel.
-test("a stacked time-series column is capped and centred in its slot", () => {
-  const css = sheet("components.css");
-  expect(block(css, ".stackseries-col")).toMatch(/justify-content:\s*center/);
-  for (const sel of [".stackseries-stack", ".stackseries-ghost"]) {
-    const b = block(css, sel);
-    expect(b, sel).toMatch(/width:\s*63%/);
-    expect(b, sel).toMatch(/max-width:\s*var\(--spacing-7\)/);
-  }
-  expect(block(css, ".stackseries-stack > span")).toMatch(/min-height:\s*1px/);
-});
-
 // A HISTOGRAM BAR IS A BAR TOO, AND IT IS DATA. The activity log's time axis
 // filled its whole slot, so a week holding one busy day drew a block a seventh
 // of the card wide, and it painted that block in the accent the kit reserves
@@ -1521,5 +1505,26 @@ test("the span detail sits beside the waterfall at a laptop's page width", () =>
   const bars = threshold - detail - 16 - 2 * 12 - 140 - 64 - 2 * 12;
   expect(bars, "the waterfall beside the detail has no room for its bars").toBeGreaterThanOrEqual(
     240,
+  );
+});
+
+// A GRID THAT IS A CARD'S BODY DRAWS NO FRAME OF ITS OWN. Inside a card the
+// default wrap's border stood a pixel inside the card's, a table inset in the
+// frame the card already is; `flush` takes the border, the radius and the
+// ground away and keeps one rule above the head.
+test("a flush grid draws no frame inside its card", () => {
+  const body = block(sheet("frame.css"), ".grid-wrap[data-flush]");
+  expect(body).toMatch(/border:\s*0/);
+  expect(body).toMatch(/border-top:\s*1px solid/);
+  expect(body).toMatch(/border-radius:\s*0/);
+  expect(body).toMatch(/background:\s*transparent/);
+});
+
+// THE SPEND CHART'S SUBTITLE TAKES NO WIDTH FROM ITS LEGEND. Both sit in the
+// kit's head row and shrink by their content widths, so a subtitle as long as
+// the card pushed the legend onto a second, ragged row at 1280.
+test("the spend chart's subtitle asks for no width of its own", () => {
+  expect(block(sheet("screens.css"), ".spend-chart-head .spend-caption")).toMatch(
+    /contain:\s*inline-size/,
   );
 });

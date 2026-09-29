@@ -105,6 +105,16 @@ export interface Offer {
    */
   today?: boolean;
   /**
+   * Whether a custom window is named in WHOLE COMPANY DAYS on [zone] rather
+   * than to the minute: the picker takes two dates, both inclusive, and the
+   * window runs from the first instant of the first to the first instant
+   * after the last. For a screen whose question is company days — spend is
+   * read from the usage domain, whose smallest unit is one — a picker that
+   * took minutes would offer a precision the answer cannot have, and a reader
+   * who chose 14:00 would be shown the whole day with nothing saying why.
+   */
+  customDays?: boolean;
+  /**
    * The company's zone (`org.timezone`), which is where its day begins. A
    * screen that offers `today` passes it; before the org arrives the day is
    * cut in UTC, which is a label on one screen for one render rather than a
@@ -335,12 +345,17 @@ export interface TimeRange {
  * lengths compares two numbers that do not answer the same question, which is
  * how a 28-day February outperforms every other month in every dashboard that
  * gets it wrong.
+ *
+ * `days` IS A SCREEN OF WHOLE COMPANY DAYS, which aligns to neither a bucket
+ * nor the clock but to the company's midnights — see [dayEdges].
  */
 export function windowEdges(
   w: Window,
   now: number,
   step = 0,
+  days?: { zone: string | undefined },
 ): Pick<TimeRange, "since" | "until" | "previous"> {
+  if (days) return dayEdges(w, now, days.zone);
   // A NAMED WINDOW MOVES WITH THE CLOCK — a duration, and today — and an
   // interval a reader typed does not.
   const moving = isRange(w) || w.today === true;
@@ -358,6 +373,56 @@ export function windowEdges(
 }
 
 /**
+ * The edges of a window on a screen of WHOLE COMPANY DAYS (`Offer.customDays`).
+ *
+ * EVERY EDGE IS A COMPANY MIDNIGHT, because that is what the question is: the
+ * engine answers `days=30` as the thirty company days ending TODAY on the
+ * company's clock, so the window runs from the first instant of the first of
+ * them to the first instant after today. Aligning a named range to a UTC day
+ * bucket instead named a different window — in Berlin, for twenty-two hours of
+ * every twenty-four, an edge at 02:00 TOMORROW, so thirty-one company days
+ * ending tomorrow — and the custom dialog, which is prefilled from these
+ * edges, then offered to ask for that.
+ *
+ * The comparison window is the SAME NUMBER OF DAYS ending where this one
+ * starts — counted in days rather than milliseconds, since a window across a
+ * clock change is a day of 23 or 25 hours and is still one day.
+ */
+function dayEdges(
+  w: Window,
+  now: number,
+  zone: string | undefined,
+): Pick<TimeRange, "since" | "until" | "previous"> {
+  // The first and last company day, both inclusive.
+  let first: string;
+  let last: string;
+  if (isRange(w)) {
+    last = dayLabelIn(now, zone);
+    first = shiftDay(last, 1 - Math.max(1, Math.round(RANGE_MS[w] / 86_400_000)));
+  } else {
+    const covered = companyDays(w.today ? { from: w.from, to: now } : w, zone);
+    first = covered.since;
+    last = covered.until;
+  }
+  const count = Math.round((Date.parse(last) - Date.parse(first)) / 86_400_000) + 1;
+  const at = (label: string) =>
+    new Date(dayStartIn(label, zone) ?? Date.parse(label)).toISOString();
+  return {
+    since: at(first),
+    until: at(shiftDay(last, 1)),
+    previous: { since: at(shiftDay(first, -count)), until: at(first) },
+  };
+}
+
+/** A company date `n` days after `label` (before it for a negative `n`). */
+function shiftDay(label: string, n: number): string {
+  // CALENDAR ARITHMETIC ON THE LABEL, in UTC where every day is 24 hours: a
+  // date is not an instant, and stepping an instant by 86,400,000 across a
+  // clock change lands on the wrong side of a midnight.
+  return new Date(Date.parse(`${label}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
  * `window=` as two instants, and the setter that moves it.
  *
  * `align` is what separates a chart from a list: a chart asks for edges on the
@@ -366,13 +431,13 @@ export function windowEdges(
  */
 export function useTimeRange(now: number, offer: Offer, align = true): TimeRange {
   const [raw, setRaw] = useParam("window", offer.fallback, "section");
-  const { ranges, custom, fallback, buckets, today, zone } = offer;
+  const { ranges, custom, fallback, buckets, today, zone, customDays } = offer;
   // Rebuilt from the fields rather than held by identity: every caller writes
   // its offer inline, so a new object arrives on every render and an offer in
   // the dependency list would rebuild the window on every one of them.
   const settled = useMemo(
-    () => ({ ranges, custom, fallback, buckets, today, zone }),
-    [ranges, custom, fallback, buckets, today, zone],
+    () => ({ ranges, custom, fallback, buckets, today, zone, customDays }),
+    [ranges, custom, fallback, buckets, today, zone, customDays],
   );
   const window = parseWindow(raw, settled, now);
   const bucket = bucketFor(window, buckets);
@@ -391,12 +456,12 @@ export function useTimeRange(now: number, offer: Offer, align = true): TimeRange
     const w = parseWindow(key, settled, anchor);
     return {
       window: w,
-      ...windowEdges(w, anchor, step),
+      ...windowEdges(w, anchor, step, customDays ? { zone } : undefined),
       bucket,
       offer: settled,
       set: (next: Window) => setRaw(windowParam(next)),
     };
-  }, [key, settled, anchor, step, bucket, setRaw]);
+  }, [key, settled, anchor, step, bucket, setRaw, customDays, zone]);
 }
 
 /**
@@ -510,6 +575,71 @@ export function companyMidnight(now: number, zone: string | undefined): number {
 /** Today on the company's clock, from its first instant to `now`. */
 export function todayWindow(now: number, zone: string | undefined): Interval {
   return { from: companyMidnight(now, zone), to: now, today: true };
+}
+
+/** The company date (`YYYY-MM-DD`) an instant falls on in `zone`. */
+export function dayLabelIn(at: number, zone: string | undefined): string {
+  return dateIn(zone)(at);
+}
+
+/**
+ * The first instant of the company date `label` in `zone`, or null for a
+ * value that is not a date.
+ *
+ * FOUND, NOT ASSUMED, for the reason [companyMidnight] gives: noon UTC of the
+ * date is within a day of noon wherever the zone is (every offset is under
+ * fifteen hours), so it lands on the date itself or on a neighbour, one step
+ * away. Stepping onto the date and taking its company midnight is then exact
+ * in the zones that move their clocks across midnight too.
+ */
+export function dayStartIn(label: string, zone: string | undefined): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(label.trim());
+  if (!m) return null;
+  const day = dateIn(zone);
+  let at = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
+  if (Number.isNaN(at) || new Date(at).toISOString().slice(0, 10) !== label.trim()) return null;
+  for (let step = 0; step < 2 && day(at) !== label.trim(); step++) {
+    at += day(at) < label.trim() ? 86_400_000 : -86_400_000;
+  }
+  if (day(at) !== label.trim()) return null;
+  return companyMidnight(at, zone);
+}
+
+/**
+ * The company days an interval covers, both inclusive: the date its first
+ * instant falls on and the date its last instant does. The end is EXCLUSIVE,
+ * so the last instant is one millisecond before it — an interval ending at a
+ * midnight covers the day before and not the day it ends on.
+ */
+export function companyDays(
+  w: Interval,
+  zone: string | undefined,
+): { since: string; until: string } {
+  const day = dateIn(zone);
+  return { since: day(w.from), until: day(Math.max(w.from, w.to - 1)) };
+}
+
+/** Two company dates as a heading says them: one date, or the first and last. */
+export function daysLabel(days: { since: string; until: string }): string {
+  return days.since === days.until ? days.since : `${days.since} – ${days.until}`;
+}
+
+/**
+ * The interval two company dates name, both inclusive — from the first
+ * instant of `since` to the first instant after `until` — or null when either
+ * is not a date or the second is before the first.
+ */
+export function daysInterval(
+  since: string,
+  until: string,
+  zone: string | undefined,
+): Interval | null {
+  const from = dayStartIn(since, zone);
+  const last = dayStartIn(until, zone);
+  if (from === null || last === null || last < from) return null;
+  // A DAY IS AT MOST 25 HOURS, so 26 past the last day's start is inside the
+  // day after it, whose midnight is where this window ends.
+  return { from, to: companyMidnight(last + 26 * 3_600_000, zone) };
 }
 
 /** A function reading the `YYYY-MM-DD` an instant falls on in `zone`. */

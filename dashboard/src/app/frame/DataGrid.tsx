@@ -498,6 +498,7 @@ export function DataGrid<T>({
   name,
   colsName,
   phoneRows = "labelled",
+  flush = false,
 }: {
   rows?: T[];
   bands?: GridBand<T>[];
@@ -558,6 +559,13 @@ export function DataGrid<T>({
    * two and a half of them.
    */
   phoneRows?: "labelled" | "compact";
+  /**
+   * THE GRID IS A CARD'S BODY rather than a box inside it: no border, no
+   * radius and no ground of its own, one rule above its head, so its rows run
+   * to the card's edges. A bordered box inside a bordered card drew two edges
+   * a pixel apart — a table inset in a frame the card already is.
+   */
+  flush?: boolean;
 }) {
   const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
   const columnSet = colsName ?? name;
@@ -929,6 +937,7 @@ export function DataGrid<T>({
       ref={setWrap}
       className="grid-wrap"
       data-phone-rows={phoneRows === "compact" ? "compact" : undefined}
+      data-flush={flush || undefined}
       style={{ gridTemplateColumns: template }}
       onPointerDown={claimKeyboard}
     >

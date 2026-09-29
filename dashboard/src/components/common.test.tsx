@@ -20,7 +20,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Tag } from "@crewlethq/ui";
 
-import { SeatCard } from "./common.tsx";
+import { QueryState, SeatCard } from "./common.tsx";
 import { drawnClasses } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, LiveCall } from "~/protocol/index.ts";
@@ -116,4 +116,19 @@ test("a seat the engine reported no handle for still links to its page", () => {
   expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
     "#/agents/seats/Ada%20Lovelace",
   );
+});
+
+// A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
+// `bad_params` banner blames the screen, which is right when the screen asked
+// wrong and wrong when a reader chose a window past the history — the engine's
+// words name the parameter either way, so they replace the guess.
+test("a bad_params refusal with the engine's sentence shows the sentence, not the guess", () => {
+  render(<QueryState error="bad_params" detail="days=91 is past the ninety" loading={false} />);
+  expect(
+    screen.getByText(/The engine refused this request: days=91 is past the ninety/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/screen’s bug/)).toBeNull();
+  cleanup();
+  render(<QueryState error="bad_params" loading={false} />);
+  expect(screen.getByText(/screen’s bug to fix/)).toBeTruthy();
 });

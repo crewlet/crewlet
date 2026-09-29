@@ -103,6 +103,11 @@ func (r *budgetReporter) run(ctx context.Context) {
 	defer close(r.done)
 	tick := time.NewTicker(BudgetReportInterval)
 	defer tick.Stop()
+	// ONE FRAME AT ONCE, then one per tick. A ticker's first fire is an
+	// interval away, and until a frame lands every open dashboard holds no
+	// reading of the budget at all — which it says, rather than guessing,
+	// but for fifteen seconds after every engine start.
+	r.publish(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -148,16 +153,27 @@ func (r *budgetReporter) publish(ctx context.Context) {
 // consumer REPLACES what it holds on every report, so a zeroed one would
 // render a company that is spending as a company that has spent nothing —
 // which is the one reading an operator acts on by doing nothing.
+//
+// A COMPANY THAT CAPS NOTHING IS A FRAME, and one that needs no read: its
+// windows are empty whatever the counter holds, so neither the counter nor
+// the protocol floor that decides whose counter it is has anything to say
+// about it. It used to publish nothing, which left a consumer unable to tell
+// "no ceiling" from "no report yet" — and the dashboard, holding an empty
+// meter for both, told an operator whose company WAS capped that it was not
+// for the first interval after every start.
 func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.BudgetMeters, bool) {
 	e := r.engine
 	company := e.Company()
 	if company == nil || company.Org == nil {
 		return types.BudgetMeters{}, false
 	}
+	windows := coord.WindowsAt(now, company.Config.Location())
+	if uncapped := budgetSnapshot(company, windows, nil); !uncapped.Metered() {
+		return uncapped, true
+	}
 	if !r.countersCurrent(ctx) {
 		return types.BudgetMeters{}, false
 	}
-	windows := coord.WindowsAt(now, company.Config.Location())
 	usage, err := e.backends.Fleet.Usage(ctx, windows)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -167,7 +183,7 @@ func (r *budgetReporter) frame(ctx context.Context, now time.Time) (types.Budget
 		}
 		return types.BudgetMeters{}, false
 	}
-	return budgetSnapshot(company, windows, usage)
+	return budgetSnapshot(company, windows, usage), true
 }
 
 // countersCurrent reports whether this node's reading of the counters is the
@@ -292,8 +308,10 @@ func cappedWindows(caps coord.Caps, u coord.Usage) []types.BudgetWindow {
 	return out
 }
 
-// budgetSnapshot is the frame one read of the shared counters makes, and false
-// when nothing in the company is capped.
+// budgetSnapshot is the frame one read of the shared counters makes. A company
+// that caps nothing frames the org as `[]` and lists no seat, which
+// [types.BudgetMeters.Metered] reports — a reading in its own right, "there is
+// no ceiling", never the absence of one.
 //
 // Split from the publish so what a frame SAYS is testable without a broker, a
 // node and a fleet: the reading of the counter is the whole of what can be
@@ -303,7 +321,7 @@ func cappedWindows(caps coord.Caps, u coord.Usage) []types.BudgetWindow {
 // state, so a seat capped by the day and by the month shows two bars rather
 // than one that jumps between them. A scope nothing has charged reads
 // [coord.Unspent].
-func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage) (types.BudgetMeters, bool) {
+func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage) types.BudgetMeters {
 	byScope := make(map[string]coord.Usage, len(usage))
 	for _, row := range usage {
 		byScope[row.Scope] = row
@@ -353,12 +371,7 @@ func budgetSnapshot(company *Company, windows coord.Windows, usage []coord.Usage
 	for _, seat := range seats {
 		report.Seats = append(report.Seats, seat.meter)
 	}
-	if len(orgCaps) == 0 && len(report.Seats) == 0 {
-		// NOTHING IS CAPPED, so there is no meter to render and a frame
-		// would be a header bar over an unlimited budget.
-		return types.BudgetMeters{}, false
-	}
-	return report, true
+	return report
 }
 
 // refusedAt renders a window's refusal stamp the way the payload carries it:

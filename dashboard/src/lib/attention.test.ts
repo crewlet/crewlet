@@ -29,7 +29,7 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return {
     agents: [],
     runs: [],
-    budget: {},
+    budget: null,
     engine: { status: "ok", configured: true },
     connected: true,
     authRejected: false,

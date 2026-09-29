@@ -249,13 +249,12 @@ type BudgetMeter struct {
 // MarshalJSON states `windows` as a LIST in every state, `[]` when nothing is
 // capped or nothing has been reported yet.
 //
-// ON THE TYPE, not at the sites that build one. Two sites made the list
-// non-nil when a report arrived, and the one state no site built — the
-// projection's zero `OrgBudget` before a node's first `budget_meters` frame —
-// went out as `"windows": null`. The client reads the list as the wire types
-// promise, so for the seconds after every engine start the Cost screen threw
-// reading `.length` of null. A value receiver, so a pointer and a value
-// marshal alike.
+// ON THE TYPE, not at the sites that build one: a report whose org scope caps
+// nothing arrives with the list absent or null, and the client reads the list
+// as the wire types promise — a `null` here once threw reading `.length` on
+// the Cost screen. The meter BEFORE any report is a different fact and is not
+// this type at all: [LiveState.Budget] is nil then. A value receiver, so a
+// pointer and a value marshal alike.
 func (m BudgetMeter) MarshalJSON() ([]byte, error) {
 	type wire BudgetMeter
 	if m.Windows == nil {

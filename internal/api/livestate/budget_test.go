@@ -235,8 +235,8 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 	if got := overlayOf(t, s, "Lead").Budget; got != nil {
 		t.Errorf("budget = %+v, want none", got)
 	}
-	if got := s.Budget(); got.MeterID != "" {
-		t.Errorf("org budget = %+v, want empty", got)
+	if got := s.Budget(); got != nil {
+		t.Errorf("org budget = %+v, want none: nobody has read the counter", got)
 	}
 }
 
@@ -566,19 +566,33 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	}
 }
 
-// TestTheOrgMeterIsAListBeforeAnyReport holds the one state no report builds:
-// the projection before a node's first `budget_meters` frame. Its zero meter
-// went out as `"windows": null`, and the dashboard — which reads the list the
-// wire promises — threw on the Cost screen for the seconds after every engine
-// start. A seat meter with no windows marshals the same way.
-func TestTheOrgMeterIsAListBeforeAnyReport(t *testing.T) {
+// TestTheOrgMeterIsUnknownBeforeAnyReportAndAListAfterOne holds the two states
+// a reader must never confuse. Before a node's first `budget_meters` frame
+// nobody has read the counter, and the meter is `null`; its zero value went
+// out as an empty meter instead, which the Spend and Home tiles read as "no
+// budget" — so for the seconds after every engine start a capped company
+// offered its operator "Set one". A report that caps nothing is the other
+// fact, and it states its list as `[]` rather than `null`, which the client
+// reads as the list the wire promises. A seat meter with no windows marshals
+// the same way.
+func TestTheOrgMeterIsUnknownBeforeAnyReportAndAListAfterOne(t *testing.T) {
 	s := livestate.New()
 	raw, err := json.Marshal(s.Budget())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if string(raw) != "null" {
+		t.Fatalf("the unreported org meter must be null, not a reading, got %s", raw)
+	}
+	s.Apply(env("budget_meters", map[string]any{
+		"meter_id": "m-1", "seq": 1, "timezone": "UTC", "org": map[string]any{"windows": nil},
+	}, streamOnly))
+	raw, err = json.Marshal(s.Budget())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(string(raw), `"org":{"windows":[]}`) {
-		t.Fatalf("the unreported org meter must state an empty list, got %s", raw)
+		t.Fatalf("a report capping nothing must state an empty list, got %s", raw)
 	}
 	seat, err := json.Marshal(&livestate.BudgetMeter{})
 	if err != nil {

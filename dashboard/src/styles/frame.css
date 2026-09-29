@@ -1393,6 +1393,15 @@ a.user-block-who:focus-visible {
   background: var(--color-surface-subtle);
 }
 
+/* A CARD'S BODY (`flush`): the card is the frame, so the grid draws none of
+   its own — one rule parts it from the card's head above. */
+.grid-wrap[data-flush] {
+  border: 0;
+  border-top: 1px solid var(--color-border-default);
+  border-radius: 0;
+  background: transparent;
+}
+
 /* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
    reset, and the empty state, which is the one child rendered when the wrap
    carries no track list at all. A child that forgot this would land in column
@@ -1941,8 +1950,8 @@ a.cell-seat:hover {
 
 /* THE SLOT IS THE CONTROL; THE FILL INSIDE IT IS THE BAR. Painted as the slot
    itself, a seven-day window holding one busy day drew a solid block a seventh
-   of the card wide — a panel, not a quantity — the defect the spend chart's
-   `.stackseries-stack` was already fixed for. The fill takes the kit's own
+   of the card wide — a panel, not a quantity — the defect the kit's
+   `StackedColumns` was drawn to avoid. The fill takes the kit's own
    column proportion (`.crewlet-stacked-columns__column`: 63% of its slot,
    capped at `--spacing-7`), centred, so one bucket and ninety draw with the
    geometry every other chart in the product uses; the click target stays the

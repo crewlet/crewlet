@@ -45,6 +45,7 @@ import {
   useId,
   useRef,
   useState,
+  type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -258,7 +259,21 @@ function useRovingGroup<T extends string>(
     e.preventDefault();
   };
 
-  return { box, onKeyDown, stop };
+  // THE STOP FOLLOWS FOCUS, HOWEVER FOCUS ARRIVED — a click, or a dialog
+  // handing focus back to the option that opened it. Only the arrows used to
+  // move it, so an option that opens something rather than committing (the
+  // time picker's Custom) took focus on its click, kept `tabIndex={-1}`, and
+  // got focus back when its dialog was dismissed: the reader stood on an
+  // option that was neither checked nor the group's tab stop, and the next
+  // Tab or arrow started from somewhere else. Where focus is, the reader is.
+  const onFocus = (e: FocusEvent<HTMLDivElement>) => {
+    const buttons = box.current?.querySelectorAll<HTMLElement>("[data-roving]");
+    const at = buttons ? Array.prototype.indexOf.call(buttons, e.target) : -1;
+    const next = values[at];
+    if (next !== undefined && next !== held.stop) setHeld((h) => ({ ...h, stop: next }));
+  };
+
+  return { box, onKeyDown, onFocus, stop };
 }
 
 /**
@@ -355,7 +370,7 @@ export function Segmented<T extends string>({
     if (options.find((o) => o.value === next)?.disabled) return;
     onChange(next);
   };
-  const { box, onKeyDown, stop } = useRovingGroup(
+  const { box, onKeyDown, onFocus, stop } = useRovingGroup(
     options.map((o) => o.value),
     value,
     choose,
@@ -388,6 +403,7 @@ export function Segmented<T extends string>({
       aria-label={ariaLabel}
       aria-describedby={manual ? hintID : undefined}
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
     >
       {manual && (
         <span id={hintID} className="sr-only">
@@ -473,6 +489,7 @@ function FeedbackButton({
   title,
   variant,
   size = "sm",
+  disabled,
 }: {
   run: () => boolean | Promise<boolean>;
   /** The glyph at rest. A COMPONENT, which is how every uilet control takes
@@ -495,6 +512,9 @@ function FeedbackButton({
   title?: string;
   variant?: "default" | "ghost";
   size?: "md" | "sm";
+  /** Nothing to act on yet — an export of an empty table. `title` then says
+   *  why, so the control is never a dead button with no reason. */
+  disabled?: boolean;
 }) {
   // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
   // running is not a DOM change and a live region announces changes only. A
@@ -574,6 +594,7 @@ function FeedbackButton({
           )
         }
         onClick={onClick}
+        disabled={disabled}
         title={state === "failed" ? failedSaid : title}
       >
         {state === "done" ? doneLabel : state === "failed" ? failedLabel : label}
@@ -707,6 +728,7 @@ export function DownloadButton({
   title,
   variant,
   size = "sm",
+  disabled,
 }: {
   text: Text;
   /** The name to offer it under. Sanitised here — see [safeFilename]. */
@@ -716,6 +738,8 @@ export function DownloadButton({
   title?: string;
   variant?: "default" | "ghost";
   size?: "md" | "sm";
+  /** See [FeedbackButton]'s. */
+  disabled?: boolean;
 }) {
   const name = safeFilename(filename);
   const run = useCallback(() => saveTextFile(resolve(text), name, mime), [text, name, mime]);
@@ -738,6 +762,7 @@ export function DownloadButton({
       title={title}
       variant={variant}
       size={size}
+      disabled={disabled}
     />
   );
 }

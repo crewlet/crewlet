@@ -37,7 +37,7 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 	at := newStamp(env.Timestamp)
 
 	switch {
-	case meterID != "" && meterID == s.budget.MeterID:
+	case meterID != "" && s.budget != nil && meterID == s.budget.MeterID:
 		if seq <= s.budget.Seq {
 			return change
 		}
@@ -64,7 +64,7 @@ func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Ch
 	// here would be a second implementation of the same decision, agreeing
 	// with the first only for as long as nobody edits either.
 
-	s.budget = OrgBudget{
+	s.budget = &OrgBudget{
 		MeterID:  meterID,
 		Seq:      seq,
 		Timezone: report.Timezone,

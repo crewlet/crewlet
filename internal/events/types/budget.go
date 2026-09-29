@@ -165,7 +165,10 @@ type BudgetSeatMeter struct {
 
 // BudgetMeters is a snapshot of every live token meter, for the dashboard.
 //
-// Published on a fixed tick by every node, from the fleet's SHARED counters.
+// Published on a fixed tick by every node, from the fleet's SHARED counters —
+// and for a company that caps nothing as well, with an empty org list and no
+// seats, because "there is no ceiling" is a reading a consumer must be able to
+// tell from "no node has reported yet" ([BudgetMeters.Metered]).
 // It exists because the dashboard's header renders the company's headroom
 // from a websocket push: a screen open while a company works has to move as
 // the company spends, and the spend rollups it already has cover windows of
@@ -210,6 +213,12 @@ type BudgetMeters struct {
 
 // EventType is the "budget_meters" wire type.
 func (BudgetMeters) EventType() string { return "budget_meters" }
+
+// Metered reports whether anything in the snapshot is capped: a window on the
+// company's scope, or any seat listed at all, since only a capped seat is.
+func (e BudgetMeters) Metered() bool {
+	return len(e.Org.Windows) > 0 || len(e.Seats) > 0
+}
 
 // Summary counts the metered seats rather than leading with an actor: the
 // snapshot is the engine's, not any one seat's.

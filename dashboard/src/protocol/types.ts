@@ -570,6 +570,17 @@ export interface Bucket {
   output_tokens: number;
   total_tokens: number;
   calls: number;
+  /**
+   * The share of `input_tokens` the provider's prompt cache served and
+   * stored. A BREAKDOWN of the input, never an addition to it: every backend
+   * counts the cached prefix inside its input total, so the cache's share is
+   * `cache_read_tokens / input_tokens` and adding the two double-counts the
+   * prefix (`tokens.Bucket`). Both are zero where no backend reported a
+   * cache, which is not the same as "nothing was cached" — see
+   * `routes/spend/model.ts`' `cacheShare`.
+   */
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 export interface PhaseRow extends Bucket {
@@ -749,12 +760,18 @@ export interface EventSeries {
 }
 
 /** The org-wide live meter, plus the identity of the engine run reporting it
- *  and the company clock its windows were cut on. */
+ *  and the company clock its windows were cut on.
+ *
+ *  A REPORT, never the absence of one: before any node has reported the
+ *  snapshot and the push carry `null`, which the store holds as `null` — "no
+ *  reading yet". `org.windows` empty is the other fact, "nothing is capped",
+ *  and the two send a reader to opposite places ("Set one" is offered only on
+ *  the second). */
 export interface OrgBudget {
-  meter_id?: string;
-  seq?: number;
-  timezone?: string;
-  org?: BudgetMeter;
+  meter_id: string;
+  seq: number;
+  timezone: string;
+  org: BudgetMeter;
 }
 
 /** The `budgets` answer: every scope's day, week and month, capped or not. */
@@ -3494,7 +3511,8 @@ export interface Snapshot {
   tools?: ToolRow[];
   health?: EngineHealth;
   tokens?: Rollup;
-  budget?: OrgBudget;
+  /** `null` until a node has reported the counters — see {@link OrgBudget}. */
+  budget?: OrgBudget | null;
   schedules?: ScheduleRow[];
 }
 
@@ -3510,6 +3528,12 @@ export interface Frame {
    * helper as the REST 503's header.
    */
   retry_after_seconds?: number;
+  /**
+   * The refusal's own sentence, on a `bad_params` error frame and nowhere
+   * else: that refusal is written for the caller — it names the parameter to
+   * change — and every other failure's text stays in the node's log.
+   */
+  detail?: string;
   ts?: string;
 }
 

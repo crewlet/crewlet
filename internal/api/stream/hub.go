@@ -101,6 +101,10 @@ type Envelope struct {
 	// [RetryAfterSeconds] — the helper the REST 503's header comes from, so
 	// a screen waits the same time whichever transport refused it.
 	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+
+	// Detail is the refusal's own sentence, on a `bad_params` error and
+	// nowhere else — see [RefusedError] for why that one and only that one.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Push builds a broadcast envelope stamped now.

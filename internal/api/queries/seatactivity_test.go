@@ -276,7 +276,8 @@ func TestSeatActivityRefusesAWindowItCannotHold(t *testing.T) {
 	r := registryOver(t, f.sources())
 	for _, days := range []int{0, tokens.MaxSpendRangeDays + 1} {
 		_, err := r.Answer(t.Context(), "seat_activity", map[string]any{"days": days}, "")
-		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "days=") {
+		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) ||
+			!strings.Contains(queries.RefusalDetail(err), "days is") {
 			t.Errorf("days=%d: %v, want a bad-params refusal naming days", days, err)
 		}
 	}

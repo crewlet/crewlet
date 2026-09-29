@@ -755,3 +755,22 @@ test("a compact grid marks its wrap and its lead cells", () => {
     false,
   );
 });
+
+// A FLUSH GRID SAYS SO ON ITS WRAP, and the default carries nothing: the sheet
+// draws the card-body form from that attribute alone (styles/frame.test.ts).
+test("a flush grid marks its wrap, and the default does not", () => {
+  const columns = [{ key: "id", header: "Id", cell: (r: Row) => r.id }];
+  const flush = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} flush />
+    </Router>,
+  );
+  expect(flush.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(true);
+  cleanup();
+  const framed = render(
+    <Router>
+      <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={columns} />
+    </Router>,
+  );
+  expect(framed.container.querySelector(".grid-wrap")!.hasAttribute("data-flush")).toBe(false);
+});

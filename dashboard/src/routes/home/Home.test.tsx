@@ -175,6 +175,9 @@ afterEach(() => {
   location.hash = "";
 });
 
+/** A report that caps nothing: "no ceiling", as distinct from no report. */
+const UNCAPPED = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
+
 /** Mount Home over a socket answering a bound viewer and a quiet company;
  *  `answers` overrides one question, and a function answer is a thunk so a
  *  case can answer with silence. */
@@ -291,8 +294,20 @@ describe("the figures", () => {
     expect(card.innerHTML).not.toMatch(/warning/);
   });
 
-  test("a company with no weekly budget says so and points at the budgets", async () => {
+  // NOT REPORTED IS NOT "NO BUDGET": before the engine's first report the
+  // line says it has no reading, and offers no way to set a ceiling the
+  // company may well have.
+  test("before the first budget report the tile says so, and offers nothing", async () => {
     mount();
+    await settle();
+    const card = tile(/^Tokens · /);
+    expect(card.textContent).toContain("Weekly budget not reported yet");
+    expect(card.textContent).not.toContain("No weekly budget");
+    expect(within(card).queryByRole("link")).toBeNull();
+  });
+
+  test("a company with no weekly budget says so and points at the budgets", async () => {
+    mount({ budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     const link = within(card).getByRole("link", { name: "No weekly budget" });
@@ -305,7 +320,7 @@ describe("the figures", () => {
   // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader who is not an
   // operator gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, operator: false } });
+    mount({ viewer: { ...JANE, operator: false }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");

@@ -204,8 +204,8 @@ func TestThePreviousWindowIsServedAtSevenThirtyAndNinetyDays(t *testing.T) {
 		{"days": "a week"},
 	} {
 		_, err := r.Answer(t.Context(), "tokens", params, "")
-		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrOutOfRange) ||
-			!strings.Contains(err.Error(), "days=") {
+		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) ||
+			!strings.Contains(queries.RefusalDetail(err), "days is") {
 			t.Errorf("%v: err = %v, want a refusal naming days", params, err)
 		}
 	}
@@ -220,7 +220,9 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	r := registryOver(t, f.sources())
 	_, err := r.Answer(t.Context(), "token_series",
 		map[string]any{"since": "2026-03-01", "until": "2026-03-10"}, "")
-	if !errors.Is(err, tokens.ErrOutOfRange) || !strings.Contains(err.Error(), "since=2026-03-01") {
+	if !errors.Is(err, tokens.ErrOutOfRange) || errors.Is(err, tokens.ErrWindowLength) ||
+		!strings.Contains(queries.RefusalDetail(err), "starts 2026-03-01") ||
+		!strings.Contains(queries.RefusalDetail(err), "move since") {
 		t.Errorf("err = %v, want the horizon refusal naming since", err)
 	}
 	// And a custom window's previous half past the floor names days.
@@ -228,6 +230,31 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 		map[string]any{"since": "2026-03-29", "until": "2026-04-27", "previous": true}, "")
 	if !errors.Is(err, tokens.ErrOutOfRange) || !strings.Contains(err.Error(), "fewer days") {
 		t.Errorf("err = %v, want the previous window refused", err)
+	}
+}
+
+// A WINDOW TOO LONG IS REFUSED FOR ITS LENGTH, NOT ITS PLACE — and in words.
+//
+// 152 days lying wholly inside the history used to be refused as one that
+// "reaches past the spend history", on a screen whose hero said the history
+// began weeks earlier: the reader was told to move the dates when the fix was
+// to narrow them. And the sentence is the one a person reads, so it carries
+// neither class's Go text nor a key=value dump of what they typed.
+func TestALongWindowInsideTheHistoryIsRefusedForItsLength(t *testing.T) {
+	t.Parallel()
+	r := registryOver(t, newSpendFixture(t).sources())
+	_, err := r.Answer(t.Context(), "tokens",
+		map[string]any{"since": "2026-04-26", "until": "2026-09-24"}, "")
+	if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) {
+		t.Fatalf("err = %v, want a window-length refusal", err)
+	}
+	if errors.Is(err, tokens.ErrOutOfRange) {
+		t.Errorf("err = %v is also the horizon's class, and the window is inside it", err)
+	}
+	const want = "2026-04-26 to 2026-09-24 is 152 days, and a spend window is at most 90 — " +
+		"bring since and until closer together"
+	if got := queries.RefusalDetail(err); got != want {
+		t.Errorf("detail = %q, want %q", got, want)
 	}
 }
 
@@ -307,8 +334,8 @@ func TestTheSeriesIsCutInCompanyWeeksAndFoldsPhasesIntoFourBands(t *testing.T) {
 	for _, b := range got.ByGroup {
 		bands = append(bands, b.Group)
 	}
-	if !slices.Equal(bands, []string{"execute", "workers"}) {
-		t.Errorf("bands = %v, want the phase bands in stacking order", bands)
+	if !slices.Equal(bands, []string{"execute", "review", "workers", "auxiliary"}) {
+		t.Errorf("bands = %v, want all four phase bands in stacking order, the unspent ones at zero", bands)
 	}
 }
 

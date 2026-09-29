@@ -162,7 +162,7 @@ func (s *LiveState) stateOf(role string, agent *agentLive) seatState {
 	case s.unplaced(role):
 		return stopped(StoppedUnplaced)
 	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
-		refusing(s.budget.Org.Windows, s.clock()):
+		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
 		return stopped(StoppedBudget)
 	case agent != nil && agent.failure == providerFailure:
 		return stopped(StoppedProvider)

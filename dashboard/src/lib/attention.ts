@@ -166,7 +166,8 @@ export interface AttentionInput {
    * for how much longer its box is held.
    */
   runs: SandboxRun[];
-  budget: OrgBudget;
+  /** `null` before the first report: nothing to judge, so nothing is raised. */
+  budget: OrgBudget | null;
   engine: EngineHealth | null;
   connected: boolean;
   authRejected: boolean;

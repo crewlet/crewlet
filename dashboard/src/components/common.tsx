@@ -434,11 +434,19 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  */
 export function QueryState({
   error,
+  detail,
   loading,
   empty,
   children,
 }: {
   error: string | null;
+  /**
+   * The engine's own sentence on a `bad_params` refusal (`useQuery`'s
+   * `detail`). Given, the refusal is the ENGINE'S words about what to change
+   * rather than this component's guess that the screen asked wrong — a window
+   * past the spend history is the reader's to change, not a bug.
+   */
+  detail?: string;
   loading: boolean;
   /**
    * `hint` IS REQUIRED, which is uilet's `EmptyState` rule and the reason this
@@ -452,6 +460,9 @@ export function QueryState({
   empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
+  if (error === "bad_params" && detail) {
+    return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
+  }
   const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (refusal) return <>{refusal}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire

@@ -1057,15 +1057,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the same reason: its duty is claimed under the node's incarnation,
 	// and a trim that ran before the lease existed would run on every node
 	// at once. Without it a domain's log only ever grows — to its ceiling,
-	// where appends are refused.
-	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
-	// which nothing published — so every header carried zeroes. Armed
-	// before the native backends, because it needs neither: the counters
-	// are coordination's and the company's caps are the epoch's.
-	e.startBudgetReports(ctx)
-	// The native runtime's own duties, where there is one. An unconfigured
-	// node has none yet, and the apply that brings its first native company
-	// arms them then — see [Engine.startNativeFor].
+	// where appends are refused. It is one of the native runtime's own
+	// duties, armed where there is one: an unconfigured node has none yet,
+	// and the apply that brings its first native company arms them then —
+	// see [Engine.startNativeFor]. The live token meters are NOT armed
+	// here: they are [Engine.Start]'s, after the host runs — see
+	// [Engine.startBudgetReports].
 	e.startNativeDuties(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -1230,6 +1227,15 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
+	// which nothing published — so every header carried zeroes. AFTER the
+	// host is running, because its first frame is published at once and
+	// asks the fleet's protocol floor, which reads the presence lease
+	// node.Start has just claimed: armed before it, that first frame was
+	// declined and every dashboard waited out a whole interval knowing
+	// nothing about the company's budget. Detached, like everything else
+	// here — see [Engine.startBudgetReports].
+	e.startBudgetReports(ctx)
 	// AFTER the host is running, and detached from the caller's context
 	// like the host itself. Before it, every watched duty reads as not
 	// live and the watchdog stands down for the life of the process —

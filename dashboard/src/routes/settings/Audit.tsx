@@ -53,8 +53,8 @@
 
 import { useMemo, useRef } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { Button, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
-import { CopyGlyph, FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
@@ -62,6 +62,8 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatCell, SeatLabel, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { DownloadButton } from "~/ui/primitives.tsx";
+import { toCsv } from "~/lib/csv.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
@@ -561,15 +563,19 @@ export function Audit() {
     <>
       <PageActions>
         <TimeRangePicker range={range} ariaLabel="Window" />
-        <Button
-          size="small"
+        {/* THROUGH THE ONE DOWNLOAD PATH. This had its own, which revoked the
+            file's URL in the same task as the click that queued it — racing
+            the read the download is about to make — and said nothing either
+            way; `DownloadButton` waits a task and says what happened. */}
+        <DownloadButton
           variant="ghost"
-          leadingIcon={<CopyGlyph />}
-          onClick={() => downloadCsv(shown)}
+          label="Export CSV"
+          filename="crewlet-audit.csv"
+          mime="text/csv;charset=utf-8"
+          text={() => auditCsv(shown)}
           disabled={shown.length === 0}
-        >
-          Export CSV
-        </Button>
+          title={shown.length === 0 ? "Nothing on screen to export" : "The rows on screen, as CSV"}
+        />
       </PageActions>
 
       {/* ONE BAR, SIZED BY WHAT IT HOLDS. The Who field took the full width
@@ -670,33 +676,17 @@ function useSecrets(): { rows: SecretRow[] | null } {
  * about rows this screen never read. The footer says the same number.
  */
 export function auditCsv(rows: AuditEntry[]): string {
-  const cell = (value: string) => `"${value.replaceAll('"', '""')}"`;
-  const lines = [["at", "where", "who", "who_kind", "who_seat", "what", "to", "detail"].join(",")];
-  for (const row of rows) {
-    lines.push(
-      [
-        row.at,
-        SOURCE_LABEL[row.source],
-        row.actor,
-        row.actorKind,
-        row.actorSeat ?? "",
-        row.kind,
-        row.subject,
-        row.detail,
-      ]
-        .map(cell)
-        .join(","),
-    );
-  }
-  return lines.join("\n");
-}
-
-function downloadCsv(rows: AuditEntry[]): void {
-  const blob = new Blob([auditCsv(rows)], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "crewlet-audit.csv";
-  link.click();
-  URL.revokeObjectURL(url);
+  return toCsv(
+    ["at", "where", "who", "who_kind", "who_seat", "what", "to", "detail"],
+    rows.map((row) => [
+      row.at,
+      SOURCE_LABEL[row.source],
+      row.actor,
+      row.actorKind,
+      row.actorSeat ?? "",
+      row.kind,
+      row.subject,
+      row.detail,
+    ]),
+  );
 }

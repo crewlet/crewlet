@@ -16,8 +16,8 @@ import (
 // THE SPEND ANSWERS, `tokens` and `token_series`, and where each one reads.
 //
 // TWO SOURCES, one aggregation. The live projection holds the phase records of
-// its own rolling window and answers that instantly — it is what the Spend
-// screen opens on and what the `tokens` push carries. EVERY NAMED WINDOW is
+// its own rolling window and answers that instantly — it is what the `tokens`
+// push carries and what the dashboard's live views read. EVERY NAMED WINDOW is
 // company days read from the replicated `usage` domain (ADR-0020): every
 // node's day, so the answer is the same on whichever node is asked, reaches
 // back the domain's 181 days rather than the event log's 30, and still counts
@@ -84,9 +84,9 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 				"2026-06-01, the first no later than the second: %w", ErrBadParams, err)
 		}
 		if n := r.Days(); n > tokens.MaxSpendRangeDays {
-			return w, fmt.Errorf("%w: %w: since=%s until=%s is %d days, and a spend "+
-				"window is at most %d — narrow the dates", ErrBadParams,
-				tokens.ErrOutOfRange, since, until, n, tokens.MaxSpendRangeDays)
+			return w, refuseAs(tokens.ErrWindowLength, "%s to %s is %d days, and a "+
+				"spend window is at most %d — bring since and until closer together",
+				r.First.Label, r.Last.Label, n, tokens.MaxSpendRangeDays)
 		}
 		w.Range = r
 	default:
@@ -94,17 +94,18 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 		if p.Has("days") {
 			days = p.Int("days", 0)
 			if days < 1 || days > tokens.MaxSpendRangeDays {
-				return w, fmt.Errorf("%w: %w: days=%v, and a spend window is 1 to %d "+
-					"company days — ask for at most %d", ErrBadParams, tokens.ErrOutOfRange,
+				return w, refuseAs(tokens.ErrWindowLength, "days is %v, and a spend "+
+					"window is 1 to %d company days — ask for at most %d",
 					p.Values()["days"], tokens.MaxSpendRangeDays, tokens.MaxSpendRangeDays)
 			}
 		}
 		w.Range = tokens.LastDays(days, now, loc)
 	}
 	if !w.Horizon.Admits(w.Range) {
-		return w, fmt.Errorf("%w: %w: since=%s is before %s, the oldest day the "+
-			"%d-day spend history still holds on any node", ErrBadParams,
-			tokens.ErrOutOfRange, w.Range.First.Label, w.Horizon.Floor, w.Horizon.Days)
+		return w, refuseAs(tokens.ErrOutOfRange, "the window starts %s, before %s — "+
+			"the oldest day the %d-day spend history still holds on any node; move "+
+			"since to %s or later", w.Range.First.Label, w.Horizon.Floor,
+			w.Horizon.Days, w.Horizon.Floor)
 	}
 	if p.Bool("previous", false) {
 		prev := w.Range.Previous()
@@ -112,10 +113,10 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			// NAMING `days`, because that is the knob a reader turns: the
 			// window before a long enough one starts past the floor, and
 			// the fix is a shorter window, not a different comparison.
-			return w, fmt.Errorf("%w: %w: the window before these %d days starts "+
-				"%s, before %s — the oldest day the %d-day spend history holds; "+
-				"ask for fewer days", ErrBadParams, tokens.ErrOutOfRange,
-				w.Range.Days(), prev.First.Label, w.Horizon.Floor, w.Horizon.Days)
+			return w, refuseAs(tokens.ErrOutOfRange, "the window before these %d "+
+				"days starts %s, before %s — the oldest day the %d-day spend history "+
+				"holds; ask for fewer days", w.Range.Days(), prev.First.Label,
+				w.Horizon.Floor, w.Horizon.Days)
 		}
 		w.Range = prev
 	}

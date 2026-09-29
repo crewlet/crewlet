@@ -146,8 +146,8 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	if p.Has("days") {
 		days = p.Int("days", 0)
 		if days < 1 || days > tokens.MaxSpendRangeDays {
-			return nil, fmt.Errorf("%w: %w: days=%v, and a seat's activity covers 1 to %d "+
-				"company days — ask for at most %d", ErrBadParams, tokens.ErrOutOfRange,
+			return nil, refuseAs(tokens.ErrWindowLength, "days is %v, and a seat's "+
+				"activity covers 1 to %d company days — ask for at most %d",
 				p.Values()["days"], tokens.MaxSpendRangeDays, tokens.MaxSpendRangeDays)
 		}
 	}
@@ -158,10 +158,9 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	previous := p.Bool("previous", false)
 	prev := window.Previous()
 	if previous && !horizon.Admits(prev) {
-		return nil, fmt.Errorf("%w: %w: the window before these %d days starts %s, "+
-			"before %s — the oldest day the %d-day usage history holds; ask for fewer "+
-			"days", ErrBadParams, tokens.ErrOutOfRange, days, prev.First.Label,
-			horizon.Floor, horizon.Days)
+		return nil, refuseAs(tokens.ErrOutOfRange, "the window before these %d days "+
+			"starts %s, before %s — the oldest day the %d-day usage history holds; "+
+			"ask for fewer days", days, prev.First.Label, horizon.Floor, horizon.Days)
 	}
 
 	var seat, agentID string

@@ -20,7 +20,18 @@
  */
 
 import { useState, type CSSProperties } from "react";
-import { RANGES, RANGE_LABEL, TODAY, isRange, todayWindow, windowLabel } from "~/lib/range.ts";
+import {
+  RANGES,
+  RANGE_LABEL,
+  TODAY,
+  companyDays,
+  dayStartIn,
+  daysLabel,
+  daysInterval,
+  isRange,
+  todayWindow,
+  windowLabel,
+} from "~/lib/range.ts";
 import type { Range, TimeRange, Window } from "~/lib/range.ts";
 import { fromWall, toWall, tsKey } from "~/lib/format.ts";
 import { Button, Callout, FormField, Input, Modal } from "@crewlethq/ui";
@@ -69,7 +80,13 @@ export function TimeRangePicker({
       // changes with its value reflows the control beside it every time a
       // reader picks a different window.
       title:
-        isRange(window) || window.today ? "Name two instants of your own" : windowLabel(window),
+        isRange(window) || window.today
+          ? offer.customDays
+            ? "Name two company days of your own"
+            : "Name two instants of your own"
+          : offer.customDays
+            ? daysLabel(companyDays(window, offer.zone))
+            : windowLabel(window),
     });
   }
 
@@ -89,6 +106,7 @@ export function TimeRangePicker({
         <CustomWindow
           from={tsKey(since)}
           to={tsKey(until)}
+          days={offer.customDays ? { zone: offer.zone } : undefined}
           onClose={() => setEditing(false)}
           onPick={(next) => {
             set(next);
@@ -115,23 +133,44 @@ export function TimeRangePicker({
 function CustomWindow({
   from,
   to,
+  days,
   onClose,
   onPick,
 }: {
   from: number;
   to: number;
+  /**
+   * Set on a screen whose windows are WHOLE COMPANY DAYS (`Offer.customDays`):
+   * the two boxes are dates on the company's clock, both inclusive, rather
+   * than instants on the reader's. See [daysInterval].
+   */
+  days?: { zone: string | undefined };
   onClose: () => void;
   onPick: (next: Window) => void;
 }) {
-  const [start, setStart] = useState(() => toWall(from));
-  const [end, setEnd] = useState(() => toWall(to));
+  // THE LAST DAY IS THE ONE THE WINDOW'S FINAL INSTANT FALLS ON, since the
+  // end is exclusive: a window ending at midnight covers the day before.
+  const [start, setStart] = useState(() =>
+    days ? companyDays({ from, to }, days.zone).since : toWall(from),
+  );
+  const [end, setEnd] = useState(() =>
+    days ? companyDays({ from, to }, days.zone).until : toWall(to),
+  );
 
-  const at = fromWall(start);
-  const till = fromWall(end);
+  const picked = days ? daysInterval(start, end, days.zone) : null;
+  const at = days ? dayStartIn(start, days.zone) : fromWall(start);
+  const till = days ? dayStartIn(end, days.zone) : fromWall(end);
   // THE THREE FAILURES ARE THREE SENTENCES. "Invalid" over a form with two
   // fields tells a reader to check both of them.
-  const problem =
-    at === null
+  const problem = days
+    ? at === null
+      ? "The first day is not a date."
+      : till === null
+        ? "The last day is not a date."
+        : till < at
+          ? "The last day has to be on or after the first — both are counted."
+          : ""
+    : at === null
       ? "The start is not a date and time."
       : till === null
         ? "The end is not a date and time."
@@ -156,7 +195,12 @@ function CustomWindow({
       stackBody
       onClose={onClose}
       onSubmit={() => {
-        if (!problem && at !== null && till !== null) onPick({ from: at, to: till });
+        if (problem) return;
+        if (days) {
+          if (picked) onPick(picked);
+        } else if (at !== null && till !== null) {
+          onPick({ from: at, to: till });
+        }
       }}
       footer={
         <>
@@ -182,11 +226,18 @@ function CustomWindow({
             measured in, not a note about one of them. The component hands each
             control the id its own label points at, so a second field added
             here cannot quietly inherit the first one's. */}
-      <FormField label="From" helper="In your own time zone, as every time on this screen is.">
+      <FormField
+        label={days ? "First day" : "From"}
+        helper={
+          days
+            ? `Company days, both counted, on the company's clock${days.zone ? ` (${days.zone})` : ""}.`
+            : "In your own time zone, as every time on this screen is."
+        }
+      >
         {(field) => (
           <Input
             id={field.id}
-            type="datetime-local"
+            type={days ? "date" : "datetime-local"}
             width="full"
             value={start}
             aria-describedby={field.describedBy}
@@ -194,11 +245,11 @@ function CustomWindow({
           />
         )}
       </FormField>
-      <FormField label="To">
+      <FormField label={days ? "Last day" : "To"}>
         {(field) => (
           <Input
             id={field.id}
-            type="datetime-local"
+            type={days ? "date" : "datetime-local"}
             width="full"
             value={end}
             aria-describedby={field.describedBy}

@@ -100,3 +100,26 @@ type unreadableFloor struct{ coord.Backend }
 func (unreadableFloor) FleetProtocolFloor(context.Context) (int, bool, error) {
 	return 0, false, errors.New("the lease store is unreachable")
 }
+
+// A COMPANY THAT CAPS NOTHING IS PUBLISHED, AND READS NOTHING TO SAY SO.
+//
+// Its frame is "there is no ceiling", which the dashboard must be able to tell
+// from "no node has reported yet" — so it is sent, where it used to be
+// withheld and the two collapsed into one empty meter that told the operator
+// of a CAPPED company, for the first interval after every start, that it had
+// no budget. And it is sent whatever the protocol floor says, because an empty
+// list of windows holds no figure the floor could make wrong: the lease store
+// here cannot be read at all.
+func TestAnUncappedCompanyPublishesItsNoCeilingWithoutAReading(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 23, 12, 0, 0, 0, time.UTC)
+	r := meteringReporter(t, unreadableFloor{coordmem.New()}, now)
+	r.engine.epoch.current.Store(meteredCompany(config.TokenBudget{}))
+	frame, sent := r.frame(t.Context(), now)
+	if !sent {
+		t.Fatal("an uncapped company published nothing, which a reader cannot tell from no report")
+	}
+	if frame.Metered() || frame.Org.Windows == nil {
+		t.Fatalf("frame = %+v, want the org as an empty list and no seat", frame)
+	}
+}

@@ -104,6 +104,7 @@ export type Screen =
   | { screen: "diaries" }
   | { screen: "diary"; handle: string }
   | { screen: "spend" }
+  | { screen: "spend-tasks" }
   | { screen: "budgets" }
   | { screen: "general" }
   | { screen: "integrations"; kind?: string }
@@ -189,6 +190,7 @@ export function resolve(path: string[]): Route {
       // screen: `#/spend/budget` — the obvious typo — drawing the spend tables
       // under a trail reading "Spend / budget" names three different things.
       if (rest.length === 1 && rest[0] === "budgets") return screen({ screen: "budgets" });
+      if (rest.length === 1 && rest[0] === "tasks") return screen({ screen: "spend-tasks" });
       return missing("spend", under("Spend"));
     case "settings":
       return settings(rest, screen, under);

@@ -378,22 +378,20 @@ describe("a peer this build was not built against", () => {
 
   // EVERY FIELD THIS PR ADDED IS OPTIONAL, because an older node's snapshot
   // does not carry it. Applying one must neither throw nor invent a value: a
-  // seat with no `activity`, a budget with no clock and a health frame with no
-  // alarm count stay absent, which is what each screen's "unknown" branch
+  // seat with no `activity`, a budget nobody reported and a health frame with
+  // no alarm count stay absent, which is what each screen's "unknown" branch
   // reads.
   test("an older node's snapshot applies with this build's fields absent", () => {
     const store = new Store();
     store.applySnapshot({
       agents: [{ id: "pm", role: "PM", handle: "pm" }],
-      budget: {},
       health: { status: "ok" },
     });
     const [pm] = store.state.agents;
     expect(pm?.activity).toBeUndefined();
     expect(pm?.turn).toBeUndefined();
     expect(pm?.paused).toBeUndefined();
-    expect(store.state.budget.timezone).toBeUndefined();
-    expect(store.state.budget.org).toBeUndefined();
+    expect(store.state.budget).toBeNull();
     expect(store.state.health.alarms).toBeUndefined();
     expect(nodeCountLabel(store.state.health.nodes)).toBe("node count unavailable");
   });
@@ -416,6 +414,27 @@ describe("a refused query", () => {
     expect((err as QueryError).retryAfterSeconds).toBe(4);
   });
 
+  // THE REFUSAL'S SENTENCE TRAVELS WITH IT. A `bad_params` refusal is the
+  // one the engine writes for the caller — which parameter, and what it
+  // accepts — and a rejection carrying only the code left a screen to say
+  // "something was missing" about a window the reader chose.
+  test("a bad_params frame's sentence reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("tokens", { days: 91 });
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "bad_params",
+        detail: "days=91, and a spend window is 1 to 90 company days — ask for at most 90",
+      }),
+    );
+    const err = (await asked.catch((e: unknown) => e)) as QueryError;
+    expect(err.message).toBe("bad_params");
+    expect(err.detail).toMatch(/ask for at most 90/);
+  });
+
   test("a refusal that names no wait carries none", async () => {
     const store = new Store();
     const socket = new LiveSocket(store);
@@ -423,5 +442,24 @@ describe("a refused query", () => {
     socket.onMessage(JSON.stringify({ kind: "error", id: 1, error: "not_found" }));
     const err = await asked.catch((e: unknown) => e);
     expect((err as QueryError).retryAfterSeconds).toBeNull();
+    expect((err as QueryError).detail).toBeNull();
+  });
+
+  // NOT REPORTED IS NOT UNCAPPED. The budget slice is `null` until a report
+  // has carried it, from the store's birth, through a snapshot taken before any
+  // node reported (`budget: null`) and after a push of `null`; a report that
+  // caps nothing is held as the report it is. An empty object used to stand
+  // for both, and the Spend and Home tiles offered an operator of a capped
+  // company "Set one" for the first seconds after every engine start.
+  test("the budget is null until a report carries it, and an uncapped report is kept", () => {
+    const store = new Store();
+    expect(store.state.budget).toBeNull();
+    store.applySnapshot({ budget: null, health: { status: "ok" } });
+    expect(store.state.budget).toBeNull();
+    const uncapped = { meter_id: "n:1", seq: 1, timezone: "UTC", org: { windows: [] } };
+    store.applyBudget(uncapped);
+    expect(store.state.budget).toEqual(uncapped);
+    store.applyBudget(null);
+    expect(store.state.budget).toBeNull();
   });
 });

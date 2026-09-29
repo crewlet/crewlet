@@ -251,6 +251,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return inside("diaries", named(labels, where.handle));
     case "budgets":
       return sectionPage("budgets");
+    case "spend-tasks":
+      return sectionPage("tasks");
     case "integrations":
       return where.kind
         ? inside("integrations", { label: labels[where.kind] ?? where.kind })

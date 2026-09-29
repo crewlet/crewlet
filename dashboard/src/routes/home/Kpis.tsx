@@ -222,6 +222,11 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
  * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: an operator gets
  * "No weekly budget" as the link into Spend › Budgets; anybody else gets the
  * fact, since the screen behind the link would only refuse them.
+ *
+ * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
+ * slice is `null` — nobody has read the counter — and the line says that
+ * rather than "No weekly budget", which a capped company would otherwise be
+ * told for the first seconds after every engine start.
  */
 function TokensTile({
   spend,
@@ -258,6 +263,8 @@ function TokensTile({
       sub={
         week ? (
           <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+        ) : budget === null ? (
+          "Weekly budget not reported yet"
         ) : operator ? (
           <a className="t-link" href={href(["spend", "budgets"])}>
             No weekly budget

@@ -1,17 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
 
-import {
-  bandColor,
-  bandLabel,
-  bandsOf,
-  columnsOf,
-  ghostHeights,
-  phaseColor,
-  spendDays,
-  spentOnly,
-  unbandedTokens,
-} from "./spend.ts";
+import { bandColor, bandLabel, bandsOf, phaseColor, spentOnly, unbandedTokens } from "./spend.ts";
 import { BANDS, PHASE_BANDS } from "~/contract/spend.ts";
 import type { Bucket, SeriesPoint, TokenSeries } from "~/protocol/types.ts";
 
@@ -103,6 +93,27 @@ describe("the legend", () => {
     expect(seats[1]?.label).toBe("workers");
   });
 
+  // A SEAT IS NAMED AS THE REST OF THE SCREEN NAMES IT: the engine keys the
+  // band on the handle, and the legend reads the chart's name for it — the
+  // handle only for a seat the chart no longer has. Any other grouping keeps
+  // the engine's own label.
+  it("labels a seat band with the seat's name, and nothing else", () => {
+    const by_group = [
+      { ...bucket(90), group: "agent-pm", handle: "agent-pm", other: false, folded: 0 },
+      { ...bucket(10), group: "gone", other: false, folded: 0 },
+    ];
+    const names: Record<string, string> = { "agent-pm": "Agent PM" };
+    const nameOf = (h: string) => names[h] ?? h;
+    expect(bandsOf(series({ by_group }), "seat", nameOf).map((b) => b.label)).toEqual([
+      "Agent PM",
+      "gone",
+    ]);
+    expect(bandsOf(series({ by_group }), "model", nameOf).map((b) => b.label)).toEqual([
+      "agent-pm",
+      "gone",
+    ]);
+  });
+
   // THE CONTRACT'S HUES ARE ITS STACKING ORDER: `series` is the 1-based data
   // hue, and a table whose second row took the first hue would draw two bands
   // in one colour.
@@ -133,54 +144,6 @@ describe("the legend", () => {
   });
 });
 
-describe("the days a window asks for", () => {
-  it("is the named range's own count of company days", () => {
-    expect(spendDays("1d")).toBe(1);
-    expect(spendDays("7d")).toBe(7);
-    expect(spendDays("90d")).toBe(90);
-  });
-});
-
-describe("the columns", () => {
-  const s = series({
-    by_group: [
-      { ...bucket(30), group: "plan", other: false, folded: 0 },
-      { ...bucket(4), group: "", other: true, folded: 2 },
-    ],
-    series: [
-      point("2026-06-14T00:00:00Z", bucket(30), { groups: { plan: bucket(30) } }),
-      point("2026-06-15T00:00:00Z", bucket(0)),
-      point("2026-06-16T00:00:00Z", bucket(4), { other: bucket(4) }),
-    ],
-  });
-
-  it("keeps the empty buckets, so a quiet day is a gap and not a missing column", () => {
-    const cols = columnsOf(s, bandsOf(s));
-    expect(cols.map((c) => c.at)).toHaveLength(3);
-    expect(cols[1]).toMatchObject({ total: 0, parts: [] });
-  });
-
-  it("drops a segment worth nothing but keeps the engine's own total", () => {
-    const cols = columnsOf(s, bandsOf(s));
-    expect(cols[0]?.parts).toEqual([{ key: "plan", value: 30 }]);
-    expect(cols[2]?.parts).toEqual([{ key: "", value: 4 }]);
-    expect(cols[2]?.total).toBe(4);
-  });
-
-  it("orders each column's segments the way the legend reads", () => {
-    const two = series({
-      by_group: [
-        { ...bucket(9), group: "b", other: false, folded: 0 },
-        { ...bucket(1), group: "a", other: false, folded: 0 },
-      ],
-      series: [
-        point("2026-06-14T00:00:00Z", bucket(10), { groups: { a: bucket(1), b: bucket(9) } }),
-      ],
-    });
-    expect(columnsOf(two, bandsOf(two))[0]?.parts.map((p) => p.key)).toEqual(["b", "a"]);
-  });
-});
-
 describe("what falls under no band", () => {
   it("is the gap between the window's total and what the bands cover", () => {
     // Grouping by worker leaves out every phase that is not a worker's. A
@@ -191,16 +154,6 @@ describe("what falls under no band", () => {
 
   it("is never negative, whatever the wire says", () => {
     expect(unbandedTokens(series({ totals: bucket(10), grouped: bucket(40) }))).toBe(0);
-  });
-});
-
-describe("the ghost", () => {
-  it("is the prior window's heights in order, since the two share no instant", () => {
-    const prior = series({
-      series: [point("2026-06-10T00:00:00Z", bucket(5)), point("2026-06-11T00:00:00Z", bucket(7))],
-    });
-    expect(ghostHeights(prior)).toEqual([5, 7]);
-    expect(ghostHeights(null)).toEqual([]);
   });
 });
 

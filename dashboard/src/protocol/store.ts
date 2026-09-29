@@ -94,7 +94,15 @@ export interface StoreState {
    */
   health: EngineHealth;
   tokens: Rollup | null;
-  budget: OrgBudget;
+  /**
+   * The company's live token meter as the last `budget` push stated it, and
+   * `null` UNTIL ONE HAS. Three facts, not two: nobody has read the counter
+   * yet, nothing is capped (`org.windows` empty), or a reading. An empty
+   * object used to stand for both of the first two, so for the first seconds
+   * after every engine start a capped company was drawn as having no budget
+   * and its operator was offered "Set one".
+   */
+  budget: OrgBudget | null;
   schedules: ScheduleRow[] | null;
   connected: boolean;
   /**
@@ -133,7 +141,7 @@ function emptyState(): StoreState {
     tools: [],
     health: { status: "unknown" },
     tokens: null,
-    budget: {},
+    budget: null,
     schedules: null,
     connected: false,
     authRejected: false,
@@ -212,7 +220,7 @@ export class Store {
     this.state.org = snap.org ?? {};
     this.state.tools = snap.tools ?? [];
     if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-    this.state.budget = snap.budget ?? {};
+    this.state.budget = snap.budget ?? null;
     // A bare list here, unlike the push's `{schedules: […]}` object.
     if (snap.schedules) this.state.schedules = snap.schedules;
     // NOT `connected`. That belongs to the transport, which knows whether the
@@ -280,7 +288,7 @@ export class Store {
   }
 
   applyBudget(budget: OrgBudget | null | undefined): void {
-    this.state.budget = budget ?? {};
+    this.state.budget = budget ?? null;
     this.emit("budget");
   }
 

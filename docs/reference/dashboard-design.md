@@ -739,7 +739,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change: the document, who read it and how, what links to it, its revisions and thread; edited as you | `edit=1` · `version=` (one revision in the document's place) · `lens=diff\|full` |
 | `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
-| `#/spend` | **Spend › Overview** — tokens over time, then by phase, model, seat, and the costliest turns (tokens only) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
+| `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, background workers and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days) · `group=phase\|model\|provider\|seat\|unit\|worker` |
+| `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
 | `#/spend/budgets` | **Budgets** — each window's ceiling and what it is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
@@ -802,6 +803,15 @@ interval written as ISO 8601's own `<from>/<to>`, so a custom window is still
 one value a reader can copy out of the address bar. The custom window's Apply
 is its form's submit button, so Enter in either box applies it — as a plain
 button it left Enter doing nothing, for the reason the New task sheet gives.
+
+**A screen of whole company days** (`Offer.customDays` — Spend) puts every edge
+on a company midnight: `30d` is the thirty company days ending today, exactly as
+the engine answers `days=30`, running to the first instant after today — never
+a span aligned to UTC midnights, which in Berlin ended at 02:00 tomorrow for
+twenty-two hours of every day. The custom dialog is prefilled from those edges,
+so opening it on `30d` shows the thirty dates the chart is drawn over and
+Apply without an edit asks for the same window. The window before is the same
+number of days, counted in days rather than hours across a clock change.
 
 **`today` is the company's day so far**, cut at the first instant of the date on
 the company's clock (`org.timezone`, the calendar `internal/period` keeps) —
@@ -4702,6 +4712,83 @@ diaries** row counts the agents listed. `#/knowledge/diaries/{handle}` is one
 agent's diary and episodes — the same two cards its profile's Memory tab
 draws, from the same holder-answered `agent_memory` — with the node that
 answered, or the reason nothing is shown, and the way to its whole memory.
+
+## Spend: tokens by phase, agent and model
+
+`#/spend` is one window of **whole company days** — 7, 30 or 90 (it opens on
+30, a daily chart's shortest useful run and the monthly budget's scale), or two
+dates a reader names (the custom picker takes two dates on the company's clock, both
+counted, because the answer is company days and a minute picker would offer a
+precision it cannot have). Everything on the screen is that window, read from
+the replicated usage domain, and every card says which window in words built
+from the ANSWER (`last 30 days`, or the dates) rather than from the control.
+There is no live rolling window here any more: a "24 hours" beside a chart of
+company days put two windows that cannot be compared on one screen.
+
+**A window the engine refuses draws no figures.** More than 90 days, or a start
+before the history's floor, is refused in the engine's own sentence — which
+says which of the two it is and what to change — shown once at the top of the
+page and nothing under it: the previous window's answer is not kept on screen
+beneath a control that now names a different window, and Export has nothing to
+export.
+
+- **The hero** is the window's tokens, the change against the window before it
+  (the engine's `previous=true`, cut on the company's calendar, and "nothing
+  was spent" rather than a percentage when the window before spent nothing),
+  and where the history's floor is (`horizon.floor`).
+- **This month** is the budget gate's monthly window from the `budget` push —
+  "used of limit · resets Oct 1" on a kit `Meter` handed the engine's `state`,
+  never a fraction judged here, with the reset on the company's calendar. With
+  no monthly ceiling it says so, and offers **Set one** (to `#/spend/budgets`)
+  only to an operator — and only once a report has SAID so: before the engine's
+  first report the push is `null` and the tile waits, because "nobody has read
+  the counter" is not "there is no ceiling" (Home's weekly line reads the same
+  slice the same way).
+- **The prompt cache's share** is `cache_read_tokens / input_tokens` (the input
+  already includes the cached prefix). A window in which nothing reported a
+  cache has **no cache tile** — not 0%, which would be a claim about caching
+  nobody made.
+- **The median task** is the tracker's own `totals=spend_tokens:median` over
+  the tasks FINISHED in the window that spent anything, with how many. On a
+  company whose tracker is not the engine's, `work_items` is not served and the
+  tile is not drawn.
+- **Daily tokens by phase** is the kit's `StackedColumns` over the engine's four
+  bands, each in its `BANDS` hue, and the legend is always those four — the
+  engine answers a band nothing spent in at zero; the split control offers the
+  contract's six `GROUPS`, and any split but phase draws the engine's top four
+  and a residual. A seat band is labelled with the seat's name, as the table
+  under it names it, and a team band with the unit's. The comparison is the
+  hero's; the chart draws no ghost of the window before.
+- **By agent** — turns, tokens, share, **budget today** (the seat's daily window
+  from its overlay, `exhausted` where the engine says `refusing`) and tokens per
+  ended turn. A row opens the seat in the peek; on a phone a seat is one
+  compact row — name, tokens and share, then turns · today · per turn, each
+  with its unit. **Recent turns by tokens** goes to `#/live/turns?sort=-tokens`
+  over the same window where the turn list has it (a quarter goes to its thirty
+  days, and a caption beside the link says so): a company day holds no turn, so
+  per-turn spend is the turn list's.
+- **By model** is the engine's `by_provider`: each configured provider entry,
+  the models it answered with, who used it (the top three and how many more)
+  and its tokens. **By team** is `token_series{group: unit}` asked for every
+  team; **Background workers** is `by_worker`.
+- **Export** is a client CSV of the rollup and the by-agent table, every row
+  labelled with its window and section, tokens only, and every text cell
+  guarded so a spreadsheet opens a name as text rather than a formula.
+
+`#/spend/tasks` — **Expensive tasks** — is the tasks last changed inside the
+window, bounded at both edges (`closed_since` plus `updated=range:<since>..<until>`
+from the spend answer's own instants, so a window that ended last month lists
+nothing that moved only this week), most tokens first
+(`sort=-spend_tokens`, the engine's order), each with what drove it from
+`fields=spend`: its turns, and its reopens, workers and send-backs where they
+are not zero, and a bar beside the figure scaled to the top task (not a
+percentage: a lifetime's tokens are a share of no window's total). A task's
+tokens are its whole life's — the tracker charges a task, not a day — and the
+list says so. The overview shows the top three. A
+window the engine refused has no list: the page says the refusal and nothing
+under it waits for an answer that will never be asked. On a phone each task is
+the overview card's compact row — key and title with what drove it under, the
+tokens at the end — rather than a labelled card per task.
 
 ## Honest empty states
 

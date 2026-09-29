@@ -189,6 +189,34 @@ func TestThePhaseBandsAreInStackingOrderAndNeverFold(t *testing.T) {
 	}
 }
 
+// EVERY PHASE BAND IS ANSWERED, A BAND NOTHING SPENT IN AT ZERO. The legend is
+// the closed set, and a window with no delegated worker used to answer three
+// bands — so the chart's legend lost Workers while the sentence under it still
+// named it, and "no worker ran" read the same as "workers are not measured".
+func TestEveryPhaseBandIsAnsweredEvenAtZero(t *testing.T) {
+	t.Parallel()
+	got := tokens.BucketDaily([]tokens.Cell{
+		cell("2026-06-14", "ceo", "execute", "sonnet", 10),
+	}, tokens.SeriesOptions{
+		Group: tokens.GroupPhase, Range: days(t, "2026-06-14", "2026-06-14", time.UTC),
+	})
+	totals := map[string]int{}
+	var order []string
+	for _, row := range got.ByGroup {
+		order = append(order, row.Group)
+		totals[row.Group] = row.TotalTokens
+	}
+	if want := []string{"execute", "review", "workers", "auxiliary"}; !slices.Equal(order, want) {
+		t.Fatalf("phase bands = %v, want all four, %v", order, want)
+	}
+	if totals["execute"] != 10 || totals["review"] != 0 || totals["workers"] != 0 || totals["auxiliary"] != 0 {
+		t.Errorf("band totals = %v, want execute's 10 and zero for the rest", totals)
+	}
+	if got.Grouped.TotalTokens != 10 {
+		t.Errorf("grouped = %d, want 10: a zero band adds nothing", got.Grouped.TotalTokens)
+	}
+}
+
 func TestTheBandsPastTheCapFoldIntoOneResidual(t *testing.T) {
 	t.Parallel()
 	// The chart carries four and the rest are ONE row — and that row is
@@ -432,7 +460,7 @@ func TestAnUnknownIntervalOrGroupIsAValueTheCallerCanRefuse(t *testing.T) {
 func TestAnEmptyWindowIsAnAxisOfEmptyDaysNotNulls(t *testing.T) {
 	t.Parallel()
 	got := tokens.BucketDaily(nil, tokens.SeriesOptions{
-		Group: tokens.GroupPhase, Range: days(t, "2026-06-14", "2026-06-16", time.UTC),
+		Group: tokens.GroupModel, Range: days(t, "2026-06-14", "2026-06-16", time.UTC),
 	})
 	if len(got.Points) != 3 {
 		t.Errorf("points = %d, want the window's three empty days", len(got.Points))

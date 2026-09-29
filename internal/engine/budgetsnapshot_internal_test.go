@@ -90,7 +90,7 @@ func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 	orgRefused := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	leadRefused := time.Date(2026, 6, 14, 12, 0, 5, 250_000_000, time.FixedZone("CEST", 2*3600))
 
-	report, metered := budgetSnapshot(c, snapshotWindows, []coord.Usage{
+	report := budgetSnapshot(c, snapshotWindows, []coord.Usage{
 		row(coord.OrgScope, map[period.Period]int{period.Day: 120, period.Week: 990, period.Month: 2000},
 			orgRefused, period.Week),
 		row(scopeOf(t, c, lead), map[period.Period]int{period.Day: 390, period.Week: 700, period.Month: 8950},
@@ -99,7 +99,7 @@ func TestABudgetFrameCarriesEveryCappedWindowAndItsRefusal(t *testing.T) {
 		// Ops caps nothing, so a stamp on its counter is no meter.
 		row(scopeOf(t, c, ops), map[period.Period]int{period.Day: 70}, orgRefused, period.Day),
 	})
-	if !metered {
+	if !report.Metered() {
 		t.Fatal("a company with caps produced no frame")
 	}
 	if report.Timezone != "UTC" {
@@ -159,7 +159,7 @@ func TestABudgetFrameStatesTheCompanysClock(t *testing.T) {
 		t.Fatalf("load Asia/Tokyo: %v", err)
 	}
 	windows := coord.WindowsAt(time.Date(2026, 6, 14, 20, 0, 0, 0, time.UTC), tokyo)
-	report, _ := budgetSnapshot(c, windows, nil)
+	report := budgetSnapshot(c, windows, nil)
 	if report.Timezone != "Asia/Tokyo" {
 		t.Errorf("timezone = %q, want Asia/Tokyo", report.Timezone)
 	}
@@ -221,10 +221,10 @@ func TestABudgetFrameIsByteStable(t *testing.T) {
 		row(scopeOf(t, c, lead), map[period.Period]int{period.Day: 20}, time.Time{}),
 		row(scopeOf(t, c, dev), map[period.Period]int{period.Week: 30}, time.Time{}),
 	}
-	first, _ := budgetSnapshot(c, snapshotWindows, rows)
+	first := budgetSnapshot(c, snapshotWindows, rows)
 	reversed := slices.Clone(rows)
 	slices.Reverse(reversed)
-	second, _ := budgetSnapshot(c, snapshotWindows, reversed)
+	second := budgetSnapshot(c, snapshotWindows, reversed)
 	a, err := json.Marshal(first)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -247,10 +247,10 @@ func TestAnUnchargedScopeIsMeteredAtZero(t *testing.T) {
 	t.Parallel()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 400}}
 	c := meteredCompany(config.TokenBudget{Month: ceiling(1000)}, lead)
-	report, metered := budgetSnapshot(c, snapshotWindows, []coord.Usage{
+	report := budgetSnapshot(c, snapshotWindows, []coord.Usage{
 		row(coord.OrgScope, map[period.Period]int{period.Month: 10}, time.Time{}),
 	})
-	if !metered {
+	if !report.Metered() {
 		t.Fatal("a company with caps produced no frame")
 	}
 	if len(report.Seats) != 1 || len(report.Seats[0].Windows) != 1 {
@@ -261,16 +261,14 @@ func TestAnUnchargedScopeIsMeteredAtZero(t *testing.T) {
 	}
 }
 
-// A company whose seats cap nothing still frames the org with an EMPTY list
-// of windows when it caps nothing either — which is no frame at all — while
-// a seat-only company frames the org as `[]`, never null.
+// A company whose only caps are a seat's frames the org as `[]`, never null.
 func TestASeatOnlyCompanyFramesTheOrgAsNoWindows(t *testing.T) {
 	t.Parallel()
 	lead := &org.Role{Name: "Lead", TokenBudget: org.TokenCeilings{period.Day: 400}}
 	c := meteredCompany(config.TokenBudget{}, lead)
-	report, metered := budgetSnapshot(c, snapshotWindows, nil)
-	if !metered {
-		t.Fatal("a capped seat produced no frame")
+	report := budgetSnapshot(c, snapshotWindows, nil)
+	if !report.Metered() {
+		t.Fatal("a capped seat produced no meter")
 	}
 	raw, err := json.Marshal(report.Org)
 	if err != nil {
@@ -281,15 +279,25 @@ func TestASeatOnlyCompanyFramesTheOrgAsNoWindows(t *testing.T) {
 	}
 }
 
-// NOTHING CAPPED IS NO FRAME: a header bar over an unlimited budget is a
-// claim nobody measured. A human seat is never metered, whatever it declares.
-func TestAnUncappedCompanyPublishesNoFrame(t *testing.T) {
+// NOTHING CAPPED IS A FRAME THAT SAYS SO: the org as `[]` and no seat, which
+// is "there is no ceiling" — never a bar over an unlimited budget, and never
+// the silence a consumer cannot tell from "nobody has reported yet". A human
+// seat is never metered, whatever it declares.
+func TestAnUncappedCompanyFramesNoCeiling(t *testing.T) {
 	t.Parallel()
 	c := meteredCompany(config.TokenBudget{}, &org.Role{Name: "Lead"},
 		&org.Role{Name: "Founder", Kind: org.KindHuman, TokenBudget: org.TokenCeilings{period.Day: 500}})
-	if report, metered := budgetSnapshot(c, snapshotWindows, []coord.Usage{
+	report := budgetSnapshot(c, snapshotWindows, []coord.Usage{
 		row(coord.OrgScope, map[period.Period]int{period.Day: 10}, time.Time{}),
-	}); metered {
-		t.Errorf("an uncapped company produced a frame: %+v", report)
+	})
+	if report.Metered() || len(report.Seats) != 0 {
+		t.Errorf("an uncapped company framed a meter: %+v", report)
+	}
+	raw, err := json.Marshal(report.Org)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(raw) != `{"windows":[]}` {
+		t.Errorf("org = %s, want {\"windows\":[]}", raw)
 	}
 }

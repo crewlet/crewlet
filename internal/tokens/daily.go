@@ -29,16 +29,24 @@ import (
 // the parameter.
 const MaxSpendRangeDays = 90
 
-// ErrOutOfRange is a window that reaches past what the usage domain holds: its
-// first day is older than the horizon's floor, or it is longer than
-// [MaxSpendRangeDays].
+// ErrOutOfRange is a window that starts before what the usage domain holds:
+// its first day — or the first day of the window before it, when a comparison
+// was asked for — is older than the horizon's floor.
 //
 // A REFUSAL rather than a truncated answer: the rows before the floor are gone
 // on every node, so an answer "floored" to it would put a heading over figures
 // covering fewer days than it names — the previous-window chart at 30 and 90
 // days read exactly that way, silently empty, while the event log was its
 // source.
-var ErrOutOfRange = errors.New("tokens: the window reaches past the spend history")
+//
+// NOT [ErrWindowLength], which it was until a 152-day window lying wholly
+// inside the history was refused as one that "reaches past the spend
+// history": the reader was told the wrong thing to change.
+var ErrOutOfRange = errors.New("tokens: the window starts before the spend history")
+
+// ErrWindowLength is a window of fewer than one or more than
+// [MaxSpendRangeDays] company days, wherever in the history it lies.
+var ErrWindowLength = fmt.Errorf("tokens: a spend window is 1 to %d company days", MaxSpendRangeDays)
 
 // Horizon is how far back the usage domain can answer, stated on every named
 // answer so a reader can say it rather than discover it.

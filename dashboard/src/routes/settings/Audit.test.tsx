@@ -255,11 +255,30 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
       detail: 'turn on Slack, and say "done"',
     },
   ]);
-  const [header, row] = csv.split("\n");
-  expect(header).toBe("at,where,who,who_kind,who_seat,what,to,detail");
+  const [header, row] = csv.split("\r\n");
+  expect(header).toBe('"at","where","who","who_kind","who_seat","what","to","detail"');
   expect(row).toContain('"turn on Slack, and say ""done"""');
   // Eight columns, whatever the detail held.
   expect(row?.match(/","/g)?.length).toBe(7);
+});
+
+// A CELL SOMEBODY ELSE WROTE IS NEVER A FORMULA. A summary is text a model or a
+// person typed, and a spreadsheet evaluates a leading `=` in it when the file
+// opens — so the export marks it as text, the spreadsheet's own way.
+test("the export opens a formula-looking cell as text", () => {
+  const csv = auditCsv([
+    {
+      id: "config:rev-2",
+      at: "2031-04-16T00:00:00Z",
+      source: "config",
+      kind: "dashboard",
+      actor: "founder",
+      actorKind: "operator",
+      subject: "rev-2",
+      detail: '=HYPERLINK("https://example.com","click")',
+    },
+  ]);
+  expect(csv.split("\r\n")[1]).toContain(`"'=HYPERLINK(""https://example.com"",""click"")"`);
 });
 
 // AN OPERATOR IS A PERSON, AND A TOKEN IS NOT A SEAT.

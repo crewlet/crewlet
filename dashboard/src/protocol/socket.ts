@@ -108,11 +108,19 @@ export class QueryError extends Error {
    * included, which no engine said anything about.
    */
   readonly retryAfterSeconds: number | null;
+  /**
+   * The refusal's own sentence on a `bad_params` refusal — the parameter to
+   * change and what it accepts — and null everywhere else. The engine writes
+   * that one refusal FOR the caller and keeps every other failure's text in
+   * its log, so this is never a path or a driver's message.
+   */
+  readonly detail: string | null;
 
-  constructor(code: string, retryAfterSeconds: number | null = null) {
+  constructor(code: string, retryAfterSeconds: number | null = null, detail: string | null = null) {
     super(code);
     this.name = "QueryError";
     this.retryAfterSeconds = retryAfterSeconds;
+    this.detail = detail;
   }
 }
 
@@ -443,7 +451,13 @@ export class LiveSocket {
       case "error":
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
-        this.settle(msg.id, msg.error || "query_failed", null, retryHint(msg.retry_after_seconds));
+        this.settle(
+          msg.id,
+          msg.error || "query_failed",
+          null,
+          retryHint(msg.retry_after_seconds),
+          typeof msg.detail === "string" && msg.detail ? msg.detail : null,
+        );
         break;
       case "pong":
         break;
@@ -464,13 +478,14 @@ export class LiveSocket {
     error: string | null,
     data: unknown,
     retryAfterSeconds: number | null = null,
+    detail: string | null = null,
   ): void {
     if (id === undefined) return;
     const entry = this.inflight.get(id);
     if (!entry) return;
     this.inflight.delete(id);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new QueryError(error, retryAfterSeconds));
+    if (error) entry.reject(new QueryError(error, retryAfterSeconds, detail));
     else entry.resolve(data);
   }
 

@@ -278,7 +278,13 @@ type LiveState struct {
 	// whatever a reconnect left behind.
 	spend []spendEntry
 
-	budget OrgBudget
+	// budget is the company's meter as the last report stated it, and NIL
+	// UNTIL ONE HAS. Three facts, not two: before a report nobody has read
+	// the counter, which is not the same as a report stating that nothing is
+	// capped — and a zero value held here went out as the second, so for the
+	// first seconds after every engine start a capped company was drawn as
+	// having no budget and an operator was pointed at setting one.
+	budget *OrgBudget
 
 	// placement is which of the company's agent seats some node holds,
 	// keyed by role, as the last read of the seat leases found it — nil
@@ -448,11 +454,19 @@ func (s *LiveState) RecentEvents(limit int) []FeedRow {
 	return out
 }
 
-// Budget returns the org-wide meter. Zero-valued when none is reporting.
-func (s *LiveState) Budget() OrgBudget {
+// Budget returns the org-wide meter as the last report stated it, or nil when
+// no report has arrived — which the wire states as `null`, "nobody has read
+// the counter yet", rather than an empty meter, which says "nothing is
+// capped". A copy of the held value: a report REPLACES the windows list
+// rather than editing it, so sharing the list with the copy is safe.
+func (s *LiveState) Budget() *OrgBudget {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.budget
+	if s.budget == nil {
+		return nil
+	}
+	held := *s.budget
+	return &held
 }
 
 // --- write side --------------------------------------------------------- //

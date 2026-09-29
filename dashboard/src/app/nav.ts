@@ -427,7 +427,14 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Overview",
         icon: "coins",
         path: ["spend"],
-        hint: "Token spend over time, by phase, model, seat and turn",
+        hint: "Tokens over time, by phase, agent, model and team",
+      },
+      {
+        key: "tasks",
+        label: "Expensive tasks",
+        icon: "layers",
+        path: ["spend", "tasks"],
+        hint: "The tasks that have spent the most tokens, and what drove each",
       },
       {
         key: "budgets",

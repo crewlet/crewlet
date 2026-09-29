@@ -8729,3 +8729,400 @@ a.live-row:focus-visible {
     display: none;
   }
 }
+
+/* ---- Spend ---------------------------------------------------------------
+   The design's Spend artboard: the hero beside the daily chart, then the
+   by-agent table beside a column of ranked lists, then the teams and the
+   background workers. Every row is MEASURED FROM THE PAGE COLUMN
+   (`@container page`), not the window, because the sidebar and the peek take
+   their share first. */
+.spend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+/* THE HERO'S 340px IS THE ARTBOARD'S: the figure at display size and two
+   tiles side by side under it, which is the narrowest that holds "of input
+   served from prompt cache" on two lines. */
+.spend-top {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
+/* The table is the wider of the pair: the design's 1.7 : 1. */
+.spend-mid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+.spend-side,
+.spend-pair {
+  display: grid;
+  gap: var(--spacing-4);
+  align-items: start;
+}
+/* THE SAME TRACKS AS THE ROW ABOVE, so the gutter between By team and
+   Background workers is the gutter between By agent and By model: two rows
+   split 1.7 : 1 and 1 : 1 drew two gutters 150px apart down one page. */
+.spend-pair {
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+}
+/* 900px IS THE TABLE'S FLOOR beside a list column of 300: below it the pairs
+   stack, the table first, since it is what the screen is read for. The hero
+   stacks over the chart below 760, where the chart would be narrower than
+   thirty columns can be read in. */
+@container page (width < 900px) {
+  .spend-mid,
+  .spend-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@container page (width < 760px) {
+  .spend-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.spend-card {
+  min-width: 0;
+}
+.spend-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
+}
+/* A padded card (a list) draws its head flush with its own padding. */
+.spend-list .spend-card-head {
+  padding: 0 0 var(--spacing-3);
+}
+.spend-card-body {
+  margin: 0;
+  padding: 0 var(--spacing-4) var(--spacing-4);
+}
+.spend-title {
+  flex: none;
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.spend-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.spend-caption {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.spend-muted {
+  color: var(--color-text-tertiary);
+}
+
+/* The hero. */
+.spend-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.spend-hero-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.spend-hero-number {
+  font-size: 3.25rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.035em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+.spend-hero-change {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.spend-budget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.spend-budget-none {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+}
+.spend-refusing {
+  color: var(--color-feedback-danger-ink);
+}
+/* THE TWO FIGURES INSIDE THE HERO are a block inside a card — the elevated
+   rung, which is exactly what `--color-surface-elevated` is for. */
+.spend-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.spend-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.spend-tile-figure {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+.spend-tile-figure.spend-muted {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+/* The chart. The group control and the gap sentence sit UNDER the plot: six
+   dimensions do not fit beside a title and a four-band legend at a laptop
+   width, and the kit's head row is where the design draws the legend. */
+.spend-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.spend-chart-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/* THE SENTENCE UNDER THE TITLE ASKS FOR NO WIDTH OF ITS OWN. The kit's head
+   is a flex row of this block and the legend, each shrinking by its content
+   width — so a one-line sentence as wide as the card squeezed the legend into
+   two ragged rows at 1280 (and with four seat names at 1440). With no
+   intrinsic width the block's basis is the title's, the legend keeps its one
+   row, and the sentence wraps in the room the block then grows into.
+   ONLY BESIDE THE HERO: stacked on a narrow page the legend is most of the
+   head's width, and a sentence with no width of its own was left a column
+   four words wide under a title wrapped onto two lines. */
+@container page (width >= 760px) {
+  .spend-chart-head .spend-caption {
+    contain: inline-size;
+  }
+}
+.spend-chart-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+/* By agent: the share bar and today's budget. */
+.spend-share {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.spend-share-track {
+  flex: 1 1 auto;
+  min-width: 2rem;
+  max-width: 5rem;
+}
+/* A FIGURE'S UNIT ON A PHONE'S COMPACT ROW, which draws no column heads: see
+   `PhoneUnit` in `ByAgent.tsx`. Nowhere else — a head already says it. */
+.spend-phone-unit {
+  display: none;
+}
+@media (width < 640px) {
+  .spend-phone-unit {
+    display: inline;
+    color: var(--color-text-tertiary);
+    white-space: pre;
+  }
+  /* THE NAME TAKES THE FIRST LINE'S ROOM, the tokens and share sit at its end
+     at their own width — the compact row gives EVERY lead cell the rest of
+     the line, which is right for a key-and-title row and wrong for figures. */
+  .spend-agents .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:not(:has(.cell-seat)) {
+    flex: none;
+    font-weight: inherit;
+  }
+  /* A TASK'S PHONE ROW READS ALONG ITS FIRST LINE: the key and the tokens sit
+     on the title's baseline, not centred against a title and the facts under
+     it — centred, a two-line title left its key floating between the two. */
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .grid-row {
+    align-items: baseline;
+  }
+  /* THE KEY IS A COLUMN ON A PHONE TOO, so every title starts at one x:
+     sized to its own width, ENG-4 and LEAD-6 put the titles beside them at
+     two different indents. Seven characters of the key's own monospace fit a
+     project key and a two-digit number; a longer key grows its own row. */
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .key-cell {
+    display: inline-block;
+    min-width: 7ch;
+  }
+  /* THE BAR IS FOR SCANNING A COLUMN, and a compact row has none — and the
+     figure takes its own width at the line's end, where the compact row
+     would otherwise split the line between it and the title. */
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-share-track {
+    display: none;
+  }
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:has(.spend-task-spend) {
+    flex: none;
+  }
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend {
+    width: auto;
+  }
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend > :last-child {
+    flex: none;
+  }
+  /* THE CAPTION GOES UNDER THE TITLE on a phone: beside it, a sentence
+     wrapped into four lines in the width the title left. */
+  .spend-tasks .spend-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-1);
+  }
+  .spend-agents .spend-share-track {
+    flex: 0 0 3rem;
+  }
+  /* ONE LINE FOR A NAME on the compact row: the card layout wraps a value
+     because it has a line of its own, and here a wrapped name stood a seat
+     three lines tall beside figures that fit on one. */
+  .spend-agents .grid-cell[data-lead] .truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+/* ONE QUANTITY, THE FIRST DATA HUE — the value end rounded, as the kit's own
+   bars are, and a zero draws nothing. */
+.spend-share-bar {
+  display: block;
+  height: 10px;
+  border-radius: 0 4px 4px 0;
+  background: var(--color-data-1);
+}
+.spend-share-pct,
+.spend-day-pct {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.spend-day {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.spend-day-meter {
+  flex: 0 0 4rem;
+}
+.spend-exhausted {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-feedback-danger-ink);
+}
+.spend-card-foot {
+  padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+}
+
+/* The most expensive tasks. */
+.spend-task-spend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-3);
+  width: 100%;
+  min-width: 0;
+}
+/* BOTH FIXED, so every row's bar starts at one x: a track that took what the
+   figure left began a few pixels later beside 1.3M than beside 99.4k. */
+.spend-task-spend .spend-share-track {
+  flex: 0 0 8rem;
+  max-width: none;
+}
+.spend-task-spend > :last-child {
+  flex: 0 0 4rem;
+  text-align: right;
+}
+.spend-task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.spend-task-list > li + li {
+  border-top: 1px solid var(--color-border-default);
+}
+.spend-task {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+  color: inherit;
+  text-decoration: none;
+}
+.spend-task:hover {
+  background: var(--color-surface-hover);
+}
+.spend-task-list > li:first-child .spend-task {
+  border-top: 1px solid var(--color-border-default);
+}
+.spend-task-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.spend-task-title {
+  display: flex;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.spend-task-key {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: inherit;
+  color: var(--color-text-secondary);
+}
+.spend-task-tokens {
+  flex: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+/* BY MODEL'S WORDS TAKE HALF THE ROW, not the kit's 128px Home column: under
+   each entry's key is who used it, and at 128px "Agent PM, Agent SWE, Agent AI
+   Systems Engineer" was cut to its first name. The bar is a share of the
+   card's one total, and half a card still draws it. Two classes, so this wins
+   over the kit's own declaration on the same element whatever the load order. */
+.spend-list .spend-models {
+  --crewlet-bar-list-label-width: 50%;
+}
+/* "Used by" on one line: the names give way, the count never does. */
+.spend-used {
+  display: flex;
+  gap: 0.35em;
+  min-width: 0;
+}
+.spend-used-more {
+  flex: none;
+}
+.spend-per-turn {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}

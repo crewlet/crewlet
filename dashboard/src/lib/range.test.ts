@@ -20,8 +20,12 @@ import {
   TODAY,
   companyMidnight,
   todayWindow,
+  companyDays,
+  dayLabelIn,
+  dayStartIn,
+  daysInterval,
+  daysLabel,
 } from "./range.ts";
-import { spendDays } from "./spend.ts";
 import type { Offer } from "./range.ts";
 
 /** A screen that offers everything, so a case can isolate one rule. */
@@ -482,10 +486,99 @@ describe("today", () => {
     });
   });
 
-  it("is charted in hours from its first, and asks the engine for one day", () => {
+  it("is charted in hours from its first", () => {
     const early = todayWindow(Date.parse("2026-09-22T00:20:00Z"), "UTC");
     expect(bucketFor(early)).toBe("hour");
     expect(spanOf(early)).toBe(20 * 60_000);
-    expect(spendDays(early)).toBe(1);
+  });
+});
+
+/**
+ * A WINDOW OF WHOLE COMPANY DAYS — the spend screen's custom window, whose
+ * question is the usage domain's company days. Two dates, both counted, cut on
+ * the COMPANY's clock: a reader in Berlin naming "the 1st to the 8th" for a
+ * company in Tokyo means Tokyo's 1st to Tokyo's 8th.
+ */
+describe("a window of company days", () => {
+  it("starts each date at its first instant on the company's clock", () => {
+    expect(new Date(dayStartIn("2026-09-02", "Asia/Tokyo")!).toISOString()).toBe(
+      "2026-09-01T15:00:00.000Z",
+    );
+    expect(new Date(dayStartIn("2026-09-02", "America/New_York")!).toISOString()).toBe(
+      "2026-09-02T04:00:00.000Z",
+    );
+    // Santiago springs forward at midnight on the 6th: that day's first
+    // instant is 01:00 local, 04:00 UTC — never an hour that does not exist.
+    expect(new Date(dayStartIn("2026-09-06", "America/Santiago")!).toISOString()).toBe(
+      "2026-09-06T04:00:00.000Z",
+    );
+    // A zone fourteen hours ahead: noon UTC is already the next day there.
+    expect(new Date(dayStartIn("2026-09-02", "Pacific/Kiritimati")!).toISOString()).toBe(
+      "2026-09-01T10:00:00.000Z",
+    );
+  });
+
+  it("refuses what is not a date", () => {
+    expect(dayStartIn("2026-02-30", "UTC")).toBeNull();
+    expect(dayStartIn("yesterday", "UTC")).toBeNull();
+  });
+
+  it("runs from the first instant of the first date to the first after the last", () => {
+    const w = daysInterval("2026-09-01", "2026-09-08", "Asia/Tokyo")!;
+    expect(new Date(w.from).toISOString()).toBe("2026-08-31T15:00:00.000Z");
+    expect(new Date(w.to).toISOString()).toBe("2026-09-08T15:00:00.000Z");
+    // And back: the interval names the same two dates.
+    expect(companyDays(w, "Asia/Tokyo")).toEqual({ since: "2026-09-01", until: "2026-09-08" });
+    // One day is a window of one day.
+    const one = daysInterval("2026-09-06", "2026-09-06", "America/Santiago")!;
+    expect(companyDays(one, "America/Santiago")).toEqual({
+      since: "2026-09-06",
+      until: "2026-09-06",
+    });
+    expect(daysInterval("2026-09-08", "2026-09-01", "UTC")).toBeNull();
+  });
+
+  it("is labelled as its dates", () => {
+    expect(daysLabel({ since: "2026-09-01", until: "2026-09-08" })).toBe("2026-09-01 – 2026-09-08");
+    expect(daysLabel({ since: "2026-09-01", until: "2026-09-01" })).toBe("2026-09-01");
+    expect(dayLabelIn(Date.parse("2026-09-22T20:00:00Z"), "Asia/Tokyo")).toBe("2026-09-23");
+  });
+
+  // A NAMED RANGE IS THE COMPANY DAYS ENDING TODAY, which is how the engine
+  // answers `days=` — never a span aligned to UTC midnights. Aligned to a UTC
+  // bucket, 30d at 13:00 UTC in Berlin ended at 02:00 TOMORROW, so the
+  // custom dialog prefilled from these edges offered thirty-one days ending
+  // tomorrow.
+  it("puts a named range on the company's midnights, ending after today", () => {
+    const now = Date.parse("2026-09-29T13:00:00Z");
+    const got = windowEdges("30d", now, 0, { zone: "Europe/Berlin" });
+    expect(got.since).toBe("2026-08-30T22:00:00.000Z");
+    expect(got.until).toBe("2026-09-29T22:00:00.000Z");
+    expect(
+      companyDays({ from: Date.parse(got.since), to: Date.parse(got.until) }, "Europe/Berlin"),
+    ).toEqual({ since: "2026-08-31", until: "2026-09-29" });
+    // The comparison window is the thirty days before, meeting this one.
+    expect(got.previous.until).toBe(got.since);
+    expect(got.previous.since).toBe("2026-07-31T22:00:00.000Z");
+  });
+
+  it("counts a window across a clock change in days, not in hours", () => {
+    // Berlin falls back on 25 October: that day is 25 hours long and still
+    // one day, so the seven days ending on the 27th start on the 21st.
+    const now = Date.parse("2026-10-27T09:00:00Z");
+    const got = windowEdges("7d", now, 0, { zone: "Europe/Berlin" });
+    expect(got.since).toBe("2026-10-20T22:00:00.000Z");
+    expect(got.until).toBe("2026-10-27T23:00:00.000Z");
+    expect(got.previous.since).toBe("2026-10-13T22:00:00.000Z");
+  });
+
+  it("keeps a named interval on the dates it names, whatever the clock", () => {
+    const w = daysInterval("2026-09-01", "2026-09-08", "Asia/Tokyo")!;
+    for (const clock of [0, Date.parse("2027-01-01T00:00:00Z")]) {
+      const got = windowEdges(w, clock, 0, { zone: "Asia/Tokyo" });
+      expect(got.since).toBe("2026-08-31T15:00:00.000Z");
+      expect(got.until).toBe("2026-09-08T15:00:00.000Z");
+      expect(got.previous.since).toBe("2026-08-23T15:00:00.000Z");
+    }
   });
 });

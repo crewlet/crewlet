@@ -19,7 +19,7 @@ function emptyState() {
 		tools: [],
 		health: { status: "unknown" },
 		tokens: null,
-		budget: {},
+		budget: null,
 		schedules: null,
 		connected: false,
 		authRejected: false
@@ -86,7 +86,7 @@ var Store = class {
 		this.state.org = snap.org ?? {};
 		this.state.tools = snap.tools ?? [];
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-		this.state.budget = snap.budget ?? {};
+		this.state.budget = snap.budget ?? null;
 		if (snap.schedules) this.state.schedules = snap.schedules;
 		if (snap.health) this.state.health = snap.health;
 		this.emit(...ALL_DATA_SLICES);
@@ -139,7 +139,7 @@ var Store = class {
 		this.emit("tokens");
 	}
 	applyBudget(budget) {
-		this.state.budget = budget ?? {};
+		this.state.budget = budget ?? null;
 		this.emit("budget");
 	}
 	applySchedules(payload) {
@@ -444,10 +444,18 @@ var QueryError = class extends Error {
 	* included, which no engine said anything about.
 	*/
 	retryAfterSeconds;
-	constructor(code, retryAfterSeconds = null) {
+	/**
+	* The refusal's own sentence on a `bad_params` refusal — the parameter to
+	* change and what it accepts — and null everywhere else. The engine writes
+	* that one refusal FOR the caller and keeps every other failure's text in
+	* its log, so this is never a path or a driver's message.
+	*/
+	detail;
+	constructor(code, retryAfterSeconds = null, detail = null) {
 		super(code);
 		this.name = "QueryError";
 		this.retryAfterSeconds = retryAfterSeconds;
+		this.detail = detail;
 	}
 };
 /** The engine's wait on a refusal, or null where it named none. */
@@ -711,19 +719,19 @@ var LiveSocket = class {
 				this.settle(msg.id, null, msg.data);
 				break;
 			case "error":
-				this.settle(msg.id, msg.error || "query_failed", null, retryHint(msg.retry_after_seconds));
+				this.settle(msg.id, msg.error || "query_failed", null, retryHint(msg.retry_after_seconds), typeof msg.detail === "string" && msg.detail ? msg.detail : null);
 				break;
 			case "pong": break;
 			default: this.store.noteUnknownPush(msg.kind);
 		}
 	}
-	settle(id, error, data, retryAfterSeconds = null) {
+	settle(id, error, data, retryAfterSeconds = null, detail = null) {
 		if (id === void 0) return;
 		const entry = this.inflight.get(id);
 		if (!entry) return;
 		this.inflight.delete(id);
 		clearTimeout(entry.timer);
-		if (error) entry.reject(new QueryError(error, retryAfterSeconds));
+		if (error) entry.reject(new QueryError(error, retryAfterSeconds, detail));
 		else entry.resolve(data);
 	}
 	failInflight(reason) {

@@ -515,7 +515,7 @@ describe("the screens", () => {
   // read the answer draws no price either, and that pass would prove nothing.
   test.each([
     ["the landing screen", "#/home", <Home />, { token_series: series() }],
-    ["spend", "#/spend", <Spend />, { token_series: series() }],
+    ["spend", "#/spend", <Spend />, { token_series: series(), tokens: rollup() }],
     [
       "the task page",
       "#/work/ENG-42",

@@ -140,3 +140,37 @@ test.each([
   });
   expect(asked).toHaveBeenCalledTimes(1);
 });
+
+// THE SENTENCE IS THE ANSWER'S, AND ONLY WHILE IT STANDS. A `bad_params`
+// refusal's detail reaches the screen beside its code; an answer that follows
+// clears it, so a window the reader fixed is never captioned with the refusal
+// of the one before.
+test("a refusal's sentence is on the result until an answer replaces it", async () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  let next = 0;
+  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
+    next++ === 0
+      ? Promise.reject(new QueryError("bad_params", null, "days=91 is too many"))
+      : Promise.resolve({ nodes: [] });
+  function Said() {
+    const { error, detail, refetch } = useQuery("fleet");
+    return (
+      <button type="button" onClick={refetch} data-testid="said">
+        {error ?? "ok"}|{detail ?? ""}
+      </button>
+    );
+  }
+  const view = render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Said />
+    </ClientContext.Provider>,
+  );
+  await act(async () => {});
+  expect(view.getByTestId("said").textContent).toBe("bad_params|days=91 is too many");
+  await act(async () => {
+    view.getByTestId("said").click();
+  });
+  await act(async () => {});
+  expect(view.getByTestId("said").textContent).toBe("ok|");
+});

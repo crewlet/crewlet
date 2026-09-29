@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // seededApp is an app whose sources hold a known company's worth of history.
@@ -232,6 +233,46 @@ func TestABadParameterIsRefusedRatherThanGuessedAt(t *testing.T) {
 	socket := overSocket(t, a, "events", map[string]any{"before_id": "ev1"})
 	if socket["kind"] != "error" || socket["error"] != "bad_params" {
 		t.Errorf("socket answer = %v, want bad_params", socket)
+	}
+}
+
+// THE REFUSAL'S SENTENCE REACHES THE CALLER, ON BOTH TRANSPORTS, WORD FOR WORD.
+//
+// A spend window past the engine's ninety days is refused naming `days` and
+// the bound — the one thing a person who typed a window can act on. It used to
+// reach the debug log only, so the Spend screen could say nothing but "the
+// engine refused this request". And the two transports carry the SAME
+// sentence, with the package's sentinel taken out of it: "queries: bad
+// parameters" is a Go package's name for the class, not something to read.
+func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+
+	status, body := overREST(t, a, "tokens", url.Values{"days": {"91"}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("REST status = %d, want 400", status)
+	}
+	rest, _ := body.(map[string]any)["detail"].(string)
+	socket := overSocket(t, a, "tokens", map[string]any{"days": 91})
+	sock, _ := socket["detail"].(string)
+
+	for name, detail := range map[string]string{"REST": rest, "socket": sock} {
+		if !strings.Contains(detail, "days is 91") || !strings.Contains(detail, "at most 90") {
+			t.Errorf("%s detail = %q, want the refusal naming days, 91 and the bound", name, detail)
+		}
+		// NO CLASS NAME, the engine's or the finer one: `tokens:` twice over
+		// is what the Spend screen used to show in front of this sentence.
+		for _, class := range []error{queries.ErrBadParams, tokens.ErrWindowLength} {
+			if strings.Contains(detail, class.Error()) {
+				t.Errorf("%s detail = %q still carries %q", name, detail, class)
+			}
+		}
+		if strings.HasPrefix(detail, "tokens") {
+			t.Errorf("%s detail = %q opens with the question's name", name, detail)
+		}
+	}
+	if rest != sock {
+		t.Errorf("the transports disagree about the sentence:\n REST   %q\n socket %q", rest, sock)
 	}
 }
 

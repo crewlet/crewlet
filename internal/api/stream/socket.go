@@ -113,6 +113,31 @@ func (e *UnavailableError) Error() string {
 // Unwrap makes an UnavailableError an [ErrUnavailable] to errors.Is.
 func (e *UnavailableError) Unwrap() error { return ErrUnavailable }
 
+// RefusedError is [ErrBadParams] carrying the refusal's own sentence.
+//
+// A TYPE FOR THE SAME REASON [UnavailableError] is one: the frame has to carry
+// something the code alone cannot, and here it is the sentence. A `bad_params`
+// refusal is the one failure whose text is written FOR the caller — it names
+// the parameter to change and the values it accepts ("days=91, and a spend
+// window is 1 to 90 company days — ask for at most 90") — and it used to reach
+// the debug log and nothing else, so a person who picked a window past the
+// spend history was told only that "something it needs was missing". Every
+// other failure keeps its text off the wire: a query failure can carry a
+// database path, and none of the rest has a reader.
+type RefusedError struct {
+	What string
+	// Detail is the refusal's sentence with no sentinel prefix in front of
+	// it — what a screen shows beside the code.
+	Detail string
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrBadParams, e.What, e.Detail)
+}
+
+// Unwrap makes a RefusedError an [ErrBadParams] to errors.Is.
+func (e *RefusedError) Unwrap() error { return ErrBadParams }
+
 // RetryAfterSeconds is how long a caller told `unavailable` should wait, in
 // the whole seconds both transports carry it in.
 //
@@ -379,11 +404,16 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 	case errors.Is(err, ErrBadParams):
 		// DEBUG, NOT WARN: it is not this node's failure, and a poll
 		// behind a bad request writes a line per tick for as long as the
-		// screen is open. The message is worth keeping — it names the
-		// field the caller got wrong, which is the whole of the fix —
-		// but only to somebody who turned debug on to look for it.
+		// screen is open. The sentence travels on the frame's `detail`
+		// (see [RefusedError]), so the caller reads the fix without
+		// anybody turning debug on.
 		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
-		client.send(queryError(req, CodeBadParams))
+		refusal := queryError(req, CodeBadParams)
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			refusal.Detail = refused.Detail
+		}
+		client.send(refusal)
 	case errors.Is(err, ErrUnavailable):
 		refusal := queryError(req, CodeUnavailable)
 		var hint time.Duration

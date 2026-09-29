@@ -612,10 +612,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		// THE ONLY ONE HERE THAT KEEPS THE ORIGINAL ERROR, because it is
 		// the only one whose message is written FOR the caller: it names
 		// the field that was missing and the values the field accepts,
-		// and [stream] logs exactly that at debug. The others are
+		// and the frame carries it as `detail`. The others are
 		// deliberately reduced to the query name — a failure's own text
 		// can carry a database path, and none of them has a reader.
-		return nil, fmt.Errorf("%w: %s: %w", stream.ErrBadParams, what, err)
+		return nil, &stream.RefusedError{What: what, Detail: queries.RefusalDetail(err)}
 	case errors.Is(err, queries.ErrUnavailable):
 		// WITH THE REFUSAL'S OWN HINT, which the frame's
 		// `retry_after_seconds` is computed from exactly as the REST
@@ -661,8 +661,12 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
-		// request the caller has to change.
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeBadParams})
+		// request the caller has to change. AND ITS SENTENCE, as the
+		// socket's frame carries it: the refusal names the parameter to
+		// change, which is the whole of the fix.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": stream.CodeBadParams, "detail": queries.RefusalDetail(err),
+		})
 	case errors.Is(err, queries.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
 	case errors.Is(err, queries.ErrUnavailable):

@@ -259,8 +259,9 @@ type Series struct {
 
 	// ByGroup is the legend and the grid: each band's total over the whole
 	// window, biggest first, with the residual last when there is one —
-	// EXCEPT by phase, where the four bands are in stacking order ([Bands])
-	// every time, so a band's colour and place never move with the data.
+	// EXCEPT by phase, where ALL FOUR bands are listed, a band nothing spent
+	// in at zero, in stacking order ([Bands]) every time, so a band's colour
+	// and place never move with the data.
 	ByGroup []GroupRow `json:"by_group"`
 
 	// Totals is the window's whole spend — every cell inside it, including
@@ -372,6 +373,17 @@ func BucketDaily(cells []Cell, opts SeriesOptions) Series {
 	// bucket-at-a-time decision would put a band in the chart for the days
 	// it happened to lead and in the residual for the rest.
 	total := map[string]*Bucket{}
+	if opts.Group == GroupPhase {
+		// EVERY BAND, SPENT OR NOT. By phase the legend is the closed set
+		// in stacking order, so a window with no delegated worker still
+		// answers Workers at zero: a band that came and went with the data
+		// is a legend that disagrees with the sentence under it ("review,
+		// workers and auxiliary calls are the overhead"), and a reader who
+		// cannot find Workers cannot tell "none" from "not measured".
+		for _, band := range Bands {
+			bucketFor(total, string(band))
+		}
+	}
 	seats := map[string]map[string]bool{}
 	handles := map[string]string{}
 	for _, c := range cells {

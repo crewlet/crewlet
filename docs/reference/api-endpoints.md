@@ -1489,7 +1489,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
   "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
-  "budget":    { /* the live org-wide token meter, or {} — see below */ },
+  "budget":    { /* the live org-wide token meter, or null before any node has reported — see below */ },
   "schedules": [ { /* configured schedule + computed next_run */ }, ... ]
 }
 ```
@@ -1840,11 +1840,17 @@ in the same shape.
   shared counter beside the spend, so every node reports the same one, and it
   clears on the scope's next admitted charge or when the window turns over.
 
-Every node publishes a `budget_meters` snapshot of the counters every
-**15 seconds** (`engine.BudgetReportInterval`), and the projection folds each
-one in as it arrives. A company with no ceiling anywhere publishes none, and
-neither does a node while any node of a build before the windowed counters is
-still live — see [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows).
+Every node publishes a `budget_meters` snapshot of the counters as soon as its
+seat host is running and every **15 seconds** (`engine.BudgetReportInterval`)
+after that, and the projection folds each one in as it arrives. Until the first
+one lands, `budget` is **`null`** — nobody has read the counter — which is a
+different fact from a report whose `org.windows` is `[]`, "nothing is capped". A
+company with no ceiling anywhere publishes exactly that: an empty list and no
+seats, without reading the counter. A node publishes nothing for a CAPPED
+company while any node of a build before the windowed counters is still live —
+see [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-token-windows) —
+so a dashboard served through that rollout holds `null` rather than a reading
+of the wrong counter.
 That older build's `budget_reported` frame is ignored: it read the lifetime
 counters, which are not the ones the gate charges.
 
@@ -1943,11 +1949,11 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, finished or was lost, and after a reconcile against the durable run record changed the set. | The full in-flight sandbox list. |
 | `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
+| `budget`   | After a node's token meter report is applied (every node reports at start and every 15 seconds, a company that caps nothing included). | `{ meter_id, seq, timezone, org: { windows: [...] } }`, the org-wide half: one entry per capped calendar window, each with its span, spend, ceiling, refusal stamp and `state`. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The whole [health envelope](#the-health-envelope), exactly what `GET /health` answers. There is no query for it. |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -4002,7 +4008,8 @@ parameters:
 - **The live window** — a request naming no `days`, no dates, no `seat` and no
   `previous` — is the projection's: the phase records of the last
   24 hours (`livestate.LiveSpendWindow`, rolling), held in memory and pushed as
-  the [`tokens` push](#pushes). It is what the Spend screen opens on, and the
+  the [`tokens` push](#pushes). The dashboard's live views read it; the Spend
+  screen reads named windows only, so its figures are the company's. It is the
   only answer with a per-turn tail (`by_turn`) and a watermark
   (`aggregated_through`).
 - **Every named window** is whole **company days** read from the replicated
@@ -4023,14 +4030,14 @@ this rollup.
 
 | Name | Default | Description |
 |------|---------|-------------|
-| `days` | `1` on a named window | The company days ending today, on the company's [clock](../getting-started/configuration.md#the-companys-clock): `7` is today and the six before it. `1` to `90` (`tokens.MaxSpendRangeDays`); anything else is **400** naming `days`. |
-| `since` / `until` | — | Instead of `days`: two company dates, `2026-06-01`, **both inclusive** — `since=2026-06-01&until=2026-06-08` is eight days. A pair or neither; at most 90 days; never together with `days`. |
+| `days` | `1` on a named window | The company days ending today, on the company's [clock](../getting-started/configuration.md#the-companys-clock): `7` is today and the six before it. `1` to `90` (`tokens.MaxSpendRangeDays`); anything else is **400** (`tokens.ErrWindowLength`) naming `days`. |
+| `since` / `until` | — | Instead of `days`: two company dates, `2026-06-01`, **both inclusive** — `since=2026-06-01&until=2026-06-08` is eight days. A pair or neither; at most 90 days — a longer pair is **400** (`tokens.ErrWindowLength`: `2026-05-01 to 2026-09-29 is 152 days, and a spend window is at most 90 — bring since and until closer together`) wherever in the history it lies; never together with `days`. |
 | `previous` | `false` | The same number of company days ending the day before the window begins — compare-to-previous, cut on the company's calendar rather than a browser's, so the two windows are never different weeks. |
 | `seat` | (every seat) | One seat, by its **handle**. Matched on the agent id every node derives from the org name and the handle, so a seat since removed from the chart still answers for the days it left behind. |
 
 A window whose first day — or whose `previous` window's first day — is older
-than the history's floor is **400** (`tokens.ErrOutOfRange`) naming the
-parameter to change, never answered short: the rows before the floor are gone
+than the history's floor is **400** (`tokens.ErrOutOfRange`, a different
+class from a window that is merely too long) naming the parameter to change, never answered short: the rows before the floor are gone
 on every node, and a heading over fewer days than it names is a lie about the
 numbers under it. At 90 days the previous window begins 179 days back, inside
 the 181.
@@ -4193,9 +4200,10 @@ Notes:
   window's `since`: the first and last weeks can be partial, and `days` says
   how many of the window's days each bucket holds.
 - `by_group` is the **legend and the grid**: each band's total over the whole
-  window, with the residual last. By `phase` the four bands are in the
-  stacking order above whatever their size; every other grouping is biggest
-  first. Which bands survive the cap is decided over the WHOLE window, never
+  window, with the residual last. By `phase` ALL FOUR bands are listed, in the
+  stacking order above whatever their size — a band nothing spent in is there
+  at zero, so the legend is the same four every time; every other grouping is
+  biggest first and lists only what spent. Which bands survive the cap is decided over the WHOLE window, never
   per bucket — a per-bucket decision would put a band in the chart for the
   days it happened to lead and in the residual for the rest.
 - A `unit` band carries `seats`, how many seats spent in it; a `seat` band

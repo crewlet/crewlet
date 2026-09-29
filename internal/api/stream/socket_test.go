@@ -382,6 +382,50 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 	}
 }
 
+// A REFUSAL CARRIES ITS SENTENCE, AND NOTHING ELSE DOES.
+//
+// `bad_params` is the one failure whose text is written for the caller — it
+// names the parameter to change — and it reached the debug log and nothing
+// else, so a person who asked for a window past the spend history read "the
+// engine refused this request" with no word of which field or why. Every
+// other code stays bare: its text can carry a path, and a detail on it would
+// be the leak the loop above guards against.
+func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
+	t.Parallel()
+	const sentence = "days is 91, and a spend window is 1 to 90 company days — ask for at most 90"
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{&stream.RefusedError{What: "tokens", Detail: sentence}, sentence},
+		{stream.ErrBadParams, ""},
+		{&stream.UnavailableError{What: "tokens"}, ""},
+		{errors.New("open /var/lib/crewlet/crewlet.db: " + sentence), ""},
+	} {
+		f := newSocket(t, nil, func(context.Context, string, map[string]any, string) (any, error) {
+			return nil, tc.err
+		})
+		conn, _, err := f.dial(t, "")
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		next(t, conn)
+
+		write(t, conn, map[string]any{"kind": "query", "id": 1, "what": "tokens"})
+		got := next(t, conn)
+		detail, present := got["detail"]
+		switch {
+		case tc.want == "" && present:
+			t.Errorf("%v: the frame carried a detail it has no business carrying: %v", tc.err, got)
+		case tc.want != "" && detail != tc.want:
+			t.Errorf("%v: detail = %v, want the refusal's own sentence %q", tc.err, detail, tc.want)
+		}
+		if tc.want != "" && got["error"] != stream.CodeBadParams {
+			t.Errorf("%v: code = %v, want bad_params", tc.err, got["error"])
+		}
+	}
+}
+
 func TestAQueryWithNoSurfaceIsAnUnknownQuery(t *testing.T) {
 	t.Parallel()
 	f := newSocket(t, nil, nil)
