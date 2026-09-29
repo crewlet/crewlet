@@ -34,7 +34,9 @@ import (
 // [partmap.ErrNoMap] (no estate map), [partmap.ErrUnknownPartition],
 // [partmap.ErrNotAHolder] and [partmap.ErrNowhereToMove] for a move, and
 // internal/membership's refusals for the rest — ErrRemovedMember tested
-// before ErrUnknownMember, which it wraps. A hold or a release confirmed by
+// before ErrUnknownMember, which it wraps, and ErrNowhereToRebuild for an out
+// no other member could take the copies of, which is a move's refusal made by
+// the membership rule both maps share. A hold or a release confirmed by
 // no generation at all is [ErrEstateUnconfirmed], and one confirmed for
 // another map [ErrEstateOtherMap] — both judged against the stored map, so
 // where there is none the refusal is the no-map one below; a store that did

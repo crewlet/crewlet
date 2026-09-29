@@ -15,16 +15,30 @@ import (
 
 var gestureNow = time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
 
+// fixtureCopies is the copies [storedMap]'s company asks for: ONE, so taking
+// out any member but the last leaves a member to rebuild its copies on. These
+// tests are the control's — its compare-and-set, its retries, its answers — and
+// the membership rule that refuses an out with nowhere to rebuild is
+// internal/membership's, certified there; [storedMapAt] asks for more where a
+// test is about that refusal reaching the control's caller.
+const fixtureCopies = 1
+
 // storedMap writes a first placement map over the named data nodes, as the
 // maintainer's first tick would, and answers the store holding it.
 func storedMap(t *testing.T, nodes ...string) *coordmemory.Fleet {
+	t.Helper()
+	return storedMapAt(t, fixtureCopies, nodes...)
+}
+
+// storedMapAt is [storedMap] for a company asking for copies copies.
+func storedMapAt(t *testing.T, copies int, nodes ...string) *coordmemory.Fleet {
 	t.Helper()
 	live := make([]upkeep.Presence, 0, len(nodes))
 	for _, n := range nodes {
 		live = append(live, upkeep.Presence{Node: n, Weight: 1})
 	}
 	state, changed := upkeep.Next(objstore.MapState{}, live,
-		membership.Company{Epoch: 1, Replicas: 3}, gestureNow)
+		membership.Company{Epoch: 1, Replicas: copies}, gestureNow)
 	if !changed {
 		t.Fatal("the fixture wrote no first map")
 	}
@@ -85,8 +99,9 @@ func TestAnOutGestureLandsInTheStoredMap(t *testing.T) {
 }
 
 // EVERY REFUSAL IS ONE A SURFACE CAN TELL APART: no map yet, a node that is no
-// member, the last member present, a hold of no length or past a day, a store
-// that would not answer, and a map a newer build wrote.
+// member, the last member present, a member the copies cannot do without, a
+// hold of no length or past a day, a store that would not answer, and a map a
+// newer build wrote.
 func TestAGestureRefusesByName(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -104,6 +119,11 @@ func TestAGestureRefusesByName(t *testing.T) {
 	}
 	if _, err := c.Out(ctx, "a", "ops", ""); !errors.Is(err, membership.ErrNothingPlaceable) {
 		t.Errorf("taking out the last member = %v, want ErrNothingPlaceable", err)
+	}
+	// THREE COPIES ON THREE MEMBERS: an out would drop one of each.
+	tight := controlOver(storedMapAt(t, 3, "a", "b", "c"), nil)
+	if _, err := tight.Out(ctx, "b", "ops", ""); !errors.Is(err, membership.ErrNowhereToRebuild) {
+		t.Errorf("taking out a member the copies cannot do without = %v, want ErrNowhereToRebuild", err)
 	}
 	for _, d := range []time.Duration{0, membership.MaxHold + time.Minute} {
 		if _, err := c.Hold(ctx, d, "ops", ""); !errors.Is(err, membership.ErrHoldRange) {
@@ -289,7 +309,7 @@ func removedFrom(t *testing.T, gone string, nodes ...string) *coordmemory.Fleet 
 		}
 	}
 	for range membership.OutTicks + 1 {
-		state, _ = upkeep.Next(state, live, membership.Company{Epoch: 1, Replicas: 3}, gestureNow)
+		state, _ = upkeep.Next(state, live, membership.Company{Epoch: 1, Replicas: fixtureCopies}, gestureNow)
 	}
 	if _, removed := state.Removed[gone]; !removed {
 		t.Fatalf("%d ticks without %s did not remove it", membership.OutTicks+1, gone)

@@ -187,6 +187,26 @@ describe("the gestures", () => {
     expect(changed).toHaveBeenCalled();
   });
 
+  test("an out with nowhere to rebuild says what to change, and takes nothing out", async () => {
+    const refusal = golden.refusals.nowhere_to_rebuild!;
+    engine({ status: refusal.status, body: refusal.body });
+    const changed = vi.fn();
+    view(state("placed"), changed);
+    const row = screen
+      .getByText("data-c", { selector: "a *, a" })
+      .closest(".grid-row") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Take out" }));
+    fireEvent.change(screen.getByLabelText("Type data-c to confirm"), {
+      target: { value: "data-c" },
+    });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Take out" }));
+    await waitFor(() => expect(screen.getByText(String(refusal.body.detail))).toBeTruthy());
+    // THE FIELD THAT MEANS FEWER COPIES is named, in the engine's own words.
+    expect(screen.getByText(String(refusal.body.hint))).toBeTruthy();
+    expect(String(refusal.body.hint)).toMatch(/estate\.replicas/);
+    expect(screen.queryByText(/is out: no partition's target names it/)).toBeNull();
+  });
+
   test("a hold is confirmed by the map's generation, and says until when", async () => {
     const sent = engine({ status: 200, body: golden.answers.hold });
     view(state("placed"));

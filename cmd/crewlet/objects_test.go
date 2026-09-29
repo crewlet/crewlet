@@ -165,6 +165,18 @@ func newFakeObjectsNode(t *testing.T) *fakeObjectsNode {
 	return n
 }
 
+// spare gives the node's map a fourth member, data-d, placed on and repaired
+// like the others. With data-c out, data-a and data-b are all the map's two
+// copies have, so taking either out is refused — it would drop a copy rather
+// than move one — until there is a member to spare.
+func (n *fakeObjectsNode) spare() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.state.Map.Members = append(n.state.Map.Members, placement.Member{Node: "data-d",
+		Weight: 1, Share: placement.DefaultShare(1), Domain: "eu-2"})
+	n.leases["data-d"] = n.leases["data-b"]
+}
+
 // requests is every gesture the node received.
 func (n *fakeObjectsNode) requests() []*http.Request {
 	n.mu.Lock()
@@ -439,6 +451,7 @@ func TestObjectsOutWithoutTheNodeRepeatedIsRefused(t *testing.T) {
 // the node is stopped — which is the whole point of taking it out first.
 func TestObjectsOutTakesTheMemberOutAndSaysWhatComesNext(t *testing.T) {
 	node := newFakeObjectsNode(t)
+	node.spare()
 	out, stderr, err := cli(t, "objects", "out", "data-a", "-confirm", "data-a",
 		"-reason", "disk swap", bootstrapForURL(t, node.server.URL))
 	if err != nil {
@@ -533,6 +546,19 @@ func TestObjectsGestureRefusalsAndLostRacesAreErrors(t *testing.T) {
 		t.Errorf("a removed node taken out: %v", err)
 	}
 
+	// AN OUT THAT WOULD DROP A COPY names the field that means fewer: data-a
+	// and data-b are all the map's two copies have.
+	_, _, err = cli(t, "objects", "out", "data-a", "-confirm", "data-a",
+		bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(), "nowhere_to_rebuild") ||
+		!strings.Contains(err.Error(), "lower objects.replicas") {
+		t.Errorf("an out with nowhere to rebuild: %v", err)
+	}
+	if m, _ := node.state.Map.Member("data-a"); m.Out {
+		t.Error("a refused out took the member out")
+	}
+
+	node.spare()
 	node.lose = true
 	out, _, err := cli(t, "objects", "out", "data-a", "-confirm", "data-a",
 		bootstrapForURL(t, node.server.URL))

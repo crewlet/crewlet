@@ -49,9 +49,10 @@
 // PROBATION: read from and repaired from, since it may hold the only copy of
 // something, and placed on only after the same span of presence, or it would
 // be placed on and removed again every cycle ([Removal]). An operator may take
-// a member OUT ([Out]) so what it holds moves while it still serves, and HOLD
-// the map ([HoldFor]) through planned maintenance so nothing is removed while
-// nodes restart.
+// a member OUT ([Out]) so what it holds moves while it still serves — never
+// onto nothing, so an out no other member could rebuild the copies of is
+// refused rather than taken as a copy dropped — and HOLD the map ([HoldFor])
+// through planned maintenance so nothing is removed while nodes restart.
 //
 // How many copies a map keeps and which label they are spread across are the
 // COMPANY's (ADR-0020), taken from the company configuration stamped with the
@@ -274,6 +275,17 @@ type ConfigSource struct {
 	// one: a node whose company is a revision behind must not undo what a
 	// node on the current one set.
 	Epoch uint64 `json:"epoch"`
+}
+
+// Copies says where a map's copy count came from, for a refusal that judged
+// by it — this package's own and a map's ([placement.Draw.Size] against the
+// stored count): the company activation that set it, or none where no
+// activation has stamped one yet.
+func (c ConfigSource) Copies() string {
+	if c.Epoch == 0 {
+		return "a copy count no company activation has stamped yet"
+	}
+	return fmt.Sprintf("the copy count company activation %d set", c.Epoch)
 }
 
 // Hold keeps every member in a map, however long it has been gone, until it

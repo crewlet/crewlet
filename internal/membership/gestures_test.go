@@ -96,14 +96,17 @@ func TestTheGestures(t *testing.T) {
 		if _, _, err := In(base.s, base.d, "data-09"); !errors.Is(err, ErrUnknownMember) {
 			t.Errorf("in of an unknown node = %v", err)
 		}
-		s, d, err := Out(base.s, base.d, "data-00", "ops", "", t0)
+		// FOUR MEMBERS FOR TWO COPIES, so every out below leaves the map
+		// its two copies and only presence is in question: data-00 out,
+		// and data-01 and data-02 go quiet, leaving data-03 the last
+		// member present to place on.
+		four := first(t, roster(4), c)
+		s, d, err := Out(four.s, four.d, "data-00", "ops", "", t0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// data-01 goes quiet: data-02 is the last member present to
-		// place on.
-		quiet := tick(t, record{s, d}, without(roster(3), "data-01"), c)
-		if _, _, err := Out(quiet.s, quiet.d, "data-02", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
+		quiet := tick(t, record{s, d}, without(roster(4), "data-01", "data-02"), c)
+		if _, _, err := Out(quiet.s, quiet.d, "data-03", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
 			t.Errorf("taking out the last present placeable member = %v", err)
 		}
 		if _, _, err := Out(quiet.s, quiet.d, "data-01", "ops", "", t0); err != nil {
@@ -188,7 +191,10 @@ func TestTheGestures(t *testing.T) {
 // taking a member out for up to ten minutes after one missed heartbeat.
 func TestAMemberBackFromAMissedTickIsPresentToOut(t *testing.T) {
 	t.Parallel()
-	c := company(1, 2, "")
+	// ONE COPY, so the other member can take data-00's and presence is the
+	// only question: at two, taking either of two members out would drop a
+	// copy, and [Out] refuses that whoever is present.
+	c := company(1, 1, "")
 	live := roster(2)
 	missed := tick(t, first(t, live, c), without(live, "data-01"), c)
 	if _, _, err := Out(missed.s, missed.d, "data-00", "ops", "", t0); !errors.Is(err, ErrNothingPlaceable) {
@@ -221,7 +227,7 @@ func TestAMemberBackFromAMissedTickIsPresentToOut(t *testing.T) {
 func TestARefusalNamesNoPackage(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{ErrUnknownMember, ErrRemovedMember, ErrNothingPlaceable,
-		ErrHoldRange, Company{}.Validate()} {
+		ErrNowhereToRebuild, ErrHoldRange, Company{}.Validate()} {
 		if strings.Contains(err.Error(), "membership") {
 			t.Errorf("%q names the package", err)
 		}
@@ -238,4 +244,111 @@ func TestARefusalNamesNoPackage(t *testing.T) {
 			t.Errorf("%+v refused as %v, want it to name %s", c.company, err, c.field)
 		}
 	}
+}
+
+// AN OUT NEVER DROPS A COPY. Taking a member out means its copies are rebuilt
+// on the others while it serves; where the map would place fewer copies
+// without it than with it — as many members as copies, or already short —
+// there is nowhere to rebuild them, and the out is refused with the record
+// left as it was given, so a fleet shrinks only by the company lowering its
+// copies first. The question is the draw's: a member absent right now is one
+// the map still places on, and a member that places nothing already — on
+// probation — drops nothing by going out.
+func TestAnOutNeverDropsACopy(t *testing.T) {
+	t.Parallel()
+	refused := func(t *testing.T, r record, node string, want string) {
+		t.Helper()
+		s, d, err := Out(r.s, r.d, node, "ops", "shrinking", t0)
+		if !errors.Is(err, ErrNowhereToRebuild) {
+			t.Fatalf("taking %s out = %v, want ErrNowhereToRebuild", node, err)
+		}
+		if !reflect.DeepEqual(record{s, d}, r) {
+			t.Fatalf("a refused out changed the record:\n%+v\nto\n%+v", r, record{s, d})
+		}
+		// The detail counts the copies, says which activation the map's
+		// count came from — the one an operator who lowered it compares
+		// against — and names the node last, as every refusal here does.
+		stamped := r.s.Config.Copies()
+		if !strings.HasSuffix(err.Error(), ": "+node) || !strings.Contains(err.Error(), want) ||
+			!strings.Contains(err.Error(), stamped) {
+			t.Fatalf("the refusal %q does not say %q and %q and end with %s",
+				err, want, stamped, node)
+		}
+	}
+	taken := func(t *testing.T, r record, node string) record {
+		t.Helper()
+		s, d, err := Out(r.s, r.d, node, "ops", "shrinking", t0)
+		if err != nil {
+			t.Fatalf("taking %s out = %v", node, err)
+		}
+		if m, _ := d.Member(node); !m.Out {
+			t.Fatalf("%s was not taken out: %+v", node, m)
+		}
+		return record{s, d}
+	}
+
+	t.Run("as many members as copies", func(t *testing.T) {
+		t.Parallel()
+		refused(t, first(t, roster(3), company(1, 3, "")), "data-01",
+			"only 2 of the 3 copies")
+	})
+	t.Run("already short of copies", func(t *testing.T) {
+		t.Parallel()
+		// Three asked for, two placed: without either, one.
+		refused(t, first(t, roster(2), company(1, 3, "")), "data-00",
+			"only 1 of the 2 copies")
+	})
+	t.Run("one to spare, then none", func(t *testing.T) {
+		t.Parallel()
+		c := company(1, 3, "")
+		one := taken(t, first(t, roster(4), c), "data-00")
+		refused(t, one, "data-01", "only 2 of the 3 copies")
+	})
+	t.Run("fewer copies make room", func(t *testing.T) {
+		t.Parallel()
+		// The company lowering its copies is how a fleet shrinks: the
+		// same three members at two copies have one to spare.
+		taken(t, first(t, roster(3), company(1, 2, "")), "data-01")
+	})
+	t.Run("the count's activation, or none", func(t *testing.T) {
+		t.Parallel()
+		if got, want := (ConfigSource{Epoch: 7}).Copies(),
+			"the copy count company activation 7 set"; got != want {
+			t.Fatalf("activation 7's count reads %q, want %q", got, want)
+		}
+		if got := (ConfigSource{}).Copies(); strings.Contains(got, "activation 0") {
+			t.Fatalf("a count no activation stamped reads %q, as though one had", got)
+		}
+	})
+	t.Run("a lowered count makes room once the map has it", func(t *testing.T) {
+		t.Parallel()
+		// The out judges the MAP's count, which the duty stamps on its
+		// tick: until then the refusal says the count is still the one
+		// activation 1 set, and the tick that stamps activation 2's is
+		// what lets the same out through.
+		at3 := first(t, roster(3), company(1, 3, ""))
+		refused(t, at3, "data-01", "only 2 of the 3 copies")
+		taken(t, tick(t, at3, roster(3), company(2, 2, "")), "data-01")
+	})
+	t.Run("an absent member still takes copies", func(t *testing.T) {
+		t.Parallel()
+		c := company(1, 3, "")
+		quiet := tick(t, first(t, roster(4), c), without(roster(4), "data-03"), c)
+		if !absentNow(quiet.s, "data-03") {
+			t.Fatalf("setup: data-03 is not absent: %+v", quiet.s.Absence)
+		}
+		taken(t, quiet, "data-00")
+	})
+	t.Run("a member on probation places nothing to drop", func(t *testing.T) {
+		t.Parallel()
+		c := company(1, 2, "")
+		// data-02 removed for absence and seen back: on probation, so the
+		// two copies sit on data-00 and data-01 alone.
+		back := tick(t, ticks(t, first(t, roster(3), c), roster(2), c, OutTicks), roster(3), c)
+		if m, _ := back.d.Member("data-02"); !m.Probation {
+			t.Fatalf("setup: data-02 is not on probation: %+v", m)
+		}
+		taken(t, back, "data-02")
+		refused(t, back, "data-00", "only 1 of the 2 copies")
+	})
 }

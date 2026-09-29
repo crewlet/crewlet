@@ -571,6 +571,14 @@
         "hint": "no data node has joined the object store yet, so there is no map to change: one is written within seconds of the first data node starting"
       }
     },
+    "nowhere_to_rebuild": {
+      "status": 409,
+      "body": {
+        "error": "nowhere_to_rebuild",
+        "detail": "objstore/upkeep: taking it out would leave no member to rebuild its copies on: without it only 1 of the 2 copies the map places would have a member to hold them, at a copy count no company activation has stamped yet: data-a — add a data node first, or lower objects.replicas if the company means to keep fewer, and take it out once the placement map shows the lower count — the map takes it on its duty's next tick after the activation",
+        "hint": "add a data node first, so there is a member to rebuild its copies on — or lower objects.replicas if the company means to keep fewer copies, and take it out once the placement map shows the lower count: the map takes a new count on its duty's next tick after the activation, not when it is applied"
+      }
+    },
     "objects_newer_map": {
       "status": 409,
       "body": {

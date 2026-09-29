@@ -169,7 +169,8 @@ type ObjectsRefusalBody struct {
 // its own code rather than one 409 for all: a fleet with no map yet waits for
 // a data node, a name the map does not hold is a typo, a node the map removed
 // is put back rather than taken out, taking out the last member is a decision
-// to revisit, and a store that did not answer is asked again.
+// to revisit, taking out one the copies cannot do without needs a data node or
+// fewer copies first, and a store that did not answer is asked again.
 func RenderObjectsRefusal(err error) (ObjectsRefusal, bool) {
 	refuse := func(status int, code, hint string) (ObjectsRefusal, bool) {
 		return ObjectsRefusal{Status: status, Body: ObjectsRefusalBody{
@@ -201,6 +202,12 @@ func RenderObjectsRefusal(err error) (ObjectsRefusal, bool) {
 		return refuse(http.StatusConflict, "objects_refused",
 			"every write needs a present member to land on: put another member "+
 				"back in, or bring an absent one back, before taking this one out")
+	case errors.Is(err, membership.ErrNowhereToRebuild):
+		return refuse(http.StatusConflict, "nowhere_to_rebuild",
+			"add a data node first, so there is a member to rebuild its copies on — or "+
+				"lower objects.replicas if the company means to keep fewer copies, and take it out "+
+				"once the placement map shows the lower count: the map takes a new count on its "+
+				"duty's next tick after the activation, not when it is applied")
 	case errors.Is(err, membership.ErrHoldRange):
 		return refuse(http.StatusBadRequest, "invalid_hold",
 			"hold for more than nothing and at most "+maxHold+"; a longer "+

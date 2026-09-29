@@ -289,18 +289,23 @@ describe("object placement", () => {
     expect(changed).toHaveBeenCalled();
   });
 
-  test("a refusal says what is wrong and what to do", async () => {
-    const refusal = golden.refusals.objects_refused!;
-    engine({ status: refusal.status, body: refusal.body });
-    renderCard(block("placed"));
-    fireEvent.click(screen.getAllByRole("button", { name: "Take out" })[0]!);
-    fireEvent.change(screen.getByLabelText("Type data-a to confirm"), {
-      target: { value: "data-a" },
-    });
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Take out" }));
-    await waitFor(() => expect(screen.getByText(String(refusal.body.detail))).toBeTruthy());
-    expect(screen.getByText(String(refusal.body.hint))).toBeTruthy();
-  });
+  // THE LAST MEMBER PRESENT, AND ONE THE COPIES CANNOT DO WITHOUT: two
+  // refusals of one gesture sending the operator to different remedies.
+  test.each(["objects_refused", "nowhere_to_rebuild"])(
+    "a refusal (%s) says what is wrong and what to do",
+    async (code) => {
+      const refusal = golden.refusals[code]!;
+      engine({ status: refusal.status, body: refusal.body });
+      renderCard(block("placed"));
+      fireEvent.click(screen.getAllByRole("button", { name: "Take out" })[0]!);
+      fireEvent.change(screen.getByLabelText("Type data-a to confirm"), {
+        target: { value: "data-a" },
+      });
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Take out" }));
+      await waitFor(() => expect(screen.getByText(String(refusal.body.detail))).toBeTruthy());
+      expect(screen.getByText(String(refusal.body.hint))).toBeTruthy();
+    },
+  );
 
   test("a gesture that lost every race says it is not in the map, and offers it again", async () => {
     engine({ status: 200, body: golden.answers.not_landed });

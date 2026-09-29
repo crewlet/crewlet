@@ -258,18 +258,39 @@ func sameState(a, b objstore.MapState) bool {
 
 // ErrNoMap is a gesture on a fleet that has no placement map yet. Every other
 // refusal is membership's — [membership.ErrUnknownMember],
-// [membership.ErrRemovedMember], [membership.ErrNothingPlaceable] and
-// [membership.ErrHoldRange] — wrapped in this map's name ([refused]).
+// [membership.ErrRemovedMember], [membership.ErrNothingPlaceable],
+// [membership.ErrNowhereToRebuild] and [membership.ErrHoldRange] — wrapped in
+// this map's name ([refused]).
 var ErrNoMap = errors.New("objstore/upkeep: there is no placement map yet")
 
 // refused is a membership refusal as this map answers it: named for the map,
-// so the detail every surface shows says which map refused.
-func refused(err error) error { return fmt.Errorf("objstore/upkeep: %w", err) }
+// so the detail every surface shows says which map refused — and, for the one
+// refusal whose remedy is the map's own ([membership.ErrNowhereToRebuild]),
+// saying which of the company's fields to change.
+//
+// THE MAP'S COUNT, NOT THE CONFIGURATION'S, is what an out is judged by, and
+// the map takes a lowered count only when its duty stamps it, on the duty's
+// next tick after the configuration is activated ([membership.Tick]). So the
+// remedy says to wait for the map to show it: an operator who lowered
+// objects.replicas and repeated the out at once was refused again and told to
+// lower what they already had.
+func refused(err error) error {
+	if errors.Is(err, membership.ErrNowhereToRebuild) {
+		return fmt.Errorf("objstore/upkeep: %w — add a data node first, or lower "+
+			"objects.replicas if the company means to keep fewer, and take it out "+
+			"once the placement map shows the lower count — the map takes it on "+
+			"its duty's next tick after the activation", err)
+	}
+	return fmt.Errorf("objstore/upkeep: %w", err)
+}
 
 // Out takes a member out of the placement map ([membership.Out]): the map
 // places nothing on it, so its share moves to the others while it keeps
 // serving what it holds — balanced in the epoch the gesture moves. Taking out
-// a member already out answers the record it was given.
+// a member already out answers the record it was given. On a fleet with no
+// member to spare — as many members as copies — it is refused
+// ([membership.ErrNowhereToRebuild]): the share would have nowhere to move, and
+// the chunks would keep a copy fewer rather than move one.
 //
 // Pure over the record: the caller reads it, applies this and writes the
 // result with a compare-and-set.

@@ -35,10 +35,11 @@ import (
 // [internal/membership]'s ErrRemovedMember (taking out a node the map removed
 // for absence, which places nothing already — tested BEFORE the next, which it
 // wraps), ErrUnknownMember, ErrNothingPlaceable (taking this member out would
-// leave nowhere to write) and ErrHoldRange. A store that did not answer is
-// [ErrObjectsUnavailable], and a map this build cannot rewrite is
-// [ErrObjectsNewerMap]. A gesture that lost every race is not an error: it
-// answers Landed false with the map as it now stands.
+// leave nowhere to write), ErrNowhereToRebuild (no other member could take its
+// copies, so the out would drop one rather than move it) and ErrHoldRange. A
+// store that did not answer is [ErrObjectsUnavailable], and a map this build
+// cannot rewrite is [ErrObjectsNewerMap]. A gesture that lost every race is not
+// an error: it answers Landed false with the map as it now stands.
 //
 // # What a gesture sent again does
 //

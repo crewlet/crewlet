@@ -771,10 +771,15 @@ to the other members **while it keeps serving every chunk it holds**, so taking
 a node away is a copy rather than a recovery. The runbook is: take it out, run
 `status` until it says the node may be stopped for good, then stop it. It is
 refused (`objects_refused`) when it would leave no member present on the latest
-tick to write to, and (`removed_member`) for a node the map has removed and not
-seen back — nothing is placed on it to move, and `in` is the gesture that names
-it. A member on probation can be taken out, and stays out once its probation
-ends.
+tick to write to; (`nowhere_to_rebuild`) when no other member could take its
+copies — as many placeable members as `objects.replicas` — since the out would
+then drop a copy of every chunk it holds rather than move it: add a data node
+first, or lower `objects.replicas` if the company means to keep fewer and take
+it out once `status` shows the lower count (the map takes it on its duty's next
+tick after the activation); and
+(`removed_member`) for a node the map has removed and not seen back — nothing is
+placed on it to move, and `in` is the gesture that names it. A member on
+probation can be taken out, and stays out once its probation ends.
 
 `in` puts a member back, and its share moves back to it. For a node the map
 removed for being gone, it vouches for the node rather than waiting for it to
@@ -861,7 +866,13 @@ node gave it.
 rebuilt on another member while it keeps serving, then released under the two
 conditions every leave waits for — so taking a node away is a copy rather than a
 recovery. Keep it running until `map` shows it serving, joining and leaving
-nothing. `in` puts it back, or vouches for a node the map removed. `move` takes
+nothing. It is refused (`nowhere_to_rebuild`) where no other member could take
+its copies — as many placeable members as `estate.replicas` — since every
+partition would then keep one copy fewer rather than move one: add a data node
+first, or lower `estate.replicas` if the company means to keep fewer and take it
+out once `map` shows the lower count (the map takes it on its duty's next tick
+after the activation). `in` puts
+it back, or vouches for a node the map removed. `move` takes
 one partition's copy off one node: the partition's target skips it, so the copy
 is rebuilt on the member its ranking offers next and then released; it lasts
 until `-cancel` lifts it or the node leaves the map, and it is refused

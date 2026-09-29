@@ -540,14 +540,18 @@ func renderObjectsScenarios(t *testing.T) []byte {
 		}
 		return err
 	}
-	lone := fleet
-	for _, node := range []string{"data-b", "data-c"} {
-		next, err := upkeep.Out(lone, node, "founder", "", objectsSince)
-		if err != nil {
-			t.Fatalf("setup: taking out %s: %v", node, err)
-		}
-		lone = next
-	}
+	// THE LAST MEMBER LEFT TO PLACE ON: data-b and data-c out as well — set
+	// on the record rather than by the gesture, which refuses the second
+	// out, since two members are all the map's two copies have.
+	lone := objectsFleet()
+	lone.Map.Members[1].Out, lone.Map.Members[2].Out = true, true
+	lone.TakenOut["data-b"] = membership.Gesture{By: "founder", At: objectsSince}
+	lone.TakenOut["data-c"] = membership.Gesture{By: "founder", At: objectsSince}
+	// AS MANY PLACEABLE MEMBERS AS COPIES: data-c out, so taking out either
+	// of the two left has nowhere to rebuild its copies.
+	tight := objectsFleet()
+	tight.Map.Members[2].Out = true
+	tight.TakenOut["data-c"] = membership.Gesture{By: "founder", At: objectsSince}
 	refusals := map[string]api.ObjectsRefusal{}
 	for name, err := range map[string]error{
 		"unknown_member": refusedBy("out of a stranger", func() (objstore.MapState, error) {
@@ -558,6 +562,9 @@ func renderObjectsScenarios(t *testing.T) []byte {
 		}),
 		"objects_refused": refusedBy("out of the last member", func() (objstore.MapState, error) {
 			return upkeep.Out(lone, "data-a", "founder", "", objectsSince)
+		}),
+		"nowhere_to_rebuild": refusedBy("an out with no member to rebuild on", func() (objstore.MapState, error) {
+			return upkeep.Out(tight, "data-a", "founder", "", objectsSince)
 		}),
 		"invalid_hold": refusedBy("a hold past a day", func() (objstore.MapState, error) {
 			return upkeep.HoldFor(fleet, 25*time.Hour, "founder", "", objectsSince)

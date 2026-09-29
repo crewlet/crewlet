@@ -304,7 +304,8 @@ a zone lost, the data nodes cut off from the coordination store — removes
 nobody however long it lasts, rather than removing every member but the last
 onto others that are just as gone, and the map is as it was when the tier
 returns. `crewlet objects out` asks the same question, and refuses to take out
-the last member present to place copies on.
+the last member present to place copies on — and, beyond it, any member the
+copies cannot do without.
 
 ```mermaid
 stateDiagram-v2
@@ -597,6 +598,20 @@ would have nowhere to land. So is taking out a node the map has already removed
 and not seen back (`removed_member`): nothing is placed on it to move, and `in`
 is the gesture that names it. A member on probation can be taken out, and stays
 out once its probation ends.
+
+**An out never drops a copy.** Taking out a member no other could take the
+copies of — as many placeable members as `objects.replicas`, three data nodes at
+three copies — is refused (`nowhere_to_rebuild`), because its share would have
+nowhere to move and every chunk it holds would keep one copy fewer once it was
+stopped. To shrink such a fleet, lower `objects.replicas` first, which is the
+company deciding to keep fewer copies, then take the node out once
+`crewlet objects status` shows the lower count; or add the node that replaces
+it first. The out is judged by the map's count, and the map takes a lowered one
+on its duty's next tick after the configuration is activated — not when it is
+applied — so an out sent straight after the change is refused again, its
+detail naming the activation the map's count still comes from. A member absent right now still counts as somewhere to
+rebuild — the map places on it until it has been gone ten minutes — so an out
+beside it is taken, and its copies land when it returns.
 
 A gesture whose answer was lost can be sent again. An out, an in or a release
 the map already says changes nothing — the record of who took a member out,

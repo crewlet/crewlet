@@ -632,7 +632,8 @@ func renderEstateScenarios(t *testing.T) []byte {
 	lone.Map.Members[1].Out, lone.Map.Members[2].Out = true, true
 	lone.TakenOut = nil
 	// AS MANY PLACEABLE MEMBERS AS COPIES: data-c taken out as well, so a
-	// move off either of the two left has nowhere to rebuild the copy.
+	// move off either of the two left — or taking either out — has nowhere
+	// to rebuild the copy.
 	tight := fleet.Clone()
 	tight.Map.Members[2].Out = true
 	tight.TakenOut["data-c"] = membership.Gesture{By: "founder", At: estateSince}
@@ -646,6 +647,9 @@ func renderEstateScenarios(t *testing.T) []byte {
 		}),
 		"estate_refused": refusedBy("out of the last member", func() (partmap.MapState, error) {
 			return partmap.Out(lone, "data-a", "founder", "", estateSince)
+		}),
+		"nowhere_to_rebuild": refusedBy("an out with no member to rebuild on", func() (partmap.MapState, error) {
+			return partmap.Out(tight, "data-a", "founder", "", estateSince)
 		}),
 		"invalid_hold": refusedBy("a hold past a day", func() (partmap.MapState, error) {
 			return partmap.HoldFor(fleet, 25*time.Hour, "founder", "", estateSince)

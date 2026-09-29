@@ -519,7 +519,14 @@ moved:
 
 1. `crewlet objects out <node> -confirm <node>`. The placement map stops
    placing on it, and its share is copied to the other data nodes *from it*,
-   while it keeps serving — so no chunk is a copy short at any point.
+   while it keeps serving — so no chunk is a copy short at any point. On a
+   fleet with no data node to spare — as many as `objects.replicas`, three at
+   three copies — the out is refused (`nowhere_to_rebuild`), since the share
+   would have nowhere to go: add the node's replacement first, or lower
+   `objects.replicas` if the company means to keep fewer copies and send the
+   out again once `crewlet objects status` shows the lower count — the map
+   takes it on its duty's next tick after the activation, not when it is
+   applied.
 2. Run `crewlet objects status` until it says the node **may be stopped for
    good**: every member has repaired at the map's epoch with nothing pending,
    and the node holds no strays. It counts those in a collection that starts

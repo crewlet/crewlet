@@ -203,7 +203,10 @@ func TestAMoveThatWouldDropACopyIsRefused(t *testing.T) {
 		t.Fatalf("moving %s off one of the three members holding its three copies: %v, "+
 			"want ErrNowhereToMove (target %v)", p, err, s.state.Map.Target(p))
 	}
-	for _, want := range []string{p.String(), "data-00", "estate.replicas"} {
+	// And that a lowered count counts once the MAP shows it, since the move
+	// is judged by the map's count and the duty stamps a new one on a tick.
+	for _, want := range []string{p.String(), "data-00", "estate.replicas",
+		s.state.Config.Copies(), "once the estate map shows the lower count"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not name %q", err, want)
 		}
@@ -214,6 +217,38 @@ func TestAMoveThatWouldDropACopyIsRefused(t *testing.T) {
 	s.settle(200)
 	if _, err := Move(s.state, p, s.state.Map.Target(p)[0], "op", "hot disk", base); err != nil {
 		t.Fatalf("moving %s with a member to spare: %v", p, err)
+	}
+}
+
+// AN OUT THAT WOULD DROP A COPY RATHER THAN MOVE IT IS REFUSED, for a move's
+// reason and by membership's rule for both maps: on a fleet with no member to
+// spare every member holds every partition, so taking one out has nowhere to
+// rebuild what it holds, and every partition would keep one copy fewer once
+// it was let go. The refusal names the field the company lowers to mean
+// fewer, the record is left as it was, and a fourth member makes room.
+func TestAnOutThatWouldDropACopyIsRefused(t *testing.T) {
+	t.Parallel()
+	s := settled(t, smallLayout, 3, nodeIDs(3)...)
+	given, _ := s.state.Encode()
+	answered, err := Out(s.state, "data-00", "op", "retiring", base)
+	if !errors.Is(err, membership.ErrNowhereToRebuild) {
+		t.Fatalf("taking out one of three members holding three copies: %v, "+
+			"want membership.ErrNowhereToRebuild", err)
+	}
+	for _, want := range []string{"estate/partmap: ", "data-00", "estate.replicas",
+		s.state.Config.Copies(), "once the estate map shows the lower count"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", err, want)
+		}
+	}
+	if got, _ := answered.Encode(); string(got) != string(given) {
+		t.Errorf("a refused out answered\n%s\nfor\n%s", got, given)
+	}
+
+	s.add("data-03", 1, nil)
+	s.settle(200)
+	if _, err := Out(s.state, "data-00", "op", "retiring", base); err != nil {
+		t.Fatalf("taking a member out with one to spare: %v", err)
 	}
 }
 

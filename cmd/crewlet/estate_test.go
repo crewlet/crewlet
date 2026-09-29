@@ -416,3 +416,23 @@ func TestAnEstateGestureAtLayoutZeroSaysThereIsNothingToMove(t *testing.T) {
 		t.Errorf("an out at layout 0 = %v, want the node's estate_whole refusal", err)
 	}
 }
+
+// AN OUT THAT WOULD DROP A COPY FAILS WITH WHAT TO CHANGE: with data-c out,
+// data-a and data-b are all the map's two copies have, so taking either out
+// would leave every partition a copy short rather than move it — refused by
+// the node, in words naming the field that means fewer, and nothing changed.
+func TestAnEstateOutWithNowhereToRebuildSaysWhatToChange(t *testing.T) {
+	node := newFakeEstateNode(t)
+	cfg := bootstrapForURL(t, node.server.URL)
+	if _, _, err := cli(t, "estate", "out", "data-c", cfg, "-confirm", "data-c"); err != nil {
+		t.Fatalf("taking out the member to spare: %v", err)
+	}
+	_, _, err := cli(t, "estate", "out", "data-a", cfg, "-confirm", "data-a")
+	if err == nil || !strings.Contains(err.Error(), "nowhere_to_rebuild") ||
+		!strings.Contains(err.Error(), "lower estate.replicas") {
+		t.Errorf("an out with nowhere to rebuild = %v, want the node's nowhere_to_rebuild refusal", err)
+	}
+	if m, _ := node.state.Map.Draw().Member("data-a"); m.Out {
+		t.Error("a refused out took the member out")
+	}
+}

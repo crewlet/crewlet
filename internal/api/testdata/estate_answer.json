@@ -1233,8 +1233,16 @@
       "status": 409,
       "body": {
         "error": "nowhere_to_move",
-        "detail": "estate/partmap: there is no member to rebuild the partition's copy on: tracker.002 off \"data-a\": without \"data-a\" only 1 of its 2 copies would have a member to hold them — add a data node first, or lower estate.replicas if the company means to keep fewer",
-        "hint": "add a data node first, so there is a member to rebuild the copy on — or lower estate.replicas if the company means to keep fewer copies"
+        "detail": "estate/partmap: there is no member to rebuild the partition's copy on: tracker.002 off \"data-a\": without \"data-a\" only 1 of its 2 copies would have a member to hold them, at the copy count company activation 4 set — add a data node first, or lower estate.replicas if the company means to keep fewer, and move it once the estate map shows the lower count — the map takes it on its duty's next tick after the activation",
+        "hint": "add a data node first, so there is a member to rebuild the copy on — or lower estate.replicas if the company means to keep fewer copies, and move it once the estate map shows the lower count: the map takes a new count on its duty's next tick after the activation, not when it is applied"
+      }
+    },
+    "nowhere_to_rebuild": {
+      "status": 409,
+      "body": {
+        "error": "nowhere_to_rebuild",
+        "detail": "estate/partmap: taking it out would leave no member to rebuild its copies on: without it only 1 of the 2 copies the map places would have a member to hold them, at the copy count company activation 4 set: data-a — add a data node first, or lower estate.replicas if the company means to keep fewer, and take it out once the estate map shows the lower count — the map takes it on its duty's next tick after the activation",
+        "hint": "add a data node first, so there is a member to rebuild its copies on — or lower estate.replicas if the company means to keep fewer copies, and take it out once the estate map shows the lower count: the map takes a new count on its duty's next tick after the activation, not when it is applied"
       }
     },
     "other_estate_map": {

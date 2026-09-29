@@ -196,11 +196,11 @@ type EstateRefusalBody struct {
 // EACH SENDS AN OPERATOR SOMEWHERE DIFFERENT, which is why each has its own
 // code: a fleet at layout 0 has nothing to move and never will, a partitioned
 // fleet with no map yet waits for one, a name the map does not hold is a typo,
-// a move with nowhere to rebuild the copy needs a data node first, a node the
-// map removed is put back rather than taken out, a hold or a release confirmed
-// by no generation at all is made again with the one the map names, one
-// confirmed for another map was sent to the wrong fleet, and a store that did
-// not answer is asked again.
+// a move or an out with nowhere to rebuild the copy needs a data node or fewer
+// copies first, a node the map removed is put back rather than taken out, a
+// hold or a release confirmed by no generation at all is made again with the
+// one the map names, one confirmed for another map was sent to the wrong
+// fleet, and a store that did not answer is asked again.
 func RenderEstateRefusal(err error) (EstateRefusal, bool) {
 	refuse := func(status int, code, hint string) (EstateRefusal, bool) {
 		return EstateRefusal{Status: status, Body: EstateRefusalBody{
@@ -232,7 +232,9 @@ func RenderEstateRefusal(err error) (EstateRefusal, bool) {
 	case errors.Is(err, partmap.ErrNowhereToMove):
 		return refuse(http.StatusConflict, "nowhere_to_move",
 			"add a data node first, so there is a member to rebuild the copy on — or "+
-				"lower estate.replicas if the company means to keep fewer copies")
+				"lower estate.replicas if the company means to keep fewer copies, and move it "+
+				"once the estate map shows the lower count: the map takes a new count on its "+
+				"duty's next tick after the activation, not when it is applied")
 	case errors.Is(err, membership.ErrRemovedMember):
 		// BEFORE THE UNKNOWN MEMBER IT WRAPS, for the object map's reason:
 		// the map does know this node, and the unknown-member hint would
@@ -248,6 +250,12 @@ func RenderEstateRefusal(err error) (EstateRefusal, bool) {
 		return refuse(http.StatusConflict, "estate_refused",
 			"every partition needs a present member to hold a copy: put another member "+
 				"back in, or bring an absent one back, before taking this one out")
+	case errors.Is(err, membership.ErrNowhereToRebuild):
+		return refuse(http.StatusConflict, "nowhere_to_rebuild",
+			"add a data node first, so there is a member to rebuild its copies on — or "+
+				"lower estate.replicas if the company means to keep fewer copies, and take it out "+
+				"once the estate map shows the lower count: the map takes a new count on its "+
+				"duty's next tick after the activation, not when it is applied")
 	case errors.Is(err, membership.ErrHoldRange):
 		return refuse(http.StatusBadRequest, "invalid_hold",
 			"hold for more than nothing and at most "+maxHold+"; a longer maintenance is "+

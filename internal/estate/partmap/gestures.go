@@ -14,9 +14,9 @@ import (
 
 // The gestures' own refusals. Every other refusal is membership's —
 // [membership.ErrUnknownMember], [membership.ErrRemovedMember],
-// [membership.ErrNothingPlaceable] and [membership.ErrHoldRange] — wrapped in
-// this map's name ([refused]), so the detail every surface shows says which
-// map refused.
+// [membership.ErrNothingPlaceable], [membership.ErrNowhereToRebuild] and
+// [membership.ErrHoldRange] — wrapped in this map's name ([refused]), so the
+// detail every surface shows says which map refused.
 var (
 	// ErrNoMap is a gesture on a fleet that has no estate map.
 	//
@@ -46,8 +46,31 @@ var (
 		"the partition's copy on")
 )
 
-// refused is a membership refusal as this map answers it.
-func refused(err error) error { return fmt.Errorf("estate/partmap: %w", err) }
+// refused is a membership refusal as this map answers it: named for the map,
+// and — for the one refusal whose remedy is the map's own
+// ([membership.ErrNowhereToRebuild]) — saying what to change, in the words
+// [Move]'s refusal uses for the same want of a member.
+func refused(err error) error {
+	if errors.Is(err, membership.ErrNowhereToRebuild) {
+		return fmt.Errorf("estate/partmap: %w — %s", err, fewerCopies("take it out"))
+	}
+	return fmt.Errorf("estate/partmap: %w", err)
+}
+
+// fewerCopies is the remedy for a gesture with no member to rebuild a copy
+// on, which then makes the gesture.
+//
+// THE MAP'S COUNT, NOT THE CONFIGURATION'S, is what the gesture is judged
+// by, and the map takes a lowered count only when its duty stamps it, on the
+// duty's next tick after the configuration is activated ([membership.Tick]).
+// So the remedy says to wait for the map to show it: an operator who lowered
+// estate.replicas and repeated the gesture at once was refused again and told
+// to lower what they already had.
+func fewerCopies(then string) string {
+	return "add a data node first, or lower estate.replicas if the company means " +
+		"to keep fewer, and " + then + " once the estate map shows the lower count " +
+		"— the map takes it on its duty's next tick after the activation"
+}
 
 // Out takes a member out of the estate map ([membership.Out]): every
 // partition's target stops naming it, so what it holds is rebuilt on the
@@ -56,11 +79,14 @@ func refused(err error) error { return fmt.Errorf("estate/partmap: %w", err) }
 // member already out answers the record it was given.
 //
 // On a fleet with no member to spare — as many members as copies — there is
-// nowhere to rebuild, and every partition keeps one copy fewer once the member
-// is let go. That is what taking a member out of such a fleet means, and it is
-// membership's rule for both maps (ADR-0008): it is how a fleet shrinks. A
-// [Move], whose whole meaning is that the copy is rebuilt, refuses the same
-// drop.
+// nowhere to rebuild, and the out is REFUSED
+// ([membership.ErrNowhereToRebuild]) rather than taken as every partition
+// keeping one copy fewer: an out, like a [Move], moves copies and never drops
+// one, and that is membership's rule for both maps (ADR-0008). A fleet
+// shrinks by the company lowering estate.replicas first. A move standing on
+// the map cannot make an out the membership rule admitted drop a copy either:
+// once the members could not do without the node it was moved off, the move
+// waits and that node holds the partition again ([Map.MoveWaiting]).
 //
 // NO EPOCH MOVES: the epoch counts the holder table, and a gesture changes only
 // the targets — the maintainer's next tick moves the holders toward them.
@@ -152,10 +178,11 @@ func Release(state MapState) (MapState, error) {
 // the partition in any state, and a move with NO MEMBER TO REBUILD THE COPY ON
 // — where the partition's target without the node would be smaller than with
 // it, as on a fleet with exactly as many members as copies. That move would
-// drop a copy rather than move it, which is what taking a member out or
-// lowering the company's copies does, and a gesture that says it moves a copy
-// must not be the way to do either. Like the membership gestures it changes
-// the targets alone, and moves no epoch.
+// drop a copy rather than move it, which only lowering the company's copies
+// does — taking a member out moves every copy it holds, or is refused
+// ([membership.ErrNowhereToRebuild]) exactly as this is — and a gesture that
+// says it moves a copy must not be the way to drop one. Like the membership
+// gestures it changes the targets alone, and moves no epoch.
 func Move(state MapState, p statelog.PartitionID, node, by, reason string, now time.Time) (MapState, error) {
 	if state.Map.Generation == uuid.Nil {
 		return state, ErrNoMap
@@ -184,8 +211,8 @@ func Move(state MapState, p statelog.PartitionID, node, by, reason string, now t
 	// nowhere to go.
 	if moved, copies := next.Map.drawWithoutEveryMove(p).Size(), state.Map.Size(); moved < copies {
 		return state, fmt.Errorf("%w: %s off %q: without %q only %d of its %d copies would "+
-			"have a member to hold them — add a data node first, or lower estate.replicas if "+
-			"the company means to keep fewer", ErrNowhereToMove, p, node, node, moved, copies)
+			"have a member to hold them, at %s — %s", ErrNowhereToMove, p, node, node, moved,
+			copies, state.Config.Copies(), fewerCopies("move it"))
 	}
 	return next, nil
 }

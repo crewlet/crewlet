@@ -3112,6 +3112,7 @@ Every refusal carries `detail` and `hint`:
 | `404` | `unknown_member` | For `out`, the node is not a member of the map; for `in`, it is neither a member nor in the map's `removed` list |
 | `409` | `removed_member` | `out` of a node in the map's `removed` list: the map places nothing on it, so there is nothing to take out — `in` is the gesture that names it. A member on `probation` is a member and can be taken out |
 | `409` | `objects_refused` | Taking it out would leave no member present on the latest tick to write to |
+| `409` | `nowhere_to_rebuild` | `out` of a member no other could take the copies of — as many placeable members as copies — so the out would drop a copy of every chunk it holds rather than move it. Add a data node first, or lower `objects.replicas` if the company means to keep fewer and send the out again once the map shows the lower count — the map's duty takes it on its next tick after the activation, and the detail names the activation the map's count comes from |
 | `409` | `objects_newer_map` | A newer build wrote the map, and this one must not rewrite it — make the gesture through a node running that build |
 | `503` | `no_object_map` | No data node has joined yet, so there is no map to change |
 | `503` | `objects_unavailable` | The coordination store did not answer; whether the map changed is unknown, and asking again is safe — with a hold's resend restarting its length, as above |
@@ -3290,8 +3291,9 @@ Every refusal carries `detail` and `hint`:
 | `409` | `estate_whole` | Layout 0: every data node holds the whole estate, and there is nothing to place, move or hold |
 | `409` | `removed_member` | `out` of a node the map removed: `in` is the gesture that names it |
 | `409` | `not_a_holder` | A move off a node that holds no copy of the partition |
-| `409` | `nowhere_to_move` | A move with no member to rebuild the copy on — as many placeable members as copies. Add a data node first |
+| `409` | `nowhere_to_move` | A move with no member to rebuild the copy on — as many placeable members as copies. Add a data node first, or lower `estate.replicas` if the company means to keep fewer and send the move again once the map shows the lower count |
 | `409` | `estate_refused` | Taking it out would leave no member present to hold a copy |
+| `409` | `nowhere_to_rebuild` | `out` of a member no other could take the copies of — as many placeable members as copies — so every partition would keep one copy fewer rather than move it. Add a data node first, or lower `estate.replicas` if the company means to keep fewer and send the out again once the map shows the lower count — the map's duty takes it on its next tick after the activation, and the detail names the activation the map's count comes from |
 | `409` | `other_estate_map` | A hold or a release confirmed for another map's generation |
 | `409` | `estate_newer_map` | A newer build wrote the map, and this one must not rewrite it |
 | `503` | `no_estate_map` | A partitioned fleet whose first map is not written yet: ask again once the `estate-map` duty has written it |

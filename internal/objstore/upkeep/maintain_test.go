@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -768,8 +769,17 @@ func TestTheGestures(t *testing.T) {
 		if _, err := Out(quiet, "data-02", "ops", "", t0); !errors.Is(err, membership.ErrNothingPlaceable) {
 			t.Errorf("taking out the last present placeable member = %v", err)
 		}
-		if _, err := Out(quiet, "data-01", "ops", "", t0); err != nil {
-			t.Errorf("taking out a quiet member beside a present one = %v", err)
+		// TWO MEMBERS LEFT FOR TWO COPIES: taking out either drops a copy
+		// of every chunk it holds, so this map refuses it — and says which
+		// of the company's fields to lower, since only the map knows, and
+		// that a lowered count counts once the map shows it.
+		_, err = Out(two, "data-01", "ops", "", t0)
+		if !errors.Is(err, membership.ErrNowhereToRebuild) ||
+			!strings.Contains(err.Error(), "objects.replicas") ||
+			!strings.Contains(err.Error(), "once the placement map shows the lower count") ||
+			!strings.HasPrefix(err.Error(), "objstore/upkeep: ") {
+			t.Errorf("taking out a member the map cannot do without = %v, want "+
+				"membership.ErrNowhereToRebuild naming objects.replicas", err)
 		}
 		one := first(t, roster(1), c)
 		if _, err := Out(one, "data-00", "ops", "", t0); !errors.Is(err, membership.ErrNothingPlaceable) {

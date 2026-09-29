@@ -42,6 +42,20 @@ var (
 	ErrNothingPlaceable = errors.New("taking it out would leave no present member to " +
 		"place copies on")
 
+	// ErrNowhereToRebuild is taking out a member whose copies no other
+	// member could take: the map places fewer copies without it than with
+	// it — as on a fleet with exactly as many members as copies — so the
+	// out would DROP a copy of everything it holds rather than move one,
+	// and an out is the gesture that says it moves them.
+	//
+	// ITS REMEDY IS THE MAP'S, and the one refusal here a map extends: add
+	// a data node, or lower the copies the company asks for — a field each
+	// map names differently (`objects.replicas`, `estate.replicas`) and
+	// every surface reads the same, so it belongs beside the map's name
+	// rather than in each surface's hint alone.
+	ErrNowhereToRebuild = errors.New("taking it out would leave no member to rebuild " +
+		"its copies on")
+
 	// ErrHoldRange is a hold of no length, or one past [MaxHold].
 	ErrHoldRange = errors.New("a hold lasts more than nothing and at most a day")
 )
@@ -62,9 +76,30 @@ var (
 //
 // It refuses to take out the last member present to place copies on: every
 // write would then have nowhere to land. Present is what the latest tick saw
-// ([absentNow]), so a member back from a missed tick counts. And it refuses a
-// node the map removed and has not seen back ([ErrRemovedMember]): that one
-// places nothing already.
+// ([absentNow]), so a member back from a missed tick counts. It refuses a node
+// the map removed and has not seen back ([ErrRemovedMember]): that one places
+// nothing already.
+//
+// AND IT NEVER DROPS A COPY ([ErrNowhereToRebuild]): an out whose member the
+// map could not do without — fewer copies placed without it than with it, as
+// on a fleet with exactly as many members as copies — is refused, because the
+// out would not move its copies but lose one of each, and the gesture's whole
+// meaning is the move. A fleet shrinks by lowering the company's copies first,
+// which is a decision about durability the company makes in its
+// configuration, never a side effect of a gesture about one node. The
+// question is the DRAW's, the one [placement.Draw.Size] answers, never who is
+// present: a member absent now is still one the map places on, which rebuilds
+// onto it when it returns, and whether it is gone for good is the tick's
+// judgement to make ([OutTicks]), never a gesture's to anticipate. A member on
+// probation or already out places nothing, so taking it out drops nothing.
+//
+// THE REFUSAL NAMES THE ACTIVATION THE MAP'S COPY COUNT CAME FROM
+// ([ConfigSource.Copies]), because the count it judges is the one the map holds, and a
+// company's lowered count reaches the map only when the map's duty stamps it
+// on its next tick after the activation ([Tick]) — not when the configuration
+// is applied. An operator who has just lowered the count and is refused again
+// reads there that the map is still on the old one, rather than being told to
+// lower what they already have.
 //
 // Pure over the record: the caller reads it, applies this — and whatever its
 // map does with a change to its members — and writes the result with a
@@ -80,6 +115,7 @@ func Out(s State, d placement.Draw, node, by, reason string, now time.Time) (Sta
 	case member.Out:
 		return s, d, nil
 	}
+	taken := setMember(d, node, func(m *placement.Member) { m.Out = true })
 	if member.Placeable() {
 		others := 0
 		for _, m := range d.Placeable() {
@@ -90,13 +126,21 @@ func Out(s State, d placement.Draw, node, by, reason string, now time.Time) (Sta
 		if others == 0 {
 			return s, d, fmt.Errorf("%w: %s", ErrNothingPlaceable, node)
 		}
+		// BEFORE THE STATE IS TOUCHED, and after the refusal above: a
+		// fleet with no other present member is refused for the harder
+		// reason, since there every write has nowhere to land at all.
+		if without, with := taken.Size(), d.Size(); without < with {
+			return s, d, fmt.Errorf("%w: without it only %d of the %d copies the map "+
+				"places would have a member to hold them, at %s: %s", ErrNowhereToRebuild,
+				without, with, s.Config.Copies(), node)
+		}
 	}
 	next := s.Clone()
 	if next.TakenOut == nil {
 		next.TakenOut = map[string]Gesture{}
 	}
 	next.TakenOut[node] = Gesture{By: by, Reason: reason, At: now.UTC()}
-	return next, setMember(d, node, func(m *placement.Member) { m.Out = true }), nil
+	return next, taken, nil
 }
 
 // In puts a member back: the map places on it again, and its share moves back.

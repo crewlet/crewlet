@@ -664,12 +664,16 @@ func TestTheLastPlaceableMemberIsNeverRemoved(t *testing.T) {
 		t.Fatalf("back: %+v", r.s.Absence)
 	}
 
-	two := first(t, roster(2), c)
+	// ONE COPY, so the out has the other member to rebuild on: at three,
+	// taking out either of two members would drop a copy, which [Out]
+	// refuses before any tick could be asked about it.
+	single := company(1, 1, "")
+	two := first(t, roster(2), single)
 	s, d, err := Out(two.s, two.d, "data-01", "ops", "decommission", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	two = ticks(t, record{s, d}, nil, c, OutTicks)
+	two = ticks(t, record{s, d}, nil, single, OutTicks)
 	if !two.d.Holds("data-00") {
 		t.Fatal("the last placeable member was removed beside an out one")
 	}

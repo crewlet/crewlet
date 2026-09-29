@@ -193,7 +193,7 @@ routing alone.
 
 | Gesture | Effect | Confirmed by |
 |---|---|---|
-| `crewlet estate out <node>` | Takes the node out of every partition's target: each copy it holds is rebuilt on another member while it serves, then released | the node |
+| `crewlet estate out <node>` | Takes the node out of every partition's target: each copy it holds is rebuilt on another member while it serves, then released; refused where no other member could take its copies | the node |
 | `crewlet estate in <node>` | Puts it back, or vouches for a node the map removed | the node |
 | `crewlet estate hold -for D` | No member is removed for being gone, for at most a day | the map's generation |
 | `crewlet estate release` | Ends the hold | the map's generation |
@@ -207,6 +207,21 @@ it was written again from nothing, is refused with nothing written. The
 generation is judged against the stored map, never before it: where there is
 no map there is no generation to repeat, and the refusal is the one that says
 why.
+
+An out **moves copies and never drops one**. It is refused
+(`nowhere_to_rebuild`) where no other member could take the copies the node
+holds — as many placeable members as `estate.replicas`, three data nodes at
+three copies — because every partition would keep one copy fewer once the node
+was let go rather than have its copy rebuilt. That is one rule for both
+placement maps, the object store's as well: a fleet shrinks by lowering
+`estate.replicas` first, the company deciding to keep fewer copies, and never as
+a side effect of a gesture about one node. The out is judged by the MAP's count,
+which the map takes on its duty's next tick after the configuration is
+activated, so take the node out once `crewlet estate map` shows the lower count:
+sent before, it is refused again, its detail naming the activation the map's
+count still comes from. A move waits on the same count. A member absent right now still
+counts as somewhere to rebuild, since the map places on it until the tick
+removes it.
 
 A move **moves a copy and never drops one**. It is refused where no other
 member could hold the partition's copy, and the members can change after it: a
