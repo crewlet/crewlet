@@ -87,6 +87,10 @@ type App struct {
 	// no object store.
 	objects ObjectsControl
 
+	// estate makes the operator's gestures on the estate map. Nil leaves
+	// the routes unmounted, on a node with no coordination store.
+	estate EstateControl
+
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
 	// the route being absent, because "you are in the wrong mode" is the
@@ -249,6 +253,11 @@ type Options struct {
 	// [ObjectsControl].
 	Objects ObjectsControl
 
+	// Estate reads the estate map and makes the operator's gestures on it.
+	// Nil leaves the routes unmounted and the estate question unregistered
+	// — see [EstateControl].
+	Estate EstateControl
+
 	// Backup copies this node's durable state to a path an operator
 	// names.
 	Backup backupTaker
@@ -339,6 +348,11 @@ func New(opts Options) (*App, error) {
 	if sources.FleetBroker == nil {
 		sources.FleetBroker = opts.FleetBroker
 	}
+	// AND THE ESTATE MAP'S, for the same reason: GET /estate and the
+	// gestures under it read one record through one seam.
+	if sources.Estate == nil && opts.Estate != nil {
+		sources.Estate = opts.Estate
+	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
 	// the caller: one source for each, and the one that actually knows.
@@ -357,6 +371,7 @@ func New(opts Options) (*App, error) {
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 	a.objects = opts.Objects
+	a.estate = opts.Estate
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -384,6 +399,11 @@ func New(opts Options) (*App, error) {
 	// POSTs for the retention gestures' reason — moving a member's share
 	// across the fleet is not a read. See objects.go.
 	a.mountObjects(mux)
+	// The estate map's gestures: taking a data node out of every
+	// partition's target, putting it back, holding the map, and moving one
+	// partition's copy off one node. POSTs for the same reason. See
+	// estate.go.
+	a.mountEstate(mux)
 	// The capacity window's own control surface. It is the one thing a
 	// maintenance-mode node serves that a publishing one does not need,
 	// and it is why the verb can run at all on a topology whose broker

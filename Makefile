@@ -175,7 +175,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
+.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer estate-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -565,6 +565,17 @@ gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate 
 objects-answer: ## regenerate internal/api/testdata/objects_answer.json from the object store's renderers
 	CREWLET_REGENERATE_OBJECTS_ANSWER=1 $(GO) test ./internal/api -count=1 \
 	  -run TestTheObjectsAnswerMatchesItsGoldenFile
+
+# internal/api/testdata/estate_answer.json is the estate map's renderings —
+# the estate question's answer in each of its states (layout 0's among them),
+# every gesture answer and every refusal — written by the renderers GET /estate
+# and the /estate routes answer through, for `objects-answer`'s reason: the
+# dashboard's Estate screen suite loads the SAME file as its fixture, so a
+# change to the rendering fails on both sides until each follows it. Read the
+# diff before committing it.
+estate-answer: ## regenerate internal/api/testdata/estate_answer.json from the estate map's renderers
+	CREWLET_REGENERATE_ESTATE_ANSWER=1 $(GO) test ./internal/api -count=1 \
+	  -run TestTheEstateAnswerMatchesItsGoldenFile
 
 broker-answer: ## regenerate internal/api/testdata/fleet_broker_answer.json from the engine's broker view
 	CREWLET_REGENERATE_BROKER_ANSWER=1 $(GO) test ./internal/api -count=1 \

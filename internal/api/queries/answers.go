@@ -82,6 +82,11 @@ type Sources struct {
 	// than reporting a fleet with no map.
 	Objects ObjectMapReader
 
+	// Estate is the estate map's stored record and the layout this node
+	// runs, for the estate question. Nil — or no Coord to list the estate
+	// leases with — leaves the question unregistered.
+	Estate EstateReader
+
 	// FleetBroker is the fleet broker's membership — what every live node
 	// advertises against what the metadata group counts. Nil leaves the
 	// question unregistered.
@@ -373,6 +378,11 @@ func Register(r *Registry, s Sources) {
 			s.layouts = &objectLayouts{}
 		}
 		r.RegisterOperator("fleet", s.fleet)
+	}
+	if s.Coord != nil && s.Estate != nil {
+		// OPERATOR-ONLY, for the fleet question's reason: which node holds
+		// which partition is the deployment's shape, not the company's work.
+		r.RegisterOperator("estate", s.estate)
 	}
 	if s.FleetBroker != nil {
 		// OPERATOR-ONLY, for the fleet question's reason: node ids, their

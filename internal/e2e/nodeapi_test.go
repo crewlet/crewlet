@@ -167,6 +167,9 @@ func wireAPI(
 		// uses, so a case taking a member out crosses the same seam a
 		// deployment's does.
 		Objects: api.EngineObjects(e),
+		// AND THE ESTATE MAP'S, the one seam GET /estate and its gestures
+		// read through, as `crewlet run` wires it.
+		Estate: api.EngineEstate(e),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

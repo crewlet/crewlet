@@ -1,0 +1,926 @@
+{
+  "answers": {
+    "cancel": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "node": "data-c",
+      "member": {
+        "node": "data-c",
+        "weight": 1,
+        "domain": "eu-3",
+        "out": false
+      },
+      "partition": "tracker.002",
+      "target": [
+        "data-a",
+        "data-c"
+      ]
+    },
+    "hold": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "hold": {
+        "until": "2026-09-01T14:00:00Z",
+        "by": "founder",
+        "reason": "kernel upgrade",
+        "at": "2026-09-01T12:00:00Z"
+      }
+    },
+    "in": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "node": "data-d",
+      "member": {
+        "node": "data-d",
+        "weight": 1,
+        "domain": "eu-1",
+        "out": false
+      }
+    },
+    "in_removed": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "node": "data-e",
+      "hint": "not a member of the map now: the map places partitions on it again the next time its maintainer sees it present and healthy"
+    },
+    "move": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "node": "data-c",
+      "member": {
+        "node": "data-c",
+        "weight": 1,
+        "domain": "eu-3",
+        "out": false
+      },
+      "partition": "tracker.000",
+      "move": {
+        "node": "data-c",
+        "by": "founder",
+        "reason": "disk swap",
+        "at": "2026-09-01T12:00:00Z"
+      },
+      "target": [
+        "data-a",
+        "data-b"
+      ]
+    },
+    "not_landed": {
+      "landed": false,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "node": "data-c",
+      "member": {
+        "node": "data-c",
+        "weight": 1,
+        "domain": "eu-3",
+        "out": false
+      },
+      "hint": "the estate map changed under every attempt, so this gesture is not in it: read the map as it stands and make the gesture again if it still applies"
+    },
+    "out": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "node": "data-c",
+      "member": {
+        "node": "data-c",
+        "weight": 1,
+        "domain": "eu-3",
+        "out": true,
+        "out_by": "founder",
+        "out_reason": "disk swap",
+        "out_at": "2026-09-01T12:00:00Z"
+      }
+    },
+    "release": {
+      "landed": true,
+      "epoch": 9,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d"
+    }
+  },
+  "estate": {
+    "held": {
+      "state": "placed",
+      "layout": 1,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "epoch": 9,
+      "spaces": [
+        {
+          "space": "tracker",
+          "partitions": 4,
+          "domains": [
+            "tracker",
+            "vectors"
+          ]
+        },
+        {
+          "space": "pages",
+          "partitions": 1,
+          "domains": [
+            "pages",
+            "vectors"
+          ]
+        },
+        {
+          "space": "company",
+          "partitions": 1,
+          "domains": [
+            "tracker"
+          ]
+        }
+      ],
+      "replicas": 2,
+      "copies": 2,
+      "failure_domain": "zone",
+      "distinct_domains": 3,
+      "domain_limited": false,
+      "hold": {
+        "until": "2026-09-01T14:00:00Z",
+        "by": "founder",
+        "reason": "kernel upgrade",
+        "at": "2026-09-01T12:00:00Z"
+      },
+      "balance": {
+        "deviation_percent": 3.1,
+        "tolerance_percent": 5,
+        "converged": true,
+        "rounds": 4
+      },
+      "unserved": 1,
+      "short": 3,
+      "joining": 2,
+      "leaving": 1,
+      "moves": 1,
+      "members": [
+        {
+          "node": "data-a",
+          "weight": 2,
+          "domain": "eu-1",
+          "out": false,
+          "share_percent": 50,
+          "serving": 4,
+          "joining": 1,
+          "leaving": 0,
+          "live": true,
+          "lease": {
+            "weight": 2,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-b",
+          "weight": 1,
+          "domain": "eu-2",
+          "out": false,
+          "absence": {
+            "ticks": 12,
+            "out_after_ticks": 40,
+            "present": 3,
+            "clear_after_ticks": 40,
+            "since": "2026-09-01T12:00:00Z",
+            "reason": "absent"
+          },
+          "share_percent": 33.333333333333336,
+          "serving": 2,
+          "joining": 0,
+          "leaving": 0,
+          "live": false
+        },
+        {
+          "node": "data-c",
+          "weight": 1,
+          "domain": "eu-3",
+          "out": false,
+          "share_percent": 16.666666666666668,
+          "serving": 3,
+          "joining": 1,
+          "leaving": 0,
+          "moved_off": [
+            "tracker.002"
+          ],
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-d",
+          "weight": 1,
+          "domain": "eu-1",
+          "out": true,
+          "out_by": "founder",
+          "out_reason": "decommission",
+          "out_at": "2026-09-01T12:00:00Z",
+          "share_percent": 0,
+          "serving": 0,
+          "joining": 0,
+          "leaving": 1,
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 8,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-f",
+          "weight": 1,
+          "domain": "eu-2",
+          "out": false,
+          "probation": {
+            "present": 12,
+            "placed_after_ticks": 40,
+            "removed_at": "2026-09-01T11:00:00Z",
+            "reason": "absent"
+          },
+          "share_percent": 0,
+          "serving": 1,
+          "joining": 0,
+          "leaving": 0,
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        }
+      ],
+      "removed": [
+        {
+          "node": "data-e",
+          "at": "2026-09-01T12:00:00Z",
+          "reason": "unhealthy",
+          "detail": "its store says it cannot hold partitions",
+          "gone": 6,
+          "forget_after_ticks": 40,
+          "placed_after_ticks": 40
+        }
+      ],
+      "partitions": [
+        {
+          "id": "company.000",
+          "space": "company",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "pages.000",
+          "space": "pages",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 1,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-b",
+              "state": "serving",
+              "since": 3,
+              "able": false
+            }
+          ]
+        },
+        {
+          "id": "tracker.000",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-c"
+          ],
+          "serving": 1,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "joining",
+              "since": 9,
+              "reports": "adopting",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-d",
+              "state": "leaving",
+              "since": 8,
+              "reports": "draining",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "tracker.001",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 0,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-b",
+              "state": "serving",
+              "since": 2,
+              "able": false
+            },
+            {
+              "node": "data-c",
+              "state": "joining",
+              "since": 7,
+              "reports": "catching_up",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "tracker.002",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            }
+          ],
+          "moves": [
+            {
+              "node": "data-c",
+              "by": "founder",
+              "reason": "disk swap",
+              "at": "2026-09-01T12:00:00Z"
+            }
+          ]
+        },
+        {
+          "id": "tracker.003",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 4,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-f",
+              "state": "serving",
+              "since": 3,
+              "reports": "serving",
+              "able": true
+            }
+          ]
+        }
+      ]
+    },
+    "no_map": {
+      "state": "no_map",
+      "layout": 1,
+      "detail": "layout 1: no estate map has been written yet, so no partition is placed — the estate-map duty writes the first once the layout's logs exist and a company and a data node are there to place them on"
+    },
+    "placed": {
+      "state": "placed",
+      "layout": 1,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "epoch": 9,
+      "spaces": [
+        {
+          "space": "tracker",
+          "partitions": 4,
+          "domains": [
+            "tracker",
+            "vectors"
+          ]
+        },
+        {
+          "space": "pages",
+          "partitions": 1,
+          "domains": [
+            "pages",
+            "vectors"
+          ]
+        },
+        {
+          "space": "company",
+          "partitions": 1,
+          "domains": [
+            "tracker"
+          ]
+        }
+      ],
+      "replicas": 2,
+      "copies": 2,
+      "failure_domain": "zone",
+      "distinct_domains": 3,
+      "domain_limited": false,
+      "balance": {
+        "deviation_percent": 3.1,
+        "tolerance_percent": 5,
+        "converged": true,
+        "rounds": 4
+      },
+      "unserved": 1,
+      "short": 3,
+      "joining": 2,
+      "leaving": 1,
+      "moves": 1,
+      "members": [
+        {
+          "node": "data-a",
+          "weight": 2,
+          "domain": "eu-1",
+          "out": false,
+          "share_percent": 50,
+          "serving": 4,
+          "joining": 1,
+          "leaving": 0,
+          "live": true,
+          "lease": {
+            "weight": 2,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-b",
+          "weight": 1,
+          "domain": "eu-2",
+          "out": false,
+          "absence": {
+            "ticks": 12,
+            "out_after_ticks": 40,
+            "present": 3,
+            "clear_after_ticks": 40,
+            "since": "2026-09-01T12:00:00Z",
+            "reason": "absent"
+          },
+          "share_percent": 33.333333333333336,
+          "serving": 2,
+          "joining": 0,
+          "leaving": 0,
+          "live": false
+        },
+        {
+          "node": "data-c",
+          "weight": 1,
+          "domain": "eu-3",
+          "out": false,
+          "share_percent": 16.666666666666668,
+          "serving": 3,
+          "joining": 1,
+          "leaving": 0,
+          "moved_off": [
+            "tracker.002"
+          ],
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-d",
+          "weight": 1,
+          "domain": "eu-1",
+          "out": true,
+          "out_by": "founder",
+          "out_reason": "decommission",
+          "out_at": "2026-09-01T12:00:00Z",
+          "share_percent": 0,
+          "serving": 0,
+          "joining": 0,
+          "leaving": 1,
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 8,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-f",
+          "weight": 1,
+          "domain": "eu-2",
+          "out": false,
+          "probation": {
+            "present": 12,
+            "placed_after_ticks": 40,
+            "removed_at": "2026-09-01T11:00:00Z",
+            "reason": "absent"
+          },
+          "share_percent": 0,
+          "serving": 1,
+          "joining": 0,
+          "leaving": 0,
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        }
+      ],
+      "removed": [
+        {
+          "node": "data-e",
+          "at": "2026-09-01T12:00:00Z",
+          "reason": "unhealthy",
+          "detail": "its store says it cannot hold partitions",
+          "gone": 6,
+          "forget_after_ticks": 40,
+          "placed_after_ticks": 40
+        }
+      ],
+      "partitions": [
+        {
+          "id": "company.000",
+          "space": "company",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "pages.000",
+          "space": "pages",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 1,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-b",
+              "state": "serving",
+              "since": 3,
+              "able": false
+            }
+          ]
+        },
+        {
+          "id": "tracker.000",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-c"
+          ],
+          "serving": 1,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "joining",
+              "since": 9,
+              "reports": "adopting",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-d",
+              "state": "leaving",
+              "since": 8,
+              "reports": "draining",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "tracker.001",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 0,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-b",
+              "state": "serving",
+              "since": 2,
+              "able": false
+            },
+            {
+              "node": "data-c",
+              "state": "joining",
+              "since": 7,
+              "reports": "catching_up",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "tracker.002",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            }
+          ],
+          "moves": [
+            {
+              "node": "data-c",
+              "by": "founder",
+              "reason": "disk swap",
+              "at": "2026-09-01T12:00:00Z"
+            }
+          ]
+        },
+        {
+          "id": "tracker.003",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 4,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-f",
+              "state": "serving",
+              "since": 3,
+              "reports": "serving",
+              "able": true
+            }
+          ]
+        }
+      ]
+    },
+    "unavailable": {
+      "state": "unavailable",
+      "layout": 0,
+      "detail": "the estate map or the estate leases could not be read from the coordination store, so where each partition is held is unknown from here — ask again, or ask another node"
+    },
+    "unreadable": {
+      "state": "unreadable",
+      "layout": 0,
+      "detail": "the estate map was written by a newer build than this node's, which does not read it — ask a node running that build, or once the upgrade has finished"
+    },
+    "whole": {
+      "state": "whole",
+      "layout": 0,
+      "detail": "layout 0: every data node holds the whole estate, so there is no partition to place, move or hold a node for",
+      "partition": "estate.000",
+      "holders": [
+        {
+          "node": "data-a",
+          "lease": {
+            "weight": 1,
+            "layout": 0,
+            "healthy": true,
+            "able": true,
+            "free_bytes": 103079215104
+          },
+          "reports": "serving"
+        },
+        {
+          "node": "data-b"
+        }
+      ]
+    }
+  },
+  "refusals": {
+    "estate_newer_map": {
+      "status": 409,
+      "body": {
+        "error": "estate_newer_map",
+        "detail": "engine: the estate map was written by a newer build; make this gesture from a node running it: unknown field",
+        "hint": "a node running a newer build wrote the map, and this one must not rewrite it: make the gesture through a node running that build, or once the upgrade has finished"
+      }
+    },
+    "estate_refused": {
+      "status": 409,
+      "body": {
+        "error": "estate_refused",
+        "detail": "estate/partmap: taking it out would leave no present member to place copies on: data-a",
+        "hint": "every partition needs a present member to hold a copy: put another member back in, or bring an absent one back, before taking this one out"
+      }
+    },
+    "estate_unavailable": {
+      "status": 503,
+      "body": {
+        "error": "estate_unavailable",
+        "detail": "engine: the estate map could not be read or written: nats: timeout",
+        "hint": "the coordination store did not answer, so whether the map changed is unknown — asking again is safe: an out, an in, a release, a move or a cancel the map already says is answered as landed with nothing written, and a hold sent again replaces the one in force, ending its length after the resend"
+      }
+    },
+    "estate_whole": {
+      "status": 409,
+      "body": {
+        "error": "estate_whole",
+        "detail": "estate/partmap: there is no estate map yet: layout 0: every data node holds the whole estate, so there is no partition to place, move or hold a node for",
+        "hint": "nothing to move: a data node is added by starting it and taken away by stopping it, and every other data node goes on holding the whole estate"
+      }
+    },
+    "invalid_hold": {
+      "status": 400,
+      "body": {
+        "error": "invalid_hold",
+        "detail": "estate/partmap: a hold lasts more than nothing and at most a day: asked for 25h0m0s",
+        "hint": "hold for more than nothing and at most 24h; a longer maintenance is a hold renewed on purpose"
+      }
+    },
+    "no_estate_map": {
+      "status": 503,
+      "body": {
+        "error": "no_estate_map",
+        "detail": "estate/partmap: there is no estate map yet: layout 1: no estate map has been written yet, so no partition is placed — the estate-map duty writes the first once the layout's logs exist and a company and a data node are there to place them on",
+        "hint": "the estate-map duty writes the first map within a tick of the layout's logs existing and a data node holding a live estate lease: ask again then"
+      }
+    },
+    "not_a_holder": {
+      "status": 409,
+      "body": {
+        "error": "not_a_holder",
+        "detail": "estate/partmap: the node does not hold the partition: tracker.001 on \"data-a\"",
+        "hint": "name a node the partition's holders list: a move takes a copy off a node that has one"
+      }
+    },
+    "nowhere_to_move": {
+      "status": 409,
+      "body": {
+        "error": "nowhere_to_move",
+        "detail": "estate/partmap: there is no member to rebuild the partition's copy on: tracker.002 off \"data-a\": without \"data-a\" only 1 of its 2 copies would have a member to hold them — add a data node first, or lower estate.replicas if the company means to keep fewer",
+        "hint": "add a data node first, so there is a member to rebuild the copy on — or lower estate.replicas if the company means to keep fewer copies"
+      }
+    },
+    "other_estate_map": {
+      "status": 409,
+      "body": {
+        "error": "other_estate_map",
+        "detail": "engine: the estate map is not the one the gesture was confirmed for: it was confirmed for generation 00000000-0000-0000-0000-000000000000",
+        "hint": "read the estate map through the node you mean to change and confirm with the generation it names: this one is another fleet's, or was written again since it was read"
+      }
+    },
+    "removed_member": {
+      "status": 409,
+      "body": {
+        "error": "removed_member",
+        "detail": "estate/partmap: no such member of the placement map: the map removed it for absence, so it places nothing to take out: \"data-e\"",
+        "hint": "leave it: it rejoins on probation the next time it is seen present and healthy, or putting it back vouches for it now"
+      }
+    },
+    "unknown_member": {
+      "status": 404,
+      "body": {
+        "error": "unknown_member",
+        "detail": "estate/partmap: no such member of the placement map: \"data-z\"",
+        "hint": "name a node the estate map lists: a member to take out or put back, or a removed node to put back"
+      }
+    },
+    "unknown_partition": {
+      "status": 404,
+      "body": {
+        "error": "unknown_partition",
+        "detail": "estate/partmap: the estate map's layout has no such partition: \"tracker.009\"",
+        "hint": "name a partition the estate map lists: a space and a three-digit index, like tracker.007"
+      }
+    }
+  }
+}

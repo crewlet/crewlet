@@ -37,7 +37,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
-| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, the `/objects/*` gestures, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, the `/objects/*` and `/estate/*` gestures, `POST /operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
 `/operator/mcp` is the one route the by-method rule splits, because it is mounted for every verb: its `POST` — every JSON-RPC call, reads included — is refused, and its `GET` server-to-client stream is served like any other read. Its `DELETE`, which ends a session, rides the default with the writes; the session dies with the listener a moment later either way. `/mcp/{token}` is not split, because the whole prefix is served: a coding run's tool calls are the one thing on this listener the node must not break.
 
@@ -103,6 +103,13 @@ node means nothing was done.
 | `POST` | `/objects/in/{node}` | Put a member back, or vouch for a node the map removed for being gone. `?confirm=` repeats the node id |
 | `POST` | `/objects/hold` | Hold the placement map for `?for=` (a duration, at most `24h`, required): no member is removed however long it is gone. `?reason=` is recorded |
 | `POST` | `/objects/release` | End a hold |
+| `GET` | `/estate` | The [estate map](../concepts/estate-placement.md): which data nodes hold each partition of the replicated estate, in which state, and what each node's estate lease says. At layout 0 — every fleet on this build — it answers that every data node holds the whole estate. **Always needs a token** (see [below](#get-estate)) |
+| `POST` | `/estate/out/{node}` | Take a data node out of every partition's target: what it holds is rebuilt on the others while it keeps serving, then released. `?confirm=` repeats the node id; `?reason=` is recorded. **Operator-only** (see [Gestures on the estate map](#gestures-on-the-estate-map)) |
+| `POST` | `/estate/in/{node}` | Put a member back, or vouch for a node the map removed for being gone. `?confirm=` repeats the node id |
+| `POST` | `/estate/hold` | Hold the estate map for `?for=` (at most `24h`, required): no member is removed however long it is gone. `?confirm=` repeats the map's `generation`; `?reason=` is recorded |
+| `POST` | `/estate/release` | End a hold. `?confirm=` repeats the map's `generation` |
+| `POST` | `/estate/move/{partition}` | Move one partition's copy off `?from=`: it is rebuilt on another member, then released. `?confirm=` repeats the node; `?reason=` is recorded |
+| `POST` | `/estate/move/{partition}/cancel` | Lift a move. `?from=` names the node and `?confirm=` repeats it |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
@@ -1697,6 +1704,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `token_series` | `{group, bucket, since, until, previous, groups, agent_role, since_days}` | `GET /tokens/series`. THE SAME SPEND WITH A TIME AXIS, which the breakdown has no dimension for: every one of its rows is a sum over the whole window, so a runaway loop, a spike and a quiet weekend are the same number. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back. Bucketed by the ENGINE — the browser holds at most the live window's records, so an axis folded client-side would be right for a day and absent for every other range. An unknown `group` or `bucket` is refused naming what is accepted, never defaulted: a chart legended by one dimension over another's bands is worse than an error |
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
+| `estate` | `{}` | `GET /estate`: the estate map as the stored record says it, joined with every data node's estate lease — or, at layout 0, the data nodes that each hold the whole estate. **Operator-only** |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Operator-only** |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read |
@@ -3101,6 +3109,180 @@ Every refusal carries `detail` and `hint`:
 | `503` | `no_object_map` | No data node has joined yet, so there is no map to change |
 | `503` | `objects_unavailable` | The coordination store did not answer; whether the map changed is unknown, and asking again is safe — with a hold's resend restarting its length, as above |
 | `500` | `objects_failed` | The gesture failed on this node before the map was written — a map this build could not encode again. Nothing changed; this node's log (`api_objects_gesture_failed`) has the reason |
+
+### `GET /estate`
+
+The [estate map](../concepts/estate-placement.md): which data nodes hold each
+partition of the replicated estate, and what each of them says about its part in
+holding it. **Always needs a token.** It is the `estate` question, so the
+[socket's query channel](#ws-wsstream) answers it too — that is how the
+dashboard's Estate screen and `crewlet estate map` read it — and it is absent
+(`404`) on a node with no coordination store.
+
+Every fleet on this build runs **layout 0**: the estate is not divided into
+partitions, and every data node holds the whole of it. The answer says so in the
+sentence every surface gives that layout, and lists the data nodes that hold it
+— every live data node, as the fleet's presence names them, each with what its
+estate lease says where it holds one:
+
+```json
+{
+  "state": "whole",
+  "layout": 0,
+  "detail": "layout 0: every data node holds the whole estate, so there is no partition to place, move or hold a node for",
+  "partition": "estate.000",
+  "holders": [
+    {
+      "node": "data-a",
+      "lease": {
+        "weight": 1,
+        "layout": 0,
+        "healthy": true,
+        "able": true,
+        "free_bytes": 103079215104
+      },
+      "reports": "serving"
+    },
+    {
+      "node": "data-b"
+    }
+  ]
+}
+```
+
+A holder with no `lease` is a data node running a build from before the estate
+lease; it holds and serves the whole estate all the same. A test holds this
+example to what the renderer writes for that fleet.
+
+`state` names which of five things the answer is, and each but `placed` carries
+the sentence that says it in `detail`:
+
+| `state` | Means |
+|---|---|
+| `whole` | Layout 0: every data node holds the whole estate, and there is no map |
+| `no_map` | A partitioned layout whose first map the `estate-map` duty has not written yet: nothing is placed |
+| `placed` | A map, rendered in full (below) |
+| `unreadable` | A map a newer build wrote, which this node does not read — ask a node running that build |
+| `unavailable` | The map, the estate leases or the presence leases could not be read; nothing is known from here, and asking again is safe |
+
+Under a partitioned layout, a `placed` answer carries the map whole:
+
+| Field | Means |
+|---|---|
+| `generation` / `epoch` | The map's lineage — what a hold and a release are confirmed by — and its epoch, which counts changes to the holder table and nothing else |
+| `spaces` | How the layout divides the estate: each space, its partition count and the domains with a log in each partition |
+| `replicas` / `copies` | The copies of each partition the company asks for (`estate.replicas`), and how many the map places — fewer while it has fewer placeable members |
+| `failure_domain` / `distinct_domains` / `domain_limited` | The node label copies are spread across (`estate.failure_domain`), how many of its values the placeable members span, and whether that is fewer than `copies` |
+| `hold` | An operator's hold in force now, absent when there is none |
+| `balance` | How evenly the map spreads partitions over the members' weights, and the tolerance it aimed within — the finest the partition count promises for the fleet. `converged: false` is a measurement, never a fault |
+| `unserved` / `short` / `joining` / `leaving` / `moves` | Partitions no copy can answer for; partitions with fewer copies that can answer than their target has; holders joining and leaving; operator moves in force |
+| `members` | Each member as the map describes it — `weight`, `domain`, `out`, `probation` and `absence` counted in the maintainer's ticks, as the object map's members are — plus its `share_percent` of every partition copy, how many partitions it is `serving`, `joining` and `leaving`, the partitions an operator `moved_off` it, whether it holds a `live` estate lease, and that lease: whether its store is `healthy` (absent when it does not say, which the map counts as failed), whether the map counts it `able`, the `map_epoch` it last acted on, and its `free_bytes` |
+| `removed` | Nodes the map removed for being gone and still remembers, as the object map lists them |
+| `partitions` | Every partition in the layout's order: its `target`, how many copies are `serving` (holders the map lists serving whose node it counts present and healthy) against how many it has `wanted`, its `holders` — each with the map's `state` and the epoch it entered it `since`, what the node's own lease `reports` of the partition, and whether the map counts the node `able` — and the operator's `moves` of it |
+
+A **copy** is a holder the map lists serving whose node holds a live estate lease
+saying its store is healthy and that it runs the map's layout. The map itself
+keeps a serving holder serving for ten minutes after its node goes, until
+membership removes it; routers route to it and nothing answers, so the answer
+does not count it.
+
+### Gestures on the estate map
+
+```
+POST /estate/out/{node}?confirm={node}&reason=
+POST /estate/in/{node}?confirm={node}
+POST /estate/hold?for={duration}&confirm={generation}&reason=
+POST /estate/release?confirm={generation}
+POST /estate/move/{partition}?from={node}&confirm={node}&reason=
+POST /estate/move/{partition}/cancel?from={node}&confirm={node}
+```
+
+The operator's gestures on the estate map, through a running node for the
+placement map's reason. `crewlet estate out`, `in`, `hold`, `release` and `move`
+are clients of these routes. **Operator-only**, refused during a
+[drain](#during-a-drain), and absent on a node with no coordination store.
+
+Every gesture is **confirmed**. The four that move a node's copies repeat the
+node; a hold and a release name no node and act on the whole map, so they repeat
+the map's `generation` from `GET /estate` — the confirmation that says this is
+the map of the fleet you meant, not another's reached through the wrong node.
+
+- **out** takes a member out of every partition's target: each copy it holds is
+  rebuilt on another member while it keeps serving, then released under the two
+  conditions every leave waits for.
+- **in** puts it back — or vouches for a node the map removed for being gone.
+- **hold** holds the map for `for`, at most `24h` and required: no member is
+  removed for being gone until the hold ends or is released.
+- **release** ends the hold.
+- **move** moves one partition's copy off one node: the partition's target skips
+  that node, so its copy is rebuilt on the member the partition's ranking offers
+  next — spread across failure domains as far as the members allow — and then
+  released. It lasts until it is cancelled or the node leaves the map.
+- **cancel** lifts a move; one that is not in force is answered as landed with
+  nothing written.
+
+At layout 0 there is no map, and every gesture is refused `409 estate_whole` in
+the words the read gives. Under a map, each is a read, a pure change and a
+compare-and-set, answered with whether the map **now says** what was asked:
+
+```json
+{
+  "landed": true,
+  "epoch": 9,
+  "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+  "node": "data-c",
+  "member": {
+    "node": "data-c",
+    "weight": 1,
+    "domain": "eu-3",
+    "out": false
+  },
+  "partition": "tracker.000",
+  "move": {
+    "node": "data-c",
+    "by": "founder",
+    "reason": "disk swap",
+    "at": "2026-09-01T12:00:00Z"
+  },
+  "target": [
+    "data-a",
+    "data-b"
+  ]
+}
+```
+
+No gesture moves `epoch`: the epoch counts the holder table, and a gesture
+changes the targets — the maintainer's next tick moves the holders toward them.
+`member` is the member as the map now describes it, absent for a node it does
+not hold; `move` is the move of `partition` off `node` in force now, absent after
+a cancel; `target` is where the partition's copies should now be; `hold` is the
+hold in force. `landed: false` is a gesture that lost every race to another
+writer, as on the placement map. A request that went unanswered is safe to send
+again: an out, an in, a release, a move or a cancel the map already says is
+answered as landed with nothing written, and a hold sent again replaces the one
+in force, its length counted from the resend. A test holds this example to what
+the renderer answers for that move.
+
+Every refusal carries `detail` and `hint`:
+
+| Status | `error` | When |
+|---|---|---|
+| `400` | `confirm_required` | `?confirm=` does not repeat the node — or, for a hold or a release, is not a generation |
+| `400` | `partition_invalid` | The path names no partition: a space and a three-digit index, like `tracker.007` |
+| `400` | `invalid_hold` | `?for=` is missing, is not a duration, or is not more than nothing and at most `24h` |
+| `403` | `operator_required` | The request carries no operator identity |
+| `404` | `unknown_member` | The node is not a member of the map — nor, for `in`, one it removed |
+| `404` | `unknown_partition` | The map's layout has no such partition |
+| `409` | `estate_whole` | Layout 0: every data node holds the whole estate, and there is nothing to place, move or hold |
+| `409` | `removed_member` | `out` of a node the map removed: `in` is the gesture that names it |
+| `409` | `not_a_holder` | A move off a node that holds no copy of the partition |
+| `409` | `nowhere_to_move` | A move with no member to rebuild the copy on — as many placeable members as copies. Add a data node first |
+| `409` | `estate_refused` | Taking it out would leave no member present to hold a copy |
+| `409` | `other_estate_map` | A hold or a release confirmed for another map's generation |
+| `409` | `estate_newer_map` | A newer build wrote the map, and this one must not rewrite it |
+| `503` | `no_estate_map` | A partitioned fleet whose first map is not written yet: ask again once the `estate-map` duty has written it |
+| `503` | `estate_unavailable` | The coordination store did not answer; whether the map changed is unknown, and asking again is safe |
+| `500` | `estate_failed` | The gesture failed on this node before the map was written. Nothing changed; this node's log (`api_estate_gesture_failed`) has the reason |
 
 ### `GET /sandbox-runs`
 

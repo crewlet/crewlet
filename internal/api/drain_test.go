@@ -40,6 +40,8 @@ func drainingApp(t *testing.T, draining bool) *api.App {
 		// THE OBJECT STORE'S GESTURES, mounted over a map this fake holds,
 		// so their entries below are held against real routes.
 		Objects: newFakeObjects(),
+		// AND THE ESTATE MAP'S, for the same reason.
+		Estate: newFakeEstate(),
 	})
 	return a
 }
@@ -71,7 +73,7 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
 // credential writes, the setup pass, the operator writes, the object store's
-// gestures and the operator MCP surface.
+// and the estate map's gestures and the operator MCP surface.
 //
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
@@ -110,6 +112,12 @@ var startsWork = []struct {
 	{http.MethodPost, "/objects/in/data-a?confirm=data-a", true},
 	{http.MethodPost, "/objects/hold?for=1h", true},
 	{http.MethodPost, "/objects/release", true},
+	{http.MethodPost, "/estate/out/data-a?confirm=data-a", true},
+	{http.MethodPost, "/estate/in/data-a?confirm=data-a", true},
+	{http.MethodPost, "/estate/hold?for=1h&confirm=" + estateGeneration.String(), true},
+	{http.MethodPost, "/estate/release?confirm=" + estateGeneration.String(), true},
+	{http.MethodPost, "/estate/move/tracker.002?from=data-c&confirm=data-c", true},
+	{http.MethodPost, "/estate/move/tracker.002/cancel?from=data-c&confirm=data-c", true},
 	{http.MethodPost, "/operator/mcp", false},
 }
 

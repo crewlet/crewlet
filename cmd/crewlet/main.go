@@ -1740,6 +1740,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the coordination store its broker holds. Nil, and the routes
 		// unmounted, on a node that runs no object store.
 		Objects: api.EngineObjects(e),
+		// THE ESTATE MAP — which data nodes hold each partition — and the
+		// gestures on it, through this node for the object map's reason:
+		// the map lives in the coordination store its broker holds. One
+		// seam serves GET /estate and the routes under it. Under layout 0
+		// the read answers that every data node holds the whole estate,
+		// and every gesture is refused saying so.
+		Estate: api.EngineEstate(e),
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
