@@ -324,6 +324,11 @@ type DB struct {
 	// on any other handle.
 	file PartitionFile
 
+	// owner is the node that holds this partition open, on a partition's
+	// handle, and nil on every other. It is how a partition closed through
+	// its OWN handle leaves its node's set — see [DB.Close].
+	owner *DB
+
 	// closed is set by the first Close, and it is what makes a handle
 	// closed UNDER a caller answer [ErrNoEstate] like one that was never
 	// open: a partition's database is taken for one operation, and an
@@ -663,13 +668,32 @@ func engineVersion(ctx context.Context, pool *sql.DB) string {
 // THE LOCK LAST, after the pool: a peer that saw the lock free while this
 // process still had connections open would be the two-writer case the lock
 // exists to prevent, in the one window where it looked safe.
+//
+// A PARTITION'S HANDLE LEAVES ITS NODE'S SET FIRST, exactly as
+// [DB.ClosePartition] takes it out: a partition is held by its node, and one
+// closed behind the node's back would stay in the set as open — answered to
+// every lookup, answered again to an open of the same file, and never reopened
+// by the runtime, which asks the set what it has lost.
 func (d *DB) Close() error {
+	if d != nil && d.owner != nil {
+		d.owner.forget(d)
+	}
+	return d.close()
+}
+
+// close is [DB.Close] without the node's bookkeeping, for the node's own paths,
+// which have already taken the handle out of the set under its lock.
+func (d *DB) close() error {
 	if d == nil || d.sql == nil || !d.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	// THE PARTITIONS FIRST, and every one's error is reported even when
 	// this one also fails: a node that closed some of its files and
 	// returned one error would leave a lock held with nothing naming it.
+	//
+	// The node is marked closed above BEFORE the set's lock is taken here,
+	// which is what [DB.stillOpen] relies on to refuse an open that would
+	// land after the set was emptied.
 	var errs []error
 	if d.parts != nil {
 		d.parts.mu.Lock()
@@ -677,7 +701,7 @@ func (d *DB) Close() error {
 		d.parts.open.Store(&map[string]*DB{})
 		d.parts.mu.Unlock()
 		for _, name := range slices.Sorted(maps.Keys(open)) {
-			if err := open[name].Close(); err != nil {
+			if err := open[name].close(); err != nil {
 				errs = append(errs, fmt.Errorf("store: close the partition %s: %w", name, err))
 			}
 		}

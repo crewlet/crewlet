@@ -268,12 +268,35 @@ func (s *partitionSet) held() map[string]*DB {
 var ErrNotANode = errors.New("store: partitions are held by a node's own handle, and this is not one")
 
 // node refuses a handle that is not a node's own, naming the gesture.
+//
+// IT DOES NOT JUDGE WHETHER THE NODE IS STILL OPEN, beyond a handle that was
+// never opened: that is [DB.stillOpen]'s, asked under the set's lock by every
+// gesture that changes the set.
 func (d *DB) node(gesture string) error {
 	switch {
-	case !d.isOpen():
+	case d == nil || d.sql == nil:
 		return fmt.Errorf("%w: %s: %w", ErrNotANode, gesture, ErrNoEstate)
 	case d.parts == nil:
 		return fmt.Errorf("%w: %s on the %s handle at %s", ErrNotANode, gesture, d.estate, d.path)
+	}
+	return nil
+}
+
+// stillOpen refuses a gesture on a node that has been closed. A gesture that
+// changes the set asks it holding d.parts.mu.
+//
+// UNDER THE LOCK, AND ONLY THERE, because that is what orders it against
+// [DB.Close]: Close marks the node closed BEFORE it takes the same lock to
+// empty the set, so a gesture that finds the node open here holds the lock
+// until its change is in the set — which Close then takes down with the rest
+// — and one that comes after finds it closed. Judged before the lock, an open
+// that passed the check, waited for the lock while Close emptied the set, and
+// then took it, would open a file into a node nothing will close again: its
+// pool, its descriptors and this process's claim on it would outlive the node
+// for the life of the process, and another process would be refused the file.
+func (d *DB) stillOpen(gesture string) error {
+	if d.closed.Load() {
+		return fmt.Errorf("store: %s: the node is closed: %w", gesture, ErrNoEstate)
 	}
 	return nil
 }
@@ -322,6 +345,9 @@ func (d *DB) OpenPartition(ctx context.Context, f PartitionFile) (*DB, error) {
 
 	d.parts.mu.Lock()
 	defer d.parts.mu.Unlock()
+	if err := d.stillOpen("open a partition"); err != nil {
+		return nil, err
+	}
 	open := d.parts.held()
 	if held := open[f.Name]; held != nil {
 		if held.file != f {
@@ -343,6 +369,7 @@ func (d *DB) OpenPartition(ctx context.Context, f PartitionFile) (*DB, error) {
 		return nil, fmt.Errorf("store: open the partition %s: %w", f.Name, err)
 	}
 	db.file = f
+	db.owner = d
 
 	next := make(map[string]*DB, len(open)+1)
 	for name, held := range open {
@@ -432,6 +459,10 @@ func fileBytes(path string) int64 {
 // legitimately. Nothing long-lived keeps the handle this returns — see
 // [PartitionHandle] for what it keeps instead.
 func (d *DB) PartitionDB(name string) (*DB, error) {
+	// WITHOUT THE LOCK, which is safe here as it is not for a change: a
+	// lookup that races a Close answers either the handle — which the
+	// Close then takes down, and which then answers ErrNoEstate itself —
+	// or the empty set a closed node keeps.
 	if err := d.node("look up a partition"); err != nil {
 		return nil, err
 	}
@@ -469,11 +500,14 @@ func (d *DB) ClosePartition(name string) error {
 	}
 	d.parts.mu.Lock()
 	defer d.parts.mu.Unlock()
+	if err := d.stillOpen("close a partition"); err != nil {
+		return err
+	}
 	held := d.release(name)
 	if held == nil {
 		return nil
 	}
-	if err := held.Close(); err != nil {
+	if err := held.close(); err != nil {
 		return fmt.Errorf("store: close the partition %s: %w", name, err)
 	}
 	return nil
@@ -496,16 +530,21 @@ func (d *DB) DropPartition(ctx context.Context, f PartitionFile) error {
 	}
 	d.parts.mu.Lock()
 	defer d.parts.mu.Unlock()
+	if err := d.stillOpen("drop a partition"); err != nil {
+		return err
+	}
+	// ANOTHER FILE UNDER THIS NAME IS REFUSED BEFORE THE SET IS TOUCHED:
+	// deleting the one open here would delete what the caller did not ask
+	// for, and taking it out of the set to look at it first — then putting
+	// it back — would answer ErrNoEstate, for a partition that stayed open
+	// throughout, to every lookup in between. The runtime reads that answer
+	// as a lost file and restores it.
+	if held := d.parts.held()[f.Name]; held != nil && held.file != f {
+		return fmt.Errorf("store: the partition %s is open on this node as %+v, "+
+			"not %+v — nothing was dropped", f.Name, held.file, f)
+	}
 	if held := d.release(f.Name); held != nil {
-		if held.file != f {
-			// PUT BACK: the caller named another file under this name,
-			// and deleting the one open here would delete what it did
-			// not ask for.
-			d.hold(held)
-			return fmt.Errorf("store: the partition %s is open on this node as %+v, "+
-				"not %+v — nothing was dropped", f.Name, held.file, f)
-		}
-		if err := held.Close(); err != nil {
+		if err := held.close(); err != nil {
 			return fmt.Errorf("store: close the partition %s before dropping it: %w", f.Name, err)
 		}
 	}
@@ -536,16 +575,15 @@ func (d *DB) release(name string) *DB {
 	return held
 }
 
-// hold puts a handle back in the set. The caller holds d.parts.mu.
-func (d *DB) hold(db *DB) {
-	open := d.parts.held()
-	next := make(map[string]*DB, len(open)+1)
-	for name, held := range open {
-		next[name] = held
+// forget takes part out of the set when part is what the set holds under its
+// name — the half of closing a partition through its OWN handle that the node
+// has to do. See [DB.Close].
+func (d *DB) forget(part *DB) {
+	d.parts.mu.Lock()
+	defer d.parts.mu.Unlock()
+	if d.parts.held()[part.file.Name] == part {
+		d.release(part.file.Name)
 	}
-	next[db.file.Name] = db
-	d.parts.open.Store(&next)
-	apply(next, d.divide(next, "", ""))
 }
 
 // File is the partition this handle is the file of, and the zero value on a

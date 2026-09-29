@@ -364,3 +364,123 @@ func TestADrawOnAHandleClosedUnderItAnswersNoEstate(t *testing.T) {
 		t.Errorf("a draw on a closed handle = %v, want ErrNoEstate", err)
 	}
 }
+
+// A DROP REFUSED FOR NAMING ANOTHER FILE LEAVES THE OPEN SET UNTOUCHED.
+//
+// The set is read without its lock by every lookup a domain makes, and a
+// lookup that misses is read by the runtime as a LOST partition, which it
+// restores — halting the appliers and resetting their consumers for a file
+// that never went anywhere. So a refusal must not take the partition out of
+// the set even for the instant it takes to look at it and put it back: the
+// set is the same value after the refusal as before it, and a lookup running
+// beside a burst of refusals never misses.
+func TestARefusedDropLeavesTheOpenSetUntouched(t *testing.T) {
+	t.Parallel()
+	node, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+	file := PartitionFile{Layout: 1, Name: "tracker.000", Logs: 2}
+	if _, err := node.OpenPartition(t.Context(), file); err != nil {
+		t.Fatalf("open %s: %v", file.Name, err)
+	}
+	other := file
+	other.Logs = 1
+
+	before := node.parts.open.Load()
+	if err := node.DropPartition(t.Context(), other); err == nil {
+		t.Fatal("a drop naming another file under an open partition's name was not refused")
+	}
+	if after := node.parts.open.Load(); after != before {
+		t.Error("a refused drop replaced the open set, so every lookup between " +
+			"the replacement and its undoing answered a partition that stayed " +
+			"open as not open")
+	}
+
+	stop := make(chan struct{})
+	missed := make(chan int)
+	go func() {
+		n := 0
+		for {
+			select {
+			case <-stop:
+				missed <- n
+				return
+			default:
+			}
+			if _, err := node.PartitionDB(file.Name); err != nil {
+				n++
+			}
+		}
+	}()
+	for range 500 {
+		_ = node.DropPartition(t.Context(), other)
+	}
+	close(stop)
+	if n := <-missed; n > 0 {
+		t.Errorf("%d lookups beside refused drops answered the open partition %s "+
+			"as not open", n, file.Name)
+	}
+	if _, err := os.Stat(node.PartitionPath(file)); err != nil {
+		t.Errorf("a refused drop touched the file: %v", err)
+	}
+}
+
+// A NODE THAT HAS BEEN CLOSED CHANGES ITS SET NO MORE.
+//
+// [DB.Close] marks the node closed and then empties its set under the set's
+// lock, and every gesture that changes the set judges the node open UNDER THE
+// SAME LOCK — so an open that raced the close either lands before the set is
+// emptied, and is closed with the rest, or finds the node closed. Judged only
+// before the lock, an open that passed the check and then waited while the
+// close emptied the set would put a file into a set nothing closes again, and
+// its pool, its descriptors and this process's claim on it would outlive the
+// node. That check is the only one there is, so a gesture on a node already
+// closed exercises it: each must refuse with ErrNoEstate, the open must create
+// and claim nothing, and the drop must delete nothing.
+func TestANodeThatHasBeenClosedChangesItsSetNoMore(t *testing.T) {
+	t.Parallel()
+	node, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	held := PartitionFile{Layout: 1, Name: "tracker.000", Logs: 1}
+	if _, err := node.OpenPartition(t.Context(), held); err != nil {
+		t.Fatalf("open %s: %v", held.Name, err)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	late := PartitionFile{Layout: 1, Name: "tracker.001", Logs: 1}
+	if part, err := node.OpenPartition(t.Context(), late); !errors.Is(err, ErrNoEstate) {
+		if part != nil {
+			_ = part.Close()
+		}
+		t.Errorf("an open on a closed node = %v, want ErrNoEstate", err)
+	}
+	path := node.PartitionPath(late)
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("an open on a closed node created %s: %v", path, err)
+	}
+	locksHeld.mu.Lock()
+	claim := locksHeld.by[path]
+	locksHeld.mu.Unlock()
+	if claim != nil {
+		t.Errorf("an open on a closed node left %s claimed by %d handle(s)", path, claim.holds)
+	}
+	if got := node.OpenPartitions(); len(got) != 0 {
+		t.Errorf("a closed node lists %v open", got)
+	}
+
+	if err := node.ClosePartition(held.Name); !errors.Is(err, ErrNoEstate) {
+		t.Errorf("a close on a closed node = %v, want ErrNoEstate", err)
+	}
+	if err := node.DropPartition(t.Context(), held); !errors.Is(err, ErrNoEstate) {
+		t.Errorf("a drop on a closed node = %v, want ErrNoEstate", err)
+	}
+	if _, err := os.Stat(node.PartitionPath(held)); err != nil {
+		t.Errorf("a drop on a closed node deleted %s: %v", held.Name, err)
+	}
+}

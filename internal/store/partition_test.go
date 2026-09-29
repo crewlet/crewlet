@@ -580,3 +580,49 @@ func TestAPartitionClosedUnderACallerAnswersNoEstate(t *testing.T) {
 		}
 	}
 }
+
+// A PARTITION CLOSED THROUGH ITS OWN HANDLE LEAVES ITS NODE'S SET.
+//
+// A partition is held by its node, and the runtime asks the node's set which
+// partitions it has lost — a partition a lookup answers is one it never
+// reopens. So a partition closed behind the node's back, through the handle
+// the node gave out, must stop being answered as open: a lookup is told
+// ErrNoEstate, the listing leaves it out, and opening the same file again
+// opens it rather than handing back the handle that was closed.
+func TestAPartitionClosedThroughItsOwnHandleLeavesTheSet(t *testing.T) {
+	t.Parallel()
+	node, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+	file := store.PartitionFile{Layout: 1, Name: "tracker.000", Logs: 1}
+	part, err := node.OpenPartition(t.Context(), file)
+	if err != nil {
+		t.Fatalf("open %s: %v", file.Name, err)
+	}
+	if err := part.Close(); err != nil {
+		t.Fatalf("close %s through its own handle: %v", file.Name, err)
+	}
+
+	if got, err := node.PartitionDB(file.Name); !errors.Is(err, store.ErrNoEstate) {
+		t.Errorf("a partition closed through its own handle is still answered: "+
+			"PartitionDB = %p, %v, want ErrNoEstate", got, err)
+	}
+	if held := node.OpenPartitions(); slices.Contains(held, file.Name) {
+		t.Errorf("a partition closed through its own handle is still listed open: %v", held)
+	}
+	again, err := node.OpenPartition(t.Context(), file)
+	if err != nil {
+		t.Fatalf("reopen %s: %v", file.Name, err)
+	}
+	if again == part {
+		t.Fatal("opening the file again handed back the handle that was closed")
+	}
+	if err := again.Read(t.Context(), func(tx *sql.Tx) error {
+		var n int
+		return tx.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n)
+	}); err != nil {
+		t.Errorf("the reopened partition does not read: %v", err)
+	}
+}
