@@ -1559,8 +1559,14 @@ func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int
 // is in [events.Category]'s map. What reads them is the live seat state, where
 // "this seat is running here now" is exactly the question.
 //
-// THE ROLE, NOT THE HANDLE, because every other event the projection keys on
-// carries the role name and a seat under two spellings is two rows.
+// THE SEAT'S AGENT ID under `agent_id`, because that is what every other
+// seat-level event carries there and what the projection keys a seat by. It
+// carried the HANDLE, so the one field the projection reads its key from meant
+// a different thing on these two types than on every other: a seat's arrival
+// and its first turn landed under two identities. Neither a handle nor a name
+// can stand in for the id — a name is prose two seats may share, and a handle
+// moves on a rename while the id, derived from the handle the seat was created
+// under, does not (ADR-0019). The handle and the name ride along for a reader.
 func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	payload events.Payload) {
 
@@ -1568,20 +1574,22 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 		return
 	}
 	role := e.seatRole(handle)
-	if role == nil {
+	agentID := e.seatAgentID(role)
+	if role == nil || agentID == "" {
 		// A HANDLE THIS EPOCH NO LONGER HAS, which is the ordinary way a
 		// seat is released: the revision that removed it is already
-		// current. There is no role to key the row on, and inventing one
-		// from the handle would make a second row for the same seat.
+		// current. There is no seat to key the row on, and inventing an
+		// identity from the handle would make a second row for the same
+		// seat.
 		return
 	}
 	var ev *events.Event
 	switch p := payload.(type) {
 	case types.AgentSpawned:
-		p.RoleName, p.Agent = role.Name, handle
+		p.Agent, p.AgentHandle, p.RoleName = agentID, role.Handle(), role.Name
 		ev = events.New(p, tracing.TraceOf(ctx))
 	case types.AgentTerminated:
-		p.RoleName, p.Agent = role.Name, handle
+		p.Agent, p.AgentHandle, p.RoleName = agentID, role.Handle(), role.Name
 		ev = events.New(p, tracing.TraceOf(ctx))
 	default:
 		return
