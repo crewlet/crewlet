@@ -745,7 +745,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
 | `#/settings/people` | **People & access** — every human seat, where agents reach them and whether they act here as themselves; every API token by label, the person it acts as and its scope. Never a value *(operator)*. No tail: a person's page is their seat | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
-| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every tool a seat can call, by origin. Not guarded: the registry is the push every reader gets, and only an MCP server's template reads the guarded configuration, which its panel says itself. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` |
+| `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools & MCP** — every MCP server with what each node did with it, and every tool a seat can call, by origin. Not guarded: the registry and who holds each tool are pushes every reader gets; only the servers' status (`mcp_servers_status`) is the operator's, and its section says so in its own place. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties and config rollout *(operator)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
@@ -4973,8 +4973,55 @@ it holds everything else — the facts, the agents and any faulted surface
 (open on arrival, behind a disclosure that can fold it away), each agent's own
 step at the vendor (*Create app on GitHub*, *Install on GitHub*), the settings
 square, **Disconnect**, the provisioning passes and each surface's deliveries.
-A dashed tile at the end of the grid leads to **Tools & MCP** for every other
-tool an agent can reach. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
+A dashed tile at the end of the grid, **Add an MCP server**, opens the add form
+on Tools & MCP (`?add=server`) for every other tool an agent can reach. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
+
+**Tools & MCP** is the servers first, then the catalogue. **MCP servers** draws
+the engine's `mcp_servers_status`: each server's launch (the command and its
+arguments, or the address — never an `env` value or a header), who it
+**reaches** (every agent seat, *n seats* or *No seat*, from each agent seat's
+`tool_sources` on the pushed org — the engine's own grant), the engine's
+**state** (*Running*, *Partly failing*, *Failing*, *Not started*, *Not
+reported*) and **one chip per live node** with what that node started, and
+under THAT chip the first failure it reported, in secondary ink with the seat
+it was launched for — the chip carries the danger tone and names the node, so
+the reason does not repeat either. A per-seat server on a roster that carries
+no `tool_sources` reaches *Unknown*, never *No seat*; a shared one reaches
+every agent seat by the engine's own rule whatever the roster says. The launch
+is one line cut at its end, never broken inside a token. A node whose build
+does not report is named once above the grid and its chips read *not
+reported*, never *none*. The **From MCP servers** tile counts *n of m servers
+running* off the same answer — never the registry's origins, which read *0*
+over a table of failing servers. The section is the operator's — it names
+nodes, commands and failures — so a reader without the credential sees the
+refusal in its place and the catalogue around it unchanged. A row opens the
+**server's page** (`servers/{name}`): its state, transport, instances, reach
+and tool count, the launch whole, and every node's reason as the heartbeat
+carried it, unclamped — the one place a reason the grid clamps can be read
+without a pointer — above the
+catalogue narrowed to its origin, whose chip is drawn and selected even when
+the server registered nothing. A reader refused the status (or one whose read
+failed) is told the page could not read it — never that no configuration
+carries the server, which only an answer can say. An origin with no tools says so — *docs has
+registered no tools*, with the reason from the engine's state and **Show all
+tools** — rather than *No tool matches “”*, which is kept for a search that
+found nothing. **Add an MCP server** is drawn for every reader and
+disabled with the reason for one who cannot change the configuration: a
+name (its example is never a name the company already has; a name the
+configuration carries is refused, and one only a node still runs from an
+earlier revision is free and said beside the field, since the engine's
+create judges the configuration alone), how it runs
+(*Launch a command* or *Connect to an address*), whether
+there is one for the company or one per seat granted it, the command and its
+arguments one per line (or the address), and the environment or headers as
+`NAME: value` rows whose value is a secret field (`$` offers the sealed
+entries). Add checks the whole company with the server in it (the create-only
+`PUT /config/mcp-servers/{name}` with `If-None-Match: *` and `dry_run`), says
+any warning the add introduces — not one the company already carried — and
+places a refusal beside its field; then it stores the revision. A tool's own
+panel names the seats **granted** its server from the same pushed
+`tool_sources`, so opening a tool, or stepping through them with `[`/`]`,
+asks the engine nothing.
 
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.

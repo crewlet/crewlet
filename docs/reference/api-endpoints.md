@@ -98,6 +98,7 @@ node means nothing was done.
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
+| `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
 | `POST` | `/work/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -220,7 +221,7 @@ through unchanged; one that adds its own `Content-Security-Policy` produces two
 policies, and a browser enforces both.
 
 Read-side handlers live in the `internal/api` package (one module
-per domain — `agents`, `events`, `tokens`, `org`, `fleet`, `access`,
+per domain — `agents`, `events`, `tokens`, `org`, `fleet`, `access`, `mcpstatus`,
 `sandbox_runs`, `budgets`, `integrations`, `webhooks`,
 `dashboard`, `health`);
 `webhooks` and `/config/*` keep a stable external contract, while the
@@ -386,9 +387,10 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 | `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the document has not moved |
 | `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise |
 | `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
-| `If-None-Match: *` | writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
+| `If-None-Match: *` | `/config` writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
+| `If-None-Match: *` | entity `PUT` | Proceed only if **that entity** does not exist: the create-only write that adds an MCP server or an LLM provider. `412 entity_exists` when one does; `400 conflicting_preconditions` beside an `If-Match` |
 
-The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition, and every `If-Match` value other than `*` is an entity tag, matched against the active revision and nothing else.
+The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition — about the company at `/config`, about the entity at an entity's own address — and every `If-Match` value other than `*` is an entity tag, matched against the active revision and nothing else.
 
 Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
 
@@ -403,8 +405,8 @@ Four collections, `GET` and `PUT`:
 | `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
 | `PUT` | `/config/units/{name}` | Replace one org unit |
-| `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
-| `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |
+| `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
+| `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every server already declared |
 
 Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
 
@@ -431,12 +433,17 @@ Four rules follow from that:
   placed where the seat sits in the document (`roles[1].gaol`), with its line in
   the body. A decoder that ignored what it did not recognise would answer `201`
   and store the seat with its goal silently gone.
-- **A `PUT` never creates.** An id nothing carries is `404 no_such_entity`, not
-  a new entity: naming one that is not there is far more often a typo than an
-  intent to add one, and creating through this route would grow the company
-  without the caller ever seeing the document they changed. Add through
-  `PUT /config`, which shows the whole thing. The id is looked up before the
-  body is read, so a mistyped one is a `404` whatever the body holds.
+- **A plain `PUT` never creates.** An id nothing carries is `404 no_such_entity`,
+  not a new entity: naming one that is not there is far more often a typo than
+  an intent to add one. The intent is SAID with `If-None-Match: *` — the
+  create-only write, for the two flat collections (`mcp-servers`,
+  `llm-providers`): a taken id is `412 entity_exists` rather than a
+  replacement, the body's identity must match the path as on any `PUT`, and
+  the whole company is validated with the new entity in it. A seat and a unit
+  are `400 not_creatable` — each has a place in the chart the path cannot
+  name — and are added through `PUT /config`, which shows the whole thing.
+  The id is looked up before the body is read, so a mistyped one is a `404`
+  whatever the body holds.
 - **The id in the path is the identity, and a `PUT` never renames.** A body
   whose own identity disagrees with the path is `400 identity_mismatch`, not a
   move: nothing that points at the old identity travels with the splice. A
@@ -1986,6 +1993,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | `{}` | `GET /schedules` |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
 | `sandbox_tail` | `{turn_id, launch_id}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output: {text, source: transcript\|stderr\|none, cut, as_of, finished}` (the last 8 KiB, redacted), `not_running` with the record's `status` (`awaiting_clarification`, `launching`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left), `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget (no `node` for a run nobody holds right now), or `owner_upgrading` naming an owner whose build does not advertise the `sandbox_tail` feature. A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s while a running job's span is open, and nothing else asks |
@@ -3526,6 +3534,60 @@ attribution rather than an address.
   ]
 }
 ```
+
+### `GET /mcp-servers`
+
+Backs the **Servers** section of **Settings › Tools & MCP**: every MCP server,
+what the configuration declares for it and what each live node did with it.
+**It needs a token, reads included**, for the reason `/fleet` does — it names
+the nodes, the launch commands and the first line of each failure — and
+`api.allow_anonymous_read` does not open it.
+
+**Off the heartbeats, not a fan-out.** Each node re-publishes what its MCP
+starts concluded on its presence lease, one row per server with its instances
+counted (a per-seat template has one instance per seat that node holds), so
+one read of the lease table is every node's answer at once. A node running a
+build older than that report is `reported: false` and its cells are UNKNOWN —
+never a row of zeros, which would read as "started nothing".
+
+`servers` lists every server this node's active configuration declares, then
+any a node reports that the configuration does not carry (`configured: false`
+— a node still on an older revision mid-rollout). The launch is the parts
+that are not credentials — `transport`, `command`, `args`, `url`; `env` and
+`headers` are never here. `started` and `failed` are summed over the nodes,
+`tools` is the most one started instance serves, and `state` is decided here
+so no screen re-derives it:
+
+| `state` | Means |
+|---|---|
+| `running` | Every instance any node launched started and listed its tools |
+| `partial` | Some started and some did not — a node's environment or one seat's credentials rather than the server |
+| `failing` | Instances were launched and none started — the server, its command or address, or credentials every seat shares |
+| `not_started` | Every reporting node started nothing for it — a per-seat template no seat on a live node declares credentials for |
+| `unreported` | No live node publishes the report at all |
+
+`error` is one failed instance's reason, cut to 240 bytes on the heartbeat,
+and `error_seat` the seat it was launched for; the whole text is the node's
+`mcp_server_failed` log line.
+
+```json
+{
+  "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
+  "servers": [
+    {"name": "github", "configured": true, "shared": false, "transport": "stdio",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "url": "",
+     "state": "partial", "started": 3, "failed": 1, "tools": 26,
+     "nodes": [
+       {"node": "node-1", "reported": true, "started": 2, "failed": 0, "tools": 26, "error": "", "error_seat": ""},
+       {"node": "node-2", "reported": true, "started": 1, "failed": 1, "tools": 26,
+        "error": "401 Bad credentials", "error_seat": "backend-dev"}
+     ]}
+  ]
+}
+```
+
+To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
+see [Per-entity read and write](#per-entity-read-and-write).
 
 ### `GET /fleet`
 

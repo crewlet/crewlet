@@ -7,11 +7,9 @@ import {
   ceilingText,
   changesFrom,
   companyPatch,
-  introducedWarnings,
   refusalWords,
   seatWithCeilings,
 } from "./ceilings.ts";
-import type { ConfigWarning } from "~/protocol/types.ts";
 
 describe("reading a typed ceiling", () => {
   // THE SPELLING THE SCREEN DRAWS. A field that took only digits asked the
@@ -110,17 +108,6 @@ describe("what a change writes", () => {
 });
 
 describe("what the engine's answer means", () => {
-  const w = (path: string, message: string) => ({ path, message }) as ConfigWarning;
-
-  // ONLY WHAT THIS CHANGE INTRODUCES: a warning the company already had would
-  // otherwise stop every ceiling change on an unrelated sentence.
-  test("the warnings a change introduces are the check's less the company's own", () => {
-    const old = w("roles[3].manages[0]", "old");
-    const idle = w("roles[0].token_budget.day", "idle");
-    expect(introducedWarnings([old], [old, idle])).toEqual([idle]);
-    expect(introducedWarnings([old], [old])).toEqual([]);
-  });
-
   test("a refusal whose remedy is a fresh read says so", () => {
     const scope = { kind: "seat", handle: "pm", name: "PM" } as const;
     expect(

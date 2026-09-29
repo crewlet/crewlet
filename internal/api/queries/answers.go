@@ -402,6 +402,12 @@ func Register(r *Registry, s Sources) {
 		// a guard the server did not keep, and on a node with
 		// `api.allow_anonymous_read` an anonymous GET read all of it.
 		r.RegisterOperator("fleet", s.fleet)
+		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
+		// table: every node re-publishes its starts on its presence
+		// heartbeat, so one listing answers for the fleet. Operator-only
+		// for fleet's reason — node ids, launch commands and the first
+		// line of each failure. See [Sources.mcpServersStatus].
+		r.RegisterOperator("mcp_servers_status", s.mcpServersStatus)
 	}
 	if s.Access != nil {
 		// OPERATOR-ONLY: which labels the guard accepts and which person

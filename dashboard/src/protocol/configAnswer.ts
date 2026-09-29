@@ -15,7 +15,7 @@
  * network half is `configWrite.ts`.
  */
 
-import type { ConfigProblem, Derived } from "./types.ts";
+import type { ConfigProblem, ConfigWarning, Derived } from "./types.ts";
 
 /** What the engine answered: its status, its parsed body and its entity tag.
  *  Status 0 is a request that was never fully answered. */
@@ -32,7 +32,9 @@ export type ConfigConflictReason =
   /** `412 already_configured`: a company exists, and the write was creating one. */
   | "already_configured"
   /** `409` or `412 no_active_revision`: the write edits a company the engine no longer holds. */
-  | "no_active_revision";
+  | "no_active_revision"
+  /** `412 entity_exists`: a create-only entity write named an id the revision already carries. */
+  | "entity_exists";
 
 /** What a refusal from the configuration surface means. */
 export type ConfigRefusal =
@@ -89,7 +91,9 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
         ? "no_active_revision"
         : code === "already_configured"
           ? "already_configured"
-          : "revision_advanced";
+          : code === "entity_exists"
+            ? "entity_exists"
+            : "revision_advanced";
     return {
       kind: "conflict",
       reason,
@@ -113,4 +117,23 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     code,
     hint: text(body.hint),
   };
+}
+
+/**
+ * The warnings a change INTRODUCES: the check's, less the ones the company
+ * already had.
+ *
+ * A check answers every warning the whole document raises, and a company
+ * already carrying one — a dangling `manages:` entry three seats away — would
+ * otherwise stop every ceiling change on the same unrelated sentence until
+ * somebody fixed it. What a person making a change has to see is what THEIR
+ * change does: a seat ceiling now above the company's, a week now below its
+ * own day, a server nobody is granted.
+ */
+export function introducedWarnings(
+  before: readonly ConfigWarning[],
+  after: readonly ConfigWarning[],
+): ConfigWarning[] {
+  const had = new Set(before.map((w) => `${w.path}\u0000${w.message}`));
+  return after.filter((w) => !had.has(`${w.path}\u0000${w.message}`));
 }

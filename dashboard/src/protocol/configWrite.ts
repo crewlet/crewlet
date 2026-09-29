@@ -14,7 +14,9 @@
  *  - [getEntity] reads one addressable entity (a seat, a unit, a provider, an
  *    MCP server) with the tag of its revision, [dryRunEntity] checks a
  *    replacement of it, and [putEntity] stores one — each with the same
- *    validation of the whole document behind it.
+ *    validation of the whole document behind it;
+ *  - [dryRunCreate] and [createEntity] ADD an MCP server or a provider: the
+ *    same PUT at the new entity's own address, create-only.
  *
  * EVERY WRITE STATES THE REVISION IT EDITED (`If-Match`), so a colleague's
  * save in between is a `conflict` to re-read rather than an overwrite. And
@@ -289,6 +291,62 @@ export async function putEntity(
     await answerOf(
       rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
         headers: { "If-Match": etag },
+        body: { ...entity, _summary: summary },
+        signal,
+      }),
+    ),
+  );
+}
+
+/** The collections an entity can be ADDED to by its address: the flat ones. */
+export type CreatablePath = Extract<EntityPath, "llm-providers" | "mcp-servers">;
+
+/**
+ * The create-only condition: `If-None-Match: *` at the new entity's address.
+ *
+ * NOT `If-Match` BESIDE IT — the engine refuses the pair. The document tag
+ * names a revision an EDIT was read from, and an address with nothing at it
+ * has no representation for that tag to describe; the create lands on the
+ * revision active when it commits, compare-and-set, and is validated whole
+ * against it. A taken name is `412 entity_exists` — a conflict whose reason
+ * says so — rather than a replacement of an entity the form never showed.
+ */
+const CREATE_ONLY = { "If-None-Match": "*" } as const;
+
+/**
+ * Check that adding `entity` under `id` would be accepted — the whole company
+ * validated with it in. Stores nothing, carries no summary.
+ */
+export async function dryRunCreate(
+  kind: CreatablePath,
+  id: string,
+  entity: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+        query: { dry_run: "true" },
+        headers: CREATE_ONLY,
+        body: entity,
+        signal,
+      }),
+    ),
+  );
+}
+
+/** Add `entity` under `id`, with its audit summary. */
+export async function createEntity(
+  kind: CreatablePath,
+  id: string,
+  entity: Record<string, unknown>,
+  summary: string,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+        headers: CREATE_ONLY,
         body: { ...entity, _summary: summary },
         signal,
       }),

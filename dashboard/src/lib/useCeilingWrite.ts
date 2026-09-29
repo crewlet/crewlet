@@ -35,13 +35,13 @@ import {
   savePatch,
   type ConfigWriteOutcome,
 } from "~/protocol/configWrite.ts";
+import { introducedWarnings } from "~/protocol/configAnswer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { ConfigWarning, TokenBudget } from "~/protocol/types.ts";
 import {
   ceilingSummary,
   changesFrom,
   companyPatch,
-  introducedWarnings,
   refusalWords,
   seatWithCeilings,
   type CeilingChanges,

@@ -3291,14 +3291,18 @@ export function Integrations({ kind }: { kind?: string }) {
             {/* EVERY OTHER TOOL IS AN MCP SERVER, and a catalogue that ended
                 at the six vendors this build ships would read as the whole of
                 what an agent can reach. A link rather than a tile with an
-                action: the servers are configured, listed and checked on
-                Tools & MCP. */}
+                action: it opens the add form where the servers are listed and
+                checked — Tools & MCP, with `?add=server` — so a server added
+                from here lands beside the others it is compared with. */}
             {show !== "connected" && (
-              <a className="int-tile int-tile-more" href={href(["settings", "tools"])}>
+              <a
+                className="int-tile int-tile-more"
+                href={href(["settings", "tools"], { add: "server" })}
+              >
                 <span className="int-brand int-brand-more" aria-hidden>
                   <PlusGlyph size="sm" />
                 </span>
-                <span className="int-name">MCP servers</span>
+                <span className="int-name">Add an MCP server</span>
                 <span className="int-tile-text">
                   Give agents any tool that speaks MCP — per role, with per-seat credentials.
                 </span>

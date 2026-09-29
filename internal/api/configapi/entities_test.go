@@ -203,10 +203,10 @@ func TestAnEntityWriteThatBreaksTheCompanyIsRefused(t *testing.T) {
 	}
 }
 
-// AN ID NOBODY CARRIES IS NOT CREATED. A PUT naming an entity that is not
-// there is far more often a typo than an intent to add one, and creating
-// through this route would let a caller grow the company without ever seeing
-// the document they changed.
+// AN ID NOBODY CARRIES IS NOT CREATED BY A PLAIN PUT. One naming an entity
+// that is not there is far more often a typo than an intent to add one; the
+// intent is said with `If-None-Match: *` (entity_create_test.go), and a seat
+// is not created by address at all.
 func TestAnEntityWriteNeverCreates(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
@@ -252,8 +252,8 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // — a *routing* answer rather than a handler that 404s or, worse, one that
 // quietly succeeds having done nothing.
 //
-// Removal is a full-document edit on purpose, for the same reason creation is
-// and more so: deleting a seat strands its mailbox and its in-flight work, and
+// Removal is a full-document edit on purpose: deleting a seat strands its
+// mailbox and its in-flight work, and
 // deleting a provider silently repoints every role that named it. Both belong
 // in a document somebody looked at. docs/guides/configure-via-api.md states
 // this status code, which is why it is asserted rather than assumed.

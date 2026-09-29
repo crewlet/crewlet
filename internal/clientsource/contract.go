@@ -108,6 +108,13 @@ var contract = []Entry{
 	{"TokenScope", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
 	{"AccessBinding", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheAccessStates"},
 
+	// mcp.ts
+	{"McpServersStatusAnswer", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpStatusNode", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpServerStatus", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpServerNode", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpServerState", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+
 	// attribution.ts
 	{"CHANGE_FIELDS", ReadLiteral, "internal/tracker.TestAttributionFieldsAreTheEngines"},
 

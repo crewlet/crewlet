@@ -29,6 +29,7 @@
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { AccessAnswer } from "../contract/access.ts";
+import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type {
@@ -4234,6 +4235,7 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   access: AccessAnswer;
+  mcp_servers_status: McpServersStatusAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;

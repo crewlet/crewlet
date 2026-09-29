@@ -588,6 +588,21 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-modal__header",
+    why: "uilet's Modal writes it on a dialog's head row, which centres its items. styles/frame.css aligns the row to the top when the head carries a subtitle (`:has(.crewlet-modal__subtitle)`), because a two- or three-line description under the title left the mark floating beside the description rather than on the title's line — the Add an MCP server dialog was the case found. A head with no subtitle keeps the kit's centring. The kit should do this itself; until it does, this is a rule about how every dialog here uses the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__subtitle",
+    why: "uilet's Modal writes it on the description under a dialog's title. styles/frame.css reads its presence (`.crewlet-modal__header:has(...)`) to top-align the head; see crewlet-modal__header.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-modal__icon",
+    why: "uilet's Modal writes it on a dialog's mark. styles/frame.css makes its box one title line tall inside a top-aligned head, so the glyph centres on the title's line; see crewlet-modal__header.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-app-shell__main",
     why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

@@ -159,7 +159,33 @@ groups on it:
 | `mcp:<server>` | Discovered on an MCP server. `<server>` is the **bare** template name, never the per-role instance: two seats' children of one template are the same integration to a reader grouping the catalogue |
 
 Those two are the whole grammar. A server that fails to start is visible as a
-**missing group**, rather than its tools quietly going absent from the builtins.
+**missing group**, rather than its tools quietly going absent from the builtins —
+and, above the catalogue on the same screen, as a row of its own: every node
+re-publishes what its MCP starts concluded on its presence heartbeat (per
+server, its instances counted), so **MCP servers** shows each server as
+*Running*, *Partly failing*, *Failing*, *Not started* or *Not reported* with one
+cell per live node and the first failure's reason and seat (`GET /mcp-servers`,
+operator-only; the heartbeat carries each reason bounded, and the whole text is
+the node's `mcp_server_failed` log line). Clicking a server opens its own page:
+its state, reach and launch, every node's reason as the node reported it rather
+than clamped to the grid's two lines, and the catalogue narrowed to its tools —
+which, for a server that never started, says it registered none and why.
+
+### Adding a server from the dashboard
+
+**Add an MCP server** on Settings › Tools & MCP (operator token required) writes
+the same `mcp_servers` entry you would write in YAML: a name, a command and its
+arguments (stdio) or an address (http), `shared` or one per seat, and the
+environment or headers — values as `${NAME}` pointers into the secret store,
+which the form offers as you type `$`. It checks the whole company with the
+server in it before storing, and adds it after every server already declared.
+A name the configuration already carries is refused; a name only a node still
+runs, from a revision it has not applied past yet, is free: the create is
+judged against the configuration alone.
+Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
+see [configure via the API](configure-via-api.md). A per-seat server still needs
+a seat to declare credentials for it under `mcp_env`, which is written in the
+org builder.
 
 ### What a tool can do
 

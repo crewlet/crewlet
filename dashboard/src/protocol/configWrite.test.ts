@@ -6,9 +6,11 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { classifyConfigRefusal } from "./configAnswer.ts";
+import { classifyConfigRefusal, introducedWarnings } from "./configAnswer.ts";
 import {
   configTransport,
+  createEntity,
+  dryRunCreate,
   dryRunEntity,
   dryRunPatch,
   getConfig,
@@ -17,6 +19,7 @@ import {
   putEntity,
   savePatch,
 } from "./configWrite.ts";
+import type { ConfigWarning } from "./types.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -169,12 +172,46 @@ describe("the helpers every /config writer uses", () => {
     const calls = stub(async () =>
       json({ revision_id: "r8", epoch: 9, warnings: null, derived: {} }, 201),
     );
-    await putEntity("mcp-servers", "git hub", { name: "git hub" }, '"r7"', "Add", never());
+    await putEntity("mcp-servers", "git hub", { name: "git hub" }, '"r7"', "Edit", never());
     const { url, init } = calls[0]!;
     expect(init.method).toBe("PUT");
     expect(new URL(url).pathname).toBe("/config/mcp-servers/git%20hub");
     expect((init.headers as Record<string, string>)["If-Match"]).toBe('"r7"');
-    expect(JSON.parse(init.body as string)).toMatchObject({ _summary: "Add" });
+    expect(JSON.parse(init.body as string)).toMatchObject({ _summary: "Edit" });
+  });
+
+  // AN ADD SAYS IT IS ONE. A plain PUT to an id nothing carries is a 404 —
+  // the engine reads it as a typo — so an add is the create-only condition
+  // at the new entity's address, and never an If-Match beside it, which the
+  // engine refuses as two conditions about two different resources.
+  test("an add is the create-only PUT, checked first without a summary", async () => {
+    const calls = stub(() => Promise.resolve(json({ base_revision_id: "r7" }, 200)));
+    await dryRunCreate("mcp-servers", "linear", { name: "linear" }, never());
+    await createEntity("mcp-servers", "linear", { name: "linear" }, "Add linear", never());
+    const [check, save] = calls;
+    for (const { url, init } of [check!, save!]) {
+      const headers = init.headers as Record<string, string>;
+      expect(init.method).toBe("PUT");
+      expect(new URL(url).pathname).toBe("/config/mcp-servers/linear");
+      expect(headers["If-None-Match"]).toBe("*");
+      expect(headers["If-Match"]).toBeUndefined();
+    }
+    expect(new URL(check!.url).searchParams.get("dry_run")).toBe("true");
+    expect(JSON.parse(check!.init.body as string)._summary).toBeUndefined();
+    expect(JSON.parse(save!.init.body as string)).toMatchObject({ _summary: "Add linear" });
+  });
+});
+
+describe("the warnings a change introduces", () => {
+  const w = (path: string, message: string) => ({ path, message }) as ConfigWarning;
+
+  // ONLY WHAT THIS CHANGE INTRODUCES: a warning the company already had would
+  // otherwise stop every change on an unrelated sentence.
+  test("are the check's less the company's own", () => {
+    const old = w("roles[3].manages[0]", "old");
+    const idle = w("roles[0].token_budget.day", "idle");
+    expect(introducedWarnings([old], [old, idle])).toEqual([idle]);
+    expect(introducedWarnings([old], [old])).toEqual([]);
   });
 });
 
@@ -191,6 +228,11 @@ describe("one reading of a /config refusal", () => {
       412,
       { error: "already_configured" },
       { kind: "conflict", reason: "already_configured", currentRevisionId: null },
+    ],
+    [
+      412,
+      { error: "entity_exists" },
+      { kind: "conflict", reason: "entity_exists", currentRevisionId: null },
     ],
     [
       409,

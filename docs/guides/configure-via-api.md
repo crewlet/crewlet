@@ -176,11 +176,27 @@ consequences worth knowing before you script against it:
   whole-document parser refuses an unknown key. A decoder that ignored what it
   did not recognise would answer `201` and store a seat with no goal, and this
   is the surface most likely to be hand-edited in a hurry.
-- **A `PUT` never creates.** An id the active revision does not carry is
-  `404 no_such_entity`. Naming one that is not there is far more often a typo
-  than an intent to add a seat, and adding through this route would grow the
-  company without you ever seeing the document you changed. Add through
-  `PUT /config`.
+- **A plain `PUT` never creates.** An id the active revision does not carry
+  is `404 no_such_entity`: naming one that is not there is far more often a
+  typo than an intent to add one. To ADD an MCP server or an LLM provider,
+  say so — send the same `PUT` with `If-None-Match: *`, the create-only
+  condition at the new entity's own address. It is added (an MCP server after
+  every server already declared, so no seat's tool block moves) and the whole
+  company validated as for any write; a name already taken is
+  `412 entity_exists` rather than a replacement of a server you never saw. Do
+  not send `If-Match` beside it (`400 conflicting_preconditions`): the create
+  lands on the revision active when it commits, compare-and-set. A seat and a
+  unit are not created by address (`400 not_creatable`) — each has a place in
+  the chart the path does not name — so add those through `PUT /config`.
+
+  ```bash
+  curl -X PUT http://localhost:8080/config/mcp-servers/linear \
+    -H "Authorization: Bearer $CREWLET_TOKEN" \
+    -H "If-None-Match: *" \
+    -H "X-Summary: add the linear server" \
+    -d '{"name":"linear","transport":"http","url":"https://mcp.example.com",
+         "headers":{"Authorization":"${LINEAR_TOKEN}"}}'
+  ```
 - **The path is the identity, and a `PUT` never renames.** `PUT
   /config/roles/ceo` replaces whatever is at `ceo`; a body carrying a
   different handle is `400 identity_mismatch` rather than a move. The handle
@@ -192,9 +208,8 @@ consequences worth knowing before you script against it:
   which makes a display-name edit a rename by accident. Keep `handle` in the
   body and change whatever else you like. Renaming is a full-document edit.
 - **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
-  answers `405`. Removal is a full-document edit for the same reason creation
-  is, only more so — deleting a seat also strands its mailbox and its in-flight
-  work, and deleting a provider silently repoints every role that named it. If
+  answers `405`. Removal is a full-document edit — deleting a seat strands its
+  mailbox and its in-flight work, and deleting a provider silently repoints every role that named it. If
   that is going to happen, it should happen in a document you looked at, and
   land as one reviewable revision. Export, edit, `PUT /config`.
 

@@ -11,6 +11,7 @@ import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural } from "~/lib/format.ts";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import {
+  Button,
   Callout,
   Card,
   CodeBlock,
@@ -28,11 +29,12 @@ import {
 import {
   WrenchGlyph,
   PlugGlyph,
+  PlusGlyph,
   PackageGlyph,
   SearchGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState, RECORD_MAX_HEIGHT, Section, SeatChip } from "~/components/common.tsx";
+import { RECORD_MAX_HEIGHT, Section, SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
@@ -41,6 +43,16 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import {
+  grantedSeats,
+  nodeOnlyNames,
+  serverOrigin,
+  serversUpLine,
+  takenNames,
+} from "~/lib/mcpServers.ts";
+import { AddMcpServerDialog } from "./AddMcpServerDialog.tsx";
+import { failureLine, McpServers, ServerHeader } from "./McpServers.tsx";
 import { useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import type { Capability } from "~/lib/tools.ts";
@@ -51,7 +63,8 @@ import {
   hintsAdvertised,
   schemaFields,
 } from "~/lib/tools.ts";
-import type { ConfigUnit, ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
+import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
+import type { McpServerStatus } from "~/contract/mcp.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -156,38 +169,32 @@ function hintRows(ann: ToolAnnotations | undefined): { label: string; value: str
 /**
  * Which seats can call a tool, and the rule that decides it.
  *
- * THREE DIFFERENT RULES, which is why this is a value rather than a list:
+ * THE ENGINE'S GRANT, NEVER A CLIENT'S. A builtin and an A2A tool are
+ * registered on every agent seat the engine spawns; an MCP server's tools
+ * reach exactly the seats the engine GRANTS that server — every agent seat for
+ * a shared server, and for a per-seat template only a seat declaring
+ * credentials for it under `mcp_env`, its own or its unit's. That grant is on
+ * the pushed org as each agent seat's `tool_sources`, resolved by
+ * `config.MCPServer.Grants` — the one rule the engine starts children by — so
+ * this reads it rather than walking the company document to re-derive it. The
+ * walk it replaced asked for the active configuration twice per addressed tool
+ * (the server's entity and the whole document) and was a second copy of the
+ * `mcp_env` inheritance rule.
  *
- *   - a builtin and an A2A tool are registered on every agent seat the engine
- *     spawns, so naming two hundred of them says less than saying so;
- *   - a SHARED MCP server is one instance serving the company, so its tools
- *     are every agent seat's too;
- *   - a server with `shared: false` is a TEMPLATE — `config.MCPServer`'s own
- *     words — and an instance is launched only for a seat that declares
- *     credentials for it under `mcp_env`. There the credential IS the grant,
- *     and the seats can be named exactly.
- *
- * `shared` is three-valued for the reason everything in this product is: the
- * active configuration may not have been readable, and a tool whose holders
- * are UNKNOWN must not be drawn as a tool nobody holds.
+ * NULL IS UNKNOWN: a roster whose agent seats carry no `tool_sources` came
+ * from a node older than the field, and a tool whose holders are unknown must
+ * not be drawn as a tool nobody holds.
  */
 interface Holders {
-  /** Named seats, where the grant is a credential and can be enumerated. */
+  /** The seats granted it. */
   seats: Seat[];
-  /** Every agent seat, where the tool is registered on all of them. */
+  /** Every agent seat holds it. */
   everyone: boolean;
   /** One sentence naming the rule this answer came from. */
   why: string;
 }
 
-function holdersOf(
-  tool: ToolRow,
-  seats: Seat[],
-  shared: boolean | null,
-  /** Which seats declare credentials for a per-seat server, or null when the
-   *  company document could not be read. */
-  holdersByServer: Map<string, Set<string>> | null,
-): Holders | null {
+function holdersOf(tool: ToolRow, seats: Seat[]): Holders | null {
   const agents = seats.filter((s) => s.kind === "agent");
   const server = mcpServerOf(tool.source);
   if (!server) {
@@ -200,45 +207,13 @@ function holdersOf(
           : "The engine registers its builtins on every agent seat it spawns.",
     };
   }
-  // THE CONFIGURATION DID NOT ANSWER. Not "nobody holds it" — see the type's
-  // own comment — so the panel says which question went unanswered instead of
-  // drawing an empty list somebody would act on.
-  if (shared === null) return null;
-  if (shared) {
-    return {
-      seats: agents,
-      everyone: true,
-      why: `${server} is a shared server: one instance serves the company, so every agent seat can call its tools.`,
-    };
-  }
-  // AND THE CREDENTIALS ARE GUARDED TOO. `mcp_env` is not on the anonymous org
-  // projection — the classification in `internal/api/orgprojection_test.go`
-  // calls it "tool credentials inherited by members" — so which seats declare
-  // one is a question the company document answers and an anonymous reader
-  // cannot. Unanswered is null, exactly as an unread `shared` is, rather than
-  // an empty list somebody would act on.
-  if (!holdersByServer) return null;
-  const declared = holdersByServer.get(server) ?? new Set<string>();
+  const granted = grantedSeats(seats, server);
+  if (granted === null) return null;
   return {
-    seats: agents.filter((s) => declared.has(s.name)),
-    everyone: false,
-    why: `${server} is a per-seat template, so an instance is launched only for a seat that declares credentials for it under mcp_env.`,
+    seats: granted,
+    everyone: agents.length > 0 && granted.length === agents.length,
+    why: `The engine grants ${server} to every agent seat when it is shared, and otherwise only to a seat that declares credentials for it under mcp_env.`,
   };
-}
-
-/**
- * Whether an `mcp_servers` entry is shared.
- *
- * UNSET IS SHARED, and unset is what the wire carries for it: `config.Toggle`
- * omits an untouched toggle rather than writing today's default into the
- * document, so the field is absent on every server nobody said anything
- * about — and reading absent as `false` would report the ordinary company
- * server as a per-seat template held by nobody.
- */
-function sharedFlag(entity: unknown): boolean {
-  if (!entity || typeof entity !== "object") return true;
-  const value = (entity as Record<string, unknown>)["shared"];
-  return typeof value === "boolean" ? value : true;
 }
 
 /**
@@ -251,10 +226,9 @@ function sharedFlag(entity: unknown): boolean {
  * name is shared.
  *
  * IT ASKS THE ENGINE NOTHING. Everything here comes off the pushed catalogue,
- * so every surface that only needs to know WHICH tool this is — a header, a
- * peek deciding whether it has one at all — costs no request. The one question
- * a tool raises that the catalogue cannot answer is [useServerSharing]'s, and
- * it is asked where it is read.
+ * and who holds a tool off the pushed org ([holdersOf]), so a tool costs no
+ * request wherever it is shown — a header, a peek, every `[`/`]` step through
+ * the peek's neighbours.
  */
 function useTool(name: string): {
   /** Every registration under this name — see [ToolBody]. */
@@ -280,79 +254,6 @@ function useTool(name: string): {
 }
 
 /**
- * Whether one MCP server's template is SHARED, from the active configuration.
- *
- * THE HALF THE CATALOGUE CANNOT CARRY — a registration records what a tool IS,
- * not who was given it — and it is what decides whether a tool belongs to
- * every agent seat or to the handful that hold credentials for its server.
- *
- * SEPARATE FROM [useTool] BECAUSE ONLY [ToolBody] READS IT. `useQuery` has no
- * cache and no in-flight dedupe — each instance mints its own frame — so while
- * this sat inside the resolution hook, every addressed tool asked the engine
- * for the same entity twice: once for the header, which throws the answer
- * away, and once for the body, on the page and in the rail alike, again on
- * every `[`/`]` step through the peek's neighbours. A builtin or an A2A tool
- * asks nothing at all: it has no server to ask about.
- */
-function useServerSharing(server: string): {
-  /** Null until the configuration answers, which is not the same as false. */
-  shared: boolean | null;
-  entity: { loading: boolean; error: string | null };
-} {
-  const entity = useQuery(
-    "config_entities",
-    { kind: "mcp-servers", id: server },
-    { enabled: server !== "" },
-  );
-  return {
-    shared: entity.data?.entity ? sharedFlag(entity.data.entity) : null,
-    entity: { loading: entity.loading, error: entity.error },
-  };
-}
-
-/**
- * Which seats declare credentials for a per-seat MCP server, by SEAT NAME.
- *
- * THE COMPANY DOCUMENT ANSWERS THIS AND THE PROJECTION CANNOT. `mcp_env` is
- * guarded — it holds tool credentials — so the anonymous org projection
- * carries none of it, and a reader without an operator token simply does not
- * know which seats a per-seat server is launched for. Null says exactly that,
- * for the same reason an unread `shared` is null: an empty list here reads as
- * "nobody holds this tool", which is a claim about somebody's company.
- *
- * A unit's own `mcp_env` counts, because its direct AGENT members inherit it —
- * that is `org.MCPEnv`'s rule and the merge `lib/seats.ts` performs for the
- * seat screen. A human member inherits none: it runs no tools.
- *
- * Read only for a server, because a builtin and an A2A tool have none to ask
- * about — the same reason [useServerSharing] is gated the same way.
- */
-function useServerHolders(server: string): Map<string, Set<string>> | null {
-  const doc = useQuery("config", undefined, { enabled: server !== "" });
-  return useMemo(() => {
-    if (server === "" || doc.error || !doc.data) return null;
-    const out = new Map<string, Set<string>>();
-    const add = (seat: string, env: Record<string, Record<string, string>> | undefined) => {
-      for (const name of Object.keys(env ?? {})) {
-        const held = out.get(name) ?? new Set<string>();
-        held.add(seat);
-        out.set(name, held);
-      }
-    };
-    const visit = (unit: ConfigUnit): void => {
-      for (const role of unit.roles ?? []) {
-        add(role.name, role.mcp_env);
-        if (role.kind !== "human") add(role.name, unit.mcp_env);
-      }
-      for (const child of unit.children ?? []) visit(child);
-    };
-    for (const role of doc.data.roles ?? []) add(role.name, role.mcp_env);
-    for (const unit of doc.data.units ?? []) visit(unit);
-    return out;
-  }, [server, doc.data, doc.error]);
-}
-
-/**
  * What a tool IS, under whichever header named it.
  *
  * ONE BODY FOR THE PAGE AND THE RAIL. `#/settings/tools/{name}` is a tool's
@@ -367,8 +268,6 @@ function ToolBody({ name }: { name: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const { matches, tool, server, cold } = useTool(name);
-  const { shared, entity } = useServerSharing(server);
-  const holdersByServer = useServerHolders(server);
 
   // THE CATALOGUE HAS NOT ARRIVED YET, which is not the same screen as a tool
   // that does not exist. An engine registers its builtins at boot, so an empty
@@ -389,7 +288,7 @@ function ToolBody({ name }: { name: string }) {
   }
 
   const fields = schemaFields(tool);
-  const holders = holdersOf(tool, index.seats, shared, holdersByServer);
+  const holders = holdersOf(tool, index.seats);
 
   return (
     <div className="col gap-3">
@@ -466,50 +365,44 @@ function ToolBody({ name }: { name: string }) {
 
       <section className="col gap-2">
         <div className="t-label">Which seats hold it</div>
-        {entity.loading && <Skeleton variant="text" rows={2} label="Loading" />}
-        {/* THE REFUSAL GOES WHERE THE ANSWER WOULD HAVE BEEN, and nowhere
-            else: the tool's own facts came off a push and are still true, so
-            a configuration read that failed must not blank them. */}
-        <QueryState error={entity.error} loading={entity.loading}>
-          {holders === null ? (
-            <p className="t-body muted">
-              Who holds this depends on whether <span className="mono">{server}</span> is shared,
-              and the active configuration did not answer.
+        {holders === null ? (
+          <p className="t-body muted">
+            Which seats are granted <span className="mono">{server}</span> is not on the roster this
+            engine sent: the node serving it is older than the grant.
+          </p>
+        ) : holders.everyone ? (
+          <>
+            <p className="t-body">
+              Every agent seat — {plural(holders.seats.length, "seat")} in this company.
             </p>
-          ) : holders.everyone ? (
-            <>
-              <p className="t-body">
-                Every agent seat — {plural(holders.seats.length, "seat")} in this company.
-              </p>
-              <p className="t-caption">{holders.why}</p>
-            </>
-          ) : holders.seats.length > 0 ? (
-            <>
-              <div className="row gap-2 wrap">
-                {holders.seats.map((seat) => (
-                  <SeatChip
-                    key={seat.handle}
-                    name={seat.name}
-                    handle={seat.handle}
-                    kind={seat.kind}
-                  />
-                ))}
-              </div>
-              <p className="t-caption">{holders.why}</p>
-            </>
-          ) : (
-            // A TEMPLATE NOBODY INSTANTIATES. The server is configured, the
-            // tool is in the registry, and no seat can call it — which is a
-            // finding rather than an empty list, so it is said outright.
-            <>
-              <p className="t-body">
-                No seat can call this: nothing declares credentials for{" "}
-                <span className="mono">{server}</span>, so the template launches nowhere.
-              </p>
-              <p className="t-caption">{holders.why}</p>
-            </>
-          )}
-        </QueryState>
+            <p className="t-caption">{holders.why}</p>
+          </>
+        ) : holders.seats.length > 0 ? (
+          <>
+            <div className="row gap-2 wrap">
+              {holders.seats.map((seat) => (
+                <SeatChip
+                  key={seat.handle}
+                  name={seat.name}
+                  handle={seat.handle}
+                  kind={seat.kind}
+                />
+              ))}
+            </div>
+            <p className="t-caption">{holders.why}</p>
+          </>
+        ) : (
+          // A TEMPLATE NOBODY INSTANTIATES. The server is configured, the
+          // tool is in the registry, and no seat can call it — which is a
+          // finding rather than an empty list, so it is said outright.
+          <>
+            <p className="t-body">
+              No seat can call this: no seat is granted <span className="mono">{server}</span>, so
+              it launches for nobody.
+            </p>
+            <p className="t-caption">{holders.why}</p>
+          </>
+        )}
       </section>
     </div>
   );
@@ -556,10 +449,11 @@ function ToolHeader({ name }: { name: string }) {
  * and then be stale for exactly as long as the peek is interesting. [SeatPeek]
  * says the same about the roster, for the same reason.
  *
- * # The one thing it does ask
+ * # And nothing else either
  *
- * Whether the tool's server is SHARED, asked ONCE, by [ToolBody] — see
- * [useServerSharing] for why the header half of this rail must not ask it too.
+ * Who holds it is the pushed org's `tool_sources` ([holdersOf]), so opening a
+ * tool — and stepping through its neighbours with `[` and `]` — asks the
+ * engine nothing at all.
  */
 export function ToolPeek({ name }: { name: string }) {
   const { tool, cold } = useTool(name);
@@ -586,6 +480,57 @@ export function ToolPeek({ name }: { name: string }) {
   );
 }
 
+/**
+ * Why a server's slice of the catalogue is empty, from what the engine
+ * reports about it.
+ *
+ * A server's tools reach the registry only from an instance that STARTED, so
+ * an empty slice is always one of the engine's states — and saying which
+ * turns "nothing here" into what to go and fix. Null status (refused, or not
+ * yet answered) says only what the registry itself can.
+ */
+export function emptyOriginReason(
+  server: string,
+  servers: readonly McpServerStatus[] | null,
+): string {
+  if (!server) return "The registry holds no tool from this origin.";
+  const row = servers?.find((s) => s.name === server);
+  if (!row) {
+    return servers
+      ? `No configuration or live node carries a server called ${server}.`
+      : "A server's tools are listed once an instance of it starts on a node.";
+  }
+  const failed = row.nodes.find((n) => n.error);
+  switch (row.state) {
+    case "failing":
+      return failed
+        ? `Every instance a node launched failed to start. On ${failed.node}, ${failureLine(failed)}`
+        : "Every instance a node launched failed to start.";
+    case "partial":
+      return failed
+        ? `It started somewhere, but not on the node serving this page. On ${failed.node}, ${failureLine(failed)}`
+        : "It started somewhere, but not on the node serving this page.";
+    case "not_started":
+      return row.shared
+        ? "No node has started it yet: a change no node has applied."
+        : "No node started it: no seat on a live node declares credentials for it under mcp_env.";
+    case "unreported":
+      return "No live node reports its MCP servers, so whether it started is unknown.";
+    default:
+      return "It is running, and the node serving this page has not listed its tools yet.";
+  }
+}
+
+/**
+ * How often the servers' status is asked again, in ms.
+ *
+ * FIFTEEN SECONDS, the Nodes screen's cadence and for its reason: the answer
+ * is the lease table, and a poll slower than the presence TTL would show a
+ * server running on a node whose lease had already expired. It also bounds
+ * how long a server just added reads "not started" after a node applied it.
+ */
+const SERVERS_POLL_MS = 15_000;
+
 export function Tools({ server, tool }: { server?: string; tool?: string }) {
   // `/` FOCUSES THIS SCREEN'S SEARCH rather than opening the palette over it.
   const searchBox = useRef<HTMLInputElement>(null);
@@ -593,15 +538,28 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   const tools = useTools();
   const route = useRoute();
   const nav = useNavigator();
+  const org = useOrg();
+  const seats = useMemo(() => indexOrg(org).seats, [org]);
   const [q, setQ] = useParam("q", "");
   const [chosen, setChosen] = useParam("origin", "");
+  // THE ADD FORM IS AN ADDRESS (`?add=server`), so the Integrations screen's
+  // "Add an MCP server" tile can open it and a reload keeps it open.
+  const [adding, setAdding] = useParam("add", "");
+  const status = useQuery("mcp_servers_status", undefined, { pollMs: SERVERS_POLL_MS });
+  const access = useConfigWriteAccess();
+  const addressedStatus = useMemo(
+    () => (server ? (status.data?.servers.find((s) => s.name === server) ?? null) : null),
+    [server, status.data],
+  );
+  const taken = useMemo(() => takenNames(status.data?.servers), [status.data]);
+  const nodeOnly = useMemo(() => nodeOnlyNames(status.data?.servers), [status.data]);
 
   // `#/settings/tools/servers/{name}` IS A FILTER ON THE ORIGIN, and this screen
   // accepted the segment and dropped it: the crumb trail said "Servers /
   // github" over the whole unfiltered catalogue, and `Open ↗` from a tool's
   // rail landed on the same place. The path wins where it names one, and the
   // chips write the query key as before.
-  const addressed = server ? `mcp:${server}` : "";
+  const addressed = server ? serverOrigin(server) : "";
   const origin = chosen || addressed;
   const pick = useCallback(
     (next: string) => {
@@ -626,11 +584,17 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
     [addressed, nav, route.query, setChosen],
   );
 
+  // THE ORIGIN IN FORCE ALWAYS HAS A CHIP. The chips are built from the
+  // registry, and a server that registered nothing (it failed, or no node
+  // started it) has no row there — so `servers/{name}` filtered by an origin
+  // no chip named, and the group showed nothing selected at all: neither
+  // `All` nor the filter, with no way to see what was narrowing the list.
   const origins = useMemo(() => {
     const map = new Map<string, number>();
     for (const t of tools) map.set(t.source, (map.get(t.source) ?? 0) + 1);
+    if (origin && !map.has(origin)) map.set(origin, 0);
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
-  }, [tools]);
+  }, [tools, origin]);
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -673,6 +637,8 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
 
   const builtins = tools.filter((t) => t.source === "builtin").length;
   const mcp = tools.filter((t) => t.source.startsWith("mcp")).length;
+  const mcpOrigins = new Set(tools.filter((t) => t.source.startsWith("mcp")).map((t) => t.source))
+    .size;
   // HOW MANY OF THESE CAN WRITE, which is the number an operator opens this
   // screen for after adding a server — and which the catalogue could not
   // answer at all while it carried three strings per tool.
@@ -685,8 +651,31 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   return (
     <>
       <PageActions>
-        {<Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>}
+        <Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>
+        {/* NEVER HIDDEN: drawn for every reader, and disabled with the reason
+            for one whose token cannot change the configuration. */}
+        <Button
+          variant="primary"
+          size="small"
+          leadingIcon={<PlusGlyph />}
+          disabledReason={access.can ? undefined : access.reason}
+          title={access.can ? undefined : access.reason}
+          onClick={() => setAdding("server")}
+        >
+          Add an MCP server
+        </Button>
       </PageActions>
+      {adding === "server" && (
+        <AddMcpServerDialog
+          taken={taken}
+          nodeOnly={nodeOnly}
+          onClose={() => setAdding("")}
+          onAdded={() => {
+            setAdding("");
+            status.refetch();
+          }}
+        />
+      )}
       <PageNote>
         What the models can actually call. An executor is shown the built-in tools and each MCP
         server by name; a server's own tools are discovered and activated during a turn.
@@ -708,6 +697,18 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
           <ToolBody name={tool} />
         </>
       )}
+      {/* A SERVER'S PAGE: what the engine reports about it, above the
+          catalogue narrowed to its tools — so a row's click in the servers
+          table opens something, including for a server with no tools. */}
+      {server && !tool && (
+        <ServerHeader
+          name={server}
+          server={addressedStatus}
+          seats={seats}
+          loading={status.loading && !status.data}
+          unavailable={status.data ? null : status.error}
+        />
+      )}
 
       <Card padding="none">
         <StatGroup columns={4}>
@@ -727,7 +728,16 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
             icon={<PlugGlyph size="xs" />}
             label="From MCP servers"
             value={mcp}
-            sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
+            sub={
+              // THE SERVERS AS THE ENGINE REPORTS THEM, the same answer the
+              // table under this tile draws — counted off the registry, four
+              // failing servers read "0 servers" above a table of four. A
+              // reader the status is refused to gets the registry's count,
+              // which is all this node can say to them.
+              status.data
+                ? serversUpLine(status.data.servers)
+                : `${plural(mcpOrigins, "server")} with tools`
+            }
           />
           <StatCard
             icon={<TriangleAlertGlyph size="xs" />}
@@ -742,8 +752,23 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         </StatGroup>
       </Card>
 
+      <Section
+        title="MCP servers"
+        hint="What each server is launched as, which seats it reaches, and what every live node did with it."
+      >
+        <McpServers
+          data={status.data}
+          loading={status.loading}
+          error={status.error}
+          seats={seats}
+        />
+      </Section>
+
       <div className="toolbar">
-        <div style={{ maxWidth: 340, flex: 1 }}>
+        {/* A BASIS, NOT ZERO: at `flex: 1` the field's basis was 0, so on a
+            phone the chips kept the line and squeezed the search to "Sear".
+            With a real basis the chips wrap under it instead. */}
+        <div style={{ maxWidth: 340, flex: "1 1 14rem" }}>
           <Input
             type="search"
             value={q}
@@ -783,7 +808,27 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         </FilterChipGroup>
       </div>
 
-      {!tools.length ? (
+      {tools.length > 0 && rows.length === 0 && !q.trim() && origin ? (
+        // AN ORIGIN WITH NO TOOLS, which is not a search that found nothing:
+        // there is no query to quote. The sentence names what is filtering
+        // and why it is empty, and the way out is a control rather than a
+        // hunt for the `All` chip.
+        <EmptyState
+          size="compact"
+          icon={<PlugGlyph size="xl" />}
+          title={
+            mcpServerOf(origin)
+              ? `${mcpServerOf(origin)} has registered no tools`
+              : `No tool comes from ${origin}`
+          }
+          description={emptyOriginReason(mcpServerOf(origin), status.data?.servers ?? null)}
+          action={
+            <Button variant="secondary" size="small" onClick={() => pick("")}>
+              Show all tools
+            </Button>
+          }
+        />
+      ) : !tools.length ? (
         <EmptyState
           icon={<WrenchGlyph size="xl" />}
           title="No tools are registered"
@@ -800,7 +845,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
             rowHref={(t) => peekHref({ kind: "tool", id: t.name })}
             onRowActivate={openTool}
             defaultSort="name"
-            empty={{ title: `No tool matches “${q}”` }}
+            empty={{ title: `No tool matches “${q.trim()}”` }}
             columns={[
               {
                 key: "name",

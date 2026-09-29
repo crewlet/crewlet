@@ -47,17 +47,31 @@ func carryUnknown(stored, written []byte) ([]byte, error) {
 // THE STORED DOCUMENT, not this build's struct encoded again: the rest of the
 // company may carry fields this build cannot represent, and a write about one
 // seat must not remove them.
-func spliceStored(stored []byte, access entityAccess, id string, entity any) ([]byte, error) {
+//
+// A CREATED entity has no element to replace, so it is PLACED where the
+// collection's create put it in the struct — an MCP server at the end of its
+// list, a provider under its key — and carries nothing, having no stored self.
+func spliceStored(stored []byte, access entityAccess, id string, entity any, create bool) ([]byte, error) {
 	tree, err := decodeTree(stored)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: decode the active revision: %w", err)
 	}
 	root, _ := tree.(map[string]any)
-	element, ok := access.stored(root, id)
-	if !ok {
-		// Unreachable while stored and find agree: the struct this entity
-		// was spliced into was decoded from these bytes.
-		return nil, fmt.Errorf("configapi: the stored document holds no entity %q", id)
+	if root == nil {
+		return nil, fmt.Errorf("configapi: the active revision is not a document")
+	}
+	var element map[string]any
+	if create {
+		element = map[string]any{}
+		access.place(root, id, element)
+	} else {
+		found, ok := access.stored(root, id)
+		if !ok {
+			// Unreachable while stored and find agree: the struct this entity
+			// was spliced into was decoded from these bytes.
+			return nil, fmt.Errorf("configapi: the stored document holds no entity %q", id)
+		}
+		element = found
 	}
 	encoded, err := json.Marshal(entity)
 	if err != nil {

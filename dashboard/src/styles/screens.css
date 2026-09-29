@@ -9573,3 +9573,74 @@ a.live-row:focus-visible {
   line-height: var(--size-control-sm);
   overflow: hidden;
 }
+
+/* SETTINGS › TOOLS & MCP › ADD AN MCP SERVER. The two choices sit side by
+   side where the dialog has the width and stack on a phone; a pair row is a
+   name, a value twice its width and the remove control, aligned on the
+   fields rather than on their labels so the × sits beside the boxes. */
+.mcp-add-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  gap: var(--spacing-3);
+}
+.mcp-add-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.mcp-add-pairs > legend {
+  padding: 0;
+  margin-bottom: var(--spacing-1);
+}
+.mcp-add-pair-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  gap: var(--spacing-2);
+  align-items: end;
+}
+.mcp-add-pair-remove {
+  margin-bottom: var(--spacing-1);
+}
+.mcp-add-pairs-error {
+  color: var(--color-feedback-danger-ink);
+}
+@media (width < 640px) {
+  .mcp-add-pair-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .mcp-add-pair-row > :nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* A NODE'S FAILURE under its chip: secondary prose, clamped by `.clamp` to two
+   lines. The chip above it carries the danger tone; the reason in danger ink
+   too was the same alarm twice, in running text. Whole on the server's page. */
+.mcp-failure {
+  color: var(--color-text-secondary);
+  max-width: 32rem;
+}
+/* THE SERVER'S PAGE says a launch and each failure WHOLE — the one place a
+   reason the grid clamps can be read without a pointer — so a command line or
+   a URL wraps anywhere rather than running off the column. */
+.mcp-failures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-launch-whole,
+.mcp-failure-whole {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.mcp-failure-whole {
+  color: var(--color-text-secondary);
+}

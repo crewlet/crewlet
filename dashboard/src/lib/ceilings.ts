@@ -25,7 +25,7 @@
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import type { ConfigRefusal } from "~/protocol/configAnswer.ts";
-import type { ConfigWarning, TokenBudget } from "~/protocol/types.ts";
+import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
 
@@ -171,25 +171,6 @@ export function ceilingSummary(
   }
   const text = parts.join("; ");
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/**
- * The warnings a change INTRODUCES: the check's, less the ones the company
- * already had.
- *
- * A check answers every warning the whole document raises, and a company
- * already carrying one — a dangling `manages:` entry three seats away — would
- * otherwise stop every ceiling change on the same unrelated sentence until
- * somebody fixed it. What a person raising a ceiling has to see is what THEIR
- * number does: a seat ceiling now above the company's, a week now below its
- * own day.
- */
-export function introducedWarnings(
-  before: readonly ConfigWarning[],
-  after: readonly ConfigWarning[],
-): ConfigWarning[] {
-  const had = new Set(before.map((w) => `${w.path}\u0000${w.message}`));
-  return after.filter((w) => !had.has(`${w.path}\u0000${w.message}`));
 }
 
 /**

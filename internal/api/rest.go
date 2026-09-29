@@ -81,6 +81,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
 	{method: "GET", pattern: "/access", what: "access"},
+	// WHAT EACH MCP SERVER DID ON EACH NODE. Not under /config/mcp-servers,
+	// which is the configuration's own collection — this is what the fleet
+	// did with it, from the heartbeats.
+	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
 	// above, so /work/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather

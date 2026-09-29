@@ -6,6 +6,19 @@
   box-sizing: border-box;
 }
 
+/* THE HIDDEN ATTRIBUTE HIDES, whatever display a class sets. The browser's own
+   `[hidden] { display: none }` is a user-agent rule, so ANY author `display`
+   outranks it — and the kit's disclosure panel sets `display: flex` on the
+   element it closes with `hidden`, so every closed Disclosure in the product
+   drew its panel anyway (a tool's 366px schema under "The schema as JSON",
+   the add-server form's "More options"). `!important` because the rule has to
+   beat a component's own class, which is the entire failure. `until-found`
+   is exempt: it is a hidden state the browser reveals on find-in-page, and
+   forcing `none` would remove it from the search. */
+[hidden]:not([hidden="until-found"]) {
+  display: none !important;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
