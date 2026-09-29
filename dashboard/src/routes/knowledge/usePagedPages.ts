@@ -28,6 +28,7 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { queryErrorCode, type PageSummary, type PagesAnswer } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
+import type { SkillLoad } from "~/contract/pages.ts";
 
 /**
  * How many pages one window asks for: the engine's own ceiling
@@ -54,6 +55,12 @@ export interface PagedPages {
   paging: boolean;
   /** Why the last "Load more" failed, until the next one. */
   pageError: QueryErrorCode | null;
+  /**
+   * Who each loaded TOOL SKILL reached as a skill, by page id, from every
+   * window — present only on a `skills: true` listing on a node that reads the
+   * usage domain, and null otherwise (which is not "nobody loaded it").
+   */
+  loadedBy: Record<string, SkillLoad[]> | null;
 }
 
 /** Pages from several windows, each once, first occurrence kept. */
@@ -116,7 +123,17 @@ export function usePagedPages(
     [first.data, windows],
   );
 
+  const loadedBy = useMemo(() => {
+    const answers = [first.data, ...windows].filter((w): w is PagesAnswer => Boolean(w));
+    if (!answers.some((w) => w.skill_loaded_by)) return null;
+    return Object.assign({}, ...answers.map((w) => w.skill_loaded_by ?? {})) as Record<
+      string,
+      SkillLoad[]
+    >;
+  }, [first.data, windows]);
+
   return {
+    loadedBy,
     data: first.data,
     loading: first.loading,
     error: first.error,

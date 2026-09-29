@@ -36,6 +36,12 @@ import type {
   ReconcileStatus,
 } from "../contract/integrations.ts";
 import type { AgentMemory } from "../contract/memory.ts";
+import type {
+  LinkedFromStatus,
+  PageBacklinks,
+  PageReadsAnswer,
+  SkillLoad,
+} from "../contract/pages.ts";
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 import type {
@@ -2847,6 +2853,10 @@ export interface PagesAnswer {
    *  cursor rather than an offset, because a listing read while seats write
    *  repeats and skips rows under an offset. */
   after?: string;
+  /** Who each listed TOOL SKILL reached as a skill over thirty company days,
+   *  keyed by page id — sent only on a `skills: true` listing, for every page
+   *  in it (an unloaded skill as an empty list). */
+  skill_loaded_by?: Record<string, SkillLoad[]>;
   /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
    *  — so a page list served far behind the log was pixel-identical to a
    *  complete one. Same envelope as every other state-log answer. */
@@ -2875,8 +2885,11 @@ export interface PageComment {
   author_kind?: string;
   body: string;
   mentions?: string[];
+  /** The comment this one answers. */
+  reply_to?: string;
   created_at: string;
-  edited_at?: string;
+  /** Moved by an edit, and equal to `created_at` on a comment never edited. */
+  updated_at: string;
 }
 
 /** One past version, METADATA ONLY: the projection keeps no bodies, and
@@ -2941,6 +2954,19 @@ export interface PageRevisionBody {
 export interface PageDetail {
   page: Page;
   revision: number;
+  /** What the applier DERIVED the page as — a tool skill, the onboarding
+   *  page. Beside `page` rather than on it: neither is anything a writer
+   *  wrote. */
+  skill: boolean;
+  onboarding: boolean;
+  /** For a tool-skill page: the seats it reached as a skill over thirty
+   *  company days, most recent first. Absent on any other page. */
+  skill_loaded_by?: SkillLoad[];
+  /** The pages and tasks linking here, from the answering node's index;
+   *  absent where the node has no index to ask, and where
+   *  `linked_from_status` says why the node that has one could not answer. */
+  linked_from?: PageBacklinks;
+  linked_from_status?: LinkedFromStatus;
   comments?: PageComment[];
   history?: PageRevision[];
   /** The first page of children by title; `children_total` is all of them. */
@@ -4210,6 +4236,7 @@ export interface QueryMap {
   page: PageDetail;
   containers: { containers: PageContainer[] };
   page_activity: PageActivityAnswer;
+  page_reads: PageReadsAnswer;
   page_revision: PageRevisionBody;
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;

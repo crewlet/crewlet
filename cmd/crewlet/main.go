@@ -1713,6 +1713,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
+			// WHO LINKS TO A PAGE, from this node's lexical index, which
+			// derives the links from the bodies it already reads. Untyped
+			// nil on a node with no index, which leaves the answer without
+			// `linked_from` rather than claiming nothing links anywhere.
+			Backlinks: nativeBacklinks(e),
 			// RANKED SEARCH, gated on its own index rather than on
 			// the tracker: the rows are the fleet's and the lexical
 			// index is this node's own, so a node still building one
@@ -2547,6 +2552,14 @@ func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
 func nativePages(e *engine.Engine) queries.PageReader {
 	if r := e.Pages(); r != nil {
 		return r
+	}
+	return nil
+}
+
+// nativeBacklinks is the node's "linked from" reader, or an untyped nil.
+func nativeBacklinks(e *engine.Engine) queries.PageBacklinks {
+	if x := e.Backlinks(); x != nil {
+		return x
 	}
 	return nil
 }

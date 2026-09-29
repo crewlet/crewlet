@@ -196,9 +196,29 @@ export const ACTIONS = {
     // a new page in the knowledge base, which is then attached to the item
     // (`update_work_item{linked_pages}`) — the long form a comment's size
     // limit sends a writer to.
-    args: ["title", "body", "container"],
+    //
+    // AND "NEW PAGE" in the knowledge base: a space's own page files one at
+    // its top, a page's "New sub-page" under it (`parent`).
+    args: ["title", "body", "container", "parent"],
     domain: "pages",
     refreshes: ["knowledge"],
+    scope: "person",
+  },
+  save_page: {
+    // "EDIT" ON A PAGE: the body the person rewrote, saved against the
+    // version they opened (`base_version`), so a save that raced somebody
+    // else's is refused `stale_version` rather than overwriting it. A
+    // one-line `message` says what changed, as a seat's save does.
+    args: ["page", "base_version", "body", "message"],
+    domain: "pages",
+    refreshes: ["knowledge"],
+    scope: "person",
+  },
+  comment_on_page: {
+    // A PAGE'S THREAD: a remark, or a reply to one (`reply_to`).
+    args: ["page", "body", "reply_to"],
+    domain: "pages",
+    refreshes: [],
     scope: "person",
   },
   place_work_item: {

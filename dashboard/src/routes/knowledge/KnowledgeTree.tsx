@@ -44,12 +44,13 @@
  * is served, else the first mode that is — never a segment it also draws as
  * unavailable.
  *
- * # Not here yet: agent skills and diaries
+ * # Below the spaces, the workspace's sections
  *
- * The artboard's two rows under the spaces — Agent skills and Agent diaries —
- * are sections of this workspace with addresses of their own, and each lands
- * with its screen. A row pointing at an address that does not resolve would be
- * a link to Not Found.
+ * The artboard's rows under the spaces are sections of this workspace with
+ * addresses of their own. Agent skills is one, its count the TOOL-SKILL total
+ * the engine answers (`pages{skills}.total`) — never the length of a window.
+ * Agent diaries lands with its screen; a row pointing at an address that does
+ * not resolve would be a link to Not Found.
  */
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -60,6 +61,7 @@ import {
   ChevronRightGlyph,
   FileTextGlyph,
   SearchGlyph,
+  WandSparklesGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
@@ -177,6 +179,7 @@ export function KnowledgeTree() {
         currentSpace={currentSpace}
         fold={phone ? { unfolded, set: setUnfolded } : null}
       />
+      <Sections current={where.resolved ? where.screen : ""} />
     </nav>
   );
 }
@@ -376,6 +379,44 @@ function Spaces({
       <h2 className="ktree-heading">Spaces</h2>
       {body}
     </div>
+  );
+}
+
+/**
+ * The workspace's sections under the spaces: Agent skills, with the engine's
+ * count of tool skills. Not drawn where the pages are a vendor wiki's — there
+ * is no skill page on this engine to count.
+ */
+function Sections({ current }: { current: string }) {
+  const skills = useQuery(
+    "pages",
+    { skills: true, status: "published", limit: 1 },
+    {
+      pollMs: TREE_POLL_MS,
+    },
+  );
+  if (skills.error === "unknown_query") return null;
+  const here = current === "skills";
+  return (
+    <ul className="ktree-list ktree-sections" role="list">
+      <li>
+        <div className={cx("ktree-row", here && "is-current")} style={depthStyle(0)}>
+          <a
+            className="ktree-link"
+            href={href(["knowledge", "skills"])}
+            aria-current={here ? "page" : undefined}
+          >
+            <WandSparklesGlyph size="sm" className="ktree-mark" />
+            <span className="ktree-title">Agent skills</span>
+            {skills.data && (
+              <span className="ktree-count" title="Tool-skill pages">
+                {skills.data.total.toLocaleString()}
+              </span>
+            )}
+          </a>
+        </div>
+      </li>
+    </ul>
   );
 }
 

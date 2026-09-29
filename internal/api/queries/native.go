@@ -127,6 +127,8 @@ type WorkReader interface {
 	CompanyFeed(ctx context.Context, q tracker.FeedQuery) (tracker.FeedPage, error)
 	Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
 		loc *time.Location) (tracker.DecisionsAnswer, error)
+	TurnPlaces(ctx context.Context, runs []string,
+		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -715,26 +717,18 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	if list.After != "" {
 		out["after"] = list.After
 	}
+	// THE SKILLS SCREEN'S "LOADED BY", for the whole window in one read:
+	// asked per row, a catalogue of fifty skills was fifty page answers,
+	// bodies included, to draw one column. Only on a listing of tool
+	// skills, which is the one listing whose rows are loaded as skills.
+	if f.Skills != nil && *f.Skills && s.Usage != nil && len(list.Pages) > 0 {
+		loads, err := s.skillLoads(ctx, list.Pages)
+		if err != nil {
+			return nil, err
+		}
+		out["skill_loaded_by"] = loads
+	}
 	return out, nil
-}
-
-func (s Sources) page(ctx context.Context, p Params) (any, error) {
-	ref := strings.TrimSpace(p.String("id"))
-	if ref == "" {
-		return nil, badParams("id", "", nil)
-	}
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	detail, err := s.Pages.Get(ctx, ref, fresh)
-	switch {
-	case errors.Is(err, pages.ErrNotFound):
-		return nil, ErrNotFound
-	case err != nil:
-		return nil, err
-	}
-	return detail, nil
 }
 
 func (s Sources) containers(ctx context.Context, p Params) (any, error) {

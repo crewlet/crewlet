@@ -378,6 +378,11 @@ func (stubWorkReader) Decisions(context.Context, tracker.DecisionsQuery, time.Ti
 	return tracker.DecisionsAnswer{}, nil
 }
 
+func (stubWorkReader) TurnPlaces(context.Context, []string,
+	statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+	return map[string]tracker.TurnPlace{}, nil
+}
+
 func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
 	statelog.Freshness) (tracker.ResolvedThread, error) {
 	return tracker.ResolvedThread{}, nil

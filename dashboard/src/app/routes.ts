@@ -100,6 +100,7 @@ export type Screen =
   | { screen: "knowledge" }
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
+  | { screen: "skills" }
   | { screen: "spend" }
   | { screen: "budgets" }
   | { screen: "general" }
@@ -314,6 +315,8 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
     }
     return screen({ screen: "page", id });
   }
+  // THE SKILLS AGENTS ARE GIVEN, a list that links to each skill's one page.
+  if (first === "skills" && tail.length === 0) return screen({ screen: "skills" });
   // A CONTAINER BY ITS SHAPE, like a project: a lowercase segment here is a
   // reserved word or nothing, and never a container the engine could have
   // minted — so a knowledge section that has not landed yet answers Not Found

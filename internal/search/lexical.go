@@ -123,6 +123,31 @@ type Indexer struct {
 	// sources is what this index covers. See [LexicalSource] for why the
 	// SQL is theirs and the walk is this type's.
 	sources []LexicalSource
+
+	// links reads the page ids a body links to — `pages.Links`, handed in
+	// by [Indexer.WithLinks] because `pages` imports this package and the
+	// grammar is theirs. Nil derives no backlinks, which is what an index
+	// built for one question about RANKING is; the engine always wires it.
+	links func(body string) []string
+}
+
+// IndexDerivation is what the indexer derives from a document's text, as a
+// number a row records beside the source version it was built from.
+//
+// BUMPED WHEN THE DERIVATION CHANGES and the text did not — the first bump is
+// the backlinks (node migration 0036): every row indexed before them matched
+// its source's version and would never have been looked at again, so no page
+// written before the upgrade would ever have listed a link. A row below this
+// is stale exactly as a moved source is, and the next ordinary lap re-derives
+// it: that is the whole backfill.
+const IndexDerivation = 1
+
+// WithLinks has this index derive the backlinks from every body it indexes,
+// through the grammar given — `pages.Links`. Called once, at construction,
+// before [Indexer.Run]: the field is read by the one loop that writes.
+func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
+	x.links = links
+	return x
 }
 
 // NewIndexer builds an indexer over a node's store, covering every corpus in
@@ -202,8 +227,9 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_docs (id, source, source_id, search_shard, container,
-		                     title, excerpt, length, source_rev, indexed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                     title, excerpt, length, source_rev, derivation,
+		                     indexed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		-- THE SHARD IS NOT RE-STAMPED, and that is the invariant rather
 		-- than an omission: the id column is derived from the same two
 		-- source columns the bucket is, so a row's bucket cannot change
@@ -220,10 +246,15 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
 			excerpt    = excluded.excerpt,
 			length     = excluded.length,
 			source_rev = excluded.source_rev,
+			derivation = excluded.derivation,
 			indexed_at = excluded.indexed_at`,
 		id, doc.Source, doc.ID, ShardOf(doc.Source, doc.ID), doc.Container,
-		doc.Title, excerptOf(doc.Body), length, int64(doc.Version), now); err != nil {
+		doc.Title, excerptOf(doc.Body), length, int64(doc.Version),
+		IndexDerivation, now); err != nil {
 		return fmt.Errorf("search: index %s: %w", id, err)
+	}
+	if err := x.writeLinks(ctx, tx, doc, id, maxVariables); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM kb_postings WHERE doc_id = ?`, id); err != nil {
@@ -252,6 +283,37 @@ func (x *Indexer) upsertOne(ctx context.Context, tx *sql.Tx, doc Doc, now int64,
 		// be a guess that reads as a fact.
 		return fmt.Errorf("search: write %d postings for %s: %w",
 			len(postings), id, err)
+	}
+	return nil
+}
+
+// writeLinks replaces one document's backlink rows with the page ids its body
+// links to NOW.
+//
+// REPLACE RATHER THAN MERGE, for [Indexer.Upsert]'s reason: a link somebody
+// deleted from a runbook must stop listing the runbook as "linked from", and
+// the upsert above updates the document row in place, so the cascade from
+// `kb_docs` does not fire here — this delete is what does it.
+//
+// A PAGE DOES NOT LINK TO ITSELF, in the sense a reader means: a page quoting
+// its own address (a "permalink" line) is not somebody else pointing at it.
+func (x *Indexer) writeLinks(ctx context.Context, tx *sql.Tx, doc Doc, id string,
+	maxVariables int) error {
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM page_links WHERE doc_id = ?`, id); err != nil {
+		return fmt.Errorf("search: clear the links of %s: %w", id, err)
+	}
+	if x.links == nil {
+		return nil
+	}
+	targets := slices.DeleteFunc(x.links(doc.Body), func(target string) bool {
+		return doc.Source == string(SourcePage) && strings.EqualFold(target, doc.ID)
+	})
+	if _, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO page_links (doc_id, target_id) VALUES`, `(?, ?)`, "",
+		len(targets), func(i int) []any { return []any{id, targets[i]} }); err != nil {
+		return fmt.Errorf("search: write %d links for %s: %w", len(targets), id, err)
 	}
 	return nil
 }
@@ -410,7 +472,12 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 				return err
 			}
 			for _, at := range scan {
-				if held, ok := indexed[at.ID]; ok && held == at.Version {
+				// CURRENT ON BOTH COUNTS: the text it was built from
+				// and what was derived from that text. A row built
+				// under an older derivation is re-derived here exactly
+				// as a moved source is — see [IndexDerivation].
+				if held, ok := indexed[at.ID]; ok && held.version == at.Version &&
+					held.derivation >= IndexDerivation {
 					continue
 				}
 				moved = append(moved, at.ID)
@@ -460,29 +527,37 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 	}
 }
 
+// heldRow is what the index already holds for one document: the source
+// version its row was built from, and the derivation it was built under.
+type heldRow struct {
+	version    uint64
+	derivation int
+}
+
 // versions is what the index already holds for one scan batch.
 func (x *Indexer) versions(ctx context.Context, source string,
-	scan []DocVersion) (map[string]uint64, error) {
+	scan []DocVersion) (map[string]heldRow, error) {
 
 	ids := make([]any, 0, len(scan))
 	for _, at := range scan {
 		ids = append(ids, docKey(source, at.ID))
 	}
 	rows, err := x.db.SQL().QueryContext(ctx,
-		`SELECT source_id, source_rev FROM kb_docs WHERE id IN (`+
+		`SELECT source_id, source_rev, derivation FROM kb_docs WHERE id IN (`+
 			binds(len(ids))+`)`, ids...)
 	if err != nil {
 		return nil, fmt.Errorf("search: read what the index holds: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[string]uint64, len(scan))
+	out := make(map[string]heldRow, len(scan))
 	for rows.Next() {
 		var id string
 		var version int64
-		if err := rows.Scan(&id, &version); err != nil {
+		var derivation int
+		if err := rows.Scan(&id, &version, &derivation); err != nil {
 			return nil, fmt.Errorf("search: scan an index version: %w", err)
 		}
-		out[id] = uint64(version)
+		out[id] = heldRow{version: uint64(version), derivation: derivation}
 	}
 	return out, rows.Err()
 }

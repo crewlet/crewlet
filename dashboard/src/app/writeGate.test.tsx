@@ -90,6 +90,20 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "gesture with no button, so the reason it cannot act is one line above the lanes",
     suite: "routes/work/shapes/Board.test.tsx",
   },
+  "routes/knowledge/page/Editor.tsx": {
+    why:
+      "a page's Save (save_page against the revision it opened) and its conflict's " +
+      "way on top of somebody else's save",
+    suite: "routes/knowledge/page/PageView.test.tsx",
+  },
+  "routes/knowledge/page/Comments.tsx": {
+    why: "a page's Comment and Reply (comment_on_page)",
+    suite: "routes/knowledge/page/PageView.test.tsx",
+  },
+  "routes/knowledge/NewPage.tsx": {
+    why: "the New page sheet's Write the page, filed in a space or under a page (write_page)",
+    suite: "routes/knowledge/page/PageView.test.tsx",
+  },
   "routes/work/NewTask.tsx": {
     why:
       "the New task sheet's Create — one create_work_item carrying the whole task — " +

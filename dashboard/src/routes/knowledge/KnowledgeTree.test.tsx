@@ -239,7 +239,9 @@ test("a level is read in windows of 500 and never cut silently", async () => {
   });
   fireEvent.click(await screen.findByRole("button", { name: "Pages in Engineering" }));
   await waitFor(() => expect(screen.getByText("Runbooks")).toBeTruthy());
-  const first = asked.find((a) => a.what === "pages")!;
+  // THE FIRST READ OF A SPACE — the Agent skills row's count is a listing of
+  // its own, beside the tree.
+  const first = asked.find((a) => a.what === "pages" && a.params.container === "ENG")!;
   expect(first.params).toMatchObject({
     container: "ENG",
     roots: true,
@@ -404,8 +406,11 @@ test("on a phone the spaces fold, so no tree stands above the page being read", 
     expect(fold.getAttribute("aria-expanded")).toBe("false");
     // NOTHING UNDER IT IS DRAWN OR READ while it is closed.
     expect(screen.queryByText("Engineering")).toBeNull();
-    expect(document.querySelector(".ktree-row")).toBeNull();
-    expect(asked.some((a) => a.what === "pages" || a.what === "page")).toBe(false);
+    expect(document.querySelector(".ktree-spaces .ktree-row")).toBeNull();
+    // The one listing read is the Agent skills row's count, a single row.
+    expect(asked.some((a) => (a.what === "pages" && !a.params.skills) || a.what === "page")).toBe(
+      false,
+    );
 
     // OPENED, it opens where the reader is.
     fireEvent.click(fold);
@@ -416,7 +421,7 @@ test("on a phone the spaces fold, so no tree stands above the page being read", 
     // AND A LINK FOLLOWED FROM IT LANDS ON ITS PAGE, not on the tree again.
     location.hash = "#/knowledge/ENG";
     await waitFor(() => expect(fold.getAttribute("aria-expanded")).toBe("false"));
-    expect(document.querySelector(".ktree-row")).toBeNull();
+    expect(document.querySelector(".ktree-spaces .ktree-row")).toBeNull();
   } finally {
     phone.restore();
   }
@@ -435,4 +440,23 @@ test("above a phone the spaces are always drawn", async () => {
   } finally {
     wide.restore();
   }
+});
+
+// THE AGENT SKILLS ROW COUNTS WHAT THE ENGINE COUNTS: the listing's total of
+// published tool skills, never the length of a window.
+test("the Agent skills row carries the engine's total of tool skills", async () => {
+  const asked = mount({
+    knowledge: everyMode,
+    containers: () => ({ containers: [] }),
+    pages: (params) =>
+      params.skills ? { pages: [], limit: 1, total: 42 } : { pages: [], limit: 500, total: 0 },
+  });
+  const row = await screen.findByRole("link", { name: /Agent skills/ });
+  await waitFor(() => expect(row.textContent).toContain("42"));
+  expect(row.getAttribute("href")).toBe("#/knowledge/skills");
+  expect(asked.find((a) => a.what === "pages" && a.params.skills)?.params).toMatchObject({
+    skills: true,
+    status: "published",
+    limit: 1,
+  });
 });

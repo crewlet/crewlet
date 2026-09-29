@@ -294,8 +294,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// on the runtime existing, which is either backend.
 	//
 	// BEFORE the block, because the searcher built there takes it.
+	//
+	// AND IT DERIVES THE BACKLINKS from the same bodies it tokenises, through
+	// the one grammar the knowledge base owns — see [search.Backlinks].
 	n.indexer = search.NewIndexerOver(e.backends.Store,
-		lexicalSources(runTracker, wiki))
+		lexicalSources(runTracker, wiki)).WithLinks(pages.Links)
 	// ONE QUERY-VECTOR CACHE FOR BOTH SEARCHES on this node, so a phrase
 	// the palette embedded for the work search is a hit when the same
 	// phrase is searched as knowledge. Read through [Engine.queryModel]
@@ -686,6 +689,18 @@ func (e *Engine) Pages() *pages.Reader {
 		return nil
 	}
 	return n.pageReader
+}
+
+// Backlinks is this node's "linked from" reader — the lexical index, which
+// derives the links from the bodies it reads — or nil for a node with no
+// native backend. Nil only where the index is: a company on Jira and
+// Confluence has no body this engine indexes, so no link it could list.
+func (e *Engine) Backlinks() *search.Indexer {
+	n := e.native.Load()
+	if n == nil {
+		return nil
+	}
+	return n.indexer
 }
 
 // PagesStore is this node's knowledge write side, or nil.

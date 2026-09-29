@@ -22,8 +22,12 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // pinned is the clock these answers run on. Pinned because a lease countdown
@@ -2467,4 +2471,47 @@ func TestAScheduleRunsReadStatesWhatItIsMissing(t *testing.T) {
 			t.Errorf("%v answered %v, want bad params", params, err)
 		}
 	}
+}
+
+// THE PAGE SCREEN READS WHAT THESE ANSWERS SEND, in both directions — every
+// member `contract/pages.ts` declares is a key the engine sends, and every key
+// it sends is declared, down to the rows inside the lists. A field renamed
+// here without the client is a rail line that reads undefined.
+func TestThePageScreenReadsWhatTheseAnswersSend(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	at := time.Date(2026, 9, 24, 3, 0, 0, 0, time.UTC)
+	f.reads("node-a", "2026-09-25", "lead", 1,
+		usage.Read{PageID: readPage, Backend: "native", Via: "search", Count: 1, LastAt: at,
+			LastTurnID: "run-a", LastWorkKey: "wk-1", LastQuery: "dhcp"},
+		read("skill_loaded", 1, at, "run-a", ""))
+	sources := f.sources()
+	sources.Work = &stubWork{places: map[string]tracker.TurnPlace{
+		"run-a": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
+	sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}}
+	sources.Backlinks = stubBacklinks{links: search.Backlinks{
+		Pages: []search.PageLink{{ID: "p-2", Container: "ENG", Title: "On-call"}},
+		Tasks: []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry", Status: "todo",
+			Via: []string{search.TaskLinkedPage}}},
+		PagesTotal: 1, TasksTotal: 1,
+	}}
+
+	reads := asMap(t, askRaw(t, registryOver(t, sources), "page_reads", map[string]any{"page": readPage}))
+	holdShape(t, "PageReadsAnswer", []map[string]any{reads}, false)
+	readers := rowsOf(t, reads["readers"])
+	holdShape(t, "PageReadRow", readers, false)
+	var places []map[string]any
+	for _, r := range readers {
+		if place, ok := r["last_work_item"].(map[string]any); ok {
+			places = append(places, place)
+		}
+	}
+	holdShape(t, "TurnPlace", places, false)
+
+	page := asMap(t, askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}))
+	holdShape(t, "SkillLoad", rowsOf(t, page["skill_loaded_by"]), false)
+	links := asMap(t, page["linked_from"])
+	holdShape(t, "PageBacklinks", []map[string]any{links}, false)
+	holdShape(t, "PageLink", rowsOf(t, links["pages"]), false)
+	holdShape(t, "TaskLink", rowsOf(t, links["tasks"]), false)
 }

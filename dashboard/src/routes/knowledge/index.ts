@@ -2,4 +2,6 @@
 
 export { ContainerPeek, Knowledge } from "./Knowledge.tsx";
 export { KnowledgeTree } from "./KnowledgeTree.tsx";
-export { PagePeek, Pages, PageView } from "./Pages.tsx";
+export { PagePeek, Pages } from "./Pages.tsx";
+export { PageView } from "./page/PageView.tsx";
+export { Skills } from "./Skills.tsx";

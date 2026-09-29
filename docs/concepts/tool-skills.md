@@ -325,6 +325,17 @@ engine's own boot-time sync picks up the pages that are already there.
 
 Open the page in your browser, edit, save. The Confluence page webhook reaches one node, which reads that page back into its registry and tells the rest of the fleet, and each of them reads the page into its own. The next agent turn on any node sees the new body. No restart, no CLI invocation, no deploy.
 
+### Who a skill reached
+
+Every offer and every load is a recorded `knowledge_read` (`skill_injected`
+and `skill_loaded`), kept per company day in the replicated `usage` domain. A
+skill page's `page` answer carries `skill_loaded_by` — each seat, how often it
+loaded the body and how often a phase offered the summary — and the dashboard's
+[Agent skills](../reference/dashboard-design.md#agent-skills) screen lists every
+skill with the seats it reached over thirty days. A skill offered constantly
+and never loaded is a summary that answers the question on its own, or one
+nobody's work matches.
+
 ### Drift recovery
 
 If you suspect a webhook was missed during a long outage:

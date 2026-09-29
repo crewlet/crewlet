@@ -72,6 +72,15 @@ export const seatKindKey = (handle: string) => `\u0000kind:${handle}`;
  * Live › {agent} › Turn n · KEY — leading back to what is running for that
  * seat. NUL-prefixed for the reason the seat keys are.
  */
+/**
+ * The label keys a page's screen publishes for its trail: the space it is
+ * filed in, and the id of each page above it, outermost first — whose titles
+ * are ordinary labels keyed by their ids. NUL-prefixed for the reason the
+ * seat keys are. Knowledge › Engineering › Runbooks › Provisioner runbook.
+ */
+export const pageSpaceKey = (id: string) => `\u0000page-space:${id}`;
+export const pageUpKey = (id: string, depth: number) => `\u0000page-up:${id}:${depth}`;
+
 export const turnSeatKey = (turnId: string) => `\u0000turn-seat:${turnId}`;
 export const turnHandleKey = (turnId: string) => `\u0000turn-handle:${turnId}`;
 
@@ -216,8 +225,26 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return inside("events", named(labels, where.id));
     case "container":
       return [root(row, true), named(labels, where.key)];
-    case "page":
-      return [root(row, true), named(labels, where.id)];
+    case "page": {
+      // THE PAGE'S PLACE, which its id cannot say: the space it is filed in
+      // and the pages above it, from what the page's own screen publishes
+      // under [pageSpaceKey] and [pageUpKey] — until it has, the workspace
+      // and the page, which is still a trail a reader can act on.
+      const space = labels[pageSpaceKey(where.id)];
+      const up: Crumb[] = [];
+      for (let i = 0; labels[pageUpKey(where.id, i)] !== undefined; i++) {
+        const ancestor = labels[pageUpKey(where.id, i)]!;
+        up.push({ label: labels[ancestor] ?? ancestor, path: ["knowledge", "pages", ancestor] });
+      }
+      return [
+        root(row, true),
+        ...(space ? [{ label: labels[space] ?? space, path: ["knowledge", space] }] : []),
+        ...up,
+        named(labels, where.id),
+      ];
+    }
+    case "skills":
+      return sectionPage("skills");
     case "budgets":
       return sectionPage("budgets");
     case "integrations":

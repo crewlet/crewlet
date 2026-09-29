@@ -288,7 +288,7 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(save.Quiet, kind, head,
-				excerptOfSave(save, head), nil)
+				excerptOfSave(save), nil)
 			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
@@ -865,15 +865,18 @@ func dominantKind(kinds map[ChangeKind]bool) ChangeKind {
 	return ChangeSaved
 }
 
-// excerptOfSave is what a card shows for one edit.
-func excerptOfSave(save Save, page Page) string {
-	if save.Message != "" {
-		return excerpt(save.Message)
-	}
-	if save.Body != nil {
-		return excerpt(firstLine(*save.Body, page.Title))
-	}
-	return excerpt(page.Title)
+// excerptOfSave is what a card shows for one edit: what the writer SAID the
+// change was, and nothing when they said nothing.
+//
+// NEVER A LINE OF THE PAGE. This used to fall back to the body's first line
+// (or the title), and every save without a message then showed the page's
+// opening heading — "Paging rules" — under the saver's name, on the page's
+// activity and in every watcher's wake, reading as a change note somebody
+// wrote. It is not a summary of the change either: the first line is the
+// same before and after an edit anywhere else. The kind, the actor and the
+// title already say a page was saved; the revision says what changed.
+func excerptOfSave(save Save) string {
+	return excerpt(save.Message)
 }
 
 // firstLine is a body's first non-empty line, or a fallback.

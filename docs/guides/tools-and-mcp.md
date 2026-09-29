@@ -48,7 +48,7 @@ fourteen in full.
 | `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
-| `write_page` | Create one. Titles are addresses and are unique per container |
+| `write_page` | Create one. Titles are addresses and are unique per container; a body links another page by id, `[its title](#/knowledge/pages/<page id>)`, which is what "Linked from" reads |
 | `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 

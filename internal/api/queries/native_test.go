@@ -22,6 +22,8 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
+	places        map[string]tracker.TurnPlace
+	placesAsked   []string
 	turns         tracker.TaskTurns
 	turnsRef      string
 	turnsCursor   string
@@ -171,6 +173,13 @@ func (s *stubWork) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time
 	return s.decisions, s.err
 }
 
+func (s *stubWork) TurnPlaces(_ context.Context, runs []string,
+	_ statelog.Freshness) (map[string]tracker.TurnPlace, error) {
+
+	s.placesAsked = runs
+	return s.places, s.err
+}
+
 func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Time) (
 	tracker.RoutingAnswer, error) {
 
@@ -232,6 +241,9 @@ type stubPages struct {
 	revisionHeld bool
 	askedPage    string
 	askedVersion int
+
+	// detail is what Get answers.
+	detail pages.Detail
 }
 
 func (s *stubPages) List(_ context.Context, f pages.Filter,
@@ -247,7 +259,7 @@ func (s *stubPages) Get(_ context.Context, _ string,
 	fresh statelog.Freshness,
 ) (pages.Detail, error) {
 	s.level, s.fresh = fresh.Level, fresh
-	return pages.Detail{}, s.err
+	return s.detail, s.err
 }
 
 func (s *stubPages) Containers(_ context.Context,

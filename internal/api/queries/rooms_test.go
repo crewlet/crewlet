@@ -205,6 +205,11 @@ func (emptyWork) Decisions(context.Context, tracker.DecisionsQuery, time.Time, *
 	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}}, nil
 }
 
+func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
+	map[string]tracker.TurnPlace, error) {
+	return map[string]tracker.TurnPlace{}, nil
+}
+
 func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
 	return tracker.SearchAnswer{}, nil
 }

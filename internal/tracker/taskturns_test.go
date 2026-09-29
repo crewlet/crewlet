@@ -190,3 +190,63 @@ func TestWorkItemTurnsPages(t *testing.T) {
 		t.Error("a malformed cursor was accepted rather than refused")
 	}
 }
+
+// A RUN IS PLACED ON THE TASK IT WAS CHARGED TO, numbered as that task's own
+// page numbers it — so "turn 2 on ENG-1" beside a page's reader and "Turn 2"
+// on the task are one count. A run whose only row here carries no count is
+// placed with ordinal zero rather than an invented one, and a run the tracker
+// never saw is absent rather than guessed.
+func TestTurnPlacesNamesTheChargedTaskAndItsOrdinal(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	for i, rec := range []struct {
+		op   string
+		turn tracker.TurnRecord
+	}{
+		{"turn/run-a/dispatch", segment("run-a", 1, "done", "execute")},
+		{"turn/run-b/dispatch", segment("run-b", 1, "done", "execute")},
+		{"turn/run-c/resume/l-9", segment("run-c", 0, "done", "execute")},
+	} {
+		if _, err := r.writer.RecordTurn(t.Context(), rec.op, rec.turn); err != nil {
+			t.Fatalf("RecordTurn %d: %v", i, err)
+		}
+		r.drain()
+	}
+
+	got, err := r.reader.TurnPlaces(t.Context(), []string{"run-b", "run-c", "run-z", "run-b", ""},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("TurnPlaces: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("placed %d runs, want run-b and run-c only: %+v", len(got), got)
+	}
+	if b := got["run-b"]; b.Key != "ENG-1" || b.Ordinal != 2 || b.TaskID != "t-1" {
+		t.Errorf("run-b = %+v, want turn 2 on ENG-1", b)
+	}
+	if c := got["run-c"]; c.Key != "ENG-1" || c.Ordinal != 0 {
+		t.Errorf("run-c = %+v, want ENG-1 with no ordinal — its row counts no turn", c)
+	}
+
+	if _, err := r.reader.TurnPlaces(t.Context(), []string{"run-a"}, statelog.Freshness{}); err == nil {
+		t.Error("a read naming no level was served")
+	}
+
+	// A REMOVED TASK PLACES NOTHING: a reader line linking to it would be a
+	// link to a task that is gone.
+	if _, err := r.writer.RemoveTask(t.Context(), "op-remove", "t-1", "ENG", false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	got, err = r.reader.TurnPlaces(t.Context(), []string{"run-b"}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("TurnPlaces after the removal: %v", err)
+	}
+	if place, ok := got["run-b"]; ok {
+		t.Errorf("run-b is still placed on %+v, a removed task", place)
+	}
+}

@@ -396,6 +396,13 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["knowledge"],
         hint: "Search the knowledge base by words, meaning or both, and browse its spaces",
       },
+      {
+        key: "skills",
+        label: "Agent skills",
+        icon: "wand-sparkles",
+        path: ["knowledge", "skills"],
+        hint: "The tool skills the engine offers agents, who loaded each, and what each agent learned",
+      },
     ],
   },
   {

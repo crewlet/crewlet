@@ -736,7 +736,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
 | `#/knowledge` | **Knowledge** — the ranked search, or with no phrase the spaces at a glance; beside every Knowledge screen, the tree (search, mode, spaces) | `q=` · `mode=hybrid\|keyword\|semantic` (Hybrid, Keyword, Meaning) |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
-| `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change | |
+| `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change: the document, who read it and how, what links to it, its revisions and thread; edited as you | `edit=1` · `version=` (one revision in the document's place) · `lens=diff\|full` |
+| `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
 | `#/spend` | **Spend › Overview** — tokens over time, then by phase, model, seat, and the costliest turns (tokens only) | `window=1d\|7d\|30d\|90d` · `group=phase\|model\|provider\|seat\|unit\|worker` · `compare=previous` |
 | `#/spend/budgets` | **Budgets** — each window's ceiling and what it is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
@@ -4606,9 +4607,86 @@ pages in it.
   Recent pages and Who writes here each say they cover the first pages by
   title, since the listing is ordered by title rather than by time.
 
-Agent skills and agent diaries are sections of this workspace that land with
-their own screens; the tree does not draw a row for an address that does not
-resolve yet.
+Above the spaces the column draws the workspace's own SECTIONS: **Agent
+skills**, with the count of published tool-skill pages (`pages{skills: true,
+status: published, limit: 1}`'s `total`, so the number is the engine's rather
+than a window's). A section the engine cannot answer is not drawn — on a
+company whose knowledge lives in a vendor's wiki the listing is `unknown_query`
+and the row would open onto an error.
+
+### A page: the document, who read it, and who links to it
+
+`#/knowledge/pages/{id}` is the approved Knowledge artboard: the document in
+the middle and a rail beside it.
+
+- **The head** is the space and ancestors as crumbs, the title, and one meta
+  row — who wrote it, when it was last saved and by whom, its revision count
+  and, on a tool skill, a pill saying who it reached: "Loaded as a skill by
+  SWE, CTO +2" from the `page` answer's `skill_loaded_by`, "offered to" when
+  no seat asked for the body but phases offered it, and "not loaded in 30
+  days" when neither happened. The pill is neutral: the accent means where
+  the reader is.
+- **The body is rendered with anchors on its headings**, and a first heading
+  that repeats the title is not drawn twice.
+- **The rail**, top to bottom: *On this page* (the headings, the current one
+  marked as the document scrolls, a press moving focus to the heading so a
+  keyboard continues from it), *Read by* (`page_reads`: each seat and how it
+  reached the page — "turn 2 on ENG-412", `search: “DHCP lease”` — linking
+  the turn it happened in), *Read today* (the faces, and the engine's
+  `distinct_seats_today` rather than the length of the faces drawn),
+  *Linked from* (`linked_from`: tasks by key with their status, then pages by
+  title), *Revisions*, *Children* and *Watchers*. Readers, backlinks and
+  revisions each draw five rows and "Show n more". A signal this node cannot answer is not drawn rather than
+  drawn empty: no `page_reads` on a node without the usage domain, no
+  *Linked from* on one without an index. A node that holds an index and
+  cannot answer says why instead of "No page or task links here" —
+  `linked_from_status` `building` ("still building its search index … look
+  again in a few minutes") or `unavailable` — and the capped-reads note is
+  worded company-wide ("this list may be missing some"), because `elided`
+  counts what the cap dropped on every page rather than this one. The
+  readers section names its window ("Read by agents · last 30 days") beside
+  the page bar's company-day count, and each row is two lines as the artboard
+  draws it: the seat with its read count, then how it read the page and when —
+  the way-read cut with an ellipsis (whole on hover) so the age is never pushed
+  onto a third line.
+- **Comments and the change log sit under the document**, not in the rail —
+  a reply is prose and a rail is 280 px wide.
+- **Edit writes as you.** The editor saves through `save_page` on
+  [`/operator/act`](api-endpoints.md#operatoract--the-dashboards-write-surface)
+  with the revision it was opened on as `base_version`. The page keeps being
+  read while it is open (every 20 s), so a save by somebody else is SEEN
+  before the person presses Save: the editor says "Somebody saved revision n
+  while you edited", offers their change as a diff, and "Keep editing on top
+  of it" MERGES their change into the draft by line before the base moves
+  (`lib/merge.ts`, a three-way merge over the revision the edit started
+  from). A change only one side made is taken as it is; where both changed
+  the same lines the base stays behind and each clash is shown — their lines
+  beside the draft's — for the person to keep theirs, yours or both, with
+  nothing pre-chosen and the draft read-only until they apply. Moving the
+  base without the merge is precisely what the engine's refusal of a stale
+  base exists to prevent: the next save would be accepted against the new
+  revision and delete what they wrote. Save and ⌘/Ctrl-Enter read one
+  answer for whether a save can be sent. Write and Preview are two tabs; a page link
+  is inserted by picking a page, and is written in the address the backlinks
+  read (`PAGE_ADDRESS_PREFIX`, held against `pages.AddressPrefix` by a test).
+- **New page** on a space files the page at its top, and **New sub-page** in
+  a page's menu files it under that page (`write_page` with `parent`); the
+  reader lands on the page by the id the engine answered with.
+- **History** reads any revision back and shows what a save changed against
+  the one before it, by line.
+
+A reader without a write credential sees every button with the reason it is
+unavailable, never a button that fails.
+
+### Agent skills
+
+`#/knowledge/skills` has two kinds behind one address. **Tool skills**
+(`kind=pages`, the default) lists every published tool-skill page with who it
+reached over thirty company days — the `pages` listing's `skill_loaded_by`,
+read with the listing rather than per row — and the total the listing counts,
+with Load more past a window. **Learned** (`kind=learned&seat=`) is one agent
+seat's synthesized skills from `agent_memory`, answered by the node holding
+the seat, with "n of total" when the page is cut.
 
 ## Honest empty states
 

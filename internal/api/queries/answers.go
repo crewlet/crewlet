@@ -221,6 +221,13 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
+	// Backlinks is which pages and tasks link to a page — this node's
+	// lexical index, which derives the links from the bodies it reads
+	// ([search.Backlinks]). Nil leaves the `page` answer without
+	// `linked_from`, which is absent rather than empty: "nothing links
+	// here" is a claim only a node holding the index can make.
+	Backlinks PageBacklinks
+
 	// WorkSearch is the ranked item search, and it is SEPARATE from
 	// [Sources.Work] because the two fail independently: the rows are the
 	// fleet's and the lexical index is this node's own, so a node still
@@ -520,6 +527,13 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_flow", s.workFlow)
 		r.Register("company_feed", s.companyFeed)
 		r.Register("decisions", s.decisions)
+	}
+	if s.Usage != nil {
+		// WHO READ A PAGE, from every node's days — see pagereads.go.
+		// Gated on the USAGE domain rather than on the native pages: a
+		// read is recorded with its backend, so a company on Confluence
+		// has readers too.
+		r.Register("page_reads", s.pageReads)
 	}
 	if s.Pages != nil {
 		r.Register("pages", s.pageList)

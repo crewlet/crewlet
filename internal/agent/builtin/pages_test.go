@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -722,6 +723,38 @@ func (c *cutKB) List(_ context.Context, _ pages.Filter,
 		Pages: []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
 		Total: c.total, Level: fresh.Level, Complete: true,
 	}, nil
+}
+
+// A PAGE BODY IS TOLD THE ADDRESS THE BACKLINKS READ. Nothing else tells a
+// seat how to link a page, and left to guess it writes `[[ENG/Title]]` — a
+// grammar nothing resolves, drawn as literal brackets and invisible to the
+// target's "Linked from". The example each writing tool carries must be one
+// [pages.Links] reads back, or the help teaches a link that counts for nothing.
+func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	const id = "3f6c9a52-7d24-4517-83b0-39d026dd1cf2"
+	example := regexp.MustCompile(`\[its title\]\(([^)\s]*)<page id>\)`)
+	for _, name := range []string{builtin.WritePageTool, builtin.SavePageTool} {
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+		body, _ := props["body"].(map[string]any)
+		desc, _ := body["description"].(string)
+		m := example.FindStringSubmatch(desc)
+		if m == nil {
+			t.Errorf("%s: body says nothing about how to link a page: %q", name, desc)
+			continue
+		}
+		link := "[x](" + m[1] + id + ")"
+		if got := pages.Links("See " + link + "."); !slices.Equal(got, []string{id}) {
+			t.Errorf("%s: the example link %s reads back as %v — the backlinks never see it",
+				name, link, got)
+		}
+	}
 }
 
 // A PAGE REMARK MADE AGAIN AFTER A DIFFERENT ONE CARRIES ITS REPEAT COUNT, so

@@ -163,6 +163,19 @@ var contract = []Entry{
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
+
+	// links.ts
+	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},
+
+	// pages.ts
+	{"PageReadsAnswer", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"PageReadRow", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"TurnPlace", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"SkillLoad", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"PageBacklinks", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"PageLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"TaskLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
+	{"LinkedFromStatus", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheBacklinkStatuses"},
 }
 
 // Contract is every declaration the engine's gates read out of the

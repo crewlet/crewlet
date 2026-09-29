@@ -592,6 +592,11 @@ code.inline {
      line and the sentence around it is torn into fragments. */
   overflow-wrap: anywhere;
 }
+/* A SHORT SPAN IS NOT BROKEN at its spaces — see `UnbrokenCode` in
+   lib/markdown.ts, which decides what short is. */
+code.inline.is-whole {
+  white-space: nowrap;
+}
 /* A REFUSAL'S PROBLEMS, one per line.
  *
  * A validation refusal is several of them joined with newlines, and HTML

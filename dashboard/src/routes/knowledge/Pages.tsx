@@ -14,19 +14,21 @@
  * knowledge base. On Confluence there is no local copy to browse, by design:
  * search there is live at query time and there is no index to walk.
  *
- * # Read-only, for the reason the tracker is
+ * # Written as you
  *
- * A page is written by a seat's own tools or by an operator through MCP, both
- * attributed to somebody. A dashboard button would write as "the dashboard",
- * which is nobody and cannot be asked why.
+ * "New page" files a page in the space being browsed through `write_page`, as
+ * the person the token is bound to (ADR-0024) — the same tool a seat writes
+ * with, attributed to somebody who can be asked why. The page itself, its
+ * editor and its thread are `page/`.
  */
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { plainText, renderMarkdown } from "~/lib/markdown.ts";
-import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { NewPageDialog } from "./NewPage.tsx";
 import {
   Button,
   Card,
@@ -52,11 +54,10 @@ import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
   NetworkGlyph,
-  CheckGlyph,
   FileTextGlyph,
   ClockGlyph,
+  PlusGlyph,
   SearchGlyph,
-  ChartNoAxesGanttGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -64,7 +65,7 @@ import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import type { Page, PageRevision, PageSummary } from "~/protocol/index.ts";
+import type { Page, PageDetail, PageRevision, PageSummary } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { usePagedPages } from "./usePagedPages.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -169,18 +170,22 @@ function pageFacts({
  * machinery the engine injects into a phase, and a reader who takes it for
  * guidance has misread the page rather than missed a field.
  */
-function pageFlags(page: Page): React.ReactNode {
+function pageFlags(detail: PageDetail): React.ReactNode {
+  const page = detail.page;
   return (
     <span className="row gap-1">
       <Tag variant={STATUS_TONE[page.status] ?? "neutral"} dot>
         {page.status}
       </Tag>
-      {page.skill && (
+      {/* THE DETAIL'S FLAGS, not the page's: the page is the record's own
+          document and these are what the applier derived from it, sent
+          beside it — `page.skill` on a detail was never set. */}
+      {detail.skill && (
         <Tag variant="info" title="Injected into a phase by the tool-skill registry">
           tool skill
         </Tag>
       )}
-      {page.onboarding && (
+      {detail.onboarding && (
         <Tag variant="warning" title="Where a new seat's reading starts">
           onboarding
         </Tag>
@@ -267,9 +272,29 @@ export function Pages({ container: fromPath }: { container?: string }) {
   // one order both halves agree on beats a stepper that claims to follow a
   // sequence it cannot see.
   usePeekNeighbours(useMemo(() => rows.map((r) => ({ kind: "page" as const, id: r.id })), [rows]));
+  // A NEW PAGE IS FILED IN THE SPACE BEING BROWSED — the reader chose the
+  // place by where they pressed, so the button is drawn on a space's own page
+  // and nowhere a space would have to be guessed.
+  const canWrite = useWriteAccess("write_page");
+  const [writing, setWriting] = useState(false);
 
   return (
     <>
+      {container && (
+        <PageActions>
+          <Button
+            size="small"
+            variant="secondary"
+            leadingIcon={<PlusGlyph size="sm" />}
+            disabledReason={canWrite.can ? undefined : canWrite.reason}
+            title={canWrite.can ? undefined : canWrite.reason}
+            onClick={() => setWriting(true)}
+          >
+            New page
+          </Button>
+        </PageActions>
+      )}
+      {writing && <NewPageDialog container={container} onClose={() => setWriting(false)} />}
       <PageNote>
         The company's own knowledge base, browsed. To find pages about a subject rather than in a
         place, search from the Knowledge screen — it ranks.
@@ -519,185 +544,6 @@ export function Pages({ container: fromPath }: { container?: string }) {
   );
 }
 
-/**
- * One page: its body, where it sits, and everything that changed it.
- *
- * ADDRESSED BY ITS ID, `#/knowledge/pages/{id}`, and by nothing else. It was
- * addressed by container and title, and a title changes on rename — so every
- * link anybody had copied broke the day somebody fixed a heading. The id is
- * what every internal link and every search hit already carries, and it is
- * what the `page` read is asked with here.
- */
-export function PageView({ id }: { id: string }) {
-  const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
-  const { data, loading, error } = useQuery("page", { id }, { enabled: id !== "", pollMs: 20_000 });
-  usePageLabels(data?.page ? { [id]: data.page.title } : {});
-
-  // THE CHART'S TWO ANSWERS ABOUT A HANDLE. The prose lines below want the
-  // NAME; a watcher's and a commenter's chip also draws the dashed ring off
-  // the KIND, so a name-only resolver made every human on this page an agent.
-  const who = seatLookup(index);
-  const seatName = (handle: string) => who(handle).name;
-  const page = data?.page;
-  // NEWEST FIRST — `internal/pages` reads the revisions `ORDER BY version
-  // DESC`, and the header's "set by" line is the head of this list. Read once
-  // here so the panel below and the header cannot disagree about which save
-  // was the last one.
-  const history = data?.history ?? [];
-
-  return (
-    <>
-      <PageActions>
-        {page ? (
-          <>
-            <Tag variant={STATUS_TONE[page.status] ?? "neutral"} dot>
-              {page.status}
-            </Tag>
-            <Tag appearance="outline" monospace>
-              v{page.version}
-            </Tag>
-            {page.skill && <Tag variant="info">tool skill</Tag>}
-          </>
-        ) : undefined}
-      </PageActions>
-      {/* THE ANCESTOR CHAIN, outermost first — a page's place is what makes
-            it findable, and a title alone says nothing about which team's tree
-            it is in.
-
-            A CHAIN OF ONE IS NOT A CHAIN. On a page filed directly in its
-            container — which is most of them — this rendered the container and
-            nothing else: a lone accent word in an otherwise empty band above
-            the header, reading as a stray button, saying exactly what the
-            `Container` fact three lines below it already says as a link to the
-            same place. The trail earns its line when it has something the fact
-            cannot carry, which is the path THROUGH the tree; until then the
-            fact is the whole answer.
-
-            THE GUARD WRAPS THE NOTE, NOT ITS CONTENTS. `PageNote` renders its
-            `<p class="page-note">` whatever it is handed, and that paragraph
-            carries a `margin-bottom` of its own — so guarding only the
-            breadcrumb inside it swapped a stray link for an empty band, which
-            is the same gap with nothing in it. */}
-      {page && (data.ancestors ?? []).length > 0 ? (
-        <PageNote>
-          <span className="row wrap" style={{ gap: "var(--spacing-1)" }}>
-            <a href={href(["knowledge", page.container])}>{page.container}</a>
-            {(data.ancestors ?? []).map((a) => (
-              <span key={a.id}>
-                {" / "}
-                <a href={href(["knowledge", "pages", a.id])}>{a.title}</a>
-              </span>
-            ))}
-          </span>
-        </PageNote>
-      ) : undefined}
-
-      {loading && <Skeleton variant="text" rows={8} label="Loading the page" />}
-
-      <QueryState error={error} loading={loading}>
-        {page && (
-          <>
-            {/* THE OBJECT'S OWN HEADER. The title used to be the page bar's
-                crumb and nothing else, so the screen opened straight into a
-                body with no statement of what it was — and of the five facts a
-                page is read by, two were a badge row, one was the breadcrumb,
-                one was a panel of chips, and WHO WROTE IT AND WHEN appeared
-                nowhere at all: the grid a reader arrived from showed both, and
-                the page they clicked into showed neither. They come out of the
-                same builder the rail uses, so a reader scans them in one order
-                wherever a page appears.
-
-                THE PAGE BAR KEEPS ITS OWN BADGES, which is not a duplicate
-                for the sake of one: the bar sits outside the scrolling region
-                and the header scrolls away with the body, so on a long page
-                the status is the one fact that must survive the scroll. */}
-            <ObjectHeader
-              kind="Page"
-              icon="file-text"
-              // NO IDENTIFIER BESIDE THE TITLE. A page is ADDRESSED by its id,
-              // which the address bar already carries, but a reader finds it
-              // by its container and its title — both already here, one as the
-              // first fact and one as the title itself.
-              title={page.title}
-              status={pageFlags(page)}
-              facts={pageFacts({ page, history, now, seatName })}
-            />
-
-            <Card>
-              {page.body ? (
-                <div className="prose md">{renderMarkdown(page.body)}</div>
-              ) : (
-                <span className="muted">This page has no body.</span>
-              )}
-            </Card>
-
-            {data.children?.length ? (
-              <Card>
-                <Card.Header>
-                  {/* THE TOTAL, not the length: the read carries the first
-                      fifty by title, and "Children (50)" over a page with
-                      sixty said fifty. */}
-                  <Card.Title>{`Children (${data.children_total ?? data.children.length})`}</Card.Title>
-                </Card.Header>
-                <ul className="list">
-                  {data.children.map((child) => (
-                    <li key={child.id}>
-                      <a href={href(["knowledge", "pages", child.id])}>{child.title}</a>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-            ) : null}
-
-            {page.watchers?.length ? (
-              <Card>
-                <Card.Header>
-                  <Card.Title>Watching</Card.Title>
-                </Card.Header>
-                <div className="row wrap" style={{ gap: "var(--spacing-2)" }}>
-                  {page.watchers.map((w) => (
-                    <SeatChip key={w} handle={w} {...who(w)} />
-                  ))}
-                </div>
-              </Card>
-            ) : null}
-
-            <Card>
-              <Card.Header>
-                <Card.Title>{`Comments (${data.comments?.length ?? 0})`}</Card.Title>
-              </Card.Header>
-              {data.comments?.length ? (
-                <div className="col gap-3">
-                  {data.comments.map((c) => (
-                    <div key={c.id} className="comment">
-                      <div className="row" style={{ gap: "var(--spacing-2)" }}>
-                        <SeatChip handle={c.author} {...who(c.author)} />
-                        <span className="muted" title={fmtDateTime(c.created_at)}>
-                          {relTime(c.created_at, now)}
-                        </span>
-                        {c.edited_at && <span className="muted">(edited)</span>}
-                      </div>
-                      <div className="prose md">{renderMarkdown(c.body)}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <span className="muted">Nobody has commented.</span>
-              )}
-            </Card>
-
-            <PageHistory pageID={page.id} history={history} seatName={seatName} now={now} />
-
-            <PageChanges pageID={page.id} seatName={seatName} now={now} />
-          </>
-        )}
-      </QueryState>
-    </>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // The peeks
 // ---------------------------------------------------------------------------
@@ -796,7 +642,7 @@ export function PagePeek({ id }: { id: string }) {
               kind="Page"
               icon="file-text"
               title={page.title}
-              status={pageFlags(page)}
+              status={pageFlags(data)}
               facts={pageFacts({ page, history, now, seatName })}
             />
             <div className="col gap-3">
@@ -891,295 +737,5 @@ export function PagePeek({ id }: { id: string }) {
         )}
       </QueryState>
     </>
-  );
-}
-
-/**
- * A page's saved versions, and the body of whichever one is open.
- *
- * # A list of version numbers is not a history
- *
- * The detail answer carries revision SUMMARIES — a version, an author, a
- * message, an instant — which says a page was edited eleven times and not what
- * any of those edits did. This panel used to render exactly that and tell the
- * reader why they could not click one: "past versions are kept as metadata
- * here; reading one back is a coordination read the engine does on demand."
- * There was no such read. The bodies sat in `pages_revisions` reachable only
- * by reading the page at its head.
- *
- * # An old version is an ordinary absence
- *
- * A page keeps a bounded number of revisions, so asking for one the node no
- * longer holds is not a failure — and the panel says which of the two happened
- * rather than rendering a blank.
- */
-/**
- * A line diff, rendered as the document it is.
- *
- * MONOSPACE AND LINE-NUMBERED on both sides, because the two numbers are what
- * a reader uses to find the paragraph in the version beside it. A skipped run
- * is a row of its own saying how many lines it stands for: a gap silently
- * closed makes a document edited at both ends look like one rewritten in the
- * middle.
- */
-function DiffPane({ sections }: { sections: DiffSection[] }) {
-  return (
-    <div className="diff">
-      {sections.map((section, s) => (
-        <div key={s} className="diff-section">
-          {section.skipped > 0 && (
-            <div className="diff-skip">{plural(section.skipped, "unchanged line")}</div>
-          )}
-          {section.lines.map((line, i) => (
-            // THE CLASS NAMES ARE LITERALS, never assembled from the value:
-            // a stylesheet gate that cannot see a class cannot tell a rule
-            // this file relies on from one nothing uses.
-            <div
-              key={i}
-              className={cx(
-                "diff-line",
-                line.kind === "add" && "is-add",
-                line.kind === "remove" && "is-remove",
-              )}
-            >
-              <span className="diff-no">{line.before ?? ""}</span>
-              <span className="diff-no">{line.after ?? ""}</span>
-              <span className="diff-mark">
-                {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
-              </span>
-              <span className="diff-text">{line.text || " "}</span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function PageHistory({
-  pageID,
-  history,
-  seatName,
-  now,
-}: {
-  pageID: string;
-  history: PageRevision[];
-  seatName: (handle: string) => string;
-  now: number;
-}) {
-  // WHICH VERSION IS OPEN, as a FILTER: stepping through a page's versions
-  // must not fill the back stack with every one the reader glanced at.
-  const [open, setOpen] = useParam("version", "", "filter");
-  const version = Number(open) || 0;
-  const body = useQuery("page_revision", { page: pageID, version }, { enabled: version > 0 });
-  // WHAT THIS SAVE CHANGED, which is the question somebody opens a history
-  // for and which the panel could not answer: it showed any ONE version, so
-  // the answer was to open two and read both.
-  //
-  // The PREVIOUS version by position in the list, not `version - 1`: a page
-  // keeps a bounded number of revisions, so the one below this in the history
-  // is the one that was actually saved before it — and off a trimmed page
-  // `version - 1` is a read that comes back not found.
-  const previous = useMemo(() => {
-    const i = history.findIndex((rev) => rev.version === version);
-    return i >= 0 ? (history[i + 1]?.version ?? 0) : 0;
-  }, [history, version]);
-  const [lens, setLens] = useParam("lens", "diff", "filter");
-  const prior = useQuery(
-    "page_revision",
-    { page: pageID, version: previous },
-    { enabled: version > 0 && previous > 0 && lens === "diff" },
-  );
-  const diff = useMemo(
-    () =>
-      body.data && prior.data
-        ? collapse(diffLines(prior.data.body ?? "", body.data.body ?? ""))
-        : [],
-    [body.data, prior.data],
-  );
-  const stat = useMemo(() => diffStat(diff.flatMap((section) => section.lines)), [diff]);
-
-  return (
-    <Card>
-      <Card.Header icon={<ClockGlyph size="sm" />}>
-        <Card.Title>{`History (${history.length})`}</Card.Title>
-      </Card.Header>
-      {history.length ? (
-        <div className="list">
-          {history.map((rev) => (
-            <button
-              key={rev.version}
-              type="button"
-              className={`thread-entry as-row${rev.version === version ? " selected" : ""}`}
-              onClick={() => setOpen(rev.version === version ? "" : String(rev.version))}
-            >
-              <span className="row gap-2">
-                <FileTextGlyph size="sm" />
-                <span className="mono">v{rev.version}</span>
-                <span>{rev.author ? seatName(rev.author) : "the engine"}</span>
-                {rev.message && <span className="muted truncate">{rev.message}</span>}
-                <span className="spacer" />
-                <span className="muted" title={fmtDateTime(rev.created_at)}>
-                  {relTime(rev.created_at, now)}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <span className="muted">Only this version exists — nobody has saved over it.</span>
-      )}
-
-      {version > 0 && (
-        <div style={{ marginTop: "var(--spacing-3)" }}>
-          <QueryState error={body.error} loading={body.loading}>
-            {body.data ? (
-              <>
-                <div className="row wrap gap-2">
-                  <span className="t-caption">
-                    Version {body.data.version}
-                    {body.data.title ? ` — “${body.data.title}”` : ""}, as it was saved.
-                  </span>
-                  <span className="spacer" />
-                  {/* THE FIRST VERSION HAS NOTHING TO COMPARE WITH, which is
-                      a fact about the page rather than a lens the reader
-                      failed to pick — so the control is absent rather than
-                      offering a diff that can only say "everything". */}
-                  {previous > 0 && (
-                    <Segmented
-                      ariaLabel="What to show"
-                      value={lens}
-                      onChange={setLens}
-                      options={[
-                        { value: "diff", label: `Changes from v${previous}` },
-                        { value: "full", label: "The whole version" },
-                      ]}
-                    />
-                  )}
-                </div>
-                {lens === "diff" && previous > 0 ? (
-                  <QueryState error={prior.error} loading={prior.loading}>
-                    {prior.data &&
-                      (stat.identical ? (
-                        // IDENTICAL IS ITS OWN ANSWER. A save that changed
-                        // only the title leaves the body untouched, and a
-                        // pane of unmarked lines reads as one that failed
-                        // to load.
-                        <EmptyState
-                          size="compact"
-                          icon={<CheckGlyph size="xl" />}
-                          title="This save did not change the body"
-                          description="A page's title, its labels and its place in the tree are saved beside its body — this version's prose is the one before it."
-                        />
-                      ) : (
-                        <>
-                          <p className="t-caption">
-                            <span className="diff-add-ink">+{stat.added}</span>{" "}
-                            <span className="diff-del-ink">−{stat.removed}</span> against v
-                            {previous}
-                          </p>
-                          <DiffPane sections={diff} />
-                        </>
-                      ))}
-                  </QueryState>
-                ) : (
-                  <div className="prose md">
-                    {body.data.body ? (
-                      renderMarkdown(body.data.body)
-                    ) : (
-                      <span className="muted">This version had no body.</span>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              // NOT FOUND IS NOT A FAILURE. A page keeps a bounded number
-              // of revisions, so an older one is an ordinary absence — and
-              // saying which of the two happened is the whole point.
-              !body.loading && (
-                <EmptyState
-                  size="compact"
-                  icon={<ClockGlyph size="xl" />}
-                  title="This node no longer holds that version"
-                  description="A page keeps a bounded number of revisions. The entry above is the record that it existed."
-                />
-              )
-            )}
-          </QueryState>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/**
- * Everything that happened to this page, which is not the same as its saves.
- *
- * `pages_history` has one row per change since the domain landed — ten change
- * kinds, who made it, whether it announced anything, and the TURN that made it
- * — and the schema ships an index literally named "one page's activity". Until
- * now nothing read a single row of it: a comment, a rename, a move, a label
- * edit and a status change all happened and left no trace any screen could
- * show. Only saves appeared, through the revision list.
- *
- * THE TURN IS WHAT A WIKI CANNOT HAVE. An edit made by a seat carries the turn
- * that made it, so "why did this page change" is one click rather than a
- * search of the event log.
- */
-function PageChanges({
-  pageID,
-  seatName,
-  now,
-}: {
-  pageID: string;
-  seatName: (handle: string) => string;
-  now: number;
-}) {
-  const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
-  const changes = feed.data?.changes ?? [];
-  return (
-    <Card>
-      <Card.Header icon={<ChartNoAxesGanttGlyph size="sm" />}>
-        <Card.Title>{`Activity (${changes.length})`}</Card.Title>
-      </Card.Header>
-      <QueryState
-        error={feed.error}
-        loading={feed.loading}
-        empty={
-          changes.length
-            ? undefined
-            : {
-                title: "Nothing has happened to this page",
-                hint: "Every change writes an entry — a save, a comment, a rename, a move, a label. A page with none was created and left alone.",
-              }
-        }
-      >
-        <div className="list">
-          {changes.map((change) => (
-            <div key={change.id} className="thread-entry">
-              <span className="row gap-2">
-                <Tag appearance="outline">{change.kind}</Tag>
-                <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
-                {change.quiet && (
-                  <span className="t-caption" title="this change announced nothing">
-                    quiet
-                  </span>
-                )}
-                <span className="spacer" />
-                {change.turn_id && (
-                  <a className="t-link t-caption" href={href(["live", "turns", change.turn_id])}>
-                    turn →
-                  </a>
-                )}
-                <span className="muted" title={fmtDateTime(change.at)}>
-                  {relTime(change.at, now)}
-                </span>
-              </span>
-              {change.excerpt && <p className="t-caption">{plainText(change.excerpt)}</p>}
-            </div>
-          ))}
-        </div>
-      </QueryState>
-    </Card>
   );
 }

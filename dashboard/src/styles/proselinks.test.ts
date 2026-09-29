@@ -51,16 +51,6 @@ const ALLOWED: Allowed[] = [
       "`.grid-band-foot a` for the reason the board's entry above gives. The " +
       "shapes draw one answer and the link means the same thing in all of them.",
   },
-  {
-    where: "routes/knowledge/Pages.tsx",
-    why:
-      "The ancestor trail and the children list under 'Where it sits'. Both are " +
-      "LISTS of links — a path and a set of siblings — rather than links inside a " +
-      "sentence, so the reset is right for them: what separates them from the text " +
-      "around them is that there is no text around them. They carry no class " +
-      "because the containers draw them, which is the one case the forward " +
-      "question has a good answer without one.",
-  },
 ];
 
 /** The modules that can hold markup: an anchor is JSX, and JSX is `.tsx`. */

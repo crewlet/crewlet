@@ -458,8 +458,20 @@ func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) 
 
 // Detail is one page with everything a reader opening it wants.
 type Detail struct {
-	Page     Page              `json:"page"`
-	Revision uint64            `json:"revision"`
+	Page     Page   `json:"page"`
+	Revision uint64 `json:"revision"`
+
+	// Skill and Onboarding are what the applier DERIVED from the page —
+	// whether its body parses as a tool skill, whether it is the onboarding
+	// page — read from `pages_skills` in the same transaction. They sit
+	// beside the page rather than on it because [Page] is the record's own
+	// document and neither flag is anything a writer wrote. They were
+	// missing from this answer altogether, so a tool-skill page's own screen
+	// never said what it was: a listing row carried the mark and the page it
+	// opened did not.
+	Skill      bool `json:"skill"`
+	Onboarding bool `json:"onboarding"`
+
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
 	Children []Summary         `json:"children,omitempty"`
@@ -525,6 +537,15 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			return err
 		}
 		detail = Detail{Page: page, Revision: revision}
+		var skill, onboarding int
+		switch serr := tx.QueryRowContext(ctx,
+			`SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`, id).
+			Scan(&skill, &onboarding); {
+		case errors.Is(serr, sql.ErrNoRows):
+		case serr != nil:
+			return fmt.Errorf("pages: read what %s was derived as: %w", id, serr)
+		}
+		detail.Skill, detail.Onboarding = skill != 0, onboarding != 0
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
 			return err
 		}
@@ -580,9 +601,11 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 	return document, uint64(rev), id, nil
 }
 
+// comments reads a page's thread.
 func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Comment, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT document FROM pages_comments WHERE page_id = ? ORDER BY created_at, id`,
+		`SELECT document FROM pages_comments
+		  WHERE page_id = ? ORDER BY created_at, id`,
 		pageID)
 	if err != nil {
 		return nil, fmt.Errorf("pages: read the thread on %s: %w", pageID, err)

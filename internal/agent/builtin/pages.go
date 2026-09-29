@@ -421,7 +421,7 @@ func (t *writePage) Parameters() map[string]any {
 			},
 			"body": map[string]any{
 				"type":        "string",
-				"description": "The page, in markdown.",
+				"description": "The page, in markdown. " + pageLinkHelp,
 			},
 			"container": map[string]any{
 				"type":        "string",
@@ -505,6 +505,18 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 
 // ---- save_page --------------------------------------------------------- //
 
+// pageLinkExample is how a body links another page: the address
+// [pages.Links] reads back, so the linked page lists this one under "Linked
+// from". BY ID, never by title — a title is an address that a rename moves,
+// and a `[[CONTAINER/Title]]` wiki link is a grammar nothing in the engine
+// reads: it renders as literal brackets and is invisible to the backlinks.
+const pageLinkExample = "[its title](" + pages.AddressPrefix + "<page id>)"
+
+// pageLinkHelp is the sentence both page-writing tools carry on `body`.
+const pageLinkHelp = "Link another page as " + pageLinkExample +
+	", using the `id` get_page or list_pages answers — not the title " +
+	"and not [[wiki]] brackets, which nothing resolves."
+
 type savePage struct{ deps PageDeps }
 
 var _ tools.SeatCallable = (*savePage)(nil)
@@ -532,7 +544,10 @@ func (t *savePage) Parameters() map[string]any {
 					"what makes somebody else's edit a refusal instead of a " +
 					"silent overwrite.",
 			},
-			"body":   map[string]any{"type": "string", "description": "Replaces the page."},
+			"body": map[string]any{
+				"type":        "string",
+				"description": "Replaces the page. " + pageLinkHelp,
+			},
 			"title":  map[string]any{"type": "string", "description": "Renames it."},
 			"parent": map[string]any{"type": "string", "description": "Moves it under this page."},
 			"labels": map[string]any{

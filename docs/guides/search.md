@@ -215,6 +215,29 @@ ranges can go missing.
 
 ---
 
+## The index also derives a page's backlinks
+
+The lexical index reads every page body and task description to tokenise it,
+and the same read extracts the page ids that body links to — `/pages/<id>` or
+the dashboard's `#/knowledge/pages/<id>`, outside code — into this node's
+`page_links` table. That is where a page's **Linked from** comes from (the
+`page` answer's `linked_from`), so it has the index's staleness: a body saved a
+moment ago lists its links once the next lap reads it.
+
+It has the index's first lap too. Until a node has finished its first lap over
+both pages and tasks it cannot say what links to a page, and the `page` answer
+says so — `linked_from_status: building` — rather than sending an empty list,
+which would read as "nothing links here" about a page that is linked.
+
+**An upgrade that changes what the index derives needs no rebuild command.**
+Every indexed row records the derivation it was built under (`kb_docs.derivation`,
+compared against the build's `search.IndexDerivation`), and a row built under an
+older one is re-derived on the next lap exactly as a row whose source moved.
+The upgrade that introduced backlinks is one: every row indexed before it is
+re-read once, and until that lap finishes the node reports `building`.
+
+---
+
 ## If search is slow
 
 1. **Check `search_degraded` first.** A failing embeddings provider makes every

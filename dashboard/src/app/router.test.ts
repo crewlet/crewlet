@@ -323,7 +323,9 @@ describe("the resolver", () => {
       screen: "container",
       key: "2026-OFFSITE",
     });
-    for (const word of ["skills", "diaries", "eng", "Eng"]) {
+    // `skills` is the section it was reserved for, and never a container.
+    expect(resolve(["knowledge", "skills"])).toMatchObject({ screen: "skills" });
+    for (const word of ["diaries", "eng", "Eng"]) {
       expect(resolve(["knowledge", word]).resolved, word).toBe(false);
     }
   });

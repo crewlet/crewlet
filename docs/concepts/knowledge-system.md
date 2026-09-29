@@ -381,6 +381,27 @@ Two properties differ from the vendor path and both are visible:
   (the rows, the lexical index and the replicated vectors), and the screen
   says so: it is as current as this node's place on the pages log. See
   [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-a-tree-and-search-with-real-modes).
+- **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
+  is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
+  per company day, so `page_reads` names each seat, how the page reached it
+  and in which turn — the same answer on every node, a departed node's reads
+  included. Backlinks are this node's: the lexical indexer extracts every
+  page id a body links to (`pages.Links` — `/pages/<id>` or the dashboard's
+  `#/knowledge/pages/<id>`, outside code) into `page_links` in the node
+  estate, beside the index it is derived with, and a task links a page either
+  as a page relation or by an address in its description. A link is BY ID,
+  never by title — a title is an address a rename moves — and `write_page` and
+  `save_page` tell a seat so on their `body` parameter, with an example a test
+  holds against `pages.Links`: `[its title](#/knowledge/pages/<page id>)`. A
+  `[[CONTAINER/Title]]` wiki link is not a grammar the engine reads; it is
+  drawn as the brackets it is and counts for nothing in "Linked from". An index built
+  before a node knew how to extract links is re-derived once, on its own
+  (`search.IndexDerivation`), with no rebuild command to remember.
+- **THE DASHBOARD EDITS AS THE PERSON.** A save, a new page and a comment go
+  through `/operator/act` bound to the signed-in seat, so the page's history
+  names who wrote it — never "the dashboard". A save states the revision it
+  edited; one against a stale revision is refused rather than overwriting
+  prose somebody else just wrote.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
   the version before it, by line.
@@ -405,6 +426,12 @@ Two properties differ from the vendor path and both are visible:
   page's history and tells its watchers. Only a rename to the title the page
   already displays does nothing — and it reports success, because it has
   already happened.
+- **A save's note is the one its writer gave.** The one line `save_page`
+  takes as `message` is what the page's activity and each watcher's wake show
+  under the saver's name; a save without one shows none. It never falls back
+  to a line of the page — the opening heading is the same before and after an
+  edit anywhere below it, and shown there it reads as a note nobody wrote.
+  What changed is the revision's to say, and History shows it by line.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 

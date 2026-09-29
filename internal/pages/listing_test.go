@@ -2,6 +2,7 @@ package pages_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/pages"
@@ -528,5 +529,39 @@ func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
 	// same container rather than a second one.
 	if ensure("eng", "Platform", "Build it") {
 		t.Error("the lower-cased key wrote a record — want the same container")
+	}
+}
+
+// A SAVE'S EXCERPT IS WHAT ITS WRITER SAID, never a line of the page.
+//
+// With no message the excerpt used to fall back to the body's first line, so
+// every such save showed the page's opening heading under the saver's name —
+// on the activity feed and in each watcher's wake — reading as a change note
+// nobody wrote, and one that is the same before and after an edit anywhere
+// below it.
+func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "## Paging rules\n\nv1"})
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("## Paging rules\n\nv2")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.SavePage(t.Context(), author("bob"), page.Page.ID,
+		pages.Save{BaseVersion: 2, Body: ptr("## Paging rules\n\nv3"), Message: "raise the grace"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+
+	var saves []string
+	for _, change := range r.activity(pages.PageActivityQuery{Page: page.Page.ID}).Changes {
+		if change.Kind == pages.ChangeSaved {
+			saves = append(saves, change.Excerpt)
+		}
+	}
+	// Newest first.
+	if want := []string{"raise the grace", ""}; !slices.Equal(saves, want) {
+		t.Fatalf("save excerpts = %q, want %q", saves, want)
 	}
 }

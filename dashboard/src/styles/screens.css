@@ -2378,6 +2378,627 @@ a.prof-row:hover {
     );
 }
 
+/* THE TREE'S SECTIONS under the spaces (Agent skills), a hairline above them
+   as the artboard draws, and the section's count at the row's end. */
+.ktree-sections {
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+}
+
+.ktree-count {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+/* ---- A knowledge page (routes/knowledge/page/) -----------------------------
+
+   THE APPROVED KNOWLEDGE ARTBOARD: the document in a reading column, and a
+   280px rail beside it, each its own scroller, flush with the sheet — the
+   frame the task page takes, for its reason: the rail is read while the
+   document is scrolled. The section frame's padding is handed back to the two
+   columns, and the frame takes the window's height the screen asked for. */
+.section-frame:has(.kpage) {
+  height: 100%;
+}
+.section-body:has(> .kpage) {
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+}
+/* THE CONTAINER AND THE GRID ARE TWO ELEMENTS, because a container query
+   styles what is INSIDE its container and never the container itself — one
+   element that was both kept its two columns at 390px. */
+.kpage {
+  container: kpage / inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+.kpage-grid {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  min-width: 0;
+  min-height: 0;
+}
+.kpage-main {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 40px 56px 48px;
+}
+/* THE READING MEASURE, 700px — the artboard's, which keeps a paragraph of
+   14.5px prose near seventy characters a line. */
+.kpage-doc,
+.kpage-section {
+  width: 100%;
+  max-width: 700px;
+  min-width: 0;
+}
+.kpage-head {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.kpage-title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+.kpage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+}
+.kpage-meta b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.kpage-prose {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+/* THE DOCUMENT'S OWN RHYTHM over the shared markdown one (`.prose.md`), at
+   that rule's weight plus this class so the two cannot tie. The renderer
+   draws a body's `#` as an h2 and its `##` — the level a page's sections are
+   written at — as an h3, so both are section headings here. */
+.prose.md.kpage-prose > * + * {
+  margin-top: 14px;
+}
+.prose.md.kpage-prose h2 {
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+.prose.md.kpage-prose h3 {
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.prose.md.kpage-prose h4 {
+  font-size: 15px;
+  color: var(--color-text-primary);
+}
+.prose.md.kpage-prose > * + :is(h2, h3, h4, h5, h6) {
+  margin-top: 26px;
+}
+/* A HEADING THE OUTLINE SCROLLED TO takes focus so a keyboard continues from
+   it. A pointer press draws no ring (`:focus-visible` does not match one); a
+   keyboard's is drawn off the text, since the heading is not a control. */
+.kpage-prose :is(h2, h3, h4, h5, h6):focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 4px;
+  border-radius: var(--radius-xs);
+}
+.kpage-readonly {
+  margin-top: var(--spacing-3);
+}
+
+/* The page bar's "read by n agents today". */
+.kpage-today {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-right: 6px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* The thread and the activity under the document. */
+.kpage-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding-top: var(--spacing-5);
+  border-top: 1px solid var(--color-border-default);
+}
+.kpage-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.kpage-count {
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.kpage-comments,
+.kpage-changes {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kpage-comment,
+.kpage-change {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) 0;
+  border-bottom: 1px solid var(--color-border-default);
+}
+.kpage-comment:last-child,
+.kpage-change:last-child {
+  border-bottom: none;
+}
+.kpage-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.kpage-replying {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* Editing. */
+.kpage-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.kpage-editor-bar,
+.kpage-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+/* MARKDOWN IS EDITED AS MARKDOWN: the source face, so a table's pipes and a
+   list's indent line up the way the renderer reads them. */
+.kpage-editor-body textarea,
+textarea.kpage-editor-body {
+  min-height: 420px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: 1.6;
+}
+.kpage-preview {
+  min-height: 200px;
+  padding: var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+/* THE CALLOUT'S ACTIONS UNDER ITS SENTENCE, not at its trailing edge: two
+   buttons there took ~290px of a 580px document and folded the explanation
+   into a five-line column ending under them. */
+.kpage-callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+.kpage-merged {
+  margin: 0;
+}
+.kpage-resolve {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+.kpage-resolve-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.kpage-resolve-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kpage-resolve-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.kpage-resolve-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-2);
+}
+.kpage-resolve-side {
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.kpage-resolve-side figcaption {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.kpage-resolve-side pre {
+  margin: 0;
+  padding: var(--spacing-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-inset);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kpage-theirs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.kpage-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+.kpage-picker-hits {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kpage-picker-hit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  width: 100%;
+  min-height: var(--size-target-min);
+  padding: 0 var(--spacing-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kpage-picker-hit:hover {
+  background: var(--color-surface-hover);
+}
+.kpage-picker-hit:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* One revision, read in the document's place. */
+.kpage-version {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.kpage-version-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.kpage-version-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+.kpage-version-by {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+.kpage-version-message {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+/* THE RAIL: small labels over short lists, the artboard's 22px between. */
+.kpage-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 20px 32px;
+  border-left: 1px solid var(--color-border-default);
+}
+.kpage-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.kpage-rail-label {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+.kpage-rail-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.kpage-rail-window {
+  color: var(--color-text-tertiary);
+}
+/* FLUSH WITH THE LIST it grows: the small ghost button's padding and border
+   (8px + 1px) set its label nine pixels right of the avatar column above. The
+   hover fill still extends left of the column, as the rail's links do. */
+.kpage-rail-more {
+  align-self: flex-start;
+  margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
+}
+.kpage-toc,
+.kpage-readers,
+.kpage-links,
+.kpage-revisions,
+.kpage-watchers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kpage-toc-link {
+  display: block;
+  width: 100%;
+  min-height: var(--size-target-min);
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kpage-toc-link.is-nested {
+  padding-left: var(--spacing-3);
+}
+.kpage-toc-link:hover,
+.kpage-toc-link[aria-current] {
+  color: var(--color-text-primary);
+}
+.kpage-toc-link[aria-current] {
+  font-weight: var(--font-weight-medium);
+}
+.kpage-toc-link:focus-visible,
+.kpage-revision:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+  border-radius: var(--radius-xs);
+}
+.kpage-readers {
+  gap: var(--spacing-3);
+}
+.kpage-reader {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.kpage-reader-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.kpage-reader-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.kpage-reader-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+.kpage-reader-count {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.kpage-reader-via {
+  display: flex;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.kpage-reader-how {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* THE WAY IT WAS READ IS A MUTED LINE, as the artboard draws it — a turn's
+   link underlines only under the pointer or the keyboard, like the name. */
+.kpage-reader-via-link {
+  color: inherit;
+  text-decoration: none;
+}
+.kpage-reader-when {
+  flex: none;
+  white-space: pre;
+}
+.kpage-reader-name:hover,
+.kpage-reader-name:focus-visible,
+.kpage-reader-via-link:hover,
+.kpage-reader-via-link:focus-visible {
+  text-decoration: underline;
+}
+.kpage-link {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: 28px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+.kpage-link:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.kpage-link > svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.kpage-link-key {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.kpage-link-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kpage-revision {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  width: 100%;
+  min-height: var(--size-target-min);
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-compact);
+  text-align: left;
+  cursor: pointer;
+  box-sizing: content-box;
+}
+.kpage-revision:hover {
+  background: var(--color-surface-hover);
+}
+.kpage-revision[aria-pressed="true"] {
+  background: var(--color-surface-elevated);
+  outline: 1px solid var(--color-border-default);
+  outline-offset: -1px;
+}
+.kpage-revision-what {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kpage-revision-when {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+/* A revision the engine wrote has no seat to draw — the badge's room, empty,
+   so the column of names stays aligned. */
+.kpage-revision-engine {
+  flex: none;
+  width: 18px;
+}
+
+/* BELOW 760px OF ITS OWN WIDTH THE RAIL FOLLOWS THE DOCUMENT in one scroller
+   — a document narrower than its measure beside a 280px rail reads as two
+   cramped columns rather than one page. Between that and 980 the insets
+   tighten to 32px, where the artboard's 56 starts costing the measure. */
+@container kpage (max-width: 980px) {
+  .kpage-main {
+    padding: 32px 32px 40px;
+  }
+}
+@container kpage (max-width: 760px) {
+  .kpage-grid {
+    display: block;
+    overflow-y: auto;
+  }
+  .kpage-main,
+  .kpage-rail {
+    overflow: visible;
+  }
+  .kpage-main {
+    padding: var(--spacing-5) var(--spacing-4);
+  }
+  .kpage-rail {
+    padding: var(--spacing-5) var(--spacing-4) var(--spacing-8);
+    border-top: 1px solid var(--color-border-default);
+    border-left: none;
+  }
+  .kpage-title {
+    font-size: 26px;
+  }
+}
+/* A PHONE SCROLLS THE PAGE, as any other: the fill is withdrawn there. */
+@media (width < 640px) {
+  .section-frame:has(.kpage) {
+    height: auto;
+  }
+  .kpage {
+    height: auto;
+  }
+  .kpage-grid {
+    overflow: visible;
+  }
+}
+
 .hit {
   display: flex;
   flex-direction: column;
