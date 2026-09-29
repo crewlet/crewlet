@@ -229,6 +229,37 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 		t.Errorf("control: a constant did not fold: got %q, %v", got, ok)
 	}
 
+	// THE SCOPE OF AN ENTRY, on classes whose verdict is known: a file that
+	// only holds the handle is not allowed a write of its own.
+	for _, c := range []struct {
+		kind  allowanceKind
+		class siteClass
+		want  bool
+	}{
+		{mechanism, siteHandle, true}, {mechanism, siteDML, true}, {mechanism, siteComputed, true},
+		{holder, siteHandle, true}, {holder, siteDML, false}, {holder, siteComputed, false},
+		{exception, siteHandle, true}, {exception, siteDML, true}, {exception, siteComputed, false},
+		{notReplicated, siteHandle, false}, {notReplicated, siteDML, false}, {notReplicated, siteComputed, true},
+		{mechanism, "", false},
+	} {
+		if got := c.kind.covers(c.class); got != c.want {
+			t.Errorf("control: a %s entry covers a %q site = %v, want %v", c.kind, c.class, got, c.want)
+		}
+	}
+	// AND THE JUDGEMENT THAT APPLIES IT, on a file allowed only as a holder:
+	// the handle it hands out passes, a sweep planted beside it does not.
+	controlAllowed := []allowance{{Prefix: "internal/p/runtime.go", Kind: holder, Why: "control"}}
+	held := filepath.FromSlash("internal/p/runtime.go")
+	if _, unexpected := judge([]site{{File: held, Line: 1, Why: "control", Class: siteHandle}},
+		controlAllowed); len(unexpected) != 0 {
+		t.Errorf("control: the handle a holder hands out was reported: %+v", unexpected)
+	}
+	if _, unexpected := judge([]site{{File: held, Line: 1, Why: "control", Class: siteDML}},
+		controlAllowed); len(unexpected) != 1 {
+		t.Error("control: a statement writing a partition table in a file allowed " +
+			"only as a holder was not reported")
+	}
+
 	root := sourcetree.Root(t)
 	files := parseTree(t, root, "internal", "cmd")
 	accessors := collectAccessors(files)
@@ -250,6 +281,7 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 			if why, ok := partitionWriteAt(n, parent, f.names, accessors); ok {
 				found = append(found, site{
 					File: f.rel, Line: f.fset.Position(n.Pos()).Line, Why: why,
+					Class: siteHandle,
 				})
 				return true
 			}
@@ -261,12 +293,14 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 			case writesTable(text, partition):
 				found = append(found, site{
 					File: f.rel, Line: f.fset.Position(n.Pos()).Line,
-					Why: "DML on " + strings.Join(strings.Fields(text), " "),
+					Why:   "DML on " + strings.Join(strings.Fields(text), " "),
+					Class: siteDML,
 				})
 			case writesComputedTable(text):
 				found = append(found, site{
 					File: f.rel, Line: f.fset.Position(n.Pos()).Line,
-					Why: "DML whose table is COMPUTED: " + strings.Join(strings.Fields(text), " "),
+					Why:   "DML whose table is COMPUTED: " + strings.Join(strings.Fields(text), " "),
+					Class: siteComputed,
 				})
 			}
 			// A composed string's own operands are literals this walk
@@ -282,15 +316,7 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 			"writes and would pass whatever the tree did. Fix the walk")
 	}
 
-	used := map[string]bool{}
-	var unexpected []site
-	for _, s := range found {
-		if a, ok := allowanceFor(s.File); ok {
-			used[a] = true
-			continue
-		}
-		unexpected = append(unexpected, s)
-	}
+	used, unexpected := judge(found, allowedPartitionWriter)
 	slices.SortFunc(unexpected, func(a, b site) int {
 		if a.File != b.File {
 			return strings.Compare(a.File, b.File)
@@ -315,14 +341,16 @@ func TestOnlyTheApplierWritesThePartitions(t *testing.T) {
 	for _, a := range allowedPartitionWriter {
 		if !a.Kind.Valid() {
 			t.Errorf("%s is allowed with kind %q — an entry says which of the "+
-				"three things it is, so a reviewer can tell the mechanism from "+
-				"the writes this rule actually tolerates", a.Prefix, a.Kind)
+				"four things it is, so a reviewer can tell the mechanism from "+
+				"the writes this rule actually tolerates, and so the walk "+
+				"knows which of its findings the entry covers", a.Prefix, a.Kind)
 		}
 		if !used[a.Prefix] {
-			t.Errorf("%s is allowed to write a partition and does not — the "+
-				"reason on file is %q. An allowance for a write nobody makes any "+
-				"more silently covers the next one into the same file; delete it",
-				a.Prefix, a.Why)
+			t.Errorf("%s is allowed as %s and the walk found nothing there it "+
+				"covers — the reason on file is %q. An allowance for a write "+
+				"nobody makes any more silently covers the next one into the "+
+				"same file; delete it, or give it the kind of what it does",
+				a.Prefix, a.Kind, a.Why)
 		}
 	}
 	t.Logf("parsed %d files; partition writers: %d site(s) across %d allowance(s)",
@@ -334,16 +362,46 @@ type site struct {
 	File string
 	Line int
 	Why  string
+
+	// Class is which of the walk's three findings this is, which is what
+	// an allowance's kind is judged against. The zero value is none of
+	// them, and no kind covers it: a site the walk forgot to classify is
+	// reported rather than waved through.
+	Class siteClass
 }
+
+// siteClass is which of the three things the walk looks for a site is.
+type siteClass string
+
+const (
+	// siteHandle holds a partition's write side: the handle, the
+	// framework's write seam, or a partition's own database.
+	siteHandle siteClass = "handle"
+
+	// siteDML is a statement that writes a table the partition schema
+	// declares.
+	siteDML siteClass = "dml"
+
+	// siteComputed is a statement that writes a table the walk cannot
+	// resolve.
+	siteComputed siteClass = "computed"
+)
 
 // allowanceKind is what an entry claims about itself.
 type allowanceKind string
 
 const (
 	// mechanism: this file IS a state log's applier, or the framework and
-	// the runtime the appliers run on. A write here is how the rule works
-	// rather than an exception to it.
+	// the store the appliers run on. A write here is how the rule works
+	// rather than an exception to it, so it covers every site.
 	mechanism allowanceKind = "mechanism"
+
+	// holder: this file holds or hands out the write handle — the runtime
+	// opening each partition and handing it to the framework, a copy of a
+	// FILE — and writes no row. It covers the handle and nothing else, so
+	// a statement writing a partition table there is reported like one
+	// anywhere else.
+	holder allowanceKind = "holder"
 
 	// exception: a genuine write to a partition that is not a record,
 	// because no record could own what it touches. Read both before adding
@@ -357,9 +415,29 @@ const (
 	notReplicated allowanceKind = "not_replicated"
 )
 
-// Valid reports whether k is one of the three. The zero value is not.
+// Valid reports whether k is one of the four. The zero value is not.
 func (k allowanceKind) Valid() bool {
-	return k == mechanism || k == exception || k == notReplicated
+	return k == mechanism || k == holder || k == exception || k == notReplicated
+}
+
+// covers reports whether an entry of this kind allows a site of class c.
+//
+// An EXCEPTION covers what a write is — the handle it writes through and the
+// statement naming the table — and nothing it cannot name: a computed table
+// in an exception's file is a write nobody argued for. NOT_REPLICATED is a
+// claim about computed table names and covers those alone.
+func (k allowanceKind) covers(c siteClass) bool {
+	switch k {
+	case mechanism:
+		return c == siteHandle || c == siteDML || c == siteComputed
+	case holder:
+		return c == siteHandle
+	case exception:
+		return c == siteHandle || c == siteDML
+	case notReplicated:
+		return c == siteComputed
+	}
+	return false
 }
 
 // allowance is one file permitted to write a partition, with why.
@@ -371,13 +449,20 @@ type allowance struct {
 	// Prefix is the repository-relative file, or directory, it covers.
 	Prefix string
 
-	// Kind says which of three things this allowance is, so a reviewer can
-	// tell them apart at a glance rather than by reading seventeen reasons.
+	// Kind says which of four things this allowance is, so a reviewer can
+	// tell them apart at a glance rather than by reading seventeen reasons
+	// — and it is what the walk judges each site against
+	// ([allowanceKind.covers]), so an entry allows only the findings its
+	// kind names.
 	//
 	// It was a bool — applier or not — and a third case arrived the moment
 	// the walk learned to read a computed table name: a statement this gate
 	// flags that is not a replicated write at all. A bool would have filed
-	// that under one of the two meanings it does not have.
+	// that under one of the two meanings it does not have. The fourth,
+	// HOLDER, arrived when the write handle became a value the runtime
+	// hands out: a file that only passes it on was allowed as mechanism,
+	// and that allowed its every statement too — a sweep planted there
+	// wrote a partition table and the gate passed.
 	Kind allowanceKind
 
 	// Why must say what makes this write legitimate in terms of the RULE
@@ -397,8 +482,10 @@ type allowance struct {
 var allowedPartitionWriter = []allowance{
 	// -----------------------------------------------------------------
 	// The mechanism. These are the appliers this rule names as the one
-	// writer, plus the framework they run on and the runtime that opens
-	// each partition and hands it out.
+	// writer, plus the framework they run on and the store beneath it —
+	// and, as HOLDERS, the runtime that opens each partition and hands it
+	// out and the two copies of a partition's file, none of which may
+	// issue a write of its own.
 	// -----------------------------------------------------------------
 	{
 		Prefix: "internal/statelog/", Kind: mechanism,
@@ -416,35 +503,35 @@ var allowedPartitionWriter = []allowance{
 			"schema, not a row.",
 	},
 	{
-		Prefix: "internal/engine/statelog.go", Kind: mechanism,
+		Prefix: "internal/engine/statelog.go", Kind: holder,
 		Why: "THE RUNTIME: it opens and closes each partition its layout " +
 			"places here, and hands the write handle to the framework's own " +
 			"loops — the appliers, the snapshotter, the adoption and its " +
 			"legacy fold. It writes no row of its own.",
 	},
 	{
-		Prefix: "internal/engine/reanchor.go", Kind: mechanism,
+		Prefix: "internal/engine/reanchor.go", Kind: holder,
 		Why: "Hands the framework's reanchor the partition whose checkpoint " +
 			"it rewrites. It writes no row of its own.",
 	},
 	{
-		Prefix: "internal/engine/maintenance.go", Kind: mechanism,
+		Prefix: "internal/engine/maintenance.go", Kind: holder,
 		Why: "Where the runtime hands the tracker's partition to the tracker's " +
 			"two exceptions below — the duty's probe clear and the inbox " +
 			"sweep. It writes no row of its own.",
 	},
 	{
-		Prefix: "internal/engine/retention", Kind: mechanism,
+		Prefix: "internal/engine/retention", Kind: holder,
 		Why: "The retention report and the capacity check take each open " +
 			"partition's database to size its FILE. Neither writes a row.",
 	},
 	{
-		Prefix: "internal/backup/backup.go", Kind: mechanism,
+		Prefix: "internal/backup/backup.go", Kind: holder,
 		Why: "Takes the partition's database to copy the FILE — VACUUM INTO " +
 			"and the manifest — never to write a row.",
 	},
 	{
-		Prefix: "cmd/crewlet/ops.go", Kind: mechanism,
+		Prefix: "cmd/crewlet/ops.go", Kind: holder,
 		Why: "`crewlet migrate` opens every partition its layout names, " +
 			"which is how an operator's migration reaches each file. The " +
 			"only write is the schema.",
@@ -505,16 +592,37 @@ var allowedPartitionWriter = []allowance{
 	},
 }
 
-// allowanceFor reports whether a file is allowed to write, and which entry
-// covers it.
-func allowanceFor(file string) (string, bool) {
+// judge sorts the walk's sites into those an entry allows — naming each entry
+// that allowed one — and those it reports.
+//
+// AN ENTRY COVERS WHAT ITS KIND SAYS AND NOTHING ELSE. A file that is here
+// because it holds the write handle is not thereby allowed a statement that
+// writes a partition table: that is the one thing this rule forbids everywhere
+// but an applier, and a whole-file allowance read the file as allowed
+// wholesale.
+func judge(found []site, allowed []allowance) (map[string]bool, []site) {
+	used := map[string]bool{}
+	var unexpected []site
+	for _, s := range found {
+		if a, ok := allowanceFor(s.File, allowed); ok && a.Kind.covers(s.Class) {
+			used[a.Prefix] = true
+			continue
+		}
+		unexpected = append(unexpected, s)
+	}
+	return used, unexpected
+}
+
+// allowanceFor reports the entry of allowed that governs a file, if any.
+func allowanceFor(file string, allowed []allowance) (allowance, bool) {
 	// The longest prefix wins, so a file-specific entry is not shadowed by
 	// a package-wide one and both stay two-sided.
-	best, found := "", false
-	for _, a := range allowedPartitionWriter {
+	var best allowance
+	found := false
+	for _, a := range allowed {
 		p := filepath.FromSlash(a.Prefix)
-		if strings.HasPrefix(file, p) && len(p) > len(best) {
-			best, found = a.Prefix, true
+		if strings.HasPrefix(file, p) && len(p) > len(filepath.FromSlash(best.Prefix)) {
+			best, found = a, true
 		}
 	}
 	return best, found
