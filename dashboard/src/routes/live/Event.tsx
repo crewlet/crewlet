@@ -30,11 +30,11 @@ import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { useAgents, useEngineHealth } from "~/lib/store-hooks.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import type { EventRecord } from "~/protocol/index.ts";
+import type { AgentRow, EventRecord } from "~/protocol/index.ts";
 
 /**
  * What an id that resolves to nothing means, on the page and in the rail.
@@ -70,9 +70,33 @@ function eventTitle(event: EventRecord): string {
  * the category and a rail that led with the actor would make a reader
  * re-learn the same record every time it changed frame.
  */
-function eventFacts(event: EventRecord, now: number): Fact[] {
+/**
+ * The handle of the seat an event concerns, or "" when no seat this tab knows
+ * carries its id.
+ *
+ * BY THE SEAT'S ID, never its actor. An event's actor is a display name
+ * ("Agent PM"), and the seat's page is addressed by its handle — so the
+ * actor's link and button went to `#/agents/seats/Agent PM`, which is no
+ * seat's address, on every event a seat published. The id is the store's own
+ * `agent_id` tag, and the agents push is what maps it to a handle.
+ */
+export function seatHandleOf(event: EventRecord, agents: readonly AgentRow[]): string {
+  const id = event.tags?.agent_id;
+  if (!id) return "";
+  return agents.find((a) => a.agent_id === id)?.handle ?? "";
+}
+
+function eventFacts(event: EventRecord, now: number, handle: string): Fact[] {
   return [
-    { label: "Type", value: <code className="inline">{event.type}</code> },
+    {
+      label: "Type",
+      value: (
+        <code className="inline" title={event.type}>
+          {event.type}
+        </code>
+      ),
+      token: true,
+    },
     { label: "Category", value: humanize(event.category) || "system" },
     {
       // A WORDED EMPTY, not a dash: an event with no actor was published by
@@ -80,7 +104,7 @@ function eventFacts(event: EventRecord, now: number): Fact[] {
       // blank — and only a real actor carries a link out to its seat.
       label: "Actor",
       value: event.actor || <span className="muted">the engine itself</span>,
-      path: event.actor ? ["agents", "seats", event.actor] : undefined,
+      path: handle ? ["agents", "seats", handle] : undefined,
     },
     {
       label: "When",
@@ -92,11 +116,14 @@ function eventFacts(event: EventRecord, now: number): Fact[] {
     {
       label: "Trace",
       value: event.trace_id ? (
-        <code className="inline">{event.trace_id}</code>
+        <code className="inline" title={event.trace_id}>
+          {event.trace_id}
+        </code>
       ) : (
         <span className="muted">not traced</span>
       ),
       path: event.trace_id ? ["live", "traces", event.trace_id] : undefined,
+      token: Boolean(event.trace_id),
     },
   ];
 }
@@ -154,6 +181,8 @@ export function EventScreen({ eventId }: { eventId: string }) {
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId });
   const engine = useEngineHealth();
+  const agents = useAgents();
+  const handle = data ? seatHandleOf(data, agents) : "";
 
   // A phase event has a first-class rendering; everything else gets its
   // payload shown honestly rather than being squeezed into a shape it is not.
@@ -191,12 +220,12 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 Turn
               </Button>
             )}
-            {data?.actor && (
+            {data?.actor && handle && (
               <Button
                 size="small"
                 variant="secondary"
                 leadingIcon={<UserGlyph size="xs" />}
-                onClick={() => nav.to(["agents", "seats", data.actor])}
+                onClick={() => nav.to(["agents", "seats", handle])}
               >
                 {data.actor}
               </Button>
@@ -224,7 +253,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
           identifier={data.id}
           title={name}
           status={eventStatus(data)}
-          facts={eventFacts(data, now)}
+          facts={eventFacts(data, now, handle)}
         />
       )}
 
@@ -351,6 +380,8 @@ export function EventPeek({ eventId }: { eventId: string }) {
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
   const engine = useEngineHealth();
+  const agents = useAgents();
+  const handle = data ? seatHandleOf(data, agents) : "";
 
   // NOT AN EMPTY RAIL. `peek=event:` is reached from a pasted id as often as
   // from a row — the search box takes one — so an id that resolves to nothing
@@ -368,7 +399,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           identifier={data.id}
           title={eventTitle(data)}
           status={eventStatus(data)}
-          facts={eventFacts(data, now)}
+          facts={eventFacts(data, now, handle)}
         />
       )}
       <div className="col gap-3">

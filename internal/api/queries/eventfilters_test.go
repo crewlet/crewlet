@@ -199,6 +199,33 @@ func TestTheEventsCanBeNarrowedToAChannelAndATrace(t *testing.T) {
 	}
 }
 
+// "FAILURES ONLY" IS THE ENGINE'S FILTER, on the listing and its axis alike.
+//
+// The event log narrowed the rows a tab had paged in, so its bars counted the
+// whole window while its list held the failures among the newest hundred.
+// Read here, both halves are one set; anything but true or false is refused
+// rather than read as "every row".
+//
+// Mutation: drop `failed` from the filter reader, and the failures' page is
+// the whole log.
+func TestFailuresOnlyIsAFilterTheEngineApplies(t *testing.T) {
+	t.Parallel()
+	r, _ := filterFixture(t)
+	if got := eventIDs(t, r, map[string]any{"failed": "true"}); !slices.Equal(got, []string{"s-phase"}) {
+		t.Errorf("the failures = %v, want the one failed phase", got)
+	}
+	if got := eventIDs(t, r, map[string]any{"failed": "false"}); !slices.Equal(got, []string{"p-done", "p-phase", "s-done"}) {
+		t.Errorf("the clean rows = %v, want the other three", got)
+	}
+	series := askRaw(t, r, "event_series", map[string]any{"failed": "true", "bucket": "hour"}).(queries.SeriesAnswer)
+	if series.Total != 1 || series.Failed != 1 {
+		t.Errorf("the axis of failures counts %d with %d failed, want 1 with 1", series.Total, series.Failed)
+	}
+	if _, err := r.Answer(t.Context(), "events", map[string]any{"failed": "1"}, ""); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("failed=1: err %v, want bad params", err)
+	}
+}
+
 // A SEAT NAMED BY ANYTHING BUT A HANDLE IS REFUSED, and one that cannot be
 // resolved yet says so rather than answering empty.
 //

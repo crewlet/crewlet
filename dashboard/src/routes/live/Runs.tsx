@@ -14,15 +14,24 @@
  * A plain click opens the run BESIDE the list rather than in place of it. This
  * screen is read while something is in flight, and a reader comparing three
  * parked runs loses the comparison the moment the list navigates away. The
- * path `#/live/runs/{turn_id}` is still the run's own page — it is what a
- * ⌘-click and the rail's own `Open ↗` reach — and it is the only place the
- * bridge log is drawn, because a log of two hundred tool calls is the one
- * thing a 420 px rail is the wrong shape for.
+ * path `#/live/runs/{turn_id}` is the run's OWN page — what a ⌘-click, the
+ * rail's `Open ↗` and every link to one run reach — and it draws the run
+ * alone. It used to draw the whole list with the run tacked on beneath it, so
+ * a link to one run landed on a board with the run below the fold.
+ *
+ * # What the page says a run did
+ *
+ * Two sources, one per half of a run's life. While the job runs, its output is
+ * asked of the node that owns it (`sandbox_tail`, every few seconds, only while
+ * the page is open); once the run is collected its record is deleted and what
+ * it did is the `sandbox` phase its turn published, with the transcript on it.
+ * So a run that has settled still has a page: it is the turn's collected runs,
+ * read from the turn — the record a reader followed the link for.
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import {
   Button,
   Callout,
@@ -31,7 +40,6 @@ import {
   Disclosure,
   EmptyState,
   EmptyValue,
-  IconButton,
   Skeleton,
   StatCard,
   StatGroup,
@@ -45,19 +53,23 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
-  XGlyph,
   CircleQuestionMarkGlyph,
   PackageGlyph,
   SquareTerminalGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useSandboxes } from "~/lib/store-hooks.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
+import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
+import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
+import { AnswerRunButton } from "~/components/writes.tsx";
+import { LiveOutput } from "./trace/Waterfall.tsx";
 import {
   elapsedMs,
   fmtDateTime,
   fmtDuration,
+  fmtCount,
   fmtTime,
   inTime,
   plural,
@@ -65,7 +77,13 @@ import {
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
-import type { BridgeCall, SandboxEntry, SandboxRun, SandboxStatus } from "~/protocol/index.ts";
+import type {
+  BridgeCall,
+  EventRecord,
+  SandboxEntry,
+  SandboxRun,
+  SandboxStatus,
+} from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -92,9 +110,6 @@ const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "inf
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
 const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
-
-/** How long the durable record is polled for. A run's lifetime is minutes. */
-const POLL_MS = 20_000;
 
 /**
  * A live projection entry as the run it is.
@@ -179,18 +194,17 @@ function runTitle(run: SandboxRun): string {
  * the tone carries it — spelled once in colour and again in a list, it reads
  * as two different facts about one run.
  */
-function runFacts(run: SandboxRun): Fact[] {
+function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
   return [
     {
       label: "Seat",
-      // `agent` WITHOUT ASKING THE CHART, and it is a fact rather than a
-      // default: a coding run is a suspended Execute phase, and the engine
-      // never RUNS a human seat — so the seat on a sandbox run is an agent
-      // seat by construction. Stated so the solid disc reads as the answer
-      // rather than as a kind nobody threaded.
-      value: (
-        <SeatChip name={run.role || run.agent_handle} handle={run.agent_handle} kind="agent" />
-      ),
+      // THE SEAT'S NAME, LINKED, rather than a chip: a fact wraps inside its
+      // two-line clamp, and a chip is one line cut at the track's edge — the
+      // seat a run belongs to read "Agent Fronten…" on a page with room for
+      // it three times over. An agent seat by construction: the engine never
+      // runs a human seat, so a coding run is always an agent's.
+      value: nameOf(run.agent_handle) || run.role,
+      path: run.agent_handle ? ["agents", "seats", run.agent_handle] : undefined,
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
@@ -234,23 +248,47 @@ function pauseDeadline(run: SandboxRun): string | null {
 }
 
 /**
- * What a parked run is waiting for, and from whom.
+ * What a parked run is waiting for, from whom — and the answer to it.
  *
- * ONE COPY for the page and the rail: the two sentences below are the whole of
+ * ONE COPY for the page and the rail: the sentences below are the whole of
  * what a reader can DO about a paused run, and two spellings of them is how
  * one of them comes to describe a chat reply path the run does not have.
+ *
+ * # Answered here, whatever launched it
+ *
+ * A run is answered by its TURN (`answer_run`), which reaches a run whatever
+ * woke the turn that launched it. The banner used to say how to answer and
+ * offer nothing to press: a run a schedule tick or a task assignment launched
+ * stored no conversation at all, so "the run resumes when the coordinator
+ * carries an answer back" described a door with no handle on it. The chat
+ * path is still named where there is one, as the other way in.
  */
-function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
+export function AwaitingBanner({
+  run,
+  now,
+  nameOf,
+}: {
+  run: SandboxRun;
+  now: number;
+  nameOf: NameOf;
+}) {
   const deadline = pauseDeadline(run);
   const expired = deadline !== null && tsKey(deadline) <= now;
+  const seat = nameOf(run.agent_handle) || run.role || run.agent_handle;
+  const audience = (run.audience_handles ?? []).map(nameOf);
   return (
     <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
-      <span className="col" style={{ gap: 2 }}>
+      <span className="col gap-2 run-awaiting">
         <strong>{run.question || "The run asked a question."}</strong>
         <span className="t-caption">
+          {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
+              — never re-derived here from the coding agent's own label. */}
+          {audience.length > 0
+            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}'s lead chain — "${run.audience}" named nobody on the chart` : ""}.`
+            : "Nothing recorded whom this question is put to — anybody who can act may answer it."}
           {run.answerable_in_chat
-            ? `Answer it on ${run.audience || "the conversation this turn served"} — the next inbound message on that thread is taken as the reply.`
-            : "The run is paused. It resumes when the sandbox coordinator carries an answer back."}
+            ? " A reply on the conversation this turn served is taken as the answer too."
+            : ""}
           {deadline && !expired
             ? ` The box is held for ${fmtDuration(run.pause_ttl_seconds * 1000)} from ${fmtDateTime(run.paused_at)} — ${inTime(deadline, now)}.`
             : ""}
@@ -262,9 +300,18 @@ function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
             ? ` The hold expired at ${fmtDateTime(deadline)}: the box is reclaimed, so an answer now re-seeds the run rather than resuming it.`
             : ""}
         </span>
+        <span className="row gap-2">
+          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question} />
+        </span>
       </span>
     </Callout>
   );
+}
+
+/** "A", "A and B", "A, B and C". */
+function listWords(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** What the run is doing, for a run nobody is being waited on by. */
@@ -332,9 +379,10 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
 export function RunPeek({ turnId }: { turnId: string }) {
   const now = useNow();
   const live = useSandboxes();
+  const nameOf = useNameOf();
   const { data, loading, error } = useQuery("sandbox_runs", undefined, {
     enabled: turnId !== "",
-    pollMs: POLL_MS,
+    pollMs: RUNS_POLL_MS,
   });
 
   const run = useMemo(
@@ -353,8 +401,8 @@ export function RunPeek({ turnId }: { turnId: string }) {
           <EmptyState
             size="compact"
             icon={<SquareTerminalGlyph size={32} />}
-            title="No coding run for this turn"
-            description="A run is addressed by the turn that started it. This one is not in the durable record — it may have been swept, or the id may be wrong."
+            title="No coding run in flight for this turn"
+            description="A run's record is deleted once it settles, and what it did is then on its turn — open the run's page for its collected output. Otherwise the id may be wrong."
           />
         )}
         {run && (
@@ -366,7 +414,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
               identifier={run.turn_id.slice(0, 8)}
               title={runTitle(run)}
               status={<RunStatus status={run.status} />}
-              facts={runFacts(run)}
+              facts={runFacts(run, nameOf)}
             />
             <div className="col gap-3">
               <section className="col gap-2">
@@ -374,7 +422,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
                   {AWAITING.includes(run.status) ? "Waiting on a person" : "Doing now"}
                 </div>
                 {AWAITING.includes(run.status) ? (
-                  <AwaitingBanner run={run} now={now} />
+                  <AwaitingBanner run={run} now={now} nameOf={nameOf} />
                 ) : (
                   <p className="t-body">{doingLine(run)}</p>
                 )}
@@ -418,20 +466,13 @@ export function RunPeek({ turnId }: { turnId: string }) {
   );
 }
 
-export function Runs({ runId }: { runId?: string }) {
+export function Runs() {
   const seatBadge = useSeatBadgeOf();
-  const nav = useNavigator();
   const live = useSandboxes();
   const now = useNow();
-  // THE OPEN RUN IS A PATH (`#/live/runs/{turn_id}`), not a query key: a
-  // detached run is an object with a life of its own — it outlives the turn
-  // that started it and is resumed by another process on another node — so it
-  // is addressed rather than filtered for.
-  const selected = runId ?? "";
-  const setSelected = (id: string) => nav.to(id ? ["live", "runs", id] : ["live", "runs"]);
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: POLL_MS });
+  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
 
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
 
@@ -445,10 +486,8 @@ export function Runs({ runId }: { runId?: string }) {
 
   const { open: openPeek } = usePeekControls();
   const peek = usePeek();
-  // WHICH ROW IS THE ONE IN FOCUS — the run in the rail, or the run this path
-  // names when the page was opened directly. Two sources for one highlight,
-  // because both are ways of having this run open.
-  const focused = peek?.kind === "run" ? peek.id : selected;
+  // WHICH ROW IS THE ONE IN FOCUS: the run in the rail.
+  const focused = peek?.kind === "run" ? peek.id : "";
 
   const openRun = useCallback(
     (r: SandboxRun, e: React.MouseEvent | React.KeyboardEvent) => {
@@ -467,17 +506,6 @@ export function Runs({ runId }: { runId?: string }) {
     [openPeek],
   );
 
-  const detail = rows.find((r) => r.turn_id === selected) ?? null;
-  // WHAT THE RUN IS CALLED, for the breadcrumb, the browser tab and the
-  // palette's recents — all of which read the one label a screen publishes and
-  // fall back to the raw path segment otherwise, which here is the turn's
-  // uuid. THE TASK ONLY, never the header's "No task was recorded": that
-  // placeholder is a sentence about the absence of a name, and two runs
-  // wearing it are two identical recents rows going to different runs. The id
-  // at least tells them apart.
-  usePageLabels(
-    selected && detail?.task_description ? { [selected]: detail.task_description } : {},
-  );
   const waiting = rows.filter((r) => AWAITING.includes(r.status)).length;
   const running = rows.filter((r) => r.status === "running").length;
 
@@ -539,8 +567,8 @@ export function Runs({ runId }: { runId?: string }) {
           rows.length
             ? undefined
             : {
-                title: "No coding runs",
-                hint: "A run starts when a seat calls the sandbox tool. Configure providers.sandbox to give one a place to run.",
+                title: "No coding run is in flight",
+                hint: "A run is listed while it runs or waits on a person; a finished run's record is its turn's trace. A run starts when a seat calls the sandbox tool, and providers.sandbox gives it a place to run.",
               }
         }
       >
@@ -567,6 +595,11 @@ export function Runs({ runId }: { runId?: string }) {
               {
                 key: "seat",
                 header: "Seat",
+                // THE TWO COLUMNS A ROW IS RECOGNISED BY keep a width beside a
+                // peek; the three that describe the box give way first — see
+                // DataGrid's `fitColumns`. At 1280 with a run open they were
+                // drawn one letter wide.
+                floor: "9rem",
                 sortValue: (r) => r.role || r.agent_handle,
                 // NOT `SeatCell` or `SeatChip`: both are anchors and every row
                 // here is one, and an anchor inside an anchor is markup no
@@ -582,6 +615,7 @@ export function Runs({ runId }: { runId?: string }) {
               {
                 key: "task",
                 header: "Task",
+                floor: "10rem",
                 cell: (r) =>
                   r.task_description ? (
                     <TextCell>{r.task_description}</TextCell>
@@ -593,6 +627,7 @@ export function Runs({ runId }: { runId?: string }) {
                 key: "agent",
                 header: "Coding agent",
                 shrink: true,
+                drop: 1,
                 sortValue: (r) => r.coding_agent,
                 cell: (r) =>
                   r.coding_agent ? (
@@ -607,6 +642,7 @@ export function Runs({ runId }: { runId?: string }) {
                 key: "where",
                 header: "Runs in",
                 shrink: true,
+                drop: 2,
                 sortValue: (r) => r.placement,
                 cell: (r) =>
                   r.placement ? (
@@ -625,6 +661,7 @@ export function Runs({ runId }: { runId?: string }) {
                 key: "box",
                 header: "Box",
                 shrink: true,
+                drop: 3,
                 sortValue: (r) => (r.box_exists ? 1 : 0),
                 cell: (r) => (
                   <StatusCell
@@ -650,80 +687,321 @@ export function Runs({ runId }: { runId?: string }) {
           />
         </Card>
       </QueryState>
+    </>
+  );
+}
 
-      {detail && (
-        <>
-          <ObjectHeader
-            kind="Coding run"
-            icon="square-terminal"
-            identifier={detail.turn_id.slice(0, 8)}
-            title={runTitle(detail)}
-            status={<RunStatus status={detail.status} />}
-            facts={runFacts(detail)}
-            actions={
-              <>
-                {detail.trace_id && (
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    onClick={() => nav.to(["live", "traces", detail.trace_id])}
-                  >
-                    Trace
-                  </Button>
-                )}
-                <Button
-                  size="small"
-                  variant="secondary"
-                  onClick={() => nav.to(["live", "turns", detail.turn_id])}
-                >
-                  Turn
-                </Button>
-                {/* An icon with no label is an IconButton over there, and the
-                    name is a required prop rather than a `title` a caller
-                    remembers. */}
-                <IconButton
-                  size="sm"
-                  variant="ghost"
-                  icon={<XGlyph size="sm" />}
-                  label="Close"
-                  title="Close"
-                  onClick={() => setSelected("")}
-                />
-              </>
-            }
-          />
-          <Card>
-            {AWAITING.includes(detail.status) && (
-              <div style={{ marginBottom: "var(--spacing-3)" }}>
-                <AwaitingBanner run={detail} now={now} />
-              </div>
+/** A handle as the seat's name, off the one org index every screen reads. */
+function useNameOf(): NameOf {
+  const org = useOrg();
+  return useMemo(() => nameOfIn(indexOrg(org)), [org]);
+}
+
+/** The statuses whose job is running now, so its output is asked of its owner. */
+const RUNNING: SandboxStatus[] = ["launching", "running"];
+
+/**
+ * The `sandbox` phases a turn published — one per collected job, oldest first.
+ *
+ * WHAT A SETTLED RUN LEAVES. The run's record is deleted once its box is
+ * reclaimed, so after collection the only account of what the job did is the
+ * phase record its turn published, with the transcript on it.
+ */
+export function collectedRuns(events: readonly EventRecord[] | undefined): PhaseRecord[] {
+  return (events ?? [])
+    .map(fromPhaseEvent)
+    .filter((r): r is PhaseRecord => r !== null && r.phase === "sandbox")
+    .sort((a, b) => tsKey(a.at) - tsKey(b.at));
+}
+
+/**
+ * One coding run, on its own page.
+ *
+ * # Two records, one per half of its life
+ *
+ * The durable row (`sandbox_runs`, merged with the live projection exactly as
+ * the board does) while the run is in flight — its status, its box, the
+ * question it is parked on and the bridge's tool log — and the turn's own
+ * `sandbox` phases once it is collected. The page reads both, because a run
+ * page is reached from a link long after the run it names has settled, and
+ * "no such run" is the wrong thing to tell somebody holding a link to a run
+ * that finished.
+ *
+ * THE TURN IS ASKED AGAIN when the run's status moves: a collected job's phase
+ * record lands on the turn, and the row leaving the board is the moment it
+ * does.
+ */
+export function RunScreen({ turnId }: { turnId: string }) {
+  const nav = useNavigator();
+  const now = useNow();
+  const live = useSandboxes();
+  const nameOf = useNameOf();
+  const board = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const turn = useQuery("turn", { turn_id: turnId });
+
+  const run = useMemo(
+    () => mergeRuns(board.data?.runs ?? [], live).find((r) => r.turn_id === turnId) ?? null,
+    [board.data, live, turnId],
+  );
+  const collected = useMemo(() => collectedRuns(turn.data?.events), [turn.data]);
+
+  const status = run?.status ?? "";
+  const moved = useRef(status);
+  const refetchTurn = turn.refetch;
+  useEffect(() => {
+    if (moved.current === status) return;
+    moved.current = status;
+    refetchTurn();
+  }, [status, refetchTurn]);
+
+  // WHAT THE RUN IS CALLED, for the breadcrumb, the browser tab and the
+  // palette's recents — the task only, never the header's "No task was
+  // recorded", which two runs would wear as two identical recents rows. A
+  // collected run's row is gone, and its task is on the `sandbox_run_started`
+  // its launch published, which the turn holds.
+  const task = run?.task_description || launchedTask(turn.data?.events);
+  usePageLabels(task ? { [turnId]: task } : {});
+
+  const loading = (board.loading && !board.data) || (turn.loading && !turn.data);
+  const settled = !run && collected.length > 0;
+  const last = collected[collected.length - 1];
+  // TWO READS, AND "NONE" NEEDS BOTH. The page is drawn from the run record
+  // (`sandbox_runs`) and the turn (`turn`), and only when BOTH answered does
+  // finding the run in neither mean there is none. It used to say "neither
+  // holds a coding run" whenever one of them failed, which is a claim about a
+  // record the page never read — "could not read" and "none" are opposite
+  // answers, so a single failure is named rather than folded into either.
+  const answered = !board.error && !turn.error && Boolean(board.data) && Boolean(turn.data);
+  const absent = !loading && !run && collected.length === 0;
+  const unread =
+    board.error && turn.error ? null : board.error ? "board" : turn.error ? "turn" : null;
+  // THE HEADER SAYS WHAT THE BODY KNOWS. "No task was recorded" is a fact
+  // about a RUN whose launch carried no task, so it is only worn by one; a
+  // turn with no run is headed as having none, and a page still reading (or
+  // missing one of its two sources) claims neither.
+  const title = run
+    ? runTitle(run)
+    : task
+      ? task
+      : collected.length > 0
+        ? "No task was recorded"
+        : absent && answered
+          ? "No coding run"
+          : "Coding run";
+  const seat = run?.agent_handle || last?.role || "";
+  // THE TRACE the run belongs to: its row names it while it is in flight, and
+  // the turn's own events do once it is collected.
+  const traceId = run?.trace_id || turn.data?.events?.find((e) => e.trace_id)?.trace_id || "";
+
+  return (
+    <>
+      <ObjectHeader
+        kind="Coding run"
+        icon="square-terminal"
+        identifier={turnId.slice(0, 8)}
+        title={title}
+        status={
+          run ? (
+            <RunStatus status={run.status} />
+          ) : settled ? (
+            <Tag variant="neutral" dot>
+              collected
+            </Tag>
+          ) : undefined
+        }
+        facts={
+          run
+            ? runFacts(run, nameOf)
+            : settled
+              ? [
+                  { label: "Seat", value: nameOf(seat) },
+                  { label: "Coding agent", value: last?.codingAgent ?? "" },
+                  { label: "Jobs", value: String(collected.length) },
+                ]
+              : []
+        }
+        actions={
+          <>
+            {traceId && (
+              <Button
+                size="small"
+                variant="secondary"
+                onClick={() => nav.to(["live", "traces", traceId])}
+              >
+                Trace
+              </Button>
             )}
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => nav.to(["live", "turns", turnId])}
+            >
+              Turn
+            </Button>
+          </>
+        }
+      />
+      {loading && <Skeleton variant="text" rows={6} label="Loading the run" />}
+      <QueryState error={board.error && turn.error ? board.error : null} loading={loading}>
+        {unread && (
+          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+            {unread === "board"
+              ? "The run record could not be read, so whether this run is in flight is unknown; what is below is what the turn holds."
+              : "The turn could not be read, so what a collected run did is unknown; what is below is what the run record holds."}
+          </Callout>
+        )}
+        {absent && answered && (
+          <EmptyState
+            icon={<SquareTerminalGlyph size={32} />}
+            title="No coding run for this turn"
+            description="Neither the run record nor the turn holds a coding run under this id. A turn's record is kept for the store's retention window; the id may be wrong, or the turn may be older than that."
+          />
+        )}
+        {run && AWAITING.includes(run.status) && (
+          <AwaitingBanner run={run} now={now} nameOf={nameOf} />
+        )}
+        {/* WHAT IT IS DOING, for a run nobody is being waited on by: a parked
+            run's banner above already says what it is waiting for. */}
+        {run && !AWAITING.includes(run.status) && (
+          <Card>
+            <Card.Header icon={<SquareTerminalGlyph size="sm" />}>
+              <Card.Title>Doing now</Card.Title>
+            </Card.Header>
+            {RUNNING.includes(run.status) && run.launch_id ? (
+              <LiveOutput turnId={run.turn_id} launchId={run.launch_id} now={now} />
+            ) : RUNNING.includes(run.status) ? (
+              <span className="t-caption">
+                {run.owner
+                  ? "This run's record names no job, so its live output cannot be asked for — it arrives on the turn when the run is collected."
+                  : "The run's durable record has not been written yet; its live output can be asked for once it has."}
+              </span>
+            ) : (
+              <p className="t-body">{doingLine(run)}</p>
+            )}
+          </Card>
+        )}
+        {collected.map((record, i) => (
+          <CollectedRun key={record.key} record={record} ordinal={i + 1} of={collected.length} />
+        ))}
+        {run && (
+          <Card>
+            <Card.Header>
+              <Card.Title>The box</Card.Title>
+            </Card.Header>
             <PropertiesRail
               groups={[
                 {
                   properties: [
-                    { label: "Owner node", value: detail.owner },
-                    { label: "Started", value: fmtDateTime(detail.started_at) },
-                    { label: "Updated", value: fmtDateTime(detail.updated_at) },
+                    {
+                      label: "Owner node",
+                      value: run.owner,
+                      title: "the node that holds this run's record",
+                    },
+                    { label: "Started", value: fmtDateTime(run.started_at) },
+                    { label: "Updated", value: fmtDateTime(run.updated_at) },
                     {
                       label: "Ran for",
-                      value: fmtDuration(elapsedMs(detail.started_at, detail.updated_at)),
+                      value: fmtDuration(elapsedMs(run.started_at, run.updated_at)),
+                      title: "between the first report and the last, not wall-clock since",
                     },
                     {
                       label: "Turn",
-                      value: <code className="inline">{detail.turn_id}</code>,
-                      path: ["live", "turns", detail.turn_id],
+                      value: <code className="inline">{run.turn_id}</code>,
+                      path: ["live", "turns", run.turn_id],
                     },
                   ],
                 },
               ]}
             />
           </Card>
-        </>
-      )}
-
-      {detail && <BridgeLog run={detail} />}
+        )}
+        {run && <BridgeLog run={run} />}
+      </QueryState>
     </>
+  );
+}
+
+/**
+ * The task the newest launch of this turn was given — `sandbox_run_started`'s
+ * own `task` — or "" when the turn holds no launch.
+ */
+export function launchedTask(events: readonly EventRecord[] | undefined): string {
+  const started = (events ?? [])
+    .filter((e) => e.type === "sandbox_run_started")
+    .sort((a, b) => tsKey(b.timestamp) - tsKey(a.timestamp))[0];
+  const task = started?.payload?.task;
+  return typeof task === "string" ? task : "";
+}
+
+/**
+ * One collected job: what it delivered and what it said, off the `sandbox`
+ * phase its turn published.
+ */
+function CollectedRun({
+  record,
+  ordinal,
+  of,
+}: {
+  record: PhaseRecord;
+  ordinal: number;
+  of: number;
+}) {
+  return (
+    <Card>
+      <Card.Header
+        icon={<SquareTerminalGlyph size="sm" />}
+        className="card-head-stacked"
+        subtitle={`collected ${fmtDateTime(record.at)}${record.launchId ? ` · job ${record.launchId.slice(0, 8)}` : ""}`}
+        actions={record.failed ? <Tag variant="danger">failed</Tag> : undefined}
+      >
+        <Card.Title>{of > 1 ? `What job ${ordinal} of ${of} did` : "What the run did"}</Card.Title>
+      </Card.Header>
+      <div className="col gap-3">
+        <PropertiesRail
+          groups={[
+            {
+              properties: [
+                { label: "Coding agent", value: record.codingAgent },
+                {
+                  label: "Box",
+                  value: record.sandboxId ? <code className="inline">{record.sandboxId}</code> : "",
+                },
+                {
+                  label: "Delivered",
+                  value: record.deliveredRefs.length ? record.deliveredRefs.join(", ") : "",
+                },
+                {
+                  label: "Tokens",
+                  value: record.totalTokens > 0 ? fmtCount(record.totalTokens) : "",
+                },
+                // ONLY A JOB THAT FAILED HAS ONE, so only its row carries the
+                // property — a dash under "Error" on every run that worked
+                // reads as a field somebody forgot to fill.
+                ...(record.error ? [{ label: "Error", value: record.error }] : []),
+              ],
+            },
+          ]}
+        />
+        {record.response.trim() && (
+          <div className="col gap-1">
+            <span className="t-label">What it reported</span>
+            <p className="t-body run-report">{record.response.trim()}</p>
+          </div>
+        )}
+        {record.transcript ? (
+          <CodeBlock
+            plain
+            selectable
+            copyable
+            maxHeight={RECORD_MAX_HEIGHT}
+            label="What the run did"
+            code={record.transcript}
+          />
+        ) : (
+          <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
+        )}
+      </div>
+    </Card>
   );
 }
 

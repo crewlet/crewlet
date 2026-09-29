@@ -27,7 +27,8 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { QueryState, Section } from "~/components/common.tsx";
+import { EventRow, QueryState, Section } from "~/components/common.tsx";
+import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
@@ -41,7 +42,15 @@ import { MessageSquareGlyph, UsersGlyph, InfoGlyph, LinkGlyph } from "@crewlethq
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
-import { elapsedMs, fmtDateTime, fmtDuration, relTime, tsKey } from "~/lib/format.ts";
+import {
+  elapsedMs,
+  fmtDateTime,
+  fmtDuration,
+  oldestFirst,
+  plural,
+  relTime,
+  tsKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -125,18 +134,14 @@ function channelFacts(
 /**
  * What crossed the channel, as far as the record can say.
  *
- * THE WORDS ARE NOT HERE AND THEY ARE NOT MISSING. The channel record is the
- * authorization — the pair, the count and the window — and the brief and the
- * reply travel over the seat inbox, published as ordinary `a2a_message_sent`
- * events. So this says which half has happened, derived from the count the
- * record does keep, and links to the log that holds the text rather than
- * inventing a body from a message counter.
- *
- * (The event log promotes a `channel_id` column and `store.ListQuery` has no
- * filter for it, so the link carries the id as the log's own text search. A
- * `channel` filter on the `events` query is what would make this an exact
- * read; matching the id against a rendered summary here instead would be the
- * same guess wearing a filter's clothes.)
+ * THE WORDS ARE NOT IN THE RECORD AND THEY ARE NOT MISSING. The channel record
+ * is the authorization — the pair, the count and the window — and the brief and
+ * the reply travel over the seat inbox, published as ordinary
+ * `a2a_message_sent` events. So this says which half has happened, derived from
+ * the count the record does keep, and links to the log NARROWED TO THIS CHANNEL
+ * (`#/live/events?channel=`), which the engine answers by the channel id every
+ * A2A event carries. The link used to carry the id as the log's text search,
+ * which matched no summary the engine writes — so it landed on an empty log.
  */
 function Exchange({
   channel,
@@ -171,15 +176,20 @@ function Exchange({
       <span className="t-caption">
         The words themselves are not in the channel record: both halves travel over the seat inbox
         and are published as events.{" "}
-        <a
-          className="t-link prose-link"
-          href={href(["live", "events"], { category: "a2a", q: channel.id })}
-        >
+        <a className="t-link prose-link" href={channelEventsHref(channel.id)}>
           Read this channel's events ↗
         </a>
       </span>
     </div>
   );
+}
+
+/**
+ * The event log narrowed to one channel — the one address every "read this
+ * channel's events" link takes, so the peek, the page and the log agree.
+ */
+export function channelEventsHref(id: string): string {
+  return href(["live", "events"], { channel: id });
 }
 
 /**
@@ -360,7 +370,7 @@ export function ChannelPeek({ id }: { id: string }) {
   );
 }
 
-export function Conversations({ channelId }: { channelId?: string }) {
+export function Conversations() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
   const seatName = useSeatName();
@@ -377,8 +387,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
 
   const { open: openPeek } = usePeekControls();
   const peek = usePeek();
-  const addressed = channelId ?? "";
-  const focused = peek?.kind === "channel" ? peek.id : addressed;
+  const focused = peek?.kind === "channel" ? peek.id : "";
 
   const openChannel = useCallback(
     (c: A2AChannel, e: React.MouseEvent | React.KeyboardEvent) => {
@@ -396,14 +405,6 @@ export function Conversations({ channelId }: { channelId?: string }) {
     },
     [openPeek],
   );
-
-  const addressedChannel = rows.find((c) => c.id === addressed) ?? null;
-  // AND THAT NAME IS THE CHANNEL'S EVERYWHERE, not just in the header below.
-  // The breadcrumb, the browser tab and the palette's recents read the one
-  // label a screen publishes and otherwise show the raw path segment — a
-  // channel uuid, which says neither who nor what.
-  const channelName = addressedChannel ? channelTitle(addressedChannel, seatName) : "";
-  usePageLabels(addressed && channelName ? { [addressed]: channelName } : {});
 
   return (
     <>
@@ -484,6 +485,9 @@ export function Conversations({ channelId }: { channelId?: string }) {
                 {
                   key: "from",
                   header: "Asked by",
+                  // WHO ASKED WHOM is what a row is; the counts and the dates
+                  // give way first beside a peek (DataGrid's `fitColumns`).
+                  floor: "9rem",
                   sortValue: (c) => seatName(c.requester),
                   // NOT `SeatCell`, and not the `SeatChip` this column used to
                   // draw: both are anchors and every row here is one now, and
@@ -494,6 +498,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
                 {
                   key: "to",
                   header: "Asked",
+                  floor: "9rem",
                   sortValue: (c) => seatName(c.target),
                   cell: (c) => <SeatLabel {...seatBadge(c.target)} />,
                 },
@@ -502,6 +507,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
                   header: "Messages",
                   align: "right",
                   shrink: true,
+                  drop: 2,
                   sortValue: (c) => c.messages,
                   // A CELL RATHER THAN THE BARE NUMBER it used to render: a
                   // channel with nothing on it yet is a real zero and must
@@ -513,6 +519,7 @@ export function Conversations({ channelId }: { channelId?: string }) {
                   key: "opened",
                   header: "Opened",
                   shrink: true,
+                  drop: 1,
                   sortValue: (c) => tsKey(c.opened_at),
                   cell: (c) => <DateCell at={c.opened_at} now={now} />,
                 },
@@ -527,43 +534,6 @@ export function Conversations({ channelId }: { channelId?: string }) {
             />
           </Card>
         </QueryState>
-      )}
-
-      {/* THE CHANNEL THIS PATH NAMES. `#/live/a2a/{id}` is a channel's own
-          page — it is where `Open ↗` from the rail lands and what a ⌘-click on
-          a row opens — and it read as the plain list for as long as the id was
-          accepted and ignored: a reader who followed a link to one channel got
-          every channel and no sign of which one they had asked for. */}
-      {addressedChannel && (
-        <>
-          <ObjectHeader
-            kind="A2A channel"
-            icon="link"
-            identifier={addressedChannel.id}
-            title={channelName}
-            status={<ChannelState channel={addressedChannel} />}
-            facts={channelFacts(addressedChannel, seatName, now)}
-          />
-          <ChannelBody channel={addressedChannel} seatName={seatName} now={now} />
-        </>
-      )}
-      {/* ONLY OVER A RECORD THAT WAS ACTUALLY READ. "This node cannot reach the
-          coordination store", "the read failed" and "the record holds no such
-          channel" are three different facts, and this Empty states the third
-          about somebody's company — so it is guarded on the answer rather than
-          on `loading` alone. Unguarded, a timed-out socket or a node with no
-          channel record drew the refusal banner above and, directly under it, a
-          confident claim that the channel the reader followed a link to had
-          been purged. `available` is the flag that tells the first two apart —
-          see `queries.a2aChannels` — and a present answer is what tells a read
-          that happened from one that did not; the sibling `ChannelPeek` gets
-          both for free by rendering inside `QueryState`. */}
-      {addressed !== "" && !addressedChannel && channels.data?.available === true && (
-        <EmptyState
-          icon={<LinkGlyph size={32} />}
-          title="No such channel in the record"
-          description={missingChannel(channels.data?.truncated)}
-        />
       )}
 
       <Section title="What this surface is, and is not">
@@ -582,6 +552,147 @@ export function Conversations({ channelId }: { channelId?: string }) {
           </span>
         </Callout>
       </Section>
+    </>
+  );
+}
+
+/** How many of a channel's events its page reads. A channel is one ask and
+ *  one answer, so its events are a handful — the open, the two messages, the
+ *  close, and the turns on either side; fifty is every channel with room. */
+const CHANNEL_EVENTS = 50;
+
+/**
+ * One agent-to-agent channel, on its own page.
+ *
+ * `#/live/a2a/{id}` is what `Open ↗` from the rail lands on and what a
+ * ⌘-click on a row opens. It used to be the whole list with the channel drawn
+ * beneath it, so a reader who followed a link to one conversation got every
+ * conversation and scrolled for the one they asked for.
+ *
+ * # The words, read here
+ *
+ * The record holds the pair, the count and the window; the brief and the reply
+ * are `a2a_message_sent` events. The page asks the log for this channel's
+ * events (`channel_id`, an index seek) and draws them in the order they
+ * happened — a conversation reads top down — with the whole log one link away.
+ */
+export function ChannelScreen({ id }: { id: string }) {
+  const now = useNow();
+  const seatName = useSeatName();
+  const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
+  const events = useQuery("events", { channel_id: id, limit: CHANNEL_EVENTS });
+  const channel = (channels.data?.channels ?? []).find((c) => c.id === id) ?? null;
+  // AND THAT NAME IS THE CHANNEL'S EVERYWHERE, not just in the header below.
+  // The breadcrumb, the browser tab and the palette's recents read the one
+  // label a screen publishes and otherwise show the raw path segment — a
+  // channel uuid, which says neither who nor what.
+  const name = channel ? channelTitle(channel, seatName) : "";
+  usePageLabels(name ? { [id]: name } : {});
+  const rows = useMemo(() => [...(events.data?.events ?? [])].sort(oldestFirst), [events.data]);
+  // NOT IN A RECORD THAT WAS READ. One fact, stated once: the not-found state
+  // carries the way to the log itself, and the events card below is not drawn
+  // beside it to say "none" a second time — unless the log still holds what
+  // crossed the channel, which outlives the channel's own record (a purged
+  // record's events are exactly what somebody following an old link wants).
+  const missing = channels.data?.available === true && !channel;
+  const eventsCard = !missing || rows.length > 0;
+
+  return (
+    <>
+      <ObjectHeader
+        kind="A2A channel"
+        icon="link"
+        identifier={id}
+        title={name || (missing ? "No such channel" : "A2A channel")}
+        status={channel ? <ChannelState channel={channel} /> : undefined}
+        facts={channel ? channelFacts(channel, seatName, now) : []}
+      />
+      {channels.loading && !channels.data && (
+        <Skeleton variant="text" rows={5} label="Loading the channel" />
+      )}
+      <QueryState error={channels.error} loading={channels.loading}>
+        {/* THREE ANSWERS, NOT TWO: "this node cannot reach the coordination
+            store", "the record holds no such channel" and "here it is" — and
+            the second is guarded on a record that was actually read. */}
+        {channels.data?.available === false && (
+          <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+            No channel record is reachable from this node, so this channel cannot be read here.
+            Channels live in the fleet&rsquo;s coordination store.
+          </Callout>
+        )}
+        {missing && !eventsCard && (
+          <EmptyState
+            icon={<LinkGlyph size={32} />}
+            title="No such channel in the record"
+            description={missingChannel(channels.data?.truncated)}
+            action={
+              <a className="t-link" href={channelEventsHref(id)}>
+                Open in the event log
+              </a>
+            }
+          />
+        )}
+        {missing && eventsCard && (
+          <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+            The channel record no longer holds this channel, but the log still holds what crossed
+            it.
+          </Callout>
+        )}
+        {channel && <ChannelBody channel={channel} seatName={seatName} now={now} />}
+      </QueryState>
+
+      {eventsCard && (
+        <Card padding="none">
+          <Card.Header
+            icon={<MessageSquareGlyph size="sm" />}
+            // THE SUBTITLE TAKES ITS OWN LINE, so on a phone the title and
+            // the link keep theirs ("On this chann…" beside "wh…").
+            className="card-head-stacked"
+            count={events.data ? rows.length : undefined}
+            subtitle="what crossed it, oldest first"
+            actions={
+              <a className="t-link" href={channelEventsHref(id)}>
+                Open in the event log
+              </a>
+            }
+          >
+            <Card.Title>On this channel</Card.Title>
+          </Card.Header>
+          <CoverageNote coverage={[events.data?.coverage]} what="this channel's events" />
+          {events.loading && !events.data && (
+            <Skeleton variant="text" rows={3} label="Loading the channel's events" />
+          )}
+          <QueryState
+            error={events.error}
+            loading={events.loading}
+            empty={
+              events.data && rows.length === 0
+                ? {
+                    title: "No event names this channel",
+                    hint: "Its events may be older than the store keeps, or on a node that did not answer.",
+                  }
+                : undefined
+            }
+          >
+            <div className="list">
+              {rows.map((ev) => (
+                <EventRow key={ev.id} event={ev} />
+              ))}
+            </div>
+            {events.data?.next && (
+              <footer className="panel-foot">
+                <span>
+                  The newest {plural(rows.length, "event")} are shown —{" "}
+                  <a className="t-link prose-link" href={channelEventsHref(id)}>
+                    the event log pages the rest
+                  </a>
+                  .
+                </span>
+              </footer>
+            )}
+          </QueryState>
+        </Card>
+      )}
     </>
   );
 }

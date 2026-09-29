@@ -624,6 +624,55 @@ func TestAV3FilterIsNotAnsweredAroundByAV2Peer(t *testing.T) {
 	}
 }
 
+// A v4 FILTER IS NOT ANSWERED AROUND BY A v3 PEER.
+//
+// The event log's "Failures only" is a `failed` filter now, and a v3 build
+// does not read it — it would answer "the failures" with every event it holds,
+// merged in as though each one matched. The narrowed listing and its axis go
+// out as v4, the v3 peer refuses by version and the coverage names it; the
+// same listing without the filter is still answered by the whole fleet.
+//
+// Mutation: drop the Failed case from [listParams.version], and the v3 peer's
+// clean row is listed as a failure.
+func TestAV4FilterIsNotAnsweredAroundByAV3Peer(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	a := newNode(t, broker, "node-a")
+	at := time.Now().UTC().Add(-time.Minute)
+	appendTo(t, a, store.EventRecord{ID: "broke", Type: "sandbox_run_failed", Category: "system", Time: at})
+	servesAs(t, broker, "node-v3", 3, store.EventRecord{ID: "fine", Type: "thing_happened",
+		Category: "system", Time: at.Add(time.Second)})
+	fan := fanFrom(a, "node-a", "node-v3")
+
+	all, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(all.Rows) != 2 {
+		t.Errorf("the unnarrowed log: %v, coverage %+v — want both nodes' rows", idsOf(all.Rows), coverage)
+	}
+	failed := true
+	only, coverage, err := fan.List(t.Context(), store.ListQuery{Failed: &failed, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(only.Rows); !slices.Equal(got, []string{"broke"}) {
+		t.Errorf("the failures = %v, want only the one that failed — a v3 peer's clean row is not a match", got)
+	}
+	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
+		t.Errorf("a listing narrowed by failed: coverage %+v does not name node-v3", coverage)
+	}
+	_, coverage, err = fan.Histogram(t.Context(), store.HistogramQuery{
+		ListQuery: store.ListQuery{Failed: &failed}, Bucket: store.BucketHour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.Complete || !missing(coverage, "node-v3", "v4") {
+		t.Errorf("an axis narrowed by failed: coverage %+v does not name node-v3", coverage)
+	}
+}
+
 // A HISTOGRAM'S FAILED SPLIT IS EVERY NODE'S, summed bar by bar.
 func TestTheFailedSplitIsSummedAcrossNodes(t *testing.T) {
 	t.Parallel()

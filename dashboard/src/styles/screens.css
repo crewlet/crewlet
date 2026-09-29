@@ -1887,6 +1887,87 @@ a.prof-row:hover {
   color: var(--color-text-primary);
   min-width: 0;
 }
+
+/* ONE EVENT OF A TRACE (routes/live/Trace.tsx): the feed's time, actor and
+   sentence, plus a LANE — the trace's own window, on which the event's
+   position is a mark. The mark used to be a tick under the sentence, set
+   back by the offset alone with no rail to read it against, so in a trace
+   whose events were milliseconds apart it drew as a stray underscore at a
+   scattered x. On its own track with a visible rail it reads as a place on a
+   scale. NEUTRAL, because colour is state here — a category has no hue — and
+   the danger fill marks the one state a trace is read for. */
+.trace-row {
+  display: grid;
+  /* THE TAIL IS A FIXED TRACK, because the lane before it is a SCALE: with
+     an `auto` tail every row's lane started wherever its category word
+     ended ("Task" or "Learning"), so two marks at one instant sat at two x
+     positions and the column compared nothing. 6.5rem holds the longest
+     category ("Notification") and the chevron. */
+  grid-template-columns: 62px 132px minmax(0, 1fr) 120px 6.5rem;
+  gap: var(--spacing-3);
+  align-items: center;
+  width: 100%;
+  padding: var(--spacing-2) var(--row-inline);
+  border-bottom: 1px solid var(--color-border-default);
+  text-align: left;
+  font-size: var(--font-size-compact);
+  min-width: 0;
+}
+.trace-row:last-child {
+  border-bottom: none;
+}
+.trace-row:hover {
+  background: var(--color-surface-hover);
+}
+.trace-row.failed {
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
+}
+/* A SENTENCE, cut at the pixel on a wide row (the title carries the whole of
+   it) and WRAPPED on a phone below, where the row has a line to spare and
+   the sentence is what a trace is read for. */
+.trace-what {
+  color: var(--color-text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-row > .feed-tail {
+  justify-content: flex-end;
+}
+.trace-failed-mark {
+  display: inline;
+  margin-right: var(--spacing-1);
+  color: var(--color-feedback-danger-ink);
+  vertical-align: -1px;
+}
+.trace-lane {
+  position: relative;
+  display: block;
+  height: 10px;
+}
+/* THE RAIL: the trace's whole window, first event to last. */
+.trace-lane::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+/* THE MARK: a fixed width, kept inside the rail at both ends. */
+.trace-mark {
+  position: absolute;
+  top: 0;
+  width: 3px;
+  height: 100%;
+  left: clamp(0px, calc(var(--at, 0%) - 1.5px), calc(100% - 3px));
+  border-radius: var(--radius-xs);
+  background: var(--color-text-secondary);
+}
+.trace-row.failed .trace-mark {
+  background: var(--color-feedback-danger);
+}
 .feed-tail {
   display: flex;
   align-items: center;
@@ -1914,11 +1995,37 @@ a.prof-row:hover {
   .feed-row {
     grid-template-columns: 54px minmax(0, 1fr);
   }
-  .feed-row .feed-tail {
-    grid-column: 2;
-  }
+  /* EVERY CELL BUT THE CLOCK IN THE SECOND TRACK. The sentence was left out
+     of this list, so on a phone it wrapped into the 54px clock track under
+     the time and the event log read "Agent …" on every row — the one column
+     a log is read for, cut to its first word. A compact row is one line and
+     has no actor cell, so it keeps its own two tracks. */
+  .feed-row .feed-tail,
+  .feed-row:not(.compact) .feed-what,
   .feed-actor {
     grid-column: 2;
+  }
+  /* A TRACE ROW THE SAME WAY, and its sentence WRAPS: cut to a phone's
+     width it read "Agent PM execute → blocked (stub-sonn…" on the one
+     screen where the sentence is the point. The lane keeps a fixed width
+     under it, so a position is still a place on a scale. */
+  .trace-row {
+    grid-template-columns: 54px minmax(0, 1fr);
+    align-items: baseline;
+    row-gap: var(--spacing-1);
+  }
+  .trace-row > :not(.feed-time) {
+    grid-column: 2;
+  }
+  .trace-what {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .trace-lane {
+    width: min(100%, 160px);
+  }
+  .trace-row > .feed-tail {
+    justify-content: flex-start;
   }
 }
 
@@ -6324,6 +6431,22 @@ a.work-cal-chip {
   gap: 6px;
   max-width: 50%;
 }
+/* A PARKED RUN'S BANNER (routes/live/Runs.tsx): the question, who it is put
+   to and how long its box is held, then the Answer. The sentences are held to
+   a reading measure — on a wide page the banner spans the column, and one
+   caption line of 180 characters is a line nobody finds the end of. */
+.run-awaiting .t-caption {
+  max-width: 72ch;
+}
+
+/* A collected run's own report — prose the coding agent wrote, so it keeps its
+   line breaks and is held to a reading measure. */
+.run-report {
+  margin: 0;
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
 .answer-run-question {
   margin: 0;
   padding: var(--spacing-2) var(--spacing-3);

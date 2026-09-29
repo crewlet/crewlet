@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -491,5 +492,92 @@ func TestTheChannelAndSeatFiltersNarrowTheListingAndItsAxis(t *testing.T) {
 		if axis.Total != len(c.want) {
 			t.Errorf("%s: the axis counts %d, the listing shows %d", c.name, axis.Total, len(c.want))
 		}
+	}
+}
+
+// "FAILURES ONLY" IS A FILTER, answered by the rule every read stamps.
+//
+// The event log narrowed the rows it had already paged in, so its axis counted
+// every event in the window while the list showed the failures among the
+// newest hundred. Filtered here, the list and the axis are one set again, and
+// the rule is the one [store.EventRecord.Failed] is read by: a `failed` tag
+// OR a type in the failure set — and its negation keeps a row that carries no
+// tag at all, which a bare NOT over a NULL comparison would drop. Asked with a
+// related agent too, because that FROM joins the party table and the rule's
+// columns have to be qualified to mean the log's.
+//
+// Mutation: drop the clause from the predicate, and every case counts four;
+// drop the COALESCE, and the clean half loses the untagged row.
+func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	failureType := ""
+	for _, rec := range []store.EventRecord{
+		{ID: "tagged", Type: "thing_happened", Tags: map[string]string{"failed": "true"}},
+		{ID: "clean-tag", Type: "thing_happened", Tags: map[string]string{"failed": "false"}},
+		{ID: "untagged", Type: "thing_happened"},
+		{ID: "by-type", Type: "sandbox_run_failed"},
+	} {
+		rec.Time = base.Add(time.Minute)
+		rec.Category = "system"
+		rec.Actor = "PM"
+		rec.Payload = []byte(`{}`)
+		if err := log.Append(t.Context(), rec); err != nil {
+			t.Fatalf("append %s: %v", rec.ID, err)
+		}
+	}
+	// THE TYPE IS THE CATALOGUE'S, read back through the row's own mark
+	// rather than assumed: if `sandbox_run_failed` ever leaves the failure
+	// set this names the case instead of passing on a wrong expectation.
+	all, err := log.List(t.Context(), store.ListQuery{Since: base, Until: base.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range all {
+		if r.ID == "by-type" && r.Failed {
+			failureType = r.Type
+		}
+	}
+	if failureType == "" {
+		t.Fatal("sandbox_run_failed is not read back as a failure — pick a type in types.FailureEventNames")
+	}
+	yes, no := true, false
+	for _, c := range []struct {
+		name string
+		q    store.ListQuery
+		want []string
+	}{
+		{"failures", store.ListQuery{Failed: &yes}, []string{"by-type", "tagged"}},
+		{"clean", store.ListQuery{Failed: &no}, []string{"clean-tag", "untagged"}},
+		{"either", store.ListQuery{}, []string{"by-type", "clean-tag", "tagged", "untagged"}},
+		{"failures involving a seat", store.ListQuery{Failed: &yes, RelatedAgent: "PM"}, []string{"by-type", "tagged"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			q := c.q
+			q.Since, q.Until = base, base.Add(time.Hour)
+			rows, err := log.List(t.Context(), q)
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			got := idsOf(rows)
+			slices.Sort(got)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("rows = %v, want %v", got, c.want)
+			}
+			if q.RelatedAgent != "" {
+				return // a related-agent axis is refused by design
+			}
+			bars, err := log.Histogram(t.Context(), store.HistogramQuery{ListQuery: q, Bucket: store.BucketHour})
+			if err != nil {
+				t.Fatalf("histogram: %v", err)
+			}
+			if bars.Total != len(c.want) {
+				t.Errorf("the axis counts %d, want %d — the list's own set", bars.Total, len(c.want))
+			}
+			if c.q.Failed != nil && *c.q.Failed && bars.Failed != bars.Total {
+				t.Errorf("an axis of failures has a failed share of %d of %d, want all of it", bars.Failed, bars.Total)
+			}
+		})
 	}
 }

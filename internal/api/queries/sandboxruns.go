@@ -138,6 +138,12 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		// Null on a run launched by a turn charged to no item.
 		"work_item":    run.WorkItem,
 		"agent_handle": run.AgentHandle,
+		// THE JOB THE ROW HOLDS NOW, which is what `sandbox_tail` is asked
+		// by: a turn can launch more than one, and the run's own page polls
+		// the live output of the job it is showing rather than of whichever
+		// replaced it. Empty on a row a build that predates it wrote, and
+		// such a run has no live output to ask for.
+		"launch_id":    run.LaunchID,
 		"role":         run.Role,
 		"status":       run.Status,
 		"coding_agent": run.CodingAgent,

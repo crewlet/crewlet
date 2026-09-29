@@ -14,6 +14,7 @@ import { useQuery } from "./useQuery.ts";
 import { useNow } from "./clock.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg, useOrgBudget } from "./store-hooks.ts";
 import { indexOrg, nameOfIn } from "./seats.ts";
+import { RUNS_POLL_MS } from "./runs.ts";
 
 export function useAttention(): Attention[] {
   const now = useNow();
@@ -26,9 +27,9 @@ export function useAttention(): Attention[] {
   // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
   // this queue has by construction — it is waiting for a person — and what the
   // row says about it is how long its box is still held, which is the pause
-  // window only the durable record carries. Slow, like the runs board's own
-  // poll: a run's lifetime is minutes.
-  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
+  // window only the durable record carries. On the runs board's own poll, so
+  // the queue and the board cannot disagree about a run — see RUNS_POLL_MS.
+  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
   return useMemo(
     () =>
       attentionQueue({

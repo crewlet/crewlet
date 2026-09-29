@@ -793,8 +793,9 @@ func (s *LiveState) recordEvent(env *Envelope) {
 		// Read off the envelope Apply just stamped, rather than derived a
 		// second time: one derivation is what keeps the live row and the
 		// seeded one agreeing about the same event.
-		Failed:  env.Failed,
-		AgentID: env.AgentID,
+		Failed:    env.Failed,
+		AgentID:   env.AgentID,
+		ChannelID: env.ChannelID,
 	}
 	s.feed = append(s.feed, row)
 	s.trimFeed()

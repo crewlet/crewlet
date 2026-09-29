@@ -286,6 +286,7 @@
 a.seat-card,
 a.list-row,
 a.feed-row,
+a.trace-row,
 a.org-node,
 a.seat-chip {
   color: inherit;

@@ -18,6 +18,22 @@
  * previous client sent `before`, so `time.Parse("")` failed and EVERY cursored
  * page was rejected, then read the rejection as "that is the beginning of the
  * retained history".
+ *
+ * # Every filter but the text search is the ENGINE's
+ *
+ * The category, the actor, the seat, one trace (`trace=`), one agent-to-agent
+ * channel (`channel=`) and "Failures only" (`failed=true`) are asked of the
+ * engine, so the axis, every page it fetches and the live rows merged over
+ * them are one set. "Failures only" used to be applied here to whatever rows
+ * the tab held — so the axis counted the whole window while the list showed
+ * the failures among the newest hundred, and every older page came back
+ * unfiltered for the mark to hide. The search box is the one filter the
+ * engine does not have, and the list says so where it matters: an empty
+ * search result offers the older pages rather than claiming there is nothing.
+ *
+ * A trace and a channel arrive from a link — a trace's "In the log", a
+ * channel's "Read this channel's events" — so each is a chip that says what
+ * the log is narrowed to and takes itself off, like the seat.
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +46,8 @@ import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/
 import { indexOrg } from "~/lib/seats.ts";
 import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
+import type { Coverage } from "~/contract/coverage.ts";
+import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
@@ -103,7 +121,13 @@ export function Activity() {
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
   const [q, setQ] = useParam("q", "");
+  // THE ENGINE'S FILTER, three-valued on the wire; the log offers the one
+  // half a reader asks for, so the chip sets `true` or nothing.
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
+  const failedOnly = onlyFailed === "true";
+  // ONE TRACE AND ONE CHANNEL, by id, as the links that open the log name them.
+  const [trace, setTrace] = useParam("trace", "");
+  const [channel, setChannel] = useParam("channel", "");
   // ONE SEAT'S EVENTS, by its handle — what a profile's "Events" opens. The
   // engine resolves the handle to the id its events carry, so the pages it
   // answers are that seat's; the LIVE rows are narrowed here by the same id,
@@ -152,6 +176,9 @@ export function Activity() {
   const [exhausted, setExhausted] = useState(false);
   const [paging, setPaging] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  // WHICH NODES EACH PAGE WAS MERGED FROM, so the note below names a node
+  // that did not answer for any of them.
+  const [pageCoverage, setPageCoverage] = useState<(Coverage | undefined)[]>([]);
 
   // A FILTER CHANGE IS A NEW QUERY, so the pages fetched under the old one go
   // with it. They used to survive, and it broke three ways at once: rows
@@ -173,8 +200,9 @@ export function Activity() {
     setCursor(null);
     setExhausted(false);
     setPageError(null);
+    setPageCoverage([]);
     setFetched(false);
-  }, [category, actor, seat, windowKey]);
+  }, [category, actor, seat, trace, channel, failedOnly, windowKey]);
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
@@ -208,7 +236,13 @@ export function Activity() {
         // different filters over one list, and the paged half came back empty
         // for every prefix. The search box is where substring lives.
         .filter((e) => !actor || (e.actor ?? "") === actor)
-        .filter((e) => !onlyFailed || e.failed)
+        // THE SAME THREE FILTERS THE ENGINE APPLIED TO THE PAGES, applied to
+        // the live rows by the same values: each row carries its trace, its
+        // channel (the store's own column, stamped on the live row too) and
+        // its failure mark.
+        .filter((e) => !trace || e.trace_id === trace)
+        .filter((e) => !channel || e.channel_id === channel)
+        .filter((e) => !failedOnly || e.failed)
         .filter(
           (e) =>
             !needle ||
@@ -218,7 +252,20 @@ export function Activity() {
         )
         .sort(newestFirst)
     );
-  }, [liveEvents, older, category, actor, seat, seatId, q, onlyFailed, since, until]);
+  }, [
+    liveEvents,
+    older,
+    category,
+    actor,
+    seat,
+    seatId,
+    trace,
+    channel,
+    failedOnly,
+    q,
+    since,
+    until,
+  ]);
 
   // THE AXIS IS THE ENGINE'S. This tab holds at most the last 400 events and
   // the store's window it never holds, so a histogram folded here would be
@@ -226,16 +273,25 @@ export function Activity() {
   // through the same predicate the listing filters with, so a bar can never
   // claim rows the list below it would not show.
   //
-  // The SERVER-SIDE filters only. `q` and `failed` are applied in the browser
-  // to whatever arrived, so an axis carrying them would be counting a set the
-  // engine was never asked about.
+  // The SERVER-SIDE filters only — every one but `q`, which is applied in
+  // the browser to whatever arrived, so an axis carrying it would be counting
+  // a set the engine was never asked about.
+  const filters = useMemo(
+    () => ({
+      ...(category ? { category } : {}),
+      ...(actor ? { actor } : {}),
+      ...(seat ? { seat } : {}),
+      ...(trace ? { trace_id: trace } : {}),
+      ...(channel ? { channel_id: channel } : {}),
+      ...(failedOnly ? { failed: "true" } : {}),
+    }),
+    [category, actor, seat, trace, channel, failedOnly],
+  );
   const series = useQuery("event_series", {
     since: axis.since,
     until: axis.until,
     bucket,
-    ...(category ? { category } : {}),
-    ...(actor ? { actor } : {}),
-    ...(seat ? { seat } : {}),
+    ...filters,
   });
 
   const loadOlder = useCallback(async () => {
@@ -245,10 +301,7 @@ export function Activity() {
       // The cursor names BOTH halves. The engine reads `before_time` and
       // `before_id`; a client sending one bare `before` gets every page
       // rejected with `query_failed`.
-      const params: Record<string, unknown> = { limit: PAGE, since, until };
-      if (category) params.category = category;
-      if (actor) params.actor = actor;
-      if (seat) params.seat = seat;
+      const params: Record<string, unknown> = { limit: PAGE, since, until, ...filters };
       if (cursor) {
         params.before_time = cursor.before_time;
         params.before_id = cursor.before_id;
@@ -264,6 +317,7 @@ export function Activity() {
       // then read as "the beginning of the retained history".
       const page = await socket.query("events", params);
       setOlder((prev) => [...prev, ...(page.events ?? [])]);
+      setPageCoverage((prev) => [...prev, page.coverage]);
       setCursor(page.next ?? null);
       setExhausted(page.exhausted || !page.next);
     } catch (err) {
@@ -271,7 +325,7 @@ export function Activity() {
     } finally {
       setPaging(false);
     }
-  }, [socket, cursor, rows, category, actor, seat, since, until]);
+  }, [socket, cursor, rows, filters, since, until]);
 
   // THE FIRST PAGE OF THE WINDOW, once per window. `loadOlder` is a
   // dependency and changes with every render that changes `rows`, so the
@@ -283,7 +337,7 @@ export function Activity() {
     void loadOlder();
   }, [fetched, loadOlder]);
 
-  const filtered = !!(category || actor || seat || q || onlyFailed);
+  const filtered = !!(category || actor || seat || trace || channel || q || failedOnly);
 
   return (
     <>
@@ -299,6 +353,8 @@ export function Activity() {
               setCategory("");
               setActor("");
               setSeat("");
+              setTrace("");
+              setChannel("");
               setQ("");
               setOnlyFailed("");
             }}
@@ -384,7 +440,7 @@ export function Activity() {
           leading={<SearchGlyph size="sm" />}
           width="sm"
         />
-        <FilterChip pressed={!!onlyFailed} onPressedChange={(on) => setOnlyFailed(on ? "1" : "")}>
+        <FilterChip pressed={failedOnly} onPressedChange={(on) => setOnlyFailed(on ? "true" : "")}>
           Failures only
         </FilterChip>
         {/* THE SEAT, as a chip that says whose log this is and takes itself
@@ -404,8 +460,37 @@ export function Activity() {
             </span>
           </FilterChip>
         )}
+        {trace && (
+          <FilterChip
+            pressed
+            onPressedChange={(on) => !on && setTrace("")}
+            aria-label={`Only trace ${trace}'s events — remove`}
+          >
+            <span className="chip-removable">
+              Trace <code className="inline">{trace.slice(0, 8)}</code>
+              <XGlyph size="xs" aria-hidden="true" />
+            </span>
+          </FilterChip>
+        )}
+        {channel && (
+          <FilterChip
+            pressed
+            onPressedChange={(on) => !on && setChannel("")}
+            aria-label={`Only channel ${channel}'s events — remove`}
+          >
+            <span className="chip-removable">
+              A2A channel <code className="inline">{channel.slice(0, 8)}</code>
+              <XGlyph size="xs" aria-hidden="true" />
+            </span>
+          </FilterChip>
+        )}
         <span className="spacer" />
       </div>
+
+      {/* A NODE THAT DID NOT ANSWER is named where the rows are drawn: the
+          log is every node's, read at query time (ADR-0021), and a short
+          answer that did not say so would read exactly like a quiet company. */}
+      <CoverageNote coverage={[series.data?.coverage, ...pageCoverage]} what="this log" />
 
       {/* THE CLOSED SET, so a category with nothing in it is still offered:
           that says the category exists and is quiet, which is an answer — and
@@ -475,9 +560,14 @@ export function Activity() {
                 title: filtered
                   ? "Nothing matches these filters"
                   : "Nothing has been published yet",
-                hint: filtered
-                  ? "Older rows may still match — load more history below."
-                  : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to.",
+                // THE SEARCH IS THE ONE FILTER OVER WHAT THIS TAB HOLDS, so it
+                // is the one whose empty answer older pages can still change;
+                // every other filter was the engine's, over the whole window.
+                hint: q.trim()
+                  ? "The search reads the rows loaded so far — older rows may still match, so load more history below."
+                  : filtered
+                    ? "Nothing in this window matches. Widen the range, or clear the filters."
+                    : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to.",
               }}
             />
           )
@@ -486,7 +576,16 @@ export function Activity() {
           {pageError ? (
             <QueryState error={pageError} loading={false} />
           ) : exhausted ? (
-            <span>That is the beginning of the retained history.</span>
+            // THE END OF WHAT WAS ASKED, NOT OF THE STORE. Pages are bounded
+            // by the window and narrowed by the filters, so "exhausted" means
+            // nothing older in THIS window matches — it said "the beginning of
+            // the retained history" under two rows of a filtered 24-hour log
+            // over a store that keeps thirty days.
+            <span>
+              {filtered
+                ? "No older event in this window matches these filters."
+                : "That is the oldest event in this window."}
+            </span>
           ) : (
             <>
               <Button

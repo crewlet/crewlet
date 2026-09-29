@@ -157,6 +157,15 @@ export interface Fact {
    * For a value whose length the caller bounds; free text keeps the clamp.
    */
   whole?: boolean;
+  /**
+   * A value that is ONE TOKEN — a wire type, a trace id — which no reader can
+   * use broken in two. The clamp wraps where it must, and in a `7.5rem` track
+   * that split `turn.guard_breach` as "turn.guard_breac" over "h" and a trace
+   * id across two lines on an event's page at 1440. A token takes two tracks
+   * and stays on one line, cut with an ellipsis only where even two are too
+   * narrow; the caller puts the whole value in the element's `title`.
+   */
+  token?: boolean;
 }
 
 export function FactLine({ facts }: { facts: Fact[] }) {
@@ -165,7 +174,7 @@ export function FactLine({ facts }: { facts: Fact[] }) {
   return (
     <div className="fact-line">
       {shown.map((fact) => (
-        <span key={fact.label} className="fact">
+        <span key={fact.label} className={cx("fact", fact.token && "is-token")}>
           <span className="fact-label">{fact.label}</span>
           {/* THE VALUE AND ITS FOOTNOTES ARE ONE CELL. The labels share a
               band across the row and so do the values' first lines; a note
@@ -178,7 +187,7 @@ export function FactLine({ facts }: { facts: Fact[] }) {
                 in a track as narrow as `7.5rem`, and cut to one line an agent's
                 "not running on this node" read "not running on this no…" at
                 1440, which says nothing about where it IS running. */}
-            <span className={cx("fact-value", !fact.whole && "clamp")}>
+            <span className={cx("fact-value", fact.token ? "fact-token" : !fact.whole && "clamp")}>
               {fact.path ? (
                 <a className="t-link" href={href(fact.path, fact.query)}>
                   {fact.value}

@@ -244,6 +244,20 @@ type ListQuery struct {
 	// filter narrows first, so the read is over completion records only.
 	Suspended *bool
 
+	// Failed selects by whether the event reports a failure — the rule
+	// [EventRecord.Failed] is stamped by on every read ([types.Failed]: the
+	// stored `failed` tag, or a type in the failure set), spelled once as
+	// [failedRow] — and nil means every row. THREE-VALUED for the reason
+	// Suspended is: absent is the ordinary case.
+	//
+	// A FILTER, not a mark the reader applies to the page it holds. The
+	// event log's "Failures only" used to narrow the rows a tab had already
+	// paged in, so the axis above it counted every event in the window
+	// while the list beneath showed the failures among the newest hundred —
+	// and every older page it fetched was the unfiltered log, most of which
+	// the same mark then hid.
+	Failed *bool
+
 	// TurnID selects one RUN of a turn — every phase of it, its own
 	// completion record, and the fallbacks and breaches that happened
 	// inside it. Rows written before migration 0014 carry an empty
@@ -585,6 +599,14 @@ func (q ListQuery) predicate() (from string, where []string, args []any, col fun
 			flag = 1
 		}
 		args = append(args, flag)
+	}
+	if q.Failed != nil {
+		expr, failedArgs := failedRow(col)
+		if !*q.Failed {
+			expr = "NOT " + expr
+		}
+		where = append(where, expr)
+		args = append(args, failedArgs...)
 	}
 	// THE WINDOW, half-open, on the same column the keyset walks — so it
 	// narrows the index range the read already scans rather than adding a

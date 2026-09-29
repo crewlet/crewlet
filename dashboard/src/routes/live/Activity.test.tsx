@@ -325,3 +325,140 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   expect(screen.getByText("cto opened a task")).toBeTruthy();
   location.hash = "#/";
 });
+
+/**
+ * Mount the log at `hash` over a store holding `live` rows, answering the
+ * pages and the axis with `answer`; returns what each question was asked.
+ */
+async function mountAt(
+  hash: string,
+  live: Record<string, unknown>[],
+  answer: (what: string) => unknown = (what) =>
+    what === "events"
+      ? { events: [], next: null, exhausted: true }
+      : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {} },
+) {
+  location.hash = hash;
+  const asked: { what: string; params: Record<string, unknown> }[] = [];
+  const store = new Store();
+  for (const row of live) store.applyEvent(row as never);
+  const socket = new LiveSocket(store);
+  (
+    socket as unknown as {
+      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what: string, params: Record<string, unknown> = {}) => {
+    asked.push({ what, params });
+    return Promise.resolve(answer(what));
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Activity />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return asked;
+}
+
+function liveRow(id: string, summary: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    type: "a2a_message_sent",
+    category: "a2a",
+    source: "engine",
+    actor: "engine",
+    summary,
+    timestamp: new Date(Date.now() - 1_000).toISOString(),
+    trace_id: "",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    failed: false,
+    ...over,
+  };
+}
+
+// ONE TRACE AND ONE CHANNEL ARE THE ENGINE'S FILTERS, asked by the wire's
+// names, and the live rows are narrowed by the same values each row carries.
+// A trace's "In the log" and a channel's "Read this channel's events" land
+// here; before these, both carried the id as the text search, which matches
+// no summary the engine writes, and opened on an empty log.
+//
+// Mutation: drop `trace_id` or `channel_id` from the filters, and the pages
+// and the axis are asked for the whole log.
+test("a trace and a channel narrow the pages, the axis and the live rows", async () => {
+  let asked = await mountAt("#/live/events?trace=tr-1", [
+    liveRow("l-1", "in the trace", { trace_id: "tr-1" }),
+    liveRow("l-2", "another trace", { trace_id: "tr-2" }),
+  ]);
+  for (const what of ["events", "event_series"]) {
+    expect(asked.find((a) => a.what === what)?.params.trace_id).toBe("tr-1");
+  }
+  expect(screen.getByText("in the trace")).toBeTruthy();
+  expect(screen.queryByText("another trace")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Only trace tr-1's events/ }));
+  expect(location.hash).not.toContain("trace=");
+  cleanup();
+
+  asked = await mountAt("#/live/events?channel=ch-1", [
+    liveRow("l-3", "on the channel", { channel_id: "ch-1" }),
+    liveRow("l-4", "on another channel", { channel_id: "ch-2" }),
+  ]);
+  for (const what of ["events", "event_series"]) {
+    expect(asked.find((a) => a.what === what)?.params.channel_id).toBe("ch-1");
+  }
+  expect(screen.getByText("on the channel")).toBeTruthy();
+  expect(screen.queryByText("on another channel")).toBeNull();
+  location.hash = "#/";
+});
+
+// "FAILURES ONLY" IS ASKED OF THE ENGINE, on the pages and the axis alike.
+//
+// It narrowed the rows this tab held, so the axis counted every event in the
+// window while the list showed the failures among the newest hundred — and
+// every older page came back unfiltered for the mark to hide.
+//
+// Mutation: drop `failed` from the filters, and neither question carries it.
+test("failures only is a filter the engine applies", async () => {
+  const asked = await mountAt("#/live/events?failed=true", [
+    liveRow("l-5", "it broke", { failed: true }),
+    liveRow("l-6", "it worked"),
+  ]);
+  for (const what of ["events", "event_series"]) {
+    expect(asked.find((a) => a.what === what)?.params.failed).toBe("true");
+  }
+  expect(screen.getByText("it broke")).toBeTruthy();
+  expect(screen.queryByText("it worked")).toBeNull();
+  // THE END OF A FILTERED ANSWER IS THE FILTER'S, not the store's retention.
+  //
+  // Mutation: word the exhausted footer for the store again.
+  await act(async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  });
+  expect(screen.getByText("No older event in this window matches these filters.")).toBeTruthy();
+  expect(screen.queryByText(/retained history/)).toBeNull();
+  location.hash = "#/";
+});
+
+// A NODE THAT DID NOT ANSWER IS NAMED, off the page's coverage and the axis's.
+test("a log missing a node names it", async () => {
+  const coverage = {
+    nodes: [
+      { id: "node-a", answered: true, error: "" },
+      { id: "node-b", answered: false, error: "no answer inside the read budget" },
+    ],
+    complete: false,
+  };
+  await mountAt("#/live/events", [], (what) =>
+    what === "events"
+      ? { events: [], next: null, exhausted: true, coverage }
+      : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {}, coverage },
+  );
+  expect(screen.getByText("node-b")).toBeTruthy();
+  expect(screen.getByText(/This log is missing one node/)).toBeTruthy();
+  location.hash = "#/";
+});

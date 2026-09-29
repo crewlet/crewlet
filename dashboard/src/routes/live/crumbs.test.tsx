@@ -27,8 +27,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TurnScreen } from "./Turn.tsx";
 import { TraceScreen } from "./Trace.tsx";
 import { EventScreen } from "./Event.tsx";
-import { Runs } from "./Runs.tsx";
-import { Conversations } from "./Conversations.tsx";
+import { RunScreen } from "./Runs.tsx";
+import { ChannelScreen } from "./Conversations.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -286,7 +286,7 @@ test("an event with no summary is named by its type", async () => {
 const RUN = "85e7b505-6dc9-478f-8501-1f2e3d4c5b6a";
 
 test("a coding run is named by the task it was given", async () => {
-  mount(`#/live/runs/${RUN}`, <Runs runId={RUN} />, {
+  mount(`#/live/runs/${RUN}`, <RunScreen turnId={RUN} />, {
     sandbox_runs: {
       runs: [
         {
@@ -325,7 +325,7 @@ const CHANNEL = "77e58cab-c425-4036-9911-aa0b1c2d3e4f";
 test("an A2A channel is named by who asked whom", async () => {
   mount(
     `#/live/a2a/${CHANNEL}`,
-    <Conversations channelId={CHANNEL} />,
+    <ChannelScreen id={CHANNEL} />,
     {
       a2a_channels: {
         available: true,

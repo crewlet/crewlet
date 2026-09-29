@@ -271,9 +271,12 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 	bucketExpr := "(" + col("event_time") + " / " + micros + ") * " + micros
 	// THE FAILED SPLIT IS [failedRow], the turn list's own predicate, so a
 	// bar's failed share and a turn's failed mark are one rule rather than
-	// two that agree. Its columns are unqualified, which is safe because
-	// this read never joins: a related-agent axis is refused above.
-	failedExpr, failedArgs := failedRow()
+	// two that agree — and the `failed` FILTER is the same rule again
+	// ([ListQuery.Failed]), so an axis narrowed to failures has a failed
+	// share equal to its height. Qualified through `col` like every other
+	// column here, although this read never joins (a related-agent axis is
+	// refused above).
+	failedExpr, failedArgs := failedRow(col)
 	query := "SELECT " + bucketExpr + " AS bucket, COUNT(*), " +
 		"SUM(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END) FROM " + from +
 		" WHERE " + strings.Join(where, " AND ") + " GROUP BY bucket ORDER BY bucket"

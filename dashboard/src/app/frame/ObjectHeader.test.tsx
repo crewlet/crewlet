@@ -110,6 +110,23 @@ test("a fact's value clamps at two lines rather than truncating at one", () => {
   expect(value.classList.contains("truncate")).toBe(false);
 });
 
+// A TOKEN IS NEVER SPLIT. The clamp wraps where it must, and an event's type
+// came out "turn.guard_breac" over "h" in a 7.5rem track — an identifier a
+// reader can neither read nor search for. A token fact takes two tracks and
+// one line, and the stylesheet (`.fact.is-token`, `.fact-token`) is what says
+// how; here, that the fact is marked for it and not clamped.
+//
+// Mutation: drop `token` from `FactLine`'s class choice, and the value clamps.
+test("a token fact takes two tracks on one line rather than wrapping mid-token", () => {
+  const { container } = render(
+    <FactLine facts={[{ label: "Type", value: "turn.guard_breach", token: true }]} />,
+  );
+  expect(container.querySelector(".fact")!.classList.contains("is-token")).toBe(true);
+  const value = container.querySelector(".fact-value")!;
+  expect(value.classList.contains("fact-token")).toBe(true);
+  expect(value.classList.contains("clamp")).toBe(false);
+});
+
 // A NOTE IS ITS VALUE'S. On a band of its own, a neighbour's value wrapping to
 // two lines pushed every note in the row down, and "37%" stood a blank line
 // above the note saying what it was 37% of. So the value and its footnotes

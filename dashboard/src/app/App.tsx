@@ -58,7 +58,9 @@ const LiveNow = lazyScreen("live", (m) => m.LiveNow);
 const Turns = lazyScreen("live", (m) => m.Turns);
 const TurnScreen = lazyScreen("live", (m) => m.TurnScreen);
 const Runs = lazyScreen("live", (m) => m.Runs);
+const RunScreen = lazyScreen("live", (m) => m.RunScreen);
 const Conversations = lazyScreen("live", (m) => m.Conversations);
+const ChannelScreen = lazyScreen("live", (m) => m.ChannelScreen);
 const TraceScreen = lazyScreen("live", (m) => m.TraceScreen);
 const Activity = lazyScreen("live", (m) => m.Activity);
 const EventScreen = lazyScreen("live", (m) => m.EventScreen);
@@ -118,9 +120,9 @@ export function screenFor(route: Resolved): ReactNode {
     case "turn":
       return <TurnScreen key={route.id} turnId={route.id} />;
     case "runs":
-      return <Runs key={route.id ?? ""} runId={route.id} />;
+      return route.id ? <RunScreen key={route.id} turnId={route.id} /> : <Runs />;
     case "a2a":
-      return <Conversations key={route.id ?? ""} channelId={route.id} />;
+      return route.id ? <ChannelScreen key={route.id} id={route.id} /> : <Conversations />;
     case "trace":
       return <TraceScreen key={route.id} traceId={route.id} />;
     case "events":

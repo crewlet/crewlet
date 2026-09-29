@@ -730,10 +730,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/agents/seats/{handle}` | **Seat** — an agent's or a person's profile. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
-| `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable | |
-| `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** | |
+| `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
+| `#/live/a2a` · `#/live/a2a/{id}` | **Agent-to-agent** — a channel's own page draws the channel and what crossed it | |
 | `#/live/traces/{id}` | **Trace** — one distributed trace. NO LIST: nothing enumerates traces, so a bare traces address is Not Found, saying a trace is opened from a turn, a run or an event | |
-| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `q=` · `failed=` |
+| `#/live/events` · `#/live/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `seat=` · `trace=` · `channel=` · `q=` · `failed=true` |
 | `#/knowledge` | **Knowledge** — live search over the backend, and the containers | `q=` |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
 | `#/knowledge/pages/{id}` | **Page** — addressed by its id, which a rename does not change | |
@@ -4463,6 +4463,80 @@ about it, and its body is four tabs (`tab=timeline|transcript|context|tools`).
   phases do not carry — a run's announcement, a note's outcome, the
   reflection — arrives only in the answer.
 
+
+## Coding runs, agent-to-agent, traces and the event log
+
+The four Live screens beside Now running and the turns are each a list and a
+page, and each page draws ITS OBJECT ALONE: `#/live/runs/{turn_id}` and
+`#/live/a2a/{id}` used to draw the whole list with the object tacked on under
+it, so a link to one run landed on a board with the run below the fold.
+
+- **Coding runs** reads the durable run record (`sandbox_runs`) merged with
+  the live projection, on ONE poll, `RUNS_POLL_MS` (20 s) in `lib/runs.ts` —
+  the board, a run's page and rail, and the attention queue Home and the Inbox
+  draw all name it, so the board and the Inbox cannot disagree about whether
+  anybody is being waited on (a source test holds every reader to it).
+  - A parked run's banner says what it asked, **who it is put to** (the
+    audience the engine resolved when the run parked, by name, and the lead
+    chain when the coding agent's label named nobody), how long its box is
+    held, and carries **Answer** — `answer_run{turn_id, answer}`, which reaches
+    a run whatever launched it. `pending` is the ordinary outcome: the answer
+    is on the seat's inbox and the node holding the seat resumes the run.
+  - A running run's page polls its live output from the node that owns it
+    (`sandbox_tail`, by the `launch_id` the row names, every 3 s while the page
+    is open — the same `LiveOutput` the turn trace draws).
+  - A run is collected when its record is deleted, and its page still
+    answers: it reads the turn and draws every `sandbox` phase the turn
+    published — what the job reported, what it delivered, its tokens and its
+    transcript — named by the task its `sandbox_run_started` carried.
+  - Beside a peek the board keeps the seat and the task and drops the coding
+    agent, the placement and the box, in that order, saying so in its footer.
+  - The page reads two sources, and "no run" needs BOTH: only when the run
+    record and the turn both answered and neither holds a run does it say
+    there is none, headed **No coding run**. A source that could not be read is
+    named in a warning over whatever the other one holds, never folded into
+    "none"; "No task was recorded" heads only a real run whose launch carried
+    no task.
+- **Agent-to-agent**: a channel is an authorization record — the pair, the
+  count and the window — so its page reads the words from the log: the
+  channel's own events (`events{channel_id}`), oldest first, a conversation
+  read top down. "Read this channel's events" and "Open in the event log" are
+  the log narrowed to the channel, `#/live/events?channel={id}`. An id the
+  record does not hold is ONE not-found state carrying that link, not a
+  second empty events card under it; the events card still appears when the
+  log holds what crossed a channel whose record is gone.
+- **A trace** has no list. Its page states each number once in its header —
+  events, spans, elapsed, when it began, failures — and draws ONE ROW PER
+  EVENT, nested by the span that carried it. A span is not an event: every
+  event of one phase carries that phase's span id, so a tree keyed on the span
+  id drew one phase's last event over and over and lost the rest (a 25-event
+  trace drew 344 rows and neither of its two failures). A span holds its
+  events, appears once under its parent, and its events and child spans are
+  interleaved by time. A failed event is marked as the event log marks it —
+  the danger edge and the warning glyph. Each row places its event on a
+  **lane**, a rail spanning the trace's first event to its last with a mark at
+  the event's instant, on a fixed-width track so every row's lane is the same
+  scale; a trace whose events share one instant draws no lane. On a phone the
+  sentence wraps. It names a node that did not answer. "In the log" is the log
+  narrowed to the trace, `#/live/events?trace={id}`.
+- **The event log** asks the ENGINE for every filter but the text search:
+  category, actor, seat, one trace, one channel and "Failures only"
+  (`failed=true`) narrow the axis and every page alike, and the live rows are
+  narrowed by the same values each row carries (a live row carries its seat and
+  its channel exactly as the store's columns hold them). "Failures only" used
+  to mark the rows a tab held, so the axis counted the whole window while the
+  list held the failures among the newest hundred. The search box is the one
+  filter over what is loaded, and an empty search says older pages may still
+  match. The end of the pages is the end of what was ASKED — "No older event
+  in this window matches these filters" under a filter, "That is the oldest
+  event in this window" without — never the store's retention, which a
+  24-hour window over a thirty-day store does not reach. A node that did not
+  answer is named above the list.
+- **An identifier in a header** — an event's wire type, its trace id — is a
+  TOKEN fact (`Fact.token`): it takes two of the fact line's tracks on one line
+  and is cut with an ellipsis, its whole value in the title, only where two
+  are still too narrow. The clamp every other fact takes split
+  `turn.guard_breach` as "turn.guard_breac" over "h".
 
 ## Honest empty states
 

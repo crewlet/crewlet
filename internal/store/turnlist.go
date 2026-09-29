@@ -96,15 +96,26 @@ var (
 // [types.FailureEventNames], which is the accessor that exists because this is
 // the caller that has to ENUMERATE the set rather than test one value against
 // it — the map behind it is unexported, so there is no second way in.
-func failedRow() (string, []any) {
+//
+// `col` qualifies each column for whichever FROM the caller built — the
+// listing's predicate joins the party table when it narrows by a related agent
+// ([ListQuery.predicate]) — and is nil where the statement reads the log alone.
+func failedRow(col func(string) string) (string, []any) {
+	if col == nil {
+		col = func(name string) string { return name }
+	}
 	names := types.FailureEventNames()
 	args := make([]any, 0, len(names))
 	for _, name := range names {
 		args = append(args, name)
 	}
 	holders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
-	return "(json_extract(tags, '$.failed') = 'true' OR event_type IN (" +
-		holders + "))", args
+	// COALESCED, because the expression is negated for `failed=false`
+	// ([ListQuery.Failed]): a row with no tag would make the comparison NULL,
+	// and NOT NULL excludes the row — every clean event missing from the
+	// clean half.
+	return "(COALESCE(json_extract(" + col("tags") + ", '$.failed'), '') = 'true' OR " + col("event_type") +
+		" IN (" + holders + "))", args
 }
 
 // suspendedExpr is 1 for a completion record that PARKED its turn and 0 for
@@ -619,7 +630,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 	// could be selected by `failed=true` and then render without the mark,
 	// which is the same defect one layer down from the one [failedRow]
 	// describes.
-	failedExpr, failedArgs := failedRow()
+	failedExpr, failedArgs := failedRow(nil)
 	failedAgg := "MAX(CASE WHEN " + failedExpr + " THEN 1 ELSE 0 END)"
 	if q.Failed != nil && !shares {
 		want := "0"

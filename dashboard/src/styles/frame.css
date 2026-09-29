@@ -1236,6 +1236,24 @@ a.user-block-who:focus-visible {
   white-space: normal;
 }
 
+/* ONE TOKEN, ONE LINE (`Fact.token`): two tracks, never wrapped, and cut with
+   an ellipsis only where two tracks are still too narrow — its title carries
+   the whole of it. The link inside keeps the line too, which is the opposite
+   of the rule above and the point: an id is not prose. */
+.fact.is-token {
+  grid-column: span 2;
+}
+.fact-token {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fact-token .t-link {
+  white-space: nowrap;
+}
+
 /* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH, and the grid above is what makes
    that structural rather than capped. `.fact` was a column flex box, so it was
    as wide as its widest child — and a note is prose where the value above it
@@ -1818,6 +1836,13 @@ a.cell-seat:hover {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* A LINKED VALUE WRAPS WITH ITS CELL, as a linked fact does (`.fact-value
+   .t-link` above): `.t-link` never wraps, being written for a link in a row,
+   so a turn id linked from a run's properties ran past the card's edge at
+   phone width instead of breaking where `overflow-wrap` lets it. */
+.props > dd .t-link {
+  white-space: normal;
 }
 
 .props-section {

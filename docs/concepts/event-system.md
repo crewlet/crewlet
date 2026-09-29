@@ -518,7 +518,7 @@ sequenceDiagram
 - **A question is asked in the lowest protocol version that answers it.**
   An older build ignores a filter it does not know and would answer a wider
   question than was asked, merged in as though it matched; so a listing
-  narrowed by a newer filter (`channel_id`, `seat`, `suspended`), a page of
+  narrowed by a newer filter (`channel_id`, `seat`, `suspended`, `failed`), a page of
   turns in a window of two instants (an older build reads only whole days
   back from its own clock), the
   company's `phases` narrowed to one seat, which an older build narrowed by a

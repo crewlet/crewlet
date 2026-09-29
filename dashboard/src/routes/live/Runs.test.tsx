@@ -8,16 +8,32 @@
  * that the log in front of them is complete.
  */
 
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import type { ReactElement } from "react";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Router } from "~/app/router.tsx";
+import { FrameReadings } from "~/app/Shell.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import { overflowing } from "~/testing.tsx";
-import { BridgeLog } from "./Runs.tsx";
+import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  location.hash = "";
+});
 
 function render(ui: ReactElement) {
   return rtlRender(<Router>{ui}</Router>);
@@ -200,4 +216,267 @@ test("a bridged call's arguments are shown as the JSON document they are", () =>
   );
   const block = container.querySelector('[aria-label="read_file arguments"]');
   expect(block?.textContent).toContain('{\n  "path": "a.go",\n  "id": 9007199254740993\n}');
+});
+
+// ---------------------------------------------------------------------------
+// A run's own page
+// ---------------------------------------------------------------------------
+
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+const JANE = {
+  operator_id: "U0FOUNDER",
+  operator: true,
+  handle: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: ["answer_run"],
+};
+
+const ORG = {
+  name: "Nimbus",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    { name: "Ada Engineer", handle: "ada", kind: "agent", role: "SWE" },
+  ],
+  units: [],
+};
+
+/**
+ * Mount `#/live/runs/turn-1` over stubbed answers, recording every question
+ * and every write; `outcome` is what the engine answers a write with.
+ */
+function mountPage(answers: Record<string, unknown>, outcome = "pending") {
+  location.hash = "#/live/runs/turn-1";
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  const asked: { what: string; params: Record<string, unknown> }[] = [];
+  const posted: { tool: string; args: Record<string, unknown> }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(JSON.stringify({ tool, outcome, position: "", receipt: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  const store = new Store();
+  store.applyHealth({ status: "healthy" } as never);
+  store.applyOrg(ORG as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
+    asked.push({ what, params: params ?? {} });
+    const all: Record<string, unknown> = {
+      viewer: JANE,
+      work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+      ...answers,
+    };
+    const answer = all[what];
+    // AN `Error` STANDS FOR A READ THAT FAILED: the socket rejects with the
+    // refusal's code, which is what `useQuery` surfaces as `error`.
+    if (answer instanceof Error) return Promise.reject(answer);
+    return Promise.resolve(answer ?? {});
+  }) as typeof socket.query;
+  rtlRender(
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <RunScreen turnId="turn-1" />
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
+  );
+  return { asked, posted };
+}
+
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  });
+}
+
+// A PARKED RUN IS ANSWERED ON ITS PAGE, BY ITS TURN.
+//
+// The banner said how a run could be answered and offered nothing to press —
+// and a run a schedule or an assignment launched stored no conversation, so
+// there was no reply path at all. `answer_run` names the run by its turn, and
+// a `pending` outcome (the answer is on the seat's inbox, the owning node
+// resumes the run) closes the dialog like an applied one.
+//
+// Mutation: drop the Answer button from the banner, and there is nothing to
+// press; send `run_id` for `turn_id`, and the write names no run.
+test("a parked run's page answers it by its turn", async () => {
+  const { posted } = mountPage({
+    sandbox_runs: {
+      runs: [
+        run({
+          status: "awaiting_clarification",
+          question: "Which retry ceiling?",
+          audience: "requester",
+          audience_handles: ["jane"],
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const banner = screen.getByText("Which retry ceiling?").closest(".run-awaiting") as HTMLElement;
+  expect(within(banner).getByText(/Put to Jane Founder\./)).toBeTruthy();
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Your answer"), {
+    target: { value: "Thirty seconds." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "answer_run", args: { turn_id: "turn-1", answer: "Thirty seconds." } },
+  ]);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+// A RUNNING JOB'S OUTPUT IS ASKED OF ITS OWNER, by the job the row holds.
+//
+// Mutation: ask without `launch_id`, and the engine refuses every read.
+test("a running run's page polls the live output of the job it holds", async () => {
+  const { asked } = mountPage({
+    sandbox_runs: { runs: [run({ status: "running", launch_id: "job-2" })] },
+    turn: { turn_id: "turn-1", events: [] },
+    sandbox_tail: {
+      outcome: "tail",
+      turn_id: "turn-1",
+      launch_id: "job-2",
+      node: "node-a",
+      output: {
+        text: "running the tests",
+        source: "transcript",
+        cut: false,
+        as_of: new Date().toISOString(),
+        finished: false,
+      },
+    },
+  });
+  await settle();
+  expect(asked.find((a) => a.what === "sandbox_tail")?.params).toEqual({
+    turn_id: "turn-1",
+    launch_id: "job-2",
+  });
+  expect(await screen.findByText("running the tests")).toBeTruthy();
+});
+
+// A SETTLED RUN STILL HAS A PAGE: its record is gone from the board, and what
+// it did is the `sandbox` phase its turn published, with the transcript on it.
+// It used to answer "no coding run" to a link to a run that had finished.
+//
+// Mutation: drop the collected records, and the page claims there is no run.
+test("a collected run's page shows what its job did, off its turn", async () => {
+  mountPage({
+    sandbox_runs: { runs: [] },
+    turn: {
+      turn_id: "turn-1",
+      events: [
+        {
+          id: "s-1",
+          type: "sandbox_run_started",
+          timestamp: "2026-06-15T12:00:00Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "system",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: { turn_id: "turn-1", task: "Add retry to the webhook client" },
+        },
+        {
+          id: "p-1",
+          type: "agent_phase_completed",
+          timestamp: "2026-06-15T12:10:00Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "llm",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: {
+            turn_id: "turn-1",
+            phase: "sandbox",
+            iteration: 1,
+            role: "SWE",
+            coding_agent: "claude",
+            launch_id: "job-1",
+            activity_transcript: "edited retry.go; tests pass",
+            delivered_refs: ["crewlet/ada/retry"],
+          },
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(screen.getByText("edited retry.go; tests pass")).toBeTruthy();
+  // NAMED BY ITS TASK, off the launch the turn holds — the row that carried
+  // it is gone once the run is collected.
+  expect(screen.getByRole("heading", { name: /Add retry to the webhook client/ })).toBeTruthy();
+  expect(screen.getByText("collected")).toBeTruthy();
+  expect(screen.getByText("crewlet/ada/retry")).toBeTruthy();
+  expect(screen.queryByText("No coding run for this turn")).toBeNull();
+});
+
+// "COULD NOT READ" IS NOT "NONE". The page is drawn from two reads, and a run
+// found in neither is absent only when both answered. It said "Neither the
+// run record nor the turn holds a coding run" whenever ONE read failed — a
+// claim about a record it never read — and headed the page "No task was
+// recorded" as though a run existed.
+//
+// Mutation: gate the empty state on `!run && collected.length === 0` alone
+// (as it was), and the failed board reads as an absent run.
+test("a failed run record is named rather than read as no run", async () => {
+  mountPage({
+    sandbox_runs: new Error("unavailable"),
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.queryByText(/Neither the run record nor the turn holds/)).toBeNull();
+  expect(screen.getByText(/The run record could not be read/)).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "No coding run" })).toBeNull();
+});
+
+test("a failed turn is named rather than read as no run", async () => {
+  mountPage({
+    sandbox_runs: { runs: [] },
+    turn: new Error("timeout"),
+  });
+  await settle();
+  expect(screen.queryByText(/Neither the run record nor the turn holds/)).toBeNull();
+  expect(screen.getByText(/The turn could not be read/)).toBeTruthy();
+});
+
+// A TURN WITH NO RUN IS HEADED AS HAVING NONE. "No task was recorded" is a
+// fact about a run whose launch carried no task, and over a turn with no run
+// at all it asserted a run that does not exist.
+//
+// Mutation: fall back to "No task was recorded" for every run-less page.
+test("a turn with no coding run is headed as having none", async () => {
+  mountPage({ sandbox_runs: { runs: [] }, turn: { turn_id: "turn-1", events: [] } });
+  await settle();
+  expect(screen.getByRole("heading", { name: "No coding run" })).toBeTruthy();
+  expect(screen.queryByText("No task was recorded")).toBeNull();
+  expect(screen.getByText("No coding run for this turn")).toBeTruthy();
 });

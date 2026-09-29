@@ -850,6 +850,20 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 			return store.ListQuery{}, badParams("suspended", raw, []string{"true", "false"})
 		}
 	}
+	// WHETHER THE EVENT REPORTS A FAILURE, three-valued for the same reason:
+	// absent is every row. The event log's "Failures only" — a filter the
+	// engine applies, so its axis and every page it fetches are the one set,
+	// where narrowing the rows a tab held drew a window's worth of bars over
+	// the failures among the newest hundred.
+	if raw := strings.TrimSpace(p.String("failed")); raw != "" {
+		switch raw {
+		case "true", "false":
+			flag := raw == "true"
+			q.Failed = &flag
+		default:
+			return store.ListQuery{}, badParams("failed", raw, []string{"true", "false"})
+		}
+	}
 	// THE EVENTS ONE SEAT PUBLISHED, named by its handle — see seatParam.
 	agentID, err := s.seatParam(p)
 	if err != nil {

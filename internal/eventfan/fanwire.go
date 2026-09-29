@@ -48,7 +48,10 @@ import (
 //     seats share, and now narrows by the seat's own id — and `since` and
 //     `until` on a page of turns, the window as the asker's two instants on
 //     the turn's start rather than whole days back from each peer's clock.
-const Protocol = 3
+//   - v4: `failed` on a listing's filters — the event log's "Failures only",
+//     which used to narrow the rows a tab had paged in rather than the rows
+//     it was sent.
+const Protocol = 4
 
 // versionOf is the lowest scatter version that answers one question with
 // these parameters.
@@ -90,6 +93,8 @@ func versionOf(q Question, params any) int {
 // version is the lowest scatter version that honours every filter set.
 func (p listParams) version() int {
 	switch {
+	case p.Failed != nil:
+		return 4
 	case p.Suspended != nil:
 		return 3
 	case p.ChannelID != "" || p.AgentID != "":
@@ -226,6 +231,9 @@ type listParams struct {
 
 	// v3.
 	Suspended *bool `json:"suspended,omitempty"`
+
+	// v4.
+	Failed *bool `json:"failed,omitempty"`
 }
 
 func listParamsOf(q store.ListQuery) listParams {
@@ -235,6 +243,7 @@ func listParamsOf(q store.ListQuery) listParams {
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
 		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
+		Failed: q.Failed,
 	}
 }
 
@@ -245,6 +254,7 @@ func (p listParams) query() store.ListQuery {
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
 		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
+		Failed: p.Failed,
 	}
 }
 

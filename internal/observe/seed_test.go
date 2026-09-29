@@ -625,3 +625,50 @@ func TestALiveRowAndASeededRowNameTheSameSeat(t *testing.T) {
 		t.Errorf("the seeded row = %+v, want it to name the seat the live one did", rows)
 	}
 }
+
+// AN A2A ROW NAMES ITS CHANNEL, LIVE OR SEEDED, BY THE STORE'S OWN RULE.
+//
+// The event log narrows to one agent-to-agent channel (`channel=`) — the link
+// a channel's page carries — and the rows it pages in are narrowed by the
+// store's promoted `channel_id`. The rows the socket pushes carried no channel
+// at all, so under that filter the log could show no live row of the very
+// conversation it was opened on. Both halves carry it now, filled by
+// `store.ExtractTags` in both places.
+//
+// Mutation: leave ChannelID off the envelope, and the live row names none.
+func TestALiveRowAndASeededRowNameTheSameChannel(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	ev := events.New(types.A2AMessageSent{
+		ChannelID: "ch-9", Sender: "lead", Recipient: "eng", MessageID: "m-1", Content: "status?",
+	}, events.TraceContext{})
+	ev.Source = "Lead"
+	ev.Timestamp = time.Now().UTC().Add(-time.Minute)
+
+	env, ok := observe.Envelope(ev)
+	if !ok {
+		t.Fatal("an A2A message did not render as a live envelope")
+	}
+	live := livestate.New()
+	live.Apply(&env)
+	pushed := live.RecentEvents(0)
+	if len(pushed) != 1 || pushed[0].ChannelID != "ch-9" {
+		t.Fatalf("the live feed row = %+v, want one naming ch-9", pushed)
+	}
+
+	rec, ok := observe.Record(ev)
+	if !ok {
+		t.Fatal("an A2A message did not render as a store row")
+	}
+	if err := log.Append(t.Context(), rec); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	seeded := livestate.New()
+	if err := observe.Seed(t.Context(), eventfan.Solo("node-1", log), nil, seeded); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	rows := seeded.RecentEvents(0)
+	if len(rows) != 1 || rows[0].ChannelID != "ch-9" {
+		t.Errorf("the seeded row = %+v, want it to name ch-9 as the live one did", rows)
+	}
+}

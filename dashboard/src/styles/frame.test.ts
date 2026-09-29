@@ -841,6 +841,7 @@ describe("the frame's layout", () => {
       [".list-row", "components.css"],
       [".turn-row", "screens.css"],
       [".feed-row", "screens.css"],
+      [".trace-row", "screens.css"],
       [".work-row", "screens.css"],
       [".wl-row", "screens.css"],
       [".thread-entry", "screens.css"],

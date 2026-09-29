@@ -67,6 +67,11 @@ export interface FeedRow {
    *  event log narrows its live rows to one seat (`seat=`) exactly as the
    *  engine narrows the rows it pages in. Absent for an event about no seat. */
   agent_id?: string;
+  /** The agent-to-agent channel the event belongs to — the store's own
+   *  `channel_id`, on the live row and the seeded one alike, so the event log
+   *  narrows its live rows to one channel (`channel=`) exactly as the engine
+   *  narrows the rows it pages in. Absent on every event that is not A2A. */
+  channel_id?: string;
 }
 
 /**
@@ -454,13 +459,6 @@ export interface SandboxEntry {
   paused_at?: string;
 }
 
-/** One durable coding run, as the `sandbox_runs` query answers it. */
-/** The durable statuses `sandbox.PendingRun` actually carries.
- *
- *  Not a free string: the screen's own tone map named `succeeded`, `completed`,
- *  `cancelled` and `reclaimed`, none of which the engine can write, so four of
- *  its seven entries were unreachable and three real states fell through to
- *  the neutral default. */
 /**
  * The five statuses a run record can hold.
  *
@@ -474,10 +472,15 @@ export interface SandboxEntry {
 export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "resumed" | "reseed";
 
+/** One durable coding run, as the `sandbox_runs` query answers it. */
 export interface SandboxRun {
   /** The RUN this job belongs to — one execution of a turn, and this
    *  record's own key. See `adr/0017`. */
   turn_id: string;
+  /** The job the row holds NOW — a turn can launch more than one — and what
+   *  `sandbox_tail` is asked by. Empty on a row an older build wrote, and on
+   *  a run the live projection knows of before its durable row is read. */
+  launch_id?: string;
   /** The unit of work behind that run. Absent on a row written before the
    *  identities were split. */
   work_key?: string;

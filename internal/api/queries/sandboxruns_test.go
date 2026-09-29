@@ -301,6 +301,27 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	}
 }
 
+// THE BOARD NAMES THE JOB EACH RUN HOLDS, which is what its live output is
+// asked by (`sandbox_tail{turn_id, launch_id}`). A turn can launch more than
+// one job, so the run's page could not poll a running run's output without it.
+//
+// Mutation: drop `launch_id` from the row, and the run page has nothing to ask.
+func TestTheBoardNamesTheJobEachRunHolds(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+		Status: sandbox.StatusRunning, CreatedAt: runBase})
+	held, ok, err := store.Get(t.Context(), "t1")
+	if err != nil || !ok {
+		t.Fatalf("the seeded run: ok=%v err=%v", ok, err)
+	}
+	rows := askRuns(t, store)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want one", len(rows))
+	}
+	if got := rows[0]["launch_id"]; held.LaunchID == "" || got != held.LaunchID {
+		t.Errorf("launch_id = %v, want the job the row holds (%q)", got, held.LaunchID)
+	}
+}
+
 // THE THREE FACTS A PARKED RUN HAS AND THE BOARD COULD NOT SHOW: who is
 // waiting on it, what it called through the bridge, and the identifiers that
 // find it in somebody else's system.

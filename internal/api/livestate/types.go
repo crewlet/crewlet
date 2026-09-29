@@ -41,6 +41,13 @@ type Envelope struct {
 	// the rows it pages in. Empty for an event about no seat.
 	AgentID string `json:"agent_id,omitempty"`
 
+	// ChannelID is the agent-to-agent channel the event belongs to — the
+	// store's promoted `channel_id`, read by the same rule as AgentID and for
+	// its reason: the event log narrows to one channel (`channel=`), and the
+	// rows the socket pushes have to be narrowed by the value the store
+	// narrows its pages by. Empty on every event that is not an A2A one.
+	ChannelID string `json:"channel_id,omitempty"`
+
 	// Failed says whether the work this event reports failed.
 	//
 	// It carries the SAME derivation FeedRow gets, from the same function,
@@ -74,6 +81,9 @@ type FeedRow struct {
 	Failed       bool   `json:"failed"`
 	// AgentID is the seat the event concerns — see [Envelope.AgentID].
 	AgentID string `json:"agent_id,omitempty"`
+	// ChannelID is the A2A channel the event belongs to — see
+	// [Envelope.ChannelID].
+	ChannelID string `json:"channel_id,omitempty"`
 }
 
 // WebhookTopic is the topic a webhook delivery's envelope and feed row name.
