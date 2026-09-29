@@ -159,6 +159,32 @@ func TestTheReportNamesEveryWayTheTwoHalvesDisagree(t *testing.T) {
 	}
 }
 
+// A DANGLING REFERENCE IS NAMED ON ITS HOLDER'S ADDRESS, NEVER ITS NAME.
+//
+// A name is prose two seats or two units may share, so a finding whose object
+// was the holder's display name could not say which of two teams called
+// Platform names a lead nobody is, nor which of two seats called Dev manages a
+// ghost. Every other finding names a handle or a key; so does this one.
+func TestADanglingReferenceIsNamedOnItsHoldersAddress(t *testing.T) {
+	t.Parallel()
+	view := &org.Organization{Name: "Nimbus", Units: []*org.Unit{
+		{Name: "Platform", ID: "eng-platform", Lead: "ghost",
+			Roles: []*org.Role{{Name: "Dev", DeclaredHandle: "dev-one"}}},
+		{Name: "Platform", ID: "product-platform",
+			Roles: []*org.Role{{Name: "Dev", DeclaredHandle: "dev-two", Manages: []string{"phantom"}}}},
+	}}
+	view.Normalize()
+	got := map[string]string{}
+	for _, f := range chartapi.Evaluate(t.Context(), view, &config.Company{Name: "Nimbus"}, nil, nil).Findings {
+		if f.Kind == chartapi.KindReferenceDangling {
+			got[f.Names] = f.Object
+		}
+	}
+	if want := map[string]string{"ghost": "eng-platform", "phantom": "dev-two"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("dangling references by what they name = %v, want %v", got, want)
+	}
+}
+
 // A SCHEDULE TWO CORRECT WRITES STRANDED IS NAMED, AS AN ERROR, ON ITS SCOPE.
 //
 // The unit's `each` standup was added while it had an agent; the agent's seat

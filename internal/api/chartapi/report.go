@@ -605,26 +605,39 @@ func sharedIdentityFindings(o *org.Organization, resolve Resolve) []Finding {
 }
 
 // danglingFinding renders one reference that resolves to nothing.
+//
+// THE OBJECT IS THE HOLDER'S ADDRESS — its handle or its key — like every
+// other finding's, and never [org.DanglingRef.From], which is the holder's
+// display NAME: a name is prose two seats or two units may share, so a
+// finding on "Platform" could not say which of two teams held the reference.
 func danglingFinding(ref org.DanglingRef) Finding {
-	var detail string
+	var detail, object string
+	switch {
+	case ref.Unit != nil:
+		object = ref.Unit.Key()
+	case ref.Seat != nil:
+		object = ref.Seat.Handle()
+	default:
+		object = ref.From
+	}
 	switch ref.Kind {
 	case org.RefUnit:
 		detail = fmt.Sprintf("%s says it sits in unit %q and this company has "+
 			"no such unit, so the seat is placed at the org root instead — "+
 			"above every team, which is rarely what anybody meant",
-			ref.From, ref.To)
+			object, ref.To)
 	case org.RefLead:
 		detail = fmt.Sprintf("unit %s is led by %q and this company has no "+
 			"such seat, so the unit's lead is inherited from an ancestor",
-			ref.From, ref.To)
+			object, ref.To)
 	default:
 		detail = fmt.Sprintf("%s manages %q and this company has neither a "+
 			"seat nor a unit by that name, so the entry manages nobody",
-			ref.From, ref.To)
+			object, ref.To)
 	}
 	return Finding{
 		Kind: KindReferenceDangling, Severity: SeverityWarning,
-		Object: ref.From, Names: ref.To, Detail: detail,
+		Object: object, Names: ref.To, Detail: detail,
 		Remedy: "correct the reference, or create what it names — a retired " +
 			"address goes on resolving, so this one names nothing at all",
 	}
