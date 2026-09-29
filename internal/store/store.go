@@ -30,11 +30,13 @@
 // A partition reaches a caller as [PartitionHandle] — which can open a write
 // transaction and pin a [Writer], and which the framework, the appliers and
 // the runtime that hands them out hold — or as [PartitionReader], which can
-// only read and which every other holder is handed. Both resolve the file per
-// call, so a partition closed under its holder answers [ErrNoEstate] rather
-// than a stale pool. Who may write is then a property of the type a holder was
-// given, and TestOnlyTheApplierWritesThePartitions has only the short list of
-// those that hold the first to read.
+// only read and which every other holder is handed: it has no write method,
+// and the engine refuses a write inside its read transaction ([DB.Read]).
+// Both resolve the file per call, so a partition closed under its holder
+// answers [ErrNoEstate] rather than a stale pool. Who may write is then a
+// property of the type a holder was given, and
+// TestOnlyTheApplierWritesThePartitions has only the short list of those that
+// hold the first to read.
 //
 // Everything below is true of each of them separately.
 //

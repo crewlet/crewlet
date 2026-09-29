@@ -405,8 +405,11 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 			`DELETE FROM kb_postings WHERE doc_id = ?`, []any{"page:p.0001"}},
 	}
 
+	// IN A WRITE TRANSACTION, because two of the registered statements are
+	// the index's own removals: a read transaction runs with writes refused
+	// (store.DB.Read), and the engine refuses even to plan a DELETE there.
 	plans := map[string][]string{}
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 		for name, q := range registered {
 			steps, err := explain(t, tx, q.statement, q.args...)
 			if err != nil {

@@ -691,11 +691,13 @@ func (h PartitionHandle) Reader() PartitionReader { return PartitionReader{h: h}
 // PartitionReader is a partition's estate for a holder that only READS it —
 // a domain's reader, its writer's decide, its gates and fence, the search
 // indexer over the documents it indexes, a corpus the embedding duty walks.
-// It has no Tx and no Writer, so a reader cannot become a writer by accident:
-// the rule that only an applier writes a partition is then a property of the
-// type such a holder is handed, before any gate reads the code — and the gate
-// that does read it (internal/store's TestOnlyTheApplierWritesThePartitions)
-// has only to find who holds the other type.
+// It has no Tx and no Writer, and the one transaction it can open, Read's,
+// runs with the engine refusing every write ([DB.Read]) — so a reader cannot
+// become a writer, by accident or through a statement inside its read: the
+// rule that only an applier writes a partition is then a property of the type
+// such a holder is handed, before any gate reads the code, and the gate that
+// does read it (internal/store's TestOnlyTheApplierWritesThePartitions) has
+// only to find who holds the other type.
 type PartitionReader struct{ h PartitionHandle }
 
 // Name is the partition's name.

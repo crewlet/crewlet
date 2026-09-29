@@ -239,14 +239,14 @@ func (w *Writer) Close() error {
 // applier is committing to, otherwise reports a total that does not match the
 // page under it. A transaction is what makes the two statements one answer.
 //
-// IT PASSES sql.TxOptions{ReadOnly: true}, and that option now MEANS
-// something here — but not what its name suggests. [beginModeDriver] reads it
-// as "take the DEFERRED begin": a snapshot with no write lock, which is what
-// a multi-statement read wants and what keeps a dashboard query from
-// excluding the engine's writes for its duration. It does NOT make the driver
-// refuse a write inside fn. The read-only-ness is still the caller's
-// discipline and this doc; what the option buys is the right begin, not an
-// enforcement.
+// IT PASSES sql.TxOptions{ReadOnly: true}, and [beginModeDriver] reads that
+// option twice. It takes the DEFERRED begin: a snapshot with no write lock,
+// which is what a multi-statement read wants and what keeps a dashboard query
+// from excluding the engine's writes for its duration. And it runs fn with
+// `query_only` on, so a write inside fn is REFUSED by the engine rather than
+// committed — the promise [PartitionReader] is handed to every reader of a
+// partition on, which a doc comment alone did not keep (see
+// [beginModeConn.queryOnlyFor]).
 //
 // It carries the same retry as [DB.Tx]: a read transaction can lose a snapshot
 // race too, and a reader that surfaced "database snapshot is stale" to a
