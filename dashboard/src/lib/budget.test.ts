@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { stateTone, waitedOn, windowOf } from "./budget.ts";
+import { waitedOn, windowOf } from "./budget.ts";
 
 function w(over: Partial<BudgetWindow>): BudgetWindow {
   return {
@@ -45,15 +45,7 @@ describe("which window a scope waits on", () => {
   });
 });
 
-describe("drawing a state", () => {
-  // No fraction picks a tone: a refusing window below its ceiling is critical
-  // (a refused charge increments nothing), and a near one is caution.
-  test("each state is its own tone", () => {
-    expect(stateTone("refusing")).toBe("critical");
-    expect(stateTone("near")).toBe("caution");
-    expect(stateTone("ok")).toBe("neutral");
-  });
-
+describe("finding a window", () => {
   test("a period is found by name", () => {
     const week = w({ period: "week" });
     expect(windowOf([w({}), week], "week")).toBe(week);

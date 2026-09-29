@@ -30,6 +30,7 @@
  */
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
+import { readCeiling, tokenBudgetError } from "~/lib/budget.ts";
 import type {
   CompanyDocument,
   ConfigRole,
@@ -212,40 +213,6 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
 // Checking what was typed
 // ---------------------------------------------------------------------------
 
-/**
- * The largest token ceiling this form writes.
- *
- * JAVASCRIPT'S CEILING, NOT THE ENGINE'S. The engine reads a ceiling as a Go
- * `int64` and would take far more, but the value travels as a JSON number and
- * anything above 2^53-1 is rounded on the way through, so what the engine
- * stored would not be what somebody typed. A ceiling that large is a slipped
- * key rather than a budget, so the form refuses it and names the largest one
- * it can write.
- */
-const MAX_TOKEN_CEILING = Number.MAX_SAFE_INTEGER;
-
-/**
- * Why one window's typed ceiling cannot be written, or `undefined` when it
- * can. A shape the form can see is caught here so Apply never records a value
- * the engine would refuse; how the ceilings relate to each other is the
- * engine's to judge, and it says so in its warnings.
- *
- * A 0 IS REFUSED, in the engine's own words. It used to mean "unlimited", and
- * it is also what a ceiling of nothing would be; the engine takes neither
- * reading and asks for the key to be left out, so the form does the same
- * before a save rather than after one.
- */
-export function tokenBudgetError(window: BudgetWindow, typed: string): string | undefined {
-  const value = typed.trim();
-  const none = BUDGET_WINDOWS.find(({ period }) => period === window)!.none.toLowerCase();
-  if (value === "") return undefined;
-  if (!/^\d+$/.test(value)) return `Give a whole number of tokens, or leave it empty for ${none}.`;
-  if (Number(value) === 0) return `A ceiling of 0 is refused: leave it empty for ${none}.`;
-  if (Number(value) > MAX_TOKEN_CEILING)
-    return `Give a ceiling of at most ${MAX_TOKEN_CEILING}, or leave it empty for ${none}.`;
-  return undefined;
-}
-
 /** Every window's refusal, in window order; empty when all can be written. */
 export function tokenBudgetErrors(form: BudgetForm): Partial<Record<BudgetWindow, string>> {
   const out: Partial<Record<BudgetWindow, string>> = {};
@@ -375,9 +342,17 @@ export function seatParts(
   // One part PER WINDOW, never the whole mapping: a colleague's new weekly
   // ceiling survives an update that only changed this seat's daily one, and
   // clearing the last window removes the block (see `setPath`).
-  const ceiling = (typed: string) => {
-    const value = typed.trim();
-    return value === "" ? undefined : Number(value);
+  // READ AS THE BUDGETS SCREEN READS IT (`lib/budget.ts`): `40M` is forty
+  // million here too. A box the reader refuses is one of two things: a typed
+  // value, which the form refuses before Apply so it never reaches here, or a
+  // STORED one the engine refuses (a 0 an older build wrote), which is taken
+  // as the number it is — read as "no value" it would equal an emptied box,
+  // and emptying the box could never remove it.
+  const ceiling = (period: BudgetWindow, typed: string) => {
+    const read = readCeiling(period, typed);
+    if (read.ok) return read.value ?? undefined;
+    const stored = Number(typed.trim());
+    return Number.isFinite(stored) ? stored : undefined;
   };
   const set: FieldSet[] = [
     ...(editableHandle ? textPart(["handle"], initial.handle, form.handle, line) : []),
@@ -408,8 +383,8 @@ export function seatParts(
     ...BUDGET_WINDOWS.flatMap(({ period }) =>
       changed(
         ["token_budget", period],
-        ceiling(initial.tokenBudget[period]),
-        ceiling(form.tokenBudget[period]),
+        ceiling(period, initial.tokenBudget[period]),
+        ceiling(period, form.tokenBudget[period]),
       ),
     ),
     ...textPart(["integrations", "github", "tier"], initial.githubTier, form.githubTier, line),

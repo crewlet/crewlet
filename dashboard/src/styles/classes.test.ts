@@ -553,6 +553,11 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-popover",
+    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Spend › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning — under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-tree-grid__toggle",
     why: "uilet's TreeGrid writes it on a row's expand chevron. styles/screens.css sets it on the first line of a row inside the phone's org chart outline (`.oc-outline`), whose rows are three lines — the kit centres it on the whole row, which put it beside the unit line under the badge rather than beside the seat's name. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",

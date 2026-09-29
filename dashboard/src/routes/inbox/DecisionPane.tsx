@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useRef, useState, type ReactNode } from "react";
-import { ButtonLink, EmptyState, FormField, IconButton, Tag, Textarea } from "@crewlethq/ui";
+import { EmptyState, FormField, IconButton, Tag, Textarea } from "@crewlethq/ui";
 import {
   ActivityGlyph,
   ArrowRightGlyph,
@@ -38,6 +38,7 @@ import { href } from "~/app/router.tsx";
 import { RefusalNote, WriteButton } from "~/components/WriteButton.tsx";
 import { StatusMark } from "~/components/work.tsx";
 import { holdLine, ReassignItem, type SeatCondition } from "~/components/DecisionRow.tsx";
+import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
@@ -621,9 +622,11 @@ function SeatBody({ seat, who, now }: { seat: SeatCondition; who: Who | null; no
           Two ways out: raise the ceiling, or hand the work to somebody with room.
         </p>
         <div className="row gap-2">
-          <ButtonLink size="small" variant="secondary" href={href(["spend", "budgets"])}>
-            Raise budget
-          </ButtonLink>
+          <RaiseBudgetButton
+            handle={seat.row.handle ?? seat.row.role}
+            name={name}
+            window={seat.window}
+          />
           {item && <ReassignItem item={item.key} />}
         </div>
       </div>

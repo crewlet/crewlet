@@ -741,7 +741,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes. Handles live here as they do under `seats/` | |
 | `#/spend` | **Spend › Overview** — the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent, by provider, by team, background workers and the three most expensive tasks (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/spend/tasks` | **Expensive tasks** — the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs | `window=7d\|30d\|90d\|<from>/<to>` |
-| `#/spend/budgets` | **Budgets** — each window's ceiling and what it is refusing. ONE address: Settings lists it as a cross-link | |
+| `#/spend/budgets` | **Budgets** — the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an operator), and what is refusing. ONE address: Settings lists it as a cross-link | |
 | `#/settings` | **Settings › General** — the charter: mission, vision, policies | |
 | `#/settings/integrations` · `#/settings/integrations/{kind}` | **Integrations** *(operator)* | |
 | `#/settings/tools` · `#/settings/tools/{tool}` · `#/settings/tools/servers/{name}` | **Tools** — every tool a seat can call, by origin. Not guarded: the registry is the push every reader gets, and only an MCP server's template reads the guarded configuration, which its panel says itself. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` |
@@ -1488,6 +1488,11 @@ for the keys is the reader who does not know `?` yet.
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
 the platform's own notation with the kit's `Kbd`.
 
+**A bare `Enter` or `Space` on a focused button or link is that control's.**
+The list's `Enter` opens the cursor row only when focus is not on a control
+the platform activates itself: a button inside a row — Restore in the trash, a
+ceiling's pencil on Budgets — is pressed, never skipped for the row behind it.
+
 **A binding names a row, never a key.** A component asks `useKeymap` for the
 rows it answers — `{"peek.close": close}` — and the table says which key that
 is, so no two places can spell one key two ways. `keymap.test.tsx` refuses two
@@ -1734,8 +1739,11 @@ company did.** Top to bottom:
   posts it to #releases" when the ask promised a channel, "CTO continues from
   your answer" when it did not. A coding run parked on a question is answered
   by its turn (`answer_run`), with how long its box is still held. A seat the
-  engine stopped on a spent budget offers **Raise budget** (the one budgets
-  address) and **Reassign** of the item it was on. An ask with no options is
+  engine stopped on a spent budget offers **Raise budget** — a dialog of that
+  scope's three ceilings, opened on the seat's own when its own window is the
+  one refusing and on the company's when the company's is, with the refusing
+  window focused (see [Spend › Budgets](#spend--budgets-raised-in-place)) —
+  and **Reassign** of the item it was on. An ask with no options is
   answered in words on its row: **Reply** opens the same dialog a parked run's
   **Answer** does and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
@@ -4790,6 +4798,44 @@ under it waits for an answer that will never be asked. On a phone each task is
 the overview card's compact row — key and title with what drove it under, the
 tokens at the end — rather than a labelled card per task.
 
+## Spend › Budgets, raised in place
+
+`#/spend/budgets` is every scope's three calendar windows on the company clock
+— the day, the ISO week and the month — from the `budgets` answer: what each
+has spent, its ceiling or **No ceiling**, when it resets and, while the gate is
+refusing it, since when. **The company** comes first, as three tiles, because
+everything a seat spends is the company's spend too and its ceiling binds every
+seat at once; **Agent seats** follow as one table with a column per window, so
+the one seat near its ceiling is found down a column. A window's bar is a kit
+`Meter` handed the engine's `state` — the page states the engine's
+`near_fraction` in its lede and divides nothing itself — and a window with no
+ceiling draws no bar, because a bar needs something to be a fraction of. A
+counter nobody could read (`durable: false`) says so and draws no figures.
+
+**Every ceiling is editable in place by an operator.** The pencil beside it
+turns the figure into a field that takes the spelling the screen draws — `40M`,
+`2.5M`, `750k`, or the digits — and **empty for no ceiling**; a 0 is refused
+before anything is sent, in the engine's terms (empty is the only "none"). A
+save is **checked first**, against the revision it was read from, and only the
+warnings the change *introduces* are shown — a seat ceiling at or above the
+company's, which can never refuse a turn, is the one this screen exists to
+catch — with **Save anyway** to store it regardless. The company's ceilings are
+written as a merge patch of the windows that changed (`null` removes one); a
+seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
+request with `dry_run=true`), because a patch cannot address one seat in a
+roster. The revision's summary says whose ceiling, which window, and from what
+to what. After a save the figure shows the new ceiling marked **applying…**
+until this node reports the saved epoch, and then re-reads. A conflict saves
+nothing and offers **Reload**; so does a request that may have landed. The
+pencils are drawn for every reader and disabled, with the reason said once
+above the page, for a reader without an operator credential.
+
+**There is no reset.** A window's `used` is what it spent; the room comes back
+when it turns over, or now by raising its ceiling. Home's and the Inbox's
+**Raise budget** open the same write as a dialog of one scope's three ceilings
+(`RaiseBudgetDialog`), each field captioned with what that window has spent and
+when it resets.
+
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be
@@ -5057,8 +5103,12 @@ a tool arrives in it with the control that sends it. The controls
 A change to the **company document** — a seat, a budget ceiling, an MCP
 server, a model — is not an act: it is a new configuration revision, and every
 screen that makes one goes through `protocol/configWrite.ts` (read the document
-and its entity tag, dry-run a merge patch, save it with its audit summary, or
-replace one entity), always conditional on the revision it edited.
+and its entity tag, or one entity and the same tag; dry-run a merge patch or an
+entity replacement; save either with its audit summary), always conditional on
+the revision it edited. Its gate is the operator credential rather than a seat
+binding — `/config` is guarded by the API token and nothing narrower — so its
+controls ask `useConfigWriteAccess()`, which is `viewer.operator`, and are
+disabled with that sentence for anybody else.
 `protocol/configAnswer.ts` is the one reading of a `/config` refusal — a
 conflict to re-read, the drain gate's certain `503`, a request that may have
 landed, or the problems the document has — which the org builder's model

@@ -35,9 +35,10 @@
 
 import { firstLine } from "~/lib/format.ts";
 import { useMemo, type ReactNode } from "react";
-import { ButtonLink, EMPTY_VALUE } from "@crewlethq/ui";
+import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
+import { RaiseBudgetButton } from "./budgetWrite.tsx";
 import { AnswerAskButtons, AnswerRunButton, AssignButton, ReplyAskButton } from "./writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -432,11 +433,9 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
       sub={sub || EMPTY_VALUE}
       actions={
         <>
-          {/* RAISING A CEILING IS A CHANGE TO THE COMPANY'S CONFIGURATION,
-              made on the one budgets address where every window is drawn. */}
-          <ButtonLink size="small" variant="secondary" href={href(["spend", "budgets"])}>
-            Raise budget
-          </ButtonLink>
+          {/* RAISED WHERE IT IS REPORTED: the dialog opens on the scope
+              that is refusing this seat, the stopped window focused. */}
+          <RaiseBudgetButton handle={handle} name={who.name} window={seat.window} />
           {item && <ReassignItem item={item.key} />}
         </>
       }

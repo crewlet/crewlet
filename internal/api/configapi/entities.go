@@ -386,9 +386,21 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 // The same write [Service.ApplyEntity] performs, through the same draft, with
 // the refusals an HTTP caller needs spelled out: which entity was missing, and
 // why a rename is not an edit.
+//
+// With `dry_run=true` it is the same request, checked in the same order, that
+// stores and activates nothing — exactly as the whole-document writes are.
+// An entity write needs its check MORE than they do, not less: its caller
+// never sees the rest of the document, so the whole-company validation behind
+// the splice is the only place it can learn that a seat fine on its own leaves
+// the company invalid, or that a ceiling it raised now sits above the
+// company's own (a warning, which only a check can show before the save).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		dryRun, ok := dryRunOf(w, r)
+		if !ok {
+			return
+		}
 		body, err := readBody(w, r)
 		if err != nil {
 			refuseBody(w, err)
@@ -396,8 +408,9 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		// The same rule the whole-document write has, and for the same
 		// reason: a list of revisions with no summaries is a list of
-		// uuids. A per-entity write can say more, so the hint does.
-		summary, sent, ok := takeSummary(w, r, body, true,
+		// uuids. A per-entity write can say more, so the hint does. A
+		// check stores nothing, so it needs none.
+		summary, sent, ok := takeSummary(w, r, body, !dryRun,
 			"this write needs an audit summary: the X-Summary header, "+
 				"or a top-level _summary key in the body. Name what changed "+
 				"about "+kind+"/"+id)
@@ -432,6 +445,10 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
+			return
+		}
+		if dryRun {
+			writeChecked(w, prepared)
 			return
 		}
 		applied, err := s.commit(r.Context(), prepared, summary, authorOf(r))

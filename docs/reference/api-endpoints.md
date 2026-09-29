@@ -321,7 +321,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 
 #### Dry runs
 
-`PUT /config?dry_run=true` and `PATCH /config?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, so a check is always exactly the write a save would send.
+`PUT /config?dry_run=true`, `PATCH /config?dry_run=true` and `PUT /config/{kind}/{id}?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, and its Budgets screen one before every ceiling it saves, so a check is always exactly the write a save would send. An entity write needs its check more than the whole-document writes do: its caller never sees the rest of the document, so the whole-company validation behind the splice is the only place it learns that a seat fine on its own leaves the company invalid, or that a ceiling it raised now sits above the company's (a warning, which only a check shows before the save).
 
 ```bash
 curl -X PATCH "https://engine.example.com/config?dry_run=true" \
@@ -400,7 +400,7 @@ Four collections, `GET` and `PUT`:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
-| `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth |
+| `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
 | `PUT` | `/config/units/{name}` | Replace one org unit |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |

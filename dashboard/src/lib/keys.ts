@@ -61,6 +61,20 @@ export function isTyping(): boolean {
   return el.hasAttribute("tabindex") && el.hasAttribute("role");
 }
 
+/**
+ * Whether the focused element is a control the platform activates on Enter:
+ * a button, a link, a disclosure summary, or an element that says it is one
+ * of those. See the Enter rule in [useKeyChords].
+ */
+export function isActivatable(): boolean {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  if (el instanceof HTMLButtonElement || el.tagName === "SUMMARY") return true;
+  if (el instanceof HTMLAnchorElement) return el.hasAttribute("href");
+  const role = el.getAttribute("role");
+  return role === "button" || role === "link";
+}
+
 /** One chord and what it does. */
 export interface Chord {
   /** The key, as `KeyboardEvent.key` lowercased. `"escape"`, `"["`, `"j"`. */
@@ -146,6 +160,15 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
       const key = e.key.toLowerCase();
       const meta = e.metaKey || e.ctrlKey;
       const typing = isTyping();
+
+      // A BARE ENTER OR SPACE ON A CONTROL IS THAT CONTROL'S. The platform
+      // presses a focused button or follows a focused link on exactly these
+      // keys, and a page chord on the same key called `preventDefault` first:
+      // Enter on a button inside a grid row — Restore in the trash, the
+      // ceiling editor on Budgets — opened the ROW in the peek and never
+      // pressed the button, so the one control a keyboard reader had reached
+      // was the one thing the key did not do.
+      if (!meta && (key === "enter" || key === " ") && isActivatable()) return;
 
       // A PREFIX IN FLIGHT CONSUMES THE NEXT KEY, matched or not. Half a
       // sequence that fell through to the plain chords would make `g` then

@@ -41,6 +41,20 @@ judges each window's `state` — `ok`, `near` at 90% of the ceiling, or `refusin
 of room waits in, and [Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows)
 for how the counter is kept.
 
+### Raising a ceiling from the dashboard
+
+**Spend › Budgets** (`#/spend/budgets`) draws every scope's day, week and month
+with what it has spent and its ceiling, and an operator raises a ceiling there
+in place: the pencil beside it takes `50M`, `2.5M` or the digits, and an empty
+field removes the ceiling. Every save is checked against the whole company
+first, so a ceiling that could never refuse a turn — a seat's at or above the
+company's — is shown as a warning before it is stored. Home and the Inbox offer
+the same change as **Raise budget** on a seat the engine stopped, opened on the
+scope that is actually refusing it. It is an ordinary configuration revision,
+recorded with a summary such as "Raise Agent PM's daily token ceiling from 2M
+to 5M", and each node enforces it once it has applied that epoch. See
+[Dashboard design § Spend › Budgets](../reference/dashboard-design.md#spend--budgets-raised-in-place).
+
 ## The spend rollup, and why it has two sources
 
 **The live 24 hours** are held by each node's live projection: the phase records

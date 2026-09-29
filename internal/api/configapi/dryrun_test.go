@@ -426,3 +426,87 @@ func problemsOf(t *testing.T, res interface{ Result() *http.Response }) []config
 	}
 	return body.Problems
 }
+
+// AN ENTITY WRITE HAS A CHECK TOO, and it is the same write storing nothing.
+//
+// The Budgets screen raises one seat's ceiling through `PUT
+// /config/roles/{handle}` and checks it first, because the caller of an entity
+// write never sees the rest of the document: the whole-company validation
+// behind the splice is the only place it can learn that a ceiling it typed sits
+// above the company's own and will never refuse a turn. Without the parameter
+// the route stored every check as a revision and an epoch; with it read after
+// the body, a mistyped value was a write.
+func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
+	t.Parallel()
+	capped := strings.Replace(companyDoc, "name: Acme\n", "name: Acme\ntoken_budget:\n  day: 1000\n", 1)
+	s := newCountedSurface(t)
+	base := s.seed(t, capped, nil)
+	s.forget()
+
+	role := entityOf(t, s.surface, configapi.EntityRoles, "ceo")
+	role["token_budget"] = map[string]any{"day": 5000}
+	raised, err := json.Marshal(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No summary: nothing is stored to record one on.
+	res := s.do(t, http.MethodPut, "/config/roles/ceo?dry_run=true", string(raised), nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("an entity check = %d, want 200: %s", res.Code, res.Body)
+	}
+	var answer struct {
+		Valid    bool             `json:"valid"`
+		Base     string           `json:"base_revision_id"`
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode: %v (%s)", err, res.Body)
+	}
+	if !answer.Valid || answer.Base != base {
+		t.Errorf("valid = %v, base = %q, want true and %q", answer.Valid, answer.Base, base)
+	}
+	idle := slices.IndexFunc(answer.Warnings, func(w config.Warning) bool {
+		return w.Path == "roles[0].token_budget.day" && w.Seat == "ceo"
+	})
+	if idle < 0 {
+		t.Errorf("warnings = %+v, want the seat ceiling above the company's, located", answer.Warnings)
+	}
+	if got := s.writes(); got != (writeCounts{}) {
+		t.Errorf("an entity check wrote %+v, want nothing", got)
+	}
+	if budget := entityOf(t, s.surface, configapi.EntityRoles, "ceo")["token_budget"]; budget != nil {
+		t.Errorf("the check changed the seat: token_budget = %v", budget)
+	}
+
+	// A refusal is the write's own, located at the key to remove.
+	role["token_budget"] = map[string]any{"day": 0}
+	zero, err := json.Marshal(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := s.do(t, http.MethodPut, "/config/roles/ceo?dry_run=true", string(zero), nil)
+	if refused.Code != http.StatusBadRequest ||
+		!strings.Contains(refused.Body.String(), "roles[0].token_budget.day") {
+		t.Errorf("a check of a 0 ceiling = %d %s, want 400 located at the key", refused.Code, refused.Body)
+	}
+	if got := s.writes(); got != (writeCounts{}) {
+		t.Errorf("a refused entity check wrote %+v, want nothing", got)
+	}
+
+	// And a mistyped parameter is refused before the body is read.
+	if bad := s.do(t, http.MethodPut, "/config/roles/ceo?dry_run=yes", string(raised), nil); bad.Code != http.StatusBadRequest ||
+		decode(t, bad)["error"] != "invalid_query" {
+		t.Errorf("dry_run=yes = %d %s, want 400 invalid_query", bad.Code, bad.Body)
+	}
+
+	// THE FAKES CAN COUNT: the same request as a write makes one of each.
+	written := s.do(t, http.MethodPut, "/config/roles/ceo", string(raised),
+		map[string]string{"X-Summary": "raise the CEO's daily ceiling"})
+	if written.Code != http.StatusCreated {
+		t.Fatalf("the entity write = %d, want 201: %s", written.Code, written.Body)
+	}
+	if got := s.writes(); got != oneWrite {
+		t.Errorf("an entity write counted %+v, want one of each", got)
+	}
+}

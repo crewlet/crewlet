@@ -32,7 +32,7 @@ import { modules } from "../test/source.ts";
  * `Tag` of `variant="brand"`, and `Avatar`'s `ring="brand"`, the accent drawn
  * round a badge to say "this one is you". `StatusDot`'s `tone` would be
  * caught by the same literal. Out of scope on
- * purpose: `Meter`'s and `MeterCell`'s `tone="accent"`, which is a BAR'S FILL
+ * purpose: `Meter`'s `tone="accent"`, which is a BAR'S FILL
  * rather than a pill's ground and a different family — the accent list includes
  * the primary button for the same reason — and `uiletTone(toneOf(...))`, which
  * is dynamic and unreadable statically. A floor, not a proof.

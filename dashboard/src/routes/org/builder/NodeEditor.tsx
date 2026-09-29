@@ -1285,7 +1285,7 @@ function ModelSection({
           onChange={(typed) => onBudget(period, typed)}
           required={false}
           disabled={disabled}
-          help={`Tokens this seat may spend in one ${period} on the company clock. Empty is ${none.toLowerCase()}.`}
+          help={`Tokens this seat may spend in one ${period} on the company clock, as 40000000 or 40M. Empty is ${none.toLowerCase()}.`}
           error={budgetError(period)}
         />
       ))}

@@ -9126,3 +9126,149 @@ a.live-row:focus-visible {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-secondary);
 }
+
+/* ---------------------------------------------------------------------------
+   Spend › Budgets
+   ------------------------------------------------------------------------ */
+
+.budgets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.budget-readonly {
+  margin: 0 0 var(--spacing-3);
+  color: var(--color-text-tertiary);
+}
+/* THE COMPANY'S THREE WINDOWS side by side — the same elevated rung as the
+   Spend overview's tiles, so a window reads as the same object on both
+   screens — stacking below the width where a tile's figure, bar and ceiling
+   editor no longer fit a third of the card. */
+.budget-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 var(--spacing-4) var(--spacing-4);
+}
+@container page (width < 760px) {
+  .budget-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.budget-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+}
+.budget-tile-head,
+.budget-tile-figure,
+.budget-tile-foot {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.budget-tile-head {
+  justify-content: space-between;
+}
+.budget-tile-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+/* THE FOOT SITS ON THE TILE'S FLOOR, so the three ceilings line up across
+   the row whatever a window above them holds. */
+.budget-tile-foot {
+  margin-top: auto;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+}
+.budget-figure {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  color: var(--color-text-primary);
+}
+/* THE TRACK A BAR WOULD HAVE, drawn as a hairline: a window with no ceiling
+   keeps the tile's rhythm, and a line is not mistaken for an empty bar. */
+.budget-track-none {
+  height: 6px;
+  background: repeating-linear-gradient(
+      to right,
+      var(--color-border-default) 0 4px,
+      transparent 4px 8px
+    )
+    center / 100% 1px no-repeat;
+}
+.budget-refused {
+  color: var(--color-feedback-danger-ink);
+}
+
+/* A seat's window in its column: the spend and the ceiling on one line, the
+   bar under them. */
+.budget-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.budget-cell-line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.budget-cell-used {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+/* The ceiling, as a figure with its pencil or as the field that edits it. */
+.ceiling {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.ceiling-value.muted {
+  color: var(--color-text-tertiary);
+}
+.ceiling-applying {
+  margin-left: var(--spacing-1);
+  color: var(--color-text-tertiary);
+}
+/* The panel a pencil opens: wide enough for the engine's own sentence about
+   a ceiling that can never refuse, and no wider than a phone leaves room for. */
+/* Taller than the kit's 360px panel: a check's warning is a paragraph, and a
+   panel that scrolled it hid Save anyway below the fold of a popover. */
+.crewlet-popover.ceiling-pop {
+  width: min(22rem, calc(100vw - 2 * var(--spacing-4)));
+  max-height: min(34rem, 85vh);
+}
+.ceiling-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+}
+.ceiling-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+}
+.ceiling-status:empty {
+  display: none;
+}
+.ceiling-warnings {
+  margin: 0 0 var(--spacing-2);
+  padding-left: 1.1em;
+}

@@ -478,10 +478,13 @@ describe("the decisions", () => {
     });
     await settle();
     expect(screen.getByText("DevRel stopped — daily token budget exhausted")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Raise budget" }).getAttribute("href")).toBe(
-      "#/spend/budgets",
-    );
     expect(tile("Waiting on your decision").textContent).toContain("1");
+    // RAISED IN PLACE: the button opens the seat's own ceilings — its day is
+    // the window refusing — rather than sending the reader to find it.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Raise budget" }));
+    });
+    expect(screen.getByRole("dialog", { name: "Raise DevRel's budget" })).toBeTruthy();
   });
 
   // A DECISION WAITS ON A READER ONLY WHERE THEY CAN MAKE IT. A stopped seat

@@ -4,8 +4,13 @@
  * Which reason a control is disabled with, in the order a person clears them.
  */
 
-import { expect, test } from "vitest";
-import { WRITE_REASONS, writeAccess } from "./useWriteAccess.ts";
+import { describe, expect, test } from "vitest";
+import {
+  CONFIG_WRITE_REASONS,
+  WRITE_REASONS,
+  configWriteAccess,
+  writeAccess,
+} from "./useWriteAccess.ts";
 import type { ViewerState } from "./viewer.ts";
 
 const BOUND: ViewerState = {
@@ -75,4 +80,49 @@ test("a hold is the screen's sentence, and it ranks after everything a person ca
   ).toMatchObject({ block: "unbound" });
   // AND NO HOLD IS NO HOLD: the empty value of the context is `null`.
   expect(writeAccess("set_pins", BOUND, true, null).can).toBe(true);
+});
+
+describe("changing the company's configuration", () => {
+  const viewer = (over: Partial<ViewerState>): ViewerState => ({
+    operatorID: "U0",
+    operator: true,
+    handle: "",
+    name: "",
+    acts: [],
+    kind: "",
+    project: "",
+    unbound: true,
+    anonymous: false,
+    loading: false,
+    asking: false,
+    ...over,
+  });
+
+  // THE OPERATOR CREDENTIAL, NOT A BINDING: `/config` is guarded by the token
+  // alone, so an unbound operator token may change a ceiling it could never
+  // answer an ask with — and a bound person the engine does not take as an
+  // operator may not.
+  test("is the engine's operator answer, not the seat binding", () => {
+    expect(configWriteAccess(viewer({ unbound: true }), true)).toEqual({ can: true });
+    expect(
+      configWriteAccess(viewer({ operator: false, handle: "jane", unbound: false }), true),
+    ).toEqual({
+      can: false,
+      block: "not_operator",
+      reason: CONFIG_WRITE_REASONS.not_operator,
+    });
+  });
+
+  test("in the order a person clears them", () => {
+    expect(configWriteAccess(viewer({}), false)).toMatchObject({ block: "offline" });
+    expect(configWriteAccess(viewer({ loading: true }), true)).toMatchObject({ block: "loading" });
+    expect(configWriteAccess(viewer({ anonymous: true, operator: false }), true)).toMatchObject({
+      block: "anonymous",
+    });
+    expect(configWriteAccess(viewer({}), true, "these are Rui's")).toEqual({
+      can: false,
+      block: "held",
+      reason: "these are Rui's",
+    });
+  });
 });

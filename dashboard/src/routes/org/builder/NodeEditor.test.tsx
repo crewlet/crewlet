@@ -624,7 +624,9 @@ describe("seat fields", () => {
     type("Weekly token ceiling", "lots");
     expect(applyRefuses()).toBe(true);
     expect(
-      screen.getByText("Give a whole number of tokens, or leave it empty for no weekly ceiling."),
+      screen.getByText(
+        "Give a whole number of tokens (40000000, or 40M), or leave it empty for no weekly ceiling.",
+      ),
     ).toBeDefined();
   });
 

@@ -9,6 +9,7 @@
  * applies what the form says.
  */
 
+import { tokenBudgetError } from "~/lib/budget.ts";
 import { describe, expect, test } from "vitest";
 import type { ConfigRole } from "~/protocol/index.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
@@ -23,7 +24,6 @@ import {
   renames,
   seatForm,
   seatParts,
-  tokenBudgetError,
   tokenBudgetErrors,
   unitForm,
   unitParts,
@@ -229,7 +229,7 @@ describe("a seat", () => {
       "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
     );
     expect(tokenBudgetError("week", "12.5")).toBe(
-      "Give a whole number of tokens, or leave it empty for no weekly ceiling.",
+      "Give a whole number of tokens (40000000, or 40M), or leave it empty for no weekly ceiling.",
     );
     expect(tokenBudgetError("month", "-1")).not.toBeUndefined();
     // The ceiling is what a JSON number carries without rounding, and the
@@ -241,7 +241,8 @@ describe("a seat", () => {
     expect(tokenBudgetError("day", "")).toBeUndefined();
     expect(tokenBudgetErrors({ day: "0", week: "", month: "x" })).toEqual({
       day: "A ceiling of 0 is refused: leave it empty for no daily ceiling.",
-      month: "Give a whole number of tokens, or leave it empty for no monthly ceiling.",
+      month:
+        "Give a whole number of tokens (40000000, or 40M), or leave it empty for no monthly ceiling.",
     });
   });
 

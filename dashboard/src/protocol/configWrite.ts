@@ -11,8 +11,10 @@
  *  - [dryRunPatch] validates a merge patch against that revision and stores
  *    nothing;
  *  - [savePatch] stores it, carrying the audit `_summary` every revision needs;
- *  - [putEntity] replaces one addressable entity (a seat, a unit, a provider,
- *    an MCP server) with the same validation of the whole document behind it.
+ *  - [getEntity] reads one addressable entity (a seat, a unit, a provider, an
+ *    MCP server) with the tag of its revision, [dryRunEntity] checks a
+ *    replacement of it, and [putEntity] stores one — each with the same
+ *    validation of the whole document behind it.
  *
  * EVERY WRITE STATES THE REVISION IT EDITED (`If-Match`), so a colleague's
  * save in between is a `conflict` to re-read rather than an overwrite. And
@@ -195,6 +197,80 @@ export async function savePatch(
 
 /** The collections `PUT /config/{kind}/{id}` addresses (`contract/config.ts` holds the list). */
 export type EntityPath = "roles" | "units" | "llm-providers" | "mcp-servers";
+
+/** One entity of the active revision, or why there is none to read. */
+export type EntityRead =
+  | {
+      readonly kind: "entity";
+      /** The entity itself, redacted — the body the write takes back. */
+      readonly entity: Record<string, unknown>;
+      /** The DOCUMENT's tag: an entity is a slice of one revision. */
+      readonly etag: string;
+    }
+  /** Nothing in the active revision carries this id, or nothing is active. */
+  | { readonly kind: "missing" }
+  | ConfigRefusal;
+
+/**
+ * Read one entity of the active revision, with the tag of the revision it was
+ * read from — the pair [putEntity] and [dryRunEntity] take back.
+ */
+export async function getEntity(
+  kind: EntityPath,
+  id: string,
+  signal: AbortSignal,
+): Promise<EntityRead> {
+  const answer = await answerOf(
+    rest.request("GET", `/config/${kind}/${encodeURIComponent(id)}`, { signal }),
+  );
+  if (answer.status === 200 && isRecord(answer.body) && answer.etag) {
+    return { kind: "entity", entity: answer.body, etag: answer.etag };
+  }
+  if (answer.status === 404) return { kind: "missing" };
+  if (answer.status >= 200 && answer.status < 300) {
+    // The same reading as [getConfig]'s: a success no write can be
+    // conditional on is refused rather than taken as the entity.
+    return {
+      kind: "problems",
+      problems: [
+        {
+          path: "",
+          segments: null,
+          kind: "invalid",
+          message: "The engine answered the entity without naming its revision.",
+        },
+      ],
+      derived: null,
+      code: "",
+      hint: "",
+    };
+  }
+  return classifyConfigRefusal(answer);
+}
+
+/**
+ * Validate a replacement of one entity against the revision `etag` names —
+ * the whole company, as [putEntity] would store it. Stores nothing, and
+ * carries no summary for the reason [dryRunPatch] gives.
+ */
+export async function dryRunEntity(
+  kind: EntityPath,
+  id: string,
+  entity: Record<string, unknown>,
+  etag: string,
+  signal: AbortSignal,
+): Promise<ConfigWriteOutcome> {
+  return outcomeOf(
+    await answerOf(
+      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+        query: { dry_run: "true" },
+        headers: { "If-Match": etag },
+        body: entity,
+        signal,
+      }),
+    ),
+  );
+}
 
 /**
  * Replace one entity of the revision `etag` names. The engine splices it in

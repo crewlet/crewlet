@@ -1777,34 +1777,6 @@ a.cell-seat:hover {
   color: var(--color-text-muted);
 }
 
-.cell-meter {
-  display: inline-block;
-  width: 64px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--color-surface-elevated);
-  overflow: hidden;
-}
-
-.cell-meter-fill {
-  display: block;
-  height: 100%;
-  background: var(--color-brand-accent);
-}
-
-.cell-meter-fill.positive {
-  background: var(--color-feedback-success);
-}
-.cell-meter-fill.caution {
-  background: var(--color-feedback-warning);
-}
-.cell-meter-fill.critical {
-  background: var(--color-feedback-danger);
-}
-.cell-meter-fill.neutral {
-  background: var(--color-text-muted);
-}
-
 /* ---- The page's own one-line explanation --------------------------------- */
 
 .page-note {

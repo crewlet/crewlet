@@ -331,43 +331,6 @@ export function TagsCell({ tags, max = 3 }: { tags?: string[] | null; max?: numb
 }
 
 /**
- * A small proportion bar, for a cell that is a fraction of something.
- *
- * OURS, BECAUSE A COLUMN OF BARS HAS TO LINE UP. This is a fixed 64px bar
- * drawn inline inside a grid cell, and uilet's `Meter` is a block flex column
- * that takes the width it is given: dropped into the Budgets column it would
- * be 120px on that screen and something else on the next, so two bars at the
- * same fraction would be different lengths and the column would stop being
- * readable at a glance. `Meter` publishes no width, no intrinsic size and no
- * inline form — its `compact` size only drops the legend a type step, and the
- * legend is hidden here anyway.
- *
- * What their Meter has that ours does not is `role="meter"` with
- * `aria-valuenow`/`valuemin`/`valuemax`, where ours is a `role="img"` named by
- * its label. That is worth having and is the thing to take from it if `Meter`
- * ever grows a fixed-width form.
- */
-export function MeterCell({
-  used,
-  max,
-  label,
-  tone = "accent",
-}: {
-  used: number;
-  max: number;
-  label: string;
-  tone?: Tone;
-}) {
-  if (!(max > 0)) return <EmptyValue label="Nothing to measure against" />;
-  const pct = Math.max(0, Math.min(100, (used / max) * 100));
-  return (
-    <span className="cell-meter" title={label} role="img" aria-label={label}>
-      <span className={cx("cell-meter-fill", tone)} style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
-
-/**
  * Plain text with a leading mark, truncated.
  *
  * TWO SPELLINGS OF ONE SLOT, because a COLUMN's mark and a ROW's mark are
