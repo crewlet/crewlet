@@ -253,6 +253,29 @@ func TestEstateMapNamesEveryPartitionThatIsNotSettled(t *testing.T) {
 	}
 }
 
+// A MOVE THE MEMBERS LEFT NO ROOM FOR SAYS IT WAITS: with data-c taken out, the
+// two members left hold tracker.001's two copies, so its move off data-b is on
+// the map but not in effect — data-b is back in the target — and the line says
+// so rather than reading as a move the target ignores.
+func TestEstateMapSaysWhichMovesWait(t *testing.T) {
+	node := newFakeEstateNode(t)
+	cfg := bootstrapForURL(t, node.server.URL)
+	out, _, err := cli(t, "estate", "map", cfg)
+	if err != nil || !strings.Contains(out, "off data-b (ops)") || strings.Contains(out, "waiting") {
+		t.Fatalf("a move in effect printed (%v):\n%s", err, out)
+	}
+	node.mu.Lock()
+	node.state, err = partmap.Out(node.state, "data-c", "ops", "", objectsAt)
+	node.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = cli(t, "estate", "map", cfg)
+	if err != nil || !strings.Contains(out, "off data-b (ops, waiting)") {
+		t.Errorf("a waiting move printed (%v):\n%s", err, out)
+	}
+}
+
 // THE STATES WITH NOTHING TO SHOW say their sentence: a map not written yet
 // is a wait, and a map nobody could read is a failure.
 func TestEstateMapSaysTheStatesWithNothingToShow(t *testing.T) {

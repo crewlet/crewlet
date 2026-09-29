@@ -167,7 +167,7 @@ there is no map, so only `estate_view_stale` can fire.
 | `crewlet estate in <node>` | Puts it back, or vouches for a node the map removed | the node |
 | `crewlet estate hold -for D` | No member is removed for being gone, for at most a day | the map's generation |
 | `crewlet estate release` | Ends the hold | the map's generation |
-| `crewlet estate move <partition> -from <node>` | That partition's copy on that node is rebuilt on the member its ranking offers next, then released; refused where no member is left to rebuild on | the node |
+| `crewlet estate move <partition> -from <node>` | That partition's copy on that node is rebuilt on the member its ranking offers next, then released; refused where no member is left to rebuild on, and waits — the node back in the target — while members that left since leave none | the node |
 | `crewlet estate move … -cancel` | Lifts the move | the node |
 
 A hold and a release act on the whole map rather than on one node, so they
@@ -176,6 +176,14 @@ only on that map: one confirmed for another fleet's, or for this one's before
 it was written again from nothing, is refused with nothing written. The
 generation is judged against the stored map, never before it: where there is
 no map there is no generation to repeat, and the refusal is the one that says
-why. No gesture
+why.
+
+A move **moves a copy and never drops one**. It is refused where no other
+member could hold the partition's copy, and the members can change after it: a
+member taken out or removed for being gone can leave the others unable to hold
+every copy without the node the partition was moved off. Then that node is in
+the partition's target again — the partition keeps the company's copies like
+every other one — and the move stays on the map, **waiting**, until a member
+returns and it takes effect. No gesture
 moves the epoch; the maintainer's next tick moves the holders toward the new
 targets.

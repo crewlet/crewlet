@@ -16,7 +16,9 @@
 // Two halves share the record, each with its own reader. The TARGET is where
 // each partition should be — a pure function of the members, their shares and
 // the operator's moves, drawn by internal/placement under the estate map's own
-// salt. The HOLDER TABLE is where each partition is — who is joining it,
+// salt, and always [Map.Size] nodes: a move whose node the other members could
+// not do without waits rather than leaving its partition a copy short
+// ([Map.MoveWaiting]). The HOLDER TABLE is where each partition is — who is joining it,
 // serving it or leaving it, and since which epoch — which is what routers
 // route by. The maintainer moves the second toward the first, one
 // make-before-break step at a time.

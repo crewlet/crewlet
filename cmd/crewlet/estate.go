@@ -156,9 +156,10 @@ type estatePartitionView struct {
 		Able    bool   `json:"able"`
 	} `json:"holders"`
 	Moves []struct {
-		Node   string `json:"node"`
-		By     string `json:"by"`
-		Reason string `json:"reason"`
+		Node    string `json:"node"`
+		By      string `json:"by"`
+		Reason  string `json:"reason"`
+		Waiting bool   `json:"waiting"`
 	} `json:"moves"`
 }
 
@@ -395,11 +396,17 @@ func estateHolders(p estatePartitionView) string {
 	return strings.Join(out, " ")
 }
 
-// estateMoves is a partition's moves as `off node (by)`.
+// estateMoves is a partition's moves as `off node (by)` — `(by, waiting)` for
+// one the members left could not hold the copy for, whose node is in the
+// target again until a member returns.
 func estateMoves(p estatePartitionView) string {
 	var out []string
 	for _, m := range p.Moves {
-		out = append(out, "off "+m.Node+" ("+m.By+")")
+		who := m.By
+		if m.Waiting {
+			who += ", waiting"
+		}
+		out = append(out, "off "+m.Node+" ("+who+")")
 	}
 	if len(out) == 0 {
 		return "-"

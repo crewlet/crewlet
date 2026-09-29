@@ -251,6 +251,17 @@ describe("the gestures", () => {
     expect(sent[0]!.searchParams.get("confirm")).toBe("data-c");
   });
 
+  test("a move the members left no room for says it waits", () => {
+    view(state("waiting"));
+    // THE MOVE IS ON THE MAP AND NOT IN EFFECT: data-b is out, so the two
+    // members left hold tracker.002's two copies, data-c among them.
+    const move = screen.getByRole("button", { name: "Off data-c · waiting · cancel" });
+    expect(move.getAttribute("title")).toMatch(/no other member can hold its copy/);
+    cleanup();
+    view(state("placed"));
+    expect(screen.getByRole("button", { name: "Off data-c · cancel" })).toBeTruthy();
+  });
+
   test("a refusal says what is wrong and what to do", async () => {
     const refusal = golden.refusals.nowhere_to_move!;
     engine({ status: refusal.status, body: refusal.body });

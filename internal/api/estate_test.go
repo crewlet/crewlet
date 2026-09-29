@@ -530,11 +530,22 @@ func renderEstateScenarios(t *testing.T) []byte {
 	held := estateFleet()
 	held.Hold = &membership.Hold{Until: estateSince.Add(2 * time.Hour), By: "founder",
 		Reason: "kernel upgrade", At: estateSince}
+	// THE FLEET WITH data-b TAKEN OUT AS WELL: two members left to place
+	// two copies on, so tracker.002's move off data-c has nobody to rebuild
+	// the copy on and waits, data-c back in its target.
+	waiting, err := partmap.Out(fleet, "data-b", "founder", "decommission", estateSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !waiting.Map.MoveWaiting(statelog.PartitionID{Space: statelog.SpaceTracker, Index: 2}, "data-c") {
+		t.Fatal("the premise: with data-b out, the move off data-c waits")
+	}
 	presence, wholeEstate := wholeLeases(t)
 	maps := map[string]queries.FleetEstate{
-		"placed": queries.RenderEstate(fleet, estateLeases(t), estateSince),
-		"held":   queries.RenderEstate(held, estateLeases(t), estateSince),
-		"whole":  queries.RenderEstateWhole(engine.LayoutZero(), presence, wholeEstate),
+		"placed":  queries.RenderEstate(fleet, estateLeases(t), estateSince),
+		"held":    queries.RenderEstate(held, estateLeases(t), estateSince),
+		"waiting": queries.RenderEstate(waiting, estateLeases(t), estateSince),
+		"whole":   queries.RenderEstateWhole(engine.LayoutZero(), presence, wholeEstate),
 	}
 	// THE THREE STATES WITH NOTHING TO SHOW, as the question answers them.
 	for name, src := range map[string]*fakeEstate{

@@ -213,7 +213,8 @@ type PlacedEstate struct {
 	// Unserved and Short count the partitions no copy can answer for and
 	// the partitions fewer copies can answer for than their target has
 	// ([partmap.Coverage]); Joining and Leaving the holders in those
-	// states; Moves the operator's moves in force.
+	// states; Moves the operator's moves on the map, a waiting one included
+	// ([EstateMove.Waiting]).
 	Unserved int `json:"unserved"`
 	Short    int `json:"short"`
 	Joining  int `json:"joining"`
@@ -287,7 +288,8 @@ type EstatePartition struct {
 	// Holders are the nodes holding it in any state, by node.
 	Holders []EstateHolder `json:"holders"`
 
-	// Moves are the operator's moves of it off a node, by node.
+	// Moves are the operator's moves of it off a node, by node — each in
+	// effect, or waiting for a member to take the copy in its place.
 	Moves []EstateMove `json:"moves,omitempty"`
 }
 
@@ -311,21 +313,28 @@ type EstateHolder struct {
 }
 
 // EstateMove is an operator's move of a partition off a node: who asked, why
-// and when — for display, never compared.
+// and when — for display, never compared — and whether it is in effect.
 type EstateMove struct {
 	Node   string    `json:"node"`
 	By     string    `json:"by"`
 	Reason string    `json:"reason,omitempty"`
 	At     time.Time `json:"at"`
+
+	// Waiting is a move on the map that is NOT IN EFFECT: without the node,
+	// the members left could not hold the partition's copies, so its target
+	// names the node again until a member returns ([partmap.Map.MoveWaiting])
+	// — a move moves a copy and never drops one.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
-// RenderEstateMove is the move of p off node in force in m, or nil.
+// RenderEstateMove is the move of p off node on m, or nil where there is none.
 func RenderEstateMove(m partmap.Map, p statelog.PartitionID, node string) *EstateMove {
 	g, ok := m.Moves[p.String()][node]
 	if !ok {
 		return nil
 	}
-	return &EstateMove{Node: node, By: g.By, Reason: g.Reason, At: g.At}
+	return &EstateMove{Node: node, By: g.By, Reason: g.Reason, At: g.At,
+		Waiting: m.MoveWaiting(p, node)}
 }
 
 // RenderEstateWhole is layout 0 as the estate question renders it: every live

@@ -378,10 +378,15 @@ function PlacedEstateView({
                           key={m.node}
                           variant="tertiary"
                           size="small"
-                          title={`moved off ${m.node} by ${m.by}${m.reason ? ` — ${m.reason}` : ""}: cancel it`}
+                          title={`moved off ${m.node} by ${m.by}${m.reason ? ` — ${m.reason}` : ""}${
+                            m.waiting
+                              ? `; waiting — no other member can hold its copy, so ${m.node} holds it until one returns`
+                              : ""
+                          }: cancel it`}
                           onClick={() => setOpen({ kind: "cancel", partition: p.id, node: m.node })}
                         >
-                          Off {m.node} · cancel
+                          Off {m.node}
+                          {m.waiting ? " · waiting" : ""} · cancel
                         </Button>
                       ))}
                     </span>

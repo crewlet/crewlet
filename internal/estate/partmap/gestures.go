@@ -141,9 +141,12 @@ func Release(state MapState) (MapState, error) {
 // node, so its copy there is rebuilt on another member — the one the
 // partition's ranking offers next, within its failure domains — and then
 // released under the two conditions every leave waits for. The move lasts
-// until [CancelMove] or the node leaves the map. Moving a partition off a node
-// it has already been moved off answers the record it was given, the first
-// gesture's who and why kept.
+// until [CancelMove] or the node leaves the map — and it is in effect only
+// while the other members can hold the partition's copies without the node:
+// should members leave after it, the node holds the partition again and the
+// move waits for one to return ([Map.MoveWaiting]), since a move moves a copy
+// and never drops one. Moving a partition off a node it has already been moved
+// off answers the record it was given, the first gesture's who and why kept.
 //
 // It refuses a partition the layout does not have, a node that does not hold
 // the partition in any state, and a move with NO MEMBER TO REBUILD THE COPY ON
@@ -175,7 +178,11 @@ func Move(state MapState, p statelog.PartitionID, node, by, reason string, now t
 		next.Map.Moves[p.String()] = map[string]membership.Gesture{}
 	}
 	next.Map.Moves[p.String()][node] = membership.Gesture{By: by, Reason: reason, At: now.UTC()}
-	if moved, copies := next.Map.drawFor(p).Size(), state.Map.Size(); moved < copies {
+	// AGAINST EVERY MOVE, never the target's own draw: that one keeps a moved
+	// node where the members could not do without it, so it always has the
+	// copies and would accept every move — including the one that has
+	// nowhere to go.
+	if moved, copies := next.Map.drawWithoutEveryMove(p).Size(), state.Map.Size(); moved < copies {
 		return state, fmt.Errorf("%w: %s off %q: without %q only %d of its %d copies would "+
 			"have a member to hold them — add a data node first, or lower estate.replicas if "+
 			"the company means to keep fewer", ErrNowhereToMove, p, node, node, moved, copies)

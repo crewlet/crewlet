@@ -217,6 +217,97 @@ func TestAMoveThatWouldDropACopyIsRefused(t *testing.T) {
 	}
 }
 
+// A MOVE MOVES A COPY AND NEVER DROPS ONE, WHATEVER HAPPENS AFTER IT. Taken
+// while a member was spare, and then left with none to spare — the member it
+// rebuilt the copy on taken out, or removed for being gone — the node it moved
+// off holds the partition again, so the partition keeps the map's copies like
+// every other one rather than one fewer while a member able to hold it sits
+// idle. The move stays on the map, WAITING, and takes effect again once a
+// member returns.
+func TestAMoveWaitsWhileNoOtherMemberCanHoldTheCopy(t *testing.T) {
+	t.Parallel()
+	for name, leave := range map[string]func(s *sim, node string){
+		"taken out": func(s *sim, node string) {
+			next, err := Out(s.state, node, "op", "retiring", base)
+			if err != nil {
+				s.t.Fatal(err)
+			}
+			s.state = next
+		},
+		"removed for absence": func(s *sim, node string) {
+			s.nodes[node].down = true
+			for range membership.OutTicks + 1 {
+				s.tick()
+			}
+			if s.state.Map.Draw().Holds(node) {
+				s.t.Fatalf("%s is still a member after %d ticks gone", node, membership.OutTicks+1)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := settled(t, smallLayout, 3, nodeIDs(4)...)
+			_, p := s.targetedAt(s.state.Map.targets()[0]...)
+			moved := s.state.Map.Target(p)[0]
+			next, err := Move(s.state, p, moved, "op", "hot disk", base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.state = next
+			s.settle(200)
+			s.converged()
+			if s.state.Map.MoveWaiting(p, moved) || slices.Contains(s.state.Map.Target(p), moved) {
+				t.Fatalf("a move with a member to spare is not in effect: target %v",
+					s.state.Map.Target(p))
+			}
+
+			leave(s, s.state.Map.Target(p)[0])
+			everyTargetIsWhole(t, s.state.Map)
+			if !slices.Contains(s.state.Map.Target(p), moved) || !s.state.Map.MoveWaiting(p, moved) {
+				t.Fatalf("with no member to spare %s's target is %v, want %s back in it and the "+
+					"move waiting", p, s.state.Map.Target(p), moved)
+			}
+			if _, recorded := s.state.Map.Moves[p.String()][moved]; !recorded {
+				t.Fatal("the waiting move is no longer on the map")
+			}
+			s.settle(400)
+			s.converged()
+			for _, c := range s.state.Map.Coverage(s.live()) {
+				if c.Short() {
+					t.Errorf("%s settled short: %d of %d copies", c.Partition, len(c.Serving), c.Wanted)
+				}
+			}
+
+			// A MEMBER RETURNS, and the move is in effect again.
+			s.add("data-09", 1, nil)
+			s.settle(400)
+			s.converged()
+			everyTargetIsWhole(t, s.state.Map)
+			if s.state.Map.MoveWaiting(p, moved) || slices.Contains(s.state.Map.Target(p), moved) {
+				t.Errorf("with a member back the move still waits: %s's target is %v", p,
+					s.state.Map.Target(p))
+			}
+		})
+	}
+}
+
+// everyTargetIsWhole fails unless every partition's target — moved or not —
+// has as many nodes as the map places copies: what Coverage counts a partition
+// short against.
+func everyTargetIsWhole(t *testing.T, m Map) {
+	t.Helper()
+	for g, target := range m.targets() {
+		id := m.Partitions[g].ID
+		p, err := statelog.ParsePartitionID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(target) != m.Size() || len(m.Target(p)) != m.Size() {
+			t.Errorf("%s's target is %v, and the map places %d copies", id, target, m.Size())
+		}
+	}
+}
+
 // A GESTURE THAT CHANGES WHAT THE MAP PLACES IS BALANCED IN THE SAME WRITE:
 // the members taking a departing member's share hold it in proportion to their
 // weights, to the tolerance the layout promises, from the moment the gesture

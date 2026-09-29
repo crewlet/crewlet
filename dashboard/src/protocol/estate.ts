@@ -119,6 +119,12 @@ export interface EstateMove {
   by: string;
   reason?: string;
   at: string;
+  /**
+   * On the map but NOT IN EFFECT: without the node, the members left could not
+   * hold the partition's copies, so its target names the node again until a
+   * member returns — a move moves a copy and never drops one.
+   */
+  waiting?: boolean;
 }
 
 /** One partition. */

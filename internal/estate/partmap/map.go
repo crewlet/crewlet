@@ -204,29 +204,103 @@ func (m Map) table(p statelog.PartitionID) (int, *Partition, bool) {
 	return g, &m.Partitions[g], true
 }
 
-// drawFor is the draw p's target is taken from: the map's, with every node an
-// operator moved p off marked as taking no copies — for p alone.
+// drawFor is the draw p's target is taken from: the map's, with the nodes an
+// operator moved p off marked as taking no copies — for p alone — AS FAR AS THE
+// OTHER MEMBERS CAN HOLD p's COPIES ([Map.MoveWaiting]).
 func (m Map) drawFor(p statelog.PartitionID) placement.Draw {
 	d := m.Draw()
-	moved := m.Moves[p.String()]
-	if len(moved) == 0 {
+	return without(d, m.movedOff(p, d))
+}
+
+// drawWithoutEveryMove is p's draw with EVERY node an operator moved p off
+// marked as taking no copies, whether or not the others can hold them — what
+// [Move] measures a new move against, and nothing else.
+func (m Map) drawWithoutEveryMove(p statelog.PartitionID) placement.Draw {
+	return without(m.Draw(), m.Moves[p.String()])
+}
+
+// without is d with every member named in nodes marked as taking no copies.
+func without[V any](d placement.Draw, nodes map[string]V) placement.Draw {
+	if len(nodes) == 0 {
 		return d
 	}
 	d.Members = slices.Clone(d.Members)
 	for i := range d.Members {
-		if _, ok := moved[d.Members[i].Node]; ok {
+		if _, ok := nodes[d.Members[i].Node]; ok {
 			d.Members[i].Out = true
 		}
 	}
 	return d
 }
 
+// movedOff is the nodes p's target is drawn without: every node an operator
+// moved p off, EXCEPT where drawing without all of them would leave p fewer
+// copies than the map places — d.Size() — and then the moved nodes p's
+// ranking in d prefers are kept, as many as that shortfall.
+//
+// A MOVE MOVES A COPY; IT NEVER DROPS ONE. [Move] refuses one with no member
+// to rebuild the copy on, but the members change after it: take another member
+// out, or lose one to absence, and a target drawn without every moved node
+// holds p a copy short — for as long as the move stood, every other partition
+// at the company's copies, and a member able to hold the missing copy sitting
+// idle for no reason but an earlier gesture. So the moved node holds p again,
+// the move stays on the map, and it takes effect once a member returns. Kept in
+// p's RANKING order rather than by which node still holds a copy, because a
+// target is a function of the draw alone: one read off the holder table would
+// move each time the holders moved toward it.
+func (m Map) movedOff(p statelog.PartitionID, d placement.Draw) map[string]bool {
+	moved := m.Moves[p.String()]
+	g, _, ok := m.table(p)
+	if !ok || len(moved) == 0 {
+		return nil
+	}
+	placeable := 0
+	for _, member := range d.Members {
+		if member.Placeable() {
+			placeable++
+		}
+	}
+	// THE MOVED NODES THAT WOULD HOLD A COPY BUT FOR THE MOVE, in p's
+	// ranking: a moved node the map places nothing on already holds none.
+	var placing []string
+	for _, node := range d.Ranked(g) {
+		if _, isMoved := moved[node]; !isMoved {
+			continue
+		}
+		if member, _ := d.Member(node); member.Placeable() {
+			placing = append(placing, node)
+		}
+	}
+	keep := max(0, len(placing)-(placeable-d.Size()))
+	out := make(map[string]bool, len(moved))
+	for node := range moved {
+		out[node] = true
+	}
+	for _, node := range placing[:keep] {
+		delete(out, node)
+	}
+	return out
+}
+
+// MoveWaiting reports whether an operator's move of p off node is on the map
+// but NOT IN EFFECT: without node the members left could not hold p's copies,
+// so p's target names node again until a member returns ([Map.movedOff]). False
+// for a move in effect and for a move that does not exist.
+func (m Map) MoveWaiting(p statelog.PartitionID, node string) bool {
+	if _, moved := m.Moves[p.String()][node]; !moved {
+		return false
+	}
+	return !m.movedOff(p, m.Draw())[node]
+}
+
 // Target is the nodes p SHOULD be held by, primary first: the up set of p's
 // group in the map's draw, drawn without the nodes an operator moved p off
 // — so a move rebuilds the copy on the member p's ranking offers next, spread
 // across failure domains as far as the members allow, rather than leaving p
-// one short ([Move] refuses a move with no member to rebuild on). Nil for a
-// partition the layout does not have.
+// one short ([Move] refuses a move with no member to rebuild on, and a move
+// the members have since left no room for waits: [Map.MoveWaiting]). So every
+// partition's target has [Map.Size] nodes, moved or not. Nil for a partition
+// the layout does not have.
 //
 // It hashes every member on each call; [Map.targets] computes every
 // partition's at once.

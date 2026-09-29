@@ -865,8 +865,11 @@ nothing. `in` puts it back, or vouches for a node the map removed. `move` takes
 one partition's copy off one node: the partition's target skips it, so the copy
 is rebuilt on the member its ranking offers next and then released; it lasts
 until `-cancel` lifts it or the node leaves the map, and it is refused
-(`nowhere_to_move`) where no member is left to rebuild the copy on. Each repeats
-its node in `-confirm`.
+(`nowhere_to_move`) where no member is left to rebuild the copy on. Should
+members leave after it, so that the others could not hold the partition's
+copies without the node, the node is in the target again and `map` prints the
+move as `off <node> (<by>, waiting)` until a member returns: a move moves a copy
+and never drops one. Each repeats its node in `-confirm`.
 
 ### `crewlet estate hold` / `release`
 

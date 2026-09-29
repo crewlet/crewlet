@@ -3178,7 +3178,7 @@ Under a partitioned layout, a `placed` answer carries the map whole:
 | `unserved` / `short` / `joining` / `leaving` / `moves` | Partitions no copy can answer for; partitions with fewer copies that can answer than their target has; holders joining and leaving; operator moves in force |
 | `members` | Each member as the map describes it — `weight`, `domain`, `out`, `probation` and `absence` counted in the maintainer's ticks, as the object map's members are — plus its `share_percent` of every partition copy, how many partitions it is `serving`, `joining` and `leaving`, the partitions an operator `moved_off` it, whether it holds a `live` estate lease, and that lease: whether its store is `healthy` (absent when it does not say, which the map counts as failed), whether the map counts it `able`, the `map_epoch` it last acted on, and its `free_bytes` |
 | `removed` | Nodes the map removed for being gone and still remembers, as the object map lists them |
-| `partitions` | Every partition in the layout's order: its `target`, how many copies are `serving` (holders the map lists serving whose node it counts present and healthy) against how many it has `wanted`, its `holders` — each with the map's `state` and the epoch it entered it `since`, what the node's own lease `reports` of the partition, and whether the map counts the node `able` — and the operator's `moves` of it |
+| `partitions` | Every partition in the layout's order: its `target`, how many copies are `serving` (holders the map lists serving whose node it counts present and healthy) against how many it has `wanted`, its `holders` — each with the map's `state` and the epoch it entered it `since`, what the node's own lease `reports` of the partition, and whether the map counts the node `able` — and the operator's `moves` of it, each `waiting: true` while the members left could not hold the partition's copies without that node, which is then in the `target` again |
 
 A **copy** is a holder the map lists serving whose node holds a live estate lease
 saying its store is healthy and that it runs the map's layout. The map itself
@@ -3220,7 +3220,11 @@ fleet's own — `estate_whole` or `no_estate_map` — whatever `?confirm=` says.
 - **move** moves one partition's copy off one node: the partition's target skips
   that node, so its copy is rebuilt on the member the partition's ranking offers
   next — spread across failure domains as far as the members allow — and then
-  released. It lasts until it is cancelled or the node leaves the map.
+  released. It lasts until it is cancelled or the node leaves the map. A move
+  moves a copy and never drops one: should members leave after it, so that the
+  others could not hold the partition's copies without the node, the node is in
+  the target again and the move **waits** (`waiting: true`) until a member
+  returns.
 - **cancel** lifts a move; one that is not in force is answered as landed with
   nothing written.
 

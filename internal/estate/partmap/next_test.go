@@ -436,27 +436,28 @@ func TestAJoinIsNamedOnlyOnANodeThatCanTakeOne(t *testing.T) {
 }
 
 // THE LAST SERVER IS NEVER LET GO, and an empty target vouches for nothing: a
-// partition every member has been moved or taken off keeps every copy it has
-// rather than retiring them in favour of nobody.
+// partition whose target names nobody keeps every copy it has rather than
+// retiring them in favour of nobody.
+//
+// No gesture empties a target — taking out the last member that takes copies
+// is refused, and a move whose node the others could not do without waits
+// (TestAMoveWaitsWhileNoOtherMemberCanHoldTheCopy) — so the record is written
+// here as a store might still hold it: every member out.
 func TestTheLastServerIsNeverLetGo(t *testing.T) {
 	t.Parallel()
 	s := settled(t, smallLayout, 1, "data-a", "data-b")
 	g, p := s.targetedAt("data-a")
 	id := s.state.Map.Partitions[g].ID
 
-	// Both serve it, then it is moved off B and A is taken out: its target
-	// is empty.
+	// Both serve it, and then both members are out: its target is empty.
 	s.state.Map.Partitions[g].Holders = []Holder{
 		{Node: "data-a", State: Serving, Since: 1}, {Node: "data-b", State: Serving, Since: 1}}
 	s.nodes["data-b"].meta.Partitions[id] = PartServing
-	next, err := Move(s.state, p, "data-b", "op", "test", s.now)
-	if err != nil {
-		t.Fatal(err)
+	s.state.TakenOut = map[string]membership.Gesture{}
+	for i := range s.state.Map.Members {
+		s.state.Map.Members[i].Out = true
+		s.state.TakenOut[s.state.Map.Members[i].Node] = membership.Gesture{By: "op", At: s.now}
 	}
-	if next, err = Out(next, "data-a", "op", "test", s.now); err != nil {
-		t.Fatal(err)
-	}
-	s.state = next
 	if target := s.state.Map.Target(p); len(target) != 0 {
 		t.Fatalf("%s's target is %v, want none", p, target)
 	}
