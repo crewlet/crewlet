@@ -2516,3 +2516,53 @@ test("a dialog mid-write refuses Escape and a press on the veil, and otherwise t
   fireEvent.click(veil());
   expect(closed).toHaveBeenCalledTimes(2);
 });
+
+// ROTATE TOKEN OPENS THE SAME FORM, SAID DIFFERENTLY.
+//
+// The tile's Rotate token is the answer to a `credential_expiring` or
+// `credential_rejected` finding, and the fields it needs are the ones the
+// settings form already has — narrowing to one finding is a decision this
+// dialog reversed (see `fieldsFor`). What a rotation changes is the WORDS: the
+// title names the gesture and the engine's reason is said first, beside the
+// one thing to do, because a credential box that opens empty over a held
+// value looks like one that holds nothing.
+test("a rotation names itself and says why, over the same fields", () => {
+  stubFetch(() => new Response(JSON.stringify({ secrets: [] }), { status: 200 }));
+  const held: SetupToolState = {
+    ...tool,
+    configured: true,
+    enabled: true,
+    satisfied: true,
+    requirements: tool.requirements.map((r) => ({ ...r, present: true, resolved: true })),
+  };
+  const reason = "The Datadog application key was refused by Datadog.";
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool: held }]}
+      title="Datadog"
+      rotate={reason}
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByRole("dialog", { name: "Rotate the Datadog token" })).toBeTruthy();
+  expect(screen.getByText(reason)).toBeTruthy();
+  expect(screen.getByText(/type it over the one this form holds/)).toBeTruthy();
+  // THE SAME FIELDS as the settings form: nothing is filtered away.
+  expect(screen.getByLabelText(/Fallback seat/)).toBeTruthy();
+  cleanup();
+
+  // AND A TOOL NOTHING HAS CONFIGURED HAS NOTHING TO ROTATE: the dialog is
+  // the connect form whatever asked for it.
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      rotate={reason}
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByRole("dialog", { name: "Connect Datadog" })).toBeTruthy();
+  expect(screen.queryByText(reason)).toBeNull();
+});

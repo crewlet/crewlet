@@ -4947,6 +4947,35 @@ a value** — not an answer's, and not the token this browser presents. A
 disabled guard is a red banner: every caller is `anonymous` and nobody acts as
 a person.
 
+**Integrations** is a grid of **tiles, one per tool** — Slack, Mattermost,
+Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
+engine's word for its state (`tools[].label` from `integration.Rollup`, the
+same word the Settings column counts), one sentence and **one action**. The
+sentence is the roll-up's `reason` while something is owed, and what the tool
+does for the company otherwise. The foot counts what the engine sent: the
+agents on its roster, the credentials it holds a finding about, and the
+deliveries this node counted (only when `traffic_known`). **All · Connected ·
+Available** narrows the grid, with the rows' own counts. The action is exactly
+one of five, decided by `actionFor` from the same inputs as the tag:
+
+| Action | When | What it does |
+|---|---|---|
+| **Connect** | nothing configured | opens the tool's setup form |
+| **Continue** | a requirement unanswered, or a surface of a partly-connected tool not yet configured | opens the same form |
+| **Rotate token** | a `credential_expiring` or `credential_rejected` finding on a configured surface | opens the same form, titled *Rotate the {tool} token*, with the engine's reason first — type the new token over the held one and save; the engine seals it and re-activates the configuration |
+| **Manage** | anything else configured, including a tool the engine is mid-flight on | goes to `#/settings/integrations/{tool}` |
+| **Learn more** | nothing configured and this build answers no form for it | opens the tool's page on docs.crewlet.ai |
+
+The three that open the form are disabled — never hidden — with *Setting an
+integration up needs an operator token* when `/setup` refused the read. A
+tile carries no Disconnect: **the tool's own page is where Manage goes**, and
+it holds everything else — the facts, the agents and any faulted surface
+(open on arrival, behind a disclosure that can fold it away), each agent's own
+step at the vendor (*Create app on GitHub*, *Install on GitHub*), the settings
+square, **Disconnect**, the provisioning passes and each surface's deliveries.
+A dashed tile at the end of the grid leads to **Tools & MCP** for every other
+tool an agent can reach. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
+
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.
 Every row is sealed in the fleet's store; **Source is provenance** — which path
@@ -6076,12 +6105,14 @@ to.
    returns one, and never dots as the value: a placeholder cannot be
    submitted, and a sentinel that has to be recognised on the way out is one
    an edit can defeat.
-9. **A card is one object in two states.** The Integrations screen draws one
-   bordered card per tool rather than rows in a shared panel, so a connected
-   one can grow a body and still read as the thing it already was. A row that
-   expands inside a list of rows pushes its neighbours around and reads as the
-   list breaking. The disclosure is the identity block, never the whole
-   header, so the card's own buttons are not nested inside a button.
+9. **A catalogue tile carries one action.** The Integrations screen draws
+   one tile per tool with exactly one control — Connect, Continue, Rotate
+   token, Manage or Learn more — because a grid is read in one glance, and
+   the card it replaced carried a tag, a Connect, a Disconnect, a settings
+   square and a chevron to say that nothing was owed. Everything else a tool
+   offers is on its own page, where the card that discloses its agents keeps
+   its disclosure on the identity block, never the whole header, so the
+   card's own buttons are not nested inside a button.
 10. **Every screen, section and filter is in the URL**, and obeys the
     push/replace table above.
 11. **A screen subscribes to the slices it reads and no others.**

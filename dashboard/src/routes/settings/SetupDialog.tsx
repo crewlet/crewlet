@@ -75,10 +75,11 @@ interface Submitted {
  * IT DOES NOT NARROW TO ONE FINDING, and that is a decision rather than a
  * gap. This took a `blocks` argument and filtered to the requirements whose
  * own `blocks` named that finding, so pressing Fix on a failing row opened the
- * two inputs that mattered. The Fix control is gone — see `actionFor` in
- * Integrations.tsx, which says why: a card that needs attention says so in its
- * tag, and what is wrong and where to fix it are the note in its body and the
- * settings the gear opens, "the same settings, not a narrowed copy".
+ * two inputs that mattered. The Fix control is gone: a tile's one action —
+ * Continue for a form left unfinished, Rotate token for a credential the
+ * vendor refused or is about to — opens the same settings, never a narrowed
+ * copy (see `actionFor` in Integrations.tsx). A rotation changes the words the
+ * dialog opens with (`rotate`), not which fields it shows.
  *
  * So nothing ever passed an argument, and the branch could not be reached.
  * Collapsed rather than left half-wired: a knob with no caller is
@@ -338,6 +339,7 @@ export interface SetupSection {
 export function SetupDialog({
   sections,
   title,
+  rotate,
   onClose,
   onDone,
 }: {
@@ -351,6 +353,21 @@ export function SetupDialog({
   sections: SetupSection[];
   /** The tool's own name, which the catalogue has and the API does not. */
   title: string;
+  /**
+   * Set when the form was opened by Rotate token: the engine's sentence on
+   * which credential the vendor refused or is about to (a
+   * `credential_rejected` or `credential_expiring` finding).
+   *
+   * THE SAME FORM, NOT A NARROWED ONE — see [fieldsFor] on why the dialog no
+   * longer filters to one finding. What a rotation changes is the WORDS: the
+   * title names the gesture, the reason is said first, and the one thing to
+   * do — type the new value over the held one — is said beside it, because a
+   * credential field that opens empty over a held value looks like one that
+   * holds nothing. Submitting is then the ordinary save, which seals the new
+   * value and re-activates the revision; the engine answers `reloaded`, and
+   * the toast says the credentials were rotated.
+   */
+  rotate?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -879,7 +896,13 @@ export function SetupDialog({
   return (
     <Modal
       open
-      title={connecting ? `Connect ${title}` : `${title} settings`}
+      title={
+        rotate !== undefined && !connecting
+          ? `Rotate the ${title} token`
+          : connecting
+            ? `Connect ${title}`
+            : `${title} settings`
+      }
       icon={<PlugGlyph size="md" />}
       onClose={onClose}
       // A CONNECT IS SEVERAL WRITES IN ORDER — the credential sealed, the
@@ -918,6 +941,18 @@ export function SetupDialog({
           there each section is a different agent's own credentials and the
           name is what says whose. */}
       <div className="int-form">
+        {rotate !== undefined && !connecting && (
+          <Callout variant="warning">
+            <span className="col" style={{ gap: 4 }}>
+              {rotate && <span>{rotate}</span>}
+              <span className="t-caption">
+                Mint a new token at {title}, type it over the one this form holds, and save. The
+                engine seals it and re-activates the configuration, so every agent picks it up
+                without a restart.
+              </span>
+            </span>
+          </Callout>
+        )}
         {intros.map((intro, i) => (
           <p key={i} className="int-form-intro">
             {intro}

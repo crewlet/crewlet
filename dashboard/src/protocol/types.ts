@@ -3269,9 +3269,10 @@ export interface SetupRequirement {
    * join — setupapi's own suite checks that every vendor has a credential
    * field claiming `credential_missing`, so a row asking for a credential
    * cannot offer every field except the credential — and the dialog used to
-   * narrow to it when a Fix control existed. It does not any more: a card that
-   * needs attention says so in its tag, and the gear opens the same settings
-   * rather than a narrowed copy (see `actionFor` in Integrations.tsx).
+   * narrow to it when a Fix control existed. It does not any more: a tile's
+   * one action (Continue, Rotate token) opens the same settings rather than a
+   * narrowed copy (see `actionFor` in Integrations.tsx and `rotate` on the
+   * setup dialog).
    *
    * Declared because it is part of the shape the API sends, not because
    * anything here consumes it.

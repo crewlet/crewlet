@@ -290,10 +290,14 @@ test("a card's tag is the engine's roll-up label", () => {
 // two used to collapse into the state most likely to be mistaken for a
 // mistake.
 test("absent, paused and connecting are told apart", () => {
-  // NO TAG at all: the Connect button beside it is the whole message, and a
-  // chip on every unconfigured row reads as a fault list rather than a
-  // catalogue — whatever the roll-up calls it.
-  expect(entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use")).tag).toBe("");
+  // THE ENGINE'S WORD, NEUTRAL AND OUTLINED: a tile in a grid with no pill
+  // under its name is a hole a reader has to explain, and neutral is the one
+  // register here that reports nothing wrong.
+  const absent = entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use"));
+  expect([absent.tag, absent.tone, absent.outline]).toEqual(["Not in use", "neutral", true]);
+  // AND A ROLL-UP STILL DESCRIBING A SURFACE THE ROWS NO LONGER CARRY draws
+  // nothing: the rows are the fresher half, and the tile's action is Connect.
+  expect(entryState(slack, rowsOf(), rolled("slack", "connected", "Connected")).tag).toBe("");
   const paused = entryState(
     slack,
     rowsOf({ key: "slack", configured: true, enabled: false }),
@@ -369,7 +373,7 @@ test("a working surface adds nothing to the card", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   expect(screen.queryByText("/webhooks/jira")).toBeNull();
   expect(screen.queryByText("Jira")).toBeNull();
   expect(screen.queryByText("Confluence")).toBeNull();
@@ -393,7 +397,7 @@ test("a faulted surface says what is wrong and which surface it is", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   expect(screen.getByText("Confluence")).toBeTruthy();
   expect(screen.getByText("secret unresolved")).toBeTruthy();
   // And the surface that works is not listed beside it.
@@ -418,15 +422,17 @@ test("a card's header says what the tool is, not what is wrong with it", () => {
       detail: "sre-lead has no GitHub App of its own",
     },
   });
-  render(<EntryRow entry={CATALOG.find((e) => e.key === "github")!} rows={rows} />);
+  const { container } = render(
+    <EntryRow entry={CATALOG.find((e) => e.key === "github")!} rows={rows} />,
+  );
 
-  // THE CATALOGUE'S OWN LINE, and only it.
-  expect(screen.getByText("Code and pull requests")).toBeTruthy();
-  expect(screen.queryByText(/sre-lead has no GitHub App/)).toBeNull();
+  // THE CATALOGUE'S OWN LINE, and only it, in the card's head.
+  const head = container.querySelector(".int-card-toggle")!;
+  expect(head.textContent).toContain(CATALOG.find((e) => e.key === "github")!.description);
+  expect(head.textContent).not.toMatch(/sre-lead has no GitHub App/);
 
-  // AND IT IS THERE ONCE THE CARD IS OPEN, which is where the question it
-  // answers is actually asked.
-  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  // AND THE COMPLAINT IS IN THE BODY, which the page opens on.
+  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
   expect(screen.getByText(/sre-lead has no GitHub App/)).toBeTruthy();
   expect(screen.getByText("secret unresolved")).toBeTruthy();
 });
@@ -442,7 +448,7 @@ test("an absent tool is a plain card with no disclosure and no badge", () => {
   expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
   // And it still says what the tool is for, because the catalogue is what
   // tells a reader the engine serves it at all.
-  expect(screen.getByText("Team communication")).toBeTruthy();
+  expect(screen.getByText(slack.description)).toBeTruthy();
 });
 
 // A TEARDOWN IS AMBER AND OFFERS NOTHING, the same as every other state the
@@ -463,9 +469,17 @@ test("a disconnect in progress offers nothing", () => {
 
 // --- the action slot -------------------------------------------------------- //
 
-import { actionFor, sectionsFor } from "./Integrations.tsx";
+import {
+  actionFor,
+  asSentence,
+  formBlocked,
+  sectionsFor,
+  tileMeta,
+  ROTATE_FINDINGS,
+} from "./Integrations.tsx";
 import type { Entry } from "./Integrations.tsx";
 import type { SetupToolState } from "~/protocol/types.ts";
+import type { ReconcileFinding } from "~/contract/integrations.ts";
 
 function toolState(over: Partial<SetupToolState>): SetupToolState {
   return {
@@ -478,31 +492,36 @@ function toolState(over: Partial<SetupToolState>): SetupToolState {
   };
 }
 
-// THE ACTION IS A PURE FUNCTION of what the engine says, and of the same
-// inputs the state tag beside it is derived from. Two derivations would
-// eventually tell an operator two different things in one row.
+const expiring: ReconcileFinding = {
+  kind: "credential_expiring",
+  subject: "admin_token",
+  detail: "The GitLab admin token expires in 3 days.",
+  expires_at: "2026-10-02T00:00:00Z",
+};
+
+/** The one action, by kind: what a tile offers, from (state, listing, rows, findings). */
+function kindOf(...args: Parameters<typeof actionFor>): string {
+  return actionFor(...args).kind;
+}
+
+// EVERY TILE HAS EXACTLY ONE ACTION, and which one is a pure function of what
+// the engine says. There is no null: a tile that offered nothing sent a reader
+// looking for the control that would tell them what to do, and a working tool
+// still has somewhere to go — its own page.
 test("the action follows the state", () => {
   const ready = entryState(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
     rolled("atlassian", "connected", "Connected"),
   );
-  // A TOOL NOBODY HAS CONNECTED: neither half has it, which is what makes
-  // Connect the answer. Passing present=true here would be a card whose rows
-  // hold a surface its listing has not caught up with, and that one offers
-  // nothing until it does.
-  expect(actionFor(ready, [toolState({ configured: false })], false)?.label).toBe("Connect");
-  expect(actionFor(ready, [toolState({ satisfied: false })], true)?.label).toBe("Continue");
-  // A WORKING TOOL OFFERS NOTHING. Nothing a person does moves it, and the
-  // Manage button that used to sit here read as a card's primary action
-  // while saying only "nobody is needed".
-  expect(actionFor(ready, [toolState({})], true)).toBeNull();
-
-  // A FAULT IS NOT AN ACTION. A row a person owes something on says so in
-  // its tag and its status line; what to do about it is the settings the
-  // gear opens. A Fix button beside Disconnect, appearing and disappearing
-  // as an integration breaks and recovers, carried nothing the line above
-  // it did not already say.
+  // NOTHING CONFIGURED: Connect.
+  expect(kindOf(ready, [toolState({ configured: false })], false, [], false)).toBe("connect");
+  // A FORM LEFT UNFINISHED: Continue.
+  expect(kindOf(ready, [toolState({ satisfied: false })], true, [], false)).toBe("continue");
+  // A WORKING TOOL: Manage, which goes to its page and writes nothing.
+  expect(kindOf(ready, [toolState({})], true, [], false)).toBe("manage");
+  // A FAULT A NEW CREDENTIAL DOES NOT FIX is still Manage: what is wrong and
+  // where to fix it are on the page, beside the settings the square opens.
   const owed = entryState(
     atlassian,
     rowsOf({
@@ -512,139 +531,157 @@ test("the action follows the state", () => {
     }),
     rolled("atlassian", "attention", "Action required", "x"),
   );
-  expect(actionFor(owed, [toolState({})], true)).toBeNull();
+  expect(kindOf(owed, [toolState({})], true, [], false)).toBe("manage");
+});
+
+// A CREDENTIAL THE VENDOR REFUSED OR IS ABOUT TO IS ROTATE TOKEN, and it
+// outranks an unfinished form: it lapses on a date whether or not anybody
+// looks, and a half-connected Atlassian has no date on it.
+test("an expiring or refused credential is rotated", () => {
+  const owed = entryState(
+    CATALOG.find((e) => e.key === "gitlab")!,
+    rowsOf({
+      key: "gitlab",
+      configured: true,
+      reconcile: { phase: "ready", findings: [expiring] },
+    }),
+    rolled("gitlab", "attention", "Credential expiring", expiring.detail),
+  );
+  const both = [toolState({ key: "gitlab", form_complete: false, satisfied: false })];
+  expect(kindOf(owed, both, true, [expiring], false)).toBe("rotate");
+  const refused = { ...expiring, kind: "credential_rejected", expires_at: undefined };
+  expect(kindOf(owed, both, true, [refused], false)).toBe("rotate");
+  // AND ONLY THOSE TWO: a MISSING credential has nothing held to rotate, and
+  // the empty field is what Continue opens.
+  expect([...ROTATE_FINDINGS].sort()).toEqual(["credential_expiring", "credential_rejected"]);
+  expect(kindOf(owed, both, true, [], false)).toBe("continue");
 });
 
 // THE ROWS ARE THE FRESHER HALF, IN BOTH DIRECTIONS.
 //
 // The two halves of this screen arrive separately, and the rows are the
-// quicker answer to "does this company have this". Read as fresher in only
-// one direction, a disconnect left the card with no control at all: nothing
-// to connect it, because the listing still called it configured, and nothing
-// to disconnect, because the rows already said it was gone. It stayed that
-// way until somebody refreshed the page by hand.
-test("a card the rows say is gone offers to connect it again", () => {
+// quicker answer to "does this company have this". A disconnect the listing
+// has not caught up with still offers Connect; a connect it has not caught up
+// with offers Manage, never a Connect or a Continue beside a tag reading
+// Connected.
+test("a tile the rows say is gone offers to connect it again", () => {
   const github = CATALOG.find((e) => e.key === "github")!;
   const gone = entryState(github, rowsOf(), rolled("github", "not_in_use", "Not in use"));
-  expect(gone.tag).toBe("");
-  // The listing has not caught up and still calls it configured.
-  expect(actionFor(gone, [toolState({ key: "github", configured: true })], false)?.label).toBe(
-    "Connect",
+  expect(kindOf(gone, [toolState({ key: "github", configured: true })], false, [], false)).toBe(
+    "connect",
   );
-
-  // AND THE OTHER DIRECTION IS UNCHANGED: straight after a connect the rows
-  // hold the surface while the listing is still the pre-connect one, and a
-  // card then drew Connect beside a tag reading Connected.
   const fresh = entryState(
     github,
     rowsOf({ key: "github", configured: true }),
     rolled("github", "connected", "Connected"),
   );
-  expect(actionFor(fresh, [toolState({ key: "github", configured: false })], true)).toBeNull();
+  expect(kindOf(fresh, [toolState({ key: "github", configured: false })], true, [], false)).toBe(
+    "manage",
+  );
 });
 
-// A CARD IN MOTION OFFERS NOTHING.
+// A CARD IN MOTION OFFERS NOTHING TO WRITE.
 //
 // Between a connect and the loop's first report, and between asking for a
-// disconnect and its finishing, there is nothing a person does that moves the
-// card: the engine is working. A Continue button beside "Connecting" invited
-// somebody to act on a card whose state was about to change under them, and
-// on a multi-surface tool it appeared the instant the first surface was
-// saved, which is the moment the loop had least to say.
-test("a card the engine is mid-flight on offers no action", () => {
-  // CONNECTED AND UNREPORTED: the window after a save.
+// disconnect and its finishing, nothing a person writes moves the tile — a
+// Continue beside "Connecting" invited somebody to act on a card whose state
+// was about to change under them. Manage writes nothing, and where the tool is
+// going is exactly what they want to watch.
+test("a tile the engine is mid-flight on offers only its page", () => {
   const connecting = entryState(
     atlassian,
     rowsOf({ key: "atlassian", configured: true }),
     rolled("atlassian", "not_connected", "Connecting"),
   );
   expect(connecting.tag).toBe("Connecting");
-  // Atlassian is three surfaces, so the other two are unconfigured and this
-  // is exactly the card that drew Continue beside Connecting.
   expect(
-    actionFor(
+    kindOf(
       connecting,
       [toolState({ key: "atlassian" }), toolState({ configured: false })],
       true,
+      [expiring],
+      false,
     ),
-  ).toBeNull();
-
-  // AND BEING TAKEN AWAY, which is the other direction of the same rule.
+  ).toBe("manage");
   const going = entryState(
     atlassian,
-    rowsOf({
-      key: "jira",
-      configured: true,
-      reconcile: { phase: "ready", disconnecting: true },
-    }),
+    rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready", disconnecting: true } }),
     rolled("atlassian", "not_connected", "Disconnecting"),
   );
-  expect(actionFor(going, [toolState({ configured: false })], true)).toBeNull();
+  expect(kindOf(going, [toolState({ configured: false })], true, [], false)).toBe("manage");
 });
 
-// A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS. Atlassian with
-// Jira set up and Confluence half done is neither Connect nor finished: it is
-// a tool with something left to do, and reading only the first surface would
-// have called it done.
+// A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS, and a surface
+// nobody configured on a partly-connected tool is something to Continue:
+// connecting the Atlassian organization alone left the card with nothing on
+// screen that would add the products.
 test("one unfinished surface makes the whole tool unfinished", () => {
   const ready = entryState(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
     rolled("atlassian", "connected", "Connected"),
   );
-  const mixed = actionFor(
-    ready,
-    [
-      toolState({ key: "jira", configured: true, satisfied: true }),
-      toolState({ key: "confluence", configured: true, satisfied: false }),
-    ],
-    true,
+  const tools = (confluence: Partial<SetupToolState>) => [
+    toolState({ key: "jira", configured: true, satisfied: true }),
+    toolState({ key: "confluence", ...confluence }),
+  ];
+  expect(kindOf(ready, tools({ configured: true, satisfied: false }), true, [], false)).toBe(
+    "continue",
   );
-  expect(mixed?.label).toBe("Continue");
-
-  // AND A SURFACE NOBODY HAS CONFIGURED IS SOMETHING TO CONTINUE, not to
-  // connect.
-  //
-  // It does not make the tool UNFINISHED — a company using Jira and not
-  // Confluence is not half broken, and the tag says what the connected
-  // surfaces are doing — but it is something a person can act on, and
-  // connecting the organization alone left the Atlassian card with no
-  // button at all: nothing on screen would add the products.
-  //
-  // The WORD matters: this said Connect, beside a tag reading Connected, so
-  // the card claimed both at once. Continue is what this screen already says
-  // about a tool with something left to do.
-  const partial = actionFor(
-    ready,
-    [
-      toolState({ key: "jira", configured: true, satisfied: true }),
-      toolState({ key: "confluence", configured: false, satisfied: false }),
-    ],
-    true,
+  expect(kindOf(ready, tools({ configured: false, satisfied: false }), true, [], false)).toBe(
+    "continue",
   );
-  expect(partial?.label).toBe("Continue");
-
-  // A tool whose every surface is connected and working offers nothing.
-  const done = actionFor(
-    ready,
-    [
-      toolState({ key: "jira", configured: true, satisfied: true }),
-      toolState({ key: "confluence", configured: true, satisfied: true }),
-    ],
-    true,
+  expect(kindOf(ready, tools({ configured: true, satisfied: true }), true, [], false)).toBe(
+    "manage",
   );
-  expect(done).toBeNull();
 });
 
-// A tool this build knows nothing about offers nothing: a button that
-// discovers on a press that there is no surface behind it is worse than none.
-test("a tool with no setup surface offers no action", () => {
-  const state = entryState(
-    slack,
-    rowsOf({ key: "slack", configured: true }),
-    rolled("slack", "connected", "Connected"),
+// A TOOL WITH NO FORM IS LEARN MORE, AND A REFUSED FORM IS STILL CONNECT.
+//
+// Where this build answers no setup state for a tool and nothing refused the
+// read, there is no form a Connect could open, and the page that says how is
+// its documentation. Where the read was REFUSED, the form exists and the
+// reader lacks the token — so the action stays Connect, disabled with the
+// sentence that says why (a write control is never hidden).
+test("a tool with no form behind it is learned about, not connected", () => {
+  const nothing = entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use"));
+  expect(kindOf(nothing, [], false, [], false)).toBe("learn");
+  expect(kindOf(nothing, [], false, [], true)).toBe("connect");
+  expect(formBlocked([], true)).toMatch(/operator token/);
+  expect(formBlocked([], false)).toMatch(/no form to open/);
+  expect(formBlocked([{}], true)).toBeUndefined();
+});
+
+// THE ENGINE'S REASONS ARE WRITTEN TO BE EMBEDDED, lower-case, so a tile that
+// leads with one gives it its capital — and only that.
+test("a reason leads a tile as a sentence", () => {
+  expect(asSentence("the third-party app refused this integration's credential")).toBe(
+    "The third-party app refused this integration's credential",
   );
-  expect(actionFor(state, [], true)).toBeNull();
+  expect(asSentence("")).toBe("");
+});
+
+// THE FOOT COUNTS WHAT THE ENGINE SENT, and only a count it could make.
+test("a tile's foot counts agents, credentials and deliveries", () => {
+  const present = [
+    {
+      surface: { key: "gitlab", name: "GitLab" },
+      row: { key: "gitlab", configured: true, inbound: 12 },
+    },
+  ];
+  const roster = toolState({
+    key: "gitlab",
+    seats: [
+      { handle: "cto", requirements: [], satisfied: true },
+      { handle: "swe", requirements: [], satisfied: true },
+    ],
+  });
+  expect(tileMeta(present, roster, [expiring], true)).toBe("2 agents · 1 expiring · 12 deliveries");
+  // A NODE THAT COULD NOT READ ITS EVENT LOG sends zero for every surface, so
+  // no count is drawn rather than "nothing delivered".
+  expect(tileMeta(present, roster, [], false)).toBe("2 agents");
+  // AND A TOOL NOBODY CONNECTED HAS NOTHING TO COUNT.
+  expect(tileMeta([], roster, [], true)).toBe("");
 });
 
 // --- a per-seat vendor ------------------------------------------------------ //
@@ -714,7 +751,7 @@ test("a roster is listed once however many sections carry it", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Slack details/ }));
+  expect(screen.getByRole("button", { name: /Hide Slack details/ })).toBeTruthy();
   expect(screen.getAllByText("SRE Lead").length).toBe(1);
 });
 
@@ -753,8 +790,11 @@ test("a per-seat app leaves the work to the agent's own row", () => {
       }),
     ],
     true,
+    [],
+    false,
   );
-  expect(action).toBeNull();
+  // MANAGE: the page, where the agent's own row carries its Create button.
+  expect(action.kind).toBe("manage");
 
   // AND SLACK'S: unfinished because a seat's own credential is unanswered,
   // which is a box in this very dialog. Suppressing the button there would
@@ -772,8 +812,10 @@ test("a per-seat app leaves the work to the agent's own row", () => {
       }),
     ],
     true,
+    [],
+    false,
   );
-  expect(typeable?.label).toBe("Continue");
+  expect(typeable.label).toBe("Continue");
 
   // AND AN INFORMATIONAL ROSTER IS NOT WORK OUTSTANDING. Every app lists its
   // agents now, and most of those credentials are an upgrade on an app that
@@ -790,8 +832,10 @@ test("a per-seat app leaves the work to the agent's own row", () => {
       }),
     ],
     true,
+    [],
+    false,
   );
-  expect(informational).toBeNull();
+  expect(informational.kind).toBe("manage");
 });
 
 // --- what a card offers, and what it no longer does ------------------------ //
@@ -810,12 +854,12 @@ test("a connected card offers no pass controls", () => {
         { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
         { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
       ]}
-      onConnect={() => {}}
+      onOpen={() => {}}
       onDisconnect={() => {}}
     />,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   for (const gone of ["Run setup", "Recheck", "Manage"]) {
     expect(screen.queryByRole("button", { name: gone })).toBeNull();
   }
@@ -835,7 +879,7 @@ test("settings open from the header, beside the chevron", () => {
       entry={CATALOG.find((e) => e.key === "datadog")!}
       rows={rowsOf({ key: "datadog", configured: true })}
       sections={[{ name: "Datadog", tool: toolState({ key: "datadog" }) }]}
-      onConnect={() => {
+      onOpen={() => {
         opened += 1;
       }}
       onDisconnect={() => {}}
@@ -855,11 +899,11 @@ test("an unconnected tool offers no settings square", () => {
       entry={CATALOG.find((e) => e.key === "gitlab")!}
       rows={rowsOf()}
       sections={[{ name: "GitLab", tool: toolState({ key: "gitlab", configured: false }) }]}
-      onConnect={() => {}}
+      onOpen={() => {}}
     />,
   );
   expect(screen.queryByRole("button", { name: "GitLab settings" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Connect GitLab" })).toBeTruthy();
 });
 
 // A ROW'S CONNECT IS SECONDARY. The screen is a list of integrations and
@@ -871,10 +915,10 @@ test("a card's Connect is a secondary button", () => {
       entry={CATALOG.find((e) => e.key === "gitlab")!}
       rows={rowsOf()}
       sections={[{ name: "GitLab", tool: toolState({ key: "gitlab", configured: false }) }]}
-      onConnect={() => {}}
+      onOpen={() => {}}
     />,
   );
-  const connect = screen.getByRole("button", { name: "Connect" });
+  const connect = screen.getByRole("button", { name: "Connect GitLab" });
   expect(connect.className).toContain("crewlet-btn--secondary");
   expect(connect.className).not.toContain("crewlet-btn--primary");
 });
@@ -918,7 +962,7 @@ test("the card lists each agent and what it holds", () => {
       ]}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
+  expect(screen.getByRole("button", { name: /Hide Datadog details/ })).toBeTruthy();
   expect(screen.getByText("SRE Lead")).toBeTruthy();
   expect(screen.getByText("CTO")).toBeTruthy();
   // AND WHAT EACH ONE HOLDS. A roster of names with no state is a list of
@@ -964,7 +1008,7 @@ test("an agent is listed once however many surfaces report it", () => {
       ]}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   expect(screen.getAllByText("SRE Lead").length).toBe(1);
   // THE SURFACE THAT PROVISIONS WINS, because its answer is about the
   // account rather than about one product's credential slot.
@@ -1089,7 +1133,7 @@ test("a dropped delivery is stated, not counted", () => {
       rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 3 })}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
   expect(screen.getByText(/3 deliveries were verified and dropped/)).toBeTruthy();
 });
 
@@ -1102,7 +1146,7 @@ test("a surface dropping nothing carries no note about it", () => {
       rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 0 })}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
   expect(screen.queryByText(/verified and dropped/)).toBeNull();
 });
 
@@ -1209,7 +1253,7 @@ test("disconnect skips a surface this company never configured", () => {
 // while the setup listing is still the pre-connect one, so the card drew
 // "Connect" beside a tag reading Connected: two controls describing the same
 // tool, disagreeing, with the button the wrong one.
-test("a stale setup listing offers nothing rather than contradicting the tag", () => {
+test("a stale setup listing never contradicts the tag", () => {
   const connected = entryState(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
@@ -1219,12 +1263,12 @@ test("a stale setup listing offers nothing rather than contradicting the tag", (
     toolState({ key: "atlassian", configured: false }),
     toolState({ key: "jira", configured: false }),
   ];
-  // present: the rows say this company has the tool.
-  expect(actionFor(connected, behind, true)).toBeNull();
+  // present: the rows say this company has the tool, so its page.
+  expect(actionFor(connected, behind, true, [], false).kind).toBe("manage");
   // AND A TOOL NOBODY HAS CONNECTED STILL OFFERS CONNECT. With no rows there
   // is no tag to contradict, and the button is the only thing on the card
   // that says anything.
-  expect(actionFor(connected, behind, false)?.label).toBe("Connect");
+  expect(actionFor(connected, behind, false, [], false).label).toBe("Connect");
 });
 
 // --- an agent's own app, in the two acts a person performs ---------------- //
@@ -1244,7 +1288,7 @@ function roster(...seats: SetupSeatState[]): { container: HTMLElement } {
       sections={[{ name: "GitHub", tool: toolState({ key: "github", seats }) }]}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
   return rendered;
 }
 
@@ -1573,6 +1617,7 @@ test("the disconnect roster lists each agent once", () => {
     description: "Code and pull requests",
     vendor: "github",
     surfaces: [{ key: "github", name: "GitHub" }],
+    doc: "github",
   };
   const sections = sectionsFor(entry, new Map([["github", tool]]));
   // The sections themselves are one per agent plus the company block, which
@@ -1640,7 +1685,7 @@ test("an agent a surface reports on is not badged ready", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   expect(screen.queryByText("ready")).toBeNull();
   expect(screen.getByText("not ready")).toBeTruthy();
   // AND THE REASON IS PRINTED ONCE. The surface's own band carries it; the
@@ -1674,7 +1719,7 @@ test("an agent no surface reports on is still badged ready", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   expect(screen.getByText("ready")).toBeTruthy();
 });
 
@@ -1749,7 +1794,7 @@ test("an advisory finding leaves the agent badged ready", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   // "not ready" is the discriminating half: with the bug the roster row
   // carried it. getAllByText for the positive half because a card whose
   // surfaces are ready has more than one badge saying so.
@@ -1794,7 +1839,7 @@ test("a finding with no verdict still un-readies the agent", () => {
       )}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
   expect(screen.getByText("not ready")).toBeTruthy();
 });
 
