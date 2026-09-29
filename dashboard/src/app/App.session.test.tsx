@@ -9,12 +9,18 @@
  * in does not land on the screen that could not be drawn.
  */
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, needSession, sessionRestored } from "~/protocol/index.ts";
+import {
+  currentSessionNeed,
+  LiveSocket,
+  Store,
+  needSession,
+  sessionRestored,
+} from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -108,5 +114,59 @@ describe("a session the engine does not accept", () => {
   test("a REST 401 on any screen is enough", async () => {
     mount("#/admin/credentials");
     await waitFor(() => expect(location.hash).toBe(loginFor("#/admin/credentials")));
+  });
+});
+
+// A SIGN-IN'S OWN ANSWER IS THE NEWEST FACT ABOUT THE SESSION. The browser
+// signing in holds nothing, so a transport has already recorded `sign_in` —
+// and a sign-in answering with a session that may only enrol went to the
+// enrolment and was routed straight back to this form by that stale need,
+// with no word said, on every first sign-in of a deployment requiring a
+// second factor.
+describe("a sign-in answered with a session that may only enrol", () => {
+  test("lands on the enrolment and stays there", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://engine.test");
+        const method = (init?.method ?? "GET").toUpperCase();
+        const json = (body: unknown, status = 200) =>
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          });
+        if (method === "GET" && url.pathname === "/auth/config") return json({ backend: "local" });
+        if (method === "POST" && url.pathname === "/auth/login") {
+          return json({
+            person: "p-1",
+            login: "jane.doe",
+            expires_at: "2026-10-05T00:00:00Z",
+            position: "1:9",
+            status: "second_factor_enrolment_required",
+          });
+        }
+        if (method === "POST" && url.pathname === "/auth/totp") {
+          return json({ secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" });
+        }
+        return json({ error: "invalid_token" }, 401);
+      }),
+    );
+    needSession("sign_in");
+    mount(loginFor("#/work/ENG-42"));
+    fireEvent.change(await screen.findByLabelText(/login or email/i), {
+      target: { value: "jane.doe" },
+    });
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: "correct horse battery staple" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const enrol = `#/enrol?next=${encodeURIComponent("#/work/ENG-42")}`;
+    await screen.findByText("Set up two-step verification");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(location.hash).toBe(enrol);
+    expect(currentSessionNeed()).toBe("second_factor");
   });
 });

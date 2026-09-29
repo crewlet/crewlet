@@ -25,6 +25,11 @@
  * only enrol a second factor goes to the enrolment screen instead, carrying
  * `next` along, and the socket waits: it would only be refused again.
  *
+ * Either way the sign-in's answer REPLACES the session need a transport
+ * recorded (`protocol/session.ts`): it is the newest fact about this browser,
+ * and every sign-in starts from a recorded `sign_in`, which left in place
+ * sends the enrolment straight back to the sign-in form.
+ *
  * # And a sign-out leaves nothing behind
  *
  * Signing out, here or everywhere, ends in a RELOAD at the sign-in — see
@@ -35,7 +40,12 @@ import { useCallback } from "react";
 import { buildHash, parseHash, useNavigator } from "~/app/router.tsx";
 import { framelessOf } from "~/app/nav.ts";
 import { useClient } from "~/lib/store-hooks.ts";
-import { auth, sessionRestored, type SessionStatus } from "~/protocol/index.ts";
+import {
+  auth,
+  sessionNeedsEnrolment,
+  sessionRestored,
+  type SessionStatus,
+} from "~/protocol/index.ts";
 
 /** Where a sign-in lands when `next` names nowhere it may go. */
 export const LANDING = "#/";
@@ -171,6 +181,10 @@ export function useSignedIn(): (status: SessionStatus, next: string | null) => v
     (status, next) => {
       const target = safeNext(next);
       if (status === "second_factor_enrolment_required") {
+        // THE NEED FIRST, for the same reason as below: the `sign_in` a
+        // transport recorded while nobody was signed in would otherwise send
+        // the enrolment screen straight back to the sign-in form.
+        sessionNeedsEnrolment();
         nav.replace(["enrol"], { next: target });
         return;
       }

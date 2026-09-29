@@ -7,12 +7,12 @@
  * join from a browser at all.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
+import { LiveSocket, needSession, Store, sessionRestored } from "~/protocol/index.ts";
 import { parseInviteLink } from "./Invite.tsx";
 
 class InertWebSocket {
@@ -293,10 +293,22 @@ describe("redeeming it", () => {
     });
     const { reconnect } = mount();
     await screen.findByLabelText("Login");
+    // THE REAL BROWSER'S STATE: the socket's refusal probe records that
+    // nobody is signed in on every load of this screen. This suite's socket
+    // never dials, so the need is set as the probe would set it — and with it
+    // in place the enrolment was sent straight back to the sign-in form.
+    needSession("sign_in");
     type("Password", "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
 
-    await waitFor(() => expect(location.hash).toBe(`#/enrol?next=${encodeURIComponent("#/")}`));
+    const enrol = `#/enrol?next=${encodeURIComponent("#/")}`;
+    await waitFor(() => expect(location.hash).toBe(enrol));
+    // AND IT STAYS THERE once the frame has followed the need.
+    await screen.findByText("Set up two-step verification");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(location.hash).toBe(enrol);
     expect(reconnect).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
+import { currentSessionNeed, LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -236,11 +236,24 @@ describe("signing in with a password", () => {
       "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
     });
     const { reconnect } = mount();
+    // FROM THE REAL BROWSER'S STATE: the screen's own session read answered
+    // 401, which records that nobody is signed in. Without this the case
+    // passed while the enrolment was routed straight back to this form — its
+    // `waitFor` caught the enrolment's hash on the way through.
+    await waitFor(() => expect(currentSessionNeed()).toBe("sign_in"));
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(location.hash).toBe(`#/enrol?next=${encodeURIComponent(NEXT)}`));
+    const enrol = `#/enrol?next=${encodeURIComponent(NEXT)}`;
+    await waitFor(() => expect(location.hash).toBe(enrol));
+    // AND IT STAYS THERE once the frame has followed the need it recorded.
+    await screen.findByText("Set up two-step verification");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(location.hash).toBe(enrol);
+    expect(currentSessionNeed()).toBe("second_factor");
     // THE SOCKET WAITS: a session that may only enrol is refused it.
     expect(reconnect).not.toHaveBeenCalled();
   });

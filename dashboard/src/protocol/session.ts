@@ -72,6 +72,21 @@ export function sessionRestored(): void {
 }
 
 /**
+ * The browser holds a session that may only enrol a second factor — a
+ * sign-in or a redemption answered `second_factor_enrolment_required`.
+ *
+ * THE SIGN-IN'S OWN ANSWER REPLACES WHATEVER A TRANSPORT RECORDED BEFORE IT,
+ * because it is the newest fact about this browser's session. The sign-in
+ * screen's own `GET /auth/session` and the socket's refusal probe both record
+ * `sign_in` for a browser holding nothing, which is the state every sign-in
+ * starts from; left in place, it routed the enrolment straight back to the
+ * sign-in form the moment the enrolment screen mounted.
+ */
+export function sessionNeedsEnrolment(): void {
+  needSession("second_factor");
+}
+
+/**
  * Subscribe to a change of need. Returns the unsubscribe. The shape
  * `useSyncExternalStore` takes, which is what reads it.
  */

@@ -27,6 +27,7 @@ export {
   currentSessionNeed,
   needSession,
   onSessionNeed,
+  sessionNeedsEnrolment,
   sessionRestored,
   setStepUpConfirmer,
 } from "./session.ts";
