@@ -62,11 +62,15 @@ import (
 //
 // It is a benchmark rather than a test because it is minutes of wall clock
 // and a number rather than a property: `go test` without -bench never runs
-// it. Run it once per shape, on a quiet machine, with TMPDIR on the disk a
-// node would use — tmpfs makes every fsync free:
+// it. Run it once per shape — `T=64` or `T=256` after the slash — on a quiet
+// machine, with TMPDIR on the disk a node would use, since tmpfs makes every
+// fsync free:
 //
-//	TMPDIR=/var/tmp go test -run '^$' -bench 'PartitionFiles/T=256' \
+//	TMPDIR=/var/tmp go test -run '^$' -bench 'ANodeOpensEveryPartition/T=256' \
 //	  -benchtime 1x -timeout 30m -v ./internal/store/
+//
+// The pattern names the benchmark: one that matches nothing runs nothing and
+// still prints PASS, so a run that printed no measurement measured nothing.
 //
 // # What it measured, on this container: four cores, 15 GiB, ext4 on virtio
 //
