@@ -137,6 +137,20 @@ const GateRoom = 1 << 20
 // as free.
 const appendOverhead = 4 << 10
 
+// MaxTransportRecordBytes is the largest record the transport carries once it
+// is signed and sent: [queue.MaxPayloadBytes] less what a stored record carries
+// beside its payload ([appendOverhead]).
+//
+// THE CEILING EVERY DECLARATION IS HELD TO ([StreamSpec.Validate]), and what a
+// log whose records are bounded by caps of their own declares. The transport's
+// limit is on the whole MESSAGE — the signed payload and its headers — and not
+// on the payload a decide forms, so a declaration at the transport's own
+// number admitted a record the publisher passed and the broker then refused
+// past its max_payload: the declaration was no longer the one refusal a
+// record meets before it is sent, and the refusal it did meet named the
+// server's setting on the broker the engine configures itself.
+const MaxTransportRecordBytes = queue.MaxPayloadBytes - appendOverhead
+
 // MaxAppendBytes is the most one append to this log is counted at: its
 // largest record ([StreamSpec.MaxRecordBytes]) and what a stored record
 // carries beside it.

@@ -638,7 +638,14 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	// A STORE DIRECTORY, ALWAYS. An embedded broker with none keeps its
 	// streams in memory, and every property this framework rests on is
 	// about a stream that survives.
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	return newHarnessOn(t, domain, js.Config{StoreDir: t.TempDir()})
+}
+
+// newHarnessOn is [newHarnessFor] over the broker cfg names: an external
+// server's URL, for a case about a limit the embedded broker does not have.
+func newHarnessOn(t *testing.T, domain statelog.Domain, cfg js.Config) *harness {
+	t.Helper()
+	q, err := js.Open(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

@@ -797,15 +797,16 @@ exists to prevent.
 
 A single record larger than its log takes is a different refusal,
 `record_too_large`, on a log with room to spare, and no ceiling or trim
-changes it. Every log declares the largest record it publishes — 8 MiB on the
-tracker's, the knowledge base's and the vector changelog's, 2 MiB on the org
-chart's, 128 KiB on the identity estate's — and a record past it is refused
-before it is sent; the stream's own `max_msg_size` is that declaration plus
-4 KiB for what a stored record carries beside it, so the broker holds a peer
-on another build to it too. Past the declaration, the NATS server's
-`max_payload` and the file store's per-record limit can refuse a record as
-well, and the detail says which limit it was. See
-[Read consistency](consistency.md#a-writes-refusals).
+changes it. Every log declares the largest record it publishes — 8 MiB less
+4 KiB on the tracker's, the knowledge base's and the vector changelog's, which
+is the largest the embedded broker's 8 MiB messages carry once a record is
+signed, 2 MiB on the org chart's, 128 KiB on the identity estate's — and a
+record past it is refused before it is sent; the stream's own `max_msg_size`
+is that declaration plus 4 KiB for what a stored record carries beside it, so
+the broker holds a peer on another build to it too. Past the declaration, an
+external NATS server's `max_payload` set below 8 MiB and the file store's
+per-record limit can refuse a record as well, and the detail says which limit
+it was. See [Read consistency](consistency.md#a-writes-refusals).
 
 A full log costs `linearizable` reads, because those append a barrier — which
 is every seat tool read. `stale` keeps answering, so the dashboard and the read
@@ -863,7 +864,7 @@ So the reserve is the larger of two terms:
 
 | log | largest record | floor | reserve at the floor | ordinary writes at the floor |
 |---|---|---|---|---|
-| tracker, knowledge base | 8 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| tracker, knowledge base | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | org chart | 2 MiB | 64 MiB | 15 MiB (the fleet term) | 49 MiB |
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -56,11 +55,12 @@ const PagesLogMaxBytes = 4 << 30
 // PagesMaxRecordBytes is the largest record this domain publishes
 // ([statelog.StreamSpec.MaxRecordBytes]).
 //
-// THE TRANSPORT'S OWN MAXIMUM, for the tracker's reason: at this log's
-// gibibyte floor a sixteenth of the ceiling is already the larger term of the
-// gate reserve, so a smaller declaration would change no reserve — and a
-// page's body is the largest value any domain carries, bounded by its own cap.
-const PagesMaxRecordBytes = queue.MaxPayloadBytes
+// THE LARGEST THE TRANSPORT CARRIES ([statelog.MaxTransportRecordBytes]), for
+// the tracker's reason: at this log's gibibyte floor a sixteenth of the
+// ceiling is already the larger term of the gate reserve, so a smaller
+// declaration would change no reserve — and a page's body is the largest value
+// any domain carries, bounded by its own cap.
+const PagesMaxRecordBytes = statelog.MaxTransportRecordBytes
 
 // PagesLogDuplicates is the window the broker collapses a repeated operation
 // id in.

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -74,11 +73,13 @@ const (
 	// VectorMaxRecordBytes is the largest record this domain publishes
 	// ([statelog.StreamSpec.MaxRecordBytes]).
 	//
-	// THE TRANSPORT'S OWN MAXIMUM, because here it sizes nothing: this
-	// log claims no identity and keeps no gate reserve, so the declaration
-	// only sets where the publisher and the broker refuse, and an embed is
-	// bounded far below it by the widest vector a provider may configure.
-	VectorMaxRecordBytes = queue.MaxPayloadBytes
+	// THE LARGEST THE TRANSPORT CARRIES
+	// ([statelog.MaxTransportRecordBytes]), because here it sizes nothing:
+	// this log claims no identity and keeps no gate reserve, so the
+	// declaration only sets where the publisher and the broker refuse, and
+	// an embed is bounded far below it by the widest vector a provider may
+	// configure.
+	VectorMaxRecordBytes = statelog.MaxTransportRecordBytes
 )
 
 // Stream is the vector domain's compacted changelog.

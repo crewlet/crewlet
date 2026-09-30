@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // Domain is one replicated state machine: one ordered stream, one
@@ -276,8 +274,10 @@ type StreamSpec struct {
 	// of the log — and sized as a sixteenth of the ceiling instead, as it
 	// was, it was smaller than ONE such record on the two smallest logs.
 	//
-	// REQUIRED, and at most [queue.MaxPayloadBytes]: a record the
-	// transport cannot carry is one no declaration can admit.
+	// REQUIRED, and at most [MaxTransportRecordBytes]: a record the
+	// transport cannot carry is one no declaration can admit, and the
+	// transport's limit is on the signed message, so it is the transport's
+	// maximum less what a stored record carries beside its payload.
 	MaxRecordBytes int64
 
 	// MaxPerSubject retains only the newest message per subject, turning
@@ -349,12 +349,14 @@ func (s StreamSpec) Validate() error {
 		return fmt.Errorf("statelog: stream %q has no byte ceiling — a log "+
 			"with none fills the volume its own applier commits to", s.Name)
 	}
-	if s.MaxRecordBytes <= 0 || s.MaxRecordBytes > queue.MaxPayloadBytes {
+	if s.MaxRecordBytes <= 0 || s.MaxRecordBytes > MaxTransportRecordBytes {
 		return fmt.Errorf("statelog: stream %q declares a largest record of %d "+
-			"bytes (want 1..%d, the transport's own maximum) — it is what the "+
-			"log's gate reserve is sized by and what the broker refuses a "+
-			"message past, so a log without one keeps a reserve sized for "+
-			"nothing", s.Name, s.MaxRecordBytes, queue.MaxPayloadBytes)
+			"bytes (want 1..%d, the largest the transport carries once a "+
+			"record is signed and sent) — it is what the log's gate reserve is "+
+			"sized by and the one refusal a record meets before it is sent, so "+
+			"a log without one keeps a reserve sized for nothing and a log "+
+			"past it admits records the broker refuses", s.Name,
+			s.MaxRecordBytes, MaxTransportRecordBytes)
 	}
 	if s.Duplicates <= 0 {
 		return fmt.Errorf("statelog: stream %q sets no duplicate window", s.Name)
