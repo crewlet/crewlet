@@ -76,6 +76,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
 	{"statelog.ErrExists", statelog.ErrExists},
 	{"statelog.ErrGenerationPassed", statelog.ErrGenerationPassed},
+	{"statelog.ErrInvalidCut", statelog.ErrInvalidCut},
 	{"statelog.ErrInvalidLayout", statelog.ErrInvalidLayout},
 	{"statelog.ErrInvalidPartitionID", statelog.ErrInvalidPartitionID},
 	{"statelog.ErrLogDiverged", statelog.ErrLogDiverged},
