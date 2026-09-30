@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -389,4 +391,164 @@ func (f *flakyLister) ListLive(ctx context.Context, class coord.Class) ([]coord.
 		return nil, errors.New("the store is unreachable")
 	}
 	return f.Lister.ListLive(ctx, class)
+}
+
+// staleView is a view of the fleet's data nodes that listed once and has since
+// answered unknown for longer than any decider trusts a cached coordination
+// fact — a node that can name no holder of anything — on a clock it answers.
+func staleView(t *testing.T) (*coord.LeaseView, func() time.Time) {
+	t.Helper()
+	var clock atomic.Int64
+	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	store := &flakyLister{Lister: coordmem.New()}
+	view, err := coord.NewLeaseView(store, coord.ClassNode, coord.ViewOptions{
+		Every: 15 * time.Second, Trust: 45 * time.Second, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = view.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitUntil(t, 5*time.Second, "the view to list", func() bool { return !view.ListedAt().IsZero() })
+	store.fail()
+	clock.Add(int64(45*time.Second + statelog.FloorCacheStale + time.Second))
+	if ok, _ := routable(view, now()); ok {
+		t.Fatal("the premise: a view unknown past the bound cannot route")
+	}
+	return view, now
+}
+
+// dataNodeOver is a data node serving estate.000 from a copy judged by read,
+// whose router routes by view.
+func dataNodeOver(t *testing.T, view *coord.LeaseView, now func() time.Time,
+	read func(context.Context, *native, statelog.PartitionID) copyVerdict) *Engine {
+
+	t.Helper()
+	e := &Engine{backends: &Backends{}, dataView: view}
+	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	e.local = localWith(e, now, read)
+	router, err := estate.NewRouter(estate.RouterOptions{
+		Self: "data-self", Queue: silentAsker{}, Placement: e.estatePlacement(),
+		Local: e.local, Session: estate.NewSession(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.router = router
+	return e
+}
+
+// silentAsker is a fleet nobody else answers in.
+type silentAsker struct{}
+
+func (silentAsker) Ask(context.Context, string, []byte, int) ([][]byte, error) { return nil, nil }
+
+// A NODE THAT ANSWERS EVERY PARTITION ITS SEATS NEED FROM ITS OWN COPY ROUTES
+// THEM WITHOUT THE VIEW — the router asks this node first and asks nobody
+// where it answers — so a view gone unknown past the bound sheds none of its
+// seats and withholds none of its claims. Under layout 0 that is every data
+// node whose copy is sound: a partial coordination fault that stopped the
+// fleet listing and not the seat renewals used to release a single data
+// node's every seat, and then refuse to claim them back, while its own copy
+// served them all along. A node that must ask another holder for any
+// partition still sheds on the same view, since its seats' calls have nowhere
+// it can name to go.
+func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
+	t.Parallel()
+	view, now := staleView(t)
+	var faulted atomic.Bool
+	e := dataNodeOver(t, view, now, func(context.Context, *native, statelog.PartitionID) copyVerdict {
+		if faulted.Load() {
+			return copyVerdict{fault: "tracker", answers: true}
+		}
+		return copyVerdict{answers: true}
+	})
+	judged(t.Context(), e.local, statelog.EstatePartition)
+
+	if ok, reason := e.serviceable(now()); !ok {
+		t.Fatalf("a data node serving its seats from its own copy shed them over a stale "+
+			"view: %s", reason)
+	}
+	if !e.NativeHydrated(t.Context()) {
+		t.Fatal("a data node whose own copy admits a seat withheld its claims over a stale view")
+	}
+
+	// ITS COPY WRONG, it serves nothing itself: the view decides, and
+	// cannot.
+	faulted.Store(true)
+	e.local.mu.Lock()
+	delete(e.local.verdicts, statelog.EstatePartition)
+	e.local.mu.Unlock()
+	judged(t.Context(), e.local, statelog.EstatePartition)
+	if ok, _ := e.serviceable(now()); ok {
+		t.Fatal("a node whose copy is wrong and whose view cannot name a holder kept its seats")
+	}
+	if e.NativeHydrated(t.Context()) {
+		t.Fatal("a node whose copy is wrong and whose view cannot name a holder claimed a seat")
+	}
+
+	// A NODE HOLDING NO DATA, on the same view, sheds.
+	stateless := &Engine{dataView: view}
+	stateless.remote.Store(&remoteNative{tracker: true})
+	if ok, reason := stateless.serviceable(now()); ok ||
+		!strings.Contains(reason, "cannot say who serves the estate") {
+		t.Fatalf("a node holding no data kept its seats over a view that cannot route (%v, %q)",
+			ok, reason)
+	}
+	// AND A COMPANY ENTIRELY ON VENDORS routes nothing, so nothing sheds.
+	vendors := &Engine{dataView: view}
+	vendors.remote.Store(&remoteNative{})
+	if ok, reason := vendors.serviceable(now()); !ok {
+		t.Fatalf("a company routing nothing shed its seats: %s", reason)
+	}
+}
+
+// ADMISSION WAITS FOR THE PARTITION A SEAT CANNOT DO WITHOUT, under every
+// layout: the tracker's CATALOGUE, which every create reads — the one
+// partition under layout 0, the company space's under a divided layout — and
+// the knowledge base's one partition where there is one. A layout that gives a
+// native half nothing to wait for is refused rather than read as nothing to
+// wait for, which would admit a seat onto a company nobody checked.
+func TestSeatAdmissionWaitsForThePartitionsASeatCannotDoWithout(t *testing.T) {
+	t.Parallel()
+	company := statelog.PartitionID{Space: statelog.SpaceCompany}
+	noCompany := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{tracker.Domain{}.Name()}},
+		{Space: statelog.SpacePages, Partitions: 2, Domains: []string{pages.Domain{}.Name()}},
+	}}
+	noPages := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{tracker.Domain{}.Name()}},
+		{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{tracker.Domain{}.Name()}},
+	}}
+	for _, c := range []struct {
+		name             string
+		layout           statelog.Layout
+		runTracker, wiki bool
+		want             []seatNeed
+		unaddressed      bool
+	}{
+		{name: "layout 0, both halves", layout: LayoutZero(), runTracker: true, wiki: true,
+			want: []seatNeed{{partition: statelog.EstatePartition, tracker: true, pages: true}}},
+		{name: "layout 0, the wiki alone", layout: LayoutZero(), wiki: true,
+			want: []seatNeed{{partition: statelog.EstatePartition, pages: true}}},
+		{name: "layout 0, nothing native", layout: LayoutZero()},
+		{name: "layout 1, both halves", layout: DefaultLayoutOne(), runTracker: true, wiki: true,
+			want: []seatNeed{{partition: company, tracker: true}}},
+		{name: "layout 1, the wiki alone", layout: DefaultLayoutOne(), wiki: true},
+		{name: "no company space", layout: noCompany, runTracker: true, unaddressed: true},
+		{name: "no pages log", layout: noPages, wiki: true, unaddressed: true},
+	} {
+		got, err := seatNeeds(c.layout, c.runTracker, c.wiki)
+		switch {
+		case c.unaddressed:
+			if !errors.Is(err, estate.ErrUnaddressed) {
+				t.Errorf("%s: seatNeeds = (%v, %v), want ErrUnaddressed", c.name, got, err)
+			}
+		case err != nil || !slices.Equal(got, c.want):
+			t.Errorf("%s: seatNeeds = (%+v, %v), want %+v", c.name, got, err, c.want)
+		}
+	}
 }

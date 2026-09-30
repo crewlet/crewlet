@@ -213,32 +213,10 @@ func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.B
 // request away from a sound copy, nor bring a wrong one back into service on no
 // information. A copy never judged answers nothing: nobody has measured it.
 func (l *localEstate) verdict(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict {
-	l.mu.Lock()
-	slot := l.verdicts[p]
-	if slot == nil {
-		slot = &verdictSlot{}
-		l.verdicts[p] = slot
-	}
-	if slot.known && l.now().Sub(slot.held.at) < servingRecheck {
-		v := slot.held.copyVerdict
-		l.mu.Unlock()
+	slot, v, known, reading := l.peek(ctx, n, p)
+	if known {
 		return v
 	}
-	reading := slot.reading
-	if reading == nil {
-		reading = make(chan struct{})
-		slot.reading = reading
-		// DETACHED from the request that found the verdict stale, since
-		// every request after it shares what it reads, and BOUNDED by
-		// [servingRead], which is the goroutine's whole lifetime.
-		go l.refresh(context.WithoutCancel(ctx), n, p, slot, reading)
-	}
-	if slot.known {
-		v := slot.held.copyVerdict
-		l.mu.Unlock()
-		return v
-	}
-	l.mu.Unlock()
 	select {
 	case <-reading:
 	case <-ctx.Done():
@@ -249,6 +227,57 @@ func (l *localEstate) verdict(ctx context.Context, n *native, p statelog.Partiti
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return slot.held.copyVerdict
+}
+
+// peek is p's verdict as held NOW, never waiting: the last one read and true,
+// or false where none has been — and it starts a read wherever the verdict
+// held is older than [servingRecheck] and none is in flight. reading is closed
+// when that read lands.
+func (l *localEstate) peek(ctx context.Context, n *native, p statelog.PartitionID) (
+	slot *verdictSlot, v copyVerdict, known bool, reading chan struct{}) {
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	slot = l.verdicts[p]
+	if slot == nil {
+		slot = &verdictSlot{}
+		l.verdicts[p] = slot
+	}
+	if slot.known && l.now().Sub(slot.held.at) < servingRecheck {
+		return slot, slot.held.copyVerdict, true, nil
+	}
+	reading = slot.reading
+	if reading == nil {
+		reading = make(chan struct{})
+		slot.reading = reading
+		// DETACHED from the request that found the verdict stale, since
+		// every request after it shares what it reads, and BOUNDED by
+		// [servingRead], which is the goroutine's whole lifetime.
+		go l.refresh(context.WithoutCancel(ctx), n, p, slot, reading)
+	}
+	return slot, slot.held.copyVerdict, slot.known, reading
+}
+
+// servesUnasked reports whether this node answers p from its own copy as far
+// as it can tell WITHOUT WAITING: it serves p, runs its native runtime, and the
+// last verdict read of the copy — where one has been — found it sound.
+//
+// For serviceability, which asks it on every sweep and may not wait on the
+// broker. A copy nobody has judged yet is not read as a wrong one — its first
+// read is started here, and the next sweep has the answer — and a verdict held
+// past the recheck answers while the read that replaces it runs, exactly as a
+// request is answered.
+func (l *localEstate) servesUnasked(p statelog.PartitionID) bool {
+	serving, err := l.holding.Serving(p)
+	if err != nil || !serving {
+		return false
+	}
+	n := l.e.native.Load()
+	if n == nil {
+		return false
+	}
+	_, v, known, _ := l.peek(context.Background(), n, p)
+	return !known || v.fault == ""
 }
 
 // refresh reads p's verdict once and stores it in slot, stamped with the
@@ -353,21 +382,96 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 	return seams
 }
 
-// admissionPartitions is the partitions a seat on a company with these native
-// halves needs a serving holder of under layout l: the tracker's catalogue
-// partition, and the knowledge base's — under layout 0 both the one partition.
-func admissionPartitions(l statelog.Layout, runTracker, wiki bool) []statelog.PartitionID {
+// seatNeed is a partition a seat needs a serving holder of before it is
+// admitted, and which of the company's native halves it needs there.
+type seatNeed struct {
+	partition      statelog.PartitionID
+	tracker, pages bool
+}
+
+// seatNeeds is what seat admission waits for under layout l: for a native
+// tracker, the partition holding its CATALOGUE, which every create reads; for
+// a native knowledge base, its one partition where the layout gives it one.
+// Under layout 0 both are estate.000.
+//
+// A KNOWLEDGE BASE DIVIDED BY CONTAINER adds nothing to wait for: no one of its
+// partitions is the one every seat reads, and a page operation on a partition
+// nobody serves is refused naming it, as every operation is. A layout that
+// gives a native half NO partition to wait for — the tracker with neither one
+// partition nor a company space holding its catalogue, the knowledge base with
+// no log at all — is refused ([estate.ErrUnaddressed]) rather than read as
+// nothing to wait for, which would admit a seat onto a company nobody checked.
+func seatNeeds(l statelog.Layout, runTracker, wiki bool) ([]seatNeed, error) {
+	var out []seatNeed
+	need := func(p statelog.PartitionID, tracker, pages bool) {
+		for i := range out {
+			if out[i].partition == p {
+				out[i].tracker = out[i].tracker || tracker
+				out[i].pages = out[i].pages || pages
+				return
+			}
+		}
+		out = append(out, seatNeed{partition: p, tracker: tracker, pages: pages})
+	}
+	if runTracker {
+		p, err := trackerCatalogue(l)
+		if err != nil {
+			return nil, err
+		}
+		need(p, true, false)
+	}
+	if wiki {
+		name := pages.Domain{}.Name()
+		switch logs := l.LogsOf(name); len(logs) {
+		case 0:
+			return nil, fmt.Errorf("%w: layout %d carries no log of the %s domain, so a "+
+				"seat on a company running its knowledge base natively has nowhere to "+
+				"read it", estate.ErrUnaddressed, l.Number, name)
+		case 1:
+			need(logs[0].Partition, false, true)
+		}
+	}
+	return out, nil
+}
+
+// trackerCatalogue is the partition holding the tracker's catalogue under l:
+// the domain's one partition where the layout gives it one, and otherwise the
+// company space's, where a divided layout keeps the company-wide objects every
+// tracker partition must see.
+func trackerCatalogue(l statelog.Layout) (statelog.PartitionID, error) {
+	name := tracker.Domain{}.Name()
+	if p := l.OnlyPartition(name); p.Valid() {
+		return p, nil
+	}
+	company := statelog.PartitionID{Space: statelog.SpaceCompany}
+	for _, log := range l.LogsOf(name) {
+		if log.Partition == company {
+			return company, nil
+		}
+	}
+	return statelog.PartitionID{}, fmt.Errorf("%w: layout %d gives the %s domain neither "+
+		"one partition nor a company space to keep its catalogue in, and every create "+
+		"reads the catalogue", estate.ErrUnaddressed, l.Number, name)
+}
+
+// routedPartitions is every partition a seat's calls may address under l on a
+// company running these halves natively: each partition carrying a log of the
+// tracker's domain or the knowledge base's, beside which the vectors a search
+// reads are kept.
+func routedPartitions(l statelog.Layout, runTracker, wiki bool) []statelog.PartitionID {
 	var out []statelog.PartitionID
-	add := func(p statelog.PartitionID) {
-		if p.Valid() && !slices.Contains(out, p) {
-			out = append(out, p)
+	add := func(domain string) {
+		for _, log := range l.LogsOf(domain) {
+			if !slices.Contains(out, log.Partition) {
+				out = append(out, log.Partition)
+			}
 		}
 	}
 	if runTracker {
-		add(l.OnlyPartition(tracker.Domain{}.Name()))
+		add(tracker.Domain{}.Name())
 	}
 	if wiki {
-		add(l.OnlyPartition(pages.Domain{}.Name()))
+		add(pages.Domain{}.Name())
 	}
 	return out
 }

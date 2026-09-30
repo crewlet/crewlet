@@ -151,9 +151,13 @@ call is refused naming the partition nobody serves, which is the right trade
 for rows that are wrong — the alternative is agents acting on them.
 
 What a node does give its seats back for is not being able to **route** at
-all: its view of who serves the estate has been unreadable for longer than the
-60-second bound every cached coordination fact is held to (`unserviceable`,
-`seats_shed_unserviceable`). The release is voluntary, like a rebalance: the
+all: a partition its seats' calls address that it does not answer from its own
+copy, while its view of who serves the estate has been unreadable for longer
+than the 60-second bound every cached coordination fact is held to
+(`unserviceable`, `seats_shed_unserviceable`). A node that answers every such
+partition from its own copy routes them without the view — under the
+single-file layout, every data node whose copy is sound — and keeps its seats
+whatever the view says. The release is voluntary, like a rebalance: the
 in-flight turn finishes, and the seat leaves when it goes idle.
 
 ## Fencing: what it protects, and what it cannot
