@@ -274,7 +274,14 @@ Today's estate is one partition, `estate.000`, which every data node serves
 from the moment it starts and no node joins or leaves while it runs — and a
 node without the `data` role serves nothing and writes nothing, as it always
 has. So none of these rules refuses anything today; they are the rules a
-divided estate is held to from its first record.
+divided estate is held to from its first record. A data node's estate lease
+may meanwhile say `catching_up` of `estate.000`: what the lease says of a
+partition is how far that node's copy has applied, which is what the
+[estate map](../concepts/estate-placement.md) promotes a joining node on, and
+under today's estate nothing reads it to decide who may write. Once partitions
+move, the two are one step — a joining node starts to serve a partition's
+writes when its lease says `serving`, and a leaving one stops when its lease
+says `draining`.
 
 ### A node that leaves a partition releases its logs
 

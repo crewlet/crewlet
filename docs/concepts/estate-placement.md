@@ -101,6 +101,15 @@ The `estate-map` duty runs one step per partition per tick:
    a snapshot transfer, while a join into a partition nobody serves (every
    partition of a new deployment) has no donor to wait for.
 
+The write side follows the same states. A joining node takes the partition's
+writes from the moment its lease says `serving`, and a leaving one stops taking
+them when its lease says `draining` and then **releases** each of the
+partition's logs, so a write it still had in flight is dropped on every node
+rather than applied behind its back — see
+[Replication](../guides/replication.md#a-node-that-leaves-a-partition-releases-its-logs).
+A node asked to write to a partition it does not serve refuses `not_holder`,
+and another node that serves it takes the write.
+
 A **copy**, to every surface and alarm, is a holder the map lists serving whose
 node holds a live estate lease saying its store is healthy and that it runs the
 map's layout. The map itself keeps a serving holder serving for membership's

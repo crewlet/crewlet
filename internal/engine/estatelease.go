@@ -38,8 +38,12 @@ import (
 //
 // The layout this build runs is the single-file one: one space, one
 // partition, `estate.000`, held whole by every data node. So the lease says
-// exactly that — layout 0, no map acted on (there is none), and one
-// partition, in the state this node's copy is in:
+// exactly that — layout 0, no map acted on (there is none), and the one
+// partition this node holds, in the state this node's copy is in. WHICH
+// partitions it names is [heldIn]'s answer, the rule the files a node keeps
+// open ([HeldPartitions]) and the logs it may write ([holdingOf]) are read
+// from, so the lease can never describe a partition the node does not hold,
+// or leave out one whose logs it writes:
 //
 //   - `serving` when the copy is established, has drained since its
 //     appliers started and is within the snapshot slack of every log's end
@@ -60,7 +64,17 @@ import (
 // them.
 //
 // Nothing under layout 0 reads the partition's state: there is no map to
-// promote a joiner or release a leaver on.
+// promote a joiner or release a leaver on. And the write authority does not
+// read it either. `serving` HERE is how far the copy has applied — what a map
+// promotes a joiner on — while serving a partition's WRITES ([holdingOf]) is
+// the node's own account of where it stands in a join or a leave, and under
+// layout 0 a data node stands in none: it serves estate.000 from boot, while
+// this lease may still say `catching_up`. Refusing its writes until the lease
+// said `serving` would refuse every write a restarted node takes before its
+// appliers drain, which no layout-0 fleet has ever done. The two become one
+// step once partitions move: a joiner's lease says `serving` at the moment it
+// begins to serve the partition's writes, and a leaver stops serving them at
+// the moment its lease says `draining`.
 //
 // # The store's health, and its free space
 //
@@ -88,6 +102,10 @@ type estateLeaseAccount struct {
 	// layout is the layout this node runs.
 	layout statelog.Layout
 
+	// held is every partition of layout this node holds ([heldIn]) — what
+	// the lease describes.
+	held []statelog.PartitionID
+
 	// runtime is the estate runtime whose copy the lease describes.
 	runtime estateRuntime
 
@@ -110,9 +128,11 @@ type estateLeaseAccount struct {
 // newEstateLeaseAccount is the account of this data node's native runtime n,
 // under the node's Tier A.
 func newEstateLeaseAccount(boot *config.Bootstrap, db *store.DB, n *native) *estateLeaseAccount {
+	layout := LayoutZero()
 	a := &estateLeaseAccount{
 		weight: boot.Store.Estate.EstateWeight(),
-		layout: LayoutZero(),
+		layout: layout,
+		held:   heldIn(boot, layout),
 		// THE RUNTIME AS AN INTERFACE ONLY WHEN THERE IS ONE: a nil
 		// *stateLog in an interface would read as a runtime and be
 		// asked, where a nil interface is refused by meta below.
@@ -139,14 +159,14 @@ func (a *estateLeaseAccount) meta(ctx context.Context) (map[string]any, error) {
 	if a.runtime == nil {
 		return nil, fmt.Errorf("engine: this node has no estate runtime to describe")
 	}
-	// LAYOUT 0 HAS ONE PARTITION, and a layout this build runs that had
-	// more would need a runtime that says what it holds of each — which
-	// is the join and leave executor's, not this account's.
-	parts := a.layout.Partitions()
+	// A DATA NODE UNDER LAYOUT 0 HOLDS ONE PARTITION, and a node holding
+	// more would need a runtime that says what it holds of each — which is
+	// the join and leave executor's, not this account's — while one
+	// holding none has no copy to describe.
+	parts := a.held
 	if len(parts) != 1 {
-		return nil, fmt.Errorf("engine: the estate lease describes a copy of layout "+
-			"%d's one partition, and layout %d has %d", a.layout.Number,
-			a.layout.Number, len(parts))
+		return nil, fmt.Errorf("engine: the estate lease describes a copy of one "+
+			"partition, and this node holds %d of layout %d", len(parts), a.layout.Number)
 	}
 	layout := a.layout.Number
 	m := partmap.Meta{

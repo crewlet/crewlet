@@ -537,7 +537,8 @@ func (v *View) Serving(p statelog.PartitionID) ([]string, uint64, error) {
 }
 
 // Serves reports whether node serves p — the map's half of a node's own
-// account of what it may write (the join and leave executor holds the other).
+// account of what it may write ([statelog.Holding]; the join and leave
+// executor holds the other).
 // Three-valued, as [View.Serving] is.
 func (v *View) Serves(node string, p statelog.PartitionID) (bool, error) {
 	nodes, _, err := v.Serving(p)

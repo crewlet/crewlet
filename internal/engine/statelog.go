@@ -535,9 +535,11 @@ func HeldPartitions(b *config.Bootstrap) ([]store.PartitionFile, error) {
 //
 // ALL OF THEM, because nothing joins or leaves a partition while this build
 // runs: the state log opens every partition of the layout it runs and runs
-// every one of its logs. It is the one rule both what a node holds
-// ([HeldPartitions]) and what it serves ([holdingOf]) are read from, so the
-// files a node keeps open and the logs it may write can never be two answers.
+// every one of its logs. It is the one rule what a node holds
+// ([HeldPartitions]), what it serves ([holdingOf]) and what its estate lease
+// describes ([estateLeaseAccount]) are read from, so the files a node keeps
+// open, the logs it may write and the partitions the estate map is told it
+// holds can never be two answers.
 func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID {
 	if !holdsData(b) {
 		return nil
@@ -555,6 +557,16 @@ func heldIn(b *config.Bootstrap, layout statelog.Layout) []statelog.PartitionID 
 // `data` holds nothing and serves nothing, which is what it always was, since
 // it runs no applier and so no publisher. The set is fixed for the life of the
 // runtime for the same reason, so it is read once, where the runtime is built.
+//
+// NOT THE ESTATE LEASE'S `serving`, which is the copy's own state — how far it
+// has applied, what a map promotes a joiner on — and under layout 0 may say
+// `catching_up` of a partition this node serves: see [estateLeaseAccount].
+// Nor the estate view's Serves (partmap.View), which under layout 0 answers
+// from the presence roster that routing reads at any age, so a roster that
+// could not be listed would refuse `holding_unknown` on a node holding the
+// whole estate. Once partitions move, the join and leave executor answers this
+// instead, from its own steps and the view's map half, and the lease saying
+// `serving` and this starting to serve become one step of a join.
 func holdingOf(b *config.Bootstrap, layout statelog.Layout) statelog.Holding {
 	return statelog.ServesOnly(heldIn(b, layout)...)
 }

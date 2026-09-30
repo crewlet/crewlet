@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // fakeEstate is an estate runtime whose copy is as the case says.
@@ -116,7 +118,7 @@ func TestTheEstateLeaseSaysLayoutZerosOnePartition(t *testing.T) {
 	building := true
 	a := &estateLeaseAccount{
 		weight: 3, labels: map[string]string{"zone": "z1"}, layout: LayoutZero(),
-		runtime: rt, volume: "/var/lib/crewlet",
+		held: LayoutZero().Partitions(), runtime: rt, volume: "/var/lib/crewlet",
 		building: func() bool { return building },
 		free:     func(string) (int64, error) { return 5 << 30, nil },
 	}
@@ -159,6 +161,69 @@ func TestTheEstateLeaseSaysLayoutZerosOnePartition(t *testing.T) {
 
 	if _, err := (&estateLeaseAccount{layout: LayoutZero()}).meta(t.Context()); err == nil {
 		t.Error("a node with no estate runtime wrote a lease")
+	}
+}
+
+// THE LEASE NAMES EXACTLY THE PARTITIONS WHOSE WRITES THE NODE SERVES, both
+// read from one rule ([heldIn]), so a map reading the lease and a publisher
+// asking gate 3 ([holdingOf]) can never be told two different sets: under
+// layout 0 a data node's lease names estate.000, which it serves, and a node
+// without `data`, which serves nothing, writes no lease rather than one naming
+// a partition it may not write. What the lease says OF the partition is its
+// copy's own state, which gate 3 does not read — a copy still catching up
+// serves its writes, as every data node has from boot.
+func TestTheEstateLeaseNamesThePartitionsTheNodeServes(t *testing.T) {
+	t.Parallel()
+	db, err := store.OpenNode(t.Context(), t.TempDir()+"/node.db", store.Options{})
+	if err != nil {
+		t.Fatalf("store.OpenNode: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	rt := &fakeEstate{healthy: true} // never established: catching up
+	// THE ACCOUNT A NODE BUILDS, with a runtime to describe whatever the
+	// node's roles — the premise a node without data never reaches, so
+	// what it would name is judged by the account alone.
+	account := func(b *config.Bootstrap) *estateLeaseAccount {
+		a := newEstateLeaseAccount(b, db, &native{})
+		a.runtime = rt
+		a.free = func(string) (int64, error) { return 1 << 30, nil }
+		return a
+	}
+
+	b := config.DefaultBootstrap()
+	raw, err := account(&b).meta(t.Context())
+	if err != nil {
+		t.Fatalf("a data node's lease: %v", err)
+	}
+	m, ok := partmap.MetaFromLease(raw)
+	if !ok {
+		t.Fatalf("the lease offers no share: %+v", raw)
+	}
+	holding := holdingOf(&b, LayoutZero())
+	served := 0
+	for _, p := range LayoutZero().Partitions() {
+		serving, err := holding.Serving(p)
+		if err != nil {
+			t.Fatalf("Serving(%s): %v", p, err)
+		}
+		state, named := m.Partitions[p.String()]
+		switch {
+		case serving != named:
+			t.Errorf("%s: the lease names it %v and the node serves its writes %v", p, named, serving)
+		case named && state != partmap.PartCatchingUp:
+			t.Errorf("%s: the lease says %q of a copy never established, want catching_up", p, state)
+		}
+		if serving {
+			served++
+		}
+	}
+	if served == 0 || len(m.Partitions) != served {
+		t.Errorf("the lease names %v and the node serves %d partitions", m.Partitions, served)
+	}
+
+	b.Node.Roles = []string{"seats"}
+	if raw, err := account(&b).meta(t.Context()); err == nil {
+		t.Errorf("a node without data, which serves nothing, wrote the lease %+v", raw)
 	}
 }
 
