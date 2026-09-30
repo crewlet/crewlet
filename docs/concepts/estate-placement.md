@@ -421,7 +421,10 @@ live lease) is retired like any other server, once the target serves without
 it, because its copy is faithful and may be the only one to rebuild from.
 `crewlet retention readmit` lifts the bar, and only once every
 log has taken the node back: until then the map's part answers that it waits
-for the logs, and the same operation id finishes both. `crewlet estate map`
+for the logs, and the same operation id finishes both — the in on a node that
+serves every partition, since a node reaches only the logs of the partitions
+it serves ([the retention guide](../guides/retention.md#eviction) says how).
+`crewlet estate map`
 names every bar. The map's answer is a line of the gesture's own: a map that
 could not be written leaves the gesture unfinished, and the same operation id
 finishes it.

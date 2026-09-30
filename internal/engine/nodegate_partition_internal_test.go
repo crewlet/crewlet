@@ -350,9 +350,13 @@ func TestAnEvictionBarsTheNodeFromTheMapAndAReadmissionPutsItBack(t *testing.T) 
 // A log this node does not serve answers not_holder and holds the node's
 // eviction still: an in made then lets the maintainer place that log's
 // partition on the node, every write it decides there gated and the trim
-// passing a holder it counts by its tombstone. So the map part waits, says why,
-// and offers the same gesture again — which, once every log has answered,
-// makes the in.
+// passing a holder it counts by its tombstone. So the map part waits and says
+// why — and where it is finished. A log this node could not write for a reason
+// of its own is finished, and the in made, by the same gesture here; one on a
+// partition this node does not serve answers not_holder here however often it
+// is asked, so the gesture is sent to a node that serves every partition,
+// never round the same one again. Once every log has answered, the in is
+// made.
 func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 	t.Parallel()
 	written := 0
@@ -380,10 +384,43 @@ func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 	if len(recorder.calls) != 0 {
 		t.Fatalf("the map was changed %v with a log still holding the node's eviction", recorder.calls)
 	}
-	if res.Complete() || res.Map == nil || !errors.Is(res.Map.Err, ErrMapAwaitsLogs) ||
-		!res.Map.Remedy().Offers(statelog.GateRetrySameOp) {
-		t.Errorf("the map part answered %+v, complete %v: want it waiting on the logs, "+
-			"with the same gesture again as its remedy", res.Map, res.Complete())
+	var awaits *MapAwaitsLogs
+	if res.Complete() || res.Map == nil || !errors.As(res.Map.Err, &awaits) ||
+		!errors.Is(res.Map.Err, ErrMapAwaitsLogs) ||
+		!slices.Equal(awaits.Elsewhere, []string{"tracker@tracker.001"}) {
+		t.Fatalf("the map part answered %+v, complete %v: want it waiting on the logs, "+
+			"naming the one on a partition this node does not serve", res.Map, res.Complete())
+	}
+	if remedy := res.Map.Remedy(); !slices.Equal(remedy.Actions,
+		[]statelog.GateAction{statelog.GateOtherNode}) ||
+		!strings.Contains(remedy.Detail, "serves every partition") {
+		t.Errorf("a map part waiting on a log this node does not serve offers %+v: the "+
+			"same gesture here answers not_holder for ever, so it must send the operator "+
+			"to a node that serves every partition", remedy)
+	}
+
+	// A LOG THIS NODE COULD NOT FINISH FOR A REASON OF ITS OWN is the same
+	// gesture's here: an outcome it could not tell, and a partition it could
+	// not tell whether it serves — which it may well.
+	unknownHere := gateLog{domain: "tracker@tracker.001", stream: "tracker@tracker.001",
+		write: func(context.Context, string, string, string, bool) (statelog.Result, error) {
+			return statelog.Result{Outcome: statelog.OutcomeUnknown}, nil
+		}}
+	untold := gateLog{domain: "pages@pages.000", stream: "pages@pages.000",
+		unwritten: &statelog.Unavailable{Reason: statelog.ReasonHoldingUnknown,
+			Cause: errors.New("the estate view is stale")}}
+	g.logs = gateLogs(done("tracker@tracker.000"), unknownHere, untold)
+	if res, err = g.Readmit(t.Context(), req); err != nil {
+		t.Fatalf("readmit: %v", err)
+	}
+	awaits = nil
+	if !errors.As(res.Map.Err, &awaits) || len(awaits.Elsewhere) != 0 ||
+		!slices.Equal(res.Map.Remedy().Actions, []statelog.GateAction{statelog.GateRetrySameOp}) {
+		t.Errorf("a map part waiting only on this node's own log answered %+v, remedy %+v: "+
+			"want the same gesture again, here", res.Map, res.Map.Remedy())
+	}
+	if len(recorder.calls) != 0 {
+		t.Fatalf("the map was changed %v with a log still unfinished", recorder.calls)
 	}
 
 	g.logs = gateLogs(done("tracker@tracker.000"), done("tracker@tracker.001"))
@@ -524,8 +561,11 @@ func TestEveryWayTheMapsPartEndsSaysWhatFinishesIt(t *testing.T) {
 			"keeps nothing of the node"},
 		{"an out the map refused", MapGate{Gesture: "out", Err: membership.ErrUnknownMember}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "could not be read or written"},
-		{"logs unfinished", MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}, false,
+		{"logs unfinished", MapGate{Gesture: "in", Err: &MapAwaitsLogs{}}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "every log has taken it back"},
+		{"logs unfinished elsewhere", MapGate{Gesture: "in",
+			Err: &MapAwaitsLogs{Elsewhere: []string{"pages@pages.000"}}}, false,
+			[]statelog.GateAction{statelog.GateOtherNode}, "serves every partition"},
 		{"nowhere else", MapGate{Gesture: "out", Err: membership.ErrNothingPlaceable}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "add a data node"},
 		{"no map yet", MapGate{Gesture: "out", Err: partmap.ErrNoMap}, false,

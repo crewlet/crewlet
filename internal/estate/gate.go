@@ -30,7 +30,11 @@ import (
 // registered on it there, with the node gate sending each log it does not serve
 // through it. Until then the gate reports such a log as not written here, with
 // the remedy of running the gesture through a node that serves the partition
-// under the same operation id — which this operation automates.
+// under the same operation id — which this operation automates. Registering it
+// is also what lets a READMISSION put the node back in the estate map from any
+// node: the in is made only by a gesture that finds every log has taken the
+// node back, so until one gesture reaches every log it is made only on a node
+// that serves every partition (engine.MapAwaitsLogs).
 //
 // Its CLASS is an idempotent write (§G6): a gate record carries the operation
 // id the gesture derived for that log and node, and the log's own ledger

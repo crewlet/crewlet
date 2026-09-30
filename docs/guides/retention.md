@@ -605,10 +605,14 @@ same rule reads per partition, and three things follow from it:
   the copies it comes back with are never routed to: the map lists them
   `leaving`, and the node releases them. A
   readmission puts it back **in**, and only once **every** log has taken it
-  back: until then its line says it waits for the logs, and the same `-op-id`
-  — once the logs a node here does not serve are finished through one that
-  does — makes the in. The answer carries the map's own line (`estate map: out
-  — written`). A map that could not be written leaves the gesture unfinished
+  back — by a gesture that itself finds every log done, and a node reaches only
+  the logs of the partitions it serves. So on a node that serves every
+  partition the same `-op-id` makes the in once the logs are finished; on one
+  that does not, the line says it waits for the logs and names those on
+  partitions the node does not serve: finish them through nodes that serve
+  them, then run the same `-op-id` on a node that serves every partition,
+  where each finished log answers from its own ledger and the in is made. The
+  answer carries the map's own line (`estate map: out — written`). A map that could not be written leaves the gesture unfinished
   however the logs answered, and the same `-op-id` finishes it; a readmission
   of a node the map keeps nothing of — no member, no removal it remembers, no
   bar — is finished and says why. `crewlet estate map` names every bar. Under

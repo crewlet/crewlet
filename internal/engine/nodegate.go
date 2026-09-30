@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,9 +92,15 @@ import (
 // a readmission with a log unfinished leaves the map unwritten, saying it
 // waits for the logs ([ErrMapAwaitsLogs]), and the same gesture under the same
 // operation id — which answers the finished logs from their own ledgers —
-// makes the in once the last log is done. An eviction's bar needs no such
-// wait: it errs in the safe direction whatever the logs answered. The map's
-// answer is its own part of the result ([MapGate]).
+// makes the in once the last log is done. It makes it only where it SEES every
+// log done, and a node sees only the logs of the partitions it serves: a log
+// on another partition is finished through a node that serves it, and the in
+// is then made on a node that serves every partition ([MapAwaitsLogs] names
+// which logs sent the gesture elsewhere). Once the estate routes a gesture's
+// logs to the nodes that serve them ([estate.OpStatelogGate]), one gesture on
+// any node reaches every log, and makes the in there. An eviction's bar needs
+// no such wait: it errs in the safe direction whatever the logs answered. The
+// map's answer is its own part of the result ([MapGate]).
 //
 // The logs are independent — a gate on one log drops that log's records and
 // lifts that log's pin, whatever another did — so they are written AT ONCE,
@@ -239,10 +246,43 @@ type GateResult struct {
 // ErrMapAwaitsLogs is a readmission's map part left unwritten because a log the
 // gesture concerns has not taken the node back yet: the node is put back in the
 // estate map only once every log has, or the maintainer could place a partition
-// on it that the partition's log still gates. The same gesture under the same
-// operation id finishes it once the logs are done.
+// on it that the partition's log still gates. A gesture answers it as a
+// [*MapAwaitsLogs], which says which logs kept it and so where it is finished.
 var ErrMapAwaitsLogs = errors.New("engine: the node is put back in the estate map only once " +
 	"every log has taken it back")
+
+// MapAwaitsLogs is [ErrMapAwaitsLogs] as one gesture met it: which of the logs
+// it left unfinished are on partitions this node does not serve.
+//
+// # Why it matters where the gesture ran
+//
+// The in is made by a gesture that itself finds every log has taken the node
+// back, and a node writes — and reads its ledger for — only the logs of the
+// partitions it serves: every other one answers it `not_holder`, however often
+// it is asked. So a log unfinished HERE because this node could not write it
+// is one the same gesture here finishes, and the in with it; a log on a
+// partition this node does not serve is finished through a node that serves
+// it, and the in is then made only by the gesture run on a node that serves
+// EVERY partition, where each finished log answers from its own ledger. Until
+// the estate routes a gesture's logs to the nodes that serve them
+// ([estate.OpStatelogGate]) — which reaches every log from any node in one
+// call — that is the only node that can put the node back.
+type MapAwaitsLogs struct {
+	// Elsewhere is every log the gesture left unfinished because this node
+	// does not serve its partition, in the gesture's order: empty when
+	// every unfinished log is this node's to write.
+	Elsewhere []string
+}
+
+func (e *MapAwaitsLogs) Error() string {
+	if len(e.Elsewhere) == 0 {
+		return ErrMapAwaitsLogs.Error()
+	}
+	return fmt.Sprintf("%v, and this node does not serve the partitions of %s",
+		ErrMapAwaitsLogs, strings.Join(e.Elsewhere, ", "))
+}
+
+func (e *MapAwaitsLogs) Unwrap() error { return ErrMapAwaitsLogs }
 
 // MapGate is the estate map's part of a gesture: an eviction bars the node from
 // it ([membership.Bar], recorded as `evicted`) — out, and kept out whatever
@@ -277,6 +317,7 @@ func (m MapGate) done() bool {
 // the zero remedy for one it did — beside which a map that places nothing on
 // the node already still says so.
 func (m MapGate) Remedy() statelog.GateRemedy {
+	var awaits *MapAwaitsLogs
 	switch {
 	case m.Err == nil && m.Landed:
 		return statelog.GateRemedy{}
@@ -285,13 +326,23 @@ func (m MapGate) Remedy() statelog.GateRemedy {
 			Detail: "the estate map kept changing under the gesture: the same gesture " +
 				"under the same operation id writes it again, and every log that holds " +
 				"its record answers from its own rows"}
+	case errors.As(m.Err, &awaits) && len(awaits.Elsewhere) > 0:
+		// NOT HERE, HOWEVER OFTEN: see [MapAwaitsLogs].
+		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateOtherNode},
+			Detail: fmt.Sprintf("the node is put back in the estate map only by a gesture "+
+				"that finds every log has taken it back, so that no partition is placed "+
+				"on it while its log still gates it — and a node reaches only the logs "+
+				"of the partitions it serves, which this one does not for %s: finish "+
+				"those through a node that serves each, then run the same gesture under "+
+				"the same operation id on a node that serves every partition, where each "+
+				"finished log answers from its own ledger and the gesture puts the node "+
+				"back", strings.Join(awaits.Elsewhere, ", "))}
 	case errors.Is(m.Err, ErrMapAwaitsLogs):
 		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
 			Detail: "the node is put back in the estate map only once every log has taken " +
 				"it back, so that no partition is placed on it while its log still gates " +
-				"it: finish the logs this answer names — the same gesture under the same " +
-				"operation id, through a node that serves each — and the same gesture then " +
-				"puts it back"}
+				"it: the same gesture under the same operation id finishes the logs this " +
+				"answer names, and then puts it back"}
 	case m.Gesture == "in" && errors.Is(m.Err, membership.ErrUnknownMember):
 		return statelog.GateRemedy{Detail: "the estate map keeps nothing of the node to " +
 			"lift: it is no member the map holds, and no node it remembers removing or " +
@@ -1183,7 +1234,7 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (Ga
 	switch {
 	case g.estate == nil:
 	case readmit && !out.logsDone():
-		out.Map = &MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}
+		out.Map = &MapGate{Gesture: "in", Err: &MapAwaitsLogs{Elsewhere: out.notServedHere()}}
 	default:
 		out.Map = g.mapGesture(ctx, req, readmit)
 	}
@@ -1199,6 +1250,20 @@ func (r GateResult) logsDone() bool {
 		}
 	}
 	return true
+}
+
+// notServedHere is every log the gesture could not write because this node
+// does not serve its partition ([statelog.ReasonNotHolder]), in its order.
+func (r GateResult) notServedHere() []string {
+	var out []string
+	for _, d := range r.Domains {
+		var refusal *statelog.Unavailable
+		if errors.As(d.Err, &refusal) && refusal.Reason == statelog.ReasonNotHolder &&
+			refusal.CopyWriter == "" {
+			out = append(out, d.Domain)
+		}
+	}
+	return out
 }
 
 // mapGesture is the estate map's part of a gesture: out for an eviction, in for
