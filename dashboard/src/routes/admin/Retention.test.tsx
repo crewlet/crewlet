@@ -16,14 +16,21 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   DomainBlock,
   DomainSize,
+  donorsCounted,
   gateAction,
   MaintenanceBanner,
   NodePositions,
   ServedLevelBanner,
+  snapshotKey,
   Terms,
   Tombstone,
 } from "./Retention.tsx";
-import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
+import type {
+  RetentionDomain,
+  RetentionNode,
+  RetentionSnapshot,
+  RetentionTerm,
+} from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -395,4 +402,32 @@ test("a node on a generation the log left is labelled rather than caught up", ()
   expect(screen.getByText("log diverged")).toBeTruthy();
   expect(screen.queryByText("lag —")).toBeNull();
   expect(screen.queryByText(/behind/)).toBeNull();
+});
+
+// A DIVIDED LAYOUT'S DONORS ARE COUNTED PER PARTITION. A snapshot is a copy of
+// one partition's file and the trim's sixth term is per log, so two donors of
+// one partition and none of another is a fleet that cannot rejoin the second
+// — which a count of every row read as two donors, satisfied. Each row is also
+// its own row: one node's two partitions are two artefacts, not one twice.
+test("a divided layout's donors are those of the partition fewest nodes hold", () => {
+  const at = "2026-09-30T12:00:00Z";
+  const held = (node_id: string, partition?: string): RetentionSnapshot => ({
+    node_id,
+    ...(partition ? { partition } : {}),
+    at,
+    domains: { [partition ? `tracker@${partition}` : "tracker"]: 4 },
+  });
+  const divided = [
+    held("node-a", "tracker.000"),
+    held("node-b", "tracker.000"),
+    held("node-a", "tracker.001"),
+    { node_id: "node-b", partition: "tracker.001", skip: "lagging" },
+    // A NODE REPORTING NO PARTITION donates none, and is no partition.
+    { node_id: "node-c" },
+  ];
+  expect(donorsCounted(divided)).toBe(1);
+  expect(new Set(divided.map(snapshotKey)).size).toBe(divided.length);
+
+  // THE CONTROL: layout 0's rows name no partition, and count as one.
+  expect(donorsCounted([held("node-a"), held("node-b"), { node_id: "node-c" }])).toBe(2);
 });

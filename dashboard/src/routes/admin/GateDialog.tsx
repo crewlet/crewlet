@@ -79,7 +79,11 @@ import {
   rest,
   RestError,
 } from "~/protocol/index.ts";
-import type { RetentionGateDomain, RetentionGateResult } from "~/protocol/index.ts";
+import type {
+  RetentionGateDomain,
+  RetentionGateMap,
+  RetentionGateResult,
+} from "~/protocol/index.ts";
 
 /**
  * A gesture the screen is holding for one node and one sign: the operation id
@@ -104,14 +108,24 @@ export interface GateGesture {
 
 /**
  * Whether a held gesture is one to finish under its own operation id: a
- * request nobody answered, or an incomplete answer where some log's remedy
- * keeps the id — sent again now, through another node, or once the log has
- * room or has been re-anchored.
+ * request nobody answered, or an incomplete answer where some part's remedy —
+ * a log's, or the estate map's — keeps the id: sent again now, through another
+ * node, or once the log has room or has been re-anchored.
  */
 export function finishable(g: GateGesture): boolean {
   if (g.unanswered) return true;
   if (!g.answer || g.answer.complete) return false;
-  return g.answer.domains.some((d) => (d.actions ?? []).some(keepsOperation));
+  return remedies(g.answer).some((actions) => actions.some(keepsOperation));
+}
+
+/**
+ * Every part's remedy actions — each log's, then the estate map's where the
+ * layout places one — so a summary asks one question of the whole gesture.
+ */
+function remedies(result: RetentionGateResult): string[][] {
+  const out = result.domains.filter((d) => !holds(d)).map((d) => d.actions ?? []);
+  if (result.map) out.push(result.map.actions ?? []);
+  return out;
 }
 
 /**
@@ -526,8 +540,8 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
   const done = evict ? "evicted" : "readmitted";
   const unfinished = result.domains.filter((d) => !holds(d));
   const pending = result.domains.filter((d) => d.outcome === "pending");
-  const retryNow = unfinished.some((d) => d.actions?.includes("retry_same_op"));
-  const keeps = unfinished.some((d) => (d.actions ?? []).some(keepsOperation));
+  const retryNow = remedies(result).some((actions) => actions.includes("retry_same_op"));
+  const keeps = remedies(result).some((actions) => actions.some(keepsOperation));
 
   let summary;
   if (result.complete && pending.length === 0) {
@@ -564,8 +578,10 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
       <Callout variant="danger" role="alert">
         <span>
           <strong>Not finished</strong> — {result.domains.length - unfinished.length} of{" "}
-          {result.domains.length} logs hold the record. Finish it under the same operation id: a log
-          that already holds the record answers from its own rows and is not written twice.
+          {result.domains.length} logs hold the record
+          {result.map && !result.map.landed && <>, and the estate map is not written</>}. Finish it
+          under the same operation id: a log that already holds the record answers from its own rows
+          and is not written twice.
         </span>
       </Callout>
     );
@@ -609,6 +625,22 @@ export function GateOutcome({ result, evict }: { result: RetentionGateResult; ev
               ))}
           </li>
         ))}
+        {result.map && (
+          <li key="estate map" className="col" style={{ gap: 4 }}>
+            <span className="row wrap gap-1 baseline">
+              <InlineCode>estate map</InlineCode>
+              <MapAnswer m={result.map} />
+            </span>
+            {!result.map.landed && result.map.hint && (
+              <span className="t-caption">{result.map.hint}</span>
+            )}
+            {(result.map.actions ?? []).map((a) => (
+              <span key={a} className="t-caption">
+                {actionWords(a, { evict, stream: "the estate map", opId: result.op_id })}
+              </span>
+            ))}
+          </li>
+        )}
       </ul>
       <span className="t-caption">
         Operation <InlineCode>{result.op_id}</InlineCode>
@@ -654,6 +686,26 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     <span className="t-caption">
       <Tag variant={d.outcome === "applied" ? "success" : "warning"}>{d.outcome}</Tag> at{" "}
       {d.position.stream} {d.position.seq}
+    </span>
+  );
+}
+
+/**
+ * The estate map's answer: the gesture it made — `out` for an eviction, `in`
+ * for a readmission — and whether the stored map now says so.
+ */
+function MapAnswer({ m }: { m: RetentionGateMap }) {
+  if (m.landed) {
+    return (
+      <span className="t-caption">
+        <Tag variant="success">{m.gesture}</Tag> written
+      </span>
+    );
+  }
+  return (
+    <span className="t-caption">
+      <Tag variant={m.actions?.length ? "danger" : "neutral"}>{m.gesture}</Tag> not written
+      {m.error && <> — {m.error}</>}
     </span>
   );
 }

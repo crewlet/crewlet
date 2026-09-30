@@ -1617,6 +1617,12 @@ export interface RetentionEviction {
 
 export interface RetentionSnapshot {
   node_id: string;
+  /**
+   * The partition the artefact is a copy of, on a divided layout's row — a
+   * node donates each partition it holds separately — and ABSENT under
+   * layout 0, whose one artefact is the whole estate.
+   */
+  partition?: string;
   /** Absent when the node holds none, in which case `skip` says why. */
   domains?: Record<string, number>;
   at?: string;
@@ -1656,6 +1662,28 @@ export interface RetentionGateResult {
   /** Whether every log holds the record durably (`applied` or `pending`). */
   complete: boolean;
   domains: RetentionGateDomain[];
+  /**
+   * The estate map's part of the gesture — an eviction takes the node out of
+   * it, a readmission puts it back — and ABSENT under a layout that places no
+   * map (layout 0, where every data node holds the whole estate).
+   */
+  map?: RetentionGateMap;
+}
+
+/**
+ * The estate map's answer to a gate gesture, in a log's shape: whether the
+ * stored map now says what the gesture asked, or why not, with `actions` and
+ * `hint` exactly when the gesture did not finish it — which an `error` with
+ * neither is not: a map that places nothing on the node has nothing to take it
+ * off.
+ */
+export interface RetentionGateMap {
+  /** `out` for an eviction, `in` for a readmission. */
+  gesture: string;
+  landed: boolean;
+  error?: string;
+  actions?: string[];
+  hint?: string;
 }
 
 /** One log's answer to a gate gesture. */
