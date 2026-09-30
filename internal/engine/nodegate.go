@@ -72,15 +72,26 @@ import (
 //
 // # And the estate map
 //
-// Under a divided layout an eviction also takes the node OUT of the estate
-// map, so the maintainer places nothing on it if it comes back, and a
-// readmission puts it back IN. Both AFTER the logs: the map is the part an
-// operator can make again on its own, and a readmission's in placing the
-// node before its logs have taken it back would be the one order in which a
-// partition is placed on a node that partition's logs still gate — which is
-// safe, since that gate refuses the node's every write there, and still a
-// placement the operator did not finish asking for. The map's answer is its
-// own part of the result ([MapGate]).
+// Under a divided layout an eviction also BARS the node from the estate map
+// ([EstateControl.Bar]) — takes it out, and keeps it out through its removal
+// for absence and its return — so the maintainer never places a partition on
+// an evicted node that comes back, and a readmission puts it back IN. An
+// operator's plain out would not do: it ends when membership removes the
+// member, which for a machine an operator evicts is usually already the case,
+// and a repaired machine restarted under its old id was then placed on after
+// its probation while every log it was placed to serve still gated it.
+//
+// Both AFTER the logs, and the in ONLY ONCE EVERY LOG HAS TAKEN THE NODE BACK:
+// an in placing the node while one of its logs still holds its eviction is the
+// one order in which a partition is placed on a node that partition's log
+// gates — every write it decides there refused, and the trim, counting it from
+// a tombstone rather than its row, passing the holder that applies the log. So
+// a readmission with a log unfinished leaves the map unwritten, saying it
+// waits for the logs ([ErrMapAwaitsLogs]), and the same gesture under the same
+// operation id — which answers the finished logs from their own ledgers —
+// makes the in once the last log is done. An eviction's bar needs no such
+// wait: it errs in the safe direction whatever the logs answered. The map's
+// answer is its own part of the result ([MapGate]).
 //
 // The logs are independent — a gate on one log drops that log's records and
 // lifts that log's pin, whatever another did — so they are written AT ONCE,
@@ -223,11 +234,19 @@ type GateResult struct {
 	Map *MapGate
 }
 
-// MapGate is the estate map's part of a gesture: an eviction takes the node
-// out of it ([membership.Out], recorded as `evicted`), a readmission puts it
-// back ([membership.In]).
+// ErrMapAwaitsLogs is a readmission's map part left unwritten because a log the
+// gesture concerns has not taken the node back yet: the node is put back in the
+// estate map only once every log has, or the maintainer could place a partition
+// on it that the partition's log still gates. The same gesture under the same
+// operation id finishes it once the logs are done.
+var ErrMapAwaitsLogs = errors.New("engine: the node is put back in the estate map only once " +
+	"every log has taken it back")
+
+// MapGate is the estate map's part of a gesture: an eviction bars the node from
+// it ([membership.Bar], recorded as `evicted`) — out, and kept out whatever
+// becomes of its membership — and a readmission puts it back ([membership.In]).
 type MapGate struct {
-	// Gesture is "out" or "in".
+	// Gesture is "out" for an eviction's bar and "in" for a readmission.
 	Gesture string
 
 	// Landed is whether the stored map now says what the gesture asked.
@@ -237,12 +256,17 @@ type MapGate struct {
 	Err error
 }
 
-// done reports a map that says what the gesture asked — or one that places
-// nothing on the node already: a node the map neither holds nor remembers,
-// or one it removed for absence, is on no partition's target to take it off.
+// done reports a map that says what the gesture asked — or, for a readmission,
+// one that keeps nothing of the node to lift: a node it neither holds,
+// remembers nor bars has nothing keeping it off the map.
+//
+// NEVER AN EVICTION'S REFUSAL: a bar is written whether or not the map holds
+// the node, so an eviction whose map part did not land has not finished — a
+// map that "places nothing on the node" today is one that will the day the
+// machine comes back.
 func (m MapGate) done() bool {
 	if m.Err != nil {
-		return errors.Is(m.Err, membership.ErrUnknownMember)
+		return m.Gesture == "in" && errors.Is(m.Err, membership.ErrUnknownMember)
 	}
 	return m.Landed
 }
@@ -259,11 +283,17 @@ func (m MapGate) Remedy() statelog.GateRemedy {
 			Detail: "the estate map kept changing under the gesture: the same gesture " +
 				"under the same operation id writes it again, and every log that holds " +
 				"its record answers from its own rows"}
-	case errors.Is(m.Err, membership.ErrUnknownMember):
-		return statelog.GateRemedy{Detail: "the estate map places nothing on the node: " +
-			"it is no member the map holds, or one it removed for absence — which, " +
-			"seen back, is placed on nothing until it has been present for the " +
-			"membership grace"}
+	case errors.Is(m.Err, ErrMapAwaitsLogs):
+		return statelog.GateRemedy{Actions: []statelog.GateAction{statelog.GateRetrySameOp},
+			Detail: "the node is put back in the estate map only once every log has taken " +
+				"it back, so that no partition is placed on it while its log still gates " +
+				"it: finish the logs this answer names — the same gesture under the same " +
+				"operation id, through a node that serves each — and the same gesture then " +
+				"puts it back"}
+	case m.Gesture == "in" && errors.Is(m.Err, membership.ErrUnknownMember):
+		return statelog.GateRemedy{Detail: "the estate map keeps nothing of the node to " +
+			"lift: it is no member the map holds, and no node it remembers removing or " +
+			"bars, so nothing keeps it off the map"}
 	case errors.Is(m.Err, membership.ErrNothingPlaceable):
 		// THE SAME OPERATION, once there is somewhere else to place: a
 		// fresh one would write every log that already holds the record
@@ -294,10 +324,8 @@ func (m MapGate) Remedy() statelog.GateRemedy {
 // record, and a retry under the same [GateResult.OpID] writes only what is
 // missing — where the log's own answer says a retry can ([DomainGate.Retry]).
 func (r GateResult) Complete() bool {
-	for _, d := range r.Domains {
-		if !d.done() {
-			return false
-		}
+	if !r.logsDone() {
+		return false
 	}
 	if r.Map != nil {
 		// A NODE COUNTED ON NO LOG is complete once the map says so: a
@@ -631,7 +659,7 @@ type NodeGate struct {
 // estateMembership is the estate map's two membership gestures, as the node
 // gate makes them ([EstateControl]).
 type estateMembership interface {
-	Out(ctx context.Context, node, by, reason string) (EstateGesture, error)
+	Bar(ctx context.Context, node, by, reason string) (EstateGesture, error)
 	In(ctx context.Context, node, by string) (EstateGesture, error)
 }
 
@@ -1126,11 +1154,27 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (Ga
 		})
 	}
 	wg.Wait()
-	// THE MAP AFTER THE LOGS — see the file's doc for why the order.
-	if g.estate != nil {
+	// THE MAP AFTER THE LOGS, and a readmission's in only once every one of
+	// them has taken the node back — see the file's doc.
+	switch {
+	case g.estate == nil:
+	case readmit && !out.logsDone():
+		out.Map = &MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}
+	default:
 		out.Map = g.mapGesture(ctx, req, readmit)
 	}
 	return out, nil
+}
+
+// logsDone reports whether every log the gesture concerns holds its record
+// durably.
+func (r GateResult) logsDone() bool {
+	for _, d := range r.Domains {
+		if !d.done() {
+			return false
+		}
+	}
+	return true
 }
 
 // mapGesture is the estate map's part of a gesture: out for an eviction, in for
@@ -1140,6 +1184,6 @@ func (g *NodeGate) mapGesture(ctx context.Context, req GateRequest, readmit bool
 		res, err := g.estate.In(ctx, req.Node, req.By)
 		return &MapGate{Gesture: "in", Landed: res.Landed, Err: err}
 	}
-	res, err := g.estate.Out(ctx, req.Node, req.By, evictedReason)
+	res, err := g.estate.Bar(ctx, req.Node, req.By, evictedReason)
 	return &MapGate{Gesture: "out", Landed: res.Landed, Err: err}
 }

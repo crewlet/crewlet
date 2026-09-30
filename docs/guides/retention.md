@@ -592,16 +592,22 @@ same rule reads per partition, and three things follow from it:
   the node serves and is not running at that instant says so and is finished
   by the same gesture again.
 - **The estate map is part of the gesture.** An eviction also takes the node
-  **out** of the estate map — recorded with the reason `evicted`, so the
-  maintainer places nothing on it if it comes back, exactly as
-  [`crewlet estate out`](../concepts/estate-placement.md) would — and a
-  readmission puts it back **in**. Both are made after every log has answered,
-  and the answer carries the map's own line (`estate map: out — written`).
-  A map that could not be written leaves the gesture unfinished however the
-  logs answered, and the same `-op-id` finishes it; a map that places nothing
-  on the node already — it is no member, or one the map removed for absence —
-  is finished and says why. Under the single-file layout there is no map, and
-  no line for one.
+  **out** of the estate map — recorded with the reason `evicted` — and, unlike
+  [`crewlet estate out`](../concepts/estate-placement.md), the eviction is a
+  **bar**: it is written whether or not the map still holds the node (an
+  evicted machine is usually one the map has already removed for its absence),
+  and neither that removal nor the node's return lifts it. A repaired machine
+  restarted under its old id joins the map out and is placed on nothing until
+  it is readmitted, so no partition lands on a node its logs still gate. A
+  readmission puts it back **in**, and only once **every** log has taken it
+  back: until then its line says it waits for the logs, and the same `-op-id`
+  — once the logs a node here does not serve are finished through one that
+  does — makes the in. The answer carries the map's own line (`estate map: out
+  — written`). A map that could not be written leaves the gesture unfinished
+  however the logs answered, and the same `-op-id` finishes it; a readmission
+  of a node the map keeps nothing of — no member, no removal it remembers, no
+  bar — is finished and says why. `crewlet estate map` names every bar. Under
+  the single-file layout there is no map, and no line for one.
 
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and

@@ -186,6 +186,20 @@ func TestAnEstateGestureLandsInTheStoredMap(t *testing.T) {
 		t.Fatalf("In: %v", err)
 	}
 
+	// A BAR LANDS FOR A NODE THE MAP DOES NOT HOLD — where an out has
+	// nothing to take out — and In lifts it.
+	barred, err := c.Bar(ctx, "gone", "ops@example.com", "evicted")
+	if err != nil || !barred.Landed {
+		t.Fatalf("Bar of a node the map does not hold = (%v, %v), want it landed", barred.Landed, err)
+	}
+	if g := barred.State.Barred["gone"]; g.By != "ops@example.com" || g.Reason != "evicted" {
+		t.Errorf("the bar is recorded as %+v", g)
+	}
+	lifted, err := c.In(ctx, "gone", "ops")
+	if err != nil || !lifted.Landed || lifted.State.Barred != nil {
+		t.Fatalf("In of a barred node = (%v, %v) leaving %v", lifted.Landed, err, lifted.State.Barred)
+	}
+
 	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
 	holder := state.Map.HoldersOf(p)[0].Node
 	moved, err := c.Move(ctx, p, holder, "ops", "rebalancing by hand")

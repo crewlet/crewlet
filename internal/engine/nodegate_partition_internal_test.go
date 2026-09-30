@@ -233,8 +233,8 @@ type mapRecorder struct {
 	atGesture   []int
 }
 
-func (m *mapRecorder) Out(_ context.Context, node, by, reason string) (EstateGesture, error) {
-	return m.record("out " + node + " by " + by + " as " + reason)
+func (m *mapRecorder) Bar(_ context.Context, node, by, reason string) (EstateGesture, error) {
+	return m.record("bar " + node + " by " + by + " as " + reason)
 }
 
 func (m *mapRecorder) In(_ context.Context, node, by string) (EstateGesture, error) {
@@ -252,18 +252,20 @@ func (m *mapRecorder) record(call string) (EstateGesture, error) {
 	return EstateGesture{Landed: true}, nil
 }
 
-// AN EVICTION TAKES THE NODE OUT OF THE ESTATE MAP, AND A READMISSION PUTS IT
+// AN EVICTION BARS THE NODE FROM THE ESTATE MAP, AND A READMISSION PUTS IT
 // BACK — after the logs.
 //
-// Out is what stops the maintainer placing a partition on the node if it comes
-// back, and it records why, so a surface can tell a node an operator judged
-// gone from one taken out for maintenance; in lets it place one again. Both
-// come once every log has answered, and their answer is the gesture's own
-// part: a map that could not be written leaves the gesture incomplete however
-// the logs answered, and a map that places nothing on the node already is
-// finished. Under layout 0 there is no map, and no part of the answer about
-// one.
-func TestAnEvictionTakesTheNodeOutOfTheMapAndAReadmissionPutsItBack(t *testing.T) {
+// The bar is what stops the maintainer placing a partition on the node if it
+// comes back, whatever became of its membership meanwhile, and it records why,
+// so a surface can tell a node an operator judged gone from one taken out for
+// maintenance; in lets it place one again. Both come once every log has
+// answered, and their answer is the gesture's own part: a map that could not be
+// written leaves the gesture incomplete however the logs answered — an
+// eviction's included, whether or not the map holds the node, since a bar is
+// written for a node the map has let go — and a readmission of a node the map
+// keeps nothing of is finished. Under layout 0 there is no map, and no part of
+// the answer about one.
+func TestAnEvictionBarsTheNodeFromTheMapAndAReadmissionPutsItBack(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	written := 0
@@ -295,7 +297,7 @@ func TestAnEvictionTakesTheNodeOutOfTheMapAndAReadmissionPutsItBack(t *testing.T
 	if err != nil {
 		t.Fatalf("readmit: %v", err)
 	}
-	if want := []string{"out node-away by ops as evicted", "in node-away by ops"}; !slices.Equal(recorder.calls, want) {
+	if want := []string{"bar node-away by ops as evicted", "in node-away by ops"}; !slices.Equal(recorder.calls, want) {
 		t.Errorf("the gestures made %v on the estate map, want %v", recorder.calls, want)
 	}
 	if want := []int{2, 4}; !slices.Equal(recorder.atGesture, want) {
@@ -324,17 +326,84 @@ func TestAnEvictionTakesTheNodeOutOfTheMapAndAReadmissionPutsItBack(t *testing.T
 		t.Errorf("an unwritten map reports complete %v with remedy %v, want incomplete "+
 			"and the same gesture again", res.Complete(), res.Map.Remedy().Actions)
 	}
-	// A MAP THAT PLACES NOTHING ON THE NODE already has nothing to take it
-	// off of.
+	// A MAP THAT KEEPS NOTHING OF THE NODE has nothing for a readmission to
+	// lift — and an eviction refused that way has NOT finished: the bar is
+	// what must be written for a node the map has let go.
 	recorder.err = membership.ErrUnknownMember
-	if res, _ = g.Evict(t.Context(), req); !res.Complete() {
-		t.Errorf("a map that places nothing on the node left the gesture incomplete: %+v", res.Map)
+	if res, _ = g.Readmit(t.Context(), req); !res.Complete() {
+		t.Errorf("a readmission the map keeps nothing of left the gesture incomplete: %+v", res.Map)
+	}
+	if res, _ = g.Evict(t.Context(), req); res.Complete() {
+		t.Errorf("an eviction whose bar was refused reports complete: %+v", res.Map)
 	}
 
 	// UNDER LAYOUT 0, no map and no answer about one.
 	g.estate = nil
 	if res, _ = g.Evict(t.Context(), req); res.Map != nil || !res.Complete() {
 		t.Errorf("a gesture with no map answered %+v, complete %v", res.Map, res.Complete())
+	}
+}
+
+// A READMISSION PUTS THE NODE BACK IN THE MAP ONLY ONCE EVERY LOG HAS TAKEN IT
+// BACK.
+//
+// A log this node does not serve answers not_holder and holds the node's
+// eviction still: an in made then lets the maintainer place that log's
+// partition on the node, every write it decides there gated and the trim
+// passing a holder it counts by its tombstone. So the map part waits, says why,
+// and offers the same gesture again — which, once every log has answered,
+// makes the in.
+func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
+	t.Parallel()
+	written := 0
+	done := func(domain string) gateLog {
+		return gateLog{domain: domain, stream: domain,
+			write: func(context.Context, string, string, string, bool) (statelog.Result, error) {
+				return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
+			}}
+	}
+	elsewhere := gateLog{domain: "tracker@tracker.001", stream: "tracker@tracker.001",
+		unwritten: &statelog.Unavailable{Reason: statelog.ReasonNotHolder, Cause: statelog.ErrNotHolder}}
+	recorder := &mapRecorder{logsWritten: &written}
+	g := &NodeGate{
+		logs:         gateLogs(done("tracker@tracker.000"), elsewhere),
+		estate:       recorder,
+		live:         func(context.Context) ([]statelog.Presence, error) { return nil, nil },
+		readmissible: func(context.Context, string) error { return nil },
+		publishing:   func(string) error { return nil },
+	}
+	req := GateRequest{Node: "node-back", By: "ops", OpID: statelog.NewOpID(time.Now(), "readmit")}
+	res, err := g.Readmit(t.Context(), req)
+	if err != nil {
+		t.Fatalf("readmit: %v", err)
+	}
+	if len(recorder.calls) != 0 {
+		t.Fatalf("the map was changed %v with a log still holding the node's eviction", recorder.calls)
+	}
+	if res.Complete() || res.Map == nil || !errors.Is(res.Map.Err, ErrMapAwaitsLogs) ||
+		!res.Map.Remedy().Offers(statelog.GateRetrySameOp) {
+		t.Errorf("the map part answered %+v, complete %v: want it waiting on the logs, "+
+			"with the same gesture again as its remedy", res.Map, res.Complete())
+	}
+
+	g.logs = gateLogs(done("tracker@tracker.000"), done("tracker@tracker.001"))
+	res, err = g.Readmit(t.Context(), req)
+	if err != nil {
+		t.Fatalf("readmit again: %v", err)
+	}
+	if want := []string{"in node-back by ops"}; !slices.Equal(recorder.calls, want) || !res.Complete() {
+		t.Errorf("once every log is done the map was changed %v, complete %v; want %v",
+			recorder.calls, res.Complete(), want)
+	}
+
+	// AN EVICTION'S BAR DOES NOT WAIT: it errs in the safe direction whatever
+	// the logs answered.
+	g.logs = gateLogs(done("tracker@tracker.000"), elsewhere)
+	if _, err := g.Evict(t.Context(), req); err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	if n := len(recorder.calls); n != 2 || !strings.HasPrefix(recorder.calls[1], "bar ") {
+		t.Errorf("an eviction with a log unwritten made %v on the map, want the bar", recorder.calls)
 	}
 }
 
@@ -451,10 +520,12 @@ func TestEveryWayTheMapsPartEndsSaysWhatFinishesIt(t *testing.T) {
 		{"landed", MapGate{Gesture: "out", Landed: true}, true, nil, ""},
 		{"raced out", MapGate{Gesture: "out"}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "kept changing"},
-		{"no member", MapGate{Gesture: "out", Err: membership.ErrUnknownMember}, true, nil,
-			"places nothing on the node"},
-		{"removed", MapGate{Gesture: "in", Err: membership.ErrRemovedMember}, true, nil,
-			"places nothing on the node"},
+		{"nothing to put back", MapGate{Gesture: "in", Err: membership.ErrUnknownMember}, true, nil,
+			"keeps nothing of the node"},
+		{"an out the map refused", MapGate{Gesture: "out", Err: membership.ErrUnknownMember}, false,
+			[]statelog.GateAction{statelog.GateRetrySameOp}, "could not be read or written"},
+		{"logs unfinished", MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}, false,
+			[]statelog.GateAction{statelog.GateRetrySameOp}, "every log has taken it back"},
 		{"nowhere else", MapGate{Gesture: "out", Err: membership.ErrNothingPlaceable}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "add a data node"},
 		{"no map yet", MapGate{Gesture: "out", Err: partmap.ErrNoMap}, false,

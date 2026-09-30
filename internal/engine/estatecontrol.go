@@ -118,8 +118,18 @@ func (c *EstateControl) Out(ctx context.Context, node, by, reason string) (Estat
 	}, "node", node, "by", by, "reason", reason)
 }
 
+// Bar bars a data node from the estate map — an eviction's part in it: taken out
+// if it is a member, and recorded whether or not the map holds it, so that
+// neither its removal nor its return lifts it; only [EstateControl.In] does.
+// by and reason are recorded on the map.
+func (c *EstateControl) Bar(ctx context.Context, node, by, reason string) (EstateGesture, error) {
+	return c.apply(ctx, "bar", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.Bar(s, node, by, reason, c.now())
+	}, "node", node, "by", by, "reason", reason)
+}
+
 // In puts a data node back: the targets may name it again — and vouches for
-// one the map removed for absence and has on probation.
+// one the map removed for absence and has on probation, and lifts a bar.
 func (c *EstateControl) In(ctx context.Context, node, by string) (EstateGesture, error) {
 	return c.apply(ctx, "in", func(s partmap.MapState) (partmap.MapState, error) {
 		return partmap.In(s, node)

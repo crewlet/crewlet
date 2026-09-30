@@ -401,12 +401,19 @@ returns and it takes effect. No gesture
 moves the epoch; the maintainer's next tick moves the holders toward the new
 targets.
 
-**An eviction takes the node out, and a readmission puts it back.**
-[`crewlet retention evict`](../guides/retention.md#eviction) makes the same
-out as `crewlet estate out`, recorded with the reason `evicted` — a node the
-operator judged gone, told apart from one taken out for maintenance — after
-the gesture's record is on every log the node is counted on, so the map places
-nothing on it if it comes back; `crewlet retention readmit` makes the in once
-its logs have been written. The map's answer is a line of the gesture's own:
-a map that could not be written leaves the gesture unfinished, and the same
-operation id finishes it.
+**An eviction bars the node, and a readmission puts it back.**
+[`crewlet retention evict`](../guides/retention.md#eviction) takes the node out
+as `crewlet estate out` would, recorded with the reason `evicted` — a node the
+operator judged gone, told apart from one taken out for maintenance — after the
+gesture's record is on every log the node is counted on. Unlike an operator's
+out, which ends when membership removes the member, the eviction is a **bar**:
+it is recorded whether or not the map still holds the node — an evicted
+machine is usually one the map has already let go — and neither its removal nor
+its being forgotten lifts it, so a repaired machine restarted under the old id
+joins as a member out and the maintainer places nothing on it while its logs
+still gate it. `crewlet retention readmit` lifts the bar, and only once every
+log has taken the node back: until then the map's part answers that it waits
+for the logs, and the same operation id finishes both. `crewlet estate map`
+names every bar. The map's answer is a line of the gesture's own: a map that
+could not be written leaves the gesture unfinished, and the same operation id
+finishes it.
