@@ -212,6 +212,10 @@ func TestACollapsedWriteIsNeverBuiltOn(t *testing.T) {
 				t.Errorf("the answer says %q, not that the change landed as a "+
 					"copy this call cannot prove is its own", detail)
 			}
+			if body["outcome"] == httpjson.OutcomeUnknown {
+				t.Error("a write that landed was answered as one whose outcome " +
+					"is unknown")
+			}
 			if _, codes := body["codes"]; codes {
 				t.Error("recovery codes nothing proves are stored were handed out")
 			}
@@ -240,7 +244,10 @@ func TestACollapsedWriteIsNeverBuiltOn(t *testing.T) {
 // and says `unvouched`. The control is a lost acknowledgement, which the same
 // request here settles, and which says when.
 //
-// Mutation: drop the unvouched arm and the first row carries a Retry-After.
+// Both say `outcome: "unknown"` beside the operation.
+//
+// Mutation: drop the unvouched arm and the first row carries a Retry-After;
+// write the unknown through UnavailableWith and neither says its outcome.
 func TestAnUnvouchedUnknownSendsTheCallerElsewhere(t *testing.T) {
 	t.Parallel()
 	for _, unvouched := range []bool{true, false} {
@@ -252,9 +259,11 @@ func TestAnUnvouchedUnknownSendsTheCallerElsewhere(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		retry := rec.Header().Get("Retry-After")
 		switch {
-		case rec.Code != http.StatusServiceUnavailable || body["op_id"] == nil:
+		case rec.Code != http.StatusServiceUnavailable || body["op_id"] == nil ||
+			body["outcome"] != httpjson.OutcomeUnknown:
 			t.Errorf("unvouched %v: answered %d %v, want 503 naming the "+
-				"operation", unvouched, rec.Code, body)
+				"operation and saying its outcome is unknown", unvouched,
+				rec.Code, body)
 		case unvouched && (retry != "" || body["unvouched"] != true):
 			t.Errorf("an unvouched unknown answered Retry-After %q, unvouched "+
 				"%v", retry, body["unvouched"])

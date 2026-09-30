@@ -168,7 +168,13 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 // tool reports the unknown as a failed result, and on a write this surface
 // makes itself.
 //
-// Mutation: drop the unvouched arm and the second case carries a Retry-After.
+// Both say `outcome: "unknown"` — on the tool-backed route too, whose tool
+// reports the unknown as a failed result carrying no receipt, and which
+// answered one with no outcome at all.
+//
+// Mutation: drop the unvouched arm and the second case carries a Retry-After;
+// write the unknown through UnavailableWith and the tool-backed row lacks its
+// outcome.
 func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -193,9 +199,10 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 				key := statelog.NewOpID(time.Now(), "")
 				got := r.do(as(admin("ana")), c.method, c.target, c.body,
 					opkey.Header, key)
-				if got.status != http.StatusServiceUnavailable || got.body["op_id"] != key {
-					t.Fatalf("answered %d %v, want 503 carrying the key", got.status,
-						got.body)
+				if got.status != http.StatusServiceUnavailable || got.body["op_id"] != key ||
+					got.body["outcome"] != httpjson.OutcomeUnknown {
+					t.Fatalf("answered %d %v, want 503 carrying the key and "+
+						"saying its outcome is unknown", got.status, got.body)
 				}
 				switch retry := got.header.Get("Retry-After"); {
 				case unvouched && (retry != "" || got.body["unvouched"] != true):

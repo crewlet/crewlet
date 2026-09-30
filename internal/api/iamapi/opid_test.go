@@ -153,8 +153,12 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 // gesture one this node cannot vouch for: retried here, it meets that step's
 // silence again. The control is a lost acknowledgement, which says when.
 //
+// Every one says `outcome: "unknown"` beside the operation, which is what
+// tells it from a refusal that wrote nothing without reading the sentence.
+//
 // Mutation: drop the unvouched arm, or drop it from the fold of a sequence,
-// and a row carries a Retry-After.
+// and a row carries a Retry-After; write the unknown through UnavailableWith
+// and every row lacks its outcome.
 func TestAnUnvouchedUnknownSendsTheAdministratorElsewhere(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -178,9 +182,10 @@ func TestAnUnvouchedUnknownSendsTheAdministratorElsewhere(t *testing.T) {
 			got := r.as(everything(), http.MethodPost, "/iam/people", c.body)
 			retry := got.header.Get("Retry-After")
 			switch {
-			case got.status != http.StatusServiceUnavailable || got.body["op_id"] == nil:
-				t.Fatalf("answered %d %v, want 503 naming the operation",
-					got.status, got.body)
+			case got.status != http.StatusServiceUnavailable || got.body["op_id"] == nil ||
+				got.body["outcome"] != httpjson.OutcomeUnknown:
+				t.Fatalf("answered %d %v, want 503 naming the operation and "+
+					"saying its outcome is unknown", got.status, got.body)
 			case c.unvouched && (retry != "" || got.body["unvouched"] != true):
 				t.Errorf("an unvouched unknown answered Retry-After %q, "+
 					"unvouched %v", retry, got.body["unvouched"])

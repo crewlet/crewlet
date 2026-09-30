@@ -4,11 +4,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE SETTINGS SURFACES REFUSE IN THE ENVELOPE, AND A 503 SAYS WHEN.
@@ -88,6 +91,80 @@ func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 	if walked < len(surfaces) {
 		t.Fatalf("walked %d source files across %d surfaces, so the walk "+
 			"certifies nothing", walked, len(surfaces))
+	}
+}
+
+// AN UNKNOWN OUTCOME IS WRITTEN ONE WAY.
+//
+// A write that may have landed and a refusal that wrote nothing are both 503s,
+// and every surface wrote the first for itself: `/chart` and `/iam` said it in
+// a sentence and nowhere else, `/work` carried `outcome` on some routes and
+// not others, so a client branching on the field — `crewlet work purge` —
+// told an operator whose purge may have landed that it wrote nothing.
+// httpjson.UnknownOutcome writes `outcome`, `op_id` and `unvouched` together,
+// and `unvouched` is the one key only an unknown carries — so a body written
+// with that key anywhere else under internal/api is an unknown written by
+// hand, which is the shape that drifted. A log line naming it as an attribute
+// is not a body, and is left alone.
+//
+// Mutation: put `detail["unvouched"] = true` back into any surface's own
+// unknown and this goes red.
+func TestAnUnknownOutcomeIsWrittenOneWay(t *testing.T) {
+	t.Parallel()
+	walked := 0
+	err := sourcetree.Walk(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "httpjson" || d.Name() == "testdata" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		walked++
+		unvouched := func(expr ast.Expr) bool {
+			lit, ok := expr.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return false
+			}
+			key, _ := strconv.Unquote(lit.Value)
+			return key == "unvouched"
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.KeyValueExpr:
+				if unvouched(node.Key) {
+					t.Errorf("%s: an unknown outcome written by hand — answer it "+
+						"with httpjson.UnknownOutcome, which carries `outcome` "+
+						"beside it", fset.Position(node.Pos()))
+				}
+			case *ast.IndexExpr:
+				if unvouched(node.Index) {
+					t.Errorf("%s: an unknown outcome written by hand — answer it "+
+						"with httpjson.UnknownOutcome, which carries `outcome` "+
+						"beside it", fset.Position(node.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/api: %v", err)
+	}
+	// THE CONTROL: the surfaces that write through a state log alone are
+	// dozens of files, and a walk rooted in the wrong place reads none.
+	if walked < 50 {
+		t.Fatalf("walked %d source files, which is not internal/api", walked)
 	}
 }
 

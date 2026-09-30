@@ -203,8 +203,12 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 // until the change reaches this node, so it carries no Retry-After and says
 // `unvouched` — the control, a lost acknowledgement, says when.
 //
-// Mutation: drop the op id from the refusal, or the unvouched arm, and a row
-// goes red.
+// An unknown also says `outcome: "unknown"`, which a refusal does not — the
+// field is what tells a write that may have landed from one that wrote
+// nothing.
+//
+// Mutation: drop the op id from the refusal, the unvouched arm, or the
+// unknown's outcome, and a row goes red.
 func TestEveryChartUnavailableCarriesTheOperation(t *testing.T) {
 	t.Parallel()
 	t.Run("a refusal", func(t *testing.T) {
@@ -216,7 +220,7 @@ func TestEveryChartUnavailableCarriesTheOperation(t *testing.T) {
 			`{"name":"E"}`, "")
 		key, _ := body["op_id"].(string)
 		if status != http.StatusServiceUnavailable || key == "" ||
-			header.Get("Retry-After") == "" {
+			header.Get("Retry-After") == "" || body["outcome"] != nil {
 			t.Fatalf("answered %d %v (Retry-After %q), want 503 naming the "+
 				"operation %v", status, body, header.Get("Retry-After"),
 				r.writer.opIDs)
@@ -237,8 +241,10 @@ func TestEveryChartUnavailableCarriesTheOperation(t *testing.T) {
 				"/chart/units/engineering", `{"name":"E"}`, "")
 			retry := header.Get("Retry-After")
 			switch {
-			case status != http.StatusServiceUnavailable || body["op_id"] == nil:
-				t.Errorf("answered %d %v, want 503 naming the operation", status, body)
+			case status != http.StatusServiceUnavailable || body["op_id"] == nil ||
+				body["outcome"] != httpjson.OutcomeUnknown:
+				t.Errorf("answered %d %v, want 503 naming the operation and "+
+					"saying its outcome is unknown", status, body)
 			case unvouched && (retry != "" || body["unvouched"] != true):
 				t.Errorf("an unvouched unknown answered Retry-After %q, "+
 					"unvouched %v", retry, body["unvouched"])

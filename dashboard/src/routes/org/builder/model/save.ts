@@ -663,7 +663,8 @@ const strings = (value: unknown): string[] =>
  * AN ANSWER THAT NEVER ARRIVED, OR A FAILURE ON THE WAY, IS UNKNOWN — never
  * refused and never landed. Status 0 and every 5xx but one: a gateway that gave
  * up waiting says nothing about the write behind it, and a chart write the
- * node could not settle says so itself (`503` with `op_id`). The one certain
+ * node could not settle says so itself (`503` with `outcome: "unknown"` and
+ * `op_id`). The one certain
  * 5xx is `503 draining`, which the drain gate answers before the handler runs,
  * so nothing was written; it is still resent under the same id, which is
  * always safe and is the same thing the unknown case does.

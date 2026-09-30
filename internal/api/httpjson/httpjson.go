@@ -46,6 +46,11 @@
 // `internal/api`'s source walk holds the settings surfaces to this,
 // to hand-built bodies, and to codes minted outside the table.
 //
+// A 503 about a WRITE THAT MAY HAVE LANDED is [UnknownOutcome]'s, which says
+// so as a field (`outcome: "unknown"`) beside the operation id, because a
+// client has to tell it from a refusal that wrote nothing without reading a
+// sentence — and the same walk refuses an `unvouched` spelled anywhere else.
+//
 // # And the answers no handler writes
 //
 // The router's own 404 and 405, which [Mux] turns into this envelope, so that
@@ -1138,4 +1143,57 @@ func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, de
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 	}
 	FailWithFields(w, http.StatusServiceUnavailable, code, detail)
+}
+
+// OutcomeUnknown is the `outcome` a write nobody on this node can account for
+// answers with — the state log's own word for the third of its three outcomes
+// (statelog.OutcomeUnknown), spelled here because this package imports
+// nothing of the engine's; a test holds the two equal.
+const OutcomeUnknown = "unknown"
+
+// The keys an unknown outcome reserves, for [UnknownOutcome]'s rule that they
+// always win over a route's own detail — the same reason `error` and
+// `message` are named rather than spelled.
+const (
+	keyOutcome   = "outcome"
+	keyOpID      = "op_id"
+	keyUnvouched = "unvouched"
+)
+
+// UnknownOutcome writes the 503 of a WRITE whose outcome this node cannot
+// establish: `outcome: "unknown"` and the `op_id` a retry must send back, and
+// `unvouched: true` where this node's operation ledger cannot vouch for it.
+//
+// # Why it is not [UnavailableWith] with a map a route fills in
+//
+// A write that MAY HAVE LANDED and a write the node REFUSED are both 503s, and
+// they send a client opposite ways: the first is retried under the same
+// operation and never under a fresh one, which would make a second change if
+// the first landed; the second wrote nothing. Every surface wrote the unknown
+// for itself, and they had drifted — `/chart` and `/iam` said it only in a
+// sentence, `/work` said it on some routes because the tool's receipt happened
+// to carry an `outcome` and not on others — so `crewlet work purge`, which
+// branches on the field, told an operator whose purge may have destroyed the
+// item that the attempt "wrote nothing". One writer, and the three keys are
+// its and always win over a route's detail.
+//
+// # And why the unvouched rule is here too
+//
+// An unvouched unknown was not published at all: asked on this node again it
+// answers the same way until the change reaches this node, so it carries NO
+// Retry-After whatever the caller passed — a header saying "come back" would
+// send a client to poll the one node that cannot answer.
+func UnknownOutcome(w http.ResponseWriter, retryAfterSeconds int, opID string,
+	unvouched bool, detail Detail) {
+
+	body := make(Detail, len(detail)+3)
+	maps.Copy(body, detail)
+	body[keyOutcome] = OutcomeUnknown
+	body[keyOpID] = opID
+	delete(body, keyUnvouched)
+	if unvouched {
+		body[keyUnvouched] = true
+		retryAfterSeconds = 0
+	}
+	UnavailableWith(w, CodeUnavailable, retryAfterSeconds, body)
 }

@@ -84,6 +84,19 @@ one JSON object, and it always has the same three parts in the same places:
   poll this one. The reason is in the detail; [Read
   consistency](../guides/consistency.md#a-writes-refusals) says what each one
   asks of whom.
+- **A write that may have landed is not a refusal, and says so as a field.**
+  A `503` about a write this node cannot account for — its outcome is
+  `unknown` — carries **`"outcome": "unknown"`** and the **`op_id`** to retry
+  under, on every surface that writes through a state log (`/chart`, `/work`,
+  `/pages`, `/iam`, `/auth`); a `503` without `outcome` is a refusal and wrote
+  nothing. The two send a client opposite ways — the unknown is retried under
+  the **same** `op_id`, never a fresh one, which would make the change twice if
+  the first landed — so branch on the field rather than on the sentence. Where
+  this node's operation ledger cannot vouch for the operation it also carries
+  **`"unvouched": true`** and **no** `Retry-After`: the same request here answers
+  the same way until the change reaches this node, so send it, with the same
+  `op_id`, through another node. `outcome`, `op_id` and `unvouched` are the
+  answer's own on that `503` and are never displaced by a route's detail.
 - **A `500 internal_error` carries no reason.** Its sentence says the reason
   is in this node's log, and that is where it is: a fault's own words are a
   store's or a driver's — a database path, a connection string — and holding
@@ -834,7 +847,7 @@ make "does this install a gate" a question about a payload.
 |---|---|---|
 | `applied` | `200` | The record is durable **and this node has applied it**, so the next read here sees it |
 | `pending` | `202` | Durable at the position in the body; every node will apply it, this one has not yet. Read at that position to see it |
-| `unknown` | `503` | Nothing can be established from this node. Retry with the **same** operation id — the body carries it as `op_id`, and the route reads it back from `Idempotency-Key` |
+| `unknown` | `503` | Nothing can be established from this node. The body says `"outcome": "unknown"` — which a refusal never does — and carries the operation id as `op_id`: retry with the **same** one, which the route reads back from `Idempotency-Key` |
 
 Retrying an `unknown` under a *fresh* id would write the change twice if the
 first had in fact landed, which is the one thing the operation ledger exists to
@@ -1007,8 +1020,8 @@ grant that can lock a company out of its own engine.
 and means this node has the change, so the next read *here* sees it. `pending`
 is `202` with the position, and means the record is durable and every node
 will apply it while this one has not yet — read at that position to see it.
-`unknown` is `503` with a `Retry-After` and the op id, and the only safe retry
-is the **same** one: send it back as `Idempotency-Key`, because a fresh id
+`unknown` is `503` with a `Retry-After`, `"outcome": "unknown"` and the op
+id, and the only safe retry is the **same** one: send it back as `Idempotency-Key`, because a fresh id
 would defeat the ledger that makes the retry safe. Every body carries its
 `outcome` and `op_id`.
 
@@ -3682,7 +3695,7 @@ both left the domain — so there is nothing to route.
 | `404` | The item, page or comment does not exist — or this node runs no such backend | |
 | `409` `stale` | Somebody changed it after you read it: a stale `If-Match`, a title taken, a race lost | `detail`: read it again |
 | `422` `refused` | The domain refused the write on its own rules | `detail`: the domain's own sentence |
-| `503` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — the `op_id` to retry with. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
+| `503` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
 
 The `403` wording is the point of the second row: the three surfaces that serve
 these verbs refuse in ONE sentence, formed by one function, so a person told one

@@ -98,8 +98,9 @@ func TestAnUnknownOutcomeIsNeverBuiltOnOrAnnounced(t *testing.T) {
 				t.Fatalf("body is not JSON: %v", err)
 			}
 			if body["error"] != string(httpjson.CodeUnavailable) || body["op_id"] == "" ||
-				body["op_id"] == nil {
-				t.Errorf("body = %v, want `unavailable` naming the operation id", body)
+				body["op_id"] == nil || body["outcome"] != httpjson.OutcomeUnknown {
+				t.Errorf("body = %v, want `unavailable` naming the operation id "+
+					"and saying its outcome is unknown", body)
 			}
 			if _, codes := body["codes"]; codes {
 				t.Error("recovery codes nothing can say are stored were handed out")

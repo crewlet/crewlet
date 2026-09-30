@@ -772,7 +772,8 @@ export interface ChartUnitRead {
  * What a chart WRITE answers when it did not fail: `applied` (200 — this node
  * has applied it, so the next read here sees it) or `pending` (202 — durable
  * at `position`, not applied here yet). The third outcome, `unknown`, is a 503
- * carrying `op_id`: retry with the SAME id, never a fresh one.
+ * whose envelope carries `outcome: "unknown"` beside `op_id` — which a refusal
+ * never does: retry with the SAME id, never a fresh one.
  */
 export interface ChartWriteResult {
   outcome: "applied" | "pending" | "unknown";

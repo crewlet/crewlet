@@ -239,7 +239,9 @@ func errText(err error) string {
 // a single write does with `unknown`: it opens no session on it, mints no
 // bearer from it, says no event about it, and answers 503 with the identity
 // Retry-After — an unknown outcome is the one a retry is FOR, so it carries
-// one — and the OPERATION ID, which is how the write is found in `iam_history`
+// one — `outcome: "unknown"` ([httpjson.UnknownOutcome], which is what tells
+// it from a refusal that wrote nothing) and the OPERATION ID, which is how
+// the write is found in `iam_history`
 // and, where the gesture derives its id from what the caller presented (an
 // invitation), the id the retry lands under by construction. Every other write
 // here is a fresh operation per request, because each is answered inside it
@@ -266,30 +268,30 @@ func errText(err error) string {
 // answer is formed inside the decide, the route asks [built] rather than
 // [landed], and a collapsed write is answered here as the unknown it is to
 // this call — nothing shown, nothing opened, nothing announced — while a new
-// request is a new operation that forms its own.
+// request is a new operation that forms its own. Its OUTCOME is not unknown,
+// though, so it is not written as one: no `outcome: "unknown"` beside it.
 func unresolved(w http.ResponseWriter, r *http.Request, event string,
 	result statelog.Result) {
 
 	log.WarnContext(r.Context(), event, "op_id", result.OpID,
 		"outcome", string(result.Outcome), "collapsed", result.Collapsed,
 		"unvouched", result.Unvouched)
-	detail := httpjson.Detail{
-		"detail": "this node cannot establish whether that change landed; " +
-			"nothing was built on it — try again",
-		"op_id": result.OpID,
+	if landed(result) {
+		// COLLAPSED, AND LANDED: not an unknown outcome, so it is not
+		// answered as one — what is missing is this call's own answer.
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil),
+			httpjson.Detail{"detail": collapsedDetail, "op_id": result.OpID})
+		return
 	}
-	retry := auth.RetryIdentity(nil)
-	switch {
-	case result.Unvouched:
-		retry = 0
-		detail["detail"] = "this node's operation ledger cannot vouch for that " +
+	detail := "this node cannot establish whether that change landed; " +
+		"nothing was built on it — try again"
+	if result.Unvouched {
+		detail = "this node's operation ledger cannot vouch for that " +
 			"change, so this node answers it the same way every time; nothing " +
 			"was built on it — try again on another node"
-		detail["unvouched"] = true
-	case result.Collapsed:
-		detail["detail"] = collapsedDetail
 	}
-	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry, detail)
+	httpjson.UnknownOutcome(w, auth.RetryIdentity(nil), result.OpID, result.Unvouched,
+		httpjson.Detail{"detail": detail})
 }
 
 // built reports whether a write landed AS THIS CALL'S OWN, so that what its

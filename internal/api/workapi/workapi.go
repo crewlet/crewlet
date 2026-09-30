@@ -653,11 +653,13 @@ func (s *served) call(w http.ResponseWriter, r *http.Request, verb string,
 		result, err := tool.Call(r.Context(), args)
 		if err != nil {
 			// THE CALLER'S CONTEXT ENDED — internal/mcp's own meaning
-			// of a tool error. Nobody is waiting for an answer, and
-			// whether the write landed is exactly what a retry under
-			// the same key resolves.
-			unavailable(w, "the request ended before "+verb+" answered: "+
-				err.Error(), map[string]any{"op_id": key})
+			// of a tool error — and a write may have landed before it
+			// did, so this is an UNKNOWN outcome rather than a refusal:
+			// whether it landed is exactly what a retry under the same
+			// key resolves, and a client reading a refusal here would
+			// make the change again under a fresh one.
+			unknownOutcome(w, key, false, "the request ended before "+verb+
+				" answered: "+err.Error(), nil)
 			return
 		}
 		answerTool(w, key, result)
@@ -862,7 +864,9 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 }
 
 // unknownOutcome is the 503 of a write this node cannot account for, carrying
-// the request's operation key and whether ANOTHER node could say more.
+// `outcome: "unknown"`, the request's operation key and whether ANOTHER node
+// could say more — through [httpjson.UnknownOutcome], so it is told from a
+// refusal that wrote nothing by a field rather than by a sentence.
 //
 // # Two unknowns, and they send a client opposite ways
 //
@@ -887,12 +891,10 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 func unknownOutcome(w http.ResponseWriter, key string, unvouched bool, what string,
 	about map[string]any) {
 
-	retry := authz.RetryUndecidedSeconds
 	next := "Retry it with the SAME key — send op_id back as the " +
 		opkey.Header + " header — because a fresh one would defeat the " +
 		"ledger that makes the retry safe."
 	if unvouched {
-		retry = 0
 		next = "This node's operation ledger cannot vouch for this change, so " +
 			"the same request asked here answers the same way until the change " +
 			"reaches this node. Read whether it landed, or send it with the SAME " +
@@ -904,14 +906,13 @@ func unknownOutcome(w http.ResponseWriter, key string, unvouched bool, what stri
 		body[k] = v
 	}
 	body["detail"] = "this node cannot establish what happened to this change. " + next
-	body["op_id"] = key
 	if what != "" {
 		body["tool_detail"] = what
 	}
-	if unvouched {
-		body["unvouched"] = true
-	}
-	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry, body)
+	// THE WRITER OWNS `outcome`, `op_id` and `unvouched`, over whatever the
+	// receipt carried — a two-record tool's receipt has no `outcome` of its
+	// own, only its halves' — and drops the Retry-After of an unvouched one.
+	httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, key, unvouched, body)
 }
 
 // fail renders a write that was NOT made.

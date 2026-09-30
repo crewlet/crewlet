@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A JSON SURFACE ANSWERS AS JSON, headers included.
@@ -507,6 +508,66 @@ func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
 	if bare.Code != http.StatusServiceUnavailable || bare.Header().Get("Retry-After") != "2" {
 		t.Errorf("the bare form answered %d with Retry-After %q",
 			bare.Code, bare.Header().Get("Retry-After"))
+	}
+}
+
+// A WRITE THAT MAY HAVE LANDED SAYS SO AS A FIELD, NOT A SENTENCE.
+//
+// An unknown outcome and a refusal are both 503s and send a client opposite
+// ways — the first is retried under the same operation, the second wrote
+// nothing — and each surface wrote the unknown for itself: `/chart` and `/iam`
+// said it only in prose, so a client that branched on `outcome` (the CLI's
+// purge does) read a write that may have destroyed an item as one that wrote
+// nothing. The three keys are the writer's and win over a route's detail; an
+// unvouched unknown carries no Retry-After whatever the caller passed, since
+// the same request on this node answers the same way until the change reaches
+// it.
+//
+// Mutation: drop the `outcome` key, let the detail's `op_id` or `outcome`
+// win, or keep the caller's Retry-After on an unvouched one, and a case goes
+// red.
+func TestAnUnknownOutcomeSaysSoAsAField(t *testing.T) {
+	t.Parallel()
+	if httpjson.OutcomeUnknown != string(statelog.OutcomeUnknown) {
+		t.Fatalf("httpjson's unknown is %q and the state log's is %q — a client "+
+			"branching on one never sees the other", httpjson.OutcomeUnknown,
+			statelog.OutcomeUnknown)
+	}
+	for _, c := range []struct {
+		name      string
+		unvouched bool
+		retry     string
+	}{
+		{"a lost acknowledgement", false, "2"},
+		{"an unvouched unknown", true, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			httpjson.UnknownOutcome(rec, 2, "0192-op", c.unvouched, httpjson.Detail{
+				"outcome": "applied", "op_id": "not-the-key", "unvouched": true,
+				"item": "ENG-1", "error": "not-the-code",
+			})
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("answered %d, want 503", rec.Code)
+			}
+			if got := rec.Header().Get("Retry-After"); got != c.retry {
+				t.Errorf("Retry-After is %q, want %q", got, c.retry)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("body is not JSON: %v", err)
+			}
+			if body["outcome"] != httpjson.OutcomeUnknown || body["op_id"] != "0192-op" ||
+				body["error"] != string(httpjson.CodeUnavailable) || body["item"] != "ENG-1" {
+				t.Errorf("body = %v, want outcome unknown and the key over the "+
+					"route's own, beside the route's other detail", body)
+			}
+			if _, said := body["unvouched"]; said != c.unvouched {
+				t.Errorf("unvouched present = %v, want %v: body %v", said,
+					c.unvouched, body)
+			}
+		})
 	}
 }
 

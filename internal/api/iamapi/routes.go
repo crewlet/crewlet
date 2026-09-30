@@ -528,24 +528,20 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 				"change. Retry it with the SAME operation id — send it back " +
 				"as the " + opkey.Header + " header — because a fresh " +
 				"one would defeat the ledger that makes the retry safe.",
-			"op_id": opID,
 		}
-		retry := auth.RetryIdentity(nil)
 		if result.Unvouched {
 			// THIS NODE'S LEDGER CANNOT VOUCH FOR IT, so nothing was
 			// published and the same request asked here answers the same
-			// way until the change reaches this node: no Retry-After, which
-			// a client obeys by asking again, and another node named.
-			retry = 0
+			// way until the change reaches this node — which the writer
+			// says by carrying no Retry-After — and another node is named.
 			detail["detail"] = "this node's operation ledger cannot vouch " +
 				"for this change, so the same request asked here answers the " +
 				"same way until the change reaches this node. Read whether it " +
 				"landed, or send it with the SAME " + opkey.Header +
 				" to another node; never under a fresh one, which is a second " +
 				"change if the first one landed."
-			detail["unvouched"] = true
 		}
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry,
+		httpjson.UnknownOutcome(w, auth.RetryIdentity(nil), opID, result.Unvouched,
 			withExtra(extra, detail))
 	}
 }

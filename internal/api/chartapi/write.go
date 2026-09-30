@@ -217,10 +217,12 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 //   - pending → 202 with the position. The record is durable and every node
 //     will apply it; what is unresolved is only whether THIS one has yet. A
 //     caller that needs to see it reads at that position.
-//   - unknown → 503 with the op id. Nothing can be established from this
-//     node, and the only safe retry is the SAME op id — a fresh one would
-//     defeat the ledger that exists for exactly this case. So the answer
-//     carries it, and the route accepts it back.
+//   - unknown → 503 with the op id and `outcome: "unknown"`
+//     ([httpjson.UnknownOutcome]), which is what tells it from a refusal
+//     that wrote nothing. Nothing can be established from this node, and
+//     the only safe retry is the SAME op id — a fresh one would defeat the
+//     ledger that exists for exactly this case. So the answer carries it,
+//     and the route accepts it back.
 //
 // # Every 503 carries the operation, and says whether another node could answer
 //
@@ -315,20 +317,17 @@ func (s *Service) answerWrite(w http.ResponseWriter, op operation,
 				"change. Retry it with the SAME operation id — send it back " +
 				"as the " + opkey.Header + " header — because a fresh " +
 				"one would defeat the ledger that makes the retry safe.",
-			"op_id": opID,
 		}
-		retry := authz.RetryUndecidedSeconds
 		if result.Result.Unvouched {
-			retry = 0
 			detail["detail"] = "this node's operation ledger cannot vouch for " +
 				"this change, so the same request asked here answers the same " +
 				"way until the change reaches this node. Read whether it " +
 				"landed, or send it with the SAME " + opkey.Header +
 				" to another node; never under a fresh one, which is a second " +
 				"change if the first one landed."
-			detail["unvouched"] = true
 		}
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry, detail)
+		httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, opID,
+			result.Result.Unvouched, detail)
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}
