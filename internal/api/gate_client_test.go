@@ -40,13 +40,17 @@ func TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes(t *testing.T) {
 		statelog.GateActionsKeepingOperation(), "operation-keeping action")
 }
 
-// THE DIALOG WAITS PAST THE NODE'S OWN BOUND ON A GESTURE.
+// THE DIALOG WAITS EXACTLY AS LONG AS EVERY OTHER CLIENT: the engine's
+// [engine.GateClientWait], which is past the node's own bound on a gesture.
 //
 // The node finishes a gesture under its own budget whatever the connection
-// does, and a dialog that gave up first — the default thirty seconds did, on a
-// one-minute budget — reported "did not answer" about a gesture the node went
-// on to finish.
-func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
+// does, and a dialog that gave up first — the default thirty seconds did, on
+// what was then a one-minute budget — reported "did not answer" about a gesture
+// the node went on to finish. And held EXACTLY rather than above: the budget is derived from
+// the register, so a copy that was merely larger passed on the day it was
+// written and went on passing the day a fifth identity log raised the budget
+// past it.
+func TestTheDashboardWaitsAsLongAsTheEngineSaysAClientShould(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`export const GATE_REQUEST_TIMEOUT_MS = ([0-9_]+);`)
@@ -57,9 +61,11 @@ func TestTheDashboardWaitsPastTheGateBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GATE_REQUEST_TIMEOUT_MS = %q is not a number: %v", body, err)
 	}
-	if wait := time.Duration(ms) * time.Millisecond; wait <= engine.GateBudget {
-		t.Errorf("the dashboard waits %s for a gesture the node bounds at %s — it "+
-			"gives up on a gesture the node goes on to finish", wait, engine.GateBudget)
+	if wait := time.Duration(ms) * time.Millisecond; wait != engine.GateClientWait() {
+		t.Errorf("the dashboard waits %s for a gesture, where a client waits %s — "+
+			"the node bounds one at %s, and a dialog that gives up first reports a "+
+			"gesture the node goes on to finish as unanswered", wait,
+			engine.GateClientWait(), engine.GateBudget())
 	}
 }
 

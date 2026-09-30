@@ -13,6 +13,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
+import { GATE_REQUEST_TIMEOUT_MS } from "~/protocol/index.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 import { finishable, GateDialog, GateOutcome } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
@@ -292,8 +293,14 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   });
   expect(screen.queryByText(/No answer/)).toBeNull();
 
+  // AND NOT BEFORE THE ENGINE'S OWN WAIT, which is past the node's bound.
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(45_000);
+    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 - 1);
+  });
+  expect(screen.queryByText(/No answer/)).toBeNull();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.getByText(/No answer/)).toBeTruthy();
   const opId = sent[0]!.query.get("op_id")!;
@@ -306,9 +313,9 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
 });
 
 // AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout is a minute by default — the node's own budget for a gesture past its
-// judgement — so a slow eviction reached the browser as a gateway's 504 with an
-// HTML page, and a 200 can be cut off part way through. Read as a refusal, the
+// timeout is a minute by default — shorter than the node's own budget for a
+// gesture past its judgement — so a slow eviction reached the browser as a
+// gateway's 504 with an HTML page, and a 200 can be cut off part way through. Read as a refusal, the
 // dialog never held the gesture, offered no Finish, and closing it lost the id
 // of a gesture the node went on to finish.
 test("a gateway's answer or a cut-off one keeps the op id and offers to finish it", async () => {

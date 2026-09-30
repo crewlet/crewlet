@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -753,7 +754,13 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// PATIENTLY, for the reason [nodeClient.patiently] names: how long a
 	// gesture takes is a property of what it waits on — a write per log,
 	// each resolved against this node's applier — and not of the network.
-	if err := client.patiently(gateRequestTimeout).post(context.Background(), path,
+	// And for as long as [engine.GateClientWait] says: past the node's own
+	// bound on the gesture, so its answer — every log's outcome and what to
+	// do about the ones it could not finish — reaches the operator rather
+	// than a client timeout that knows none of it. The ten seconds every
+	// other verb waits was two of the five-second resolutions a gesture
+	// legitimately makes, back to back.
+	if err := client.patiently(engine.GateClientWait()).post(context.Background(), path,
 		&answer); err != nil {
 		var lost noAnswer
 		if errors.As(err, &lost) {
@@ -993,19 +1000,6 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 	}
 	return out
 }
-
-// gateRequestTimeout is how long `retention evict` and `readmit` wait for the
-// node's answer.
-//
-// SEVENTY-FIVE SECONDS: the node bounds a gesture at a minute from its first
-// record to its last answer (engine.GateBudget), and the judgement before it
-// and the round trip around it are a coordination read and a request. Waiting
-// past the node's own bound is what makes its answer — every log's outcome and
-// what to do about the ones it could not finish — reach the operator rather
-// than a client timeout that knows none of it. The ten seconds every other
-// verb waits was two of the five-second resolutions a gesture legitimately
-// makes, back to back.
-const gateRequestTimeout = 75 * time.Second
 
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.

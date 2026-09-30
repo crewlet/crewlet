@@ -608,7 +608,8 @@ every write has — `applied`, `pending` or `unknown` — or `not written` with 
 reason that stopped that log. A log that answered holds its record whatever
 the others did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
-gesture under its own one-minute budget, so a dropped connection or a client
+gesture under its own budget — two minutes, counted from the identity logs it
+writes — so a dropped connection or a client
 timeout does not leave the node evicted on one log and counted on another.
 
 When **not every log holds it**, the command exits non-zero, and under each
@@ -682,7 +683,8 @@ or the reason it was not written and what to do.
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
   for the whole gesture. So a request that timed out or dropped — the dialog
-  waits seventy-five seconds, past the minute the node allows a gesture — still
+  waits two minutes and fifteen seconds, past the two minutes the node allows
+  a gesture — still
   holds the id, and the dialog offers **Finish this gesture**, which sends the
   same request under the same id and reads every log's answer. So does an
   answer the node did not write: a reverse proxy's 504 page, any status with no

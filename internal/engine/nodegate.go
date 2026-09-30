@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -73,18 +74,76 @@ import (
 
 // GateBudget bounds one gesture from its first record to its last answer.
 //
-// ONE MINUTE, from what a gesture waits on. It is one write per identity log —
-// four in this build's register: the tracker, the knowledge base, the org chart
-// and the identity estate — and every wait inside a write is the publisher's
-// own, each bounded by [statelog.DefaultResolveBudget]: a wait for this node's
-// applier to reach a peer's record, and the resolution of its own. Four logs of
-// two waits is forty seconds, so a minute is a margin of one and a half — it
-// was three when two logs claimed identity — and a wedged broker still does not
-// hold the gesture for the life of the process. `crewlet retention evict` waits
-// a little longer than this, so the node's own answer — every log's outcome and
-// the operation id — reaches the operator before the client gives up; the two
-// move together or not at all, which is why this has not been raised alone.
-const GateBudget = time.Minute
+// DERIVED, from what a gesture waits on, and never written down as a number.
+// It is one write per identity-claiming log — counted off the register
+// ([identityLogCount]), four in this build: the tracker, the knowledge base, the
+// org chart and the identity estate — and every wait inside a write is the
+// publisher's own, each bounded by [statelog.DefaultResolveBudget]: a wait for
+// this node's applier to reach a peer's record, and the resolution of its own
+// ([gateWaitsPerLog]). At a margin of three ([gateBudgetMargin]) that is two
+// minutes today.
+//
+// IT WAS A LITERAL MINUTE, sized when two logs claimed identity: a margin of
+// three over twenty seconds. The register grew to four and the literal did
+// not, so the margin fell to one and a half without anybody deciding it — the
+// failure a number stated beside the arithmetic it came from always has.
+// Counted from the register, a fifth identity log raises the budget in the
+// same commit that adds it.
+//
+// A wedged broker still does not hold the gesture for the life of the
+// process: this is a bound, not a wait. And a client waits [GateClientWait],
+// derived from this, so the node's own answer — every log's outcome and the
+// operation id — reaches the operator before the client gives up.
+func GateBudget() time.Duration { return gateBudget() }
+
+// gateBudget is [GateBudget], counted once: the register is fixed for the
+// life of a build.
+var gateBudget = sync.OnceValue(func() time.Duration {
+	return gateBudgetFor(identityLogCount())
+})
+
+// gateWaitsPerLog is how many publisher waits one log's gate record makes: a
+// wait for this node's applier to reach a peer's record, and the resolution
+// of its own. Each is bounded by [statelog.DefaultResolveBudget].
+const gateWaitsPerLog = 2
+
+// gateBudgetMargin is how many times its worst legitimate case a gesture is
+// allowed — three, the margin the budget was first sized at, so a gesture
+// that meets every wait at its bound still lands with two thirds to spare
+// rather than being cut off by a bound that only just fits it.
+const gateBudgetMargin = 3
+
+// gateBudgetFor is [GateBudget] for a register holding logs identity-claiming
+// logs.
+func gateBudgetFor(logs int) time.Duration {
+	return time.Duration(logs*gateWaitsPerLog*gateBudgetMargin) * statelog.DefaultResolveBudget
+}
+
+// GateClientWait is how long a client waits for a gesture's answer: the
+// node's own budget, plus the part of the request the budget does not cover —
+// the judgement before the first record (a coordination read of the node's
+// presence lease) and the round trip around the gesture — allowed ONE more
+// resolve budget at the gesture's own margin.
+//
+// ONE STATED RELATION for every client, because each used to carry its own
+// seventy-five seconds with a comment saying it was a minute plus fifteen:
+// `crewlet retention evict` and `readmit` read this, and the dashboard's
+// GATE_REQUEST_TIMEOUT_MS is held to it exactly by a gate in internal/api.
+func GateClientWait() time.Duration {
+	return GateBudget() + gateBudgetMargin*statelog.DefaultResolveBudget
+}
+
+// identityLogCount is how many domains in this build's register claim identity —
+// each is a log a gesture writes a gate record to.
+func identityLogCount() int {
+	n := 0
+	for _, domain := range registeredDomains() {
+		if domain.ClaimsIdentity() {
+			n++
+		}
+	}
+	return n
+}
 
 // ErrInvalidGate is what a gate request that could not be carried out as given
 // wraps: no node, a node id no node could run under, no operation id, or no
@@ -600,7 +659,7 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 // node evicted on one log and counted on the other. The values travel, so each
 // write keeps the trace and the operator it was asked under.
 func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) GateResult {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), GateBudget)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), GateBudget())
 	defer cancel()
 	out := GateResult{Node: req.Node, OpID: req.OpID}
 	for _, l := range g.logs {

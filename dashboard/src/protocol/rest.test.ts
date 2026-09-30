@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError } from "./index.ts";
+import { GATE_REQUEST_TIMEOUT_MS, isAbort, REQUEST_TIMEOUT_MS, rest, RestError } from "./index.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -67,8 +67,9 @@ test("a request that never answers is abandoned rather than awaited", async () =
 
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
-// The node gate is allowed a minute from its first record to its last answer,
-// and the fixed thirty seconds gave up on a gesture the node went on to finish.
+// The node gate is allowed two minutes from its first record to its last
+// answer, and the fixed thirty seconds gave up on a gesture the node went on to
+// finish.
 // A per-call deadline replaces the default for that call only — it is not
 // abandoned at the default, it IS abandoned at its own, and the sentence says
 // which deadline ran out rather than the default's.
@@ -88,7 +89,10 @@ test("a per-call deadline replaces the default for that call", async () => {
 
   let done = false;
   const settled = rest
-    .request("POST", "/work/retention/evict/node-4", { body: {}, timeoutMs: 75_000 })
+    .request("POST", "/work/retention/evict/node-4", {
+      body: {},
+      timeoutMs: GATE_REQUEST_TIMEOUT_MS,
+    })
     .catch((err: unknown) => err)
     .finally(() => {
       done = true;
@@ -96,11 +100,11 @@ test("a per-call deadline replaces the default for that call", async () => {
   await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
   expect(done).toBe(false);
 
-  await vi.advanceTimersByTimeAsync(75_000 - REQUEST_TIMEOUT_MS);
+  await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - REQUEST_TIMEOUT_MS);
   const err = await settled;
   expect(err).toBeInstanceOf(RestError);
   expect((err as RestError).status).toBe(0);
-  expect((err as RestError).detail).toContain("within 75 seconds");
+  expect((err as RestError).detail).toContain(`within ${GATE_REQUEST_TIMEOUT_MS / 1000} seconds`);
 });
 
 describe("the whole answer", () => {

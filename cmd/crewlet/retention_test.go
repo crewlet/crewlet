@@ -776,8 +776,8 @@ func TestARefusedEvictionNamesTheFlagThatForcesIt(t *testing.T) {
 // The node minted the id and sent it back in the answer, so a request that
 // timed out or dropped — after the node had very likely written every log —
 // left the operator no handle on the gesture but a second one under a fresh id.
-// And the wait was the ten seconds every other verb takes, which two of the
-// five-second resolutions a gesture legitimately makes use up between them.
+// (How long the command waits is [engine.GateClientWait]'s, and held against
+// the node's own bound in internal/engine.)
 func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	base := bootstrapForURL(t, node.server.URL)
@@ -802,13 +802,6 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	}
 	if want := "-op-id " + sent + " -force"; !strings.Contains(stderr, want) {
 		t.Errorf("the unanswered gesture never says %q:\n%s", want, stderr)
-	}
-
-	// AND THE NODE'S OWN BOUND IS INSIDE THE WAIT, so its answer — not a
-	// client timeout that knows none of it — is what reaches the operator.
-	if gateRequestTimeout <= engine.GateBudget {
-		t.Fatalf("the command waits %s for a gesture the node bounds at %s",
-			gateRequestTimeout, engine.GateBudget)
 	}
 }
 
