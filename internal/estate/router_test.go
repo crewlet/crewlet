@@ -65,6 +65,12 @@ type fakeNode struct {
 
 	// release, when set, holds a floor wait until it is closed.
 	release chan struct{}
+
+	// hang, when set, is a node that takes a request and never answers it
+	// until hang is closed — a wedged node, as the broker's own ask sees
+	// one: waited for until the asker's deadline, where a node that is
+	// simply gone is known to have answered nothing.
+	hang chan struct{}
 }
 
 func (f *fakeNode) note(op string) {
@@ -354,8 +360,16 @@ type silencer struct {
 func (s silencer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
 	return s.q.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
 		s.node.mu.Lock()
-		silent := s.node.silent
+		silent, hang := s.node.silent, s.node.hang
 		s.node.mu.Unlock()
+		if hang != nil {
+			s.node.note("hung")
+			select {
+			case <-hang:
+			case <-ctx.Done():
+			}
+			return nil, errors.New("this node is wedged")
+		}
 		if silent {
 			s.node.note("silent")
 			return nil, errors.New("this node is gone")
@@ -1064,6 +1078,44 @@ var dividedLayout = statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
 	{Space: statelog.SpacePages, Partitions: 2, Domains: []string{"pages", "vectors"}},
 	{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
 }}
+
+// ADMISSION IS BOUNDED AS A WHOLE, not per holder: a sweep asks it on every
+// pass, the first one at boot, and each listed holder that is wedged would
+// otherwise cost the sweep a whole read attempt. A fleet whose holders do not
+// answer withholds the claim within the bound, and the sweep goes on.
+func TestWedgedHoldersCostAdmissionNoMoreThanItsBound(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b", "data-c")
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	for _, n := range f.nodes {
+		n.set(func(n *fakeNode) { n.hang = hang })
+	}
+	r := f.router(t, "agent-2", nil)
+	r.readBudget, r.admissionBudget = 10*time.Second, 200*time.Millisecond
+	type answer struct {
+		served bool
+		err    error
+	}
+	begun := time.Now()
+	done := make(chan answer, 1)
+	go func() {
+		served, _, err := r.Serves(t.Context(), statelog.EstatePartition)
+		done <- answer{served, err}
+	}()
+	select {
+	case got := <-done:
+		if got.served || got.err == nil {
+			t.Fatalf("wedged holders admitted a seat (%v, %v)", got.served, got.err)
+		}
+		if waited := time.Since(begun); waited > 2*time.Second {
+			t.Fatalf("admission waited %s on wedged holders, past its %s bound",
+				waited, r.admissionBudget)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("admission waited on every wedged holder in turn, past its bound")
+	}
+}
 
 // AN OPERATION THAT ADDRESSES ITS DOMAIN AS ONE PARTITION HAS NONE under a
 // layout that divides the domain, and says so rather than guessing one — the

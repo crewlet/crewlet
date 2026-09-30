@@ -119,9 +119,10 @@ type Router struct {
 	seams     ServerSeams
 	now       func() time.Time
 
-	// readBudget and writeBudget are [readAttempt] and [writeAttempt],
-	// held so a test can shorten them rather than wait out a dead node.
-	readBudget, writeBudget time.Duration
+	// readBudget and writeBudget are [readAttempt] and [writeAttempt], and
+	// admissionBudget [admissionAsk], held so a test can shorten them
+	// rather than wait out a dead node.
+	readBudget, writeBudget, admissionBudget time.Duration
 
 	mu sync.Mutex
 	// sticky is, per partition, the node that answered last — asked
@@ -163,7 +164,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
-		readBudget: readAttempt, writeBudget: writeAttempt,
+		readBudget: readAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
 		sticky:   map[statelog.PartitionID]string{},
 		suspect:  map[string]time.Time{},
 		admitted: map[statelog.PartitionID]admission{},
@@ -206,6 +207,19 @@ const suspectFor = 30 * time.Second
 // cached: it costs no request, and a node's own copy falling behind must
 // withhold its next claim at once.
 const admissionTrust = 5 * time.Second
+
+// admissionAsk bounds the REMOTE half of the admission question as a whole —
+// every holder it asks, together — where [readAttempt] bounds only each one.
+//
+// FIVE SECONDS, what a node holding no data waited before the router, and for
+// its reason: admission is asked on every placement sweep, synchronously — the
+// first one at boot, before the host starts — and each holder that is listed
+// but silent (wedged, cut off, restarting while its presence lease runs out)
+// would otherwise cost the sweep a whole read attempt, ten seconds apiece, with
+// its claims and its sheds waiting behind it. A holder that has not answered in
+// five is not one a seat should attach to on this sweep: the router has marked
+// it suspect, and the next sweep — a heartbeat later — asks the others first.
+const admissionAsk = 5 * time.Second
 
 // Session is this node's floors.
 func (r *Router) Session() *Session { return r.session }
@@ -747,7 +761,9 @@ func (r *Router) Serves(ctx context.Context, p statelog.PartitionID) (tracker, p
 	if ok && r.now().Sub(cached.at) < admissionTrust {
 		return cached.tracker, cached.pages, cached.err
 	}
-	out, err := call(ctx, r, opPing, nil, pingArgs{Partition: p.String()})
+	asked, cancel := context.WithTimeout(ctx, r.admissionBudget)
+	defer cancel()
+	out, err := call(asked, r, opPing, nil, pingArgs{Partition: p.String()})
 	r.mu.Lock()
 	r.admitted[p] = admission{at: r.now(), tracker: out.Tracker, pages: out.Pages, err: err}
 	r.mu.Unlock()
