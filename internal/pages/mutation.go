@@ -54,9 +54,9 @@ type CreatePayload struct {
 	Body     string   `json:"body,omitempty"`
 	Status   Status   `json:"status"`
 	Labels   []string `json:"labels,omitempty"`
-	Watchers []string `json:"watchers,omitempty"`
+	Watchers []string `json:"watchers,omitempty" person:"seat"`
 
-	Author string `json:"author,omitempty"`
+	Author string `json:"author,omitempty" person:"seat"`
 }
 
 // RenamePayload moves a page to a new address. Its subject is the NEW title.
@@ -134,8 +134,8 @@ type PagePatch struct {
 	// when not. A delta map could not represent a write that replaces the
 	// set, and every one of them is capped.
 	Labels   []string `json:"labels,omitempty"`
-	Watchers []string `json:"watchers,omitempty"`
-	Muted    []string `json:"muted,omitempty"`
+	Watchers []string `json:"watchers,omitempty" person:"seat"`
+	Muted    []string `json:"muted,omitempty" person:"seat"`
 
 	// Comment is one comment added, edited or removed. A comment rides the
 	// page for the reason the tracker's rides its task: it changes what
@@ -162,10 +162,10 @@ type CommentPatch struct {
 	Removed bool `json:"removed,omitempty"`
 
 	Body       *string    `json:"body,omitempty"`
-	Author     string     `json:"author,omitempty"`
+	Author     string     `json:"author,omitempty" person:"seat"`
 	AuthorKind AuthorKind `json:"author_kind,omitempty"`
 	ReplyTo    string     `json:"reply_to,omitempty"`
-	Mentions   []string   `json:"mentions,omitempty"`
+	Mentions   []string   `json:"mentions,omitempty" person:"seat"`
 }
 
 // ContainerPayload is a space's settings, as FULL POST-STATE.

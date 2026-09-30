@@ -387,12 +387,19 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				}
 				return reservedContainers(current.Config)
 			},
+			// EVERY PERSON A PAGE NAMES, BY THEIR SEAT'S IDENTITY — its
+			// author, its watchers, a remark's author and whom it
+			// mentions — so a rename moves nobody's pages, watches or
+			// remarks. See internal/pages' people.go.
+			Identities: livePeople{engine: e},
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
 			DB: e.backends.Store, Log: running.reader,
 			Committed: running.runner.Committed,
+			// THE STORE'S SEAM, read the other way.
+			Identities: livePeople{engine: e},
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
@@ -1750,7 +1757,8 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 	return found[0].Seat.Handle, true
 }
 
-// livePeople is the tracker's person seam against the CURRENT epoch (ADR-0019).
+// livePeople is the person seam of both domains that store people — the
+// tracker's and the knowledge base's — against the CURRENT epoch (ADR-0019).
 //
 // A READING PER CALL, never an answer per name: Pin loads the live company
 // ONCE and hands back [chartPeople] over it, which a call — a question and its
@@ -1762,7 +1770,7 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 // rename is one.
 type livePeople struct{ engine *Engine }
 
-// Pin implements [tracker.Identities].
+// Pin implements [tracker.Identities] and [pages.Identities].
 func (l livePeople) Pin() seatnames.Chart {
 	company := l.engine.Company()
 	if company == nil {

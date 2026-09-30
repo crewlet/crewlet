@@ -51,7 +51,7 @@ type PageChange struct {
 	Container string `json:"container,omitempty"`
 
 	Kind      ChangeKind `json:"kind"`
-	Actor     string     `json:"actor,omitempty"`
+	Actor     string     `json:"actor,omitempty" person:"seat"`
 	ActorKind string     `json:"actor_kind,omitempty"`
 
 	// OperatorID is the CREDENTIAL the change was made through, recorded
@@ -137,6 +137,13 @@ type PageActivityQuery struct {
 
 // Activity answers a page of what has happened to the company's pages.
 func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivity, error) {
+	call := r.pinned()
+	got, err := call.activity(ctx, q)
+	return shown(call.chart, got), err
+}
+
+// activity is [Reader.Activity] as the rows hold it.
+func (r *Reader) activity(ctx context.Context, q PageActivityQuery) (PageActivity, error) {
 	if q.Freshness.Level == "" {
 		return PageActivity{}, fmt.Errorf("pages: this activity read names no " +
 			"level — a surface resolves an absent read_level to its own " +
@@ -300,6 +307,15 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 // applier wrote into them. A revision has no other identity than its page and
 // its number.
 func (r *Reader) Revision(ctx context.Context, pageID string, version int,
+	fresh statelog.Freshness) (Revision, bool, error) {
+
+	call := r.pinned()
+	got, held, err := call.revisionAt(ctx, pageID, version, fresh)
+	return shown(call.chart, got), held, err
+}
+
+// revisionAt is [Reader.Revision] as the rows hold it.
+func (r *Reader) revisionAt(ctx context.Context, pageID string, version int,
 	fresh statelog.Freshness) (Revision, bool, error) {
 
 	if fresh.Level == "" {

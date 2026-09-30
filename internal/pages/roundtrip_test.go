@@ -45,6 +45,12 @@ type roundTrip struct {
 	// before any domain decodes.
 	verifier *statelog.Verifier
 
+	// storeOptions and readerOptions are what the store and the reader were
+	// built from, kept so a case about the person seam can rebuild both
+	// over it ([roundTrip.knowing]) on the same publisher and rows.
+	storeOptions  pages.Options
+	readerOptions pages.ReaderOptions
+
 	consumed uint64
 }
 
@@ -142,7 +148,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	kb, err := pages.NewStore(pages.Options{
+	storeOptions := pages.Options{
 		Publisher: publisher, DB: db,
 		Now: func() time.Time { return wednesday },
 		// EVERY HARNESS RESERVES TS AND HOME, so both rules are in force
@@ -152,7 +158,8 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 		Reserved: func() pages.Reserved {
 			return pages.Reserved{Skills: "TS", Root: "HOME"}
 		},
-	})
+	}
+	kb, err := pages.NewStore(storeOptions)
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
 	}
@@ -165,9 +172,10 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
-	reader, err := pages.NewReader(pages.ReaderOptions{
+	readerOptions := pages.ReaderOptions{
 		DB: db, Log: authority, Committed: waiter.Committed,
-	})
+	}
+	reader, err := pages.NewReader(readerOptions)
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
@@ -176,7 +184,26 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
 		applier: pages.NewApplier(nodeID, nil, nil),
 		reader:  reader, waiter: waiter,
 		signer: signer, verifier: testVerifier(t, pages.Domain{}),
+		storeOptions: storeOptions, readerOptions: readerOptions,
 	}
+}
+
+// knowing rebuilds this node's store and reader over a person seam, as the
+// engine builds both — on the same publisher and the same rows, so what was
+// written before is still there to be read.
+func (r *roundTrip) knowing(ids pages.Identities) {
+	r.t.Helper()
+	opts, readOpts := r.storeOptions, r.readerOptions
+	opts.Identities, readOpts.Identities = ids, ids
+	kb, err := pages.NewStore(opts)
+	if err != nil {
+		r.t.Fatalf("rebuild the store: %v", err)
+	}
+	reader, err := pages.NewReader(readOpts)
+	if err != nil {
+		r.t.Fatalf("rebuild the reader: %v", err)
+	}
+	r.store, r.reader = kb, reader
 }
 
 // appendSigned puts one hand-built record on the log, SEALED under this

@@ -193,8 +193,12 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
 			"page", base.Metadata[MetaTitle])
 		return nil
 	}
-	// A lead writing in their own container must not wake themselves.
-	if lead == actor {
+	// A lead writing in their own container must not wake themselves — and
+	// the two are compared as SEATS, because they are two spellings: the
+	// lead map names a seat as the chart spells it now, and a record names
+	// its actor by the handle the seat was created under (people.go), so a
+	// renamed lead's own new page woke them as a stranger's.
+	if sameSeat(reg, lead, actor) {
 		return nil
 	}
 	// AND THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT.
@@ -218,6 +222,25 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
 		WakeID:  changefeed.WakeID(base.Metadata[MetaChangeID], lead),
 		WakeAt:  at,
 	}}
+}
+
+// sameSeat reports two names for one seat, through the party registry, which
+// answers every handle a seat answers to — its current one, the one it was
+// created under and one a rename retired. Two equal names are one seat with no
+// registry to ask, and two a registry cannot place are two.
+func sameSeat(reg *notify.Registry, a, b string) bool {
+	if a == b {
+		return true
+	}
+	if reg == nil || a == "" || b == "" {
+		return false
+	}
+	first, known := reg.ByHandle(a)
+	if !known {
+		return false
+	}
+	second, known := reg.ByHandle(b)
+	return known && first.Handle == second.Handle
 }
 
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {

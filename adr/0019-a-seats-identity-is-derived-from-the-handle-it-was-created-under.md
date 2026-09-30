@@ -64,7 +64,15 @@ strip, and its own comments were no longer its own to edit. There the origin
 rides the RECORD, resolved once by the writer, because an applier may not
 read a chart; `internal/tracker`'s people.go states the rule (a
 `person:"seat"` tag on every such field, which its tests hold every name to)
-and `TestARenamedSeatKeepsItsWorkInboxQueueAndPins` holds it end to end.
+and `TestARenamedSeatKeepsItsWorkInboxQueueAndPins` holds it end to end. So
+is every person value of the knowledge base — a page's author, its watchers
+and mutes, a remark's author and whom it mentions, the actor on every change:
+keyed on the address, a renamed seat could not edit a remark it had written,
+its unwatch muted a name nobody watched under, and the pages it watched were
+missing from every listing asked by the name it answers to. The walk that
+rewrites a tagged field is `internal/seatnames`, one rule both domains take;
+`internal/pages`' people.go states the knowledge base's half and
+`TestARenamedSeatKeepsItsPagesWatchesAndRemarks` holds it end to end.
 
 ## Why the obvious alternative is wrong
 

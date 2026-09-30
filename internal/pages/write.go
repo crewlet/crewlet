@@ -37,7 +37,7 @@ type NewPage struct {
 	Message string
 
 	// Watchers are added beyond the author.
-	Watchers []string
+	Watchers []string `person:"seat"`
 
 	// Quiet suppresses the wake, for an import.
 	Quiet bool
@@ -76,6 +76,14 @@ type Written struct {
 // the history entry in one transaction, so there is no orphan claim and no
 // grace rule for stepping over one.
 func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, error) {
+	call := s.pinned()
+	got, err := call.create(ctx, identified(call.chart, actor), identified(call.chart, in))
+	return shown(call.chart, got), err
+}
+
+// create is [Store.Create] once the actor and everybody the page names are
+// their seats' identities — see people.go.
+func (s *Store) create(ctx context.Context, actor Actor, in NewPage) (Written, error) {
 	if err := actor.validate(); err != nil {
 		return Written{}, err
 	}
@@ -215,6 +223,16 @@ type Save struct {
 func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	save Save) (Written, error) {
 
+	call := s.pinned()
+	got, err := call.savePage(ctx, identified(call.chart, actor), pageID, save)
+	return shown(call.chart, got), err
+}
+
+// savePage is [Store.SavePage] once the actor is its seat's identity — which
+// is what its watch adds or removes. See people.go.
+func (s *Store) savePage(ctx context.Context, actor Actor, pageID string,
+	save Save) (Written, error) {
+
 	if err := actor.validate(); err != nil {
 		return Written{}, err
 	}
@@ -325,6 +343,15 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 // subject this page already holds, so there is nothing there to contend for,
 // and the only row the write touches is the page's own.
 func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
+	title string, quiet bool) (Written, error) {
+
+	call := s.pinned()
+	got, err := call.rename(ctx, identified(call.chart, actor), pageID, title, quiet)
+	return shown(call.chart, got), err
+}
+
+// rename is [Store.Rename] once the actor is its seat's identity.
+func (s *Store) rename(ctx context.Context, actor Actor, pageID string,
 	title string, quiet bool) (Written, error) {
 
 	if err := actor.validate(); err != nil {
@@ -505,12 +532,12 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 
 // Trash moves a page out of every reader's way, reversibly.
 func (s *Store) Trash(ctx context.Context, actor Actor, pageID string) (Written, error) {
-	return s.status(ctx, actor, pageID, OpTombstone, ChangeRemoved, "")
+	return s.pinnedStatus(ctx, actor, pageID, OpTombstone, ChangeRemoved, "")
 }
 
 // Restore takes a trashed page back.
 func (s *Store) Restore(ctx context.Context, actor Actor, pageID string) (Written, error) {
-	return s.status(ctx, actor, pageID, OpRestore, ChangeStatus, "")
+	return s.pinnedStatus(ctx, actor, pageID, OpRestore, ChangeStatus, "")
 }
 
 // Purge destroys a page permanently, and writes the marker that makes the
@@ -520,7 +547,17 @@ func (s *Store) Restore(ctx context.Context, actor Actor, pageID string) (Writte
 // never existed from one that was deliberately destroyed, and without it a
 // redelivery months later would resurrect it.
 func (s *Store) Purge(ctx context.Context, actor Actor, pageID, reason string) (Written, error) {
-	return s.status(ctx, actor, pageID, OpPurge, ChangeRemoved, reason)
+	return s.pinnedStatus(ctx, actor, pageID, OpPurge, ChangeRemoved, reason)
+}
+
+// pinnedStatus is [Store.status] under one reading of the chart, with the actor
+// as its seat's identity — see people.go.
+func (s *Store) pinnedStatus(ctx context.Context, actor Actor, pageID string,
+	op OpKind, kind ChangeKind, reason string) (Written, error) {
+
+	call := s.pinned()
+	got, err := call.status(ctx, identified(call.chart, actor), pageID, op, kind, reason)
+	return shown(call.chart, got), err
 }
 
 // status is the shared shape of a trash, a restore and a purge.

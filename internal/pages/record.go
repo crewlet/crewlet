@@ -199,7 +199,7 @@ type MutationRecord struct {
 	// BYTES when the version is above this build's.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
-	Actor      string     `json:"actor,omitempty"`
+	Actor      string     `json:"actor,omitempty" person:"seat"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 	TurnID     string     `json:"turn_id,omitempty"`
@@ -264,11 +264,11 @@ type Notify struct {
 	// Recipients is the watcher set MINUS the muted, computed once at
 	// write time so the feed never has to subtract and can never forget
 	// to.
-	Recipients []string `json:"recipients,omitempty"`
+	Recipients []string `json:"recipients,omitempty" person:"seat"`
 
 	// Mentions are the handles a body named, which are woken whether or
 	// not they watch.
-	Mentions []string `json:"mentions,omitempty"`
+	Mentions []string `json:"mentions,omitempty" person:"seat"`
 
 	// Excerpt is at most [MaxExcerpt] bytes of what a card should show.
 	Excerpt string `json:"excerpt,omitempty"`
