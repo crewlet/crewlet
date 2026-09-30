@@ -1,6 +1,7 @@
 // Package opkey is the HTTP half of an operation id: the header a caller
-// sends one in, the rule a key it sends is held to, and the digest that binds
-// the id a write is published under to the request that asked for it.
+// sends one in, the rule a key it sends is held to, the digest that binds the
+// id a write is published under to the request that asked for it, and what an
+// unknown outcome tells the caller to retry with.
 //
 // # Why one package, and not a copy per surface
 //
@@ -81,6 +82,34 @@ func Key(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 func Refuse(w http.ResponseWriter, err error) {
 	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
 		httpjson.Detail{"field": Header, "detail": err.Error()})
+}
+
+// UnknownDetail is what the 503 of an UNKNOWN outcome says to do: retry with
+// the same operation id, sent back as [Header] — or, where this node's
+// operation ledger cannot vouch for the operation (unvouched), send it with
+// that id through another node, since asked here it answers the same way until
+// the change arrives. Never under a fresh key, which is a second change if the
+// first landed.
+//
+// THE RETRY IS PART OF THE KEY'S RULE, so it is said here rather than by each
+// surface: /chart, /iam and the human write surface each wrote both sentences
+// for themselves, and the copies had drifted — "the SAME operation id" beside
+// "the SAME key", and one surface putting the unvouched sentence after the
+// ordinary one as though both were true. The field that tells an unknown from
+// a refusal is [httpjson.UnknownOutcome]'s; this is only the sentence beside
+// it.
+func UnknownDetail(unvouched bool) string {
+	if unvouched {
+		return "this node's operation ledger cannot vouch for this change, so " +
+			"the same request asked here answers the same way until the change " +
+			"reaches this node. Read whether it landed, or send it with the SAME " +
+			Header + " to another node; never under a fresh one, which is a " +
+			"second change if the first one landed."
+	}
+	return "this node cannot establish what happened to this change. Retry it " +
+		"with the SAME operation id — send op_id back as the " + Header +
+		" header — because a fresh one would defeat the ledger that makes the " +
+		"retry safe."
 }
 
 // Digest is what binds a write's operation to its request: the path (the

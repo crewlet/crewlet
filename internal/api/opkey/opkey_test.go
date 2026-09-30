@@ -171,3 +171,26 @@ func TestTheHeaderIsDeclaredOnce(t *testing.T) {
 		t.Fatalf("read %d source files, which is not this module", walked)
 	}
 }
+
+// AN UNKNOWN IS RETRIED UNDER THE SAME KEY, AND AN UNVOUCHED ONE ELSEWHERE.
+//
+// The sentence beside an unknown outcome's 503 is the one place a client
+// reading prose is told what to do, and /chart, /iam and the human write
+// surface each wrote it until their copies drifted. Both say to send the same
+// operation back under the header; only the unvouched one sends it to another
+// node, since asked here again it answers the same way until the change
+// arrives. Mutation: swap the two sentences and both rows go red.
+func TestAnUnknownSaysToRetryUnderTheSameKey(t *testing.T) {
+	t.Parallel()
+	for _, unvouched := range []bool{false, true} {
+		said := opkey.UnknownDetail(unvouched)
+		if !strings.Contains(said, opkey.Header) || !strings.Contains(said, "SAME") {
+			t.Errorf("unvouched=%v: %q does not say to send the same operation "+
+				"back as the %s", unvouched, said, opkey.Header)
+		}
+		if elsewhere := strings.Contains(said, "another node"); elsewhere != unvouched {
+			t.Errorf("unvouched=%v: %q names another node: %v, want %v",
+				unvouched, said, elsewhere, unvouched)
+		}
+	}
+}

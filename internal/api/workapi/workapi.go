@@ -862,21 +862,11 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 func unknownOutcome(w http.ResponseWriter, key string, unvouched bool, what string,
 	about map[string]any) {
 
-	next := "Retry it with the SAME key — send op_id back as the " +
-		opkey.Header + " header — because a fresh one would defeat the " +
-		"ledger that makes the retry safe."
-	if unvouched {
-		next = "This node's operation ledger cannot vouch for this change, so " +
-			"the same request asked here answers the same way until the change " +
-			"reaches this node. Read whether it landed, or send it with the SAME " +
-			opkey.Header + " to another node; never under a fresh key, " +
-			"which is a second change if the first one landed."
-	}
 	body := httpjson.Detail{}
 	for k, v := range about {
 		body[k] = v
 	}
-	body["detail"] = "this node cannot establish what happened to this change. " + next
+	body["detail"] = opkey.UnknownDetail(unvouched)
 	if what != "" {
 		body["tool_detail"] = what
 	}

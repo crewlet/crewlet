@@ -312,22 +312,9 @@ func (s *Service) answerWrite(w http.ResponseWriter, op operation,
 			"position to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		detail := httpjson.Detail{
-			"detail": "this node cannot establish what happened to this " +
-				"change. Retry it with the SAME operation id — send it back " +
-				"as the " + opkey.Header + " header — because a fresh " +
-				"one would defeat the ledger that makes the retry safe.",
-		}
-		if result.Result.Unvouched {
-			detail["detail"] = "this node's operation ledger cannot vouch for " +
-				"this change, so the same request asked here answers the same " +
-				"way until the change reaches this node. Read whether it " +
-				"landed, or send it with the SAME " + opkey.Header +
-				" to another node; never under a fresh one, which is a second " +
-				"change if the first one landed."
-		}
 		httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, opID,
-			result.Result.Unvouched, detail)
+			result.Result.Unvouched, httpjson.Detail{
+				"detail": opkey.UnknownDetail(result.Result.Unvouched)})
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}

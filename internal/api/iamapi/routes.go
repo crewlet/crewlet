@@ -523,26 +523,13 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	default:
 		log.WarnContext(r.Context(), "api_iam_write_unresolved", "op_id", opID,
 			"unvouched", result.Unvouched)
-		detail := httpjson.Detail{
-			"detail": "this node cannot establish what happened to this " +
-				"change. Retry it with the SAME operation id — send it back " +
-				"as the " + opkey.Header + " header — because a fresh " +
-				"one would defeat the ledger that makes the retry safe.",
-		}
-		if result.Unvouched {
-			// THIS NODE'S LEDGER CANNOT VOUCH FOR IT, so nothing was
-			// published and the same request asked here answers the same
-			// way until the change reaches this node — which the writer
-			// says by carrying no Retry-After — and another node is named.
-			detail["detail"] = "this node's operation ledger cannot vouch " +
-				"for this change, so the same request asked here answers the " +
-				"same way until the change reaches this node. Read whether it " +
-				"landed, or send it with the SAME " + opkey.Header +
-				" to another node; never under a fresh one, which is a second " +
-				"change if the first one landed."
-		}
+		// AN UNVOUCHED ONE — this node's ledger cannot vouch for it, so
+		// nothing was published and the same request asked here answers
+		// the same way until the change reaches this node — carries no
+		// Retry-After (the writer's rule) and names another node.
 		httpjson.UnknownOutcome(w, auth.RetryIdentity(nil), opID, result.Unvouched,
-			withExtra(extra, detail))
+			withExtra(extra, httpjson.Detail{
+				"detail": opkey.UnknownDetail(result.Unvouched)}))
 	}
 }
 
