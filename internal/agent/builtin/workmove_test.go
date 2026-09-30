@@ -267,9 +267,13 @@ func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 				Outcome: statelog.OutcomeUnknown, OpID: opID,
 			}}, nil
 		},
-		"a walk stopped after the root moved": func(string) (tracker.WriteResult, error) {
-			return tracker.WriteResult{}, fmt.Errorf("tracker: whether task "+
-				"id-9's move into OPS landed is unknown: %w", tracker.ErrStepUnresolved)
+		"a walk stopped after the root moved": func(opID string) (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{
+				Outcome: statelog.OutcomeApplied, OpID: opID,
+			}}, &tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 1, Of: 2, OpID: opID, Err: fmt.Errorf("tracker: "+
+					"whether task id-9's move into OPS landed is unknown: %w",
+					tracker.ErrStepUnresolved)}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -283,7 +287,7 @@ func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 			args := map[string]any{"item": "ENG-1", "project": "OPS"}
 
 			got := callMove(t, reg, args)
-			if !got.Failed || !strings.Contains(got.Output, "exactly the same arguments") {
+			if !strings.Contains(got.Output, "exactly the same arguments") {
 				t.Fatalf("the first attempt answered %q, want the retry it prescribes",
 					got.Output)
 			}
@@ -321,5 +325,108 @@ func TestAMoveIntoTheItemsOwnProjectIsTheTrackersToRefuse(t *testing.T) {
 		!strings.Contains(got.Output, "NOT made") {
 		t.Errorf("a move into the item's own project answered %q, want the "+
 			"tracker's refusal", got.Output)
+	}
+}
+
+// stoppedMover moves the root and answers the stop its walk met, as the
+// tracker does once the root's own move has landed.
+type stoppedMover struct{ stop *tracker.MoveStopped }
+
+func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
+
+	stop := *m.stop
+	stop.OpID = opID
+	return tracker.WriteResult{Result: statelog.Result{
+		Outcome: statelog.OutcomeApplied, OpID: opID,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
+	}}, &stop
+}
+
+// A MOVE WHOSE ROOT LANDED AND WHOSE WALK STOPPED IS NOT "NOT MADE".
+//
+// Every such stop but an unknown step reached the default of writeFailure —
+// "The change was NOT made — do not report it as done" — about an item
+// already re-keyed into the target. A seat told that moved it again, as a new
+// call, which the tracker refuses as somebody else's move. The answer is the
+// root's receipt, the walk's count, and the one thing that finishes it: the
+// same call, a restore first where a task in the trash holds it, and neither
+// where this node cannot vouch for the step it stopped at — the tracker duty
+// finishes it then.
+//
+// Mutation: drop the MoveStopped arm in move_work_item and every case answers
+// "NOT made".
+func TestAMoveStoppedAfterItsRootMovedSaysWhatFinishesIt(t *testing.T) {
+	t.Parallel()
+	refused := errors.New("statelog: unavailable (log_full): the broker refused " +
+		"to store the record")
+	for name, tc := range map[string]struct {
+		stop      tracker.MoveStopped
+		want      []string
+		notWanted []string
+		waits     string
+		unvouched bool
+	}{
+		"a refused step": {
+			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 2, Of: 5, Err: refused},
+			want: []string{"ENG-1 moved to OPS as OPS-3", "2 of the 5",
+				"exactly the same arguments", "tracker duty"},
+		},
+		"a task in the trash": {
+			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 4, Of: 5, Waiting: "ENG-9", Err: refused},
+			want:  []string{"ENG-9 is in the trash", "restored", "exactly the same arguments"},
+			waits: "ENG-9",
+		},
+		"a step this node cannot vouch for": {
+			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 1, Of: 5, Err: fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)},
+			want:      []string{"cannot vouch", "tracker duty"},
+			notWanted: []string{"exactly the same arguments"},
+			unvouched: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			stop := tc.stop
+			reg := moverRegistry(t, trk, func(builtin.Actor) builtin.WorkMover {
+				return stoppedMover{stop: &stop}
+			}, chartLeads)
+			got := callMove(t, reg, map[string]any{"item": "ENG-1", "project": "OPS"})
+			if got.Failed {
+				t.Fatalf("a move whose root landed answered as a failure: %s", got.Output)
+			}
+			answer := answerOf(t, got)
+			said, _ := answer["move_stopped"].(string)
+			if answer["key"] != "OPS-3" || answer["moved_from"] != "ENG-1" ||
+				answer["project"] != "OPS" || answer["outcome"] != "applied" ||
+				answer["subtree_followed"] != float64(tc.stop.Followed) ||
+				answer["subtree_total"] != float64(tc.stop.Of) || said == "" {
+				t.Fatalf("the answer is %v, want the root's receipt with the walk's "+
+					"count and how to finish it", answer)
+			}
+			if strings.Contains(said, "NOT made") {
+				t.Errorf("the stop says the change was not made: %s", said)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(said, want) {
+					t.Errorf("the stop lacks %q: %s", want, said)
+				}
+			}
+			for _, not := range tc.notWanted {
+				if strings.Contains(said, not) {
+					t.Errorf("the stop says %q, which stops at the same step "+
+						"here: %s", not, said)
+				}
+			}
+			if waits, _ := answer["move_waits_for"].(string); waits != tc.waits {
+				t.Errorf("move_waits_for is %q, want %q", waits, tc.waits)
+			}
+			if unvouched, _ := answer["move_unvouched"].(bool); unvouched != tc.unvouched {
+				t.Errorf("move_unvouched is %v, want %v", unvouched, tc.unvouched)
+			}
+		})
 	}
 }

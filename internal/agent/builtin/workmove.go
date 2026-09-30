@@ -143,7 +143,13 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		target, tracker.Wake{
 			Kind: tracker.ChangeMoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
-	if err != nil {
+	var stopped *tracker.MoveStopped
+	switch {
+	case errors.As(err, &stopped):
+		// THE ROOT MOVED — whatever stopped the walk, and an unknown step
+		// included, since the root's own move is not the step in doubt.
+		return t.deps.moveStopped(ctx, actor, from, got, stopped)
+	case err != nil:
 		return writeFailed(actor, tracker.MoveWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
@@ -165,6 +171,87 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
 	}, actor))
+}
+
+// moveStopped answers a cross-project move whose ROOT landed in the target and
+// whose walk over the subtree did not finish ([tracker.MoveStopped]).
+//
+// # Why it is not a failure, and not a success either
+//
+// For [WorkDeps.subtreeStopped]'s reason: the item the caller named IS in the
+// new project, under a new key, so "the change was NOT made" — which is what
+// every such stop but an unknown step answered — was false about the one thing
+// the caller asked about by name, and a caller told it moved the item again.
+// And the gesture is NOT done: part of its subtree is still in the old
+// project. So the answer is the root's receipt with the walk's own count
+// beside it and what finishes it.
+//
+// # Why the remedy is the SAME operation, where a removal's is either
+//
+// A second removal finishes a first because a task already in the trash is
+// nothing to do. A second MOVE under a new operation is refused: the root is
+// in the target and that operation's ledger never put it there, which is
+// exactly how somebody else's move looks ([tracker.Writer.MoveTaskToProject]).
+// So the one call that finishes it here is the same one — and the root stays
+// marked mid-move for as long as anything is left, so the tracker duty
+// finishes the walk on its own once nobody holds its claim, which is the
+// remedy where this caller has no repeat that is the same operation, or where
+// this node cannot vouch for the task the walk stopped at.
+func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from string,
+	got tracker.WriteResult, stopped *tracker.MoveStopped) (tools.Result, error) {
+
+	const tool = tracker.MoveWorkItemTool
+	as := ""
+	if stopped.Key != "" {
+		as = " as " + stopped.Key
+	}
+	duty := "the tracker duty finishes the walk on its own once nobody is " +
+		"walking it — read the item with get_work_item to see it done"
+	frozen := fmt.Sprintf("%s is in the trash under it and still in its old "+
+		"project, and a task in the trash is frozen, so the move waits for it: "+
+		"it has to be restored (restore_work_item, where you have it) or purged "+
+		"first", stopped.Waiting)
+	again := sameCall(actor, tool)
+	var next string
+	switch {
+	case errors.Is(stopped.Err, tracker.ErrStepUnvouched):
+		next = fmt.Sprintf("This node cannot vouch for the task the walk "+
+			"stopped at under this operation, so the same call here stops there "+
+			"again, and a new one is refused. Leave it: %s.", duty)
+	case stopped.Waiting != "" && again != "":
+		next = fmt.Sprintf("%s. Then %s to finish the move, or leave it: %s.",
+			frozen, again, duty)
+	case stopped.Waiting != "":
+		next = fmt.Sprintf("%s. Then %s.", frozen, duty)
+	case again != "":
+		next = fmt.Sprintf("%s to finish it: what already moved is left where "+
+			"it is and the rest follows. Or leave it: %s.", capitalize(again), duty)
+	default:
+		next = fmt.Sprintf("Leave it: %s. Calling %s again here is a new "+
+			"operation, and a new one is refused.", duty, tool)
+	}
+	d.settle(ctx, got.Position)
+	answer := map[string]any{
+		"moved_from": from, "project": stopped.Target,
+		"outcome": string(got.Outcome), "position": positionOf(got.Position),
+		"version":          got.Version,
+		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
+		"move_stopped": fmt.Sprintf("%s moved to %s%s, but only %d of the %d "+
+			"tasks under it followed before the walk stopped (%v); the rest are "+
+			"still in their old project. Do not report it as done, and do not "+
+			"move it again as a new call. %s", from, stopped.Target, as,
+			stopped.Followed, stopped.Of, stopped.Err, next),
+	}
+	if stopped.Key != "" {
+		answer["key"] = stopped.Key
+	}
+	if stopped.Waiting != "" {
+		answer["move_waits_for"] = stopped.Waiting
+	}
+	if errors.Is(stopped.Err, tracker.ErrStepUnvouched) {
+		answer["move_unvouched"] = true
+	}
+	return jsonResult(withOperation(answer, actor))
 }
 
 // replacedKey is the key a move into the project an item is already in

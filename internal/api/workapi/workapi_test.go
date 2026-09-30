@@ -711,6 +711,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"POST /work/items",
 		"POST /work/items/{key}/comments",
 		"POST /work/items/{key}/depend",
+		"POST /work/items/{key}/move",
 		"POST /work/items/{key}/purge",
 		"POST /work/items/{key}/rank",
 		"POST /work/items/{key}/relate",

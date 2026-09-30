@@ -96,6 +96,18 @@ is not drawn under that root on either board. A merge never leaves one: a fold
 that would re-parent a duplicate's subtasks onto an item in another project is
 refused before it starts, naming the move that makes it possible.
 
+A move that stops part-way **after the item itself moved** is not answered as a
+failure: the item is in the new project, under its new key, and the answer is
+its receipt with the walk's count beside it — `subtree_followed` of
+`subtree_total` tasks under it made it across — and a `move_stopped` sentence
+saying what finishes it. That is the **same** call again, never a new one; a
+task in the trash under it that holds the walk is named as `move_waits_for`
+and has to be restored or purged first; and where the node cannot vouch for
+the task the walk stopped at (`move_unvouched`), the same call there stops at
+the same place, so it is left to the `tracker` duty or made on another node.
+Over HTTP the move is `POST /work/items/{key}/move` with `{"project": "OPS"}`,
+and the same call is the same `Idempotency-Key`.
+
 The same call made again — what a move answered `unknown`, or stopped part-way,
 tells you to do — is answered by the move itself even once its first attempt has
 carried the item into the new project: it reports the move that landed, under the
@@ -103,7 +115,8 @@ key the item left (`moved_from`), and finishes whatever of the subtree has not
 followed. The lead check is on the move *out* of a project, so the lead of the
 old project finishing their own move is not sent to the new project's lead about
 a move that already happened; and a move into the project an item is already in
-that no earlier attempt of that same call made is refused, as somebody else's.
+that no earlier attempt of that same call made is refused, as somebody else's —
+which is why a *new* call cannot finish a stopped move.
 
 A project nobody has filed work into reports **no last change at all**, rather
 than an instant borrowed from its own creation: "nothing has ever been filed

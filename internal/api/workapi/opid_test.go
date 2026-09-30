@@ -1,6 +1,7 @@
 package workapi_test
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -268,6 +269,87 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 		!strings.Contains(stopped, "2 of the 5") {
 		t.Errorf("the instruction is %q, want it to name a new %s and the "+
 			"counts", stopped, workapi.IdempotencyHeader)
+	}
+}
+
+// A STOPPED MOVE IS FINISHED ON THIS SURFACE BY THE SAME KEY, AND SAYS SO.
+//
+// move_work_item answers a move whose root landed and whose walk stopped with
+// the root's receipt and an instruction for a seat or the operator's
+// assistant — the same arguments, or the same `op_id`, neither of which this
+// route takes. What finishes it here is the same Idempotency-Key: a new one
+// is refused, because the root is already in the target and that operation's
+// ledger never put it there. Where this node cannot vouch for the step it
+// stopped at, the same key here stops there again, and the answer sends the
+// client to another node or to the tracker duty; where a task in the trash
+// holds the walk, to its restore.
+//
+// Mutation: drop moveStoppedHere and every case names the tool's own remedy.
+func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		stop tracker.MoveStopped
+		want []string
+	}{
+		"a refused step": {
+			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+				Followed: 2, Of: 5, Err: errors.New("refused")},
+			want: []string{"ENG-1 moved to OPS as OPS-7", "2 of the 5",
+				"SAME " + workapi.IdempotencyHeader, "a new key is refused"},
+		},
+		"a task in the trash": {
+			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+				Followed: 4, Of: 5, Waiting: "ENG-9", Err: errors.New("frozen")},
+			want: []string{"ENG-9 is in the trash", "/work/items/ENG-9/restore",
+				"SAME " + workapi.IdempotencyHeader},
+		},
+		"a step this node cannot vouch for": {
+			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+				Followed: 1, Of: 5, Err: tracker.ErrStepUnvouched},
+			want: []string{"cannot vouch", "another node", "tracker duty"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			stop := tc.stop
+			r.writes.err = &stop
+			got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+				map[string]any{"project": "OPS"})
+			said, _ := got.body["move_stopped"].(string)
+			if got.status != http.StatusOK || said == "" || got.body["key"] != "OPS-7" {
+				t.Fatalf("answered %d %v, want the root's receipt with how to "+
+					"finish the move", got.status, got.body)
+			}
+			if strings.Contains(said, "op_id") || strings.Contains(said, "same arguments") {
+				t.Errorf("the instruction is %q, which names a remedy this route "+
+					"does not take", said)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(said, want) {
+					t.Errorf("the instruction lacks %q: %s", want, said)
+				}
+			}
+		})
+	}
+}
+
+// A MOVE IS A PERSON'S TO MAKE HERE TOO, and the route carries only the
+// project it moves to: the item is the path's.
+func TestAMoveIsServedHere(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+		map[string]any{"project": "OPS"})
+	if got.status != http.StatusOK || got.body["project"] != "OPS" ||
+		len(r.writes.targets) != 1 || r.writes.targets[0] != "OPS" {
+		t.Fatalf("answered %d %v with the tracker asked %v, want the move into OPS",
+			got.status, got.body, r.writes.targets)
+	}
+	if got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+		map[string]any{"project": "OPS", "status": "done"}); got.status != http.StatusBadRequest {
+		t.Errorf("a move carrying another route's argument answered %d, want 400",
+			got.status)
 	}
 }
 

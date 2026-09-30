@@ -1298,6 +1298,72 @@ func (h *held) release(ctx context.Context) {
 	_, _ = h.claims.Release(context.WithoutCancel(ctx), h.resource, h.owner, h.epoch)
 }
 
+// MoveStopped reports a cross-project move whose ROOT landed in its target and
+// whose walk over the subtree stopped before carrying all of it.
+//
+// A TYPE RATHER THAN A SENTENCE, for [SubtreeStopped]'s reason: the caller has
+// to say two true things at once — the item it named is in the new project,
+// and some of what goes with it is not — and a bare error made every caller
+// say the second as though it were the first. The move tool answered every
+// such stop but an unknown step with "the change was NOT made", about a root
+// that had moved and been re-keyed; a model told that moves it again, and a
+// person told that goes looking for an item under a key it no longer has.
+//
+// THE REMEDY IS THE SAME OPERATION, and only that — which is where it differs
+// from a removal's: a new operation meets a root already in the target that
+// its own ledger never moved there, and is refused as somebody else's move
+// ([Writer.finishMove]). The same operation is answered from the ledger for
+// the root and carries the rest; and the root stays marked mid-move for as
+// long as anything is left, so the tracker duty finishes the walk on its own
+// once nobody holds its claim ([duty.finishMoves]).
+type MoveStopped struct {
+	// Root is the task the move named, and Key the key it holds in the
+	// target — empty only when this stop could not read it back, which a
+	// get of Root answers.
+	Root, Key string
+
+	// Target is the project the root is in now.
+	Target string
+
+	// Followed is how many of the tasks under the root are in the target,
+	// and Of how many there are.
+	Followed, Of int
+
+	// Waiting is the key of a task under the root that is in the TRASH
+	// and still in the old project: frozen, so nothing carries it until
+	// somebody restores it — or purges it, which takes it out of the
+	// subtree. Empty for every other stop.
+	Waiting string
+
+	// OpID is the move's operation — what finishes it.
+	OpID string
+
+	// Err is why the walk stopped: a refused step, a step whose outcome
+	// is unknown ([ErrStepUnresolved]) or one this node cannot vouch for
+	// ([ErrStepUnvouched]), or the task in the trash it waits for.
+	Err error
+}
+
+func (e *MoveStopped) Error() string {
+	root := e.Root
+	if e.Key != "" {
+		root = fmt.Sprintf("%s (%s)", e.Key, e.Root)
+	}
+	next := fmt.Sprintf("the same operation (%s) finishes it — a new one is "+
+		"refused, since the root is already in %s — and so does the tracker "+
+		"duty once nobody is walking it", e.OpID, e.Target)
+	if e.Waiting != "" {
+		next = fmt.Sprintf("task %s is in the trash and the move waits for it: "+
+			"restore it and the same operation (%s), or the tracker duty, "+
+			"carries it into %s — or purge it", e.Waiting, e.OpID, e.Target)
+	}
+	return fmt.Sprintf("tracker: task %s moved into %s, and %d of the %d tasks "+
+		"under it followed before the walk stopped — the rest are still in "+
+		"their old project; %s: %v", root, e.Target, e.Followed, e.Of, next, e.Err)
+}
+
+func (e *MoveStopped) Unwrap() error { return e.Err }
+
 // MoveTaskToProject re-homes a task and everything beneath it. SEQUENCE 7.
 //
 //	Rk, then take move/<task> → Rs the target project and its tag set;
@@ -1539,30 +1605,37 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return result, err
 	}
 	if len(subtree) > 0 {
-		var last statelog.Position
-		if last, err = w.moveDescendants(ctx, opID, target, subtree, base+1); err != nil {
-			return result, err
-		}
-		// THE MARK COMES DOWN ONLY ONCE THIS NODE HOLDS THE WHOLE WALK:
-		// its decide asks whether anything under the root is still
-		// outside the target ([carriedAll]), and the descendants are on
-		// subjects of their own — so the last of them, and never only the
-		// root's position, is what this append has to see. See
-		// [Writer.After].
-		err = w.After(laterOf(result.Position, last)).endMove(ctx, opID,
-			taskID, target)
-		if errors.Is(err, errUncarried) {
-			// A TASK FILED BEHIND THE WALK, which this node has now
-			// applied — the append that met it waited for the whole walk
-			// first. So the pass the duty would run a quarter of an hour
-			// from now runs here, under the claim this call holds: it
-			// re-reads the subtree, carries what the first read could not
-			// see, and takes the mark down. Once — a second task filed
-			// behind THIS pass is the duty's, and the caller is told.
-			_, err = w.finishAbandonedMove(ctx, opID, taskID)
+		var (
+			followed int
+			last     statelog.Position
+		)
+		followed, last, err = w.moveDescendants(ctx, opID, target, subtree, base+1)
+		if err == nil {
+			// THE MARK COMES DOWN ONLY ONCE THIS NODE HOLDS THE WHOLE
+			// WALK: its decide asks whether anything under the root is
+			// still outside the target ([carriedAll]), and the
+			// descendants are on subjects of their own — so the last of
+			// them, and never only the root's position, is what this
+			// append has to see. See [Writer.After].
+			err = w.After(laterOf(result.Position, last)).endMove(ctx, opID,
+				taskID, target)
+			if errors.Is(err, errUncarried) {
+				// A TASK FILED BEHIND THE WALK, which this node has
+				// now applied — the append that met it waited for the
+				// whole walk first. So the pass the duty would run a
+				// quarter of an hour from now runs here, under the
+				// claim this call holds: it re-reads the subtree,
+				// carries what the first read could not see, and takes
+				// the mark down. Once — a second task filed behind THIS
+				// pass is the duty's, and the caller is told.
+				_, err = w.finishAbandonedMove(ctx, opID, taskID)
+			}
 		}
 		if err != nil {
-			return result, err
+			// THE ROOT MOVED, so whatever stopped the walk is a stop
+			// and never a refusal of the move: see [MoveStopped].
+			return result, w.moveStopped(ctx, result, opID, root, target,
+				fmt.Sprintf("%s-%d", target, base), followed, len(subtree), err)
 		}
 	}
 	if result.Collapsed {
@@ -1613,6 +1686,8 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 			"task %s's move into %s", root.ID, target),
 			WriteResult{Result: answered}, nil)
 	}
+	// The root is in the target and keyed there, so a stop past this point
+	// is [Writer.followRoot]'s own [MoveStopped].
 	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
 		return WriteResult{Result: answered}, err
 	}
@@ -1689,6 +1764,9 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 // each is conditioned on the project it was read in, and the task is no longer
 // there — so nothing is moved twice; the range minted for them is a gap, which
 // is what every other crash residue here costs.
+//
+// EVERY FAILURE IS A [MoveStopped]: the root is in its project before this
+// runs, so whatever stops the pass stops a move that has happened.
 func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	subtree []Task) error {
 
@@ -1702,15 +1780,22 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 			left = append(left, descendant)
 		}
 	}
+	carried := len(subtree) - len(left) - len(frozen)
+	stop := func(followed int, waiting string, err error) error {
+		return &MoveStopped{Root: root.ID, Key: root.Key, Target: root.Project,
+			Followed: followed, Of: len(subtree), Waiting: waiting, OpID: opID,
+			Err: err}
+	}
 	if len(left) > MaxDescendants {
-		return fmt.Errorf("tracker: task %s has %d descendants still to move "+
-			"and a move carries at most %d", root.ID, len(left), MaxDescendants)
+		return stop(carried, "", fmt.Errorf("tracker: task %s has %d "+
+			"descendants still to move and a move carries at most %d", root.ID,
+			len(left), MaxDescendants))
 	}
 	var last statelog.Position
 	if len(left) > 0 {
 		tags, err := w.followedTags(ctx, left)
 		if err != nil {
-			return err
+			return stop(carried, "", err)
 		}
 		if len(tags) > 0 {
 			// AN ADD, as the first run's: see [Writer.MoveTaskToProject].
@@ -1718,28 +1803,35 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 				root.Project, TagEdit{Add: tags}, TagAuthority{})
 			if err = resolved("the carried tags in "+root.Project,
 				declared, declareErr); err != nil {
-				return fmt.Errorf("tracker: declare the tags the rest of %s's "+
-					"subtree carries in %s: %w", root.ID, root.Project, err)
+				return stop(carried, "", fmt.Errorf("tracker: declare the tags "+
+					"the rest of %s's subtree carries in %s: %w", root.ID,
+					root.Project, err))
 			}
 		}
 		base, _, err := w.mintFresh(ctx, root.Project, len(left), nil)
 		if err != nil {
-			return err
+			return stop(carried, "", err)
 		}
-		if last, err = w.moveDescendants(ctx, opID, root.Project, left, base); err != nil {
-			return err
+		var moved int
+		moved, last, err = w.moveDescendants(ctx, opID, root.Project, left, base)
+		if err != nil {
+			return stop(carried+moved, "", err)
 		}
 	}
 	if len(frozen) > 0 {
-		return fmt.Errorf("tracker: task %s under %s is in the trash and still "+
-			"in project %s, and a removed task is frozen — the move waits for "+
-			"it: restore it and the next pass carries it into %s, or purge it",
-			frozen[0].ID, root.ID, frozen[0].Project, root.Project)
+		return stop(carried+len(left), frozen[0].Key, fmt.Errorf("tracker: "+
+			"task %s (%s) under %s is in the trash and still in project %s, and "+
+			"a removed task is frozen — the move waits for it: restore it and "+
+			"the next pass carries it into %s, or purge it", frozen[0].Key,
+			frozen[0].ID, root.ID, frozen[0].Project, root.Project))
 	}
 	// AFTER WHAT THIS PASS MOVED, for the reason the sequence's own last
 	// append waits: [carriedAll] asks this node's rows whether anything
 	// under the root is still outside its project.
-	return w.After(last).endMove(ctx, opID, root.ID, root.Project)
+	if err := w.After(last).endMove(ctx, opID, root.ID, root.Project); err != nil {
+		return stop(carried+len(left), "", err)
+	}
+	return nil
 }
 
 // endMove takes a root's mid-move mark down: the walk's last append.
@@ -1764,10 +1856,13 @@ func (w *Writer) endMove(ctx context.Context, opID, rootID, project string) erro
 }
 
 // moveDescendants moves each of a subtree's descendants, in order, on the
-// consecutive numbers from base, and answers the position of the last — what
-// the append that takes the mark down has to have applied before it decides.
+// consecutive numbers from base, and answers how many it moved and the
+// position of the last — what the append that takes the mark down has to have
+// applied before it decides. A step that stops the walk is answered as it is:
+// the caller knows how much of the subtree was carried before this pass, which
+// the [MoveStopped] it forms has to count.
 func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
-	descendants []Task, base uint64) (statelog.Position, error) {
+	descendants []Task, base uint64) (int, statelog.Position, error) {
 
 	var last statelog.Position
 	for i, descendant := range descendants {
@@ -1781,13 +1876,37 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 		// nothing would look for again.
 		if err = resolved(fmt.Sprintf("task %s's move into %s",
 			descendant.ID, target), moved, err); err != nil {
-			return last, fmt.Errorf("tracker: %d of %d descendants moved; re-run "+
-				"the move under the same operation id, which moves the rest: %w",
-				i, len(descendants), err)
+			return i, last, err
 		}
 		last = laterOf(last, moved.Position)
 	}
-	return last, nil
+	return len(descendants), last, nil
+}
+
+// moveStopped is what [Writer.MoveTaskToProject] answers when the walk stops
+// after the root's own move landed: a [MoveStopped], and never the bare error
+// that stopped it.
+//
+// A LATER PASS's OWN STOP IS KEPT WHOLE — the pass the walk runs for a task
+// filed behind it ([Writer.followRoot]) read the subtree again and counts what
+// it found, which the first read did not hold. key is the root's key in the
+// target by this run's own range; a root that moved under an EARLIER copy of
+// the operation holds that copy's number instead, read off its row.
+func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID string,
+	root Task, target, key string, followed, of int, err error) error {
+
+	var stop *MoveStopped
+	if errors.As(err, &stop) {
+		return err
+	}
+	if result.Collapsed {
+		key = ""
+		if landed, readErr := w.landedTask(ctx, result.Result, root.ID); readErr == nil {
+			key = landed.Key
+		}
+	}
+	return &MoveStopped{Root: root.ID, Key: key, Target: target,
+		Followed: followed, Of: of, OpID: opID, Err: err}
 }
 
 // laterOf is the later of two positions on one log, the zero position being

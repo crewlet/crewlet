@@ -117,6 +117,17 @@ func TestAMoveKeepsItsMarkOverATaskFiledBehindItThatItCannotCarry(t *testing.T) 
 	if !oneTask(t, r, "m-root").Moving {
 		t.Fatal("the root's mark came down over a task still in ENG")
 	}
+	// THE ROOT MOVED, so this is a stop naming what it waits for — the two
+	// tasks the walk read went, and the one in the trash did not.
+	var stopped *tracker.MoveStopped
+	if !errors.As(err, &stopped) {
+		t.Fatalf("the move answered %v, want a *tracker.MoveStopped", err)
+	}
+	if late := oneTask(t, r, "m-late"); stopped.Waiting != late.Key ||
+		stopped.Followed != 2 || stopped.Of != 3 {
+		t.Errorf("the stop is %+v, want it waiting for %s with 2 of 3 followed",
+			*stopped, late.Key)
+	}
 
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore-late", "m-late",
 		"ENG", nil); err != nil {

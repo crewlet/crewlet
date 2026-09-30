@@ -66,6 +66,11 @@ func (s *Service) workRoutes(mount mounter) {
 	// tool decides the verb once it has read it.
 	mount("DELETE /work/items/{key}", task(authz.ActionWorkRead), s.deleteItem)
 	mount("POST /work/items/{key}/restore", task(authz.ActionWorkRead), s.postRestore)
+	// A MOVE IS THE LEAD'S OF THE PROJECT THE ITEM IS IN, which is the row's
+	// for the trash's reason — and a move into the project it is already in
+	// is the retry of one that landed, which the tool answers from the
+	// move's own ledger rather than asking anybody's authority again.
+	mount("POST /work/items/{key}/move", task(authz.ActionWorkRead), s.postMove)
 	// THE PURGE NEEDS NO ROW TO DECIDE: it is the fleet's grant and never
 	// an agent's, whatever the item is.
 	mount("POST /work/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
@@ -147,6 +152,21 @@ func (s *Service) postRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.call(w, r, tracker.RestoreWorkItemTool, args)
+}
+
+// postMove is move_work_item: the item and everything under it, re-keyed into
+// the project the body names.
+//
+// THE PERSON'S OWN DOOR ONTO IT. The tool was served to a seat and to the
+// operator's assistant, and a person who had filed an item in the wrong
+// project could only ask one of them to move it.
+func (s *Service) postMove(w http.ResponseWriter, r *http.Request) {
+	args, ok := readArgs(w, r)
+	if !ok || !only(w, args, "project") ||
+		!fromPath(w, args, "item", r.PathValue("key")) {
+		return
+	}
+	s.call(w, r, tracker.MoveWorkItemTool, args)
 }
 
 // putProject and postProjectTags are write_project's two facets: a project's

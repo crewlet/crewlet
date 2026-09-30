@@ -138,6 +138,7 @@ type writes struct {
 	created []tracker.Task
 	updates []tracker.TaskPatch
 	moved   [][2]tracker.Rank
+	targets []string
 	purged  []string
 	edited  []string
 	inbox   []string
@@ -207,6 +208,24 @@ func (b *bound) RestoreTask(_ context.Context, opID, _, _ string,
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
+	return b.w.answer(opID)
+}
+
+// MoveTaskToProject is the cross-project move. A [tracker.MoveStopped] in the
+// rig's err comes WITH the root's receipt, as the tracker answers one: the
+// root moved, and it is the walk that stopped.
+func (b *bound) MoveTaskToProject(_ context.Context, opID, _, target string,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
+
+	b.w.mu.Lock()
+	defer b.w.mu.Unlock()
+	b.w.targets = append(b.w.targets, target)
+	if stop := (*tracker.MoveStopped)(nil); errors.As(b.w.err, &stop) {
+		b.w.opIDs = append(b.w.opIDs, opID)
+		return tracker.WriteResult{Result: statelog.Result{
+			Outcome: statelog.OutcomeApplied, OpID: opID, Version: 4,
+		}}, b.w.err
+	}
 	return b.w.answer(opID)
 }
 
@@ -428,6 +447,9 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 			Reader: r.reader,
 			Writer: func(a builtin.Actor) builtin.WorkWriter { return r.writes.as(a) },
 			TrashWriter: func(a builtin.Actor) builtin.TrashWriter {
+				return r.writes.as(a)
+			},
+			Moves: func(a builtin.Actor) builtin.WorkMover {
 				return r.writes.as(a)
 			},
 			PersonWriter: func(a builtin.Actor) builtin.PersonWriter {

@@ -652,6 +652,7 @@ func answerTool(w http.ResponseWriter, key string, result tools.Result) {
 		return
 	}
 	subtreeStoppedHere(receipt)
+	moveStoppedHere(receipt)
 	// A RECEIPT CARRIES NO LEDGER FACTS: a tool reports an outcome nobody
 	// can establish as a FAILED result carrying [builtin.UnknownOutcome],
 	// which [fail] answers, so an `unknown` still found here is a nested
@@ -699,6 +700,62 @@ func subtreeStoppedHere(receipt map[string]any) {
 		"none: a new operation decides each task afresh, so whatever has not "+
 		"followed yet goes and what already has is left where it is.",
 		key, done, int(followed), int(total), IdempotencyHeader)
+}
+
+// moveStoppedHere rewrites a stopped move's instruction for THIS surface.
+//
+// # Why the remedy is the SAME key, where a subtree's is a new one
+//
+// move_work_item answers a move whose root landed in the target and whose walk
+// over the subtree stopped with the root's receipt and a `move_stopped`
+// sentence written for a seat or the operator's assistant — call again with
+// the same arguments, or the same `op_id`, neither of which this route takes.
+// What makes the same operation here is the same `Idempotency-Key`: every id
+// the tool derives is a function of it, so the move's own ledger answers the
+// root and the walk carries the rest. A NEW key is refused, which is where a
+// move differs from a removal: the root is already in the target and that
+// operation's ledger never put it there, which is exactly how somebody else's
+// move looks. And the root stays marked mid-move while anything is left, so
+// the tracker duty finishes the walk on its own — the remedy where this node
+// cannot vouch for the step the walk stopped at, since the same key here stops
+// there again. Formed from the receipt's own fields, never from words read out
+// of the tool's sentence.
+func moveStoppedHere(receipt map[string]any) {
+	said, stopped := receipt["move_stopped"]
+	if !stopped {
+		return
+	}
+	log.Info("api_work_move_stopped", "item", receipt["moved_from"], "tool_detail", said)
+	from, _ := receipt["moved_from"].(string)
+	project, _ := receipt["project"].(string)
+	as := ""
+	if key, _ := receipt["key"].(string); key != "" {
+		as = " as " + key
+	}
+	followed, _ := receipt["subtree_followed"].(float64)
+	total, _ := receipt["subtree_total"].(float64)
+	duty := "the tracker duty finishes the move on its own once nobody is " +
+		"walking it"
+	next := fmt.Sprintf("To finish it, send this request again under the SAME "+
+		"%s — a new key is refused, since the item is already in %s — or leave "+
+		"it: %s.", IdempotencyHeader, project, duty)
+	waits, _ := receipt["move_waits_for"].(string)
+	unvouched, _ := receipt["move_unvouched"].(bool)
+	switch {
+	case unvouched:
+		next = fmt.Sprintf("This node cannot vouch for the task the walk "+
+			"stopped at, so the same %s here stops there again: send it to "+
+			"another node, or leave it: %s.", IdempotencyHeader, duty)
+	case waits != "":
+		next = fmt.Sprintf("%s is in the trash under it, and the move waits for "+
+			"it: restore it (POST /work/items/%s/restore) or purge it, then send "+
+			"this request again under the SAME %s — or leave it: once it is "+
+			"restored, %s.", waits, waits, IdempotencyHeader, duty)
+	}
+	receipt["move_stopped"] = fmt.Sprintf("%s moved to %s%s, but only %d of the "+
+		"%d tasks under it followed before the walk stopped; the rest are still "+
+		"in their old project. Do not report it as done. %s", from, project, as,
+		int(followed), int(total), next)
 }
 
 // outcomeOf is a receipt's outcome: its own, or — for a tool that made two
