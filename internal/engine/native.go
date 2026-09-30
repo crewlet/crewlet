@@ -250,20 +250,33 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
 	// than the knowledge searcher's: each verb's corpus filter is its own,
 	// and neither can widen into the other's.
-	n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
-		index: n.indexer,
-		fan: &search.FanOut{
-			Self:   nodeID,
-			Local:  search.NodeScanner{Index: n.indexer},
-			Peers:  e.searchPeers(),
-			Roster: e.searchRoster,
-			Corpus: n.indexer.Corpus,
-			Report: e.reportSearch,
-			Enter:  e.enterSearch,
-		},
-	})
-	// A HIT'S ASSIGNEE is shown as the reader shows one — see livePeople.
-	n.itemSearch.Identities = livePeople{engine: e}
+	//
+	// ONLY WHERE THE COMPANY KEEPS ITS TRACKER HERE, unlike the index. The
+	// index is built under either backend because it covers both corpora;
+	// this searcher reads the tracker's corpus alone, and on a company whose
+	// tracker is a vendor's — or none — that corpus is empty by
+	// construction. Built there anyway it made `work_search` a question this
+	// node answered with nothing, where every other work question is one it
+	// does not have: "there is no tracker here" read as "the tracker holds
+	// nothing matching", the one confusion [Engine.WorkSearch]'s untyped nil
+	// exists to prevent.
+	if runTracker {
+		n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
+			index: n.indexer,
+			fan: &search.FanOut{
+				Self:   nodeID,
+				Local:  search.NodeScanner{Index: n.indexer},
+				Peers:  e.searchPeers(),
+				Roster: e.searchRoster,
+				Corpus: n.indexer.Corpus,
+				Report: e.reportSearch,
+				Enter:  e.enterSearch,
+			},
+		})
+		// A HIT'S ASSIGNEE is shown as the reader shows one — see
+		// livePeople.
+		n.itemSearch.Identities = livePeople{engine: e}
+	}
 	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
 	// beside the coordinator because they are different jobs on one node:
 	// every node with an index answers, whether or not anybody on it ever

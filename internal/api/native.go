@@ -263,8 +263,10 @@ func (l livePages) Revision(ctx context.Context, pageID string, version int,
 
 // liveWorkSearch is ranked item search, resolved per question.
 //
-// ITS OWN SOURCE, as [queries.Sources.WorkSearch] is: the index is this node's
-// and the rows are the fleet's, so the two are absent independently.
+// ITS OWN SOURCE, as [queries.Sources.WorkSearch] is, and present exactly
+// where the tracker is: the index is built for either native backend, but the
+// search reads the tracker's corpus alone, so the engine builds it only for a
+// company that keeps its tracker here ([engine.Engine.WorkSearch]).
 type liveWorkSearch struct{ engine *engine.Engine }
 
 func (l liveWorkSearch) Search(ctx context.Context, text string, limit int) (
@@ -272,7 +274,7 @@ func (l liveWorkSearch) Search(ctx context.Context, text string, limit int) (
 	started := l.engine.NativeStarted()
 	s := l.engine.WorkSearch()
 	if s == nil {
-		return nil, nativeAbsent(started, "search index")
+		return nil, nativeAbsent(started, "tracker")
 	}
 	return s.Search(ctx, text, limit)
 }
