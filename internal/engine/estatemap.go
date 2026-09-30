@@ -3,11 +3,13 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/membership"
+	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -47,10 +49,126 @@ func (e *Engine) startEstateMap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	duty := mapDuty{event: "estate_map", claim: e.workerDuty(estateMapDuty, mapDutyTTL),
-		tick: estateMapTick(m), released: m.Forget}
-	e.estateMaintainer = startLoop(ctx, sleep, duty.turn)
+	l := &estateMapLoop{
+		converge: m.Converge,
+		live: func(ctx context.Context) ([]partmap.Presence, error) {
+			return estateHolders(ctx, e.backends.Coord)
+		},
+		sleep: sleep, now: time.Now, poll: estateLeasePoll,
+	}
+	duty := mapDuty{event: "estate_map", claim: l.claimed(e.workerDuty(estateMapDuty, mapDutyTTL)),
+		tick: l.ticked(estateMapTick(m)), released: m.Forget}
+	e.estateMaintainer = startLoop(ctx, l.wait, duty.turn)
 	return nil
+}
+
+// estateLeasePoll is how often the estate map's duty holder lists the estate
+// leases between two ticks, to converge the map when one of them changes
+// ([estateMapLoop.wait]).
+//
+// ONE SECOND, [coord.MinViewRefresh] and for its reason: one listing of one
+// lease class a second is what a lease view may already cost when callers keep
+// invalidating it, and it is paid on ONE node — the duty's holder — and only
+// while a map exists, so never under the single-file layout. A node's word
+// reaches the map on its lease's renewal, and this is how late after that the
+// map answers it: a second, plus the second the listing must hold still.
+const estateLeasePoll = coord.MinViewRefresh
+
+// estateMapLoop is the estate map's duty between two ticks: while the last turn
+// held the duty and found a map, it lists the estate leases every poll and,
+// once their [partmap.LeaseKey] has moved and then held still for a poll, runs
+// the maintainer's convergence ([partmap.Maintainer.Converge]) — so a joiner
+// is routed to, and the copy it replaces let go, as soon as its lease says it
+// serves rather than up to a tick later.
+//
+// # Debounced, and never a tick
+//
+// A convergence runs on a key that held still for one poll, so a fleet whose
+// leases are changing — a first map's many joins starting at once — is
+// converged once they settle rather than once per listing. It counts no
+// absence and names no join (partmap.Converge), so however often it runs the
+// tick's cadence still decides both; and it writes by compare-and-set, so one
+// running as the duty moves loses its race rather than overwriting the
+// successor's tick.
+//
+// Its fields are the LOOP GOROUTINE'S ALONE: [startLoop] runs a turn and then
+// its wait on one goroutine, and nothing else reads them.
+type estateMapLoop struct {
+	converge func(context.Context) (bool, error)
+	live     func(context.Context) ([]partmap.Presence, error)
+	sleep    func(context.Context, time.Duration)
+	now      func() time.Time
+	poll     time.Duration
+
+	// mapped is whether the last turn held the duty and its tick read a
+	// map: what makes the wait before the next one a time to converge in.
+	mapped bool
+}
+
+// claimed wraps the duty's claim so a turn that does not hold it converges
+// nothing until the next that does; nil, the node with no fleet to be a
+// singleton among, stays nil.
+func (l *estateMapLoop) claimed(claim schedule.DutyFunc) schedule.DutyFunc {
+	if claim == nil {
+		return nil
+	}
+	return func(ctx context.Context) (bool, error) {
+		mine, err := claim(ctx)
+		if err != nil || !mine {
+			l.mapped = false
+		}
+		return mine, err
+	}
+}
+
+// ticked wraps the tick so the wait after it knows whether it read a map.
+func (l *estateMapLoop) ticked(tick func(context.Context) (mapTick, error)) func(context.Context) (mapTick, error) {
+	return func(ctx context.Context) (mapTick, error) {
+		res, err := tick(ctx)
+		l.mapped = err == nil && res.mapped
+		return res, err
+	}
+}
+
+// wait sleeps for d — the duty's pace — converging the map on each settled
+// lease change inside it while the last turn held the duty and found a map.
+//
+// THE FIRST LISTING IS A CHANGE: the tick read the leases before it decided,
+// and a lease written between that read and the first poll would otherwise go
+// unanswered until the next tick. A listing that fails decides nothing, and a
+// convergence that fails is said and retried on the next change.
+func (l *estateMapLoop) wait(ctx context.Context, d time.Duration) {
+	if !l.mapped {
+		l.sleep(ctx, d)
+		return
+	}
+	deadline := l.now().Add(d)
+	var last string
+	listed, moved := false, true
+	for {
+		left := deadline.Sub(l.now())
+		if left <= 0 || ctx.Err() != nil {
+			return
+		}
+		l.sleep(ctx, min(l.poll, left))
+		if ctx.Err() != nil {
+			return
+		}
+		live, err := l.live(ctx)
+		if err != nil {
+			continue
+		}
+		key := partmap.LeaseKey(live)
+		switch {
+		case !listed || key != last:
+			listed, last, moved = true, key, moved || listed
+		case moved:
+			moved = false
+			if _, err := l.converge(ctx); err != nil && ctx.Err() == nil {
+				log.WarnContext(ctx, "estate_map_not_converged", "error", err)
+			}
+		}
+	}
 }
 
 // newEstateMaintainer is the estate map's maintainer over this node's stores,

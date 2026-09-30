@@ -255,6 +255,15 @@ The `estate-map` duty runs one step per partition per tick:
    a snapshot transfer, while a join into a partition nobody serves (every
    partition of a new deployment) has no donor to wait for.
 
+Steps 1 to 5 also run **between ticks**. A node's word reaches the map when
+its estate lease is renewed, so the duty's holder lists the estate leases every
+second while a map exists and, once they have changed and then held still for a
+second, converges the map again: a joiner is routed to, and the copy it
+replaces let go, within a couple of seconds of its lease saying it serves
+rather than up to a tick later. That pass counts no absence and names no join —
+both stay the tick's, so membership's grace is still forty ticks and a node
+still starts at most one transfer per tick.
+
 The write side follows the same states. A joining node takes the partition's
 writes from the moment its lease says `serving`, and a leaving one stops taking
 them when its lease says `draining` and then **releases** each of the
