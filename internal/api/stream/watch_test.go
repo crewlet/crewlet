@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A WATCH IS DECIDED LIKE THE INBOX QUESTION ABOUT THE SAME SEAT.
@@ -106,6 +107,86 @@ func TestAWatchThisNodeCannotDecideIsNotInstalled(t *testing.T) {
 	write(t, conn, map[string]any{"kind": "watch", "seat": "platform-lead"})
 	waitFor(t, func() bool { return f.svc.Hub().Watchers("platform-lead") == 1 },
 		"a watch of the holder's own seat waited on a chart it never needed")
+}
+
+// AN UNDECIDABLE WATCH SAYS WHEN TO ASK AGAIN, like every other `unavailable`
+// frame on the socket.
+//
+// The watch's refusal went out as a bare `unavailable` — the frame a node too
+// old to say sends — so the dashboard re-asked it at its own fixed interval
+// whatever the node could have told it: every five seconds for as long as the
+// tab stayed open against a chart whose log was full, which no wait clears,
+// and sooner than a node draining a long backlog had said it could answer. So
+// the frame carries `retry_after` by the state log's own rule over what could
+// not be read, ZERO where waiting will not change it — and the hint ALONE:
+// what the directory says about a login names the seat it is bound to, so its
+// words stay in the node's log.
+func TestAnUndecidableWatchSaysWhenToAskAgain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  float64
+	}{
+		{"a chart this node could not read", errors.New("the chart view is not built yet"),
+			stream.HealthInterval.Seconds()},
+		{"a chart log this node is behind", &statelog.Refused{Code: statelog.RefuseBehind,
+			Detail: "40 000 records behind", RetryAfter: 12 * time.Second}, 12},
+		{"a chart log waiting will not clear", &statelog.Refused{Code: statelog.RefuseLogFull,
+			Detail: "raise the stream's byte ceiling"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newWatchSocket(t, &leadChart{err: tc.cause},
+				map[string]string{"token:lead": "platform-lead"})
+			conn := f.open(t, "lead-token-long-enough-to-pass")
+			// A SEAT, decided on the chart; and a LOGIN, which the chart
+			// is asked about before the directory is ([watching.mayLook]).
+			for _, name := range []string{"sarah-chen", "sarah.chen"} {
+				write(t, conn, map[string]any{"kind": "watch", "seat": name})
+				assertWatchHint(t, next(t, conn), tc.want)
+			}
+			f.assertOpen(t, conn)
+		})
+	}
+
+	// AND THE DIRECTORY A LOGIN RESOLVES THROUGH, which is the other thing a
+	// watch can fail to read: its log refusing a read no wait clears is a
+	// zero, not the five seconds a bare frame was retried at.
+	t.Run("a directory log waiting will not clear", func(t *testing.T) {
+		t.Parallel()
+		chart := &leadChart{leads: map[[2]string]bool{{"platform-lead", "sarah-chen"}: true}}
+		dir := &watchDirectory{err: &statelog.Refused{Code: statelog.RefuseLogFull,
+			Detail: "sarah.chen is bound to sarah-chen"}}
+		f := newWatchSocketOver(t, chart, dir, map[string]string{"token:lead": "platform-lead"})
+		conn := f.open(t, "lead-token-long-enough-to-pass")
+		write(t, conn, map[string]any{"kind": "watch", "seat": "sarah.chen"})
+		assertWatchHint(t, next(t, conn), 0)
+	})
+}
+
+// assertWatchHint holds a watch's `unavailable` frame to its hint: present,
+// equal to want, and carrying neither the refusal's code nor its words.
+func assertWatchHint(t *testing.T, frame map[string]any, want float64) {
+	t.Helper()
+	if frame["kind"] != stream.KindError || frame["what"] != "watch" ||
+		frame["error"] != stream.CodeUnavailable {
+		t.Fatalf("an undecidable watch was answered %v, want unavailable", frame)
+	}
+	got, ok := frame["retry_after"].(float64)
+	if !ok {
+		t.Fatalf("an undecidable watch's frame carries no retry_after (%v), so a "+
+			"client re-asks it at its own interval whatever this node knows", frame)
+	}
+	if got != want {
+		t.Errorf("retry_after = %v, want %v", got, want)
+	}
+	for _, key := range []string{"refusal", "detail"} {
+		if _, sent := frame[key]; sent {
+			t.Errorf("a watch's frame carried %q (%v): what could not be read "+
+				"stays in the node's log", key, frame[key])
+		}
+	}
 }
 
 // leadChart answers who leads whom from a table, or fails every lead question.

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The close codes this socket ends a connection with, on top of the ones the
@@ -581,7 +582,9 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 //     — it stops reconnecting and says access was withdrawn — when all that
 //     was refused is one seat's frames on a socket that is otherwise fine.
 //   - UNDECIDABLE (the chart could not be read): nothing is installed either,
-//     and an `unavailable` error frame asks the client to try again. It is the
+//     and an `unavailable` error frame says when to try again — its
+//     `retry_after`, zero where waiting will not change the answer
+//     ([watchAnswer.frame]). It is the
 //     only answer that is not a guess: installing would hand a seat's frames
 //     to somebody this node could not show was allowed them, and a refusal
 //     would tell a lead they lead nobody because this node is behind — the
@@ -640,11 +643,10 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 		w.hub.Watch(w.client, "")
 		return 0, ""
 	}
-	seat, code, refused, ok := w.resolve(ctx, principal, name)
-	if !ok {
+	seat, answer := w.resolve(ctx, principal, name)
+	if answer != nil {
 		w.hub.Watch(w.client, "")
-		w.client.Reply(Envelope{Kind: KindError, ID: req.ID, What: watchWhat,
-			Error: code, Refused: refused})
+		w.client.Reply(answer.frame(req.ID))
 		return 0, ""
 	}
 	w.hub.Watch(w.client, seat)
@@ -654,7 +656,7 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 }
 
 // resolve is the record a `watch` frame's name addresses, decided: what the
-// watch is installed on, or the code and refusal it is answered with.
+// watch is installed on, or — non-nil — the answer it is refused with.
 //
 // [iam.OwnerOf] answers the name — the caller's own names are their own
 // record, somebody else's login is their holder's, and anything else is read
@@ -665,7 +667,7 @@ func (w *watching) watch(ctx context.Context, req request) (websocket.StatusCode
 // cannot read is `unavailable`, and its own words — which name the seat a
 // login is bound to — go to the log.
 func (w *watching) resolve(ctx context.Context, principal iam.Principal,
-	name string) (string, httpjson.Code, *Refused, bool) {
+	name string) (string, *watchAnswer) {
 
 	owner, _, err := iam.OwnerOf(ctx, principal, name, w.holders,
 		w.mayLook(principal))
@@ -674,23 +676,23 @@ func (w *watching) resolve(ctx context.Context, principal iam.Principal,
 	case errors.As(err, &looked):
 		var answer *watchAnswer
 		if errors.As(looked.Err, &answer) {
-			return "", answer.code, answer.refused, false
+			return "", answer
 		}
-		return "", CodeUnavailable, nil, false
+		return "", &watchAnswer{code: CodeUnavailable, cause: looked.Err}
 	case errors.Is(err, iam.ErrNoHolder), errors.Is(err, iam.ErrHolderUnseated):
-		if code, refused, ok := w.decide(ctx, principal, name); !ok {
-			return "", code, refused, false
+		if answer := w.decide(ctx, principal, name); answer != nil {
+			return "", answer
 		}
-		return "", CodeNotFound, nil, false
+		return "", &watchAnswer{code: CodeNotFound}
 	case err != nil:
 		log.InfoContext(ctx, "stream_watch_unresolvable", "login", principal.Login,
 			"asked", name, "error", err.Error())
-		return "", CodeUnavailable, nil, false
+		return "", &watchAnswer{code: CodeUnavailable, cause: err}
 	}
-	if code, refused, ok := w.decide(ctx, principal, owner); !ok {
-		return "", code, refused, false
+	if answer := w.decide(ctx, principal, owner); answer != nil {
+		return "", answer
 	}
-	return owner, "", nil, true
+	return owner, nil
 }
 
 // mayLook is the watch's decision BEFORE the identity directory is asked whose
@@ -711,7 +713,7 @@ func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 		case d.Unknown():
 			log.InfoContext(ctx, "stream_watch_undecidable", "login",
 				principal.Login, "asked", login, "error", d.Err)
-			return &watchAnswer{code: CodeUnavailable}
+			return &watchAnswer{code: CodeUnavailable, cause: d.Err}
 		}
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"asked", login, "reason", string(d.Reason))
@@ -720,21 +722,57 @@ func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 	}
 }
 
-// watchAnswer is a watch's answer carried through [iam.OwnerOf] as the error
-// its gate refused with, so the frame it becomes is the one a decision on a
-// seat would have made.
+// watchAnswer is a watch that was not installed: the code its error frame
+// carries, the refusal on authority behind an `unauthorized` one, and what made
+// an `unavailable` one undecidable. It travels through [iam.OwnerOf] as the
+// error the gate refused with, so the frame it becomes is the one a decision on
+// a seat would have made.
 type watchAnswer struct {
 	code    httpjson.Code
 	refused *Refused
+
+	// cause is what this node could not read behind an `unavailable`
+	// answer — the chart the decision asks, or the directory a login
+	// resolves through — and it is read for ONE thing, the frame's hint
+	// ([watchAnswer.frame]). Its words go to the log and never onto the
+	// socket.
+	cause error
 }
 
 func (a *watchAnswer) Error() string { return "stream: watch refused: " + string(a.code) }
 
-// decide asks the table whether principal may watch seat, answering the error
-// code a refusal carries — and, for a refusal on authority, the reason and the
-// grants a query's refusal carries too.
+// frame is the error frame the answer is sent as.
+//
+// AN `unavailable` ONE SAYS WHEN TO ASK AGAIN, like every other `unavailable`
+// frame on this socket ([Unavailable]): a `retry_after` by
+// [statelog.RetryAfter]'s rule over what could not be read — [HealthInterval]
+// where nothing better is known — and ZERO where waiting will not change it, a
+// chart or a directory whose log is full or holds a record this node cannot
+// decode. It went out bare, which is the frame a node too old to say sends, so
+// the dashboard re-asked at its own fixed interval a watch this node would
+// refuse until an operator acted, for as long as the tab stayed open.
+//
+// THE HINT ALONE, never the refusal's code or words. A client does one thing
+// with a watch's `unavailable` — decides when to send the watch again — and the
+// hint is the whole of that; the words behind it stay in the log
+// ([watching.resolve]), because what the directory says about a login names
+// the seat it is bound to.
+func (a *watchAnswer) frame(id int64) Envelope {
+	env := Envelope{Kind: KindError, ID: id, What: watchWhat, Error: a.code,
+		Refused: a.refused}
+	if a.code == CodeUnavailable {
+		env.Unavailable = &Unavailable{
+			RetryAfter: httpjson.RetrySeconds(statelog.RetryAfter(a.cause, HealthInterval)),
+		}
+	}
+	return env
+}
+
+// decide asks the table whether principal may watch seat: nil when it may, and
+// otherwise the answer it is refused with — for a refusal on authority, the
+// reason and the grants a query's refusal carries too.
 func (w *watching) decide(ctx context.Context, principal iam.Principal,
-	seat string) (httpjson.Code, *Refused, bool) {
+	seat string) *watchAnswer {
 
 	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
 		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, time.Now())
@@ -742,13 +780,13 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	case d.Unknown():
 		log.InfoContext(ctx, "stream_watch_undecidable", "login", principal.Login,
 			"seat", seat, "error", d.Err)
-		return CodeUnavailable, nil, false
+		return &watchAnswer{code: CodeUnavailable, cause: d.Err}
 	case !d.Allowed:
 		log.InfoContext(ctx, "stream_watch_refused", "login", principal.Login,
 			"seat", seat, "reason", string(d.Reason))
-		return CodeUnauthorized, NewRefused(d.Reason, d.Grants), false
+		return &watchAnswer{code: CodeUnauthorized, refused: NewRefused(d.Reason, d.Grants)}
 	}
-	return "", nil, true
+	return nil
 }
 
 // recheck re-decides the seat this socket watches, as whoever the latest
@@ -776,13 +814,12 @@ func (w *watching) recheck(ctx context.Context) {
 	if how != iam.Resolved {
 		return
 	}
-	code, refused, ok := w.decide(ctx, principal, seat)
-	if ok || code == CodeUnavailable {
+	answer := w.decide(ctx, principal, seat)
+	if answer == nil || answer.code == CodeUnavailable {
 		return
 	}
 	if w.hub.UnwatchIf(w.client, watch) {
-		w.client.Reply(Envelope{Kind: KindError, What: watchWhat, Error: code,
-			Refused: refused})
+		w.client.Reply(answer.frame(0))
 	}
 }
 
