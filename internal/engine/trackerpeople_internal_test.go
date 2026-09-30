@@ -21,8 +21,14 @@ import (
 // screen, whose inbox moved, is named as the seat is called now, because a
 // socket watches a seat by the handle it answers to.
 //
+// And a READING is held: a call names every person by the chart as it stood
+// when it pinned, so a rename landing mid-answer cannot split one answer
+// across two charts.
+//
 // Mutation: answer Identity with the handle as given, or Current with the
-// identity, or hand the movements on unmapped.
+// identity, or hand the movements on unmapped, or read the live company per
+// name again rather than once per Pin, or resolve a people field to the handle
+// the seat answers to now.
 func TestTheTrackerKnowsAPersonByTheirSeatsIdentity(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -36,7 +42,7 @@ func TestTheTrackerKnowsAPersonByTheirSeatsIdentity(t *testing.T) {
 			{Name: "Boss", DeclaredHandle: "boss"},
 			{Name: "Ada", DeclaredHandle: "ada", Kind: org.KindHuman},
 		}}})
-	people := livePeople{engine: e}
+	people := livePeople{engine: e}.Pin()
 	for _, tc := range []struct{ handle, identity, current string }{
 		{"chief", "cto", "chief"},
 		{"cto", "cto", "chief"},
@@ -74,9 +80,39 @@ func TestTheTrackerKnowsAPersonByTheirSeatsIdentity(t *testing.T) {
 		t.Error("the applier's own movements were rewritten under it")
 	}
 
-	// A NODE WITH NO COMPANY answers every name as given.
-	empty := livePeople{engine: &Engine{}}
+	// A PEOPLE FIELD'S VALUE IS RESOLVED TO THE IDENTITY by the reading that
+	// found the seat, so no second reading is asked about a handle it may
+	// never have seen.
+	for _, typed := range []string{"chief", "Chief"} {
+		if got, held := (liveSeats{engine: e}).ResolveSeat(typed); !held || got != "cto" {
+			t.Errorf("a people field naming %q resolved to (%q, %t), want the "+
+				"seat's identity cto", typed, got, held)
+		}
+	}
+
+	// A NODE WITH NO COMPANY answers every name as given, and a people
+	// field names nobody there.
+	empty := livePeople{engine: &Engine{}}.Pin()
 	if got := empty.Identity("chief"); got != "chief" {
 		t.Errorf("a node with no chart answered Identity(chief) = %q", got)
+	}
+	if got, held := (liveSeats{engine: &Engine{}}).ResolveSeat("chief"); held {
+		t.Errorf("a node with no chart resolved a people field to %q", got)
+	}
+
+	// A READING OUTLIVES THE RENAME AFTER IT: the chart moves `chief` on to
+	// `head`, and the reading taken before goes on calling it `chief` while
+	// the next one calls it `head`.
+	e.epoch.current.Store(&Company{Org: &org.Organization{Name: "Acme",
+		Roles: []*org.Role{
+			{Name: "Chief", DeclaredHandle: "head", OriginHandle: "cto",
+				FormerHandles: []string{"cto", "boss", "chief"}},
+		}}})
+	if got := people.Current("cto"); got != "chief" {
+		t.Errorf("a reading taken before the rename answered %q, want chief — "+
+			"one call named one seat two ways", got)
+	}
+	if got := (livePeople{engine: e}).Pin().Current("cto"); got != "head" {
+		t.Errorf("a reading taken after the rename answered %q, want head", got)
 	}
 }

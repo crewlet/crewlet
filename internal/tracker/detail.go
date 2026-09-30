@@ -274,8 +274,9 @@ type HistoryEntry struct {
 // were not read from.
 func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	fresh statelog.Freshness) (TaskDetail, error) {
-	got, err := r.task(ctx, idOrKey, want, fresh)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.task(ctx, idOrKey, want, fresh)
+	return shown(call.chart, got), err
 }
 
 // task is [Reader.Task] once every person the question names is their seat's

@@ -79,8 +79,9 @@ type CatalogueQuery struct {
 
 // Catalogue answers what a task may be and what it may carry.
 func (r *Reader) Catalogue(ctx context.Context, q CatalogueQuery) (CatalogueAnswer, error) {
-	got, err := r.catalogue(ctx, identified(r.Identities, q))
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.catalogue(ctx, identified(call.chart, q))
+	return shown(call.chart, got), err
 }
 
 // catalogue is [Reader.Catalogue] once every person the question names is their seat's

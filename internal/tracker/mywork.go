@@ -136,8 +136,9 @@ type MyWorkQuery struct {
 // MyWork answers everything one person is expected to look at.
 func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 	MyWork, error) {
-	got, err := r.myWork(ctx, identified(r.Identities, q), now)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.myWork(ctx, identified(call.chart, q), now)
+	return shown(call.chart, got), err
 }
 
 // myWork is [Reader.MyWork] once every person the question names is their seat's

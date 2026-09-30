@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -392,6 +393,9 @@ func purgeExcerpt(task Task, reason, actor string) string {
 // purge that did not happen, and re-running it is the operator's own gesture
 // rather than a repair somebody's cron performs on their behalf.
 func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string) (WriteResult, error) {
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	switch {
 	case id == "":
 		return WriteResult{}, fmt.Errorf("tracker: a purge names no task")
@@ -435,7 +439,7 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
 			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason,
-				currentOf(w.Identities, w.Actor), w.Leads), at)
+				seatnames.CurrentOf(w.chart(), w.Actor), w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

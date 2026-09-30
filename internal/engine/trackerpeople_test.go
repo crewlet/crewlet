@@ -15,7 +15,7 @@ import (
 // and the reader every surface asks, both carry it.
 //
 // Mutation: drop `Identities:` from the engine's WriterDeps, or the reader's
-// assignment.
+// assignment, or the item searcher's.
 func TestTheRunningTrackerKnowsPeopleByTheirSeatsIdentity(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -31,5 +31,9 @@ func TestTheRunningTrackerKnowsPeopleByTheirSeatsIdentity(t *testing.T) {
 	if reader.Identities == nil {
 		t.Error("the engine's tracker reader asks for a renamed seat's work " +
 			"by the handle it answers to now, which no row holds")
+	}
+	if search := e.WorkSearch(); search == nil || search.Identities == nil {
+		t.Error("the engine's item search shows a renamed seat's work as held " +
+			"by the handle it was created under")
 	}
 }

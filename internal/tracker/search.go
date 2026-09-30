@@ -164,7 +164,7 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 		row.Snippet, row.Rank = doc.Snippet, len(out)+1
 		out = append(out, row)
 	}
-	return shown(s.Identities, out), nil
+	return shown(pinOf(s.Identities), out), nil
 }
 
 // itemsByID reads what a ranked hit has to carry, for one batch of ids.

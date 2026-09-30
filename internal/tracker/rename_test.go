@@ -2,10 +2,13 @@ package tracker_test
 
 import (
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -29,6 +32,136 @@ func (r renamed) Current(identity string) string {
 		}
 	}
 	return identity
+}
+
+// Pin implements [tracker.Identities]: the map IS the chart, so a test that
+// renames a seat by writing to it is read by every call after.
+func (r renamed) Pin() seatnames.Chart { return r }
+
+// renaming is a chart a rename lands on every time somebody reads it: the
+// seat created as `cto` answers to `chief` on the first reading, `boss` on the
+// second, and so on — so two readings inside one call name it two ways.
+type renaming struct{ readings atomic.Int32 }
+
+func (r *renaming) Pin() seatnames.Chart {
+	names := []string{"chief", "boss", "head", "lead"}
+	n := int(r.readings.Add(1)) - 1
+	return renamed{names[n%len(names)]: "cto"}
+}
+
+// AN ANSWER NAMES EVERY SEAT FROM ONE READING OF THE CHART.
+//
+// A grouped board names the same seat twice — as the column key and as the
+// assignee on every card beneath it — in two passes over the answer. Each pass
+// asked the live chart afresh, so a rename landing between them drew `chief`'s
+// cards under a column keyed `boss`, and a board matching a card to its column
+// by the key it drew found none. A call now takes ONE reading and names every
+// person in its question and its answer by it.
+//
+// Mutation: take a reading per pass (the column keys by one, the rows by
+// another) and the column no longer matches its cards; take one per helper and
+// the call reads the chart more than once.
+func TestAnAnswerNamesEverySeatFromOneReadingOfTheChart(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	routeTo(t, r, "one", "ENG-1", "cto")
+	routeTo(t, r, "two", "ENG-2", "cto")
+	r.drain()
+
+	chart := &renaming{}
+	r.reader.Identities = chart
+	answer, err := r.reader.Tasks(t.Context(), tracker.Query{
+		GroupBy: "assignee", Level: statelog.ReadStale,
+	}, wednesday)
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	if got := chart.readings.Load(); got != 1 {
+		t.Errorf("one call read the chart %d times, want once", got)
+	}
+	matched := false
+	for _, group := range answer.Groups {
+		for _, row := range group.Rows {
+			if row.Assignee != group.Key {
+				t.Errorf("%s is drawn as %q's card under the column keyed %q",
+					row.ID, row.Assignee, group.Key)
+			}
+			matched = matched || row.Assignee == "chief"
+		}
+	}
+	if !matched {
+		t.Errorf("no card names the seat as the call's one reading calls it: %+v",
+			answer.Groups)
+	}
+}
+
+// A WRITE NAMES EVERY SEAT FROM ONE READING OF THE CHART, as an answer does.
+//
+// A write resolves people in more than one place — its payload before the
+// decide, a notice inside it, a lead's wake worded with the lead's name — and
+// each asked the chart afresh, so one write could resolve its patch by one
+// chart and word its wake by the next. It now holds one reading, and a write
+// that funnels into another (a comment edit into a task update) keeps it.
+//
+// Mutation: drop the pin from UpdateTask's funnel, from WritePriorities or
+// from EditComment, or make pinned() take a fresh reading when one is held.
+func TestAWriteNamesEverySeatFromOneReadingOfTheChart(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.applyWhileWriting()
+	ctx := t.Context()
+	routeTo(t, r, "held", "ENG-1", "bob")
+	ada := r.writer.As("ada", tracker.AuthorHuman, tracker.Provenance{})
+	if _, err := ada.UpdateTask(ctx, "op-remark", "held", "ENG", tracker.NoIfMatch,
+		tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-1", Task: "held", Author: "ada", AuthorKind: tracker.AuthorHuman,
+			Body: "first", CreatedAt: wednesday,
+		}}, tracker.ChangeComment, nil); err != nil {
+		t.Fatalf("ada's comment: %v", err)
+	}
+	r.drain()
+
+	chart := &renaming{}
+	r.writer.Identities = chart
+	ada = r.writer.As("ada", tracker.AuthorHuman, tracker.Provenance{})
+	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
+	for _, write := range []struct {
+		name string
+		do   func() error
+	}{
+		{"a patch", func() error {
+			_, err := ada.UpdateTask(ctx, "op-collab", "held", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Collaborators: &[]string{"cto"}},
+				tracker.ChangeCollaborators, nil)
+			return err
+		}},
+		{"a lead's order of somebody's queue", func() error {
+			_, err := ada.WritePriorities(ctx, "op-prio", "bob", []string{"held"},
+				tracker.PersonAuthority{Authorized: true})
+			return err
+		}},
+		{"an edit of one's own remark", func() error {
+			_, err := ada.EditComment(ctx, "op-edit", "held", "ENG", "cm-1",
+				"second", nil)
+			return err
+		}},
+		{"a refused edit of somebody else's remark", func() error {
+			_, err := bob.EditComment(ctx, "op-edit-bob", "held", "ENG", "cm-1",
+				"third", nil)
+			if err == nil {
+				return errors.New("bob rewrote ada's remark")
+			}
+			return nil
+		}},
+	} {
+		before := chart.readings.Load()
+		if err := write.do(); err != nil {
+			t.Fatalf("%s: %v", write.name, err)
+		}
+		if got := chart.readings.Load() - before; got != 1 {
+			t.Errorf("%s read the chart %d times, want once", write.name, got)
+		}
+	}
 }
 
 // A RENAMED SEAT KEEPS ITS WORK, ITS INBOX, ITS QUEUE AND ITS PINS.

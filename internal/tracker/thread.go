@@ -88,15 +88,16 @@ func (e *ErrAmbiguousAnswer) Error() string {
 // failure empties the first and refuses the second.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	fresh statelog.Freshness) (ResolvedThread, error) {
-	got, err := r.thread(ctx, identified(r.Identities, q), fresh)
+	call := r.pinned()
+	got, err := call.thread(ctx, identified(call.chart, q), fresh)
 	// THE REFUSAL NAMES PEOPLE TOO, and the caller reads it to choose which
 	// question it is answering — so it names them as they are called now.
 	var ambiguous *ErrAmbiguousAnswer
 	if errors.As(err, &ambiguous) {
-		named := shown(r.Identities, *ambiguous)
+		named := shown(call.chart, *ambiguous)
 		err = &named
 	}
-	return shown(r.Identities, got), err
+	return shown(call.chart, got), err
 }
 
 // thread is [Reader.Thread] once every person the question names is their seat's

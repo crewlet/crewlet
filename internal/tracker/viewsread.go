@@ -124,8 +124,9 @@ const (
 // ONE READ TRANSACTION for the saved rows and the viewer's pins — so the strip
 // describes one instant rather than two reads' worth of them.
 func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
-	got, err := r.views(ctx, identified(r.Identities, q))
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.views(ctx, identified(call.chart, q))
+	return shown(call.chart, got), err
 }
 
 // views is [Reader.Views] once every person the question names is their seat's

@@ -82,8 +82,9 @@ type PersonQuery struct {
 
 // Person answers one human's own state.
 func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (PersonState, error) {
-	got, err := r.person(ctx, identified(r.Identities, q), now)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.person(ctx, identified(call.chart, q), now)
+	return shown(call.chart, got), err
 }
 
 // person is [Reader.Person] once every person the question names is their seat's

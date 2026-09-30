@@ -252,8 +252,9 @@ type RoutingQuery struct {
 // second thing to keep correct for a list that cannot have a second page.
 func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	RoutingAnswer, error) {
-	got, err := r.routing(ctx, identified(r.Identities, q), now)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.routing(ctx, identified(call.chart, q), now)
+	return shown(call.chart, got), err
 }
 
 // routing is [Reader.Routing] once every person the question names is their seat's

@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -1713,69 +1714,102 @@ func (l liveUnits) AllUnits() []tracker.ChartUnit {
 	return ChartUnits(l.engine.Company().Org).AllUnits()
 }
 
-// liveSeats resolves a people field's value to exactly one handle, against the
-// CURRENT epoch.
+// liveSeats resolves a people field's value to exactly one seat, against the
+// CURRENT epoch, and answers the handle that seat was CREATED under — the
+// identity every person column is keyed on (ADR-0019).
 //
 // EXACTLY ONE, and an ambiguous spelling is the same answer as an unknown one:
 // both mean "this does not name a person", which is the only thing a stored
 // value can be written from. A field holding a handle nobody has is a field
 // every filter on it misses, silently, for as long as the value is there.
 //
+// THE IDENTITY FROM THE READING THAT FOUND THE SEAT. It answered the handle the
+// seat answers to now and left the tracker to ask a second reading for its
+// identity ([livePeople]), so a rename landing between the two handed that
+// reading a handle it had never seen, which it keeps as given — and the field
+// was stored under the new handle, where no filter asking by identity looks.
+// And a node holding no company names nobody, rather than dereferencing one.
+//
 // Per call for the reason every other live seam here is: the writer outlives a
 // revision, and a captured chart would admit a colleague who has left.
 type liveSeats struct{ engine *Engine }
 
 func (l liveSeats) ResolveSeat(ref string) (string, bool) {
-	found := colleague.Resolve(ref, builtin.Corpus(l.engine.Company().Org,
+	company := l.engine.Company()
+	if company == nil || company.Org == nil {
+		return "", false
+	}
+	found := colleague.Resolve(ref, builtin.Corpus(company.Org,
 		l.engine.WithheldContacts()))
 	if len(found) != 1 {
 		return "", false
 	}
+	if role := company.Org.Role(found[0].Seat.Handle); role != nil {
+		return role.Origin(), true
+	}
 	return found[0].Seat.Handle, true
 }
 
-// livePeople is the tracker's person seam against the CURRENT epoch: the
-// handle a seat was created under for any handle it answers to, and the handle
-// it answers to now for that identity (ADR-0019).
+// livePeople is the tracker's person seam against the CURRENT epoch (ADR-0019).
+//
+// A READING PER CALL, never an answer per name: Pin loads the live company
+// ONCE and hands back [chartPeople] over it, which a call — a question and its
+// whole answer, one write — names every person by. Answering each name off the
+// live epoch let one answer take its column keys from one chart and its cards
+// from the next when a rename landed while it ran (internal/seatnames, "One
+// reading per call"). Per CALL rather than once for good for the reason every
+// other live seam here is: the writer and the reader outlive a revision, and a
+// rename is one.
+type livePeople struct{ engine *Engine }
+
+// Pin implements [tracker.Identities].
+func (l livePeople) Pin() seatnames.Chart {
+	company := l.engine.Company()
+	if company == nil {
+		return chartPeople{}
+	}
+	return chartPeople{org: company.Org}
+}
+
+// chartPeople is ONE reading of the chart, answering both directions of a
+// seat's name: the handle it was created under for any handle it answers to,
+// and the handle it answers to now for that identity.
 //
 // THROUGH [org.Organization.Role], which resolves a current handle, a creation
 // handle and a retired alias alike — live handles first, so a retired alias
 // another seat has since taken names that seat. An identity is never issued
 // twice, so Current's lookup by one can only find the seat created under it.
 // Anything no seat answers to — a person's login, a Tier A token, a node id, a
-// seat since removed — is answered as given, both ways.
-//
-// Per call for the reason every other live seam here is: the writer and the
-// reader outlive a revision, and a rename is one.
-type livePeople struct{ engine *Engine }
+// seat since removed — is answered as given, both ways, and so is every name
+// on a node with no company.
+type chartPeople struct{ org *org.Organization }
 
-// Identity implements [tracker.Identities].
-func (l livePeople) Identity(handle string) string {
-	if role := l.role(handle); role != nil {
+// Identity implements [seatnames.Chart].
+func (c chartPeople) Identity(handle string) string {
+	if role := c.role(handle); role != nil {
 		return role.Origin()
 	}
 	return handle
 }
 
-// Current implements [tracker.Identities].
-func (l livePeople) Current(identity string) string {
-	if role := l.role(identity); role != nil {
+// Current implements [seatnames.Chart].
+func (c chartPeople) Current(identity string) string {
+	if role := c.role(identity); role != nil {
 		return role.Handle()
 	}
 	return identity
 }
 
-// role is the seat answering to a handle in the live epoch, or nil.
+// role is the seat answering to a handle in this reading, or nil.
 //
 // TRIMMED, because a question may arrive with the handle as somebody typed it
 // and the reader trims it only after it has been asked by identity — a padded
 // `chief` would otherwise be asked for as itself and find none of its work.
-func (l livePeople) role(handle string) *org.Role {
-	company := l.engine.Company()
-	if company == nil || company.Org == nil {
+func (c chartPeople) role(handle string) *org.Role {
+	if c.org == nil {
 		return nil
 	}
-	return company.Org.Role(strings.TrimSpace(handle))
+	return c.org.Role(strings.TrimSpace(handle))
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.

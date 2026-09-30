@@ -38,6 +38,16 @@
 // briefly on different epochs — which is why a RECORD carries the identity,
 // resolved once, by its writer.
 //
+// # One reading per call
+//
+// A [Chart] is ONE reading of the org chart, and a domain holds one for the
+// whole of one call. An answer names people in more than one pass — a board's
+// column keys and the cards beneath them, a question's filter and the rows it
+// matched — and a seam that asked the live chart afresh for every name let a
+// rename landing mid-answer draw a card under a column spelled the other way.
+// So a domain's seam hands out a reading ([Chart]) rather than answering
+// names itself, and each call takes exactly one.
+//
 // A LEAF over reflect and sync, importing nothing of the engine's, so
 // every domain that stores a person can import it.
 package seatnames
@@ -50,6 +60,59 @@ import (
 
 // Tag is the struct tag a field naming somebody carries, as `person:"seat"`.
 const Tag = "person"
+
+// Chart is ONE reading of the org chart, answering both directions of a seat's
+// name — see the package doc for why it is a reading and not the live chart.
+//
+// Declared here rather than by each domain because a domain's seam returns
+// one: two consumers each declaring `Pin() <their own interface>` could not
+// both be satisfied by the one implementation the engine hands them.
+type Chart interface {
+	// Identity is the handle the seat answering to handle was created
+	// under, for any handle it answers to — its current one, the one it
+	// was created under, or one a rename retired — and handle itself when
+	// no seat answers to it.
+	Identity(handle string) string
+
+	// Current is the handle the seat created under identity answers to
+	// now, and identity itself when no seat was.
+	Current(identity string) string
+}
+
+// IdentityOf is one handle's identity, through a chart that may be nil — a
+// build holding no chart, which records every name as it was given.
+func IdentityOf(c Chart, handle string) string {
+	if c == nil || handle == "" {
+		return handle
+	}
+	return c.Identity(handle)
+}
+
+// CurrentOf is one identity's current handle, through a chart that may be nil.
+func CurrentOf(c Chart, identity string) string {
+	if c == nil || identity == "" {
+		return identity
+	}
+	return c.Current(identity)
+}
+
+// Identified is v with every name w reaches rewritten to the seat's identity,
+// through a chart that may be nil.
+func Identified[T any](w *Walker, c Chart, v T) T {
+	if c == nil {
+		return v
+	}
+	return Rewrite(w, v, c.Identity)
+}
+
+// Shown is v with every name w reaches rewritten to the handle the seat
+// answers to now, through a chart that may be nil.
+func Shown[T any](w *Walker, c Chart, v T) T {
+	if c == nil {
+		return v
+	}
+	return Rewrite(w, v, c.Current)
+}
 
 // Arm is one type a [Walker] rewrites by a rule of the domain's own rather than
 // by the tag: its Rewrite is handed a value of exactly Type and a name mapping

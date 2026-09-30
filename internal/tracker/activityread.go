@@ -234,8 +234,9 @@ type ActivityQuery struct {
 // Activity answers a slice of the company's own history.
 func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 	ActivityAnswer, error) {
-	got, err := r.activity(ctx, identified(r.Identities, q), now)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.activity(ctx, identified(call.chart, q), now)
+	return shown(call.chart, got), err
 }
 
 // activity is [Reader.Activity] once every person the question names is their seat's

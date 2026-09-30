@@ -26,10 +26,11 @@ import (
 // its own comments stopped being its own to edit, and the work it held sat
 // under an address nobody asked for.
 //
-// So every one of those values is the seat's IDENTITY — what [Identities]
-// answers for any handle the seat answers to, its current one, the one it was
-// created under or one a rename retired — and every read shows it back as the
-// handle the seat answers to now. For every seat that was never renamed the
+// So every one of those values is the seat's IDENTITY — what a reading of
+// [Identities] answers for any handle the seat answers to, its current one,
+// the one it was created under or one a rename retired — and every read shows
+// it back as the handle the seat answers to now, by the one reading its call
+// took. For every seat that was never renamed the
 // identity IS its handle, so every row already written is keyed correctly and
 // nothing is migrated. A value no seat answers to — a person's login, a Tier A
 // token, the node a duty ran on, a seat since removed — is kept exactly as
@@ -64,49 +65,35 @@ import (
 //
 // CONSUMER-DEFINED, as [Leads] and [FieldWorld] are: this package holds no
 // org chart, and the engine answers from its live epoch.
+//
+// A READING, NOT AN ANSWER: Pin is the chart as it stands now, held as ONE
+// reading for everything one call names — see internal/seatnames' "One reading
+// per call". It answered each name itself, off the live chart, so an answer
+// naming people in two passes (a board's columns and its cards) could take
+// them from two different charts when a rename landed in between.
 type Identities interface {
-	// Identity is the handle the seat answering to handle was created
-	// under, for any handle it answers to, and handle itself when no seat
-	// answers to it.
-	Identity(handle string) string
-
-	// Current is the handle the seat created under identity answers to
-	// now, and identity itself when no seat was.
-	Current(identity string) string
+	Pin() seatnames.Chart
 }
 
-// identified is v with every person it names rewritten to their identity. A
-// nil seam leaves v as it is, which is a build holding no chart.
-func identified[T any](ids Identities, v T) T {
+// pinOf is one reading of a seam that may be nil — a build holding no chart,
+// which records and shows every value as it was given.
+func pinOf(ids Identities) seatnames.Chart {
 	if ids == nil {
-		return v
+		return nil
 	}
-	return seatnames.Rewrite(people, v, ids.Identity)
+	return ids.Pin()
+}
+
+// identified is v with every person it names rewritten to their identity, by
+// one reading of the chart.
+func identified[T any](c seatnames.Chart, v T) T {
+	return seatnames.Identified(people, c, v)
 }
 
 // shown is v with every person it names rewritten to the handle they answer
-// to now.
-func shown[T any](ids Identities, v T) T {
-	if ids == nil {
-		return v
-	}
-	return seatnames.Rewrite(people, v, ids.Current)
-}
-
-// identityOf is one handle's identity, through a seam that may be nil.
-func identityOf(ids Identities, handle string) string {
-	if ids == nil || handle == "" {
-		return handle
-	}
-	return ids.Identity(handle)
-}
-
-// currentOf is one identity's current handle, through a seam that may be nil.
-func currentOf(ids Identities, identity string) string {
-	if ids == nil || identity == "" {
-		return identity
-	}
-	return ids.Current(identity)
+// to now, by one reading of the chart.
+func shown[T any](c seatnames.Chart, v T) T {
+	return seatnames.Shown(people, c, v)
 }
 
 // people is this domain's walker over every value that names somebody — see
@@ -218,11 +205,11 @@ func (v FieldValue) withPeople(f func(string) string) FieldValue {
 // INSIDE THE READ, because a field's type is a declaration the read's own
 // snapshot resolves ([resolveFields]); every other person in a question is
 // tagged and rewritten before the read begins.
-func identifiedByType(ids Identities, q Query, fields map[string]resolvedField) Query {
-	if ids == nil {
+func identifiedByType(c seatnames.Chart, q Query, fields map[string]resolvedField) Query {
+	if c == nil {
 		return q
 	}
-	identity := seatnames.Name(ids.Identity)
+	identity := seatnames.Name(c.Identity)
 	if len(q.Fields) > 0 {
 		filters := slices.Clone(q.Fields)
 		for i, filter := range filters {
@@ -249,7 +236,7 @@ func identifiedByType(ids Identities, q Query, fields map[string]resolvedField) 
 	if len(q.Any) > 0 {
 		branches := make([]Query, len(q.Any))
 		for i, branch := range q.Any {
-			branches[i] = identifiedByType(ids, branch, fields)
+			branches[i] = identifiedByType(c, branch, fields)
 		}
 		q.Any = branches
 	}
@@ -272,18 +259,18 @@ func personAxis(key string, fields map[string]resolvedField) bool {
 // shownGroups is a grouped answer with its person columns keyed by the handle
 // each seat answers to now — the same spelling as the rows beneath them, so a
 // board matches a card to its column and pages the column by the key it drew.
-func shownGroups(ids Identities, groups []Group, columns, lanes bool) []Group {
-	if ids == nil || (!columns && !lanes) {
+func shownGroups(c seatnames.Chart, groups []Group, columns, lanes bool) []Group {
+	if c == nil || (!columns && !lanes) {
 		return groups
 	}
-	current := seatnames.Name(ids.Current)
+	current := seatnames.Name(c.Current)
 	out := make([]Group, len(groups))
 	for i, group := range groups {
 		if columns {
 			group.Key = current(group.Key)
 		}
 		if lanes && len(group.Subgroups) > 0 {
-			group.Subgroups = shownGroups(ids, group.Subgroups, true, false)
+			group.Subgroups = shownGroups(c, group.Subgroups, true, false)
 		}
 		out[i] = group
 	}
@@ -298,13 +285,20 @@ func (w *Writer) fieldWorld() FieldWorld {
 	if w.World == nil || w.Identities == nil {
 		return w.World
 	}
-	return identifiedWorld{world: w.World, ids: w.Identities}
+	return identifiedWorld{world: w.World, chart: w.chart()}
 }
 
-// identifiedWorld is a [FieldWorld] whose every answer is an identity.
+// identifiedWorld is a [FieldWorld] whose every answer is an identity, by the
+// one reading of the chart the write took.
+//
+// IDEMPOTENT over a world that already answers the identity, as the engine's
+// does from the reading that found the seat: an identity is never issued
+// twice, so the identity of an identity is itself. What it adds is that a world
+// answering the current handle — a test's, a build's own — still stores the
+// identity.
 type identifiedWorld struct {
 	world FieldWorld
-	ids   Identities
+	chart seatnames.Chart
 }
 
 // ResolveSeat implements [FieldWorld].
@@ -313,5 +307,30 @@ func (i identifiedWorld) ResolveSeat(ref string) (string, bool) {
 	if !held {
 		return handle, held
 	}
-	return identityOf(i.ids, handle), true
+	return seatnames.IdentityOf(i.chart, handle), true
+}
+
+// pinned is this writer holding ONE reading of the chart for the length of one
+// write: every person its payload names, a people field's values, and the
+// names its wake and its refusals are worded with — the reader's rule
+// ([Reader.pinned]) on the other side. It took a reading per helper, so one
+// write resolved its patch by one chart and its people field by the next. A
+// COPY, for the reason [Writer.As] is one; and a writer already holding a
+// reading keeps it, so a write that funnels into another stays on one.
+func (w *Writer) pinned() *Writer {
+	if w.pin != nil {
+		return w
+	}
+	call := *w
+	call.pin = pinOf(w.Identities)
+	return &call
+}
+
+// chart is the reading this write holds, or one reading of the writer's seam
+// for a writer that holds none.
+func (w *Writer) chart() seatnames.Chart {
+	if w.pin != nil {
+		return w.pin
+	}
+	return pinOf(w.Identities)
 }

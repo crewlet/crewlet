@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -156,9 +157,13 @@ func ownerOrShared(owner string) string {
 func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	prior ViewPrior) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	// WHOSE IT IS, BY THEIR IDENTITY, and the prior's owner too, so the
 	// decide compares one spelling of a seat with the row's. See people.go.
-	view, prior = identified(w.Identities, view), identified(w.Identities, prior)
+	chart := w.chart()
+	view, prior = identified(chart, view), identified(chart, prior)
 	if err := checkView(&view); err != nil {
 		return WriteResult{}, err
 	}
@@ -247,7 +252,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
 						"is protected and belongs to %s — ask them to change "+
 						"it, or save your own copy: %w", view.ID,
-						currentOf(w.Identities, current.Owner), statelog.ErrConflict)
+						seatnames.CurrentOf(chart, current.Owner), statelog.ErrConflict)
 				}
 				// THE CREATION FACTS ARE THE STORED ROW'S, never the
 				// caller's. A save that carried them would let a

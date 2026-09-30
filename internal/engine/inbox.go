@@ -43,7 +43,8 @@ func (e *Engine) inboxMoved(moved []tracker.InboxMovement) {
 		return
 	}
 	named := make([]tracker.InboxMovement, len(moved))
-	people := livePeople{engine: e}
+	// ONE READING FOR THE BATCH, as every tracker call takes one.
+	people := livePeople{engine: e}.Pin()
 	for i, movement := range moved {
 		movement.Handle = people.Current(movement.Handle)
 		named[i] = movement

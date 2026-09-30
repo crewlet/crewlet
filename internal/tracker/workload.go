@@ -94,8 +94,9 @@ type WorkloadAnswer struct {
 // Workload answers who is carrying how much, against what they can take.
 func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time) (
 	WorkloadAnswer, error) {
-	got, err := r.workload(ctx, identified(r.Identities, q), now)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.workload(ctx, identified(call.chart, q), now)
+	return shown(call.chart, got), err
 }
 
 // workload is [Reader.Workload] once every person the question names is their seat's

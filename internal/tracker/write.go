@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -168,6 +169,11 @@ type Writer struct {
 	// [Writer.After].
 	after statelog.Position
 
+	// pin is the ONE reading of Identities this write holds — see
+	// [Writer.pinned]. Nil on every writer a surface holds, and set only on
+	// the copy one write works on.
+	pin seatnames.Chart
+
 	// refusal is set by [Writer.As] when the identity it was handed
 	// cannot author a record. It is checked at the one funnel every write
 	// passes through — see the comment there for why it is carried rather
@@ -237,7 +243,7 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 	// row this writer stamps with its actor — an author, a reporter, a
 	// tombstone — and every comparison of a stored author with the caller
 	// is in the one spelling a rename does not move. See people.go.
-	clone.Actor = identityOf(w.Identities, actor)
+	clone.Actor = seatnames.IdentityOf(pinOf(w.Identities), actor)
 	clone.ActorKind = kind
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
@@ -348,7 +354,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: identityOf(d.Identities, d.Actor),
+		metrics: d.Metrics, Actor: seatnames.IdentityOf(pinOf(d.Identities), d.Actor),
 		ActorKind: d.ActorKind, Drain: d.Drain, Leads: d.Leads, World: d.World,
 		Identities: d.Identities, Now: now,
 	}, nil
@@ -422,6 +428,9 @@ var ErrNotAuthor = errors.New("tracker: only its author may edit a comment")
 func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 	commentID, body string, notify *Notify) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	body = strings.TrimSpace(body)
 	switch {
 	case strings.TrimSpace(commentID) == "":
@@ -450,7 +459,7 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 			case stored.Author != w.Actor:
 				return TaskPatch{}, fmt.Errorf("%w: comment %s was written by "+
 					"%s — reply to it instead of rewriting it", ErrNotAuthor,
-					commentID, currentOf(w.Identities, stored.Author))
+					commentID, seatnames.CurrentOf(w.chart(), stored.Author))
 			}
 			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
 			// the apply is an upsert of the row the record carries: a
@@ -469,6 +478,9 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify, amend amendment) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	switch {
 	case id == "":
 		return WriteResult{}, fmt.Errorf("tracker: an update names no task")
@@ -481,7 +493,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	// compares any of them with the rows — "is this person already
 	// watching" asked across two spellings of one seat is answered no.
 	// A copy: the caller's patch is untouched. See people.go.
-	patch = identified(w.Identities, patch)
+	patch = identified(w.chart(), patch)
 	// THE COMMENT'S BODY IS CHECKED HERE TOO, because a comment rides a
 	// task write rather than having a write of its own — so this is the
 	// one place every comment in the engine passes through.
@@ -906,13 +918,16 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	container string, document any, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	if _, _, err := documentTable(subject); err != nil {
 		return WriteResult{}, err
 	}
 	// WHOEVER THE DOCUMENT NAMES, BY THEIR IDENTITY — a view's owner, a
 	// person record's handle — as every other write path records them.
 	// See people.go.
-	document = identified(w.Identities, document)
+	document = identified(w.chart(), document)
 	// THE CONTAINER IS TAKEN AND CHECKED RATHER THAN ASSUMED. Most kinds
 	// carry their own home in their subject and must not be given a second
 	// one; a view chooses its own. Accepting one where it means nothing
@@ -1039,7 +1054,7 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 	// read, which a reader shows under current handles, and from leads a
 	// chart resolves the same way — and this is the one place every record
 	// passes through. See people.go.
-	notify = identified(w.Identities, notify)
+	notify = identified(w.chart(), notify)
 	if err := notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}

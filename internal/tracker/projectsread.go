@@ -398,8 +398,9 @@ func ParseProjectQuery(p Params) (ProjectQuery, error) {
 // Projects answers the company's projects with their maintained counts.
 func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 	ProjectListing, error) {
-	got, err := r.projects(ctx, identified(r.Identities, q))
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.projects(ctx, identified(call.chart, q))
+	return shown(call.chart, got), err
 }
 
 // projects is [Reader.Projects] once every person the question names is their seat's
@@ -770,8 +771,9 @@ type ProjectDetailQuery struct {
 // apply.
 func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery) (
 	ProjectDetail, error) {
-	got, err := r.project(ctx, identified(r.Identities, q))
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.project(ctx, identified(call.chart, q))
+	return shown(call.chart, got), err
 }
 
 // project is [Reader.Project] once every person the question names is their seat's

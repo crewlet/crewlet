@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -97,7 +98,10 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 	read, unread, snoozed []InboxEntry, reasons []Reason,
 	seenThrough Position, authority PersonAuthority) (WriteResult, error) {
 
-	handle = identityOf(w.Identities, handle)
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
+	handle = seatnames.IdentityOf(w.chart(), handle)
 	if err := w.ownRecord(handle, "inbox", authority); err != nil {
 		return WriteResult{}, err
 	}
@@ -126,7 +130,11 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	pinnedViews []string, favorites []Favorite,
 	authority PersonAuthority) (WriteResult, error) {
 
-	handle = identityOf(w.Identities, handle)
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
+	chart := w.chart()
+	handle = seatnames.IdentityOf(chart, handle)
 	if err := w.ownRecord(handle, "pins", authority); err != nil {
 		return WriteResult{}, err
 	}
@@ -135,17 +143,17 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	case len(pinnedViews) > MaxPinnedViews:
 		return WriteResult{}, fmt.Errorf("tracker: %s pins %d views and the "+
 			"maximum is %d — a strip where everything is first has no first",
-			currentOf(w.Identities, handle), len(pinnedViews), MaxPinnedViews)
+			seatnames.CurrentOf(chart, handle), len(pinnedViews), MaxPinnedViews)
 	case len(favorites) > MaxFavorites:
 		return WriteResult{}, fmt.Errorf("tracker: %s stars %d things and the "+
-			"maximum is %d", currentOf(w.Identities, handle), len(favorites),
+			"maximum is %d", seatnames.CurrentOf(chart, handle), len(favorites),
 			MaxFavorites)
 	}
 	for _, favorite := range favorites {
 		if favorite.Kind == "" || favorite.ID == "" {
 			return WriteResult{}, fmt.Errorf("tracker: a favourite of %s names "+
 				"kind %q and id %q, and a star with neither points at nothing",
-				currentOf(w.Identities, handle), favorite.Kind, favorite.ID)
+				seatnames.CurrentOf(chart, handle), favorite.Kind, favorite.ID)
 		}
 	}
 	return w.writePerson(ctx, opID, handle, func(post *Person, _ time.Time) error {
@@ -186,12 +194,16 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, authority PersonAuthority) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	priorities = cleanHandles(priorities)
 	// THE PERSON BY THEIR IDENTITY, and so is the actor ([Writer.As]): a
 	// renamed seat setting its own list is its own list.
-	handle = identityOf(w.Identities, handle)
+	chart := w.chart()
+	handle = seatnames.IdentityOf(chart, handle)
 	own := w.Actor == handle
-	actor, named := currentOf(w.Identities, w.Actor), currentOf(w.Identities, handle)
+	actor, named := seatnames.CurrentOf(chart, w.Actor), seatnames.CurrentOf(chart, handle)
 	switch {
 	case !own && (!authority.Authorized || authority.Agent):
 		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
@@ -283,7 +295,7 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			Position:      1,
 		},
 		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
-			currentOf(w.Identities, w.Actor), top.Key),
+			seatnames.CurrentOf(w.chart(), w.Actor), top.Key),
 	}, nil
 }
 
@@ -307,10 +319,11 @@ func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error
 	case authority.Authorized && !authority.Agent:
 		return nil
 	}
+	chart := w.chart()
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
 		"behalf of the person whose it is, and somebody else's hand in it is "+
 		"the one thing it must never allow: %w",
-		currentOf(w.Identities, w.Actor), currentOf(w.Identities, handle), what,
+		seatnames.CurrentOf(chart, w.Actor), seatnames.CurrentOf(chart, handle), what,
 		statelog.ErrConflict)
 }
 

@@ -273,6 +273,9 @@ type WriteResult struct {
 func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	notify *Notify) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	switch {
 	case task.ID == "":
 		return WriteResult{}, fmt.Errorf("tracker: a create names no task id")
@@ -285,7 +288,7 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 	// EVERY PERSON THE TASK NAMES, BY THEIR IDENTITY — its reporter, its
 	// assignee, whoever watches it — so the rows are keyed where a rename
 	// cannot move them. See people.go.
-	task = identified(w.Identities, task)
+	task = identified(w.chart(), task)
 	// BEFORE ANY READ, because a cap is a property of the value rather
 	// than of the database: a title past its cap is refused identically
 	// whichever node is asked and whatever the project holds, so paying

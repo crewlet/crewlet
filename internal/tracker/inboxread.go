@@ -222,8 +222,9 @@ type InboxQuery struct {
 // Inbox answers a page of one person's notices.
 func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 	InboxAnswer, error) {
-	got, err := r.inbox(ctx, identified(r.Identities, q), now)
-	return shown(r.Identities, got), err
+	call := r.pinned()
+	got, err := call.inbox(ctx, identified(call.chart, q), now)
+	return shown(call.chart, got), err
 }
 
 // inbox is [Reader.Inbox] once every person the question names is their seat's

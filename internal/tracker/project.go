@@ -96,9 +96,12 @@ type ProjectAuthority struct {
 func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	edit ProjectEdit, authority ProjectAuthority) (WriteResult, error) {
 
+	// ONE READING OF THE CHART for every name this write resolves and
+	// every name it is worded with — see [Writer.pinned].
+	w = w.pinned()
 	key = ProjectKey(key)
 	// THE DEFAULT ASSIGNEE BY THEIR IDENTITY — see people.go.
-	edit = identified(w.Identities, edit)
+	edit = identified(w.chart(), edit)
 	switch {
 	case key == "":
 		return WriteResult{}, fmt.Errorf("tracker: a project edit names no project")
