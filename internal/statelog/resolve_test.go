@@ -94,6 +94,66 @@ func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
 	}
 }
 
+// ANOTHER NODE'S COPY DROPPED BY THE DELETION MARKER NAMES NO WRITER.
+//
+// The marker is a fact about the OBJECT: it holds every writer's record on it
+// for ever, so the node that refused would have its own record dropped exactly
+// as the copy was. Named as the copy's writer, node-b read as the one the
+// refusal was about — and every reader of that field offers the same operation
+// again once the duplicate window has passed, which for a purged task meets the
+// marker for ever. The detail still says whose copy the record is.
+func TestAnotherNodesCopyTheDeletionMarkerDroppedNamesNoWriter(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	at := peerCopy(t, h, "node-b", "op-purged")
+	// EVERY WRITER, as the marker holds them — no writer named.
+	h.gates.gated, h.gates.reason = true, statelog.ReasonDeleted
+
+	res, err := h.write(probeSubject("a"), "op-purged", "mine")
+	var refusal *statelog.Unavailable
+	if !errors.As(err, &refusal) {
+		t.Fatalf("a write collapsed onto node-b's copy on a purged object = (%+v, %v), "+
+			"want a refusal %q", res, err, statelog.ReasonDeleted)
+	}
+	if refusal.Reason != statelog.ReasonDeleted || refusal.Position != at ||
+		refusal.OpID != "op-purged" {
+		t.Fatalf("refusal = %+v, want %q at %s under op-purged", refusal,
+			statelog.ReasonDeleted, at)
+	}
+	if refusal.CopyWriter != "" {
+		t.Errorf("the refusal names %q as the copy's writer — the deletion marker "+
+			"holds this node's own record as surely, so the refusal is not about "+
+			"node-b and a retry here meets it again", refusal.CopyWriter)
+	}
+	if !strings.Contains(refusal.Detail, "node-b") {
+		t.Errorf("the refusal's detail %q no longer says whose copy the record is",
+			refusal.Detail)
+	}
+}
+
+// ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the five that drop a record for
+// what its writer was or did, and none of the rest. The set is what decides
+// whether a refusal of another node's copy names that node
+// ([statelog.Unavailable.CopyWriter]), so a gate reason moved across it, or a
+// reason added without deciding which side it is on, changes what every surface
+// tells an operator to do.
+func TestOnlyAGateThatHoldsAWriterBlamesIt(t *testing.T) {
+	t.Parallel()
+	blames := []statelog.Reason{
+		statelog.ReasonEvicted, statelog.ReasonReleased, statelog.ReasonAbandoned,
+		statelog.ReasonOvertaken, statelog.ReasonWrongPartition,
+	}
+	for _, reason := range statelog.Reasons() {
+		if got, want := reason.BlamesWriter(), slices.Contains(blames, reason); got != want {
+			t.Errorf("%q.BlamesWriter() = %v, want %v", reason, got, want)
+		}
+	}
+	if statelog.Reason("from-a-newer-peer").BlamesWriter() {
+		t.Error("a reason this build does not name blames the writer — nothing " +
+			"here knows what its gate holds")
+	}
+}
+
 // A COPY THIS NODE CANNOT READ IS ONE WHOSE WRITER NOBODY HERE CAN NAME — so
 // whether a gate dropped it is unknown, and the answer is `unknown` rather than
 // either guess.

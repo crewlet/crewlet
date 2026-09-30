@@ -325,7 +325,11 @@ copy's writer, because the reason is then *its* standing and not the asking
 node's. The asking node passed its own checks before it appended, so it is the
 one that takes the write, once the window has passed; a node gesture refused
 this way says so in its `hint` and offers the same operation id again rather
-than another node.
+than another node. That holds for every gate that drops a record for what its
+writer was or did — `evicted`, `released`, `abandoned`, `overtaken` and
+`wrong_partition` — and for none other: a copy dropped because its task or page
+was purged is refused `deleted` and names no writer, because the purge refuses
+the asking node's own write exactly as it did the copy, now and on every retry.
 
 ### A record whose scope meets a deferred scope is deferred too
 

@@ -221,7 +221,10 @@ const (
 
 	// ReasonDeleted — this object carries a permanent deletion marker.
 	// It stays deleted; a guarding row's absence below the trim floor is
-	// not permission to recreate it.
+	// not permission to recreate it. A fact about the OBJECT, the same for
+	// every writer ([Reason.BlamesWriter] is false), so a refusal of another
+	// node's copy under it names no [Unavailable.CopyWriter]: this node's
+	// own record would be dropped the same way.
 	ReasonDeleted Reason = "deleted"
 
 	// ReasonRetired — the record names a kind the domain once published
@@ -346,6 +349,36 @@ func Reasons() []Reason {
 // the wire is a value to show rather than one to switch on.
 func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
+// BlamesWriter reports whether a gate answering r dropped a record for what its
+// WRITER was or did — evicted, released, stamped with a generation a reanchor
+// voided (abandoned, overtaken), or put on a log its own domain does not place
+// it on (wrong_partition) — rather than for something every writer's record
+// meets alike: the object's permanent deletion marker (deleted), or a kind the
+// domain no longer applies (retired). False for a reason that is not a gate's.
+//
+// # What it decides
+//
+// Whose standing a refusal of ANOTHER node's copy of an operation states
+// ([Unavailable.CopyWriter]). Under a reason that blames the writer, the node
+// that refused passed its own fences before it appended, stamps its own
+// generation and placed its own record: the gate holds the copy and not it, so
+// it finishes the write itself once the duplicate window lets go of the
+// operation id. Under one that does not, its own record meets the same gate — a
+// purged task stays purged for every writer, for ever — and a copy's writer
+// named there told every reader the refusal was about somebody else, which a
+// surface reads as "retry here" and which is never true of it.
+//
+// A PROPERTY OF THE REASON rather than a case in the one resolution that asks
+// it, so a gate added later is classified where its reason is declared, and
+// [TestOnlyAGateThatHoldsAWriterBlamesIt] holds every value to it.
+func (r Reason) BlamesWriter() bool {
+	switch r {
+	case ReasonEvicted, ReasonReleased, ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition:
+		return true
+	}
+	return false
+}
+
 // ErrUnavailable is what a refusal wraps, so a caller can tell a refusal from
 // a conflict with errors.Is before it looks at the reason.
 var ErrUnavailable = errors.New("statelog: unavailable")
@@ -375,15 +408,15 @@ type Unavailable struct {
 	OpID     string
 
 	// CopyWriter names ANOTHER node when the record at Position is that
-	// node's copy of this operation rather than this node's own, and the
-	// gate that dropped it — an eviction, a release, a reanchor's rule, the
-	// partition — is about that node's record: the broker collapsed this
-	// node's append onto the copy inside the log's duplicate window, or a
-	// write whose answer was lost found it newest on its subject. The
-	// reason then states THE COPY'S WRITER's standing, and not the standing
-	// of the node that refused — which passed its own fences and serves the
-	// log's partition, and takes the write itself under the same operation
-	// id once the window has let go of it.
+	// node's copy of this operation rather than this node's own, AND the
+	// gate that dropped it blames the copy's writer ([Reason.BlamesWriter]):
+	// an eviction, a release, a reanchor's rule, the partition. The broker
+	// collapsed this node's append onto the copy inside the log's duplicate
+	// window, or a write whose answer was lost found it newest on its
+	// subject. The reason then states THE COPY'S WRITER's standing, and not
+	// the standing of the node that refused — which passed its own fences
+	// and serves the log's partition, and takes the write itself under the
+	// same operation id once the window has let go of it.
 	//
 	// A FIELD rather than a sentence in Detail, because the remedy turns on
 	// it: read as this node's own `evicted`, the operator was told the node
@@ -393,7 +426,12 @@ type Unavailable struct {
 	// EMPTY WHEN THE REFUSAL IS ABOUT THE NODE THAT MADE IT — its own
 	// record, a copy it wrote itself on an earlier attempt, or no record at
 	// all — which is every refusal but that one, and what a refusal from a
-	// build before this field reads as.
+	// build before this field reads as. And EMPTY for another node's copy
+	// under a gate that blames no writer, which is `deleted`: the marker
+	// holds every writer's record on the object for ever, this node's own
+	// included, so the refusal is as true of this node as of the copy, and a
+	// writer named here read as a retry that only meets the marker again.
+	// Detail still says whose copy the record is.
 	CopyWriter string
 
 	// Cause is the error a refusal was concluded from, when there is one

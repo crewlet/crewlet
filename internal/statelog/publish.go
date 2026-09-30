@@ -1625,8 +1625,11 @@ const (
 // found no gate, no ledger row and a ledger that vouched, and reported a
 // contract violation for a record that was only ever gated; the answer is the
 // gate of the record's own writer, which is what holds the operation — and
-// the refusal NAMES that writer ([Unavailable.CopyWriter]), since the reason is
-// then its standing and not this node's.
+// the refusal NAMES that writer ([Unavailable.CopyWriter]) whenever the gate
+// that answers blames it ([Reason.BlamesWriter]), since the reason is then its
+// standing and not this node's. The deletion marker blames nobody: it holds
+// every writer's record on the object, this node's included, so a copy it
+// dropped is refused `deleted` naming no writer.
 //
 // A record the read shows is ANOTHER operation's — the ambiguous path found it
 // newest on the subject — is not this operation's landing, and the gates are
@@ -1777,9 +1780,12 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// node's: the gate held the writer of a copy this node's append
 		// was collapsed onto, and a caller reading `evicted` or
 		// `released` as this node's own would send the write away from
-		// the one node that has just shown it can make it.
+		// the one node that has just shown it can make it. ONLY A GATE
+		// THAT BLAMES THE WRITER: a deletion marker holds this node's
+		// own record as surely as the copy, and a writer named beside
+		// `deleted` read as a retry here that meets the marker for ever.
 		var copyWriter string
-		if writer != p.nodeID {
+		if writer != p.nodeID && reason.BlamesWriter() {
 			copyWriter = writer
 		}
 		return Result{}, &Unavailable{
