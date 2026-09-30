@@ -439,8 +439,8 @@ func (staticRoster) Invalidate()                        {}
 // servedEstate is a data node serving the whole estate from one backend.
 type servedEstate struct{ backend estate.Backend }
 
-func (s servedEstate) For(context.Context, statelog.PartitionID) (estate.Backend, bool) {
-	return s.backend, true
+func (s servedEstate) For(context.Context, statelog.PartitionID) (estate.Backend, bool, error) {
+	return s.backend, true, nil
 }
 
 // spendingEngine is an engine WITHOUT the data role running one seat on the

@@ -119,6 +119,12 @@ const (
 	// map epoch ([reply.Epoch]), which is what tells the asker whether ITS
 	// view or the server's is the stale one.
 	unservedNotHolder unservedReason = "not_holder"
+
+	// unservedHoldingUnknown: this node cannot tell whether it serves the
+	// partition — the answer gate 3 reads could not be read. Not
+	// `not_holder`: it carries no epoch, since the asker's map is not what
+	// is in question, and the asker moves on without reading its map again.
+	unservedHoldingUnknown unservedReason = "holding_unknown"
 )
 
 // reply is what a serving node answers.

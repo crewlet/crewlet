@@ -54,8 +54,9 @@
 // writing again".
 //
 // A node that answers "I did not run it" — it does not serve the partition,
-// runs no native backend, its copy answers no request yet, or it could not
-// reach the caller's floor in time — did not execute anything, so every class
+// cannot tell whether it does, runs no native backend, its copy answers no
+// request yet, or it could not reach the caller's floor in time — did not
+// execute anything, so every class
 // moves on from it; and so does a write the write authority refused at gate 3
 // (`not_holder`, `holding_unknown`), which appended nothing. When no holder
 // serves, the operation is refused as [ErrPartitionUnserved], naming the
@@ -68,6 +69,14 @@
 // it reads the map again ([Placement.Refresh]), resolves again and asks the
 // holders the fresh map names — once per request. A server no newer is the one
 // behind (a joiner not serving yet) or on its way out, and the asker moves on.
+//
+// A server that cannot TELL whether it serves the partition — the holding
+// answer gate 3 reads could not be read — answers `holding_unknown` instead,
+// with no epoch: nothing about the asker's map is in question, so the asker
+// moves on without reading it again. The two are kept apart for the reason
+// gate 3 keeps them apart, and [LocalBackends.For] is three-valued to carry the
+// difference, which the contract's two-valued `For(p) (Backend, bool)` could
+// not.
 //
 // # Which holders to ask is answered from memory
 //

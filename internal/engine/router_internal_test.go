@@ -40,9 +40,10 @@ func landed(l *localEstate, p statelog.PartitionID) {
 // request that finds it stale answers from the verdict before it, and the one
 // after the read lands answers from the new one.
 func judged(ctx context.Context, l *localEstate, p statelog.PartitionID) (estate.Backend, bool) {
-	l.For(ctx, p)
+	_, _, _ = l.For(ctx, p)
 	landed(l, p)
-	return l.For(ctx, p)
+	b, ok, _ := l.For(ctx, p)
+	return b, ok
 }
 
 // sound is a copy that is not wrong and answers requests.
@@ -61,21 +62,28 @@ func TestTheLocalEstateAnswersOnlyWhatThisNodeServes(t *testing.T) {
 	e := &Engine{backends: &Backends{}}
 	l := localWith(e, time.Now, sound)
 
-	b, ok := l.For(t.Context(), statelog.EstatePartition)
-	if !ok || b.Tracker != nil {
-		t.Fatalf("a held partition with no runtime = (%+v, %v), want served with no halves", b, ok)
+	b, ok, err := l.For(t.Context(), statelog.EstatePartition)
+	if !ok || err != nil || b.Tracker != nil {
+		t.Fatalf("a held partition with no runtime = (%+v, %v, %v), want served with no halves",
+			b, ok, err)
 	}
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
-	if b, ok = l.For(t.Context(), statelog.EstatePartition); !ok || b.Tracker == nil ||
-		b.Answers == nil || !b.Answers(t.Context()) {
-		t.Fatalf("a held partition with a runtime = (%+v, %v), want its halves, answering", b, ok)
+	if b, ok, err = l.For(t.Context(), statelog.EstatePartition); !ok || err != nil ||
+		b.Tracker == nil || b.Answers == nil || !b.Answers(t.Context()) {
+		t.Fatalf("a held partition with a runtime = (%+v, %v, %v), want its halves, answering",
+			b, ok, err)
 	}
-	if _, ok := l.For(t.Context(), statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}); ok {
-		t.Error("a partition this node does not hold was served")
+	if _, ok, err := l.For(t.Context(), statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}); ok ||
+		err != nil {
+		t.Errorf("a partition this node does not hold = (%v, %v), want definitively not served",
+			ok, err)
 	}
+	// CANNOT TELL is its own answer, never a "no": another node asking is
+	// told `holding_unknown`, not `not_holder`.
 	l.holding = failingHolding{}
-	if _, ok := l.For(t.Context(), statelog.EstatePartition); ok {
-		t.Error("a partition whose holding could not be told was served")
+	if _, ok, err := l.For(t.Context(), statelog.EstatePartition); ok || err == nil {
+		t.Errorf("a partition whose holding could not be told = (%v, %v), want not served "+
+			"and unknown", ok, err)
 	}
 }
 
@@ -103,7 +111,7 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	l := localWith(e, func() time.Time { return now },
 		func(context.Context, *native, statelog.PartitionID) copyVerdict { return verdict })
 
-	if _, ok := l.For(t.Context(), statelog.EstatePartition); !ok {
+	if _, ok, _ := l.For(t.Context(), statelog.EstatePartition); !ok {
 		t.Fatal("a sound copy is not served")
 	}
 	now = now.Add(servingRecheck)

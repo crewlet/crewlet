@@ -165,22 +165,28 @@ type heldVerdict struct {
 // A PARTITION HELD WITH NO RUNTIME YET — a data node that booted with no
 // company — is served with no halves, so every operation on it is answered
 // "no native backend here" and moves on, while the node still answers for it.
-func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.Backend, bool) {
+func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.Backend, bool, error) {
 	serving, err := l.holding.Serving(p)
-	if err != nil || !serving {
-		return estate.Backend{}, false
+	switch {
+	case err != nil:
+		// CANNOT TELL, kept apart from "does not serve" — gate 3's own
+		// two refusals — so another node asking is told
+		// `holding_unknown` rather than `not_holder`.
+		return estate.Backend{}, false, fmt.Errorf("engine: whether this node serves %s: %w", p, err)
+	case !serving:
+		return estate.Backend{}, false, nil
 	}
 	n := l.e.native.Load()
 	if n == nil {
-		return estate.Backend{}, true
+		return estate.Backend{}, true, nil
 	}
 	v := l.verdict(ctx, n, p)
 	if v.fault != "" {
-		return estate.Backend{}, false
+		return estate.Backend{}, false, nil
 	}
 	b := l.e.partitionBackend(n, p)
 	b.Answers = func(context.Context) bool { return v.answers }
-	return b, true
+	return b, true, nil
 }
 
 // verdict is p's verdict, read again once it is older than [servingRecheck].

@@ -55,13 +55,21 @@ type Placement interface {
 type LocalBackends interface {
 	// For is the backend over p's copy on this node, or false when this
 	// node does not serve p right now: it does not hold p, has not finished
-	// joining it, or has begun to leave it ([statelog.Holding], the answer
-	// the write authority's gate 3 reads).
+	// joining it, has begun to leave it ([statelog.Holding], the answer the
+	// write authority's gate 3 reads), or its copy of p is wrong.
+	//
+	// THREE-VALUED, as gate 3 is: an error is a node that cannot TELL
+	// whether it serves p — the holding answer could not be read — which is
+	// neither a yes nor a no. A server answers it `holding_unknown` rather
+	// than `not_holder`, whose map epoch would send an asker to re-read its
+	// map over a question about this node, and the router moves on from it
+	// either way. (The contract's `For(p) (Backend, bool)` collapsed the
+	// two; see the package doc.)
 	//
 	// It takes a context because what a copy may answer is read from the
 	// log's broker ([Backend.Answers]); an implementation answers from a
 	// verdict it refreshes, never with a broker round trip per request.
-	For(ctx context.Context, p statelog.PartitionID) (Backend, bool)
+	For(ctx context.Context, p statelog.PartitionID) (Backend, bool, error)
 }
 
 // RouterOptions are a router's dependencies.
@@ -322,7 +330,12 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	// THIS NODE FIRST, where it serves the partition — in-process, with
 	// the node's floors enforced exactly as a remote holder enforces them.
 	if r.local != nil {
-		if b, ok := r.local.For(ctx, p); ok {
+		b, ok, unknown := r.local.For(ctx, p)
+		if unknown != nil {
+			reasons = append(reasons, fmt.Sprintf("%s: cannot tell whether it serves %s: %v",
+				r.self, p, unknown))
+		}
+		if ok {
 			b.ServerSeams = r.seams
 			value, why, ran := r.runLocal(ctx, spec, b, layout, p, x)
 			switch {
@@ -748,7 +761,10 @@ func findResult(v reflect.Value) (statelog.Result, bool) {
 // that answer is trusted for [admissionTrust].
 func (r *Router) Serves(ctx context.Context, p statelog.PartitionID) (tracker, pages bool, err error) {
 	if r.local != nil {
-		if b, ok := r.local.For(ctx, p); ok {
+		// A NODE THAT CANNOT TELL WHETHER IT SERVES p is not the copy
+		// that will serve the seat — the router passes it over too — so
+		// the answer is a holder's that can.
+		if b, ok, _ := r.local.For(ctx, p); ok {
 			if b.Admits != nil && !b.Admits(ctx) {
 				return false, false, nil
 			}

@@ -52,8 +52,9 @@ type fakeNode struct {
 	failWith  error
 	written   statelog.Position
 
-	// notHolder is a node that does not serve the partition right now.
-	notHolder bool
+	// notHolder is a node that does not serve the partition right now,
+	// and holdingUnknown one that cannot tell whether it does.
+	notHolder, holdingUnknown bool
 
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
@@ -207,15 +208,18 @@ func (f *fakeNode) backend() Backend {
 }
 
 // For implements [LocalBackends]: this node serves estate.000 unless it was
-// told it does not.
-func (f *fakeNode) For(_ context.Context, p statelog.PartitionID) (Backend, bool) {
+// told it does not, or that it cannot tell.
+func (f *fakeNode) For(_ context.Context, p statelog.PartitionID) (Backend, bool, error) {
 	f.mu.Lock()
-	notHolder := f.notHolder
+	notHolder, holdingUnknown := f.notHolder, f.holdingUnknown
 	f.mu.Unlock()
-	if notHolder || p != statelog.EstatePartition {
-		return Backend{}, false
+	switch {
+	case holdingUnknown:
+		return Backend{}, false, errors.New("the executor could not say")
+	case notHolder || p != statelog.EstatePartition:
+		return Backend{}, false, nil
 	}
-	return f.backend(), true
+	return f.backend(), true, nil
 }
 
 // seams is the serving node's own chart and scope.
@@ -913,6 +917,57 @@ func TestANotHolderAtTheViewsEpochMovesToTheNextHolder(t *testing.T) {
 	}
 	if !f.other(first).askedFor("tasks") {
 		t.Fatal("the next holder was not asked")
+	}
+}
+
+// A NODE THAT CANNOT TELL WHETHER IT SERVES THE PARTITION SAYS SO, and is not
+// `not_holder`: it names no map epoch, because nothing about the asker's map is
+// in question, so the asker moves to the next holder without reading its map
+// again — however new the server's own map is. The same holds for this node's
+// own copy: a holding it cannot read is passed over for a peer.
+func TestAHoldingNobodyCanTellMovesOnWithoutARefresh(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	_, first := f.first(t, f.client)
+	first.set(func(n *fakeNode) { n.holdingUnknown = true })
+	f.servers.set(func(p *fakePlacement) { p.epoch = 7 })
+	f.placement.set(func(p *fakePlacement) { p.epoch = 3 })
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if got := f.placement.refreshed(); got != 0 {
+		t.Fatalf("a holding the server could not tell refreshed the asker's view %d times", got)
+	}
+	if first.askedFor("tasks") || !f.other(first).askedFor("tasks") {
+		t.Fatal("the read was not taken from the node that could not tell to the next holder")
+	}
+
+	raw, err := json.Marshal(request{Op: "tracker.tasks", Args: json.RawMessage(`{}`),
+		Partitions: []string{statelog.EstatePartition.String()}, MapEpoch: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies, err := f.start(t).Ask(t.Context(), Subject(first.name), raw, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
+	}
+	var rep reply
+	if err := json.Unmarshal(replies[0], &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Unserved != unservedHoldingUnknown || rep.Epoch != 0 {
+		t.Fatalf("the server answered %q at epoch %d, want %q with no epoch",
+			rep.Unserved, rep.Epoch, unservedHoldingUnknown)
+	}
+
+	local := &fakeNode{name: "data-self", units: chartOf("self"), holdingUnknown: true}
+	r := f.router(t, "data-self", local)
+	first.set(func(n *fakeNode) { n.holdingUnknown = false })
+	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks from a node that cannot tell: %v", err)
+	}
+	if local.askedFor("tasks") {
+		t.Fatal("a node that cannot tell whether it serves the partition answered it itself")
 	}
 }
 

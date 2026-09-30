@@ -107,7 +107,9 @@ flowchart TD
   the asker routed by, it means the asker's view is old: it reads the map again,
   once per request, and asks the holders the fresh map names. Otherwise the
   answering node is the one behind — joining and not serving yet, or leaving —
-  and the asker moves on.
+  and the asker moves on. A node that cannot *tell* whether it serves the
+  partition answers `holding_unknown` instead, naming no epoch: nothing about
+  the asker's map is in question, so it moves on without reading it again.
 - **Nobody serving is an answer that names the partition** — *no node serves
   `tracker.007` right now*, with what each holder said — never an empty list,
   which would say the company has none of what was asked for.

@@ -233,7 +233,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// holders.
 	waitUntil(t, 5*time.Second, "the copy below the log to stop serving its partition",
 		func() bool {
-			_, serves := e.local.For(t.Context(), statelog.EstatePartition)
+			_, serves, _ := e.local.For(t.Context(), statelog.EstatePartition)
 			return !serves
 		})
 	if ok, reason := e.SeatsServiceable(); !ok {

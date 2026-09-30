@@ -88,7 +88,15 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 			out.Err = encodeError(fmt.Errorf("estate: %s: %w", req.Op, err))
 			return encodeReply(out)
 		}
-		served, serves := s.local.For(ctx, p)
+		served, serves, unknown := s.local.For(ctx, p)
+		if unknown != nil {
+			// CANNOT TELL, which is not "does not serve": no epoch,
+			// because nothing about the asker's map is in question,
+			// and nothing ran, so every class moves on.
+			out.Unserved = unservedHoldingUnknown
+			out.Detail = fmt.Sprintf("%s cannot tell whether it serves %s: %v", s.self, p, unknown)
+			return encodeReply(out)
+		}
 		if !serves {
 			// NOTHING RAN, so every class moves on — a page write
 			// included, whose never-repeat rule is about a request
