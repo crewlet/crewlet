@@ -41,10 +41,6 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) {},
 			"retention.backup_owner", "backup owner",
 		},
-		"an in-memory stream loses everything": {
-			func(b *config.Bootstrap) { b.Stream.StoreDir = "" },
-			"stream.store_dir", "keeps everything in memory",
-		},
 		// A BROKER ASKED TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG
 		// produces nothing at all: `stream.debug` unlocks nats-server's
 		// own Debugf population, and those are still DEBUG records.
@@ -69,7 +65,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.KeyedBootstrap()
+			b := config.RunnableBootstrap()
 			tc.mutate(&b)
 			if err := b.Validate(); err != nil {
 				t.Fatalf("the fixture does not validate, so this is a refusal "+
@@ -112,7 +108,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 // has something in it is one nobody reads.
 func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.StoreDir = "/var/lib/crewlet/stream"
 	b.Retention.BackupOwner = "platform-oncall"
 	if err := b.Validate(); err != nil {
@@ -147,7 +143,7 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.KeyedBootstrap()
+			b := config.RunnableBootstrap()
 			b.Stream.StoreDir = "/var/lib/crewlet/stream"
 			b.Retention.BackupOwner = "platform-oncall"
 			b.Stream.Debug = true
@@ -295,8 +291,8 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 	}
 }
 
-// A STATE LOG ON AN IN-MEMORY STREAM IS REFUSED, WHATEVER THE COMPANY RUNS,
-// and it takes both documents to see it.
+// A STATE LOG ON AN IN-MEMORY STREAM IS REFUSED BY TIER A ALONE, company or
+// none.
 //
 // A domain's write-ahead log lives on the stream, and an embedded stream with
 // no store directory keeps its streams in memory — so a restart recreates them
@@ -304,74 +300,63 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 // from nothing refuses to serve PERMANENTLY: every snapshot it could adopt is
 // above the recreated stream too.
 //
-// # EVERY company, which is what the backend cases are here to hold
+// # Why this is not a cross-tier rule any more
 //
-// The rule once asked whether the company ran the engine's own tracker or its
-// own knowledge base, because those were the only domains. The ORG CHART is a
-// domain now, and nothing makes it optional: a company on Jira and Confluence
-// configures no engine-native backend at all and still has units and seats,
-// which are rows a log is the write-ahead for.
+// It was one — `CheckTiers`, which asked the company too — while a node's
+// logs waited for its first company: only a company started one. Every node
+// runs the core runtime from boot now, the org chart and the identity estate
+// on every domain's log, so the pair's check let through exactly the node it
+// should have refused: one started with no company, whose first person's
+// invitation and the chart the org builder wrote would be gone at its first
+// restart. So there is no company in these cases at all.
 //
-// So the case that matters most is `vendors for both`. Under the old rule it
-// PASSED — and a company that passed would start a chart log in memory and
-// lose its entire org chart on the first restart, with nothing having warned.
-// It is here, refused, for that reason.
-//
-// Each tier validates alone and neither can see the other, which is why this
-// is a rule of its own rather than a field's.
-func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
+// Mutation: let `Durable` pass an embedded stream with a blank directory and
+// the first rows are accepted; drop the call from the stream's validator and
+// Validate accepts them while Durable refuses.
+func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		storeDir   string
-		streamType config.StreamType
-		tracker    config.TrackerBackend
-		knowledge  config.KnowledgeBackend
-		accept     bool
+		stream config.Stream
+		accept bool
 	}{
-		"both native on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false},
-		"a native tracker on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false},
-		"native pages on an in-memory stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
-		"a blank store directory is none":         {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
-		"native with a store directory":           {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true},
-		"native on an external cluster":           {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true},
-		// THE CASE THE OLD RULE LET THROUGH. A company that names a
-		// vendor for both still has an org chart, and a chart is a log.
-		"vendors for both on the same stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, false},
-		"vendors for both with a store directory": {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true},
+		"an embedded stream in memory":      {config.Stream{Type: config.StreamEmbedded, Replicas: 1}, false},
+		"an unset type is embedded":         {config.Stream{Replicas: 1}, false},
+		"a blank store directory is none":   {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "  "}, false},
+		"an embedded stream that persists":  {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "/var/lib/crewlet/stream"}, true},
+		"an external cluster keeps its own": {config.Stream{Type: config.StreamNATS, URL: "nats://broker.example.com:4222", Replicas: 1}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
-			b.Stream.Type = tc.streamType
-			b.Stream.StoreDir = tc.storeDir
-			if tc.streamType == config.StreamNATS {
-				b.Stream.URL = "nats://broker.example.com:4222"
+			// THE ENGINE'S DOOR, which asks the same function for a
+			// Bootstrap that did not come through Validate.
+			stream := tc.stream
+			durable := stream.Durable()
+			// AND TIER A'S OWN, over the whole document.
+			b := config.RunnableBootstrap()
+			b.Stream = tc.stream
+			if tc.stream.Type == config.StreamNATS {
+				// A fleet's broker needs the fleet's coordination.
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 			}
-			c := config.DefaultCompany()
-			c.Name = "Acme"
-			c.Tracker.Backend = tc.tracker
-			c.Knowledge.Backend = tc.knowledge
-
-			err := config.CheckTiers(&b, &c)
+			validated := b.Validate()
 			if tc.accept {
-				if err != nil {
-					t.Fatalf("refused: %v", err)
+				if durable != nil || validated != nil {
+					t.Fatalf("refused: Durable %v, Validate %v", durable, validated)
 				}
 				return
 			}
-			if err == nil {
-				t.Fatal("a state log on an in-memory stream was accepted, so " +
-					"this node would lose every record it holds on its first " +
-					"restart and then refuse to serve")
-			}
-			// THE BACKENDS ARE NOT IN THE MESSAGE ANY MORE, and that
-			// is the rule changing rather than the message getting
-			// worse: naming them said "you chose this", and nobody
-			// chooses to have an org chart.
-			for _, want := range []string{
-				"stream.store_dir", "refuses to serve", "org chart",
-			} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("refusal = %q, want it to say %q", err, want)
+			for door, err := range map[string]error{"Durable": durable, "Validate": validated} {
+				if err == nil {
+					t.Fatalf("%s accepted a state log on an in-memory stream, so "+
+						"this node would lose every record it holds on its "+
+						"first restart and then refuse to serve", door)
+				}
+				for _, want := range []string{
+					"stream.store_dir", "refuses to serve", "org chart",
+					"identity estate",
+				} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s's refusal = %q, want it to say %q", door, err, want)
+					}
 				}
 			}
 		})

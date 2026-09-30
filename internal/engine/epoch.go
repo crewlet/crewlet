@@ -207,17 +207,6 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	if e.stopped {
 		return configplane.StatusError, nil, errStopped
 	}
-	// THE RULES THAT NEED BOTH TIERS, before anything is touched — the same
-	// check [New] makes of the company a node boots with. A boot was the
-	// only place it ran, so a node that booted unconfigured accepted a first
-	// company whose state log — which every company runs, for its org chart
-	// if for nothing else — lives on an in-memory stream.
-	if err := config.CheckTiers(e.boot, cfg); err != nil {
-		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the revision was refused before anything changed; "+
-				"this node still serves the previous epoch")
-		return configplane.StatusError, nil, fmt.Errorf("engine: apply: %w", err)
-	}
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
 	// the documented rotation gesture: the payload has not moved, so the

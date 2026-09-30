@@ -140,7 +140,7 @@ type core struct {
 // inbox retention — reaches the applier without a restart.
 func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// AN IN-MEMORY STREAM NEVER GETS THIS FAR: [New] refused it before
-	// anything was opened — see [config.CheckTiers].
+	// anything was opened — see [config.Stream.Durable].
 	//
 	// THE RESOLVED ID, not the raw field. `node.id` may be absent, a
 	// `${VAR}` reference, or come from the environment — and the value

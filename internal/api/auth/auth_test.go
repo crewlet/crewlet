@@ -515,6 +515,9 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 	t.Parallel()
 	complete := func() config.Bootstrap {
 		b := config.DefaultBootstrap()
+		// A STREAM THAT SURVIVES A RESTART, which every node needs
+		// whatever it serves; its directory is never opened here.
+		b.Stream.StoreDir = "/var/lib/crewlet/stream"
 		b.API.Port = 8000
 		b.API.ExternalURL = "http://localhost:8000"
 		b.API.Auth.MaxGrants = iam.AllGrants
@@ -584,6 +587,7 @@ func TestConfigRefusesEveryPostureThisSurfaceCannotBeReachedUnder(t *testing.T) 
 func TestANodeServingNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
+	b.Stream.StoreDir = "/var/lib/crewlet/stream"
 	b.Secrets = config.Secrets{
 		ActiveKeyID: "k1",
 		Keys: []config.SecretKey{{

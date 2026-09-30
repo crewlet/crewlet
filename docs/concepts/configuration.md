@@ -390,15 +390,6 @@ comparison and no early return** — there is no apply lock, no payload
 short-circuit and no rollback of captured state. It rebuilds the whole epoch,
 in a fixed order, and names each stage it got through.
 
-Before the first stage it checks the rules that need both configuration tiers
-— the one today is that a company may not keep its state logs on an in-memory
-stream (an embedded stream with no `stream.store_dir`), which is every company,
-since every company keeps its org chart on one — exactly as a boot does. A
-revision that breaks one is refused with nothing touched and an empty stage
-list; before this ran at every apply, a node that booted unconfigured accepted
-such a company and started the log whose first restart leaves the node unable
-to serve.
-
 1. **`secrets`** — re-read the secret store and install a fresh resolver snapshot. **First**, because re-activating an unchanged revision is the documented [rotation gesture](secret-store.md): the payload has not moved, so the only thing that can have is what its `${VAR}` references resolve to.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
    A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).

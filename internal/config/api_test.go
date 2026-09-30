@@ -19,6 +19,7 @@ import (
 // rather than that it fails for the stated reason.
 func serving() Bootstrap {
 	b := DefaultBootstrap()
+	b.Stream.StoreDir = TestStoreDir
 	b.API.Port = DefaultAPIPort
 	b.API.ExternalURL = "https://crewlet.example.com"
 	// The front end that terminates the https above, named — which is what
@@ -95,7 +96,7 @@ func TestEveryPostureAServedApiCannotBeReachedUnderIsRefused(t *testing.T) {
 // A is exactly that node.
 func TestANodeThatServesNoApiNeedsNoneOfIt(t *testing.T) {
 	t.Parallel()
-	b := KeyedBootstrap()
+	b := RunnableBootstrap()
 	if b.API.Serving() {
 		t.Fatal("the default binds a port, so this case is not the one it names")
 	}
@@ -133,7 +134,7 @@ func TestASatelliteServingNoApiIsRefusedWithoutAKeyring(t *testing.T) {
 
 	// THE CONTROL: the same node holding a keyring is sound, so the refusal
 	// above is about the keyring and nothing else in the file.
-	if _, err := ParseKeyedBootstrap([]byte(satellite), EnvOnly()); err != nil {
+	if _, err := ParseRunnableBootstrap([]byte(satellite), EnvOnly()); err != nil {
 		t.Fatalf("the same satellite with a keyring was refused: %v", err)
 	}
 }

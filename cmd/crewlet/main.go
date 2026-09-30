@@ -722,14 +722,10 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
-	// THE RULES THAT NEED BOTH DOCUMENTS, which is the whole reason this
-	// two-flag form exists: neither tier can see the other, so a
-	// configuration that is valid twice over and unrecoverable together is
-	// only refusable here.
-	if err := config.CheckTiers(boot, company.Company); err != nil {
-		res.Problems = config.Problems(err)
-		return report(stdout, res, asJSON)
-	}
+	// NO RULE NEEDS BOTH DOCUMENTS any more. The one there was — a state
+	// log on an in-memory stream — is Tier A's alone now that every node
+	// runs its logs from boot, company or none ([config.Stream.Durable]),
+	// so the Tier A pass above already refused it.
 	res.Valid = true
 	// BOTH TIERS' WARNINGS, for the reason both tiers' problems are
 	// reported: an operator who fixes one file and is told about the other
@@ -1207,9 +1203,6 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// And the nudge, so an operator's change lands on every node in
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
-		// And this node's Tier A, which a document is judged against as
-		// the apply judges it — see configapi.Options.Bootstrap.
-		Bootstrap: boot,
 	})
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))

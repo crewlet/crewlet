@@ -106,7 +106,7 @@ func TestAnExternalStreamRefusesTheEmbeddedClusterBlock(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			b := config.KeyedBootstrap()
+			b := config.RunnableBootstrap()
 			// An external stream is a fleet, so its coordination has to be
 			// the fleet's. Left at the default it is refused for THAT,
 			// which is an ErrConflict this case would otherwise pass on
@@ -154,7 +154,7 @@ func TestAnExternalStreamRefusesTheEmbeddedClusterBlock(t *testing.T) {
 // removing the peer is what they are being told to do for the wrong reason.
 func TestAnExternalStreamIsNotJudgedByTheClusterBlocksPeerCount(t *testing.T) {
 	t.Parallel()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 	b.Stream = config.Stream{
 		Type:    config.StreamNATS,
@@ -188,7 +188,7 @@ func TestAnEmbeddedStreamStillTakesTheClusterBlock(t *testing.T) {
 // fails for that field and nothing else.
 func fleetBootstrap(t *testing.T) config.Bootstrap {
 	t.Helper()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 	b.Stream = config.Stream{
 		Replicas: 3, StoreDir: t.TempDir(),

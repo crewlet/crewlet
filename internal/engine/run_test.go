@@ -799,41 +799,59 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	}
 }
 
-// A COMPANY'S RECORD IS NOT PUT ON AN IN-MEMORY STREAM, WHATEVER BACKENDS IT
-// NAMES.
+// A NODE ON AN IN-MEMORY STREAM IS REFUSED AT BOOT, COMPANY OR NONE, BEFORE
+// ANYTHING OPENS.
 //
 // An in-memory stream is not "queued events do not survive a restart": the
-// first restart recreates the log empty, and a node whose rows are ahead of it
-// stops serving for good. Measured on a company with no native tracker whose
-// pages were the engine's own: it booted, logged an error, and after one
+// first restart recreates every log empty, and a node whose rows are ahead of
+// it stops serving for good. Measured on a company with no native tracker
+// whose pages were the engine's own: it booted, logged an error, and after one
 // restart its pages applier stopped on the recreated stream and the node never
 // admitted a seat again.
 //
-// # The pairing that has no native backend at all
+// # The node with no company is the case
 //
-// The cross-tier rule asked which backends the company ran, so a company on
-// Jira AND Confluence was let through. That company still has an org chart,
-// which is a state-log domain like any other — so it started a chart log in
-// memory and lost its units and its seats on the first restart. Asserted here,
-// at the door the engine itself goes through, and with the vendor pairing
-// rather than a native one, because that is the case the old rule missed.
-func TestACompanysRecordIsNotPutOnAnInMemoryStream(t *testing.T) {
+// The rule was a cross-tier one, asked of the company a node booted with or
+// was handed — so a node started with NONE passed it, and it runs the core
+// runtime from boot: the org chart the builder writes and the identity estate
+// its first person is invited into, on logs its first restart emptied. The
+// vendor pairing is the second row because it is the case the rule before that
+// one missed: a company on Jira and Confluence still has an org chart.
+//
+// Mutation: ask the stream only when there is a company, and the first row
+// builds an engine; move the question below OpenBackends, and the store file
+// exists.
+func TestANodeOnAnInMemoryStreamIsRefusedAtBoot(t *testing.T) {
 	t.Parallel()
-	company := parsedCompany(t, companyDoc)
-	company.Tracker.Backend = config.TrackerNone
-	company.Knowledge.Backend = config.KnowledgeNone
-	_, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) { b.Stream.StoreDir = "" }),
-		Company:   company,
-	})
-	if err == nil {
-		t.Fatal("a company that configures no engine-native backend booted on " +
-			"an in-memory stream — it still has an org chart, and its first " +
-			"restart recreates that log empty")
-	}
-	for _, want := range []string{"stream.store_dir", "org chart"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not say %q: %v", want, err)
-		}
+	vendors := parsedCompany(t, companyDoc)
+	vendors.Tracker.Backend = config.TrackerNone
+	vendors.Knowledge.Backend = config.KnowledgeNone
+	for name, company := range map[string]*config.Company{
+		"with no company":                     nil,
+		"with a company on a vendor for both": vendors,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storePath := filepath.Join(t.TempDir(), "crewlet.db")
+			_, err := engine.New(t.Context(), engine.Options{
+				Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+					b.Store.Path = storePath
+					b.Stream.StoreDir = ""
+				}),
+				Company: company,
+			})
+			if err == nil {
+				t.Fatal("a node booted on an in-memory stream — its first " +
+					"restart recreates every log it runs empty")
+			}
+			for _, want := range []string{"stream.store_dir", "org chart", "identity estate"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			if _, statErr := os.Stat(storePath); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the store was opened before the stream was refused: %v", statErr)
+			}
+		})
 	}
 }

@@ -64,30 +64,47 @@ var fixtureCipher = func() secrets.Cipher {
 	return cipher
 }()
 
-// keyedTierA is a Tier A document with [fixtureKeyring] appended, so a case
-// states what it is about and nothing else. A document that states its own
-// `secrets:` block is the case whose subject is the keyring, and is returned
-// as written.
-func keyedTierA(doc string) string {
-	if strings.HasPrefix(doc, "secrets:") || strings.Contains(doc, "\nsecrets:") {
-		return doc
+// fixtureStream is the `stream:` block a CLI fixture's Tier A carries: an
+// embedded stream persisting under dir, because one held in memory is refused
+// on every node ([config.Stream.Durable]) and a fixture short of it would be
+// refused for that before its case was judged.
+func fixtureStream(dir string) string {
+	return "stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n"
+}
+
+// runnableTierA is a Tier A document carrying what every node requires —
+// [fixtureKeyring] and a durable stream — so a case states what it is about
+// and nothing else. A document that states its own `secrets:` or `stream:`
+// block is the case whose subject that is, and the block is left as written.
+//
+// ITS STREAM IS NEVER OPENED: the documents here are parsed and judged, so the
+// directory it names is one no case creates.
+func runnableTierA(doc string) string {
+	states := func(key string) bool {
+		return strings.HasPrefix(doc, key+":") || strings.Contains(doc, "\n"+key+":")
 	}
 	if doc != "" && !strings.HasSuffix(doc, "\n") {
 		doc += "\n"
 	}
-	return doc + fixtureKeyring
+	if !states("secrets") {
+		doc += fixtureKeyring
+	}
+	if !states("stream") {
+		doc += fixtureStream("/var/lib/crewlet")
+	}
+	return doc
 }
 
-// parseTierA is [config.ParseBootstrap] over [keyedTierA] of the document.
+// parseTierA is [config.ParseBootstrap] over [runnableTierA] of the document.
 func parseTierA(data []byte, r *config.Resolver) (*config.Bootstrap, error) {
-	return config.ParseBootstrap([]byte(keyedTierA(string(data))), r)
+	return config.ParseBootstrap([]byte(runnableTierA(string(data))), r)
 }
 
 // bootstrapForStore writes a Tier A config naming a store in dir.
 func bootstrapForStore(t *testing.T, dir string) string {
 	t.Helper()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db")) + fixtureKeyring
+		filepath.Join(dir, "index.db")) + fixtureStream(dir) + fixtureKeyring
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)

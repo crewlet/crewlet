@@ -44,7 +44,7 @@ func rejects(t *testing.T, doc, wantPath string) error {
 // keyring every node needs, so the refusal it finds is the one it names.
 func rejectsBootstrap(t *testing.T, doc, wantPath string) error {
 	t.Helper()
-	_, err := ParseKeyedBootstrap([]byte(doc), EnvOnly())
+	_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 	if err == nil {
 		t.Fatalf("expected %s to be rejected", wantPath)
 	}

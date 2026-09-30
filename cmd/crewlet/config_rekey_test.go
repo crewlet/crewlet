@@ -24,8 +24,8 @@ import (
 func bootstrapWithKeys(t *testing.T, dir string, keys ...string) string {
 	t.Helper()
 	var b strings.Builder
-	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s",
+		filepath.Join(dir, "index.db"), fixtureStream(dir))
 	if len(keys) > 0 {
 		fmt.Fprintf(&b, "secrets:\n  active_key_id: %s\n  keys:\n", keys[0])
 		for _, id := range keys {

@@ -617,39 +617,12 @@ func (b *Bootstrap) Warnings() []Warning {
 				"so has nobody to name"))
 	}
 
-	// AN EMBEDDED STREAM WITH NOWHERE TO PERSIST loses everything on a
-	// restart. It is the right configuration for a test and the wrong one
-	// for any node serving a company. An ingress-only node is no exception:
-	// it runs the engine like every other node, and an embedded server with
-	// no store directory creates every stream it provisions in memory.
-	if b.Stream.Type != StreamNATS && strings.TrimSpace(b.Stream.StoreDir) == "" {
-		out = append(out, advisory(field("stream.store_dir"),
-			"an embedded stream with no store directory keeps everything in "+
-				"memory: a restart loses every mailbox, every coordination record and "+
-				"the company's own history. Correct for a test; not for a node that "+
-				"serves a company, whatever its node.roles"))
-	}
-
-	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. An embedded
-	// server with no `store_dir` keeps its streams in MEMORY, and a
-	// memory-backed stream's ceiling is reserved against the broker's
-	// memory allowance rather than against this number — so the pair that
-	// reads as "I have bounded this node's broker" is the pair that has
-	// not.
-	//
-	// A WARNING RATHER THAN A REFUSAL, because the pair is still valid: a
-	// company on external backends keeps nothing of its own on the stream,
-	// and a test runs this way on purpose. What is NOT valid is a native
-	// tracker or knowledge base on it, and that is refused already — see
-	// [Company.validate] — so this never softens that rule, it covers the
-	// deployments the rule leaves standing.
-	if b.Stream.Type != StreamNATS && b.Stream.StoreMaxBytes > 0 &&
-		strings.TrimSpace(b.Stream.StoreDir) == "" {
-		out = append(out, advisory(field("stream.store_max_bytes"),
-			"this embedded stream has no `store_dir`, so its streams are held in "+
-				"memory and this limit bounds none of them: what bounds them is the "+
-				"broker's memory allowance. Name a `store_dir`, or drop the limit"))
-	}
+	// NOT HERE: an embedded stream with no `store_dir`. It was two
+	// advisories — everything lost on a restart, and a `store_max_bytes`
+	// that bounds nothing on a broker holding its streams in memory — and
+	// it is a REFUSAL now ([Stream.Durable]), because every node keeps its
+	// state logs on the stream from boot, so no deployment is left standing
+	// for either to describe.
 
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
 	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
@@ -712,53 +685,4 @@ func (b *Bootstrap) loggingLevelName() string {
 		return "`info` (unset)"
 	}
 	return "`" + string(b.Logging.Level) + "`"
-}
-
-// CheckTiers holds the rules that need BOTH documents, and it exists because
-// neither tier can see the other.
-//
-// Tier A is the operator's and Tier B is the founder's; each validates alone,
-// and a rule about the pair has nowhere else to live. There is exactly one
-// today, and it is worth the seam: it turns a permanent, unrecoverable state
-// into a refusal at the moment somebody could still choose otherwise.
-func CheckTiers(boot *Bootstrap, company *Company) error {
-	var p problems
-	if boot == nil || company == nil {
-		return nil
-	}
-
-	// A STATE LOG ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is why
-	// it is an error rather than the warning Tier A raises alone.
-	//
-	// A domain's write-ahead log lives on the stream. An embedded server
-	// with no store directory keeps its streams in MEMORY, so a restart
-	// recreates them empty — and a node whose durable tables are ahead of a
-	// stream that restarted from nothing cannot tell "the log was trimmed"
-	// from "the log is a different log", refuses to serve, and stays
-	// refused: every snapshot it could adopt is above the recreated stream
-	// too.
-	//
-	// # It applies to EVERY company now, and that is a change
-	//
-	// This rule once asked whether the company ran the engine's own tracker
-	// or its own knowledge base, because those were the only domains and a
-	// company on Jira and Confluence started no log at all. The ORG CHART is
-	// a domain now, and nothing makes it optional: a company that configures
-	// no engine-native backend whatsoever still has units and seats, and
-	// they are rows a log is the write-ahead for. So there is no longer any
-	// company this rule can correctly let past.
-	//
-	// The narrower rule did not merely become redundant — it became WRONG in
-	// the silent direction. A company on a vendor's tracker and a vendor's
-	// wiki would have passed, started a chart log in memory, and lost its
-	// entire org chart on the first restart with nothing having warned.
-	if boot.Stream.Type != StreamNATS && strings.TrimSpace(boot.Stream.StoreDir) == "" {
-		p.add(field("stream.store_dir"), ErrMissing,
-			"every company keeps its org chart on the state log, whose records "+
-				"live on the stream, and an embedded stream with no store "+
-				"directory keeps its streams in memory: a restart recreates them "+
-				"empty and this node refuses to serve them permanently. Name a "+
-				"directory")
-	}
-	return p.err()
 }

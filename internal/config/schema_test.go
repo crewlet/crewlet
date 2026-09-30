@@ -203,10 +203,10 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 			// EVERY TIER A CASE CARRIES THE KEYRING every node needs,
 			// so each one is judged on its own subject — unless the
 			// keyring IS its subject, in which case it states its own
-			// `secrets:` block and [Keyed] leaves it as written.
+			// `secrets:` block and [Runnable] leaves it as written.
 			doc := tc.yaml
 			if tc.tier == TierBootstrap {
-				doc = Keyed(doc)
+				doc = Runnable(doc)
 			}
 			schemaErr := compiled[tc.tier].Validate(asJSON(t, doc))
 			validatorErr := validateTier(tc.tier, doc)
@@ -254,7 +254,7 @@ func parityCases() []parityCase {
 		// defaults stand on their own.
 		//
 		// `{}` because that is what an operator's "empty" crewlet.yaml
-		// actually looks like, and [Keyed] reads it as the empty mapping
+		// actually looks like, and [Runnable] reads it as the empty mapping
 		// it is.
 		{name: "empty bootstrap", tier: TierBootstrap, yaml: "{}\n"},
 		// A NODE WITH NO KEYRING, which both layers refuse: every node
@@ -406,7 +406,16 @@ units:
 		{
 			name: "a three-node fleet",
 			tier: TierBootstrap,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  store_dir: /var/lib/crewlet/stream\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+		},
+		// AN EMBEDDED STREAM HELD IN MEMORY, which the schema lets through
+		// because it cannot say "required unless the type is nats" in a
+		// way every editor honours, and the validator refuses: every node
+		// keeps its state logs on the stream from boot.
+		{
+			name: "an embedded stream held in memory", tier: TierBootstrap,
+			yaml:          "stream:\n  replicas: 1\n",
+			validatorOnly: true,
 		},
 		// A LITERAL signing secret, not a ${VAR}. The full company above
 		// carries the reference form, which validate() deliberately does not

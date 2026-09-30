@@ -1757,12 +1757,6 @@ document, and to the rules its question needs:
   `400 validation_error` naming the field; a revert to one that breaks only an
   admission rule is accepted, and each node logs `org_admission_warning` when it
   applies it.
-- **Every one of them** is also judged against the answering node's own Tier A,
-  with the rule the apply runs: on an embedded stream that keeps its streams
-  in memory (no `stream.store_dir`) no document can run — every company keeps
-  its org chart on a state log — so the write answers `400 validation_error`
-  naming `stream.store_dir`, rather than being activated for every node to
-  refuse a moment later and leave the fleet on its old epoch.
 
 #### A revision this node cannot open is refused, whichever route reads it
 

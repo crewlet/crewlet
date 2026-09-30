@@ -12,7 +12,7 @@ import (
 // retentionBoot is a valid Tier A with a retention block to vary.
 func retentionBoot(t *testing.T, r config.TrackerRetention) config.Bootstrap {
 	t.Helper()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.TrackerRetention = r
 	return b
 }
@@ -146,7 +146,7 @@ func TestAnAbsentRetentionBlockIsTheDefaults(t *testing.T) {
 	// AND THE DEFAULTS THEMSELVES SATISFY THE CROSS-FIELD RULE. A shipped
 	// default set that its own validator refuses is a deployment nobody
 	// can start.
-	shipped := config.KeyedBootstrap()
+	shipped := config.RunnableBootstrap()
 	if err := shipped.Validate(); err != nil {
 		t.Fatalf("the shipped defaults do not validate: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"the chart past 16 GiB":     {func(b *config.Bootstrap) { b.Stream.ChartLogMaxBytes = 16*gib + 1 }, false, "chart_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.KeyedBootstrap()
+			b := config.RunnableBootstrap()
 			tc.mutate(&b)
 			err := b.Validate()
 			if tc.accept {
@@ -501,7 +501,7 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		}, false, "store_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.KeyedBootstrap()
+			b := config.RunnableBootstrap()
 			tc.mutate(&b)
 			err := b.Validate()
 			if tc.accept {
@@ -520,37 +520,26 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 	}
 }
 
-// A STORE LIMIT ON A BROKER WITH NO STORE BOUNDS NOTHING, and says so.
+// A STORE LIMIT ON A BROKER WITH NO STORE IS REFUSED WITH THE BROKER.
 //
 // An embedded server with no `store_dir` holds its streams in MEMORY, where a
 // ceiling is reserved against the memory allowance rather than against this
-// number. The configuration is valid — a test, an ingress-only node — so it is
-// a warning; what it must not be is silent, because the pair reads exactly
-// like "I have bounded this node's broker".
-func TestAStoreLimitWithNoStoreDirectoryIsCalledOut(t *testing.T) {
+// number, so the pair reads exactly like "I have bounded this node's broker"
+// and bounds nothing. That was a warning while such a node was valid; every
+// node keeps its state logs on the stream from boot now, so the missing
+// directory is refused ([config.Stream.Durable]) and the limit goes with it —
+// no deployment is left standing for a warning to describe.
+func TestAStoreLimitWithNoStoreDirectoryIsRefusedWithIt(t *testing.T) {
 	t.Parallel()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.StoreDir, b.Stream.StoreMaxBytes = "", 16<<30
-	if err := b.Validate(); err != nil {
-		t.Fatalf("refused a valid document: %v", err)
+	err := b.Validate()
+	if err == nil || !strings.Contains(err.Error(), "stream.store_dir") {
+		t.Fatalf("Validate = %v, want the missing store directory refused", err)
 	}
 
-	var found bool
-	for _, w := range b.Warnings() {
-		if strings.Contains(w.Path, "store_max_bytes") {
-			found = true
-			if !strings.Contains(w.Message, "memory") {
-				t.Errorf("the warning does not say what does bound those "+
-					"streams: %q", w.Message)
-			}
-		}
-	}
-	if !found {
-		t.Error("a store limit on an in-memory broker was not mentioned at all")
-	}
-
-	// AND IT IS NOT RAISED ON A BROKER THAT HAS A STORE, or it is noise on
-	// every deployment that configured the field correctly.
+	// AND A LIMIT BESIDE A STORE DIRECTORY IS NOT WARNED ABOUT, or it is
+	// noise on every deployment that configured the field correctly.
 	b.Stream.StoreDir = t.TempDir()
 	for _, w := range b.Warnings() {
 		if strings.Contains(w.Path, "store_max_bytes") {

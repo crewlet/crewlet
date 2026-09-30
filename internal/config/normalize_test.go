@@ -20,7 +20,7 @@ import (
 // fields misses.
 func TestTierAIsTrimmedBeforeAnyRuleReadsIt(t *testing.T) {
 	t.Parallel()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Node.ID = " node-a\n"
 	b.Node.Labels = map[string]string{" zone\t": " eu \n"}
 	b.Store.Path = " /var/lib/crewlet/node.db\n"
@@ -154,7 +154,7 @@ func TestATrimCollisionIsRefusedRatherThanDecidedByMapOrder(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			b := config.KeyedBootstrap()
+			b := config.RunnableBootstrap()
 			b.Node.Labels = maps.Clone(labels)
 
 			err := b.Validate()
@@ -243,7 +243,7 @@ const pad = " \t"
 // than only plain fields.
 func populatedBootstrap(t *testing.T) config.Bootstrap {
 	t.Helper()
-	b := config.KeyedBootstrap()
+	b := config.RunnableBootstrap()
 	b.Node.ID = "node-a"
 	b.Node.Roles = []string{"seats"}
 	b.Node.Labels = map[string]string{"zone": "eu"}

@@ -22,8 +22,8 @@ func bootstrapWithKeyring(t *testing.T, keys ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	var b strings.Builder
-	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s",
+		filepath.Join(dir, "index.db"), fixtureStream(dir))
 	fmt.Fprintf(&b, "secrets:\n  active_key_id: %s\n  keys:\n", keys[0])
 	for i, id := range keys {
 		key := make([]byte, 32)
@@ -135,7 +135,7 @@ func TestWithoutAKeyringTheCommandSaysHowToGetOne(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+		filepath.Join(dir, "index.db")) + fixtureStream(dir)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
 	}
@@ -230,7 +230,8 @@ func rekeyedConfig(t *testing.T, from, active string, others ...string) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n", storePath)
+	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s", storePath,
+		fixtureStream(filepath.Dir(storePath)))
 	fmt.Fprintf(&b, "secrets:\n  active_key_id: %s\n  keys:\n", active)
 	// k1 keeps the material bootstrapWithKeyring gave it (index 0), so what
 	// it sealed still opens; the new key is fresh.

@@ -41,7 +41,7 @@ secrets:
 
 stream:
   type: embedded              # a JetStream server inside this process
-  store_dir: "/var/lib/crewlet/stream"   # empty = in-memory, nothing survives a restart
+  store_dir: "/var/lib/crewlet/stream"   # required: every node keeps its state logs here
 
 store:
   path: "/var/lib/crewlet/company.db"    # ONE file, this process only

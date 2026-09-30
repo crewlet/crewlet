@@ -653,12 +653,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
-	// THE CROSS-TIER RULES, before anything is opened. Each tier validated
-	// alone on its way in; what neither could see is the other, and the one
-	// rule that needs both (a native tracker or knowledge base whose log
-	// would live on an in-memory stream) produces a node that refuses to
-	// serve permanently rather than one that fails on the way up.
-	if err := config.CheckTiers(opts.Bootstrap, opts.Company); err != nil {
+	// A STREAM THAT SURVIVES A RESTART, before anything is opened, and
+	// whether or not this node has a company: the core runtime puts every
+	// domain's log on the stream at boot, so an embedded stream held in
+	// memory is a node whose first restart leaves it unable to serve for
+	// good. Tier A's own rule ([config.Stream.Durable]), asked again here
+	// for a Bootstrap that did not come through [config.Bootstrap.Validate]
+	// — it used to be a cross-tier rule asked only of a company, which let
+	// through exactly the node started with none.
+	if err := opts.Bootstrap.Stream.Durable(); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
 	// THE KEYRING FIRST, because everything below derives from it — the

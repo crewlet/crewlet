@@ -50,7 +50,7 @@ func TestLogSettingsPrecedence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot, err := ParseKeyedBootstrap([]byte(tc.yaml), EnvOnly())
+			boot, err := ParseRunnableBootstrap([]byte(tc.yaml), EnvOnly())
 			if err != nil {
 				t.Fatalf("expected a valid Tier A document, got: %v", err)
 			}
@@ -100,7 +100,7 @@ func TestLoggingValidatorRejections(t *testing.T) {
 func TestEveryDeclaredLevelAndFormatIsUsable(t *testing.T) {
 	t.Parallel()
 	for _, level := range logging.Levels {
-		boot := KeyedBootstrap()
+		boot := RunnableBootstrap()
 		boot.Logging.Level = level
 		if err := boot.Validate(); err != nil {
 			t.Errorf("level %q is in the closed set but refused: %v", level, err)
@@ -110,7 +110,7 @@ func TestEveryDeclaredLevelAndFormatIsUsable(t *testing.T) {
 		}
 	}
 	for _, format := range logging.Formats {
-		boot := KeyedBootstrap()
+		boot := RunnableBootstrap()
 		boot.Logging.Format = format
 		if err := boot.Validate(); err != nil {
 			t.Errorf("format %q is in the closed set but refused: %v", format, err)
@@ -280,7 +280,7 @@ func TestLogFileValidatorRejections(t *testing.T) {
 // the whole reason `max_backups` is a pointer rather than an int.
 func TestZeroBackupsIsASettingRatherThanAnAbsence(t *testing.T) {
 	t.Parallel()
-	boot, err := ParseKeyedBootstrap(
+	boot, err := ParseRunnableBootstrap(
 		[]byte("logging:\n  file:\n    path: /tmp/c.log\n    max_backups: 0\n"), EnvOnly())
 	if err != nil {
 		t.Fatalf("max_backups: 0 was refused: %v", err)
@@ -309,7 +309,7 @@ func TestNoLogFileIsTheDefault(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot, err := ParseKeyedBootstrap([]byte(tc.yaml), EnvOnly())
+			boot, err := ParseRunnableBootstrap([]byte(tc.yaml), EnvOnly())
 			if err != nil {
 				t.Fatalf("expected a valid document, got: %v", err)
 			}
@@ -324,7 +324,7 @@ func TestNoLogFileIsTheDefault(t *testing.T) {
 // between an operator's document and what internal/logging actually opens.
 func TestLogFileOptionsCarryTheWholeBlock(t *testing.T) {
 	t.Parallel()
-	boot, err := ParseKeyedBootstrap([]byte("logging:\n  file:\n"+
+	boot, err := ParseRunnableBootstrap([]byte("logging:\n  file:\n"+
 		"    path: /var/log/crewlet/crewlet.log\n    format: json\n"+
 		"    max_size_mb: 25\n    max_backups: 3\n"), EnvOnly())
 	if err != nil {
@@ -354,7 +354,7 @@ func TestLogFileOptionsCarryTheWholeBlock(t *testing.T) {
 func TestEveryDeclaredFormatIsUsableForTheFile(t *testing.T) {
 	t.Parallel()
 	for _, format := range logging.Formats {
-		boot := KeyedBootstrap()
+		boot := RunnableBootstrap()
 		boot.Logging.File.Path = "/tmp/crewlet.log"
 		boot.Logging.File.Format = format
 		if err := boot.Validate(); err != nil {
@@ -370,7 +370,7 @@ func TestEveryDeclaredFormatIsUsableForTheFile(t *testing.T) {
 // hands the node its log path the same way it hands it a node id.
 func TestALogFilePathTakesAnEnvReference(t *testing.T) {
 	t.Setenv("CREWLET_TEST_LOG_PATH", "/var/log/crewlet/from-env.log")
-	boot, err := ParseKeyedBootstrap(
+	boot, err := ParseRunnableBootstrap(
 		[]byte("logging:\n  file:\n    path: \"${CREWLET_TEST_LOG_PATH}\"\n"), EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid document, got: %v", err)
@@ -401,7 +401,7 @@ func TestSilencingStderrWithNoFileIsRefused(t *testing.T) {
 // for: a durable log the platform is not also capturing twice.
 func TestSilencingStderrBesideAFileIsAccepted(t *testing.T) {
 	t.Parallel()
-	boot, err := ParseKeyedBootstrap([]byte(
+	boot, err := ParseRunnableBootstrap([]byte(
 		"logging:\n  stderr: false\n  file:\n    path: /var/log/crewlet/crewlet.log\n"),
 		EnvOnly())
 	if err != nil {
@@ -431,7 +431,7 @@ func TestStderrDefaultsToOn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot, err := ParseKeyedBootstrap([]byte(tc.yaml), EnvOnly())
+			boot, err := ParseRunnableBootstrap([]byte(tc.yaml), EnvOnly())
 			if err != nil {
 				t.Fatalf("expected a valid document, got: %v", err)
 			}
@@ -446,7 +446,7 @@ func TestStderrDefaultsToOn(t *testing.T) {
 // nothing below this package sees an operator's spelling.
 func TestTheFileLevelIsConvertedAtTheEdge(t *testing.T) {
 	t.Parallel()
-	boot, err := ParseKeyedBootstrap([]byte(
+	boot, err := ParseRunnableBootstrap([]byte(
 		"logging:\n  level: warn\n  file:\n    path: /tmp/c.log\n    level: debug\n"),
 		EnvOnly())
 	if err != nil {
@@ -476,7 +476,7 @@ func TestTheFileLevelIsConvertedAtTheEdge(t *testing.T) {
 // the invocation's.
 func TestAnUnsetFileLevelStaysUnset(t *testing.T) {
 	t.Parallel()
-	boot, err := ParseKeyedBootstrap([]byte(
+	boot, err := ParseRunnableBootstrap([]byte(
 		"logging:\n  level: warn\n  file:\n    path: /tmp/c.log\n"), EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid document, got: %v", err)
@@ -526,7 +526,7 @@ func TestALogFileLevelWithNoPathIsRefused(t *testing.T) {
 // other level in this suite is non-zero and survives that mutation.
 func TestAnExplicitInfoFileLevelSurvivesTheConversion(t *testing.T) {
 	t.Parallel()
-	boot, err := ParseKeyedBootstrap([]byte(
+	boot, err := ParseRunnableBootstrap([]byte(
 		"logging:\n  level: warn\n  file:\n    path: /tmp/c.log\n    level: info\n"),
 		EnvOnly())
 	if err != nil {
@@ -587,7 +587,7 @@ func TestTheRotationCapsAreBoundedAbove(t *testing.T) {
 // than an off-by-one that refuses the value it documents.
 func TestTheRotationCapCeilingsAreThemselvesValid(t *testing.T) {
 	t.Parallel()
-	boot := KeyedBootstrap()
+	boot := RunnableBootstrap()
 	boot.Logging.File.Path = "/tmp/crewlet.log"
 	size, backups := logging.MaxSizeMBCeiling, logging.MaxBackupsCeiling
 	boot.Logging.File.MaxSizeMB, boot.Logging.File.MaxBackups = &size, &backups
@@ -606,7 +606,7 @@ func TestTheRotationCapCeilingsAreThemselvesValid(t *testing.T) {
 // against. Every other Tier A field catches it on its own terms (an empty
 // store.path is refused as a missing store); this one cannot.
 func TestAnUnresolvedLogFilePathIsRefused(t *testing.T) {
-	_, err := ParseKeyedBootstrap(
+	_, err := ParseRunnableBootstrap(
 		[]byte("logging:\n  file:\n    path: \"${CREWLET_TEST_UNSET_LOG_PATH}\"\n"),
 		EnvOnly())
 	if err == nil {
@@ -624,7 +624,7 @@ func TestAnUnresolvedLogFilePathIsRefused(t *testing.T) {
 // container that templates its log path — the ordinary case.
 func TestAResolvedLogFilePathIsAccepted(t *testing.T) {
 	t.Setenv("CREWLET_TEST_SET_LOG_PATH", "/var/log/crewlet/crewlet.log")
-	boot, err := ParseKeyedBootstrap(
+	boot, err := ParseRunnableBootstrap(
 		[]byte("logging:\n  file:\n    path: \"${CREWLET_TEST_SET_LOG_PATH}\"\n"),
 		EnvOnly())
 	if err != nil {
@@ -640,7 +640,7 @@ func TestAResolvedLogFilePathIsAccepted(t *testing.T) {
 // a reference that went unanswered, never about the absence of the block.
 func TestNoLogFileBlockIsStillFine(t *testing.T) {
 	t.Parallel()
-	if _, err := ParseKeyedBootstrap([]byte("logging:\n  level: debug\n"), EnvOnly()); err != nil {
+	if _, err := ParseRunnableBootstrap([]byte("logging:\n  level: debug\n"), EnvOnly()); err != nil {
 		t.Fatalf("a document with no log file was refused: %v", err)
 	}
 }

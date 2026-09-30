@@ -427,7 +427,7 @@
           "type": "integer"
         },
         "store_dir": {
-          "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
+          "description": "Embedded stream persistence directory. Required for an embedded stream: every node keeps its state logs on it from boot.",
           "type": "string"
         },
         "store_max_bytes": {

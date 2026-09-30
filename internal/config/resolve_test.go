@@ -40,6 +40,8 @@ func TestTierAResolvesAtLoad(t *testing.T) {
 	cfg, err := ParseBootstrap([]byte(`
 store:
   path: "${ACME_DB}"
+stream:
+  store_dir: /var/lib/crewlet/stream
 api:
   port: 8000
   external_url: "https://acme.example.com"
@@ -161,7 +163,7 @@ func TestDocumentResolutionNeverTouchesKeys(t *testing.T) {
 // as a type error.
 func TestSubstitutedScalarStaysAString(t *testing.T) {
 	t.Setenv("ACME_STORE_NAME", "8080")
-	cfg, err := ParseKeyedBootstrap([]byte("store:\n  path: ${ACME_STORE_NAME}\n"), EnvOnly())
+	cfg, err := ParseRunnableBootstrap([]byte("store:\n  path: ${ACME_STORE_NAME}\n"), EnvOnly())
 	if err != nil {
 		t.Fatal(err)
 	}

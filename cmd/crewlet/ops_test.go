@@ -188,7 +188,7 @@ func bootstrapForURL(t *testing.T, serverURL string) string {
 		"        grants: [state:read, config:read, config:write, secrets:read,\n"+
 		"                 secrets:write, work:write, knowledge:write,\n"+
 		"                 audit:read, fleet:operate, sandbox:run]\n"+
-		fixtureKeyring,
+		fixtureStream(dir)+fixtureKeyring,
 		filepath.Join(dir, "index.db"), host, port, host, port, cliFixtureToken)
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -366,7 +366,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 		"  auth:\n    max_grants: [state:read]\n"+
 		"    tokens:\n      - id: ops\n        token: %s\n"+
 		"        grants: [state:read]\n"+
-		fixtureKeyring,
+		fixtureStream(dir)+fixtureKeyring,
 		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
@@ -386,7 +386,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 func TestAConfigWithNoHTTPSurfaceSaysThereIsNoNode(t *testing.T) {
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db")) + fixtureKeyring
+		filepath.Join(dir, "index.db")) + fixtureStream(dir) + fixtureKeyring
 	cfg := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

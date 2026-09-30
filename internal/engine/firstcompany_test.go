@@ -1,15 +1,12 @@
 package engine_test
 
 import (
-	"context"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
-	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -98,41 +95,5 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 		if !slices.Contains(jobs, job) {
 			t.Errorf("the sweep runs %v, which does not include %s", jobs, job)
 		}
-	}
-}
-
-// unconfiguredEngineOn is an engine with no company over a bootstrap the case
-// shapes.
-func unconfiguredEngineOn(t *testing.T, mutate func(*config.Bootstrap)) *engine.Engine {
-	t.Helper()
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: bootstrap(t, mutate)})
-	if err != nil {
-		t.Fatalf("an engine with no company was refused: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
-	return e
-}
-
-// A REVISION WHOSE NATIVE BACKEND WOULD LOG TO AN IN-MEMORY STREAM IS REFUSED
-// AT THE APPLY, as it is at boot — before anything is started.
-//
-// The check ran at boot alone, so a node that booted unconfigured accepted
-// such a company; now that an apply brings the native halves up, it would
-// start writing the log whose first restart leaves the node unable to serve for
-// good.
-func TestAnApplyRefusesANativeBackendOnAnInMemoryStream(t *testing.T) {
-	t.Parallel()
-	e := unconfiguredEngineOn(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = ""
-	})
-	status, _, err := e.Apply(t.Context(), parsedCompany(t, chartCompany("builds it")))
-	if err == nil || status != configplane.StatusError {
-		t.Fatalf("Apply = (%s, %v), want a refusal", status, err)
-	}
-	if e.TrackerWriter() != nil {
-		t.Error("the refused revision started a native tracker on an in-memory log")
-	}
-	if e.Company() != nil {
-		t.Error("the refused revision was installed")
 	}
 }

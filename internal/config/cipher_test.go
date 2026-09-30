@@ -197,6 +197,7 @@ func TestValidationRefusesTheKeyMaterialTheBootWould(t *testing.T) {
 	t.Parallel()
 	file := func(material string) []byte {
 		return []byte("node:\n  roles: [seats]\napi:\n  port: 0\n" +
+			config.TestStreamYAML +
 			"secrets:\n  active_key_id: k1\n  keys:\n    - id: k1\n      material: \"" +
 			material + "\"\n")
 	}

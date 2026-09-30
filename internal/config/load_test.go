@@ -131,7 +131,7 @@ func TestAnEmptyBootstrapIsRefusedForItsKeyring(t *testing.T) {
 // company runs on the defaults alone.
 func TestAKeyringAloneTakesEveryOtherDefault(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseKeyedBootstrap(nil, EnvOnly())
+	cfg, err := ParseRunnableBootstrap(nil, EnvOnly())
 	if err != nil {
 		t.Fatalf("a bootstrap holding only its keyring should load: %v", err)
 	}

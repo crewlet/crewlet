@@ -830,16 +830,13 @@ type Stream struct {
 	// is the classic "I configured it and nothing happened".
 	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External NATS URL. Required for nats, refused for embedded."`
 
-	// StoreDir is where an EMBEDDED server persists its streams. Empty
-	// selects an in-memory server, which only a company whose tracker and
-	// knowledge base are BOTH a vendor's may run — on either native backend
-	// the company's own records live on that stream, so [CheckTiers]
-	// refuses the pairing rather than recreating those logs empty at the
-	// first restart. It is a cross-tier rule because neither document can
-	// see the other. No node is an exception for its roles: every node runs
-	// the engine, and an in-memory server creates every stream it
-	// provisions in memory.
-	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart)."`
+	// StoreDir is where an EMBEDDED server persists its streams, and it is
+	// REQUIRED for one ([Stream.Durable]): empty selects an in-memory
+	// server, and every node runs a state log on its stream from boot, so
+	// a restart would recreate every log empty and the node would refuse
+	// to serve for good. No node is an exception for its roles or for
+	// having no company yet.
+	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Required for an embedded stream: every node keeps its state logs on it from boot."`
 
 	// StoreMaxBytes is how much of that directory's volume this node's
 	// EMBEDDED broker may hold — the ONE number every stream ceiling on it
@@ -1234,6 +1231,47 @@ func (c StreamCluster) IsZero() bool {
 		c.Host == "" && c.Advertise == ""
 }
 
+// Durable refuses an embedded stream with nowhere to persist, naming
+// `stream.store_dir`, and passes every other stream.
+//
+// # A Tier A rule, because the core runtime runs from boot
+//
+// A state log's records live on the stream, and an embedded server with no
+// store directory keeps its streams in MEMORY — so a restart recreates every
+// log empty, and a node whose durable tables are ahead of a stream that
+// restarted from nothing cannot tell "the log was trimmed" from "the log is a
+// different log", refuses to serve, and stays refused: every snapshot it could
+// adopt is above the recreated stream too.
+//
+// This was a CROSS-TIER rule (`config.CheckTiers`, now gone) while a node's
+// state log waited for its first company: only a company started one, so
+// only the pair could say whether one would run. Every node runs the core
+// runtime from boot now — the org chart and the identity estate on every
+// domain's log, company or none — so the answer is Tier A's alone, and the
+// pair's check let exactly the node it should refuse through: one started
+// with no company, which put its first person's invitation and the chart the
+// org builder wrote on a stream its first restart emptied.
+//
+// ASKED TWICE, from ONE implementation: by [Bootstrap.Validate], and by the
+// engine at its own door for a Bootstrap that did not come through that one —
+// before anything opens, as the keyring is.
+func (s *Stream) Durable() error { return s.durable(field("stream")) }
+
+// durable is [Stream.Durable] at a caller's path.
+func (s *Stream) durable(path Path) error {
+	if s.Type == StreamNATS || strings.TrimSpace(s.StoreDir) != "" {
+		return nil
+	}
+	var p problems
+	p.add(at(path, "store_dir"), ErrMissing,
+		"every node keeps its state logs on this stream from boot — the org "+
+			"chart and the identity estate whatever company it runs, or none "+
+			"— and an embedded stream with no store directory keeps its "+
+			"streams in memory: a restart recreates every log empty and this "+
+			"node refuses to serve them permanently. Name a directory")
+	return p.err()
+}
+
 func (s *Stream) validate(path Path) error {
 	var p problems
 	if s.Type != "" && !slices.Contains(StreamTypes, s.Type) {
@@ -1254,6 +1292,7 @@ func (s *Stream) validate(path Path) error {
 			"store_dir is where an EMBEDDED server persists; an external "+
 				"cluster keeps its own storage")
 	}
+	p.wrap(s.durable(path))
 	// THE SAME RULE, and the same reason: this is the limit handed to the
 	// server this process starts. An external cluster's account limits
 	// belong to whoever runs it, and the engine reads them back from the
