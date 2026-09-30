@@ -1935,13 +1935,27 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 // has no such write, and a node behind in one is a coverage figure rather
 // than a node that cannot resume.
 //
+// AND ONLY THE LOGS THE NODE WOULD BE COUNTED ON ([stateLog.countedOnLogs]):
+// those whose partition holders names it a holder of, in any state, and those
+// its positions row names and has not released — the logs the trim would
+// count it on once readmitted. Under layout 0 that is every identity log, as
+// it always was. Under a divided layout a node is counted only where it holds
+// or has reported, and judged everywhere a node with no row was refused on
+// every trimmed log — at position zero — for partitions it holds nothing of
+// and would come back to only by adopting a copy; and since the readmission is
+// also what puts it back in the estate map, it could never be put back at all.
+//
 // Every read that fails is an error and REFUSES: a register nobody could list
-// is not a register without the node in it, and a floor nobody could read is
-// not a low one.
-func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
+// is not a register without the node in it, a holder table nobody could read
+// is not one that names nobody, and a floor nobody could read is not a low one.
+func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders partitionHolders) error {
 	if s == nil || s.fleet == nil {
 		return fmt.Errorf("engine: this node reads no positions register, so it "+
 			"cannot judge where %s stands against the trim floor", nodeID)
+	}
+	counted, err := s.countedOnLogs(ctx, holders, nodeID)
+	if err != nil {
+		return fmt.Errorf("engine: which logs %s would be counted on: %w", nodeID, err)
 	}
 	register, err := s.positions(ctx)
 	if err != nil {
@@ -1956,7 +1970,7 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 	var bounds []statelog.ReadmissionBound
 	for _, running := range s.running() {
 		name := running.key
-		if !running.domain.ClaimsIdentity() {
+		if !running.domain.ClaimsIdentity() || !slices.Contains(counted, running.id) {
 			continue
 		}
 		generation := running.runner.Committed().Generation

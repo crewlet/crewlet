@@ -798,8 +798,10 @@ func newNodeGate(s *stateLog, leases liveLeases, holders partitionHolders,
 		live: func(ctx context.Context) ([]statelog.Presence, error) {
 			return livePresences(ctx, leases)
 		},
-		readmissible: s.Readmissible,
-		publishing:   s.appends,
+		readmissible: func(ctx context.Context, node string) error {
+			return s.Readmissible(ctx, node, holders)
+		},
+		publishing: s.appends,
 		logs: func(ctx context.Context, node string, readmit bool) ([]gateLog, error) {
 			return countedGateLogs(ctx, s, holders, db, nodeID, rec, node, readmit)
 		},

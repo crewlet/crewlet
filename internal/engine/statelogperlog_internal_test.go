@@ -768,7 +768,7 @@ func TestAnotherLayoutsRecordsUnderThisLogsKeyAreNotThisLogs(t *testing.T) {
 			"not on this log", reported, running.key, want)
 	}
 	// THE READMISSION BOUND.
-	if err := s.Readmissible(t.Context(), "node-back"); err != nil {
+	if err := s.Readmissible(t.Context(), "node-back", fixedHolders{}); err != nil {
 		t.Errorf("a node holding every record of this layout's logs is refused "+
 			"readmission: %v", err)
 	}
@@ -777,6 +777,45 @@ func TestAnotherLayoutsRecordsUnderThisLogsKeyAreNotThisLogs(t *testing.T) {
 	if err != nil || floor != 0 {
 		t.Errorf("the fence reads %s's floor as %d (%v); another layout's floor "+
 			"is not this log's, and this layout has published none", running.key, floor, err)
+	}
+}
+
+// A READMISSION IS JUDGED ONLY WHERE THE NODE WOULD BE COUNTED.
+//
+// Under a divided layout a node is counted on a log only where the map names it
+// a holder of the log's partition or its own row names the log. A node with no
+// row that holds nothing is counted nowhere, and readmitting it counts it
+// nowhere either — it comes back to a partition only by adopting a copy — so a
+// trimmed log is no reason to refuse it; judged on every log at position zero,
+// it was refused on each, and since the readmission is what puts it back in the
+// estate map it could never be put back. Named a holder of a trimmed log's
+// partition, it IS counted there at zero, and is refused.
+func TestAReadmissionIsJudgedOnlyWhereTheNodeWouldBeCounted(t *testing.T) {
+	t.Parallel()
+	_, s, _ := aPartitionedStateLog(t)
+	running := s.Log("tracker@tracker.000")
+	at := running.runner.Committed()
+	if err := s.fleet.PutFloor(t.Context(), coord.TrimFloor{
+		Domain: running.key, Layout: s.layout.Number, Generation: at.Generation,
+		TrimTo: 1000, Floor: 1000,
+	}); err != nil {
+		t.Fatalf("publish a floor on %s: %v", running.key, err)
+	}
+	if err := s.Readmissible(t.Context(), "node-stranger", fixedHolders{}); err != nil {
+		t.Errorf("a node with no row that holds nothing is refused readmission: %v", err)
+	}
+	other := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	elsewhere := fixedHolders{other: {{NodeID: "node-stranger"}}}
+	if err := s.Readmissible(t.Context(), "node-stranger", elsewhere); err != nil {
+		t.Errorf("a holder of an untrimmed partition only is refused on a log it is "+
+			"not counted on: %v", err)
+	}
+	here := fixedHolders{running.id.Partition: {{NodeID: "node-stranger"}}}
+	var refusal *statelog.ReadmissionRefusal
+	if err := s.Readmissible(t.Context(), "node-stranger", here); !errors.As(err, &refusal) ||
+		refusal.Domain != running.key {
+		t.Errorf("a holder of a trimmed partition with no row = %v, want refused on %s",
+			err, running.key)
 	}
 }
 

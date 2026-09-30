@@ -584,7 +584,10 @@ same rule reads per partition, and three things follow from it:
   where the node is evicted is a fact each log's own rows hold — a holder
   evicted before it first reported was counted on a log its row never named,
   and the map lets an evicted node go — and a readmission on a log that never
-  evicted it changes no row there.
+  evicted it changes no row there. It is **judged** only on the logs it would
+  be counted on once back: a node with no row that the map names a holder of
+  nothing is refused nowhere, since it returns to a partition only by adopting
+  a copy.
 - **Each log is written by a node that serves its partition.** The node you
   run the gesture on writes the logs of the partitions it serves; every other
   one is answered `not_holder`, and you finish the gesture through a node that
