@@ -48,7 +48,10 @@ every writer and reader pass the origin and never the live handle, and that a
 surface showing a row resolve it back to the seat's current address;
 `internal/learning`'s package doc states the rule and
 `internal/engine.TestARenamedSeatKeepsItsEpisodesSkillsProfilesAndLedger` holds
-it end to end.
+it end to end. The completion ledger is in that family for the same reason
+with a sharper cost: a trigger worked under the old handle is redelivered
+after a rename under the new one, and keyed on the address it found nothing
+and ran the turn again.
 
 ## Why the obvious alternative is wrong
 

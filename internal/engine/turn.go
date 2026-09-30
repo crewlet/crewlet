@@ -141,14 +141,18 @@ type Dispatcher struct {
 	// Origin names the handle the seat answering to handle was CREATED
 	// under, or "" for a handle no seat answers to.
 	//
-	// It is what the conversation ledger is keyed on (see
+	// It is what BOTH ledgers are keyed on. The conversation ledger (see
 	// [ledgerstore.Conversations]): a delivery arrives under the address the
 	// seat answers to now, and a thread history filed under that address was
 	// one a rename hid — the seat's next turn in a thread it had already
-	// answered read nothing and answered again. Resolved off the LIVE epoch
-	// per call, like Identify, because the dispatcher is built once and a
-	// detached run's resume records under whatever handle the seat has by
-	// then.
+	// answered read nothing and answered again. And the completion ledger
+	// (see [ledgerstore.Completions]), for the same reason with a worse
+	// cost: a trigger worked under the old handle and redelivered after the
+	// rename found no record under the new one, and the turn ran twice —
+	// which is the single thing that ledger exists to prevent. Resolved off
+	// the LIVE epoch per call, like Identify, because the dispatcher is built
+	// once and a detached run's resume records under whatever handle the
+	// seat has by then.
 	//
 	// Nil keys the ledger on the handle as given, which is the shape of a
 	// dispatcher with no organization to ask — a test, or the embedded case
@@ -159,8 +163,9 @@ type Dispatcher struct {
 	Now func() time.Time
 }
 
-// ledgerSeat is the name the conversation ledger files this seat's thread
-// history under: the handle it was created under — see [Dispatcher.Origin].
+// ledgerSeat is the name both ledgers file this seat under — its thread history
+// and the triggers it has worked: the handle it was created under — see
+// [Dispatcher.Origin].
 //
 // The handle AS GIVEN when nothing resolves it, which is a seat no epoch
 // holds: there is no identity left to find, and the rows it writes are the
@@ -699,7 +704,8 @@ func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, ca
 				continue
 			}
 			key := workkey.Derive([]string{ev.ID.String()})
-			if err := d.Completions.Record(ctx, handle, key, "", d.now()); err != nil {
+			if err := d.Completions.Record(ctx, d.ledgerSeat(handle), key, "",
+				d.now()); err != nil {
 				log.WarnContext(ctx, "abandoned_trigger_not_recorded", "seat", handle,
 					"error", err, "detail", "the trigger may be redelivered and "+
 						"repeat this turn's work")
@@ -1041,7 +1047,10 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if len(keys) == 0 {
 		return evs
 	}
-	worked := d.Completions.Worked(ctx, handle, keys)
+	// BY THE SEAT'S IDENTITY, never the address this delivery came in on:
+	// a trigger worked before a rename is redelivered after it under the
+	// new handle — see [Dispatcher.Origin].
+	worked := d.Completions.Worked(ctx, d.ledgerSeat(handle), keys)
 	if len(worked) == 0 {
 		return evs
 	}
@@ -1072,7 +1081,8 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 				continue
 			}
 			key := workkey.Derive([]string{ev.ID.String()})
-			if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
+			if err := d.Completions.Record(ctx, d.ledgerSeat(handle), key, "",
+				now); err != nil {
 				log.WarnContext(ctx, "completion_not_recorded", "seat", handle, "error", err)
 				break
 			}
