@@ -374,6 +374,15 @@ below the published floor whose missing records the log still holds reports
    the artefact's position. `crewlet retention verify --restore` is what tells
    you in advance that it does.
 
+**A donor on a newer schema is refused before anything moves.** An artefact
+whose file carries a migration this node's binary does not have holds rows
+shaped by code the node does not run, so the node cannot take it — and the
+manifest lists the file's migrations, so the offer is refused from that list
+rather than fetched whole and refused once it arrives (the file is still held
+to its own list when it does). During a rolling upgrade that adds a migration,
+a node still on the older build adopts from a peer still on it too, or is
+upgraded first.
+
 **An adoption carries the operation ledger with it.** The ledger — the table
 that says which operations have already been applied — travels inside the
 snapshot, so the adopted node answers a retry of anything its donor applied

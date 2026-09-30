@@ -247,9 +247,13 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	// scrubbed by a donor that scrubs, minted after the bound.
 	began := a.now().UTC()
 
+	known, err := store.KnownMigrations(store.EstatePartition)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("statelog: read this binary's schema: %w", err)
+	}
 	var refusals []error
 	for _, offer := range offers {
-		if err := offer.Usable(req, a.deps.Domains); err != nil {
+		if err := offer.Usable(req, a.deps.Domains, known); err != nil {
 			refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 			continue
 		}

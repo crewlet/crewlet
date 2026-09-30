@@ -206,8 +206,16 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 		Generations: map[string]uint32{"probe": 1},
 	}
 
-	if err := base().Usable(req, build); err != nil {
+	if err := base().Usable(req, build, nil); err != nil {
 		t.Fatalf("a usable offer was refused: %v", err)
+	}
+	// A SCHEMA THIS BINARY HAS is no reason to refuse, so the migration case
+	// below is a refusal of the one it lacks rather than of the list.
+	known := []string{"0001_the_state_log_lands.sql"}
+	withSchema := base()
+	withSchema.Manifest.Migrations = known
+	if err := withSchema.Usable(req, build, known); err != nil {
+		t.Fatalf("an offer on a schema this binary has was refused: %v", err)
 	}
 
 	for name, tc := range map[string]struct {
@@ -254,11 +262,20 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			breaks: func(o *statelog.Offer) { o.Manifest.V = 99 },
 			names:  "version 99",
 		},
+		// THE SCHEMA, from the list the manifest carries: fetched whole, the
+		// file was refused for the same migration once it had arrived.
+		"a migration this binary does not have": {
+			breaks: func(o *statelog.Offer) {
+				o.Manifest.Migrations = append(o.Manifest.Migrations,
+					"9999_a_newer_build_reshaped_this.sql")
+			},
+			names: "9999_a_newer_build_reshaped_this.sql",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := base()
 			tc.breaks(&o)
-			err := o.Usable(req, build)
+			err := o.Usable(req, build, known)
 			if err == nil {
 				t.Fatalf("an offer with %s was accepted", name)
 			}

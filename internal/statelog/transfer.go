@@ -88,16 +88,27 @@ type Offer struct {
 }
 
 // Usable reports whether this offer can serve the request, and why not.
+// known is every migration of the partition estate this binary carries
+// ([store.KnownMigrations]).
 //
 // # Every clause is a refusal a joiner must make BEFORE it transfers
 //
 // A gigabyte-scale transfer that ends in a refusal is a gigabyte-scale
 // transfer nobody needed, and the refusals here are all answerable from the
-// manifest alone.
-func (o Offer) Usable(req OfferRequest, build map[string]Registered) error {
+// manifest alone. That includes the SCHEMA: the adoption refuses a file
+// carrying a migration this binary does not have once it holds the file, and
+// the manifest lists the file's migrations — so an offer from a donor on a
+// newer schema is refused here, from that list, rather than fetched whole and
+// refused after. The file is still checked against its own list once it
+// arrives, which is what makes the list a claim worth reading.
+func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []string) error {
 	if o.Manifest.V != ManifestVersion {
 		return fmt.Errorf("the artefact is a version %d manifest and this build "+
 			"reads %d", o.Manifest.V, ManifestVersion)
+	}
+	if ahead := aheadOf(o.Manifest.Migrations, known); len(ahead) > 0 {
+		return fmt.Errorf("the artefact carries migrations this binary does not: "+
+			"%v — its rows are shaped by code this node does not run", ahead)
 	}
 	for name, reg := range build {
 		pos, ok := o.Manifest.Domains[name]

@@ -690,7 +690,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 		Generations:     map[string]uint32{"probe": 1},
 		StreamCreatedAt: map[string]time.Time{"probe": liveStreamCreatedAt},
 	}
-	err := offer.Usable(req, build)
+	err := offer.Usable(req, build, nil)
 	if err == nil {
 		t.Fatal("an artefact from a stream this node's log is not was accepted " +
 			"— its sequences name a history this stream does not have, and " +
@@ -703,7 +703,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	// AND THE SAME OFFER IS USABLE when the instants agree, so this is a
 	// refusal of a mismatch rather than of the term's presence.
 	req.StreamCreatedAt["probe"] = liveStreamCreatedAt.Add(-72 * time.Hour)
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("an artefact from this node's own stream was refused: %v", err)
 	}
 
@@ -722,7 +722,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 		Replay:          statelog.ReplayStrict,
 	}
 	req.StreamCreatedAt["probe"] = liveStreamCreatedAt.Add(37 * time.Nanosecond)
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("an artefact whose instant differs by 37ns was refused: %v — "+
 			"the column keeps microseconds and the broker reports "+
 			"nanoseconds, so this refuses every real snapshot", err)
@@ -731,7 +731,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	// AND A JOINER THAT COULD NOT READ ITS OWN INSTANT ASKS WITHOUT ONE
 	// rather than refusing every donor.
 	delete(req.StreamCreatedAt, "probe")
-	if err := offer.Usable(req, build); err != nil {
+	if err := offer.Usable(req, build, nil); err != nil {
 		t.Errorf("a joiner naming no instant refused an otherwise usable "+
 			"artefact: %v", err)
 	}
