@@ -34,11 +34,10 @@ import (
 //	                                            T = 64            T = 256
 //	partition logs: 2T (tracker + vectors)
 //	  + 2·T/4 (pages + vectors) + 1 (company)   161               641
-//	durable consumers: a wake feed per
-//	  tracker, pages and company log
-//	  (T + T/4 + 1) at the stream's replicas,
-//	  plus an applier per holder per log at
-//	  consumer replicas 1                       81 R=3 + 483 R=1  321 R=3 + 1,923 R=1
+//	durable consumers, each at its stream's
+//	  replicas: a wake feed per tracker,
+//	  pages and company log (T + T/4 + 1),
+//	  plus an applier per holder per log        81 + 483 = 564    321 + 1,923 = 2,244
 //	fixed: engine streams (6) + coordination
 //	  buckets (19 + the estate map's)           26                26
 //	files on a node holding every partition
@@ -58,6 +57,21 @@ import (
 // 641 here is a quarter beyond the measured 513, so the activation step
 // measures the 641-stream point with these consumer counts before it merges,
 // rather than extrapolating it.
+//
+// # Every applier at its stream's replicas
+//
+// An applier's consumer names no replica count of its own
+// (internal/queue/jetstream's domain consumer), so it takes its stream's, and
+// the table counts it there. An applier at consumer replicas 1 would take two
+// of its three raft replicas off the broker for every holder of every log —
+// 3,846 of the 8,733 replicas the table counts at T = 256 — and it is NOT
+// applied: the broker places an R1 consumer on one of its stream's peers at
+// random, so restarting that one member stalls every applier whose consumer
+// sits there until it is back, where at the stream's replicas the consumer
+// fails over with it. Whether that stall is worth the replicas it saves is
+// measured at the 641-stream point before the partitioned estate activates;
+// until then every applier keeps its stream's replica count. Counted at R = 1
+// here, the table promised a broker the engine does not build.
 //
 // # The rule for choosing
 //
@@ -92,8 +106,10 @@ const (
 	// rule 4 it keeps a tracker partition near 64 GB at 10,000 seats in year
 	// five where 64 would put it at 257 GB. The price is four times the
 	// broker cost of 64 on every axis, which is why a fleet at this count
-	// runs five broker members rather than three (1,250 raft groups per
-	// member against 2,082 at the measured point), and why rule 2 — a single
+	// runs five broker members rather than three (1,747 raft replicas per
+	// member — the table's 2,911 streams and consumers at three replicas
+	// each, over five — against 2,082 at the measured point), and why rule
+	// 2 — a single
 	// node holding all 321 partition files — is measured before activation.
 	DefaultTrackerPartitions = 256
 
