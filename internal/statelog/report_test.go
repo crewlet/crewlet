@@ -3,6 +3,7 @@ package statelog_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -329,6 +330,7 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 		At:               reportAt,
 		RegisterReadable: true,
 		Live:             []statelog.Presence{{NodeID: "node-7"}},
+		Holders:          []statelog.Presence{{NodeID: "node-7"}},
 	})
 	if len(rep.Nodes) != 1 || rep.Nodes[0].NodeID != "node-7" {
 		t.Fatalf("a live node that has never reported is missing from the node "+
@@ -342,6 +344,33 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 		t.Errorf("a node that has never reported shows a position (%v, %d domains); "+
 			"that is a node at zero rather than a node with nothing to say",
 			row.At, len(row.Domains))
+	}
+}
+
+// A LIVE NODE HOLDING NO PARTITION IS LIVE AND NOT COUNTED; A HOLDER THAT IS
+// NOT LIVE IS COUNTED.
+//
+// The counted mark is the trim's counted set, whose holder half is who holds
+// the log's partition — not who is running. A live node holding nothing is
+// waited for on no log, and a holder whose lease flickered mid-join is exactly
+// the node whose tail must be kept; marked the other way round, the screen
+// named a fleet the trim was not waiting for.
+func TestTheCountedMarkIsTheHoldersNotTheLiveNodes(t *testing.T) {
+	t.Parallel()
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID:           "node-1",
+		At:               reportAt,
+		RegisterReadable: true,
+		Live:             []statelog.Presence{{NodeID: "stateless"}},
+		Holders:          []statelog.Presence{{NodeID: "joining"}},
+	})
+	marks := map[string][2]bool{}
+	for _, n := range rep.Nodes {
+		marks[n.NodeID] = [2]bool{n.Counted, n.Live}
+	}
+	want := map[string][2]bool{"stateless": {false, true}, "joining": {true, false}}
+	if !maps.Equal(marks, want) {
+		t.Errorf("the node block marks (counted, live) %v, want %v", marks, want)
 	}
 }
 

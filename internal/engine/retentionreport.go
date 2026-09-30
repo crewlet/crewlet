@@ -57,6 +57,14 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			in.Live = live
 		}
 	}
+	// THE HOLDERS THE TRIM COUNTS, every partition's at once — the counted
+	// set's holder half, which is who holds a partition rather than who is
+	// running ([statelog.ReportInputs.Holders]).
+	if r.holders != nil {
+		if held, err := r.holders.Holders(ctx, r.state.layout.Partitions()); err == nil {
+			in.Holders = everyHolder(held)
+		}
+	}
 	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
 	// reports its trim as unreadable rather than as a trim that has
 	// concluded nothing, which is a different thing to go and look at.

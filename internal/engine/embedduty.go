@@ -191,14 +191,17 @@ func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
 		return nil
 	}
 	return &embedDuty{
-		engine:     e,
-		publisher:  running.publisher,
-		corpora:    corpora,
-		claim:      e.workerDuty(embedDutyName, embedDutyTTL),
+		engine:    e,
+		publisher: running.publisher,
+		corpora:   corpora,
+		// ITS PARTITION'S SINGLETON, claimable only while this node serves
+		// the partition its vector log is in ([Engine.partitionDuty]) —
+		// under layout 0 `worker:embeddings`, the lease it always was.
+		claim:      e.partitionDuty(embedDutyName, embedDutyTTL, running.id.Partition, s.holding),
 		metrics:    e.metrics,
 		log:        running,
 		register:   s.positions,
-		holders:    presenceHolders{leases: e.backends.Coord},
+		holders:    e.holdersOf(s.layout),
 		identity:   s.identityDomains(),
 		db:         e.backends.Store,
 		renewEvery: search.EmbedInterval,

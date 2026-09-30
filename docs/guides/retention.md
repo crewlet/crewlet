@@ -59,13 +59,34 @@ never a horizon.
 
 The **counted set** of a log is every node the trim waits for there: each node
 that has reported a position on the log, and each node that **holds the log's
-partition** — today every live data node, since every data node holds the one
-partition — even before its first report, when it counts at position zero
+partition** even before its first report, when it counts at position zero
 because it is about to replay what the trim would otherwise delete. A node
 evicted from the log, or one that released it as it left the partition, stops
-being counted about a minute after that record lands. It is the partition's
-holders and no other partition's, so a node that is offline pins only the logs
-of the partitions it holds.
+being counted about a minute after that record lands — and a node whose own
+positions row says it has released the log stops being counted at once. It is
+the partition's holders and no other partition's, so a node that is offline
+pins only the logs of the partitions it holds.
+
+Who holds a partition depends on the [layout](../concepts/estate-placement.md):
+
+- **Layout 0** — the single-file estate — has one partition, which every data
+  node holds whole, so its holders are the live data nodes.
+- **A partitioned layout's** holders are the [estate map's](../concepts/estate-placement.md)
+  holders of that partition in **every** state — joining, serving and leaving
+  — whether or not their leases are live: a joiner is exactly the node whose
+  tail must not be deleted, and a data node that holds nothing is counted on
+  no log at all. The map is read through this node's estate view, and a view
+  that is not fresh — its map or its leases unconfirmed for longer than a
+  minute — is **unknown**: every log's trim is then blocked on `applied`, and
+  the term's detail says the estate view is stale.
+
+**Each partition's logs are trimmed by one node**: the holder of that
+partition's trim duty, `worker:retention@<partition>` (`worker:retention` for
+layout 0's one partition, the lease it has always been). Only a node that
+serves the partition may claim it, so the duties of a fleet's partitions
+spread over the nodes that hold them, and a node that cannot reach its
+partition stops that partition's trim and nobody else's. Every node still
+evaluates its own alarms on every tick, whatever duty it holds.
 
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on

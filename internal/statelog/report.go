@@ -2,6 +2,8 @@ package statelog
 
 import (
 	"fmt"
+	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -690,7 +692,19 @@ type ReportInputs struct {
 	Register         []coord.NodePositions
 	RegisterReadable bool
 
-	Live       []Presence
+	// Live is every node holding a live presence lease, which the node
+	// block marks live.
+	Live []Presence
+
+	// Holders is every node holding any partition of the layout — the
+	// holder half of every log's counted set ([CountedSet]), which the node
+	// block's counted mark is taken from. Under layout 0 it is the live data
+	// nodes, which hold that layout's one partition; under any other it is
+	// the estate map's holders, and nil when they could not be read — the
+	// block then counts the register's rows alone, and each log's published
+	// floor says its counted set was unknown.
+	Holders []Presence
+
 	Tombstones []Tombstone
 
 	Replica ReplicaReport
@@ -935,28 +949,28 @@ func (in ReportInputs) nodes() []NodeReport {
 
 	// THE COUNTED SET IS NOT RE-DERIVED HERE. It is the same function the
 	// trim itself calls, over the same three inputs, so the screen can
-	// never name a different fleet from the one the gate is waiting for.
+	// never name a different fleet from the one the gate is waiting for —
+	// its holders the partitions' holders, never the live nodes: a live
+	// node holding nothing is counted on no log, and marking it counted
+	// named a node the trim does not wait for.
 	var flat []NodePosition
 	for id, row := range reported {
 		flat = append(flat, NodePosition{NodeID: id, At: row.At})
 	}
 	counted := make(map[string]bool)
-	for _, n := range CountedSet(in.At, flat, in.Live, in.Tombstones) {
+	for _, n := range CountedSet(in.At, flat, in.Holders, in.Tombstones) {
 		counted[n.NodeID] = true
 	}
 
-	ids := make([]string, 0, len(reported)+len(live)+len(tombs))
-	for id := range reported {
-		ids = append(ids, id)
-	}
-	for id := range live {
-		if _, seen := reported[id]; !seen {
-			ids = append(ids, id)
-		}
-	}
-	for id := range tombs {
-		if _, seen := reported[id]; !seen && !live[id] {
-			ids = append(ids, id)
+	named := map[string]bool{}
+	ids := make([]string, 0, len(reported)+len(live)+len(counted)+len(tombs))
+	for _, group := range []iter.Seq[string]{maps.Keys(reported), maps.Keys(live),
+		maps.Keys(counted), maps.Keys(tombs)} {
+		for id := range group {
+			if !named[id] {
+				named[id] = true
+				ids = append(ids, id)
+			}
 		}
 	}
 	slices.Sort(ids)

@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -43,14 +42,23 @@ import (
 // being treated as satisfied. A term nobody could read is not a term nobody
 // needs.
 //
-// # A fleet singleton, and what happens without one
+// # A singleton per partition, and what happens without one
 //
 // The trim is a burst of purges against shared streams, and two nodes deciding
 // concurrently would race on the register's published floor: the loser's
 // conclusion would overwrite the winner's and `blocked_since` — the field that
 // says how long this has been going on — would reset on every tick. So it is a
-// duty like the sweep, on the `worker:{duty}` lease, and a fleet whose nodes
-// all declare `roles: [seats]` deliberately does not trim.
+// duty like the sweep, and a fleet whose nodes all declare `roles: [seats]`
+// deliberately does not trim.
+//
+// ONE DUTY PER PARTITION (§F3), `worker:retention@<partition>` — and for
+// layout 0's one partition `worker:retention`, the lease it has always been
+// ([partitionDutyName]). A partition's trim reads the partition's own applied
+// eviction and release rows, which only a node holding it has, so only a node
+// SERVING the partition may claim it ([Engine.partitionDuty]); a node offline
+// on one partition stops that partition's trim and nobody else's; and the
+// partitions' duties spread over their servers. One tick still reads the
+// register ONCE, for every log whose partition's duty it holds.
 
 // RetentionInterval is how often the trim evaluates.
 //
@@ -87,9 +95,16 @@ type retention struct {
 	// counts nobody beyond the register.
 	holders partitionHolders
 
-	db     *store.DB
-	cfg    config.TrackerRetention
-	claim  schedule.DutyFunc
+	db  *store.DB
+	cfg config.TrackerRetention
+
+	// claim answers whether this node holds the trim's duty of partition p
+	// ([Engine.partitionDuty]): a partition's logs are trimmed only by a node
+	// that serves the partition and holds its singleton. Nil answers yes for
+	// every partition this node runs a log of — a node alone, which is
+	// nobody's singleton.
+	claim func(ctx context.Context, p statelog.PartitionID) (bool, error)
+
 	nodeID string
 
 	// backupOwner is `retention.backup_owner` — read here rather than
@@ -202,23 +217,25 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 	r := &retention{
 		fleet:       e.backends.Fleet,
 		leases:      e.backends.Coord,
-		holders:     presenceHolders{leases: e.backends.Coord},
+		holders:     e.holdersOf(s.layout),
 		state:       s,
 		db:          e.backends.Store,
 		cfg:         boot.Stream.TrackerRetention,
 		backupOwner: boot.Retention.BackupOwner,
 		metrics:     e.metrics,
-		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
-		nodeID:      s.nodeID,
-		alarms:      statelog.NewTracker(e.metrics, nil),
-		coverage:    e.vectorCoverage,
-		index:       e.indexReading,
-		objects:     e.objectsReading,
-		seats:       func() int { return seatCount(e.Company()) },
-		background:  e.backgroundBarriers,
-		estate:      e.estateReading,
-		pooled:      map[string]poolCounters{},
-		done:        make(chan struct{}),
+		claim: func(ctx context.Context, p statelog.PartitionID) (bool, error) {
+			return e.partitionDuty(retentionDutyName, retentionDutyTTL, p, s.holding)(ctx)
+		},
+		nodeID:     s.nodeID,
+		alarms:     statelog.NewTracker(e.metrics, nil),
+		coverage:   e.vectorCoverage,
+		index:      e.indexReading,
+		objects:    e.objectsReading,
+		seats:      func() int { return seatCount(e.Company()) },
+		background: e.backgroundBarriers,
+		estate:     e.estateReading,
+		pooled:     map[string]poolCounters{},
+		done:       make(chan struct{}),
 	}
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
@@ -280,7 +297,7 @@ func (r *retention) run(ctx context.Context) {
 	}
 }
 
-// tick evaluates every domain once, if this node holds the duty.
+// tick evaluates every log of every partition whose trim duty this node holds.
 func (r *retention) tick(ctx context.Context) {
 	// FIRST, AND ON EVERY NODE — before the duty claim, deliberately.
 	//
@@ -292,16 +309,12 @@ func (r *retention) tick(ctx context.Context) {
 	// one nobody hears from. It is also what makes this loop useful on a
 	// node that never wins the lease at all.
 	r.evaluate(ctx)
-	if r.claim != nil {
-		mine, err := r.claim(ctx)
-		if err != nil {
-			log.WarnContext(ctx, "retention_duty_unclaimed", "err", err)
-			return
-		}
-		if !mine {
-			return
-		}
+	mine := r.claimed(ctx)
+	if len(mine) == 0 {
+		return
 	}
+	// ONE READ FOR EVERY LOG THIS TICK EVALUATES, whichever partitions' duties
+	// it holds — see [retention.read].
 	shared, err := r.read(ctx)
 	if err != nil {
 		// EVERY TERM DERIVED FROM THE REGISTER IS UNKNOWN, which blocks
@@ -315,10 +328,55 @@ func (r *retention) tick(ctx context.Context) {
 		return
 	}
 	for _, running := range r.state.running() {
+		if !mine[running.id.Partition] {
+			continue
+		}
 		if err := r.domain(ctx, running, shared); err != nil {
 			log.WarnContext(ctx, "retention_trim_failed", "domain", running.key, "err", err)
 		}
 	}
+}
+
+// claimed is every partition this node runs a log of whose trim duty it holds
+// this tick — `worker:retention@<partition>`, or `worker:retention` for layout
+// 0's one partition ([partitionDutyName]).
+//
+// # A singleton per partition
+//
+// The trim of a partition's logs reads the partition's own applied eviction and
+// release rows ([retention.tombstones]), which only a node holding the partition
+// has; so its duty is claimable only by a node SERVING the partition, and each
+// partition's is its own lease. A node that serves nothing claims nothing; a
+// node offline on one partition stops that partition's trim and nobody else's;
+// and the duties of a fleet's partitions spread over its servers rather than
+// all landing on whichever node won one lease.
+//
+// A partition whose claim cannot be answered — the store, or whether this node
+// serves it — is skipped and said, once per partition: the next tick asks again,
+// and a partition nobody could claim is one whose floor stands where it was.
+func (r *retention) claimed(ctx context.Context) map[statelog.PartitionID]bool {
+	mine := map[statelog.PartitionID]bool{}
+	for _, running := range r.state.running() {
+		p := running.id.Partition
+		if _, asked := mine[p]; asked {
+			continue
+		}
+		if r.claim == nil {
+			mine[p] = true
+			continue
+		}
+		held, err := r.claim(ctx, p)
+		if err != nil {
+			log.WarnContext(ctx, "retention_duty_unclaimed", "partition", p.String(), "err", err)
+		}
+		mine[p] = err == nil && held
+	}
+	for p, held := range mine {
+		if !held {
+			delete(mine, p)
+		}
+	}
+	return mine
 }
 
 // evaluate observes this node's alarms and records what one tick can measure
@@ -349,8 +407,11 @@ type fleetInputs struct {
 	previous  map[string]coord.TrimFloor
 
 	// holders is who holds each partition of the layout, read once for
-	// every log the tick evaluates.
-	holders map[statelog.PartitionID][]statelog.Presence
+	// every log the tick evaluates — and holdersUnknown why that could not
+	// be read, which leaves every log's counted set UNKNOWN: its trim
+	// blocks, and says so on the floor it publishes.
+	holders        map[statelog.PartitionID][]statelog.Presence
+	holdersUnknown string
 }
 
 // read fetches the fleet-wide half of the inputs.
@@ -388,9 +449,15 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
 	// position zero and blocks, which is correct: trimming past a node that
 	// is joining is deleting what it is about to replay.
+	//
+	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: the logs are
+	// still evaluated, each reading its counted set as UNKNOWN, so every
+	// floor is published BLOCKED on the applied term with the reason — an
+	// estate map too stale to decide from, say (§F2) — rather than left
+	// standing unexplained.
 	if r.holders != nil {
 		if in.holders, err = r.holders.Holders(ctx, r.state.layout.Partitions()); err != nil {
-			return in, fmt.Errorf("read who holds each partition: %w", err)
+			in.holdersUnknown = fmt.Sprintf("who holds the log's partition is unknown (%v)", err)
 		}
 	}
 	return in, nil
@@ -424,7 +491,8 @@ func (r *retention) domain(ctx context.Context, running *runningLog, shared flee
 	in := statelog.TrimInputs{
 		Generation:      generation,
 		Now:             shared.at,
-		CountedReadable: shared.readable,
+		CountedReadable: shared.readable && shared.holdersUnknown == "",
+		CountedUnknown:  shared.holdersUnknown,
 		HoldsReadable:   true,
 		BackupMaxAge:    r.cfg.BackupMaxAge(),
 		HoldStale:       statelog.TrimHoldStale,
@@ -605,7 +673,10 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 	return nil
 }
 
-// reportedPositions is every node's committed position in one domain.
+// reportedPositions is every node's committed position on one log, keyed as
+// the register keys it: every register row that names the log, each marked
+// [statelog.NodePosition.Released] where the row says the node has left it —
+// which [statelog.CountedSet] counts nowhere.
 func reportedPositions(rows []coord.NodePositions, domain string) []statelog.NodePosition {
 	out := make([]statelog.NodePosition, 0, len(rows))
 	for _, row := range rows {
@@ -633,6 +704,7 @@ func reportedPositions(rows []coord.NodePositions, domain string) []statelog.Nod
 			// its artefact still names the old one.
 			SnapshotGeneration: at.SnapshotGeneration,
 			At:                 row.At,
+			Released:           at.State == coord.LogReleased,
 		})
 	}
 	return out
