@@ -76,8 +76,9 @@ keeps a scratch store (deleted at every boot, with no replicated estate at
 all), joins an embedded fleet as a **leaf** of the members' broker — no
 JetStream, no replica, no vote — and runs `seats` only. Its seats' tools read
 and write the tracker and the knowledge base through a data node over the
-broker, carrying the node's own writes as a floor so whichever data node
-answers has applied them, and what it publishes about its turns is kept in a
+broker — the same router a data node's own seats go through, which answers
+from the node's own copy where it has one — carrying the node's own writes as a
+floor so whichever data node answers has applied them, and what it publishes about its turns is kept in a
 data node's event log. It is never counted as a copy: the trim, the eviction
 gate and the search fan-out read the role off the presence lease, and the
 capacity handshake reads the role AND the broker kind beside it — a broker

@@ -390,7 +390,7 @@ func Catalogue() []Instrument {
 			Name: StatelogDeferredOldestAgeSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How long the oldest retained record has been retained, " +
-				"which is what decides whether this node's seats move.",
+				"which is what decides whether this node still serves the partition.",
 		},
 		{
 			Name: StatelogWaiters, Kind: KindGauge, Unit: UnitCount,

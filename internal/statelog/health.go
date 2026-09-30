@@ -37,15 +37,16 @@ const (
 	// at every level meanwhile — as [RefuseBehind], or as [RefuseStalled]
 	// once the replay stops moving — because the floor is what every node
 	// must hold before it answers, and a write at an expectation of zero
-	// is refused by the fence until it holds it. It moves none of its
-	// seats: a copy that is BEHIND catches up on its own, and
-	// [Health.Healthy] sheds on no lag of any size, this one included.
+	// is refused by the fence until it holds it. It stays in service: a
+	// copy that is BEHIND catches up on its own, and [Health.Healthy]
+	// fires on no lag of any size, this one included.
 	FloorReplaying
 
 	// FloorBelow is below the log itself: the next record this node needs
 	// has been removed, so its rows are missing state no replay can
-	// supply. Reads and writes both refuse, its seats move, and the node
-	// adopts a peer's snapshot.
+	// supply. Reads and writes both refuse, the node stops serving the
+	// partition (its seats read it from another holder), and it adopts a
+	// peer's snapshot.
 	FloorBelow
 
 	// FloorUnknown is the fourth value, and it takes the SAME branch as
@@ -173,7 +174,8 @@ func Replayable(checkpoint, first uint64) bool {
 
 // ApplyRetryBudget is how long a transient apply error is retried in place
 // before the applier reports itself faulted — which its readers treat as
-// stalled: reads refuse naming the error, and the seats move.
+// stalled: reads refuse naming the error, and the node stops serving the
+// partition until a retry succeeds.
 //
 // HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
 // let a node report itself healthy while it made no progress, and one much
@@ -249,7 +251,7 @@ type Health struct {
 	// whole, and the separate question of how far they have since fallen
 	// behind is [Health.Lag] against [SnapshotLagSlack], which both apply.
 	// Neither readiness gate reads this — admission wants the instant and
-	// the shed wants a fault, and neither is a history.
+	// a copy's fault wants a fault, and neither is a history.
 	Drained bool
 
 	// Stalled reports an applied prefix that has not moved for the stall
@@ -295,8 +297,8 @@ type Health struct {
 	// record gone from the log, or [FloorReplaying], the log still holding
 	// it. The choice picks the refusal — `below_floor`, which sends a
 	// caller elsewhere and the node to adopt, or the retryable `behind` —
-	// and whether the floor term alone sheds the node's seats, which
-	// [Health.Healthy] does for the first and not the second. So a
+	// and whether the floor term alone takes the copy out of service,
+	// which [Health.Healthy] does for the first and not the second. So a
 	// stale-low value reports a node as replaying records that are already
 	// gone. What bounds that is where a stale value comes from: only a
 	// replica of a group with no leader answers the stream info, and every
@@ -305,7 +307,8 @@ type Health struct {
 	// rejoin once a reading shows the record gone — a LATER reading of the
 	// same stream info, not an independent source — and meanwhile a strict
 	// applier the broker clamped past the hole faults when its reorder
-	// buffer overflows, which refuses and sheds as `stalled`.
+	// buffer overflows, which refuses as `stalled` and stops the copy
+	// serving.
 	FirstSeq *uint64
 
 	// TrimFloor is the register's published floor for this domain as last
@@ -430,16 +433,18 @@ func (h Health) AheadOfLog() bool {
 	return h.LastSeq != nil && pastEnd(h.Position.Seq, *h.LastSeq)
 }
 
-// Healthy reports whether this domain's state permits KEEPING the seats this
-// node already holds.
+// Healthy reports whether this copy of the domain's log is SOUND — the copy
+// its node may keep serving its partition from. One that is not stops serving
+// it, and the node's seats read the partition from its other holders; the
+// seats themselves stay, since a copy being wrong is no fault of theirs.
 //
 // # It answers "is this copy WRONG", never "is this copy BEHIND"
 //
 // That is the whole line between it and [Health.Established], which gates
 // admission. A copy that is behind catches up on its own, so withholding
-// claims is the entire remedy and dropping work in hand would be pure loss; a
-// copy that is wrong cannot catch up, so the work has to move. Every term
-// below is of the second kind.
+// claims is the entire remedy and taking it out of service would be pure
+// loss; a copy that is wrong cannot catch up, so nothing may be answered from
+// it. Every term below is of the second kind.
 //
 // # What does NOT make it false, and why
 //
@@ -447,10 +452,11 @@ func (h Health) AheadOfLog() bool {
 // because this node has yet to drain the log a first time. The reading that
 // conflated the two was `lag == 0` recomputed per heartbeat: on a single node
 // every tracker write put one record on the log the applier had not consumed
-// yet, so this went false for one heartbeat and the sweep released all seven
-// of the company's seats, reclaiming them about five seconds later — six
-// times in eight minutes, with a real model that is every turn on the node
-// interrupted by somebody filing a work item. A prefix that stops MOVING is a
+// yet, so this went false for one heartbeat and — when a false answer shed
+// seats — the sweep released all seven of the company's seats, reclaiming
+// them about five seconds later — six times in eight minutes, with a real
+// model that is every turn on the node interrupted by somebody filing a work
+// item. A prefix that stops MOVING is a
 // different fact and it is [Health.Stalled], which is below.
 //
 // Nor does replaying up to the published floor ([FloorReplaying]), which is
@@ -459,17 +465,17 @@ func (h Health) AheadOfLog() bool {
 // floor nobody could read ([FloorUnknown]), has a hole in its rows.
 //
 // Holding records this build cannot decode does not either, on its own.
-// Folding that into "stalled" sheds a company's seats fleet-wide on a routine
-// rolling upgrade — one upgraded writer taking every un-upgraded node out of
-// service at once, which is exactly the outage the retain rule exists to
-// prevent, arriving through the applier instead of the codec.
+// Folding that into "stalled" takes every copy out of service fleet-wide on a
+// routine rolling upgrade — one upgraded writer taking every un-upgraded node
+// out of service at once, which is exactly the outage the retain rule exists
+// to prevent, arriving through the applier instead of the codec.
 //
 // # And what does
 //
 // Holding them PAST THE DEFERRAL GRACE. At that point the honest reading is
 // "this node cannot run this company's records" rather than "this node is
-// briefly behind", and a node that fails every call about a growing set of
-// objects while keeping its seats is the same outage in a slower form. Under
+// briefly behind", and a copy that fails every call about a growing set of
+// objects while it keeps serving is the same outage in a slower form. Under
 // the grace nothing changes, which covers every rolling upgrade this design
 // describes — a config apply and a seat re-placement are one heartbeat each.
 //

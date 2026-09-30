@@ -82,6 +82,10 @@ data node" on the nodes that hold none:
 - A tracker write one holder answered UNVOUCHED is asked of the next under the
   same operation id before the caller is told the outcome is unknown: that
   holder's ledger cannot say whether it landed, and another's may.
+- A data node whose copy of a partition is WRONG rather than behind stops
+  serving that partition and keeps its seats: for that partition it is a node
+  without data, reaching the estate through a node that holds it — which is
+  this record's decision, applied to the node itself.
 
 Under the single-file layout every data node serves the one partition, so what
 a fleet sees of this is routing through the watched view of the presence

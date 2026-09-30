@@ -66,7 +66,7 @@ Releasing has **two modes**, because losing a lease and choosing to let go are o
 
 | Mode | When | What happens |
 |---|---|---|
-| **Voluntary** | drain, capacity rebalance, role decommissioned, placement moved, this node's records wrong (`unserviceable`), a held seat that could not be prepared for a code sandbox an apply brought up (`unprepared`) | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
+| **Voluntary** | drain, capacity rebalance, role decommissioned, placement moved, this node unable to route its seats' calls to the estate (`unserviceable`), a held seat that could not be prepared for a code sandbox an apply brought up (`unprepared`) | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
 | **Fenced** | renew returned false, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
 
 Fenced release never republishes. A peer may already be running the seat, and a republished event is a **new message**: a second copy of work the successor is already doing, carrying none of the identity the completion ledger's idempotency and the batch layer's aging both key on — so nothing downstream can collapse the two. Handing the delivery back unacked keeps that identity, and the successor gets exactly what this node never finished.
@@ -99,15 +99,16 @@ That also gives the right answer during a database blip. The lease row is untouc
 
 ## A copy that is behind, and a copy that is wrong
 
-A node runs its seats out of its own copy of the company's records — the
-tracker and the knowledge base, applied from the shared log into this node's
-database (see [Replication](../guides/replication.md)). That copy can be in
-two quite different bad states, and the engine treats them as opposites.
+A data node answers its seats out of its own copy of the company's records —
+the tracker and the knowledge base, applied from the shared log into this
+node's database (see [Replication](../guides/replication.md)) — through the
+same router every node's seats use. That copy can be in two quite different
+bad states, and the engine treats them as opposites.
 
 | | What it means | What the node does |
 |---|---|---|
 | **Behind** | Records are on the log that this node has not applied yet. It is catching up, and it will. | **Keeps every seat it holds**, and claims no new ones until it is level. The sweep logs `seat_claims_withheld` at debug, and the fleet view counts how many of this node's replication loops are current |
-| **Wrong** | The copy cannot become current by applying more records | **Gives back every seat**, so a peer that can serve them takes over (`seats_shed_unserviceable`). It takes them back on the first sweep after the state clears |
+| **Wrong** | The copy cannot become current by applying more records | **Stops serving the partition and keeps every seat.** Its seats' calls go to the partition's other holders, exactly as a node holding no data is served, and other nodes asking it are told it does not serve the partition (`estate_partition_not_served`). It serves again once a reading finds the copy sound |
 
 Six states are *wrong*, and each is a fact about the rows rather than about how
 far along they are:
@@ -140,15 +141,20 @@ applier reaching it — is not in a different state from one that is level. The
 distinction is what the `apply_lag` [alarm](../reference/alarms.md) says: being
 behind is worth looking at, and it is not what moves work.
 
-The release is voluntary, like a rebalance: the in-flight turn finishes, and
-the seat leaves when it goes idle. The lease was never lost — only the rows
-are wrong — so abandoning a turn mid-flight would cost more than the stale
-answer it is racing.
+Why not give the seats back, as a node whose copy was wrong once did: the
+seats were never the problem, the copy was, and every call they make is routed
+([how a request reaches its partition](estate-placement.md#how-a-request-reaches-its-partition))
+— so a peer that took them over would be served by the very same holders,
+at the cost of every seat's processes and memory moving. On a single node there
+is no other holder, and the company stops working until the state clears: every
+call is refused naming the partition nobody serves, which is the right trade
+for rows that are wrong — the alternative is agents acting on them.
 
-On a single node there is nowhere for the seats to go, so the shed is simply a
-company that stops working until the state clears. That is the right trade for
-rows that are wrong — the alternative is agents acting on them — and it is the
-reason lag must never reach this gate.
+What a node does give its seats back for is not being able to **route** at
+all: its view of who serves the estate has been unreadable for longer than the
+60-second bound every cached coordination fact is held to (`unserviceable`,
+`seats_shed_unserviceable`). The release is voluntary, like a rebalance: the
+in-flight turn finishes, and the seat leaves when it goes idle.
 
 ## Fencing: what it protects, and what it cannot
 

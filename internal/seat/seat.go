@@ -276,19 +276,18 @@ const (
 	// to end.
 	ReasonPosture ReleaseReason = "posture"
 
-	// ReasonUnserviceable is this node's copy of the company's records
-	// being WRONG rather than behind — a halted applier, an eviction, a
-	// position below the log's first surviving record, or a record it has
-	// been unable to decode past the deferral grace. See
+	// ReasonUnserviceable is this node being unable to serve its seats'
+	// work at all — in the engine, a node that can no longer say where
+	// the estate its seats read and write is served. See
 	// [Config.Serviceable].
 	//
 	// VOLUNTARY, unlike ReasonPosture, and the difference is what is
 	// actually lost. A shedding posture means this node may be running a
 	// company revision the fleet has moved off, so what it is doing right
-	// now is suspect and must stop at once. This means its ROWS are wrong
-	// while its lease is perfectly good — so the turn in flight, which is
-	// already running against those rows, is better finished than
-	// abandoned, and the seat leaves the moment it goes idle.
+	// now is suspect and must stop at once. This means its reach is gone
+	// while its lease is perfectly good — so the turn in flight is better
+	// finished (or failed on its own calls) than abandoned, and the seat
+	// leaves the moment it goes idle.
 	ReasonUnserviceable ReleaseReason = "unserviceable"
 
 	// ReasonUnprepared is a seat this node already holds that could not be

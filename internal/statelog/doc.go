@@ -171,8 +171,8 @@
 //
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
-// halts, health goes false immediately, and the seats move to a node that can
-// decode it. A deferred gate does not postpone one record's effect on one
+// halts, health goes false immediately, and the node stops serving the
+// partition — its seats read it from a holder that can decode it. A deferred gate does not postpone one record's effect on one
 // node; it silently licenses every record above it.
 //
 // # Retention rests on the ENVELOPE, so a writer can ask who reads what
@@ -526,8 +526,9 @@
 // is the framework's answer to "is this node doing its job", and everything
 // above it asks the same question. The rule is ADR-0015 and alarms.go is where
 // it is carried out: an alarm never invents a number, it fires at the one some
-// OTHER decision already made — the grace that sheds a node, the grace that
-// moves its seats, the budget a caller was promised — and ONE evaluation feeds
+// OTHER decision already made — the grace that takes a copy out of service,
+// the grace that stops a node serving a partition it cannot decode, the budget
+// a caller was promised — and ONE evaluation feeds
 // every surface, so a gauge, a log line and a screen cannot disagree about
 // whether something is wrong.
 package statelog

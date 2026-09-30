@@ -132,6 +132,18 @@ the seat: a node's own where it serves the partition, otherwise the first
 holder that answers — so a node claims no seat while its own copy is behind,
 and a node holding no data claims none until a data node's copy is level.
 
+**A copy that is wrong is not served, and its node keeps its seats.** A copy
+whose applier halted, whose node was evicted, that is below its log, whose
+checkpoint names another stream, whose prefix stalled or that has held a record
+it cannot decode past the deferral grace stops serving its partition: other
+nodes asking it are told it does not serve it, and its own seats' calls go to
+the partition's other holders — exactly as a node holding no data is served
+(`estate_partition_not_served` is logged once, when it stops). It serves again
+the moment a reading finds the copy sound. The seats stay because they were
+never the problem; a node gives them back only when it cannot route at all,
+its view of who serves the estate unreadable past the 60-second bound (see
+[a copy that is wrong](seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)).
+
 ## Who is in the map
 
 A data node offers itself on its **estate lease** (`estate:<node>`): its share

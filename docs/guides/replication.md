@@ -577,7 +577,8 @@ them, an older node holds back a container a newer node renamed or re-described,
 with the page writes in it, the root of a subtree being moved, a file, and a
 project whose board somebody dragged, until it is upgraded — and nothing else.
 A task purge is the exception to holding back: it installs a gate, and a gate a
-node cannot apply stops that node's tracker (its seats move to a node that can)
+node cannot apply stops that node's tracker (it stops serving the partition,
+and its seats read it from a node that can)
 rather than being deferred, so **purge nothing while a rolling upgrade across
 version 4 is in progress**. A node's **release** of a log as it leaves a
 partition ([above](#a-node-that-leaves-a-partition-releases-its-logs)) is such
@@ -735,7 +736,7 @@ replication:
 | Line | Level | What it says |
 |---|---|---|
 | `statelog_apply_retrying` | `WARN` | The applier hit a failure it retries in place. Written once, when the run of failures starts. |
-| `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and its seats move until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
+| `statelog_apply_faulted` | `ERROR` | The same failure has outlived the retry budget (30 seconds): this node's rows have stopped moving, its reads refuse and it stops serving the partition — its seats read it from the partition's other holders — until a retry succeeds. Written once per run of failures, when it crosses the budget — not on every retry. While it lasts, the node's status and every refused read name the current error, and `crewlet.statelog.apply.retries` counts the attempts. |
 | `statelog_apply_recovered` | `INFO` | A retry succeeded and the run of failures is over, with how long it lasted (`after`) and the last error it saw. A failure after it starts a new run, written again from `statelog_apply_retrying`. |
 | `statelog_applier_stopped` | `ERROR` | The applier stopped for good — a gate this build cannot read, a hole that will not close, a recreated stream, a record written in a generation this node never entered — naming the stream, the position its rows froze at and why. Every read of that domain refuses from then on, and for the tracker or the knowledge base the node also stops claiming seats and the ones it holds move to a peer. What resumes it is a build that can read what this one could not, at its next boot; for a recreated stream, [`crewlet retention reanchor`](retention.md#re-anchoring-a-recreated-or-restored-log) of that one stream, which resumes it in place with no restart; and for a log a peer re-anchored, the snapshot this node [adopts on its own](retention.md#a-node-a-peer-re-anchored-past). Written once per stop. |
 | `statelog_checkpoint_named` | `INFO` | A checkpoint that named no record — written before checkpoints named theirs, or placed by a reanchor where the log held none — was named from this node's own evidence, never from the log's record: `evidence` is `ledger_instant` (its operation ledger's row at the checkpoint keeps the record's instant), `ledger_operation` (an older row names the operation the log's record carries) or `retained` (its copy of a record it could not decode). From then on it is compared like any other. See [retention](retention.md#re-anchoring-a-recreated-or-restored-log). |

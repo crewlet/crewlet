@@ -131,8 +131,8 @@ type Domain interface {
 
 	// ReadinessInput reports whether this domain's health gates seat
 	// admission. A strictly ordered domain's stall is a fault; a
-	// compacted domain's gap is a coverage number, and shedding a
-	// company's seats for one would be the outage the number exists to
+	// compacted domain's gap is a coverage number, and taking a copy
+	// out of service for one would be the outage the number exists to
 	// avoid.
 	ReadinessInput() bool
 

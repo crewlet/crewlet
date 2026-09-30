@@ -237,7 +237,8 @@ func (e *EvictionRefusal) Error() string {
 // running. Its position is advancing, so it pins nothing its own progress will
 // not release — and evicting it drops everything it writes above the eviction
 // on every applier, stops its own writes the moment its applier reaches the
-// eviction, and moves its seats. Eviction is the gesture for a node that is NOT
+// eviction, and takes its copy out of service. Eviction is the gesture for a
+// node that is NOT
 // coming back, and a live lease is the fleet's own evidence that this one is;
 // the refusal is what stops a mistyped node id taking a healthy machine out.
 //
@@ -260,8 +261,8 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
 			"lease, so it is still reaching coordination and almost certainly " +
 			"running — an eviction drops every record it writes on every node and " +
-			"moves its seats, which is the gesture for a node that is not coming " +
-			"back"}
+			"takes its copy out of service, which is the gesture for a node that " +
+			"is not coming back"}
 	}
 	return nil
 }

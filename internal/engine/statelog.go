@@ -850,8 +850,8 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	// it would at boot. The heartbeat is what notices, and this is what it
 	// calls: the appliers are ended, the artefact installed, the appliers
 	// started again over it. Until this existed the state was detected —
-	// reads refused and the seats moved — and repaired only by a restart
-	// an operator had to know to perform.
+	// reads refused and the copy taken out of service — and repaired only
+	// by a restart an operator had to know to perform.
 	s.rejoin = func(ctx context.Context) error { return e.rejoin(ctx, s) }
 	// AFTER EVERY LOG IS RUNNING. The heartbeat reports each log's
 	// position and the snapshot gate reads each one's health, so both need
@@ -2039,11 +2039,57 @@ func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
 	return s.everyReadiness(ctx, everyPartition, statelog.Health.Serving)
 }
 
-// PartitionAnswers is whether this node's copy of p may answer a request now,
-// every log of p judged by [statelog.Health.Answers] — what the estate's router
-// asks of every copy it would answer from (see [localEstate]).
-func (s *stateLog) PartitionAnswers(ctx context.Context, p statelog.PartitionID) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, onlyPartition(p), statelog.Health.Answers)
+// copyVerdict is what the estate's router reads of this node's copy of one
+// partition: whether it is WRONG — [stateLog.Healthy]'s question, over the
+// partition's logs alone — and, if not, whether it answers requests now.
+type copyVerdict struct {
+	// fault names the first of the partition's logs whose copy is wrong,
+	// empty for a copy that is not.
+	fault string
+
+	// answers is [statelog.Health.Answers] over every log of the
+	// partition, and refusal the first refusal where it is false —
+	// [statelog.RefuseBrokerUnreachable] for a log whose health could not
+	// be read.
+	answers bool
+	refusal statelog.ReadRefusal
+}
+
+// partitionVerdict judges this node's copy of p from ONE reading of each of
+// its logs' health: every reading costs the broker a request per log, and the
+// two questions are asked of the same instant.
+//
+// A LOG WHOSE HEALTH COULD NOT BE READ IS NOT A FAULT — [stateLog.Healthy]'s
+// rule, for its reason: an unreachable broker is the outage during which the
+// seats most need their node — and it is not an answer either.
+func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID) copyVerdict {
+	out := copyVerdict{answers: true}
+	if s == nil {
+		return out
+	}
+	now := time.Now()
+	for _, running := range s.running() {
+		if running.id.Partition != p || !running.domain.ReadinessInput() {
+			continue
+		}
+		health, err := s.health(ctx, running)
+		if err != nil {
+			if out.answers {
+				out.answers, out.refusal = false, statelog.RefuseBrokerUnreachable
+			}
+			continue
+		}
+		if out.fault == "" && !health.Healthy(now, running.progress.deferredSinceValue()) {
+			out.fault = running.key
+		}
+		if !out.answers {
+			continue
+		}
+		if ok, refusal := health.Answers(); !ok {
+			out.answers, out.refusal = false, refusal
+		}
+	}
+	return out
 }
 
 // everyPartition selects every running log.
@@ -2079,16 +2125,19 @@ func (s *stateLog) everyReadiness(ctx context.Context, selected func(*runningLog
 	return true, ""
 }
 
-// Healthy reports whether every registered domain permits this node to KEEP
-// the seats it holds, and names the first that does not.
+// Healthy reports whether this node's copy of every registered domain is
+// sound — not WRONG — and names the first that is not: what the estate lease
+// reports as `faulted`, and, per partition ([stateLog.partitionVerdict]), what
+// stops this node SERVING a partition while its seats keep running and read it
+// from the partition's other holders ([localEstate.For]).
 //
 // # This is a different question from Established, and the difference is what
-// # separates withholding work from giving it back
+// # separates waiting from not serving
 //
 // [stateLog.Established] gates ADMISSION: a node mid-hydration keeps what it
 // holds and claims nothing new, which is right, because its rows are merely
-// incomplete and its seats' work would only wait. This one gates HOLDING, and
-// the states it fires on are ones where the seats' work would be WRONG:
+// incomplete and will complete. This one says the rows are WRONG — they will
+// not become right by applying more records — and the states it fires on are:
 //
 //   - the applier has STOPPED, so its rows are frozen at the record that
 //     halted it and every later object is missing its consequences;
@@ -2110,22 +2159,22 @@ func (s *stateLog) everyReadiness(ctx context.Context, selected func(*runningLog
 //     run this company's records" rather than "this node is briefly behind".
 //
 // BEING BEHIND IS NOT ON THAT LIST AND FIRES NOTHING HERE. A lag is the
-// admission gate's business, and a term here that read one sheds a company's
-// seats on its own writes: a single node released all seven of its seats on
-// each burst of tracker records, because the record it had not applied yet
-// made the reading `lag == 0` false for one heartbeat. What a stalled prefix
-// says and a lag does not is that the node is not applying its way out.
+// admission gate's business, and a term here that read one took a copy out of
+// service on its own writes: when this shed seats, a single node released all
+// seven of its seats on each burst of tracker records, because the record it
+// had not applied yet made the reading `lag == 0` false for one heartbeat.
+// What a stalled prefix says and a lag does not is that the node is not
+// applying its way out.
 //
-// Until this had a caller the `deferred_old` alarm told an operator "its seats
-// move at 30m0s" and its remedy said "its seats have already moved", and
-// neither was true — [seat.Host] sheds only on a lost lease, a drain and a
-// rebalance, and its own log line says a node that is not ready "keeps what it
-// holds". The alarm was reporting a mitigation the engine did not perform.
+// Whatever reads this must also ACT on it — the `deferred_old` alarm once told
+// an operator "its seats move at 30m0s" about a node nothing ever moved. What
+// the answer does now is stop the node serving the partition, which the alarms
+// and the lease both say.
 //
-// A DOMAIN WHOSE HEALTH CANNOT BE READ DOES NOT SHED. An unreachable broker is
-// the outage during which a company most needs its seats to keep running, and
-// tearing them down on an unread number is the failure mode `unknown` exists
-// throughout this package to prevent.
+// A DOMAIN WHOSE HEALTH CANNOT BE READ IS NOT WRONG. An unreachable broker is
+// the outage during which a company most needs its copies to keep answering,
+// and taking one out of service on an unread number is the failure mode
+// `unknown` exists throughout this package to prevent.
 func (s *stateLog) Healthy(ctx context.Context) (bool, string) {
 	if s == nil {
 		return true, ""
@@ -4140,7 +4189,7 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions) 
 // SECONDS RATHER THAN A COUNT, and beside the count rather than instead of it:
 // one record held for an hour and sixty held for a second are the same count
 // and completely different states, and it is the AGE that decides whether this
-// node's seats have moved (D122).
+// node still serves the partition (D122).
 //
 // It rides the position heartbeat because that is where the deferral is
 // observed — see [progress], which is the only thing that knows when the

@@ -27,8 +27,9 @@ import (
 // # Why they are named here rather than at each condition
 //
 // Every one of them is a number some OTHER decision already made — a stall
-// grace is what sheds a node, a deferral grace is what moves its seats, a read
-// budget is what a caller was promised. An alarm that invented its own
+// grace is what takes a copy out of service, a deferral grace is what stops
+// a node serving a partition it cannot decode, a read budget is what a caller
+// was promised. An alarm that invented its own
 // threshold would be a second opinion about the same event, and the two would
 // drift: the plan this replaces tinted a dashboard row `caution` past one
 // apply linger (250 ms) on a position refreshed every 15 seconds, so every row
@@ -46,10 +47,11 @@ const (
 	StallGrace = 60 * time.Second
 
 	// DeferralGrace is how long a node may hold records it could not
-	// apply before its seats move. The alarm and the seat move share the
-	// number deliberately: an operator who sees this alarm has thirty
-	// minutes, and one who sees a different number has no idea how long
-	// they have.
+	// apply before it stops serving the partition they are on — its seats
+	// stay, and read the partition from its other holders. The alarm and
+	// that step share the number deliberately: an operator who sees this
+	// alarm has thirty minutes, and one who sees a different number has no
+	// idea how long they have.
 	DeferralGrace = 30 * time.Minute
 
 	// FloorCacheStale is how old a cached trim floor may be before the
@@ -624,11 +626,13 @@ var table = []rule{
 		kind: KindDeferredOld,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the oldest record this node cannot apply is %s old, "+
-					"and its seats move at %s", round(r.DeferredAge), round(DeferralGrace)),
+					"and it stops serving the partition at %s", round(r.DeferredAge),
+					round(DeferralGrace)),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
-			"are writing. Upgrade it; its seats have already moved.",
+			"are writing. Upgrade it; it has already stopped serving the partition, " +
+			"and its seats read it from the partition's other holders.",
 	},
 	{
 		kind: KindFloorUnknown,

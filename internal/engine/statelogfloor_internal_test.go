@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -83,7 +84,8 @@ func TestTheFloorIsThePublishedFloorRatherThanTheTicksConclusion(t *testing.T) {
 // replaying: its reads are told to come back, it admits no seats until it has
 // caught up, and nothing sends it to adopt a snapshot of records it can read.
 // Only once the purge lands is its next record gone, and only then is it below
-// the log, refused as `below_floor`, shed, and sent to adopt.
+// the log, refused as `below_floor`, taken out of serving its partition (its
+// seats stay, and read it from another holder), and sent to adopt.
 func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
@@ -224,8 +226,24 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	if e.NativeHydrated(t.Context()) {
 		t.Fatal("the node admits seats while below the log")
 	}
-	if ok, _ := e.SeatsServiceable(); ok {
-		t.Fatal("the node keeps its seats while below the log")
+	// A COPY WITH A HOLE IN IT STOPS SERVING ITS PARTITION, and the node
+	// keeps its seats: every call they make goes to a holder whose copy is
+	// sound — on this node alone there is none, so it is refused naming the
+	// partition — and moving them would hand them to a peer asking the same
+	// holders.
+	waitUntil(t, 5*time.Second, "the copy below the log to stop serving its partition",
+		func() bool {
+			_, serves := e.local.For(t.Context(), statelog.EstatePartition)
+			return !serves
+		})
+	if ok, reason := e.SeatsServiceable(); !ok {
+		t.Fatalf("the node shed its seats over a copy below the log (%s) — a "+
+			"wrong copy stops serving its partition, and the seats stay", reason)
+	}
+	var unserved *estate.ErrPartitionUnserved
+	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) {
+		t.Fatalf("a read of the only copy, below the log, answered %v — want it "+
+			"refused naming the partition nobody serves", err)
 	}
 	s.publishPositions(t.Context())
 	if !rejoinRequested() {

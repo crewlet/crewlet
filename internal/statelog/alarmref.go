@@ -36,7 +36,8 @@ func AlarmReference() string {
 // to somebody who has just been paged.
 var alarmMeaning = map[Kind]string{
 	KindApplyLag: "This node is more than a minute behind the log. Being " +
-		"behind does not move its seats; a position that stops moving does.",
+		"behind does not take its copy out of service; a position that stops " +
+		"moving does.",
 	KindReadRefusals: "Reads are being refused for something other than " +
 		"ordinary lag, and have been for longer than a heartbeat.",
 	KindBarrierSlow: "The read barrier — the append every linearizable read " +
@@ -50,7 +51,8 @@ var alarmMeaning = map[Kind]string{
 	KindTrimBlocked: "The trim has a term it cannot satisfy, so the log is " +
 		"growing toward its ceiling.",
 	KindDeferredOld: "This node has been holding records it cannot apply for " +
-		"longer than the deferral grace. Its seats have moved.",
+		"longer than the deferral grace. It no longer serves the partition; its " +
+		"seats read it from the partition's other holders.",
 	KindFloorUnknown: "The trim floor has been unreadable for four " +
 		"heartbeats, so every read on this node refuses.",
 	KindPrefetchSlow: "Turn-start context assembly is over its budget. Every " +
@@ -135,6 +137,7 @@ below.
 const alarmFooter = `
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
-decides something — the grace that sheds a node, the grace that moves its
-seats, the budget a caller was promised.
+decides something — the grace that takes a copy out of service, the grace
+that stops a node serving a partition it cannot decode, the budget a caller
+was promised.
 `

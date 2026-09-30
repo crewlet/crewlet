@@ -188,7 +188,7 @@
           "wait",
           "force"
         ],
-        "detail": "statelog: node-4 may not be evicted: it holds a live presence lease, so it is still reaching coordination and almost certainly running — an eviction drops every record it writes on every node and moves its seats, which is the gesture for a node that is not coming back",
+        "detail": "statelog: node-4 may not be evicted: it holds a live presence lease, so it is still reaching coordination and almost certainly running — an eviction drops every record it writes on every node and takes its copy out of service, which is the gesture for a node that is not coming back",
         "error": "eviction_refused",
         "hint": "stop node-4 and wait for its presence lease to lapse — the retention report stops showing it live — then run the eviction again; or, if it is wedged in a way that still renews its lease, force the eviction past the lease",
         "node": "node-4",

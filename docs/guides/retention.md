@@ -1007,8 +1007,8 @@ The engine detects this from the stream's own **creation instant**, which the
 broker reports and every applier compares at boot against the instant its
 checkpoint was committed under. On a difference the applier **stops** rather
 than resuming — the log line names both instants and this verb — the node's
-reads and writes refuse `wrong_stream` with that reason, its seats move to a
-peer, and `crewlet retention status` leads with `NOT READY <domain>:
+reads and writes refuse `wrong_stream` with that reason, it stops serving the
+partition — its seats read it from a peer — and `crewlet retention status` leads with `NOT READY <domain>:
 wrong_stream (recreated) — …` carrying the same sentence, both instants
 included (the dashboard shows the same refusal above the domain's block). A checkpoint past the log's end is caught as `wrong_stream` too,
 because a position the log has never reached is a position on another stream.

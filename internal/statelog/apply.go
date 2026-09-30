@@ -1669,7 +1669,8 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 // fault is retried quietly inside the budget and reported only past it, when
 // the honest reading is that this node's rows have stopped moving. Reported,
 // it takes the same path a stop does: reads refuse `stalled` naming it, and
-// the seats move. It clears the moment a retry succeeds.
+// the node stops serving the partition. It clears the moment a retry
+// succeeds.
 func (r *Runner) Fault(now time.Time) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1843,7 +1844,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	// loop that returned on any of them left the domain dead for the life
 	// of the process with nothing to restart it — a broker blip at the
 	// wrong moment took a node's tracker down until an operator noticed
-	// the seats had moved and restarted it. So a failure that is not a
+	// and restarted it. So a failure that is not a
 	// STOP is retried here, in place, on a pause that doubles to a
 	// ceiling, with the same run re-applied rather than abandoned to a
 	// thirty-second redelivery. What the outside sees is [Runner.Fault]:
@@ -2042,8 +2043,8 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 // error on every read that refuses and in the node's status for as long as the
 // run lasts, and `crewlet.statelog.apply.retries` counts every attempt. And
 // the ERROR lands on the same retry that makes [Runner.Fault] start
-// answering, so the line and the refusals and seat moves it describes begin
-// together.
+// answering, so the line and the refusals and the copy's leaving service it
+// describes begin together.
 func (r *Runner) faulted(ctx context.Context, err error) error {
 	if errors.Is(err, ErrStopped) || ctx.Err() != nil {
 		return err
@@ -2072,7 +2073,8 @@ func (r *Runner) faulted(ctx context.Context, err error) error {
 			"domain", r.domain.Name(), "stream", r.spec.Name,
 			"position", r.Committed().String(), "error", err.Error(),
 			"since", since, "detail", "this node's rows have stopped moving; "+
-				"its reads refuse and its seats move until a retry succeeds")
+				"its reads refuse and it stops serving the partition until a "+
+				"retry succeeds")
 	}
 	r.count(metrics.StatelogApplyRetries)
 	return nil
@@ -2697,7 +2699,8 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					return fmt.Errorf("%w: %s at %s installs an apply gate at "+
 						"record version %d and this build reads %d — a gate this "+
 						"node cannot read would license every record above it, so "+
-						"the applier halts and its seats move to a node that can",
+						"the applier halts and this node stops serving the partition "+
+						"to its seats, which read it from a holder that can",
 						ErrStopped, rec.Kind, rec.Position, rec.V, r.domain.RecordVersion())
 				}
 				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
@@ -3117,7 +3120,8 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 		"position", r.Committed().String(), "error", err.Error(),
 		"detail", "this node's rows for this domain are frozen here and every "+
 			"read of them refuses; for a domain that gates seat admission this "+
-			"node also stops claiming seats, and the ones it holds move; a build "+
+			"node also stops serving the partition, and its seats read it from "+
+			"the partition's other holders; a build "+
 			"that can read what this one could not resumes it at its next boot, "+
 			"and for a recreated stream an operator's reanchor of this one "+
 			"stream resumes it in place, with no restart")

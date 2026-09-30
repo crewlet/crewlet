@@ -53,7 +53,7 @@ import (
 //
 // The gate is per DOMAIN rather than per node, from each domain's own
 // declaration: a compacted domain's gap is a coverage number rather than a
-// fault, so shedding a company's seats for one would be the outage the number
+// fault, so taking a copy out of service for one would be the outage the number
 // exists to avoid.
 
 // native holds this node's native-backend runtime.
@@ -610,7 +610,9 @@ func (n *native) shutdown(ctx context.Context) {
 // than a read, and a node merely inside the trim floor still serves rows that
 // are behind, which a seat attaching to it acts on — and otherwise the first
 // holder that answers, which admits only once its own copy is established:
-// the same gate, one hop away. And the router's view must have answered at
+// the same gate, one hop away. A node whose own copy is WRONG does not serve
+// the partition ([localEstate.For]), so it is admitted on a sound holder's
+// word, like a node that holds no data. And the router's view must have answered at
 // least once, since a seat on a node that cannot route has no copy to read.
 //
 // IT TAKES A CONTEXT because where this node does not serve the partition the
@@ -663,46 +665,37 @@ func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
 	return false, false, false
 }
 
-// SeatsServiceable reports whether this node may KEEP the seats it holds.
+// SeatsServiceable reports whether this node may KEEP the seats it holds: it
+// may while it can ROUTE the estate, and sheds them only once its view of who
+// serves the estate answers unknown ([coord.LeaseView.Leases]) and its last
+// listing is older than [statelog.FloorCacheStale] — the age past which nothing
+// may decide from a cached coordination fact, so no node sheds sooner than any
+// other decider stops trusting the same view.
 //
-// THE OPPOSITE DIRECTION FROM [Engine.NativeHydrated], and they fire on
-// different classes of fault. Hydration is about a copy that is BEHIND: it
-// catches up, so withholding claims is the whole remedy and dropping work in
-// hand would be pure loss. This is about a copy that is WRONG — an applier
-// halted at a record it cannot decode, an eviction whose peers are dropping
-// everything this node writes, rows below the log with a hole nothing will
-// fill (or a trim floor nobody could read), a checkpoint naming a stream that
-// is not this one, an applied prefix frozen past [statelog.StallGrace], or a
-// record held past [statelog.DeferralGrace]. A seat left running on any of
-// those answers its own tools out of a copy the fleet has already abandoned,
-// and D122 is the rule that says it must not.
+// # A wrong copy is not a reason to shed
 //
-// A LAG IS NEVER ONE OF THEM, which is what the log line below means by
-// "wrong rather than behind" — and for as long as the health underneath
-// derived "has this node's copy ever been whole" from "is it level this
-// instant", that line was false on every firing: one unapplied tracker record
-// made a solo node unfit for a heartbeat and moved all seven of its seats.
+// This used to shed on a copy that was WRONG rather than behind — an applier
+// halted at a record it cannot decode, an eviction, rows below the log, a
+// checkpoint on another stream, a stalled prefix, a record held past the
+// deferral grace — because a seat left running on one answered its own tools
+// out of a copy the fleet had abandoned. The router makes that the copy's
+// problem and not the seats': a wrong copy stops SERVING its partition
+// ([localEstate.For]), so every call this node's seats make is answered by a
+// holder whose copy is sound, exactly as a node holding no data is answered.
+// Moving the seats instead cost each of them its processes and its memory to
+// be served by the very same peers — and on a single node it stopped the
+// company, which is still what happens: a partition no holder serves refuses
+// its calls, naming it.
 //
-// A node with no native backend is trivially serviceable, which is what a
-// company on Jira and Confluence has.
+// # What a node cannot survive is not being able to route
+//
+// Every call a seat makes asks the router who serves its partition, and the
+// router answers from the watched presence view. A view unread past the bound
+// is a node that can no longer say where anything is, which no copy of its own
+// makes up for; its seats go to a peer that can. Before the view has listed
+// once there is nothing to shed — admission claims no seat before it does.
 func (e *Engine) SeatsServiceable() (bool, string) {
-	// A NODE THAT HOLDS NO COPY CANNOT HOLD A WRONG ONE. A data node that
-	// stops answering is a failed request its seats report, and admission
-	// withholds new seats until one answers — moving the seats a stateless
-	// node holds would hand them to a peer asking the same data nodes.
-	n := e.native.Load()
-	if n == nil {
-		return true, ""
-	}
-	ok, domain := n.log.Healthy(n.run)
-	if !ok {
-		log.WarnContext(n.run, "seats_unserviceable",
-			"domain", domain,
-			"hint", "this node's copy of that domain is wrong rather than "+
-				"behind; its seats move to a peer until it recovers")
-		return false, domain
-	}
-	return true, ""
+	return routable(e.dataView, time.Now())
 }
 
 // ReplicationStatus is one of this node's replication loops, as the fleet view

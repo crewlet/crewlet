@@ -15,13 +15,13 @@ below.
 
 | Alarm | What it means | What to do |
 |---|---|---|
-| `apply_lag` | This node is more than a minute behind the log. Being behind does not move its seats; a position that stops moving does. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that is behind keeps the seats it holds and claims no new ones; it gives them up only if its position stops moving for the stall grace, or it holds a record it cannot decode past the deferral grace. |
+| `apply_lag` | This node is more than a minute behind the log. Being behind does not take its copy out of service; a position that stops moving does. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that is behind keeps the seats it holds and claims no new ones; it gives them up only if its position stops moving for the stall grace, or it holds a record it cannot decode past the deferral grace. |
 | `read_refusals` | Reads are being refused for something other than ordinary lag, and have been for longer than a heartbeat. | Read the refusal code in the logs. Anything other than `behind` or `too_stale` is a fault rather than a wait. |
 | `barrier_slow` | The read barrier — the append every linearizable read waits on — is spending a quarter of the whole read budget. | The barrier is an append and a wait: check the broker's own latency and this node's apply drain before looking anywhere else. |
 | `log_headroom` | The log is within a tenth of the byte ceiling its ordinary writes are held to. A full log refuses writes rather than dropping records; on the tracker and pages logs an eviction still lands in the gate reserve above that ceiling. | Raise the log's ceiling with `crewlet retention set-capacity` during a maintenance window, or find out why the trim is not advancing (`crewlet retention status` names the term holding it). A full log refuses writes; it does not drop records. On a log that claims identity the top of the ceiling is kept for gate records, so if the term is a node that is gone, `crewlet retention evict` still lands and unpins the trim. |
 | `backup_age` | No verified backup has been recorded, or the newest is older than the policy asks for. The trim does not advance either way. | Run `crewlet backup` against any node, whatever its roles, and check whatever was meant to run it. The trim does not advance past a backup older than the policy, and does not advance at all until there is one. |
 | `trim_blocked` | The trim has a term it cannot satisfy, so the log is growing toward its ceiling. | The blocking term names what to fix. Until it is fixed the log grows toward its ceiling. |
-| `deferred_old` | This node has been holding records it cannot apply for longer than the deferral grace. Its seats have moved. | This node is running a build that cannot decode records its peers are writing. Upgrade it; its seats have already moved. |
+| `deferred_old` | This node has been holding records it cannot apply for longer than the deferral grace. It no longer serves the partition; its seats read it from the partition's other holders. | This node is running a build that cannot decode records its peers are writing. Upgrade it; it has already stopped serving the partition, and its seats read it from the partition's other holders. |
 | `floor_unknown` | The trim floor has been unreadable for four heartbeats, so every read on this node refuses. | Coordination cannot be reached from this node. Every read is refused until it can be. |
 | `prefetch_slow` | Turn-start context assembly is over its budget. Every turn on this node pays it before its first token. | Every turn on this node pays this before its first token. Check the store's own latency and the knowledge backend's. |
 | `search_slow` | Interactive search is over its target. The corpus has outgrown what one node's share of it can scan in the budget. | The corpus has outgrown what one node's share can scan in the budget. Adding a node divides the buckets again, with no configuration and no rebuild. See docs/guides/search.md. |
@@ -47,5 +47,6 @@ below.
 
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already
-decides something — the grace that sheds a node, the grace that moves its
-seats, the budget a caller was promised.
+decides something — the grace that takes a copy out of service, the grace
+that stops a node serving a partition it cannot decode, the budget a caller
+was promised.

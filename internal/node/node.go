@@ -97,7 +97,8 @@ type Config struct {
 	// SeatsServiceable reports whether this node may KEEP the seats it
 	// holds, and names what stopped it when the answer is no. Nil keeps
 	// them. It is the opposite direction from SeatsAdmitted and fires on a
-	// different class of fault — see [seat.Config.Serviceable].
+	// different class of fault — a node that cannot serve its seats' work
+	// at all; see [seat.Config.Serviceable].
 	SeatsServiceable func() (bool, string)
 
 	// SeatDone runs after the mailbox is detached. It never fails a

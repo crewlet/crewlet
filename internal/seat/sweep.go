@@ -95,9 +95,10 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 
 	draining := h.Draining()
 
-	// THE UNSERVICEABLE SHED, BEFORE the capacity one. A node whose rows
-	// are wrong gives back EVERY seat, so there is no share left to
-	// converge on and the capacity pass below has nothing to divide.
+	// THE UNSERVICEABLE SHED, BEFORE the capacity one. A node that cannot
+	// serve its seats' work gives back EVERY seat, so there is no share
+	// left to converge on and the capacity pass below has nothing to
+	// divide.
 	//
 	// It is a separate question from the readiness gate lower down because
 	// the two have opposite directions: readiness withholds CLAIMS and
@@ -123,9 +124,9 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			// alarm they have to go and correlate.
 			log.WarnContext(ctx, "seats_shed_unserviceable", "node", h.nodeID,
 				"reason", unfitReason, "released", len(released),
-				"hint", "this node's copy of the company's records is wrong "+
-					"rather than merely behind, so its seats move to a peer "+
-					"that can serve them; it reclaims them when this clears")
+				"hint", "this node cannot serve its seats' work at all, so its "+
+					"seats move to a peer that can; it reclaims them when this "+
+					"clears")
 		}
 	}
 

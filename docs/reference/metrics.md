@@ -58,7 +58,7 @@ A value that goes both ways, sampled at each export.
 | `crewlet.statelog.apply.lag.seconds` | `s` | `domain` | How OLD the oldest unapplied record is. Seconds are what a stall grace, a pending outcome and a seat move all turn on; sequences are not, and a lag of 4 000 says nothing about whether anything is wrong. |
 | `crewlet.statelog.applied_through` | `1` | `domain` | The prefix this node has actually applied, which is lower than its checkpoint whenever a record was retained. |
 | `crewlet.statelog.deferred.count` | `1` | `domain` | Records this build could not read and kept. Non-zero is a rolling upgrade in progress; non-zero and not falling is one that stopped. |
-| `crewlet.statelog.deferred.oldest_age_seconds` | `s` | `domain` | How long the oldest retained record has been retained, which is what decides whether this node's seats move. |
+| `crewlet.statelog.deferred.oldest_age_seconds` | `s` | `domain` | How long the oldest retained record has been retained, which is what decides whether this node still serves the partition. |
 | `crewlet.statelog.waiters` | `1` | `domain` | Callers blocked on the applier right now. It is the depth of the queue a slow apply is making. |
 | `crewlet.statelog.log.bytes` | `By` | `domain` | What the log actually holds, against its ceiling below. |
 | `crewlet.statelog.log.max_bytes` | `By` | `domain` | The ceiling, read from the running stream rather than from this node's own configuration — the two differ, and the running one is what refuses the append. |

@@ -525,7 +525,7 @@ crewlet run -config agents.yaml -api-port 0       # terminal 2
 ```
 
 The agents node claims the seats once the data node answers that its copy of
-the company's records is established, and its seats' tracker and knowledge
+the company's records is level with its logs, and its seats' tracker and knowledge
 tools read and write through it. See
 [Running One Agent Somewhere Else](../guides/satellite-nodes.md) for what a
 node without data can and cannot do.
