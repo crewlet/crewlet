@@ -9,8 +9,8 @@
     "dev": "vite",
     "build": "vite build && vite build --config vite.protocol.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "node scripts/owned-tmpdir.mjs vitest run",
+    "test:watch": "node scripts/owned-tmpdir.mjs vitest",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

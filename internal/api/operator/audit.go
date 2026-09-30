@@ -106,6 +106,12 @@ func auditOutcome(name string, result tools.Result, err error) (
 	if err != nil {
 		return types.AuditUnknown, "", ""
 	}
+	if result.Failed && result.Unknown {
+		// A write nobody can vouch for, which the caller is answered as
+		// `unknown` — never `refused`, which would record that nothing
+		// was written.
+		return types.AuditUnknown, "", ""
+	}
 	if result.Failed {
 		if _, known := RefusalStatus(result.Refusal); known {
 			return types.AuditRefused, "", string(result.Refusal)

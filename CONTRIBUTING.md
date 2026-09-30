@@ -89,6 +89,16 @@ fails: the shell discards a command substitution's exit status, and gofmt
 handed no paths formats its standard input, finds nothing wrong and exits 0.
 Run from anywhere but the module root, the listing fails every time.
 
+Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
+one file, `npm run test:watch` for the watch loop), never a bare
+`npx vitest`. Vitest's forks pool writes every transformed module into a
+fresh directory under the system temp directory and never removes it — 16 to
+48 MB a run, which over a day of gate runs filled the volume the engine's
+embedded broker sizes its storage from. Both scripts run Vitest through
+`dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
+creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
+started without it.
+
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
 is a data race until proven otherwise — so every package runs under it, in

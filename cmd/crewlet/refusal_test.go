@@ -47,3 +47,31 @@ func TestARefusalWithNothingBesideTheCodeIsLeftAlone(t *testing.T) {
 		t.Errorf("withRefusalDetail skipping an absent detail = %q", got)
 	}
 }
+
+// A 403 IS THE NODE JUDGING A VALID CALLER, NOT A BAD TOKEN. Only a 401 is the
+// credential: a gesture that needs an operator identity, or an act the tool
+// forbids, answers 403 with a detail that is the whole answer — and reporting
+// it as "check your token" sends the operator after the one thing that was
+// fine.
+func TestAForbiddenAnswerIsTheNodesRefusalNotTheToken(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"error":"operator_required",` +
+		`"detail":"an eviction and a readmission are operator gestures"}`)
+	err := nodeError(http.StatusForbidden, body, true)
+	if err == nil {
+		t.Fatal("a 403 was not reported as an error")
+	}
+	if strings.Contains(err.Error(), "refused the token") {
+		t.Errorf("a 403 carrying the node's own code was reported as a bad token:\n%s", err)
+	}
+	for _, want := range []string{"operator_required", "operator gestures"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not carry %q:\n%s", want, err)
+		}
+	}
+	// The credential sentence is still the 401's.
+	if err := nodeError(http.StatusUnauthorized, []byte(`{"error":"invalid_token"}`), true); err == nil ||
+		!strings.Contains(err.Error(), "refused the token") {
+		t.Errorf("a 401 = %v, want the token refusal", err)
+	}
+}

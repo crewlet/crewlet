@@ -19,7 +19,7 @@
 -- the reason it gives: an index that stops at the time forces a sort over the
 -- whole matching set to resolve the id tiebreak.
 --
--- PARTIAL over the rows that name a channel, the shape 0029 and 0031 gave
+-- PARTIAL over the rows that name a channel, the shape 0029 and 0033 gave
 -- work_key and work_item: '' is the absence of a channel rather than one, and
 -- every chat delivery, phase record, webhook and fleet event would otherwise be
 -- an index entry pointing at nothing. No backfill: the column has been written

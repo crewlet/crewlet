@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // unclassifiedByDesign is every file allowed to build a failed Result with no
@@ -45,13 +47,13 @@ var unclassifiedByDesign = map[string]string{
 // Checking only the tool Result left exactly those unclassified.
 func TestEveryFirstPartyRefusalIsClassified(t *testing.T) {
 	t.Parallel()
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// THROUGH sourcetree, from the module's own internal/: a nested
+	// checkout under it is another commit's copy of every file here, and
+	// its refusals are not this build's.
+	root := filepath.Join(sourcetree.Root(t), "internal")
 	fset := token.NewFileSet()
 	classified := 0
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
