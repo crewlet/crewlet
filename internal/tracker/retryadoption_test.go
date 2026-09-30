@@ -169,6 +169,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	lag := uint64(0)
 	dir := t.TempDir()
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Layout: statelog.EstateLayout(declared.Name()), Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
 			Domain: declared, Spec: statelog.EstateStream(declared),
 			Log: statelog.LogID{Domain: declared.Name(), Partition: statelog.EstatePartition},
@@ -176,7 +177,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 				return statelog.Health{Position: at, Drained: true, Lag: &lag}
 			},
 		}},
-		Partition: donor.db, Dir: dir, NodeID: "node-a", EngineVersion: "v0.0.0-test",
+		File: donor.db, Dir: dir, NodeID: "node-a", EngineVersion: "v0.0.0-test",
 		Counted:  func(context.Context) (int, error) { return 3, nil },
 		Interval: 24 * time.Hour,
 	})
@@ -188,11 +189,12 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		t.Fatalf("the donor's snapshot: %v", err)
 	}
 	server, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "node-a",
+		NodeID: "node-a", Layout: statelog.EstateLayout(declared.Name()),
+		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
 		Dial: func(context.Context) (*nats.Conn, error) {
 			return donor.broker.Conn(), nil
 		},
-		Newest: func() (statelog.Manifest, bool) { return manifest, true },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return manifest, true },
 		Path:   func(statelog.Manifest) string { return filepath.Join(dir, manifest.Artifact) },
 	})
 	if err != nil {
@@ -215,7 +217,8 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 		NodeID:   "node-b",
 		Conn:     donor.broker.Conn(),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
-			return statelog.OfferRequest{Need: map[string]uint64{"tracker": at.Seq}}, nil
+			return statelog.OfferRequest{Partition: statelog.EstatePartition.String(),
+				Need: map[string]uint64{"tracker": at.Seq}}, nil
 		},
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
 			return func() {}, nil

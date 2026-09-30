@@ -164,7 +164,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			perLog = append(perLog, tombs)
 			d.EvictionsUnreadable = !read
 		}
-		d.SnapshotSkip = r.skipFor(in.Register, name)
+		d.SnapshotSkip = r.skipFor(in.Register, running)
 		in.Domains = append(in.Domains, d)
 	}
 	in.Tombstones = fleetTombstones(perLog)
@@ -321,16 +321,18 @@ func decisionOf(floor coord.TrimFloor) statelog.TrimDecision {
 	return d
 }
 
-// skipFor is this node's own snapshot skip reason for one domain, read back
-// off the register it published rather than held in memory — so the answer is
+// skipFor is this node's own snapshot skip reason for one log — its
+// partition's, since an artefact is a copy of the partition's file — read back
+// off the register it published rather than held in memory, so the answer is
 // the same one every peer can see.
-func (r *retention) skipFor(register []coord.NodePositions, domain string) statelog.SkipReason {
+func (r *retention) skipFor(register []coord.NodePositions, running *runningLog) statelog.SkipReason {
 	for _, row := range register {
 		if row.NodeID != r.nodeID {
 			continue
 		}
-		if _, runs := row.Domains[domain]; runs {
-			return statelog.SkipReason(row.SnapshotSkip)
+		if _, runs := row.Domains[running.key]; runs {
+			report, _ := row.Report(running.id.Partition.String())
+			return statelog.SkipReason(report.SnapshotSkip)
 		}
 	}
 	return ""

@@ -273,10 +273,15 @@ func (d retentionNodeSeat) lagCell() string {
 
 // retentionSnapshot is one node's artefact, or its absence with the reason.
 type retentionSnapshot struct {
-	NodeID string    `json:"node_id"`
-	At     time.Time `json:"at"`
-	Bytes  int64     `json:"bytes"`
-	Skip   string    `json:"skip"`
+	NodeID string `json:"node_id"`
+
+	// Partition is the partition the artefact is a copy of, empty under
+	// layout 0, whose one artefact is the whole estate's.
+	Partition string `json:"partition"`
+
+	At    time.Time `json:"at"`
+	Bytes int64     `json:"bytes"`
+	Skip  string    `json:"skip"`
 
 	// Domains is the artefact's position KEYED BY DOMAIN.
 	Domains map[string]uint64 `json:"domains"`
@@ -609,7 +614,14 @@ func retentionSnapshots(args []string, stdout, stderr io.Writer) error {
 		if len(positions) == 0 {
 			positions = []string{"-"}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.NodeID,
+		// A PARTITION'S ARTEFACT IS NAMED BESIDE ITS NODE: under a divided
+		// layout a node donates each partition it holds separately, and two
+		// rows naming only the node would read as one artefact twice.
+		node := s.NodeID
+		if s.Partition != "" {
+			node += " " + s.Partition
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", node,
 			strings.Join(positions, " / "), age, humanBytes(s.Bytes), state)
 	}
 	return w.Flush()

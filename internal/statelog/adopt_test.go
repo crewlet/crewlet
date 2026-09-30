@@ -158,6 +158,8 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	snapDir := filepath.Join(donorDir, "snapshots")
 	lag := uint64(0)
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Layout:    statelog.EstateLayout(from.domain.Name()),
+		Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
 			Domain: from.domain, Log: logOf(from.domain), Spec: specOf(from.domain),
 			Health: func() statelog.Health {
@@ -168,7 +170,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 				}
 			},
 		}},
-		Partition:     donorEstate,
+		File:          donorEstate,
 		Dir:           snapDir,
 		NodeID:        "donor",
 		EngineVersion: "v0.0.0-test",
@@ -190,9 +192,10 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 	h.donorDB = donorDB
 
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
+		NodeID: "donor", Layout: statelog.EstateLayout(from.domain.Name()),
+		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
-		Newest: func() (statelog.Manifest, bool) {
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) {
 			h.answered.CompareAndSwap(0, time.Now().UnixNano())
 			return h.manifest, true
 		},
@@ -226,6 +229,7 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		Conn:     h.nc,
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return statelog.OfferRequest{
+				Partition:   statelog.EstatePartition.String(),
 				Need:        map[string]uint64{"probe": 4_000},
 				Generations: map[string]uint32{"probe": 1},
 			}, nil
@@ -802,9 +806,10 @@ func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
 func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	t.Helper()
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: nodeID,
+		NodeID: nodeID, Layout: statelog.EstateLayout(probeDomain{}.Name()),
+		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
 		Dial:   func(context.Context) (*nats.Conn, error) { return h.broker.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) { return h.manifest, true },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return h.manifest, true },
 		Path:   func(statelog.Manifest) string { return h.snapPath },
 	})
 	if err != nil {
@@ -818,7 +823,7 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		offers, err := statelog.CollectOffers(t.Context(), h.nc,
-			statelog.OfferRequest{NodeID: "probe"}, 200*time.Millisecond)
+			statelog.OfferRequest{NodeID: "probe", Partition: statelog.EstatePartition.String()}, 200*time.Millisecond)
 		if err != nil {
 			t.Fatalf("CollectOffers: %v", err)
 		}

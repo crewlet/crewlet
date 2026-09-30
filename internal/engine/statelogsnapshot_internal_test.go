@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -37,7 +41,7 @@ func TestTheRowCarriesTheSnapshotThisNodeHolds(t *testing.T) {
 			"pages":   {Seq: 40, Generation: 2, AppliedThrough: 40},
 		},
 	}
-	stampSnapshot(&row, &snapshotHeld{
+	stampSnapshot(&row, heldSnapshots{statelog.EstatePartition: {
 		Have: true,
 		Manifest: statelog.Manifest{
 			TakenAt: taken,
@@ -47,7 +51,7 @@ func TestTheRowCarriesTheSnapshotThisNodeHolds(t *testing.T) {
 				"pages":   {Seq: 33, Generation: 2},
 			},
 		},
-	})
+	}})
 
 	if row.SnapshotBytes != 4<<20 {
 		t.Errorf("snapshot_bytes = %d, want %d — the fleet screen renders what "+
@@ -84,13 +88,13 @@ func TestAnArtefactDoesNotInventADomainThisNodeDoesNotRun(t *testing.T) {
 		NodeID:  "node-a",
 		Domains: map[string]coord.DomainPosition{"tracker": {Seq: 10, Generation: 1}},
 	}
-	stampSnapshot(&row, &snapshotHeld{
+	stampSnapshot(&row, heldSnapshots{statelog.EstatePartition: {
 		Have: true,
 		Manifest: statelog.Manifest{Domains: map[string]statelog.DomainPosition{
 			"tracker": {Seq: 8, Generation: 1},
 			"retired": {Seq: 5, Generation: 1},
 		}},
-	})
+	}})
 	if _, invented := row.Domains["retired"]; invented {
 		t.Error("a domain this node does not run reached the register — it would " +
 			"carry a committed position of zero, which the trim reads as a node " +
@@ -139,7 +143,7 @@ func TestWhatANodeHoldsSurvivesASkip(t *testing.T) {
 			statelog.SkipFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			held := heldAfter(statelog.Manifest{}, tc.err, dir)
+			held := heldAfter(statelog.Manifest{}, tc.err, dir, 0, statelog.EstatePartition)
 			if !held.Have || held.Manifest.Domains["tracker"].Seq != 120 {
 				t.Errorf("a %s tick dropped the artefact on disk (have=%v) — the "+
 					"node can still donate it, and a fleet that stops counting it "+
@@ -157,7 +161,7 @@ func TestWhatANodeHoldsSurvivesASkip(t *testing.T) {
 func TestASkipWithNothingOnDiskStillPublishesItsReason(t *testing.T) {
 	t.Parallel()
 	held := heldAfter(statelog.Manifest{},
-		&statelog.ErrSkipped{Reason: statelog.SkipSoleNode}, t.TempDir())
+		&statelog.ErrSkipped{Reason: statelog.SkipSoleNode}, t.TempDir(), 0, statelog.EstatePartition)
 	if held.Have {
 		t.Fatal("an empty directory reported an artefact")
 	}
@@ -208,6 +212,12 @@ func TestADomainSnapshottedWhileEmptyStillCountsAsADonor(t *testing.T) {
 func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 	t.Helper()
 	m.V = statelog.ManifestVersion
+	// LAYOUT 0's ONE PARTITION unless the case says otherwise: an artefact
+	// names the partition it is a copy of, and only one of the partition
+	// asked about is held.
+	if m.Partition == "" {
+		m.Partition = statelog.EstatePartition.String()
+	}
 	var newest uint64
 	for _, at := range m.Domains {
 		if at.Seq > newest {
@@ -219,6 +229,7 @@ func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 		t.Fatalf("encode the manifest: %v", err)
 	}
 	base := filepath.Join(dir, fmt.Sprintf("snapshot-%d", newest))
+	m.Artifact = filepath.Base(base) + ".db"
 	if err := os.WriteFile(base+".db", []byte("store bytes"), 0o600); err != nil {
 		t.Fatalf("write the artefact: %v", err)
 	}
@@ -366,7 +377,7 @@ func TestARestartDoesNotClaimTheNodeHasNeverSnapshotted(t *testing.T) {
 	// Exactly the first tick after a restart: nothing taken in THIS
 	// process, and the gate declines because what is on disk is current.
 	held := heldAfter(statelog.Manifest{},
-		&statelog.ErrSkipped{Reason: statelog.SkipRecent}, dir)
+		&statelog.ErrSkipped{Reason: statelog.SkipRecent}, dir, 0, statelog.EstatePartition)
 	if !held.Have {
 		t.Fatal("the artefact on disk was not seen, so the loop cannot tell " +
 			"this restart from a node that has never snapshotted")
@@ -386,7 +397,7 @@ func TestARestartDoesNotClaimTheNodeHasNeverSnapshotted(t *testing.T) {
 func TestANodeHoldingNothingIsStillReported(t *testing.T) {
 	t.Parallel()
 	held := heldAfter(statelog.Manifest{},
-		&statelog.ErrSkipped{Reason: statelog.SkipUnhydrated}, t.TempDir())
+		&statelog.ErrSkipped{Reason: statelog.SkipUnhydrated}, t.TempDir(), 0, statelog.EstatePartition)
 	if held.Have {
 		t.Fatal("an empty directory reported an artefact")
 	}
@@ -427,7 +438,16 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				(&Engine{}).snapshotLoop(s, taker, t.TempDir(), 24*time.Hour)
+				dir := t.TempDir()
+				(&Engine{}).snapshotLoop(s, snapshotPlan{
+					served: func() []statelog.PartitionID {
+						return []statelog.PartitionID{statelog.EstatePartition}
+					},
+					dir: func(statelog.PartitionID) string { return dir },
+					taker: func(statelog.PartitionID) (snapshotTaker, error) {
+						return taker, nil
+					},
+				}, 24*time.Hour)
 			}()
 			t.Cleanup(func() { stop(); <-done })
 
@@ -439,7 +459,7 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 			}
 			s.nudgeSnapshot()
 			taker.await(t, "the nudged tick")
-			if held := s.snapshot.Load(); held == nil {
+			if _, held := s.snapshotOf(statelog.EstatePartition); !held {
 				t.Fatal("the nudged tick published nothing to the register row")
 			}
 		})
@@ -543,7 +563,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 			parked := parkSnapshotLoop(t, e)
 			event()
 			waitUntil(t, 10*time.Second, "the snapshot loop to wake", func() bool {
-				return e.native.Load().log.snapshot.Load() != parked
+				return e.native.Load().log.snapshots.Load() != parked
 			})
 		})
 	}
@@ -559,7 +579,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 // own inside any window a test watched. And the loop is NOT nudged here: a
 // nudge that arrived while a tick was taking would run it again at once, and
 // that tick — declining as `recent` — goes back to the thirty-second retry.
-func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
+func parkSnapshotLoop(t *testing.T, e *Engine) *heldSnapshots {
 	t.Helper()
 	s := e.native.Load().log
 	counted := time.Now().UTC()
@@ -573,15 +593,218 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	}); err != nil {
 		t.Fatalf("publish a counted peer: %v", err)
 	}
-	var parked *snapshotHeld
+	var parked *heldSnapshots
 	waitUntil(t, 75*time.Second, "the snapshot loop to take one and park", func() bool {
-		held := s.snapshot.Load()
-		if held == nil || !held.Have || held.Skip != "" ||
-			held.Manifest.TakenAt.Before(counted) {
+		set := s.snapshots.Load()
+		if set == nil {
 			return false
 		}
-		parked = held
+		held, ok := (*set)[statelog.EstatePartition]
+		if !ok || !held.Have || held.Skip != "" || held.Manifest.TakenAt.Before(counted) {
+			return false
+		}
+		parked = set
 		return true
 	})
 	return parked
+}
+
+// THE LOOP TAKES EVERY PARTITION IT SERVES, ONE AT A TIME, THE OLDEST FIRST.
+//
+// A snapshot is a copy of one partition's file, so a node holding many takes
+// many, never two at once; and among those due, the partition whose newest
+// artefact is oldest goes first — one holding none before any — because its
+// donors are the stalest and a joiner of it replays furthest. What the loop
+// concluded about each is held apart, per partition.
+func TestTheLoopTakesEachServedPartitionOldestFirst(t *testing.T) {
+	t.Parallel()
+	p0 := statelog.PartitionID{Space: statelog.SpaceTracker}
+	p1 := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	p2 := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 2}
+	ctx, stop := context.WithCancel(t.Context())
+	s := &stateLog{run: ctx, layout: statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 3, Domains: []string{"tracker"}},
+	}}, snapshotNudge: make(chan struct{}, 1)}
+	earlier := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	s.holdSnapshot(p0, snapshotHeld{Have: true, Manifest: statelog.Manifest{TakenAt: earlier.Add(time.Hour)}})
+	s.holdSnapshot(p2, snapshotHeld{Have: true, Manifest: statelog.Manifest{TakenAt: earlier}})
+
+	var mu sync.Mutex
+	var order []statelog.PartitionID
+	took := make(chan struct{}, 8)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&Engine{}).snapshotLoop(s, snapshotPlan{
+			served: func() []statelog.PartitionID { return []statelog.PartitionID{p0, p1, p2} },
+			dir:    func(statelog.PartitionID) string { return t.TempDir() },
+			taker: func(p statelog.PartitionID) (snapshotTaker, error) {
+				return takerFunc(func() (statelog.Manifest, error) {
+					mu.Lock()
+					order = append(order, p)
+					mu.Unlock()
+					took <- struct{}{}
+					return statelog.Manifest{TakenAt: time.Now().UTC(), Partition: p.String()}, nil
+				}), nil
+			},
+		}, 24*time.Hour)
+	}()
+	t.Cleanup(func() { stop(); <-done })
+	for range 3 {
+		select {
+		case <-took:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the loop did not take every partition it serves")
+		}
+	}
+	mu.Lock()
+	got := slices.Clone(order)
+	mu.Unlock()
+	if want := []statelog.PartitionID{p1, p2, p0}; !slices.Equal(got, want) {
+		t.Errorf("the loop took %v, want the oldest artefact's partition first %v", got, want)
+	}
+	for _, p := range []statelog.PartitionID{p0, p1, p2} {
+		if held, ok := s.snapshotOf(p); !ok || !held.Have {
+			t.Errorf("what the loop concluded about %s is not held (%+v)", p, held)
+		}
+	}
+	select {
+	case <-took:
+		t.Fatal("a partition whose snapshot was just taken was taken again before its interval")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// takerFunc is a snapshotter over a function.
+type takerFunc func() (statelog.Manifest, error)
+
+func (f takerFunc) Take(context.Context) (statelog.Manifest, error) { return f() }
+
+// A PARTITION THIS NODE NO LONGER SERVES IS NO LONGER ITS DONATION.
+//
+// What the loop concluded about a partition is what the row advertises a joiner
+// may adopt; once the node has stopped serving it, keeping the entry would go
+// on advertising a copy it no longer answers for.
+func TestAPartitionNoLongerServedIsForgotten(t *testing.T) {
+	t.Parallel()
+	p0 := statelog.PartitionID{Space: statelog.SpaceTracker}
+	p1 := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	s := &stateLog{}
+	s.holdSnapshot(p0, snapshotHeld{Have: true})
+	s.holdSnapshot(p1, snapshotHeld{Have: true})
+	s.keepSnapshotsOf([]statelog.PartitionID{p1})
+	if _, held := s.snapshotOf(p0); held {
+		t.Error("a partition no longer served is still this node's donation")
+	}
+	if _, held := s.snapshotOf(p1); !held {
+		t.Error("the partition still served lost what the loop concluded about it")
+	}
+}
+
+// A DIVIDED LAYOUT'S ROW REPORTS EACH PARTITION'S ARTEFACT IN ITS OWN REPORT.
+//
+// A partitioned layout's row carries a report per partition it holds, and each
+// artefact's size and skip land in its partition's report — never on the row,
+// which is layout 0's one partition's place — with each log's artefact
+// position on the log's own entry. A partition the row does not report, one
+// this node no longer runs a log of, is written nowhere.
+func TestADividedRowReportsEachPartitionsArtefact(t *testing.T) {
+	t.Parallel()
+	p0 := statelog.PartitionID{Space: statelog.SpaceTracker}
+	p1 := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	taken := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	row := coord.NodePositions{
+		NodeID: "node-a", Layout: 1,
+		Domains: map[string]coord.DomainPosition{"tracker@tracker.000": {Seq: 9, Generation: 1}},
+		Partitions: map[string]coord.PartitionReport{
+			p0.String(): {State: "serving"},
+		},
+	}
+	stampSnapshot(&row, heldSnapshots{
+		p0: {Have: true, Manifest: statelog.Manifest{TakenAt: taken, Bytes: 10,
+			Domains: map[string]statelog.DomainPosition{"tracker@tracker.000": {Seq: 5, Generation: 1}}}},
+		p1: {Skip: statelog.SkipLagging},
+	})
+	if err := row.Validate(); err != nil {
+		t.Fatalf("the stamped row is not one a node may write: %v", err)
+	}
+	if got := row.Partitions[p0.String()]; got.SnapshotBytes != 10 || got.State != "serving" {
+		t.Errorf("tracker.000's report is %+v, want its artefact's 10 bytes beside its state", got)
+	}
+	if _, reported := row.Partitions[p1.String()]; reported {
+		t.Error("a partition the row does not report was added to it")
+	}
+	if got := row.Domains["tracker@tracker.000"]; got.SnapshotSeq != 5 || !got.SnapshotAt.Equal(taken) {
+		t.Errorf("the log's artefact position is %d at %s, want 5 at %s", got.SnapshotSeq,
+			got.SnapshotAt, taken)
+	}
+}
+
+// AN ARTEFACT OF ANOTHER PARTITION IS NOT HELD.
+//
+// A partition's directory is where its artefacts are, but what a node holds of
+// a partition is only an artefact naming that partition: one of another — a
+// directory an operator moved, a layout's leftovers — is no copy a joiner of
+// this partition can adopt.
+func TestAnArtefactOfAnotherPartitionIsNotHeld(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestSnapshot(t, dir, statelog.Manifest{
+		Layout: 1, Partition: "tracker.007",
+		TakenAt: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC),
+		Domains: map[string]statelog.DomainPosition{"tracker@tracker.007": {Seq: 120, Generation: 3}},
+	})
+	if _, found := newestSnapshot(dir, 0, statelog.EstatePartition); found {
+		t.Error("an artefact of tracker.007 was held as the estate's")
+	}
+	if _, found := newestSnapshot(dir, 2, statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}); found {
+		t.Error("an artefact of layout 1's tracker.007 was held as layout 2's")
+	}
+	if _, found := newestSnapshot(dir, 1, statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}); !found {
+		t.Error("tracker.007's own artefact was not held")
+	}
+}
+
+// THE SNAPSHOT LOOP COUNTS A PARTITION'S HOLDERS, NOT ITS REGISTER ROWS ALONE.
+//
+// A node joining a partition has no row naming its logs until it has adopted a
+// copy — the copy this count decides whether anybody takes. Counted from the
+// register alone, a partition's lone server saw a fleet of one and took no
+// artefact, and the joiner waited for a donor that could not exist. So the
+// count is the trim's own counted set: rows naming the partition's logs, not
+// released, and the partition's holders — the map's, under a divided layout.
+func TestTheSnapshotLoopCountsAPartitionsHolders(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	layout := partitionedTestLayout()
+	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker}
+	fleet := placedMap(t, layout, map[statelog.PartitionID][]partmap.Holder{
+		tracker0: {{Node: "node-a", State: partmap.Serving, Since: 1},
+			{Node: "node-j", State: partmap.Joining, Since: 2}},
+	})
+	for _, row := range []coord.NodePositions{
+		{NodeID: "node-a", Layout: 1, Domains: map[string]coord.DomainPosition{
+			"tracker@tracker.000": {Seq: 4, AppliedThrough: 4}}},
+		{NodeID: "node-l", Layout: 1, Domains: map[string]coord.DomainPosition{
+			"tracker@tracker.000": {Seq: 3, AppliedThrough: 3, State: coord.LogReleased}}},
+		{NodeID: "node-o", Layout: 1, Domains: map[string]coord.DomainPosition{
+			"tracker@tracker.001": {Seq: 2, AppliedThrough: 2}}},
+	} {
+		if err := fleet.PutPositions(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backend := coordmem.New()
+	claimLeases(t, backend, layout.Number, "node-a")
+	e := &Engine{backends: &Backends{Coord: backend}}
+	e.estateWatch.Store(runningWatch(t, fleet, backend, nil, layout, &viewClock{now: time.Now()}))
+	s := &stateLog{layout: layout, fleet: fleet}
+	n, err := e.countedOn(ctx, s, tracker0)
+	if err != nil {
+		t.Fatalf("countedOn: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("tracker.000 counts %d nodes, want its server and its joiner — not the "+
+			"node that released it, nor one holding another partition", n)
+	}
 }

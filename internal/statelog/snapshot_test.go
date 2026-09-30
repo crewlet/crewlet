@@ -111,11 +111,13 @@ func (h *snapHarness) cursor(seq uint64) {
 func (h *snapHarness) rebuild(interval time.Duration) {
 	h.t.Helper()
 	s, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Layout:    statelog.EstateLayout(probeDomain{}.Name()),
+		Partition: statelog.EstatePartition,
 		Domains: []statelog.Registered{{
 			Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
 			Health: func() statelog.Health { return h.health },
 		}},
-		Partition:     h.estate,
+		File:          h.estate,
 		Dir:           h.dir,
 		NodeID:        "node-a",
 		EngineVersion: "v0.0.0-test",
@@ -673,7 +675,7 @@ func TestASnapshotNamesTheStreamItsFileWasApplying(t *testing.T) {
 func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	t.Parallel()
 	offer := statelog.Offer{Manifest: statelog.Manifest{
-		V: statelog.ManifestVersion,
+		V: statelog.ManifestVersion, Partition: statelog.EstatePartition.String(),
 		Domains: map[string]statelog.DomainPosition{"probe": {
 			Stream:          probeStream,
 			Generation:      1,
@@ -686,6 +688,7 @@ func TestAnOfferFromAnotherStreamInstanceIsRefused(t *testing.T) {
 	build := map[string]statelog.Registered{"probe": {Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{})}}
 
 	req := statelog.OfferRequest{
+		Partition:       statelog.EstatePartition.String(),
 		Need:            map[string]uint64{"probe": 1},
 		Generations:     map[string]uint32{"probe": 1},
 		StreamCreatedAt: map[string]time.Time{"probe": liveStreamCreatedAt},
@@ -797,5 +800,94 @@ func TestASecondTakeAtTheSamePositionDoesNotPublishOverTheFirst(t *testing.T) {
 	if back.Artifact != second.Artifact {
 		t.Errorf("the manifest on disk names %q and the take reported %q",
 			back.Artifact, second.Artifact)
+	}
+}
+
+// A SNAPSHOT IS A COPY OF ONE PARTITION, AND ITS MANIFEST SAYS WHICH.
+//
+// The recipient installs the file as the partition the manifest names, of the
+// layout it names, so the snapshotter is built only over exactly one
+// partition's logs — none missing, none of another partition — and its file,
+// and every artefact it takes names both.
+func TestASnapshotIsACopyOfOnePartitionAndSaysWhich(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	m, err := h.snap.Take(t.Context())
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if m.Partition != statelog.EstatePartition.String() || m.Layout != 0 {
+		t.Errorf("the manifest names partition %q of layout %d, want estate.000 of 0",
+			m.Partition, m.Layout)
+	}
+	back, err := statelog.ReadManifest(filepath.Join(h.dir, strings.TrimSuffix(m.Artifact, ".db")+".json"))
+	if err != nil || back.Partition != m.Partition {
+		t.Fatalf("the manifest on disk reads (%+v, %v)", back, err)
+	}
+
+	reg := statelog.Registered{Domain: probeDomain{}, Log: logOf(probeDomain{}), Spec: specOf(probeDomain{}),
+		Health: func() statelog.Health { return h.health }}
+	two := statelog.EstateLayout(probeDomain{}.Name(), "pages")
+	for name, deps := range map[string]statelog.SnapshotDeps{
+		"a log of the partition missing": {Layout: two, Partition: statelog.EstatePartition,
+			Domains: []statelog.Registered{reg}, File: h.estate},
+		"no partition": {Layout: statelog.EstateLayout(probeDomain{}.Name()),
+			Domains: []statelog.Registered{reg}, File: h.estate},
+		"another partition's file": {Layout: statelog.EstateLayout(probeDomain{}.Name()),
+			Partition: statelog.EstatePartition, Domains: []statelog.Registered{reg},
+			File: (&store.DB{}).PartitionHandle("tracker.007")},
+	} {
+		deps.Dir, deps.NodeID, deps.Interval = h.dir, "node-a", time.Hour
+		deps.Counted = func(context.Context) (int, error) { return 3, nil }
+		if _, err := statelog.NewSnapshotter(deps); err == nil {
+			t.Errorf("a snapshotter over %s was built", name)
+		}
+	}
+}
+
+// A MANIFEST THAT NAMES NO PARTITION IS NOBODY'S ARTEFACT.
+//
+// Version 2 named none, and a manifest that does not say which file it is a
+// copy of cannot be installed as any: it is refused on read, so no donor
+// offers it and no loop counts it as the partition's current artefact.
+func TestAManifestNamingNoPartitionIsRefused(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"version 2":       `{"v":2,"artifact":"snapshot-1-1.db","domains":{}}`,
+		"no partition":    `{"v":3,"layout":0,"artifact":"snapshot-1-1.db","domains":{}}`,
+		"a negative one":  `{"v":3,"layout":-1,"partition":"estate.000","domains":{}}`,
+		"not a partition": `{"v":3,"layout":0,"partition":"estate","domains":{}}`,
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := statelog.ReadManifest(path); err == nil {
+			t.Errorf("a manifest of %s was read", name)
+		}
+	}
+}
+
+// EACH PARTITION'S ARTEFACTS ARE KEPT APART.
+//
+// SnapshotsKept and the rotation are per partition, so an artefact of one
+// partition never rotates another's away: layout 0's one partition keeps its
+// artefacts where they have always been, and every other partition has a
+// directory of its own, named as its file is.
+func TestEachPartitionsArtefactsAreKeptApart(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("var", "snap")
+	if got := statelog.SnapshotDir(root, 0, statelog.EstatePartition); got != root {
+		t.Errorf("layout 0's artefacts are kept in %q, want %q", got, root)
+	}
+	seven := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 7}
+	eight := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 8}
+	if got, want := statelog.SnapshotDir(root, 1, seven), filepath.Join(root, "l1-tracker.007"); got != want {
+		t.Errorf("tracker.007's artefacts are kept in %q, want %q", got, want)
+	}
+	if statelog.SnapshotDir(root, 1, seven) == statelog.SnapshotDir(root, 1, eight) ||
+		statelog.SnapshotDir(root, 1, seven) == statelog.SnapshotDir(root, 2, seven) {
+		t.Error("two partitions' artefacts share a directory")
 	}
 }

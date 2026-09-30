@@ -362,7 +362,8 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	}
 	snapDir := filepath.Join(dir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, Partition: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
+		Layout: LayoutZero(), Partition: statelog.EstatePartition,
+		Domains: registered, File: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
 		Counted:       func(context.Context) (int, error) { return 2, nil },
 		Interval:      24 * time.Hour,
@@ -375,9 +376,10 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 		t.Fatalf("Take: %v", err)
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
+		NodeID: "donor", Layout: LayoutZero(),
+		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) { return manifest, true },
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return manifest, true },
 		Path:   func(m statelog.Manifest) string { return filepath.Join(snapDir, m.Artifact) },
 	})
 	if err != nil {

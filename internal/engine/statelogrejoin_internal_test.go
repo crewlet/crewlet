@@ -64,7 +64,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	}
 	snapDir := filepath.Join(donorDir, "snapshots")
 	snapper, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains: registered, Partition: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
+		Layout: LayoutZero(), Partition: statelog.EstatePartition,
+		Domains: registered, File: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
 		Counted:       func(context.Context) (int, error) { return 2, nil },
 		Interval:      24 * time.Hour,
@@ -81,9 +82,10 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	// offers, so the latest one the adoption's bound may precede.
 	var answered atomic.Int64
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor",
+		NodeID: "donor", Layout: LayoutZero(),
+		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) {
+		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) {
 			answered.CompareAndSwap(0, time.Now().UnixNano())
 			return manifest, true
 		},

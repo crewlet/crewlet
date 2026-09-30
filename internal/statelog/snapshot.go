@@ -21,13 +21,17 @@ import (
 
 // The snapshot repository's own constants.
 const (
-	// SnapshotsKept is how many snapshots a node retains.
+	// SnapshotsKept is how many snapshots a node retains OF EACH PARTITION
+	// it holds.
 	//
 	// ONE, because the fleet is the redundancy: a snapshot is a recovery
 	// artefact for a peer, and a second copy on the same disk protects
 	// against nothing the first does not. What DOES protect against losing
-	// a donor is that every node takes its own — which is why the trim's
-	// snapshot term is the k-th highest rather than the newest.
+	// a donor is that every holder takes its own — which is why the trim's
+	// snapshot term is the k-th highest rather than the newest. Per
+	// partition, because each partition is a file and an artefact is a copy
+	// of one: a node's newest artefact of one partition says nothing about
+	// another's, and rotating across them would leave all but one without.
 	SnapshotsKept = 1
 
 	// SnapshotLagSlack is how far behind the log a node may be and still
@@ -35,17 +39,23 @@ const (
 	// one taken far behind saves less than it costs to transfer.
 	SnapshotLagSlack = 1_000
 
-	// SnapshotDonorsRequired is how many verified snapshots the fleet must
-	// hold before the trim may pass them.
+	// SnapshotDonorsRequired is how many verified snapshots of a log's
+	// partition the fleet must hold before the trim may pass them on that
+	// log.
 	//
 	// TWO. The minimum over the counted set blocks for ever on any node
 	// that has not snapshotted yet; the maximum makes one donor's disk the
 	// whole fleet's recovery plan. Two means losing any single donor still
-	// leaves a usable artefact.
+	// leaves a usable artefact. PER LOG, over the log's own counted set —
+	// its partition's holders — so a partition held by one node is
+	// satisfied by construction (its recovery artefact is a backup) and one
+	// held by three needs two of those three.
 	SnapshotDonorsRequired = 2
 
 	// SnapshotFreeSpaceFactor is how much free space the snapshot volume
-	// must hold, as a multiple of the store's own size.
+	// must hold, as a multiple of the size of the partition file a take
+	// copies — that partition's, never the whole estate's: a node holding a
+	// hundred partitions copies one at a time.
 	//
 	// The default puts a full copy on the SAME VOLUME as the live
 	// database, so a snapshot write that filled the disk would become a
@@ -168,11 +178,16 @@ func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 
 // ManifestVersion is the artefact format this build writes.
 //
-// TWO SINCE THE MANIFEST NAMES ITS OWN FILE. Before that the name was DERIVED
-// from the positions, in three places independently, and an artefact whose
-// manifest does not name its file is one this build cannot find — so it is
-// refused as a version it does not read rather than resolved to an empty path.
-const ManifestVersion = 2
+// THREE SINCE THE MANIFEST NAMES ITS PARTITION AND LAYOUT. An artefact is a copy
+// of ONE partition's file, and a recipient installs it as that partition's:
+// a manifest that did not say which one would leave the recipient to infer it
+// from the logs it happens to name, and an inference is a guess. Version two
+// named neither, so this build refuses one as a version it does not read.
+//
+// TWO WAS WHEN THE MANIFEST BEGAN NAMING ITS OWN FILE. Before that the name was
+// DERIVED from the positions, in three places independently, and an artefact
+// whose manifest does not name its file is one this build cannot find.
+const ManifestVersion = 3
 
 // DomainPosition is what a manifest says about one registered domain.
 //
@@ -228,7 +243,15 @@ type DomainPosition struct {
 // one holds the debris of a run that did not finish rather than a partial
 // snapshot.
 type Manifest struct {
-	V             int                       `json:"v"`
+	V int `json:"v"`
+
+	// Layout is the number of the layout the copied partition is of, and
+	// Partition its name: WHICH file this is a copy of. A recipient installs
+	// an artefact only as the partition it names, of the layout it names —
+	// and refuses one whose logs are not exactly that partition's.
+	Layout    int    `json:"layout"`
+	Partition string `json:"partition"`
+
 	TakenAt       time.Time                 `json:"taken_at"`
 	NodeID        string                    `json:"node_id"`
 	EngineVersion string                    `json:"engine_version"`
@@ -312,16 +335,22 @@ func checkRegistered[K comparable](regs map[K]Registered) error {
 
 // SnapshotDeps is everything the snapshot loop needs that it does not own.
 type SnapshotDeps struct {
-	// Domains are every domain this build registers. An artefact names
-	// ALL of them or a recipient refuses it, so a snapshot taken with one
-	// missing is one nobody can use.
+	// Layout is the layout this node runs, and Partition the partition of it
+	// this snapshotter copies. An artefact is a copy of ONE partition's file.
+	Layout    Layout
+	Partition PartitionID
+
+	// Domains are every log of the partition, EXACTLY: an artefact names
+	// every one of them and no other, or a recipient refuses it, so a
+	// snapshotter built with one missing — or one of another partition —
+	// is refused rather than taking artefacts nobody can use.
 	Domains []Registered
 
-	// Partition is the partition the artefact copies: its file alone. The
+	// File is the partition's file, which the artefact copies alone. The
 	// node's own estate holds the audit log and the secret bootstrap, which
 	// is exactly what a peer must not inherit and what would otherwise
 	// dominate the transfer.
-	Partition store.PartitionHandle
+	File store.PartitionHandle
 
 	// Dir is where this node keeps its snapshots.
 	Dir string
@@ -330,8 +359,9 @@ type SnapshotDeps struct {
 	NodeID        string
 	EngineVersion string
 
-	// Counted is how many nodes the fleet counts, which decides whether
-	// there is anybody to donate to at all.
+	// Counted is how many nodes the fleet counts on the partition's logs —
+	// its holders, and every node whose row names one of them — which
+	// decides whether there is anybody to donate to at all.
 	Counted func(ctx context.Context) (int, error)
 
 	// Interval is how stale the newest local snapshot may be.
@@ -358,8 +388,11 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 		return nil, fmt.Errorf("statelog: a snapshot with no registered domain " +
 			"names no position, and a recipient refuses an artefact that does " +
 			"not name every domain its own build registers")
-	case d.Partition.Name() == "":
-		return nil, fmt.Errorf("statelog: the snapshot loop has no partition to copy")
+	case !d.Partition.Valid():
+		return nil, fmt.Errorf("statelog: the snapshot loop names no partition to copy")
+	case d.File.Name() != d.Partition.String():
+		return nil, fmt.Errorf("statelog: the snapshot loop of %s would copy the file %q",
+			d.Partition, d.File.Name())
 	case d.Dir == "":
 		return nil, fmt.Errorf("statelog: the snapshot loop has nowhere to write")
 	case d.NodeID == "":
@@ -372,12 +405,40 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 	if err := checkRegistered(maps.Collect(slices.All(d.Domains))); err != nil {
 		return nil, err
 	}
+	if err := exactlyTheLogs(d.Layout, d.Partition, d.Domains); err != nil {
+		return nil, err
+	}
 	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Snapshotter{deps: d, now: now, log: logger}, nil
+}
+
+// exactlyTheLogs refuses a set of registrations that is not exactly partition
+// p's logs in layout l — the set an artefact of p must name.
+func exactlyTheLogs(l Layout, p PartitionID, regs []Registered) error {
+	want := l.Logs(p)
+	if len(want) == 0 {
+		return fmt.Errorf("statelog: layout %d has no partition %q to snapshot", l.Number, p)
+	}
+	have := make(map[string]bool, len(regs))
+	for _, r := range regs {
+		if !slices.Contains(want, r.Log) {
+			return fmt.Errorf("statelog: the snapshot of %s is handed the log %s, which "+
+				"is not one of that partition's", p, r.Log)
+		}
+		have[r.Log.String()] = true
+	}
+	for _, log := range want {
+		if !have[log.String()] {
+			return fmt.Errorf("statelog: the snapshot of %s is not handed its log %s, and "+
+				"a recipient refuses an artefact that does not name every log of its "+
+				"partition", p, log)
+		}
+	}
+	return nil
 }
 
 // ErrSkipped reports a tick that took no snapshot, carrying the reason.
@@ -443,15 +504,15 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	}
 	discard := func() { _ = store.RemoveCopy(part) }
 
-	live, err := s.deps.Partition.DB()
+	live, err := s.deps.File.DB()
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: copy the partition %s: %w",
-			s.deps.Partition.Name(), err)
+			s.deps.Partition, err)
 	}
 	info, err := live.Backup(ctx, part)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: copy the partition %s: %w",
-			s.deps.Partition.Name(), err)
+			s.deps.Partition, err)
 	}
 
 	// THE DONOR SCRUBS, on a list DERIVED from what every domain declares
@@ -502,6 +563,8 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 
 	m := Manifest{
 		V:             ManifestVersion,
+		Layout:        s.deps.Layout.Number,
+		Partition:     s.deps.Partition.String(),
 		TakenAt:       taken,
 		NodeID:        s.deps.NodeID,
 		EngineVersion: s.deps.EngineVersion,
@@ -548,7 +611,7 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	s.rotate(ctx, base)
 
 	s.log.InfoContext(ctx, "statelog_snapshot_taken",
-		"node", s.deps.NodeID, "path", copyPath, "bytes", m.Bytes,
+		"node", s.deps.NodeID, "partition", m.Partition, "path", copyPath, "bytes", m.Bytes,
 		"domains", len(m.Domains), "scrubbed", len(m.Scrubbed))
 	return m, nil
 }
@@ -754,7 +817,7 @@ func (s *Snapshotter) newest() (Manifest, bool, error) {
 			continue
 		}
 		m, err := ReadManifest(filepath.Join(s.deps.Dir, e.Name()))
-		if err != nil {
+		if err != nil || !s.copies(m) {
 			continue
 		}
 		if !found || m.TakenAt.After(newest.TakenAt) {
@@ -764,10 +827,19 @@ func (s *Snapshotter) newest() (Manifest, bool, error) {
 	return newest, found, nil
 }
 
-// current reports whether a manifest names every registered domain at the
-// generation this node's own checkpoint stands at — which is the only
-// generation a joiner asking this node would accept it at.
+// copies reports whether a manifest is an artefact of this snapshotter's own
+// partition, of the layout it runs.
+func (s *Snapshotter) copies(m Manifest) bool {
+	return m.Partition == s.deps.Partition.String() && m.Layout == s.deps.Layout.Number
+}
+
+// current reports whether a manifest is this partition's and names every one of
+// its logs at the generation this node's own checkpoint stands at — which is
+// the only generation a joiner asking this node would accept it at.
 func (s *Snapshotter) current(m Manifest) bool {
+	if !s.copies(m) {
+		return false
+	}
 	for _, reg := range s.deps.Domains {
 		at, named := m.Domains[reg.Log.String()]
 		if !named || at.Generation != reg.Health().Position.Generation {
@@ -799,7 +871,8 @@ func (s *Snapshotter) rotate(ctx context.Context, keep string) {
 	}
 }
 
-// space is the snapshot volume's free bytes and the replicated estate's size.
+// space is the snapshot volume's free bytes and the size of the partition file a
+// take copies — that one file, never the whole estate.
 func (s *Snapshotter) space() (free, size int64, err error) {
 	dir := s.deps.Dir
 	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
@@ -813,15 +886,15 @@ func (s *Snapshotter) space() (free, size int64, err error) {
 	if statfsErr := unix.Statfs(dir, &fs); statfsErr != nil {
 		return 0, 0, fmt.Errorf("statelog: measure the free space on %s: %w", dir, statfsErr)
 	}
-	live, err := s.deps.Partition.DB()
+	live, err := s.deps.File.DB()
 	if err != nil {
 		return 0, 0, fmt.Errorf("statelog: measure the partition %s: %w",
-			s.deps.Partition.Name(), err)
+			s.deps.Partition, err)
 	}
 	info, err := os.Stat(live.Path())
 	if err != nil {
 		return 0, 0, fmt.Errorf("statelog: measure the partition %s: %w",
-			s.deps.Partition.Name(), err)
+			s.deps.Partition, err)
 	}
 	// Bavail is what an unprivileged process may actually use, which is
 	// what this loop is: Bfree includes the reserve only root can reach.
@@ -877,5 +950,27 @@ func ReadManifest(path string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("statelog: %s is a version %d manifest and "+
 			"this build reads %d", path, m.V, ManifestVersion)
 	}
+	if _, err := ParsePartitionID(m.Partition); err != nil || m.Layout < 0 {
+		return Manifest{}, fmt.Errorf("statelog: %s names no partition of a layout "+
+			"(partition %q, layout %d), so nobody can tell which file it is a copy of",
+			path, m.Partition, m.Layout)
+	}
 	return m, nil
+}
+
+// SnapshotDir is where a node whose snapshot directory is root keeps its
+// artefacts of partition p of layout: root itself for layout 0's one partition
+// — where every artefact of the single-file estate has always been — and a
+// directory of its own beside that for every other, `l<layout>-<partition>`,
+// the name its file has beside the node's.
+//
+// A DIRECTORY PER PARTITION, because [SnapshotsKept] and the rotation are per
+// partition: an artefact of one partition must never rotate another's away,
+// and a take that finds its partition's newest by listing a directory must
+// find only its partition's.
+func SnapshotDir(root string, layout int, p PartitionID) string {
+	if p == EstatePartition {
+		return root
+	}
+	return filepath.Join(root, fmt.Sprintf("l%d-%s", layout, p))
 }

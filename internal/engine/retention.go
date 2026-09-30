@@ -853,35 +853,25 @@ var (
 func (r *retention) tombstones(ctx context.Context, running *runningLog,
 	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
-	return logTombstones(ctx, r.db, running.domain, running.id.Partition, generation)
-}
-
-// logTombstones is every eviction and release this node has applied on
-// domain's log in partition p, each stamped with generation — see
-// [retention.tombstones], which the snapshot loop's count reads through too
-// ([Engine.countedOn]), so the two subtract one set of tombstones.
-func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
-	p statelog.PartitionID, generation uint32) (tombs []statelog.Tombstone, read bool) {
-
-	if !domain.ClaimsIdentity() {
+	if !running.domain.ClaimsIdentity() {
 		// ONLY AN IDENTITY-CLAIMING DOMAIN CARRIES EVICTIONS. A domain
 		// that does not claim identity has no say in who the fleet
 		// counts on its log.
 		return nil, true
 	}
-	if db == nil {
+	if r.db == nil {
 		return nil, false
 	}
-	lister, ok := domain.(evictionLister)
+	lister, ok := running.domain.(evictionLister)
 	if !ok {
 		// UNREACHABLE ON A NODE THAT BOOTED — [Engine.startStateLog]
 		// refuses such a domain — and logged rather than assumed, on the
 		// conservative side: nobody is uncounted.
 		log.ErrorContext(ctx, "retention_evictions_unlisted",
-			"domain", domain.Name())
+			"domain", running.domain.Name())
 		return nil, false
 	}
-	rows, err := lister.Evictions(ctx, db.PartitionHandle(p.String()).Reader())
+	rows, err := lister.Evictions(ctx, r.db.PartitionHandle(running.id.Partition.String()).Reader())
 	switch {
 	case errors.Is(err, store.ErrNoEstate) || errors.Is(err, context.Canceled):
 		// A STOP THIS PROCESS ASKED FOR IS NOT AN UNREADABLE TABLE. A
@@ -893,7 +883,7 @@ func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 		return nil, false
 	case err != nil:
 		log.WarnContext(ctx, "retention_evictions_unreadable",
-			"domain", domain.Name(), "err", err)
+			"domain", running.domain.Name(), "err", err)
 		return nil, false
 	}
 	out := make([]statelog.Tombstone, 0, len(rows))

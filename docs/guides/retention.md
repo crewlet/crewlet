@@ -278,17 +278,36 @@ peer's snapshot of the replicated estate, verify it, and adopt it wholesale. (A
 node that is only below the published trim floor, while the log still holds
 what it lacks, replays it instead and needs none of this.)
 
+**A snapshot is a copy of one partition's file.** Under layout 0 that is the
+whole estate, as it has always been; under a [partitioned
+layout](../concepts/estate-placement.md) a node takes one artefact of each
+partition it serves, one at a time — the partition whose newest artefact is
+oldest first — each on `snapshot_interval` and each judged against its own
+file's size for free space. Its manifest names the partition and the layout it
+is a copy of, and every log of that partition: a joiner refuses an artefact of
+another partition, or one naming a log its partition does not carry, before a
+byte moves, and a donor answers only for a partition it serves. A request that
+names no partition — a build from before partitions — is answered by no donor
+of this one. Each partition's artefacts live in a directory of their own under
+`store.snapshot_dir`, named as its file is (`l1-tracker.007`); layout 0's stay
+in `store.snapshot_dir` itself.
+
 ```
 crewlet retention snapshots
 ```
 
 Its own verb rather than a block of `status`, because the repository is **per
 node**: "which of my machines can donate, and how old is what they hold" is a
-disk question, and it is the one you ask when a join has failed.
+disk question, and it is the one you ask when a join has failed. Under a
+partitioned layout each row is one node's artefact of one partition, named
+beside the node.
 
-**`SnapshotsKept = 1`.** With N donors the fleet is the redundancy — one per
-node across at least two nodes — and a recipient that fails a verification asks
-the next donor.
+**`SnapshotsKept = 1`, per partition.** With N donors the fleet is the
+redundancy — one per holder across at least two holders — and a recipient that
+fails a verification asks the next donor. The trim's `snapshot_floor` asks for
+two of a log's counted nodes to hold an artefact of its partition; a partition
+held by one node is satisfied by construction, its recovery artefact being a
+backup.
 
 **The manifest names the position the file keeps.** The checkpoint commits with
 the rows, so the position inside the copy is the only one that describes it,
@@ -300,14 +319,18 @@ both, and adoptable.
 
 **On a single node the loop does not run at all.** It skips with the published
 reason `sole_node`, because a full copy every day buys an artefact no peer can
-fetch. A solo deployment's recovery artefact is `crewlet backup`.
+fetch. A solo deployment's recovery artefact is `crewlet backup`. Who counts is
+the partition's counted set, as the trim counts it: every node whose row names
+one of its logs, and every node holding it — so a node joining the partition is
+counted before its first report, and the partition's lone server takes the
+artefact that joiner needs.
 
-Every skip is published on the node's own register row, so a failed join has an
-answer rather than a silence:
+Every skip is published on the node's own register row — per partition under a
+partitioned layout — so a failed join has an answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
-| `sole_node` | fewer than two counted nodes; nothing to donate to. Counted as the trim counts: every node whose row names a log, every live data node — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted longer ago than the fence window |
+| `sole_node` | fewer than two counted nodes on the partition; nothing to donate to |
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |

@@ -24,7 +24,8 @@ const (
 	// SubjectFetchPrefix plus a donor's node id is where that donor
 	// streams its artefact from. Per donor rather than shared, because a
 	// joiner picks ONE offer and fetching from a shared subject would
-	// race every other donor into the same reply inbox.
+	// race every other donor into the same reply inbox. The partition and
+	// the artefact travel in the request ([FetchRequest]), not the subject.
 	SubjectFetchPrefix = "crewlet.statelog.snapshot.fetch."
 )
 
@@ -47,6 +48,17 @@ const OfferWindow = 5 * time.Second
 type OfferRequest struct {
 	// NodeID is who is asking, for the donor's log.
 	NodeID string `json:"node_id"`
+
+	// Layout is the number of the layout the joiner runs, and Partition the
+	// partition of it the joiner needs a copy of — BOTH REQUIRED
+	// ([OfferRequest.Validate]). A snapshot is a copy of one partition's
+	// file, so a request that named none would be a question nobody can
+	// answer with a file. And a request naming none is exactly what a build
+	// from before partitions asks, whose join installs whatever it is
+	// handed as its whole estate: answered with a partition's file, it
+	// would install one partition as everything.
+	Layout    int    `json:"layout"`
+	Partition string `json:"partition"`
 
 	// Need is, per domain, the lowest position an artefact must name to
 	// be usable: one below the higher of the stream's first surviving
@@ -78,6 +90,33 @@ type OfferRequest struct {
 	StreamCreatedAt map[string]time.Time `json:"stream_created_at,omitempty"`
 }
 
+// ErrOfferRequest reports a request no donor answers: one that names no
+// partition, or one this donor's layout does not have.
+var ErrOfferRequest = errors.New("statelog: the offer request names no partition this donor runs")
+
+// Validate refuses a request that does not name a partition of layout: the
+// request of a build from before partitions, and one asking a donor that runs
+// another layout — whose files are not the copy the joiner needs, whatever
+// they are called.
+func (r OfferRequest) Validate(layout Layout) error {
+	p, err := ParsePartitionID(r.Partition)
+	switch {
+	case r.Partition == "":
+		return fmt.Errorf("%w: it names none — a request from a build that predates "+
+			"partitions, whose join would install one partition's file as its whole "+
+			"estate", ErrOfferRequest)
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrOfferRequest, err)
+	case r.Layout != layout.Number:
+		return fmt.Errorf("%w: it asks for %s of layout %d, and this donor runs layout %d",
+			ErrOfferRequest, r.Partition, r.Layout, layout.Number)
+	case len(layout.Logs(p)) == 0:
+		return fmt.Errorf("%w: layout %d has no partition %s", ErrOfferRequest,
+			layout.Number, r.Partition)
+	}
+	return nil
+}
+
 // Offer is what a node answers with.
 type Offer struct {
 	// Manifest is the artefact's own claim about itself.
@@ -105,6 +144,22 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 	if o.Manifest.V != ManifestVersion {
 		return fmt.Errorf("the artefact is a version %d manifest and this build "+
 			"reads %d", o.Manifest.V, ManifestVersion)
+	}
+	// THE PARTITION IT IS A COPY OF, FIRST: every other clause compares the
+	// artefact's logs with the joiner's, and a copy of another partition's
+	// file has none of them to compare.
+	if o.Manifest.Partition != req.Partition || o.Manifest.Layout != req.Layout {
+		return fmt.Errorf("the artefact is a copy of %q of layout %d and this node "+
+			"needs %q of layout %d", o.Manifest.Partition, o.Manifest.Layout,
+			req.Partition, req.Layout)
+	}
+	// EXACTLY THE PARTITION'S LOGS: one the artefact names that this node's
+	// partition does not have is a copy of some other file's rows.
+	for name := range o.Manifest.Domains {
+		if _, ours := build[name]; !ours {
+			return fmt.Errorf("the artefact names the log %q, which %s does not "+
+				"carry here — it is not a copy of this partition's file", name, req.Partition)
+		}
 	}
 	if ahead := aheadOf(o.Manifest.Migrations, known); len(ahead) > 0 {
 		return fmt.Errorf("the artefact carries migrations this binary does not: "+
@@ -184,13 +239,23 @@ type DonorDeps struct {
 	// NodeID names this donor, and its fetch subject.
 	NodeID string
 
+	// Layout is the layout this node runs: a request for another's
+	// partition is not one it answers.
+	Layout Layout
+
+	// Serves is whether this node SERVES a partition now — the only
+	// partitions it donates ([Holding]): a node still joining one holds a
+	// copy that is not yet the partition's, and one leaving it has stopped
+	// answering for it. An error answers nothing.
+	Serves func(p PartitionID) (bool, error)
+
 	// Dial opens the transfer's own connection.
 	Dial Dialer
 
-	// Newest answers this node's current offer, reporting false when it
-	// has nothing to donate. It is a function rather than a value because
-	// a node's newest artefact changes under it.
-	Newest func() (Manifest, bool)
+	// Newest answers this node's current artefact of a partition,
+	// reporting false when it has none to donate. It is a function rather
+	// than a value because a node's newest artefact changes under it.
+	Newest func(p PartitionID) (Manifest, bool)
 
 	// Path answers where an artefact's bytes are, given its manifest.
 	Path func(Manifest) string
@@ -215,6 +280,15 @@ func NewDonor(d DonorDeps) (*Donor, error) {
 		return nil, fmt.Errorf("statelog: a donor cannot open a transfer connection")
 	case d.Newest == nil || d.Path == nil:
 		return nil, fmt.Errorf("statelog: a donor has nothing to offer")
+	case d.Serves == nil:
+		return nil, fmt.Errorf("statelog: a donor cannot tell which partitions it serves")
+	case len(d.Layout.Partitions()) == 0:
+		// NOT [Layout.Validate], which is asked where a layout is made:
+		// the donor needs only which partitions the layout has — and a
+		// suite's layout places a fake domain the stream grammar has no
+		// name for ([Layout.Places]).
+		return nil, fmt.Errorf("statelog: a donor names no layout it runs, so it " +
+			"has no partition to answer for")
 	}
 	logger := loggerOr(d.Logger)
 	return &Donor{deps: d, log: logger}, nil
@@ -251,13 +325,16 @@ func (d *Donor) Serve(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// answerOffer replies with this node's artefact, or stays silent.
+// answerOffer replies with this node's artefact of the partition asked for, or
+// stays silent.
 //
 // SILENT RATHER THAN A REFUSAL, because a joiner collects for a window and
 // takes the best answer: a node with nothing to donate has nothing to say, and
-// an explicit "no" would only make the joiner wait for it.
+// an explicit "no" would only make the joiner wait for it. It says nothing
+// for a request naming no partition of its layout ([OfferRequest.Validate]), a
+// partition it does not serve, or one it holds no artefact of.
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
-	m, ok := d.deps.Newest()
+	m, ok := d.offer(ctx, msg.Data)
 	if !ok {
 		return
 	}
@@ -273,15 +350,68 @@ func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 	}
 }
 
-// stream sends the artefact to the deliver subject the request names.
+// offer is this node's artefact for the request in body, and false when it has
+// none to offer: a request it cannot read, one naming no partition of its
+// layout, a partition it does not serve, or one it holds no artefact of.
+func (d *Donor) offer(ctx context.Context, body []byte) (Manifest, bool) {
+	var req OfferRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return Manifest{}, false
+	}
+	if err := req.Validate(d.deps.Layout); err != nil {
+		// SAID AT DEBUG: a build from before partitions asks on every
+		// join, and every donor of a newer one would otherwise log each.
+		d.log.DebugContext(ctx, "statelog_snapshot_offer_refused",
+			"node", d.deps.NodeID, "asker", req.NodeID, "error", err.Error())
+		return Manifest{}, false
+	}
+	p, _ := ParsePartitionID(req.Partition)
+	if serves, err := d.deps.Serves(p); err != nil || !serves {
+		return Manifest{}, false
+	}
+	return d.deps.Newest(p)
+}
+
+// FetchRequest is what a joiner fetches an offer's artefact with: where to
+// deliver it, and WHICH artefact — the partition and the file the offer named —
+// so the donor streams the copy the joiner chose from its manifest, or refuses,
+// rather than whatever it holds by the time the fetch arrives.
+type FetchRequest struct {
+	Deliver   string `json:"deliver"`
+	Partition string `json:"partition"`
+	Artifact  string `json:"artifact"`
+}
+
+// stream sends the artefact the request names to the deliver subject it names.
+//
+// THE ARTEFACT THE JOINER CHOSE, OR NONE: the joiner accepted an offer from its
+// manifest, so a copy taken since — or one of another partition — is refused
+// with 410 rather than streamed and refused only after the transfer, by a
+// checksum it could never match.
 func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
-	deliver := string(msg.Data)
-	if deliver == "" {
+	var req FetchRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil || req.Deliver == "" {
 		return
 	}
-	m, ok := d.deps.Newest()
-	if !ok {
-		d.terminate(nc, deliver, 500, "this node holds no snapshot")
+	deliver := req.Deliver
+	p, err := ParsePartitionID(req.Partition)
+	if err != nil {
+		d.terminate(nc, deliver, 400, fmt.Sprintf("the fetch names no partition: %v", err))
+		return
+	}
+	serves, err := d.deps.Serves(p)
+	if err != nil || !serves {
+		d.terminate(nc, deliver, 404, fmt.Sprintf("this node does not serve %s", p))
+		return
+	}
+	m, ok := d.deps.Newest(p)
+	switch {
+	case !ok:
+		d.terminate(nc, deliver, 404, fmt.Sprintf("this node holds no snapshot of %s", p))
+		return
+	case m.Artifact != req.Artifact:
+		d.terminate(nc, deliver, 410, fmt.Sprintf("the artefact %s of %s was replaced by "+
+			"%s since it was offered; ask for offers again", req.Artifact, p, m.Artifact))
 		return
 	}
 	path := d.deps.Path(m)
@@ -354,7 +484,7 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	}
 	d.terminate(nc, deliver, 204, "")
 	d.log.InfoContext(ctx, "statelog_snapshot_sent",
-		"node", d.deps.NodeID, "bytes", m.Bytes, "sha256", m.SHA256)
+		"node", d.deps.NodeID, "partition", m.Partition, "bytes", m.Bytes, "sha256", m.SHA256)
 }
 
 // terminate ends a transfer with a verdict.
@@ -514,8 +644,13 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		return 0, fmt.Errorf("statelog: size the transfer buffer: %w", err)
 	}
 
+	fetch, err := json.Marshal(FetchRequest{Deliver: deliver,
+		Partition: offer.Manifest.Partition, Artifact: offer.Manifest.Artifact})
+	if err != nil {
+		return 0, fmt.Errorf("statelog: encode the fetch: %w", err)
+	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := nc.PublishRequest(offer.Fetch, nats.NewInbox(), []byte(deliver)); err != nil {
+	if err := nc.PublishRequest(offer.Fetch, nats.NewInbox(), fetch); err != nil {
 		return 0, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
 	// THE FLUSH TAKES THE CALLER'S CONTEXT, and the patience every other

@@ -86,6 +86,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrNoDecision", statelog.ErrNoDecision},
 	{"statelog.ErrNoOffer", statelog.ErrNoOffer},
 	{"statelog.ErrNotHolder", statelog.ErrNotHolder},
+	{"statelog.ErrOfferRequest", statelog.ErrOfferRequest},
 	{"statelog.ErrPositionRange", statelog.ErrPositionRange},
 	{"statelog.ErrReanchorRefused", statelog.ErrReanchorRefused},
 	{"statelog.ErrReleaseWhileServing", statelog.ErrReleaseWhileServing},

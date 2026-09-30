@@ -1,6 +1,7 @@
 package statelog
 
 import (
+	"cmp"
 	"fmt"
 	"iter"
 	"maps"
@@ -588,6 +589,11 @@ type EvictionReport struct {
 type SnapshotReport struct {
 	NodeID string `json:"node_id"`
 
+	// Partition is the partition the artefact is a copy of, on a row of a
+	// divided layout — one row per partition the node reports — and empty
+	// on a layout-0 row, whose one partition is the whole estate.
+	Partition string `json:"partition,omitempty"`
+
 	// Domains is the artefact's position per domain. Empty when the node
 	// holds none, in which case Skip says why.
 	Domains map[string]uint64 `json:"domains,omitempty"`
@@ -1050,37 +1056,65 @@ func (in ReportInputs) nodes() []NodeReport {
 	return out
 }
 
-// snapshots builds the register's view of who can donate.
+// snapshots builds the register's view of who can donate: a row per node under
+// layout 0, whose one artefact is the whole estate's, and a row per node and
+// partition it reports under any other — a snapshot is a copy of ONE
+// partition's file, so a node's artefacts of two partitions are two donations.
 func (in ReportInputs) snapshots() []SnapshotReport {
 	rows := make([]SnapshotReport, 0, len(in.Register))
 	for _, r := range in.Register {
-		row := SnapshotReport{
-			NodeID: r.NodeID,
-			Bytes:  r.SnapshotBytes,
-			Skip:   SkipReason(r.SnapshotSkip),
+		if r.Layout == 0 {
+			rows = append(rows, snapshotRow(r, "", coord.PartitionReport{
+				SnapshotBytes: r.SnapshotBytes, SnapshotSkip: r.SnapshotSkip}))
+			continue
 		}
-		for name, d := range r.Domains {
-			if d.SnapshotSeq == 0 {
-				continue
-			}
-			if row.Domains == nil {
-				row.Domains = make(map[string]uint64, len(r.Domains))
-			}
-			row.Domains[name] = d.SnapshotSeq
-			if d.SnapshotAt.After(row.At) {
-				row.At = d.SnapshotAt.UTC()
-			}
+		// A NODE WITH NO PARTITION TO REPORT still gets a row, for the
+		// reason below: a node nobody hears from is an answer too.
+		if len(r.Partitions) == 0 {
+			rows = append(rows, snapshotRow(r, "", coord.PartitionReport{}))
 		}
-		// A NODE WITH NO ARTEFACT AND NO REASON still gets a row. The
-		// absence is the operator's answer to "why did the join fail",
-		// and dropping the row would render it as a node that was
-		// never asked.
-		rows = append(rows, row)
+		for _, name := range slices.Sorted(maps.Keys(r.Partitions)) {
+			rows = append(rows, snapshotRow(r, name, r.Partitions[name]))
+		}
 	}
 	slices.SortFunc(rows, func(a, b SnapshotReport) int {
-		return strings.Compare(a.NodeID, b.NodeID)
+		return cmp.Or(strings.Compare(a.NodeID, b.NodeID), strings.Compare(a.Partition, b.Partition))
 	})
 	return rows
+}
+
+// snapshotRow is one node's artefact of one partition — partition empty for
+// layout 0's whole estate — as the register row reports it.
+func snapshotRow(r coord.NodePositions, partition string, report coord.PartitionReport) SnapshotReport {
+	row := SnapshotReport{
+		NodeID:    r.NodeID,
+		Partition: partition,
+		Bytes:     report.SnapshotBytes,
+		Skip:      SkipReason(report.SnapshotSkip),
+	}
+	for name, d := range r.Domains {
+		if d.SnapshotSeq == 0 || (partition != "" && !logOfPartition(name, partition)) {
+			continue
+		}
+		if row.Domains == nil {
+			row.Domains = make(map[string]uint64, len(r.Domains))
+		}
+		row.Domains[name] = d.SnapshotSeq
+		if d.SnapshotAt.After(row.At) {
+			row.At = d.SnapshotAt.UTC()
+		}
+	}
+	// A NODE WITH NO ARTEFACT AND NO REASON still gets a row. The absence
+	// is the operator's answer to "why did the join fail", and dropping the
+	// row would render it as a node that was never asked.
+	return row
+}
+
+// logOfPartition reports whether the log keyed key is a log of the named
+// partition — `tracker@tracker.007` of `tracker.007`.
+func logOfPartition(key, partition string) bool {
+	_, of, ok := strings.Cut(key, "@")
+	return ok && of == partition
 }
 
 // alarms evaluates this node's conditions once.

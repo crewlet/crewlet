@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -120,6 +121,29 @@ func TestTheRunningLayoutZeroRuntimeIsTodaysEstate(t *testing.T) {
 	}
 	if mine.Layout != 0 {
 		t.Errorf("the layout-0 node's row says layout %d", mine.Layout)
+	}
+	// NOTHING A DIVIDED LAYOUT ADDS: no map epoch, no per-partition report,
+	// no log's state — its one partition's snapshot stays on the row.
+	if mine.MapEpoch != 0 || mine.Partitions != nil {
+		t.Errorf("the layout-0 row carries map epoch %d and partitions %v, which no "+
+			"earlier build wrote", mine.MapEpoch, mine.Partitions)
+	}
+	for key, pos := range mine.Domains {
+		if pos.State != "" {
+			t.Errorf("the layout-0 row names %s in state %q", key, pos.State)
+		}
+	}
+	// AND ITS DUTIES AND ITS ARTEFACTS ARE WHERE THEY ALWAYS WERE: the trim's
+	// and the embedding's leases keep their names, and the one partition's
+	// snapshots their directory.
+	for duty, want := range map[string]string{retentionDutyName: "retention", embedDutyName: "embeddings"} {
+		if got := partitionDutyName(duty, statelog.EstatePartition); got != want {
+			t.Errorf("layout 0's %s duty is named %q, and every earlier build claims %q",
+				duty, got, want)
+		}
+	}
+	if root := e.boot.Store.SnapshotDirFor(); statelog.SnapshotDir(root, 0, statelog.EstatePartition) != root {
+		t.Errorf("layout 0's artefacts moved out of %s", root)
 	}
 	var keys []string
 	for key := range mine.Domains {
@@ -323,6 +347,17 @@ func TestAStateLogRunsEveryLogOfItsLayoutEachOnItsOwn(t *testing.T) {
 	}
 	if mine.Layout != 1 {
 		t.Errorf("the row says layout %d, and its keys are layout 1's", mine.Layout)
+	}
+	// A REPORT PER PARTITION IT RUNS, each in a state its estate lease could
+	// name, and no snapshot on the row — that is layout 0's one partition's.
+	if err := mine.Validate(); err != nil {
+		t.Errorf("the heartbeat wrote a row no node may write: %v", err)
+	}
+	for _, p := range layout.Partitions() {
+		report, reported := mine.Partitions[p.String()]
+		if !reported || !partmap.PartitionState(report.State).Valid() {
+			t.Errorf("the row reports %s as %+v (%v), want a state of its copy", p, report, reported)
+		}
 	}
 	for _, running := range s.running() {
 		pos, held := mine.Domains[running.key]

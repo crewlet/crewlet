@@ -503,6 +503,32 @@ func TestRetentionSnapshotsNamesWhyANodeHoldsNone(t *testing.T) {
 	}
 }
 
+// A DIVIDED ESTATE'S ARTEFACTS ARE NAMED BY PARTITION.
+//
+// Under a partitioned layout a node donates each partition it holds on its own
+// — a snapshot is a copy of one partition's file — so its rows are one per
+// partition, and two rows naming only the node would read as one artefact
+// listed twice.
+func TestRetentionSnapshotsNamesEachArtefactsPartition(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Snapshots = []statelog.SnapshotReport{
+		{NodeID: "node-2", Partition: "tracker.000",
+			Domains: map[string]uint64{"tracker@tracker.000": 40}, Bytes: 1 << 20},
+		{NodeID: "node-2", Partition: "tracker.001", Skip: statelog.SkipLagging},
+	}
+	node.report = report
+	stdout, _, err := cli(t, "retention", "snapshots", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention snapshots: %v", err)
+	}
+	for _, want := range []string{"node-2 tracker.000", "node-2 tracker.001"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the inventory does not name %q:\n%s", want, stdout)
+		}
+	}
+}
+
 // TestAnAcknowledgementNamesBothTheLogAndTheSequence: an acknowledgement moves
 // the floor the trim deletes against, so there is no value to guess.
 func TestAnAcknowledgementNamesBothTheLogAndTheSequence(t *testing.T) {

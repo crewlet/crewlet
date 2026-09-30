@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -211,6 +212,11 @@ type stateLog struct {
 	// the runners and write of the row must not interleave with another's.
 	publishing sync.Mutex
 
+	// copyStates is the state of this node's copy of each partition the last
+	// beat that could read it said ([stateLog.partitionReports]), guarded by
+	// publishing.
+	copyStates map[statelog.PartitionID]partmap.PartitionState
+
 	// clustered is whether the broker has peers, which is what a replicated
 	// create's budget branches on — and so how long a reanchor's steps after
 	// its append may take ([statelog.ReanchorDeps.CompletionBudget]).
@@ -253,7 +259,7 @@ type stateLog struct {
 	// mutex for [store]'s reason: the heartbeat reads it while the
 	// snapshot loop is mid-copy, and a nil reads honestly as a node whose
 	// loop has not concluded anything yet.
-	snapshot atomic.Pointer[snapshotHeld]
+	snapshots atomic.Pointer[heldSnapshots]
 
 	// snapshotNudge wakes the snapshot loop out of its interval, for the
 	// events that make the artefact this node holds one nobody can adopt:
@@ -668,8 +674,55 @@ func (s *stateLog) partitionFile(p statelog.PartitionID) (store.PartitionFile, e
 	return s.layout.File(p)
 }
 
-// snapshotHeld is the artefact this node holds, and why it holds no current
-// one.
+// heldSnapshots is what this node holds of each partition it takes artefacts
+// of, as its snapshot loop last concluded — IMMUTABLE once stored, and swapped
+// whole ([stateLog.holdSnapshot]), so the heartbeat reads one consistent set
+// while the loop is mid-copy of the next partition.
+type heldSnapshots map[statelog.PartitionID]snapshotHeld
+
+// snapshotOf is what this node holds of partition p, and false when its loop
+// has concluded nothing about p yet.
+func (s *stateLog) snapshotOf(p statelog.PartitionID) (snapshotHeld, bool) {
+	held := s.snapshots.Load()
+	if held == nil {
+		return snapshotHeld{}, false
+	}
+	h, ok := (*held)[p]
+	return h, ok
+}
+
+// holdSnapshot records what the loop concluded about partition p. ONE WRITER —
+// the snapshot loop — so a copy of the set with p replaced is stored whole.
+func (s *stateLog) holdSnapshot(p statelog.PartitionID, h snapshotHeld) {
+	next := heldSnapshots{}
+	if held := s.snapshots.Load(); held != nil {
+		maps.Copy(next, *held)
+	}
+	next[p] = h
+	s.snapshots.Store(&next)
+}
+
+// keepSnapshotsOf forgets what the loop concluded about any partition not in
+// served: this node no longer takes artefacts of it, and its row must not go
+// on naming one as a donation.
+func (s *stateLog) keepSnapshotsOf(served []statelog.PartitionID) {
+	held := s.snapshots.Load()
+	if held == nil {
+		return
+	}
+	next := heldSnapshots{}
+	for p, h := range *held {
+		if slices.Contains(served, p) {
+			next[p] = h
+		}
+	}
+	if len(next) != len(*held) {
+		s.snapshots.Store(&next)
+	}
+}
+
+// snapshotHeld is the artefact this node holds of one partition, and why it
+// holds no current one.
 //
 // BOTH HALVES TOGETHER, because a node can have both: a skip does not delete
 // what is already on disk, so a node that could not refresh yesterday's copy
@@ -2026,7 +2079,7 @@ func (s *stateLog) identityDomains() []*runningLog {
 // domain is what keeps that a property of the domain rather than a list
 // somewhere of the ones to skip.
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, everyPartition, func(h statelog.Health) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, everyLog, func(h statelog.Health) (bool, statelog.ReadRefusal) {
 		return h.Established(strict)
 	})
 }
@@ -2035,7 +2088,7 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 // seat's admission asks of the copy of p that will serve it.
 func (s *stateLog) PartitionEstablished(ctx context.Context, p statelog.PartitionID,
 	strict bool) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, onlyPartition(p), func(h statelog.Health) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, inPartition(p), func(h statelog.Health) (bool, statelog.ReadRefusal) {
 		return h.Established(strict)
 	})
 }
@@ -2046,7 +2099,7 @@ func (s *stateLog) PartitionEstablished(ctx context.Context, p statelog.Partitio
 // zero this instant, which is admission's question and not this one. What a
 // node's estate lease says of its copy (estatelease.go).
 func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, everyPartition, statelog.Health.Serving)
+	return s.everyReadiness(ctx, everyLog, statelog.Health.Serving)
 }
 
 // copyVerdict is what the estate's router reads of this node's copy of one
@@ -2117,26 +2170,26 @@ func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID)
 	return out
 }
 
-// everyPartition selects every running log.
-func everyPartition(*runningLog) bool { return true }
+// everyLog selects every log a node runs, for a question about the whole node.
+func everyLog(*runningLog) bool { return true }
 
-// onlyPartition selects the running logs of partition p.
-func onlyPartition(p statelog.PartitionID) func(*runningLog) bool {
+// inPartition selects the logs of partition p, for a question about one copy.
+func inPartition(p statelog.PartitionID) func(*runningLog) bool {
 	return func(running *runningLog) bool { return running.id.Partition == p }
 }
 
-// everyReadiness is judge over every selected domain whose health gates seat
-// admission, in the register's order, answering the first refusal — and
-// [statelog.RefuseBrokerUnreachable] for a domain whose health could not be
+// everyReadiness is judge over every log selected by in whose domain's health
+// gates seat admission, in the register's order, answering the first refusal —
+// and [statelog.RefuseBrokerUnreachable] for a log whose health could not be
 // read. A node with no state log is judged ready: it has nothing to wait for.
-func (s *stateLog) everyReadiness(ctx context.Context, selected func(*runningLog) bool,
+func (s *stateLog) everyReadiness(ctx context.Context, in func(*runningLog) bool,
 	judge func(statelog.Health) (bool, statelog.ReadRefusal)) (bool, statelog.ReadRefusal) {
 
 	if s == nil {
 		return true, ""
 	}
 	for _, running := range s.running() {
-		if !selected(running) || !running.domain.ReadinessInput() {
+		if !in(running) || !running.domain.ReadinessInput() {
 			continue
 		}
 		health, err := s.health(ctx, running)
@@ -2541,6 +2594,10 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 	if err != nil {
 		return "", statelog.OfferRequest{}, err
 	}
+	// THE PARTITION THIS JOIN NEEDS A COPY OF, which every request names: a
+	// donor answers a request that names none with nothing, and an artefact
+	// of another partition is refused before it is fetched.
+	want.Layout, want.Partition = s.layout.Number, whole.String()
 	adopter, err := statelog.NewAdopter(statelog.AdoptDeps{
 		Domains:  s.registered(),
 		LivePath: e.backends.Store.PartitionPath(file),
@@ -3406,48 +3463,29 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		// the event-queue contract carries.
 		return
 	}
-	// A SNAPSHOT IS THE WHOLE ESTATE IN ONE FILE, which only a layout of
-	// one partition has ([stateLog.wholeEstate]): a node on a layout of
-	// many takes none and serves none, and says so once rather than failing
-	// a take on every tick.
-	whole, single := s.wholeEstate()
-	if !single {
-		log.InfoContext(ctx, "statelog_snapshots_not_armed", "node", s.nodeID,
-			"layout", s.layout.Number, "partitions", len(s.layout.Partitions()),
-			"detail", "a snapshot and a donor's offer are one file of the whole "+
-				"estate, and this layout's estate is a file per partition")
-		return
-	}
-	dir := boot.Store.SnapshotDirFor()
+	root := boot.Store.SnapshotDirFor()
+	interval := boot.Stream.TrackerRetention.SnapshotInterval()
+	layout := s.layout
 
-	snapshotter, err := statelog.NewSnapshotter(statelog.SnapshotDeps{
-		Domains:       slices.Collect(maps.Values(s.registered())),
-		Partition:     s.estate(whole),
-		Dir:           dir,
-		NodeID:        s.nodeID,
-		EngineVersion: version.String(),
-		Counted: func(ctx context.Context) (int, error) {
-			return e.countedOn(ctx, s, time.Now())
-		},
-		Interval: boot.Stream.TrackerRetention.SnapshotInterval(),
-	})
-	if err != nil {
-		log.ErrorContext(ctx, "statelog_snapshots_unavailable", "error", err.Error(),
-			"detail", "this node takes no snapshots, so it can donate nothing to "+
-				"a peer that falls below the log's floor; the fleet's other "+
-				"members still can")
-		return
-	}
+	// ONE DONOR FOR EVERY PARTITION THIS NODE SERVES, answering each request
+	// with its newest artefact of the partition asked for — and nothing for
+	// one it does not serve ([statelog.DonorDeps.Serves]).
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: s.nodeID,
+		Layout: layout,
+		Serves: s.holding.Serving,
 		Dial:   func(context.Context) (*nats.Conn, error) { return broker.DialOwned() },
-		Newest: func() (statelog.Manifest, bool) { return newestSnapshot(dir) },
+		Newest: func(p statelog.PartitionID) (statelog.Manifest, bool) {
+			return newestSnapshot(statelog.SnapshotDir(root, layout.Number, p), layout.Number, p)
+		},
 		Path: func(m statelog.Manifest) string {
-			// THE NAME THE MANIFEST CARRIES. Deriving it here was one
-			// of three independent derivations that had to agree, and
-			// the derivation is what let a second take land on the
-			// previous pair's name — see [statelog.Manifest.Artifact].
-			return filepath.Join(dir, m.Artifact)
+			// THE NAME THE MANIFEST CARRIES, in its partition's own
+			// directory. Deriving the name here was one of three
+			// independent derivations that had to agree, and the
+			// derivation is what let a second take land on the previous
+			// pair's name — see [statelog.Manifest.Artifact].
+			p, _ := statelog.ParsePartitionID(m.Partition)
+			return filepath.Join(statelog.SnapshotDir(root, m.Layout, p), m.Artifact)
 		},
 	})
 	if err != nil {
@@ -3471,22 +3509,101 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	}()
 	go func() {
 		defer s.done.Done()
-		e.snapshotLoop(s, snapshotter, dir,
-			boot.Stream.TrackerRetention.SnapshotInterval())
+		e.snapshotLoop(s, snapshotPlan{
+			served: s.servedPartitions,
+			dir: func(p statelog.PartitionID) string {
+				return statelog.SnapshotDir(root, layout.Number, p)
+			},
+			taker: func(p statelog.PartitionID) (snapshotTaker, error) {
+				return e.snapshotterOf(s, p, statelog.SnapshotDir(root, layout.Number, p), interval)
+			},
+		}, interval)
 	}()
 }
 
-// snapshotLoop takes one at boot and then on the interval — but a SKIP is not
-// the interval's business.
+// snapshotterOf is the snapshotter of partition p, over the logs of p this node
+// runs NOW: built afresh for each take, because a partition's logs are started
+// and stopped while the node runs, and a snapshotter holding a stopped log's
+// health would judge a runner that no longer applies anything.
+func (e *Engine) snapshotterOf(s *stateLog, p statelog.PartitionID, dir string,
+	interval time.Duration) (snapshotTaker, error) {
+
+	var logs []statelog.Registered
+	for _, reg := range s.registered() {
+		if reg.Log.Partition == p {
+			logs = append(logs, reg)
+		}
+	}
+	return statelog.NewSnapshotter(statelog.SnapshotDeps{
+		Layout:        s.layout,
+		Partition:     p,
+		Domains:       logs,
+		File:          s.estate(p),
+		Dir:           dir,
+		NodeID:        s.nodeID,
+		EngineVersion: version.String(),
+		Counted: func(ctx context.Context) (int, error) {
+			return e.countedOn(ctx, s, p)
+		},
+		Interval: interval,
+	})
+}
+
+// servedPartitions is every partition this node runs a log of and SERVES now,
+// in the layout's order — the partitions its snapshot loop takes artefacts of.
+// A partition whose holding cannot be told is left out and said: a copy nobody
+// can vouch this node serves is not one to offer a joiner.
+func (s *stateLog) servedPartitions() []statelog.PartitionID {
+	var out []statelog.PartitionID
+	for _, running := range s.running() {
+		p := running.id.Partition
+		if slices.Contains(out, p) {
+			continue
+		}
+		serving, err := s.holding.Serving(p)
+		if err != nil {
+			log.WarnContext(s.run, "statelog_snapshot_holding_unknown", "partition", p.String(),
+				"error", err.Error(), "detail", "whether this node serves the partition "+
+					"is unknown, so no artefact of it is taken this round")
+			continue
+		}
+		if serving {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// snapshotPlan is what the snapshot loop takes artefacts of, and how: the
+// partitions this node serves now, where each one's artefacts are, and a
+// snapshotter of each.
+type snapshotPlan struct {
+	served func() []statelog.PartitionID
+	dir    func(statelog.PartitionID) string
+	taker  func(statelog.PartitionID) (snapshotTaker, error)
+}
+
+// snapshotLoop takes one of every partition this node serves at boot, one at a
+// time, and then each on the interval — but a SKIP is not the interval's
+// business.
+//
+// # One partition at a time, the oldest first
+//
+// A snapshot is a copy of ONE PARTITION'S FILE, so a node holding many takes
+// many — and never two at once, because each is a full copy on one volume and
+// the free space each is judged against is its own file's. Among the
+// partitions due, the one whose newest artefact is OLDEST goes first — one with
+// none before any — because that is the partition whose donors are the stalest,
+// and a joiner of it the one replaying furthest.
 //
 // # Why a skipped tick retries soon and a taken one waits
 //
 // [statelog.Snapshotter.Take] has five preconditions, and every one of them is
-// TRANSIENT AT BOOT: caught up on each domain, not too far behind, more than
-// one node counted in the fleet, room on the volume, nothing deferred. A node
+// TRANSIENT AT BOOT: caught up on each log, not too far behind, more than one
+// node counted on the partition, room on the volume, nothing deferred. A node
 // coming up fails several of them for the first seconds of its life — the
-// fleet is not counted until its peers have published a position, and it is
-// not caught up until its appliers have drained.
+// partition is not counted until its holders have published a position, and it
+// is not caught up until its appliers have drained.
 //
 // So a loop that only ever ticked on the configured interval would take its
 // first snapshot a DAY after the node started, and a node restarted more often
@@ -3496,7 +3613,8 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 //
 // A taken snapshot is different: the preconditions held, and the next one is a
 // question about staleness rather than about readiness. That is what the
-// operator's interval is for, and it is what waits.
+// operator's interval is for, and it is what waits. Each partition keeps its
+// own due time, so one that skips retries soon while the rest wait out theirs.
 //
 // The retry is deliberately not tight. A skip is a state that clears on its
 // own in seconds to minutes, the gate itself is a few reads, and a node that
@@ -3506,12 +3624,10 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 //
 // A reanchor, an adoption and the restore of a file a failed adoption
 // installed each leave this node holding an artefact at a generation a joiner
-// will refuse, so each wakes the loop at once ([stateLog.nudgeSnapshot])
-// rather than leaving it to whichever wait it is in — the interval, a day by
-// default, after a taken snapshot.
-func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
-	dir string, interval time.Duration) {
-
+// will refuse, so each wakes the loop at once ([stateLog.nudgeSnapshot]) and
+// makes EVERY partition due, rather than leaving it to whichever wait it is in
+// — the interval, a day by default, after a taken snapshot.
+func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Duration) {
 	ctx := s.run
 	// WHAT THIS NODE HOLDS is what decides how LOUD a skip is, and the
 	// distinction is the one an operator actually has: a node holding an
@@ -3527,52 +3643,116 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 	// artefact a peer could adopt. `Have` is read from the directory, so it
 	// survives the restart the way the artefact does.
 	//
-	// THE REASON LAST REPORTED is the other half: a state that has not
-	// changed is not news, and the loop retries every thirty seconds for as
-	// long as it holds. A tick that changes nothing says nothing; the
-	// register is still stamped, so the fleet screen and the trim see every
-	// tick whether or not the log does.
-	var reported statelog.SkipReason
+	// THE REASON LAST REPORTED, per partition, is the other half: a state
+	// that has not changed is not news, and the loop retries every thirty
+	// seconds for as long as it holds. A tick that changes nothing says
+	// nothing; the register is still stamped, so the fleet screen and the
+	// trim see every tick whether or not the log does.
+	reported := map[statelog.PartitionID]statelog.SkipReason{}
+	due := map[statelog.PartitionID]time.Time{}
 	for {
+		served := plan.served()
+		s.keepSnapshotsOf(served)
+		for p := range due {
+			if !slices.Contains(served, p) {
+				delete(due, p)
+				delete(reported, p)
+			}
+		}
+		for _, p := range s.oldestFirst(served, due, time.Now()) {
+			if ctx.Err() != nil {
+				return
+			}
+			due[p] = time.Now().Add(e.snapshotOne(ctx, s, plan, p, reported, interval))
+		}
 		wait := interval
-		m, err := snap.Take(ctx)
-		// THE REGISTER IS TOLD ON EVERY TICK, taken or skipped, because
-		// that row is the only place the rest of the fleet can see this
-		// node's artefact at all: the trim's snapshot term counts
-		// donors from it, and a node that stopped refreshing is
-		// invisible until somebody needs to adopt.
-		held := heldAfter(m, err, dir)
-		s.snapshot.Store(&held)
-		switch {
-		case err == nil:
-			reported = ""
-		case !isSkip(err):
-			// REPEATED DELIBERATELY, unlike a skip: this one RAN and
-			// errored, the error text is what says why, and a disk that
-			// went read-only is a fault an operator should keep seeing
-			// rather than a posture they have already been told about.
-			log.WarnContext(ctx, "statelog_snapshot_failed",
-				"error", err.Error(), "holds_artefact", held.Have,
-				"detail", "this node's newest artefact is older than the "+
-					"interval, so a peer adopting from it replays further")
-			reported = statelog.SkipFailed
-			wait = min(snapshotSkipRetry, interval)
-		default:
-			reason, _ := statelog.Skipped(err)
-			emitNoSnapshot(ctx, reportForSkip(reason, reported, held.Have))
-			reported = remembered(reason, held.Have)
-			wait = min(snapshotSkipRetry, interval)
+		for _, p := range served {
+			wait = min(wait, max(time.Until(due[p]), 0))
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		case <-s.snapshotNudge:
-			// A REANCHOR, AN ADOPTION OR A RESTORE: the next take is a
-			// question about whether the artefact is current, which the
-			// gate answers — see [stateLog.snapshotNudge].
+			// A REANCHOR, AN ADOPTION OR A RESTORE: the next take of every
+			// partition is a question about whether its artefact is
+			// current, which the gate answers — see
+			// [stateLog.snapshotNudge].
+			clear(due)
 		}
 	}
+}
+
+// snapshotOne takes one artefact of partition p, or records why not, and
+// answers how long the partition waits before the next attempt.
+func (e *Engine) snapshotOne(ctx context.Context, s *stateLog, plan snapshotPlan,
+	p statelog.PartitionID, reported map[statelog.PartitionID]statelog.SkipReason,
+	interval time.Duration) time.Duration {
+
+	dir := plan.dir(p)
+	snap, err := plan.taker(p)
+	if err != nil {
+		// A SNAPSHOTTER THAT COULD NOT BE BUILT is a registration this
+		// node cannot take a usable artefact over, which is said as the
+		// failure it is and retried as one.
+		log.ErrorContext(ctx, "statelog_snapshots_unavailable", "partition", p.String(),
+			"error", err.Error(), "detail", "this node takes no snapshot of the "+
+				"partition, so it can donate none of it; its other holders still can")
+		held := heldAfter(statelog.Manifest{}, err, dir, s.layout.Number, p)
+		s.holdSnapshot(p, held)
+		return min(snapshotSkipRetry, interval)
+	}
+	m, err := snap.Take(ctx)
+	// THE REGISTER IS TOLD ON EVERY TICK, taken or skipped, because that row
+	// is the only place the rest of the fleet can see this node's artefact at
+	// all: the trim's snapshot term counts donors from it, and a node that
+	// stopped refreshing is invisible until somebody needs to adopt.
+	held := heldAfter(m, err, dir, s.layout.Number, p)
+	s.holdSnapshot(p, held)
+	switch {
+	case err == nil:
+		reported[p] = ""
+		return interval
+	case !isSkip(err):
+		// REPEATED DELIBERATELY, unlike a skip: this one RAN and errored,
+		// the error text is what says why, and a disk that went read-only
+		// is a fault an operator should keep seeing rather than a posture
+		// they have already been told about.
+		log.WarnContext(ctx, "statelog_snapshot_failed", "partition", p.String(),
+			"error", err.Error(), "holds_artefact", held.Have,
+			"detail", "this node's newest artefact of the partition is older than "+
+				"the interval, so a peer adopting from it replays further")
+		reported[p] = statelog.SkipFailed
+	default:
+		reason, _ := statelog.Skipped(err)
+		emitNoSnapshot(ctx, p, reportForSkip(reason, reported[p], held.Have))
+		reported[p] = remembered(reason, held.Have)
+	}
+	return min(snapshotSkipRetry, interval)
+}
+
+// oldestFirst is every partition of served that is due at now, the one whose
+// newest artefact is oldest first — one holding none before any — and the
+// layout's own order between equals.
+func (s *stateLog) oldestFirst(served []statelog.PartitionID,
+	due map[statelog.PartitionID]time.Time, now time.Time) []statelog.PartitionID {
+
+	var out []statelog.PartitionID
+	for _, p := range served {
+		if at, scheduled := due[p]; !scheduled || !at.After(now) {
+			out = append(out, p)
+		}
+	}
+	taken := func(p statelog.PartitionID) time.Time {
+		if held, ok := s.snapshotOf(p); ok && held.Have {
+			return held.Manifest.TakenAt
+		}
+		return time.Time{}
+	}
+	slices.SortStableFunc(out, func(a, b statelog.PartitionID) int {
+		return taken(a).Compare(taken(b))
+	})
+	return out
 }
 
 // snapshotTaker is the snapshotter as its loop uses it: one attempt, which
@@ -3682,16 +3862,16 @@ func remembered(reason statelog.SkipReason, holds bool) statelog.SkipReason {
 	return reason
 }
 
-// emitNoSnapshot writes what [reportForSkip] decided, and nothing for the tick
-// it decided says nothing.
-func emitNoSnapshot(ctx context.Context, say noSnapshotReport) {
+// emitNoSnapshot writes what [reportForSkip] decided about partition p, and
+// nothing for the tick it decided says nothing.
+func emitNoSnapshot(ctx context.Context, p statelog.PartitionID, say noSnapshotReport) {
 	switch {
 	case say.Event == "":
 	case say.Warn:
-		log.WarnContext(ctx, say.Event, "reason", string(say.Reason),
+		log.WarnContext(ctx, say.Event, "partition", p.String(), "reason", string(say.Reason),
 			"retry_in", snapshotSkipRetry, "detail", say.Detail)
 	default:
-		log.InfoContext(ctx, say.Event, "reason", string(say.Reason),
+		log.InfoContext(ctx, say.Event, "partition", p.String(), "reason", string(say.Reason),
 			"recheck_in", snapshotSkipRetry, "detail", say.Detail)
 	}
 }
@@ -3708,7 +3888,11 @@ func emitNoSnapshot(ctx context.Context, say noSnapshotReport) {
 // copy in place, and a node holding one is still a donor the trim may count
 // and a joining peer may adopt from. So the skip says why nothing was
 // REFRESHED and the directory says what is HELD, and the row carries both.
-func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
+//
+// dir is partition p's artefacts of layout, and only an artefact of that
+// partition is held from it.
+func heldAfter(m statelog.Manifest, err error, dir string, layout int,
+	p statelog.PartitionID) snapshotHeld {
 	if err == nil {
 		return snapshotHeld{Manifest: m, Have: true}
 	}
@@ -3720,7 +3904,7 @@ func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
 	if reason, skipped := statelog.Skipped(err); skipped {
 		held.Skip = reason
 	}
-	if on, found := newestSnapshot(dir); found {
+	if on, found := newestSnapshot(dir, layout, p); found {
 		held.Manifest, held.Have = on, true
 		if held.Skip == statelog.SkipRecent {
 			// THE ONE SKIP THAT IS NOT AN ANSWER TO "why can this
@@ -3734,26 +3918,49 @@ func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
 	return held
 }
 
-// stampSnapshot writes what this node holds onto the row it is about to
-// publish.
+// stampSnapshot writes what this node holds of each partition onto the row it
+// is about to publish: layout 0's one partition's on the row itself, where
+// every earlier build wrote it, and every other layout's in the partition's own
+// report ([coord.PartitionReport]) — with each log's artefact position on the
+// log's own entry either way.
 //
 // A FUNCTION OVER VALUES, for the reason [statelog.TrimInputs] gives about the
 // terms it feeds: the whole path from an artefact on one node's disk to a term
 // in another node's trim runs through a live fleet, and the one part of it
 // that can be exercised without one is this.
-func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
-	if held == nil {
-		// NOTHING CONCLUDED YET is not the same as nothing held, and
-		// the difference matters for the first seconds of a node's
-		// life: leaving both fields empty says "not known", where a
-		// skip would say "known, and the answer is no".
-		return
+func stampSnapshot(row *coord.NodePositions, held heldSnapshots) {
+	for p, h := range held {
+		stampPartition(row, p, h)
 	}
-	row.SnapshotSkip = string(held.Skip)
+}
+
+// stampPartition is [stampSnapshot] for one partition's artefact.
+func stampPartition(row *coord.NodePositions, p statelog.PartitionID, held snapshotHeld) {
+	// NOTHING CONCLUDED YET is not the same as nothing held, and the
+	// difference matters for the first seconds of a node's life: a
+	// partition with no entry leaves its fields empty, which says "not
+	// known", where a skip would say "known, and the answer is no".
+	if row.Layout == 0 {
+		row.SnapshotSkip = string(held.Skip)
+		if held.Have {
+			row.SnapshotBytes = held.Manifest.Bytes
+		}
+	} else {
+		// A PARTITION THE ROW DOES NOT REPORT is one this node no longer
+		// runs a log of; its artefact is nobody's donation.
+		report, reported := row.Partitions[p.String()]
+		if !reported {
+			return
+		}
+		report.SnapshotSkip = string(held.Skip)
+		if held.Have {
+			report.SnapshotBytes = held.Manifest.Bytes
+		}
+		row.Partitions[p.String()] = report
+	}
 	if !held.Have {
 		return
 	}
-	row.SnapshotBytes = held.Manifest.Bytes
 	for name, at := range held.Manifest.Domains {
 		// ONLY A DOMAIN THIS NODE STILL RUNS. An artefact taken by an
 		// older build names domains this one does not register, and a
@@ -3781,43 +3988,23 @@ func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 // window a rolling upgrade lives in.
 const snapshotSkipRetry = 30 * time.Second
 
-// countedOn is how many nodes the fleet counts on this node's logs at now, which
-// is what decides whether there is anybody to donate an artefact to at all:
-// THE TRIM'S OWN COUNTED SET, log by log ([statelog.CountedSet]) — every node
-// whose positions row names the log, UNION every live data node, LESS the
-// tombstones past their window — so the loop and the trim's snapshot term ask
-// one question of one set.
+// countedOn is how many nodes the fleet counts on partition p's logs, which is
+// what decides whether there is anybody to donate an artefact of p to at all:
+// every node whose positions row names one of p's logs and has not released
+// it, and every node HOLDING p — the two halves of the trim's own counted set
+// ([statelog.CountedSet]), so the loop and the trim's snapshot term ask one
+// question of one set.
 //
-// # The live data nodes, and not the register alone
+// # The holders, and not the register alone
 //
-// A node joining the fleet has no row until it has adopted a copy — and that
-// copy is exactly what this count decides whether anybody takes. Counted from
-// the register alone, a fleet's lone data node saw a fleet of one and declined
-// every artefact as `sole_node`, while a joiner below a trimmed log's floor
-// waited on a donor that could not exist — and the trim, counting that joiner
-// at zero from its presence, waited for two donors that never came.
-//
-// # Less the tombstones
-//
-// A row never expires, so an evicted node's row outlives the machine: counted
-// from rows alone, a fleet of one server and one evicted node took a full copy
-// every interval for a peer the trim no longer waits for.
-//
-// # From the watched presence view, and unknown is the register's half
-//
-// It is asked every thirty seconds for as long as a node declines, and it
-// decides nothing about what may be removed — so it reads the presence view
-// the per-request questions read ([Engine.dataRoster]) rather than listing the
-// store each time. A view that cannot answer leaves the presence half out, and
-// the count is the register's alone: a lower bound, which errs toward
-// declining a copy for a tick rather than toward failing one — a failed take
-// is stamped on the node's row and warned about on every retry, for a
-// coordination blip that says nothing about this node's disk.
-//
-// A log whose eviction rows cannot be read subtracts none, which counts more
-// rather than less — the direction that takes a copy nobody needed rather than
-// one that declines a copy a joiner is waiting for.
-func (e *Engine) countedOn(ctx context.Context, s *stateLog, now time.Time) (int, error) {
+// A node joining p has no row naming p's logs until it has adopted a copy of p
+// — which is the copy this count decides whether anybody takes. Counted from
+// the register alone, a partition's lone server saw a fleet of one, took no
+// artefact as `sole_node`, and the joiner waited on a donor that could not
+// exist, while the trim, counting the joiner at zero, waited for two donors.
+// Under layout 0 the holders are the live data nodes, so a data node joining
+// is counted from its presence rather than its first row.
+func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.PartitionID) (int, error) {
 	if s.fleet == nil {
 		return 0, fmt.Errorf("engine: no coordination to count the fleet with")
 	}
@@ -3825,37 +4012,35 @@ func (e *Engine) countedOn(ctx context.Context, s *stateLog, now time.Time) (int
 	if err != nil {
 		return 0, err
 	}
-	var live []statelog.Presence
-	if nodes, err := e.dataRoster(ctx); err == nil {
-		for _, id := range nodes {
-			live = append(live, statelog.Presence{NodeID: id})
-		}
-	}
-	var db *store.DB
-	if e.backends != nil {
-		db = e.backends.Store
-	}
 	counted := map[string]bool{}
-	for _, id := range s.layout.AllLogs() {
-		domain, err := registeredDomain(id.Domain)
-		if err != nil {
-			return 0, err
+	for _, row := range rows {
+		for _, id := range s.layout.Logs(p) {
+			if at, names := row.Domains[id.String()]; names && at.State != coord.LogReleased {
+				counted[row.NodeID] = true
+			}
 		}
-		tombs, _ := logTombstones(ctx, db, domain, id.Partition, 0)
-		for _, n := range statelog.CountedSet(now, reportedPositions(rows, id.String()), live, tombs) {
-			counted[n.NodeID] = true
+	}
+	if e.backends != nil && e.backends.Coord != nil {
+		held, err := e.holdersOf(s.layout).Holders(ctx, []statelog.PartitionID{p})
+		if err != nil {
+			return 0, fmt.Errorf("engine: who holds %s: %w", p, err)
+		}
+		for _, h := range held[p] {
+			counted[h.NodeID] = true
 		}
 	}
 	return len(counted), nil
 }
 
-// newestSnapshot reads the newest complete manifest in a directory.
+// newestSnapshot reads the newest complete manifest of partition p of layout in
+// a directory — never one of another partition, which a recipient of p would
+// refuse, whatever it is called.
 //
 // THE MANIFEST IS THE CLAIM, which is [internal/backup]'s rule and holds here
 // for the same reason: the manifest is written last, so a directory entry
 // without one is the debris of a run that did not finish rather than a
 // snapshot somebody can adopt.
-func newestSnapshot(dir string) (statelog.Manifest, bool) {
+func newestSnapshot(dir string, layout int, p statelog.PartitionID) (statelog.Manifest, bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return statelog.Manifest{}, false
@@ -3867,7 +4052,7 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 			continue
 		}
 		m, err := statelog.ReadManifest(filepath.Join(dir, entry.Name()))
-		if err != nil {
+		if err != nil || m.Partition != p.String() || m.Layout != layout {
 			continue
 		}
 		// AND THE BYTES BESIDE IT. A manifest whose artefact was rotated
@@ -4213,7 +4398,16 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	if below {
 		s.requestRejoin(row.At)
 	}
-	stampSnapshot(&row, s.snapshot.Load())
+	// EVERY PARTITION IT RUNS A LOG OF, on a row of a divided layout: what
+	// its copy of each is doing, which the snapshot stamp below completes
+	// with its artefact. A layout-0 row carries none — see
+	// [coord.PartitionReport].
+	if s.layout.Number != 0 {
+		row.Partitions = s.partitionReports(ctx, held)
+	}
+	if held := s.snapshots.Load(); held != nil {
+		stampSnapshot(&row, *held)
+	}
 	s.positionGauges(ctx, row)
 	s.deferralGauges(row.At)
 	if err := s.fleet.PutPositions(ctx, row); err != nil {
@@ -4299,6 +4493,61 @@ func (s *stateLog) deferralGauges(now time.Time) {
 		s.metrics.Set(metrics.StatelogDeferredOldestAgeSeconds, age,
 			metrics.Attrs{"domain": name})
 	}
+}
+
+// partitionReports is this node's report on each partition it runs a log of:
+// the state of its copy of the partition ([partitionRuntime]), which the
+// snapshot stamp completes with the partition's artefact. Called under
+// [stateLog.publishing], which is what guards the states remembered between
+// beats.
+func (s *stateLog) partitionReports(ctx context.Context,
+	held []*runningLog) map[string]coord.PartitionReport {
+
+	out := make(map[string]coord.PartitionReport)
+	for _, running := range held {
+		p := running.id.Partition
+		if _, reported := out[p.String()]; reported {
+			continue
+		}
+		state, known := readPartitionState(ctx, partitionRuntime{s: s, p: p})
+		switch {
+		case known:
+			if s.copyStates == nil {
+				s.copyStates = map[statelog.PartitionID]partmap.PartitionState{}
+			}
+			s.copyStates[p] = state
+		case s.copyStates[p] != "":
+			// A BEAT THAT COULD NOT READ THE COPY'S HEALTH says what the
+			// last beat that could said, as the estate lease does.
+			state = s.copyStates[p]
+		default:
+			state = partmap.PartCatchingUp
+		}
+		out[p.String()] = coord.PartitionReport{State: string(state)}
+	}
+	return out
+}
+
+// partitionRuntime is this node's state log as one partition's copy: the
+// questions the estate lease asks of the whole runtime ([estateRuntime]),
+// asked of the partition's logs alone — a fault on one partition is that
+// partition's, never the node's other copies'.
+type partitionRuntime struct {
+	s *stateLog
+	p statelog.PartitionID
+}
+
+// Healthy implements [estateRuntime] over the partition's logs, by the
+// router's one judgement of the copy ([stateLog.partitionVerdict]) — so what
+// the estate lease reports of p and whether this node serves p are one answer.
+func (r partitionRuntime) Healthy(ctx context.Context) (bool, string) {
+	v := r.s.partitionVerdict(ctx, r.p)
+	return v.fault == "", v.fault
+}
+
+// Serving implements [estateRuntime] over the partition's logs.
+func (r partitionRuntime) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
+	return r.s.everyReadiness(ctx, inPartition(r.p), statelog.Health.Serving)
 }
 
 // logOf is the running log whose stream this is, or nil.
