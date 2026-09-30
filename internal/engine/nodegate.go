@@ -318,6 +318,18 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			return only(statelog.GateOtherNode, fmt.Sprintf("this node released %s "+
 				"when it left that log's partition, and ", d.Stream)+
 				d.landedNowhere(refusal.Position, "a node that serves the partition"))
+		case statelog.ReasonOvertaken:
+			// A RECORD A RESTORED REANCHOR OVERTOOK: this node wrote from
+			// rows the reanchor did not keep, before it learned of the move.
+			// Always one that landed, and this node refuses the log until it
+			// re-keys to the new generation.
+			return only(statelog.GateOtherNode, "a restored reanchor had overtaken "+
+				"this node's rows when it wrote, and "+d.landedNowhere(refusal.Position,
+				"a node on the log's current generation"))
+		case statelog.ReasonAbandoned:
+			return only(statelog.GateOtherNode, "this node wrote in a generation a "+
+				"reanchor abandoned, and "+d.landedNowhere(refusal.Position,
+				"a node the fleet still counts"))
 		case statelog.ReasonNotHolder:
 			return only(statelog.GateOtherNode, fmt.Sprintf("this node does not "+
 				"serve the partition %s is on, and only a node that serves a partition "+

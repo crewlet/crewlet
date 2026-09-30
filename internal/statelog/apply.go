@@ -2941,6 +2941,23 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 	return n, false, nil
 }
 
+// Voided reports whether this applier drops a record stamped with generation gen
+// at sequence seq under a rule the reanchor that placed its checkpoint made — a
+// generation it abandoned, or one a restored reanchor overtook — and which. The
+// rules applyOne asks, read from the checkpoint they travel on ([Voids]).
+func (r *Runner) Voided(gen uint32, seq uint64) (Reason, bool) {
+	r.mu.Lock()
+	void := r.void
+	r.mu.Unlock()
+	switch {
+	case void.abandons(gen):
+		return ReasonAbandoned, true
+	case void.overtakes(seq, gen):
+		return ReasonOvertaken, true
+	}
+	return "", false
+}
+
 // misplaced reports whether a record's own domain places it in another
 // partition than this log's — the partition gate, [ReasonWrongPartition], and
 // the second of the three the floor theorem is held by per log (the package

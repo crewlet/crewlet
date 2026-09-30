@@ -90,7 +90,7 @@ func Stamped(t *testing.T, new Factory) error {
 		Holding: statelog.ServesOnly(c.log().Partition),
 		Log:     log, Records: log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
-		Waiter: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
+		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
 	}
@@ -230,6 +230,9 @@ func (w suiteWaiter) Committed() statelog.Position                         { ret
 func (suiteWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
 func (suiteWaiter) StreamIdentity() error                                  { return nil }
 func (suiteWaiter) Truncated() error                                       { return nil }
+
+// Voided voids nothing: no reanchor places a rule on the suite's log.
+func (suiteWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 func (suiteWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return errNoApplier

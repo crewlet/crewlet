@@ -441,7 +441,7 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: search.Domain{}, Spec: statelog.EstateStream(search.Domain{}), Layout: statelog.EstateLayout(search.Domain{}.Name()), LogID: statelog.EstateLog(search.Domain{}), Log: log, Records: log, Rows: rows,
 		Holding: statelog.ServesOnly(statelog.EstatePartition),
-		Fence:   search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{},
+		Fence:   search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
 		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,
 	})
@@ -725,6 +725,9 @@ func nan() float64 { var zero float64; return zero / zero }
 type embedWaiter struct{}
 
 func (embedWaiter) Committed() statelog.Position { return statelog.Position{} }
+
+// Voided voids nothing: no reanchor places a rule on this harness's log.
+func (embedWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log.

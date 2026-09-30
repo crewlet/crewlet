@@ -571,7 +571,7 @@ func (w *partitionedWorld) hold(ctx, run context.Context, loops *sync.WaitGroup,
 		Domain: c.Domain, Spec: spec, Layout: w.layout, LogID: id,
 		Holding: node.holding, Log: race, Records: log, Rows: rows,
 		Fence: openFence{}, Gates: c.Gates(db.Reader()),
-		Waiter: runner, Identity: runner, Metrics: recorder, NodeID: node.id,
+		Waiter: runner, Voids: runner, Identity: runner, Metrics: recorder, NodeID: node.id,
 		Generation:    func() uint32 { return runner.Committed().Generation },
 		ResolveBudget: partitionedDeadline / 4,
 	}

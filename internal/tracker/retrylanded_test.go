@@ -224,7 +224,7 @@ func (r *roundTrip) writerOver(t *testing.T, appender statelog.Appender) *tracke
 	fence.Committed = r.waiter.Committed
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: appender, Records: r.log, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Identity: r.waiter,
+		Gates: tracker.NewGates(r.db.Reader()), Waiter: r.waiter, Voids: r.waiter, Identity: r.waiter,
 		NodeID: r.nodeID, Admission: r.reserve, Holding: r.holding,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,

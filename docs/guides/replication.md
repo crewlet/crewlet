@@ -53,7 +53,9 @@ A lost acknowledgement is resolved from the log before it is ever called
 `unknown`: the write reads the newest record on its subject, and a record that
 carries its own operation id is its answer — `applied` where this node has
 applied it and no gate dropped it, even where this node's ledger has lost the
-operation's row, and refused under the gate that dropped it otherwise. A gate
+operation's row, and refused under the gate that dropped it otherwise — the
+domain's own, or one of the log's: the partition the record belongs to, or a
+rule a reanchor placed on the checkpoint (`abandoned`, `overtaken`). A gate
 that drops a record by who wrote it (an eviction, a release) is asked about the
 node the record names, which is not always the one asking: an append the broker
 collapses onto another node's copy of the same operation is answered by that

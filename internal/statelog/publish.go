@@ -60,6 +60,26 @@ type Waiter interface {
 	WaitApplied(ctx context.Context, s ScopeSet, p Position) error
 }
 
+// Voids is this node's applier's reanchor rules, as a resolution asks them —
+// [Runner.Voided] in the engine.
+type Voids interface {
+	// Voided reports whether this node's applier drops a record stamped
+	// with generation gen at sequence seq under a rule a reanchor placed on
+	// its checkpoint — a generation the reanchor ABANDONED, or one a
+	// restored reanchor OVERTOOK — and which ([ReasonAbandoned],
+	// [ReasonOvertaken]).
+	//
+	// THE FRAMEWORK'S OWN GATES, which no domain's [Gates] can see, and a
+	// resolution needs them for the same reason it needs those: a record
+	// they dropped wrote no ledger row. A node whose rows were a restored
+	// copy's age went on writing in the old generation until it learned of
+	// the move, its record landed after the reanchor's own and was
+	// overtaken on every node, and its resolution — asking only the
+	// domain — reported a ledger contract violation for a record that was
+	// only ever gated.
+	Voided(gen uint32, seq uint64) (Reason, bool)
+}
+
 // Identity is whether this node's positions are sequences on the stream the
 // broker serves under the domain's name — [Runner.StreamIdentity], as the
 // publisher needs it.
@@ -431,6 +451,7 @@ type Publisher struct {
 	fence    Fence
 	gates    Gates
 	waiter   Waiter
+	voids    Voids
 	identity Identity
 	metrics  *metrics.Recorder
 	logger   *slog.Logger
@@ -520,6 +541,12 @@ type Deps struct {
 	Gates  Gates
 	Waiter Waiter
 
+	// Voids is the reanchor rules this node's applier drops records by — in
+	// the engine the same runner as Waiter. REQUIRED: a resolution that
+	// could not ask would report a record they dropped as a ledger contract
+	// violation ([Voids]).
+	Voids Voids
+
 	// Identity is the stream identity of the positions Waiter holds —
 	// in the engine the same runner, which is the one place both the
 	// boot's comparison and every live reading land.
@@ -569,6 +596,10 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		return nil, fmt.Errorf("statelog: publisher has no gates")
 	case d.Waiter == nil:
 		return nil, fmt.Errorf("statelog: publisher has no waiter")
+	case d.Voids == nil:
+		return nil, fmt.Errorf("statelog: publisher has no reanchor rules — a " +
+			"record a reanchor voided wrote no ledger row, and a resolution that " +
+			"cannot ask would report it as a ledger contract violation")
 	case d.Identity == nil:
 		return nil, fmt.Errorf("statelog: publisher has no stream identity — " +
 			"every expectation it forms is a sequence on the stream its rows " +
@@ -616,6 +647,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		fence:         d.Fence,
 		gates:         d.Gates,
 		waiter:        d.Waiter,
+		voids:         d.Voids,
 		identity:      d.Identity,
 		metrics:       d.Metrics,
 		logger:        logger,
@@ -1187,7 +1219,7 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 		if duplicate {
 			landed = landedCopy
 		}
-		res, err := p.resolve(ctx, req, at, landed)
+		res, err := p.resolve(ctx, req, at, landed, snap.Checkpoint.Generation)
 		res.Rounds = round
 		// A DUPLICATE ACKNOWLEDGEMENT IS THE BROKER COLLAPSING THIS
 		// APPEND onto an earlier copy of the operation still inside its
@@ -1527,7 +1559,7 @@ func (p *Publisher) classifyAmbiguous(ctx context.Context, req Request, snap Sna
 			"domain", p.domain.Name(), "subject", subject,
 			"op_id", req.OpID, "at", seq, "publish_error", detail)
 		at := Position{Stream: p.stream, Generation: p.generation(), Seq: seq}
-		return p.resolve(ctx, req, at, landedFound)
+		return p.resolve(ctx, req, at, landedFound, snap.Checkpoint.Generation)
 	}
 }
 
@@ -1606,7 +1638,18 @@ const (
 // have been somebody else's, which the same knowledge answers: this call's
 // acknowledgement, the broker's collapse onto a copy, or the operation id the
 // record itself carries.
-func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing) (Result, error) {
+//
+// # And the framework's own gates, before the domain's
+//
+// A record a reanchor's rule voided — written in a generation the reanchor
+// abandoned, or one a restored reanchor overtook — or one its own domain places
+// in another partition wrote no ledger row either, and no domain's [Gates]
+// knows those rules: they are the applier's, asked before the domain's gate as
+// the applier asks them ([Voids]). gen is the generation this call
+// stamped its own record with, which is what the rule is asked of for the
+// record this call's own append put at `at`; any other record is asked by the
+// generation it carries.
+func (p *Publisher) resolve(ctx context.Context, req Request, at Position, landed landing, gen uint32) (Result, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, p.resolveBudget)
 	defer cancel()
 
@@ -1659,8 +1702,11 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 	// questions that make absence mean something other than "somebody else
 	// won" — in the order that makes each answer conclusive.
 	writer, ours := p.nodeID, true
+	var env Envelope
 	if landed != landedOwn {
-		env, found, err := p.recordAt(ctx, at)
+		var found bool
+		var err error
+		env, found, err = p.recordAt(ctx, at)
 		if err != nil || !found {
 			// NOBODY HERE CAN NAME ITS WRITER, so nothing here can say
 			// whether a gate dropped it — and NO POSITION, for the
@@ -1675,7 +1721,7 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		ours = env.OpID == req.OpID
 		switch {
 		case ours:
-			writer = env.Writer
+			writer, gen = env.Writer, env.Gen
 		case landed == landedCopy:
 			// THE BROKER'S DUPLICATE WINDOW IS KEYED ON THE OPERATION ID,
 			// so a copy it collapsed this append onto carries it. One
@@ -1687,9 +1733,11 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 				at, env.OpID)
 		}
 	}
-	if reason, gated, err := p.gates.GatedAt(ctx, req.Subject, writer, req.OpID, at); err != nil {
-		return Result{}, fmt.Errorf("statelog: read the apply gates: %w", err)
-	} else if gated {
+	reason, gated, err := p.voided(ctx, req, at, landed, ours, env, writer, gen)
+	if err != nil {
+		return Result{}, err
+	}
+	if gated {
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
 		// than an outcome, and never a re-decide: republishing produces
 		// another durable record nothing applies.
@@ -1802,6 +1850,34 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 
 	// Somebody else won. Re-decide.
 	return Result{}, nil
+}
+
+// voided is whether the record at `at` applied nowhere, and the gate that answers
+// for it: the framework's own first — the partition, then a reanchor's rules —
+// as the applier asks them, and then the domain's, about writer.
+//
+// THE FRAMEWORK'S ARE ASKED ONLY OF THIS OPERATION'S OWN RECORD. Another
+// operation's record the ambiguous path found newest on the subject is not
+// this write's landing; the domain's gates are asked about this node for it,
+// whose own copy may be the one below it that a gate dropped. And the partition
+// is asked only of a record this call read: its own append was refused before
+// the broker if its domain placed it elsewhere.
+func (p *Publisher) voided(ctx context.Context, req Request, at Position, landed landing,
+	ours bool, env Envelope, writer string, gen uint32) (Reason, bool, error) {
+
+	if ours {
+		if landed != landedOwn && p.misplaced(env) {
+			return ReasonWrongPartition, true, nil
+		}
+		if reason, gated := p.voids.Voided(gen, at.Seq); gated {
+			return reason, true, nil
+		}
+	}
+	reason, gated, err := p.gates.GatedAt(ctx, req.Subject, writer, req.OpID, at)
+	if err != nil {
+		return "", false, fmt.Errorf("statelog: read the apply gates: %w", err)
+	}
+	return reason, gated, nil
 }
 
 // recordAt is the envelope of the record at, read off the log, and false for a

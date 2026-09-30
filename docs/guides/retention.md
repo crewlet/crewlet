@@ -587,6 +587,13 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   run the gesture, under the same `-op-id`, through a node that serves the
   partition (`-url`); sooner, the id is collapsed onto the record and answered
   `released` again.
+- `overtaken` or `abandoned` — the node you ran it on wrote that log's record
+  from rows a reanchor left behind — after a restored reanchor it had not yet
+  learned of, or in a generation a reanchor abandoned — so it landed and
+  applies nowhere. It holds the operation id for the log's duplicate window
+  (two minutes) from when it landed: once that has passed, run the gesture,
+  under the same `-op-id`, through a node on the log's current generation
+  (`-url`).
 - `not_holder` — the node you ran it on does not serve that log's partition,
   and only a node that serves a partition writes its logs: run the gesture,
   under the same `-op-id`, through one that does (`-url`).

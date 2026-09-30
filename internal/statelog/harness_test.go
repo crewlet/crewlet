@@ -169,6 +169,18 @@ type applier struct {
 	// truncated is what Truncated answers: nil while no peer's rows hold
 	// records the log lost.
 	truncated error
+
+	// voids, when set, is the reanchor rule Voided answers for every
+	// record — what this node's applier drops a record under when a
+	// reanchor's checkpoint says so.
+	voids statelog.Reason
+}
+
+// Voided answers the reanchor rule a case staged, for every record.
+func (a *applier) Voided(uint32, uint64) (statelog.Reason, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.voids, a.voids != ""
 }
 
 func (a *applier) StreamIdentity() error {
@@ -771,6 +783,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		Fence:         h.fence,
 		Gates:         h.gates,
 		Waiter:        h.applier,
+		Voids:         h.applier,
 		Identity:      h.applier,
 		Metrics:       h.metrics,
 		NodeID:        "node-a",

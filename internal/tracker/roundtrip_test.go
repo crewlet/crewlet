@@ -179,7 +179,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	r.reserve = reserve
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Spec: statelog.EstateStream(tracker.Domain{}), Layout: statelog.EstateLayout(tracker.Domain{}.Name()), LogID: statelog.EstateLog(tracker.Domain{}), Log: log, Records: log, Rows: rows, Fence: fence,
-		Gates: tracker.NewGates(db.Reader()), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Gates: tracker.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Admission:     reserve,
 		Holding:       r.holding,
@@ -450,6 +450,9 @@ func (r *roundTrip) ask(kv map[string]any) tracker.Answer {
 	}
 	return answer
 }
+
+// Voided voids nothing: this harness applies by hand and never re-anchors.
+func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 // testWaiter is this node's own applier as the publisher sees it.
 type testWaiter struct {

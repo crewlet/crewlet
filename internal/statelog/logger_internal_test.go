@@ -44,7 +44,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
 		Holding: ServesOnly(loggerProbeLog.Partition),
 		Fence:   struct{ Fence }{}, Gates: struct{ Gates }{},
-		Waiter: struct{ Waiter }{}, Identity: struct{ Identity }{},
+		Waiter: struct{ Waiter }{}, Voids: struct{ Voids }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
 	})
 	if err != nil {

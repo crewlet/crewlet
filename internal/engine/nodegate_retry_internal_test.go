@@ -538,6 +538,13 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// there — and its record is always one that landed.
 		"released": {gate: landed(statelog.ReasonReleased), actions: []statelog.GateAction{other},
 			detail: "duplicate window, 2m0s, from when it landed. Once that has passed, run the gesture through a node that serves the partition under the same operation id"},
+		// A RECORD A REANCHOR'S RULE VOIDED landed too, from rows the
+		// reanchor did not keep: another node finishes it once the window
+		// has passed.
+		"overtaken": {gate: landed(statelog.ReasonOvertaken), actions: []statelog.GateAction{other},
+			detail: "run the gesture through a node on the log's current generation under the same operation id"},
+		"abandoned": {gate: landed(statelog.ReasonAbandoned), actions: []statelog.GateAction{other},
+			detail: "run the gesture through a node the fleet still counts under the same operation id"},
 		// A NODE THAT DOES NOT SERVE THE LOG'S PARTITION never writes it,
 		// whichever id it retries under; one that cannot tell may again.
 		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{other},

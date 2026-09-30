@@ -248,7 +248,8 @@ func TestAPublisherIsNotBuiltWithoutAHolding(t *testing.T) {
 		Log: struct{ statelog.Appender }{}, Records: struct{ statelog.LogReader }{},
 		Rows:  struct{ statelog.Rows }{},
 		Fence: struct{ statelog.Fence }{}, Gates: struct{ statelog.Gates }{},
-		Waiter: struct{ statelog.Waiter }{}, Identity: struct{ statelog.Identity }{},
+		Waiter: struct{ statelog.Waiter }{}, Voids: struct{ statelog.Voids }{},
+		Identity:  struct{ statelog.Identity }{},
 		Admission: noCeiling(t), NodeID: "node-a",
 		Generation: func() uint32 { return 1 },
 	}

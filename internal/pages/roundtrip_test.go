@@ -128,7 +128,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	race := statelogtest.NewRace(log)
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: race, Records: log, Rows: rows, Fence: fence,
-		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
 		Holding:       holding,
 		Generation:    func() uint32 { return 0 },
@@ -284,6 +284,9 @@ func (r *roundTrip) get(ref string) pages.Detail {
 	}
 	return detail
 }
+
+// Voided voids nothing: this harness applies by hand and never re-anchors.
+func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
 // testWaiter is this node's own applier as the publisher sees it.
 type testWaiter struct {
