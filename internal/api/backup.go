@@ -70,8 +70,16 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	// AUDITED EITHER WAY, once the copy was attempted: a backup is every
 	// credential the company holds written to a directory somebody named,
 	// and the one that failed halfway left files there too. A request
-	// refused before the copy began wrote nothing and is not recorded.
-	a.auditBackup(r, operator, dir, manifest, err)
+	// refused before the copy began wrote nothing and is not recorded — and
+	// a DESTINATION refusal is exactly that: backup.ErrBadDestination is
+	// returned only before a byte is copied, and a refusal that arrives with
+	// an estate already in the directory is returned without it (see its
+	// doc), so it is audited as the failed backup it is.
+	// Recorded, a mistyped path read as a failed backup in the history and
+	// in the failures a person counts, beside the field that said why.
+	if !errors.Is(err, backup.ErrBadDestination) {
+		a.auditBackup(r, operator, dir, manifest, err)
+	}
 	if err != nil {
 		// The reason goes to the LOG rather than the body, like every
 		// other route here — except the two an operator can actually act
@@ -100,10 +108,10 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 
 // backupStatus separates the caller's mistakes from the engine's failures.
 //
-// A destination that is occupied or relative is a 400: nothing is wrong with
-// the node, the request named somewhere it cannot write, and answering 500
-// would send an operator looking at the engine instead of at their own
-// command.
+// A destination that is occupied, relative or one this host cannot prepare is
+// a 400: nothing is wrong with the node, the request named somewhere it cannot
+// write, and answering 500 would send an operator looking at the engine
+// instead of at their own command.
 func backupStatus(err error) int {
 	if errors.Is(err, backup.ErrBadDestination) {
 		return http.StatusBadRequest

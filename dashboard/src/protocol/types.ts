@@ -39,6 +39,7 @@ import type {
   ReconcileStatus,
 } from "../contract/integrations.ts";
 import type { AgentMemory, MemoryOverview } from "../contract/memory.ts";
+import type { BackupsAnswer } from "../contract/backups.ts";
 import type {
   LinkedFromStatus,
   PageBacklinks,
@@ -81,6 +82,14 @@ export interface FeedRow {
    *  narrows its live rows to one channel (`channel=`) exactly as the engine
    *  narrows the rows it pages in. Absent on every event that is not A2A. */
   channel_id?: string;
+  /**
+   * The filterable dimensions the store promoted out of the payload — present
+   * on a row read from history (`events`), absent on a live one. A listing
+   * never carries the payload, so this is where a history row says what only
+   * its payload holds: the node that published it (`node`), and the runtime
+   * audit's person, tool and directory (`actor_seat`, `tool`, `dir`).
+   */
+  tags?: Record<string, string>;
 }
 
 /**
@@ -4238,6 +4247,7 @@ export interface QueryMap {
   access: AccessAnswer;
   mcp_servers_status: McpServersStatusAnswer;
   credential_pool: CredentialPoolAnswer;
+  backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;

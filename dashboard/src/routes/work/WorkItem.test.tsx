@@ -437,7 +437,7 @@ test("the cost is the task's own turns, tokens and agent time, and no price", as
   expect(pairs).toEqual([
     ["DT:turns", "DD:2"],
     ["DT:tokens", "DD:79.6k"],
-    ["DT:agent time", "DD:20m 0s"],
+    ["DT:agent time", "DD:20m"],
   ]);
   expect(container.textContent).not.toMatch(/[$€£]|USD|cost_usd/);
 

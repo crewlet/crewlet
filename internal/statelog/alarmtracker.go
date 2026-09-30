@@ -105,7 +105,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		was := t.firing[kind]
 		delete(t.firing, kind)
 		log.WarnContext(ctx, "alarm_cleared",
-			"alarm", string(kind), "for", round(now.Sub(was.since)).String(),
+			"alarm", string(kind), "for", spoken(now.Sub(was.since)),
 			"detail", was.detail)
 	}
 

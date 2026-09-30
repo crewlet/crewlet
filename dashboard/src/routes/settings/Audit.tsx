@@ -40,20 +40,33 @@
  * the row's kind says which it was. A revision whose writer nobody recorded —
  * adopted from an older engine's pointer — says exactly that.
  *
+ * # The fifth source: what a person did at runtime
+ *
+ * Four subsystems keep a record of the CHANGE a write made. None keeps one of
+ * the CALL: a tool call that was refused, one whose answer never came back, and
+ * a verb that changes no tracker or wiki record at all — a backup — left
+ * nothing anywhere. The runtime audit is that record (`operator_acted` and
+ * `backup_requested`, each with the envelope source `operator`), and it is read
+ * here as `Runtime`: every call, whatever became of it, with the person the
+ * credential is bound to and the node that served it. The arguments are never
+ * in it — they are the company's content, and they already live in the history
+ * of whatever they changed.
+ *
  * # What each source can and cannot be asked
  *
- * Only the tracker's feed takes a wall-clock window (`from`/`to`); the wiki's
- * pages on a LOG POSITION, and the config and credential reads take neither.
- * So three of the four are fetched as their newest page and narrowed to the
+ * The tracker's feed and the runtime audit take a wall-clock window; the
+ * wiki's pages on a LOG POSITION, and the config and credential reads take
+ * neither. So those three are fetched as their newest page and narrowed to the
  * window HERE — and the screen says so rather than implying its window is the
  * engine's. A row count from a client-side narrowing is a count over what was
  * loaded, never over what exists, which is the rule every list in this product
- * is held to.
+ * is held to. And a windowed page can fill too: a busy week reaches further
+ * back than one page, and that is said as well.
  */
 
 import { useMemo, useRef } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
+import { Callout, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
@@ -68,12 +81,14 @@ import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { CoverageNote } from "~/components/CoverageNote.tsx";
+import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";
 import { useNow } from "~/lib/clock.ts";
 import { indexOrg, kindOfAuthor, seatLookup, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
 import { rest } from "~/protocol/index.ts";
 import { useRest } from "~/lib/useRest.ts";
-import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
+import type { FeedRow, SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
  * The window this screen offers.
@@ -98,17 +113,19 @@ const AUDIT_OFFER: Offer = {
  * nothing else — and a loop that chased cursors until the window was covered
  * would make the cost of opening this screen a property of how busy the
  * company has been, with no bound a reader could see. 200 is the tracker
- * feed's own maximum page (`tracker.MaxActivityRows`), and the others are
- * sized to it: the footer says what was loaded, and a window wider than the
+ * feed's own maximum page (`tracker.MaxActivityRows`), the runtime audit's is
+ * the same so the two windowed sources reach equally far back, and the others
+ * are sized to it: the footer says what was loaded, and a window wider than the
  * page reaches is reported rather than silently cut.
  */
-const PAGE = { work: 200, pages: 100, config: 50 } as const;
+const PAGE = { work: 200, pages: 100, config: 50, runtime: 200 } as const;
 
 /** How often the feeds are re-read. An audit is read, not watched. */
 const POLL_MS = 60_000;
 
-/** The four places a company's own writes are recorded. */
-const SOURCES = ["work", "knowledge", "config", "credentials"] as const;
+/** The four places a company's own writes are recorded, and the runtime
+ *  audit of every call a person made. */
+const SOURCES = ["work", "knowledge", "config", "credentials", "runtime"] as const;
 type Source = (typeof SOURCES)[number];
 
 const SOURCE_LABEL: Record<Source, string> = {
@@ -116,7 +133,42 @@ const SOURCE_LABEL: Record<Source, string> = {
   knowledge: "Knowledge",
   config: "Configuration",
   credentials: "Credentials",
+  runtime: "Runtime",
 };
+
+type RuntimeType = (typeof RUNTIME_AUDIT_TYPES)[number];
+
+/**
+ * What one runtime audit row says was done, and to what — keyed on the
+ * engine's own list of runtime audit types, so a record the engine adds is a
+ * compile error here rather than a row labelled with nothing.
+ */
+const RUNTIME_ROW: Record<
+  RuntimeType,
+  (row: FeedRow) => Pick<AuditEntry, "kind" | "subject" | "path" | "noSubject">
+> = {
+  // A TOOL CALL NAMES ITS TOOL AND NOTHING IT WAS CALLED WITH: the arguments
+  // are the company's content, which lives in the history of whatever the call
+  // changed, never in the audit — so the empty cell says exactly that.
+  operator_acted: (row) => ({
+    kind: row.tags?.tool ?? "tool call",
+    subject: "",
+    noSubject: "Not recorded",
+  }),
+  // A BACKUP'S SUBJECT IS WHERE IT WENT — a directory on the row's own node.
+  // A row with no directory tag is a fact about the row, not a policy about
+  // arguments, and its summary still names the directory beside it.
+  backup_requested: (row) => ({
+    kind: "backup",
+    subject: row.tags?.dir ?? "",
+    path: ["settings", "backups"],
+    noSubject: "No directory recorded",
+  }),
+};
+
+function isRuntimeType(type: string): type is RuntimeType {
+  return (RUNTIME_AUDIT_TYPES as readonly string[]).includes(type);
+}
 
 /**
  * One recorded action, whichever subsystem recorded it.
@@ -153,8 +205,19 @@ export interface AuditEntry {
   subject: string;
   /** Where that object lives, where it still has an address. */
   path?: string[];
+  /**
+   * WHY `subject` IS EMPTY, said in the To cell, where the row's source has
+   * a reason — a tool call's arguments are never recorded, which is a
+   * different fact from a record that simply named nothing. Absent, an empty
+   * subject reads "None recorded".
+   */
+  noSubject?: string;
   /** The one line that says what actually changed. */
   detail: string;
+  /** The node that served the call — the runtime audit's alone. */
+  node?: string;
+  /** The call was refused or failed, which only the runtime audit records. */
+  failed?: true;
 }
 
 /**
@@ -367,6 +430,13 @@ export function Audit() {
     { pollMs: POLL_MS },
   );
   const config = useQuery("config_audit", { limit: PAGE.config }, { pollMs: POLL_MS });
+  // THE RUNTIME AUDIT, windowed by the engine like the tracker's feed: the
+  // event log narrowed to the source every runtime audit event carries.
+  const runtime = useQuery(
+    "events",
+    { source: OPERATOR_SOURCE, since, until, limit: PAGE.runtime },
+    { pollMs: POLL_MS },
+  );
   const secrets = useSecrets();
 
   const rows = useMemo<AuditEntry[]>(() => {
@@ -441,8 +511,28 @@ export function Audit() {
         detail: row.source ? `from ${row.source}` : "",
       });
     }
+    for (const event of list(runtime.data?.events)) {
+      // A TYPE THIS BUILD DOES NOT KNOW is a newer node's record: drawn under
+      // its own type name rather than dropped, because an audit that loses
+      // a row during an upgrade is the wrong way round.
+      const what = isRuntimeType(event.type)
+        ? RUNTIME_ROW[event.type](event)
+        : { kind: event.type, subject: "", noSubject: "None recorded" };
+      out.push({
+        id: `runtime:${event.id}`,
+        at: event.timestamp,
+        source: "runtime",
+        ...what,
+        actor: event.actor ?? "",
+        actorKind: "operator",
+        ...(event.tags?.actor_seat ? { actorSeat: event.tags.actor_seat } : {}),
+        ...(event.tags?.node ? { node: event.tags.node } : {}),
+        ...(event.failed ? { failed: true as const } : {}),
+        detail: event.summary ?? "",
+      });
+    }
     return out;
-  }, [work.data, knowledge.data, config.data, secrets.rows]);
+  }, [work.data, knowledge.data, config.data, secrets.rows, runtime.data]);
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
@@ -474,6 +564,15 @@ export function Audit() {
       const last = list[list.length - 1];
       if (last && Date.parse(last.at) > from) short.push(label);
     };
+    // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
+    // so a full one whose oldest row is still after the window's start is a
+    // busy week reaching further back than a page — the same test.
+    oldest(list(work.data?.records), PAGE.work, "Work");
+    oldest(
+      list(runtime.data?.events).map((event) => ({ at: event.timestamp })),
+      PAGE.runtime,
+      "Runtime",
+    );
     oldest(list(knowledge.data?.changes), PAGE.pages, "Knowledge");
     oldest(
       list(config.data).map((revision) => ({ at: revision.created_at })),
@@ -481,7 +580,7 @@ export function Audit() {
       "Configuration",
     );
     return short;
-  }, [knowledge.data, config.data, since]);
+  }, [work.data, runtime.data, knowledge.data, config.data, since]);
 
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [
@@ -535,13 +634,23 @@ export function Audit() {
         header: "To",
         shrink: true,
         sortValue: (row) => row.subject,
+        // ONE LINE CUT WITH AN ELLIPSIS, the whole value on the title — a
+        // backup's directory is a long absolute path, and clipped hard it
+        // read "/tmp/claude-0/-home-use" with half a glyph and no way to see
+        // the rest. On a phone card `.truncate` wraps instead (frame.css).
         cell: (row) =>
-          row.path ? (
-            <a className="mono t-link" href={href(row.path)}>
+          !row.subject ? (
+            // AN EMPTY CELL SAYS WHY, in the row's own terms, rather than
+            // leaving a gap that reads as a lost value.
+            <EmptyValue label={row.noSubject ?? "None recorded"} />
+          ) : row.path ? (
+            <a className="mono t-link truncate" href={href(row.path)} title={row.subject}>
               {row.subject}
             </a>
           ) : (
-            <span className="mono">{row.subject}</span>
+            <span className="mono truncate" title={row.subject}>
+              {row.subject}
+            </span>
           ),
       },
       {
@@ -549,7 +658,14 @@ export function Audit() {
         header: "Detail",
         cell: (row) =>
           row.detail ? (
-            <span className="truncate">{row.detail}</span>
+            // THE WHOLE LINE ON THE TITLE, and the serving node under it: the
+            // cell is cut at the column's width.
+            <span
+              className="truncate"
+              title={row.node ? `${row.detail}\nOn ${row.node}` : row.detail}
+            >
+              {row.detail}
+            </span>
           ) : (
             <EmptyValue label="None recorded" />
           ),
@@ -558,7 +674,7 @@ export function Audit() {
     [now, who],
   );
 
-  const loading = work.loading || knowledge.loading || config.loading;
+  const loading = work.loading || knowledge.loading || config.loading || runtime.loading;
   return (
     <>
       <PageActions>
@@ -612,16 +728,26 @@ export function Audit() {
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
-      <QueryState error={work.error ?? knowledge.error ?? config.error} loading={loading}>
+      <CoverageNote coverage={[runtime.data?.coverage]} what="the runtime rows" />
+      {/* A PAGE THAT STOPPED SHORT OF THE WINDOW IS A NOTICE OF ITS OWN, not
+          the card's subtitle: a header line is one line, and the sentence was
+          cut at "those rows are the newest, n…" — its whole point, lost at
+          every width. */}
+      {truncated.length > 0 && (
+        <Callout variant="warning">
+          {truncated.join(" and ")} answered one page, which does not reach the start of this window
+          — those rows are the newest, not all of them.
+        </Callout>
+      )}
+      <QueryState
+        error={work.error ?? knowledge.error ?? config.error ?? runtime.error}
+        loading={loading}
+      >
         <Card padding="none">
           <Card.Header
             icon={<FileTextGlyph size="sm" />}
             count={shown.length}
-            subtitle={
-              truncated.length > 0
-                ? `${truncated.join(" and ")} answered one page, which does not reach the start of this window — those rows are the newest, not all of them.`
-                : "Every write a person or a token made, and every configuration revision, whoever wrote it."
-            }
+            subtitle="Every write a person or a token made, every call they made at runtime, and every configuration revision, whoever wrote it."
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -630,6 +756,7 @@ export function Audit() {
             columns={columns}
             rowKey={(row) => row.id}
             defaultSort="-at"
+            isFailed={(row) => row.failed === true}
             empty={{
               title: "Nothing in this window",
               hint: "No person and no operator token wrote anything here over this range. Widen the window, or clear the filters.",
@@ -677,7 +804,7 @@ function useSecrets(): { rows: SecretRow[] | null } {
  */
 export function auditCsv(rows: AuditEntry[]): string {
   return toCsv(
-    ["at", "where", "who", "who_kind", "who_seat", "what", "to", "detail"],
+    ["at", "where", "who", "who_kind", "who_seat", "what", "to", "detail", "node", "failed"],
     rows.map((row) => [
       row.at,
       SOURCE_LABEL[row.source],
@@ -687,6 +814,8 @@ export function auditCsv(rows: AuditEntry[]): string {
       row.kind,
       row.subject,
       row.detail,
+      row.node ?? "",
+      row.failed ? "true" : "",
     ]),
   );
 }

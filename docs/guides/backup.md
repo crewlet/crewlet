@@ -166,9 +166,30 @@ the copy.
 the node writes a `backup_requested` event to its own event store — who asked
 (the token's name, and the person it is bound to), which node, which directory,
 and whether it finished — a failed run included, since it can leave files
-behind. Filter the event log on `source=operator` to see it beside every other
+behind. A directory refused before the copy began (relative, not empty, or one
+the host cannot create or write because of the path itself) wrote nothing,
+answers `400`, and is not recorded. A disk that fails or fills while the
+directory is prepared is the node's failure rather than the path's: it answers
+`500` and is recorded, and so is a refusal that arrives once part of the copy
+is already in the directory. Filter the event log on `source=operator` to see it beside every other
 change a person made through the engine; see
 [the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
+
+### From the dashboard
+
+**Settings › Backups & retention** takes one too: **Take a backup** asks the
+node serving the page (`POST /backup`) for a directory on **that node's host**
+— nothing is downloaded — offering a fresh directory beside that node's last
+copy when it has one. The copy can take minutes on a large store; closing the
+dialog does not stop it, and the outcome arrives as a notice either way.
+
+The same screen shows what the fleet has backed up
+([`GET /backups`](../reference/api-endpoints.md#get-backups)): each owner's
+newest copy — its directory, size, reach and whether the trim counts it, with
+the one the trim reads marked **newest** — and the **backup history**, every
+backup a person asked any node for over the event log's 30 days, failures
+included and each with the host that holds it. The register keeps only each
+owner's newest point, so the history is where a failed night shows.
 
 ### One node, or every node?
 

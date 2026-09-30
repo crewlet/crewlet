@@ -65,6 +65,41 @@ test("a request that never answers is abandoned rather than awaited", async () =
   vi.useRealTimers();
 });
 
+// A LONGER PATH SAYS SO, AND STILL HAS A DEADLINE. `POST /backup` copies the
+// whole store before it answers, so the ordinary thirty seconds would call a
+// backup that is still copying a failure — while the engine goes on to write a
+// perfectly good one.
+test("a caller with a longer path keeps the request past the ordinary deadline", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+        }),
+    ),
+  );
+
+  let done = false;
+  const settled = rest
+    .request("POST", "/backup", { timeoutMs: 30 * 60_000 })
+    .catch((err: unknown) => err)
+    .finally(() => {
+      done = true;
+    });
+  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+  expect(done).toBe(false);
+
+  await vi.advanceTimersByTimeAsync(30 * 60_000);
+  const err = await settled;
+  expect((err as RestError).status).toBe(0);
+  expect((err as RestError).message).toContain("30 minutes");
+  vi.useRealTimers();
+});
+
 // A CALL WITH A LONGER PATH SAYS SO, AND ITS REFUSAL NAMES ITS OWN DEADLINE.
 //
 // The node gate is allowed a minute from its first record to its last answer,

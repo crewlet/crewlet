@@ -750,8 +750,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(operator)* | |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes** — leases (each seat's holder and **since** when), duties and config rollout *(operator)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(operator)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
-| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
-| `#/settings/audit` | **Audit log** — every write a person or a token made, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials` |
+| `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(operator)*. Domains live only under `backups/` | |
+| `#/settings/audit` | **Audit log** — every write a person or a token made, every call they made at runtime, and every configuration revision labelled with the kind of writer it recorded (`operator` or `node`) *(operator)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime` |
 
 **There is no redirect table.** There was one, and it was always a liability: a
 redirect whose old path is now a live route sends every reader of that route
@@ -5122,6 +5122,47 @@ the seat or the duty stays the strongest text in its row. A node's build
 version is one token in its header, on one line with the whole string in its
 title. Neither screen repeats a count in its page bar that a tile below
 already shows. See [seat ownership](../concepts/seat-ownership.md).
+
+**Backups & retention** reads `backups` beside the retention panels. **Take a
+backup** asks the node serving the page for a copy (`POST /backup`) in a
+directory on **that node's host** — the dialog names the host first, since
+nothing is downloaded — and offers a fresh directory beside that node's last
+copy when it has one (stamped to the second, never one a backup already went
+to, and nothing when that copy sat directly under `/`); a relative path is
+refused before the round trip, and the engine's own refusal of a directory —
+occupied, or one its host cannot create or write — is said on the field. The request
+waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
+stop the copy: the outcome arrives as a notice either way. Three tiles (the
+newest backup the trim counts, the `backup_floor` policy, and how many were
+requested and failed — over the span the event log reads, named from the
+`event_history_seconds` the engine reports rather than written into the
+screen, or "in the newest N" when the history filled its page), then **Newest per owner** — each node's newest copy and
+the operator's acknowledgement, with its directory, size (none for an
+acknowledgement, never 0), reach, and whether the trim counts it: exactly one
+row reads **counted · newest**, the engine's choice rather than the latest
+date, so a newer copy nobody verified reads **not verified** — and **Backup
+history**, every backup a person asked any node for over the event log's 30
+days, with the node that holds it, the person, the directory and whether its
+manifest was written. A failure is drawn as one. Neither table is derived from
+the other: the register keeps each owner's newest point only, which is why a
+failed night shows in the history alone.
+
+**Audit log** reads five sources over one window: the tracker's feed, the
+knowledge base's changes, the configuration history, the credential rows —
+and **Runtime**, the runtime audit (`events{source: "operator"}`), which is
+every call a person made through a running node whatever became of it: each
+act tool call that is not a proven read, and every backup. A runtime row names
+the tool (or "backup" and its directory), the person the credential is bound
+to, and in its detail's title the node that served it; its arguments are
+never recorded and the cell says so. A refused or failed call is marked as a
+failure. The tracker's feed and the runtime audit are windowed by the engine,
+the other three are narrowed here, and a page that filled before it reached
+the window's start is named in a notice above the card — windowed or not. A
+long value in the To column is cut with an ellipsis and carries the whole of
+itself on its title (on a phone card it wraps), and an empty one says why in
+the row's own terms: a tool call's arguments are "Not recorded", a backup row
+with no directory says so. The
+export carries the node and the failure beside the eight columns on screen.
 
 **Configuration** reads the company document through four lenses — the
 active revision, its entities (the kinds declared once, `ENTITY_KINDS`, and

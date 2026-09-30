@@ -116,6 +116,19 @@ var contract = []Entry{
 	{"CredentialKeySource", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
 	{"CredentialPoolState", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsWhatTheCredentialPoolSends"},
 
+	// backups.ts
+	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+	{"BackupPointRow", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+	{"BackupCover", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+	{"BackupRunRow", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+	{"BackupOwnerKind", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+	{"BackupOutcome", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+	{"BackupPolicy", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+
+	// audit.ts
+	{"OPERATOR_SOURCE", ReadScalar, "internal/events/types.TestTheAuditLogReadsEveryRuntimeAuditType"},
+	{"RUNTIME_AUDIT_TYPES", ReadLiteral, "internal/events/types.TestTheAuditLogReadsEveryRuntimeAuditType"},
+
 	// mcp.ts
 	{"McpServersStatusAnswer", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpStatusNode", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},

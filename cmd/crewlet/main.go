@@ -1739,7 +1739,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// this node's refresher has pulled it.
 			CredentialPools: e.CredentialPools,
 			Cooldowns:       e.Backends().Fleet,
-			NodeID:          nodeID,
+			// WHAT THE FLEET HAS BACKED UP: each owner's newest
+			// announced point, marked by the policy the trim takes —
+			// Tier A, fixed for the life of this process.
+			Backups:     e.Backends().Fleet,
+			BackupFloor: boot.Stream.TrackerRetention.Floor(),
+			NodeID:      nodeID,
 		},
 		// The fleet's record of what the log may delete, for the one
 		// retention gesture the engine cannot make on its own: an

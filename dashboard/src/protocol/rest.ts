@@ -147,9 +147,10 @@ function offline(err: unknown): RestError {
  *
  * It is the DEFAULT, not the only deadline: a call whose path is genuinely
  * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
- * The node gate is the one that does — the engine allows a gesture a minute
- * from its first record to its last answer, so thirty seconds gave up on a
- * gesture the node went on to finish, holding nothing to finish it with.
+ * Two do. A backup copies the whole store before it answers. And the node
+ * gate is allowed a minute from its first record to its last answer, so
+ * thirty seconds gave up on a gesture the node went on to finish, holding
+ * nothing to finish it with.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -181,12 +182,6 @@ export interface RequestOptions {
    */
   signal?: AbortSignal;
   /**
-   * How long this request may take before it is abandoned, in milliseconds.
-   * Defaults to [REQUEST_TIMEOUT_MS]; a caller whose path is genuinely longer
-   * says so here, and the refusal it gets on expiry names ITS deadline.
-   */
-  timeoutMs?: number;
-  /**
    * How a SUCCESSFUL body is read. `json` (the default) parses it; `text`
    * hands it over as the string the engine sent, for the one kind of answer
    * that is a file rather than a document: `GET /config?format=yaml`, which a
@@ -194,6 +189,16 @@ export interface RequestOptions {
    * JSON either way, because every refusal the engine writes is one.
    */
   read?: "json" | "text";
+  /**
+   * How long this request may take before it is abandoned, in milliseconds —
+   * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
+   * says so here, rather than removing the deadline; the refusal it gets on
+   * expiry names ITS deadline, not the default's. Two paths are: `POST
+   * /backup`, whose copy is synchronous and bounded by the size of the store
+   * rather than by anything a screen decides, and the node gate, which the
+   * engine allows a minute from its first record to its last answer.
+   */
+  timeoutMs?: number;
 }
 
 /** What the engine answered, whole: the status and entity-tag beside the body. */
@@ -210,6 +215,13 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+}
+
+/** A deadline as a person would say it: seconds under two minutes, else
+ *  minutes. */
+function waitWords(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
 }
 
 /** Whether a rejection is the caller's own abort rather than a failure. */
@@ -314,7 +326,7 @@ async function request(
     return timedOut
       ? new RestError(0, {
           error: "unreachable",
-          detail: `the engine did not answer within ${timeoutMs / 1000} seconds`,
+          detail: `the engine did not answer within ${waitWords(timeoutMs)}`,
         })
       : offline(err);
   };

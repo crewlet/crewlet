@@ -128,6 +128,12 @@ Two policies decide which copies count:
   Under this policy the trim does not advance until that acknowledgement has
   been given at least once.
 
+The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
+under the same policy: under `operator` a node's nightly copies are fresh
+while the trim waits on an acknowledgement, and the alarm fires on the missing
+acknowledgement rather than staying green beside a log that cannot be trimmed.
+**Settings › Backups & retention** marks that point **counted · newest**.
+
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
 one is what this whole term prevents.
@@ -571,7 +577,8 @@ the flags it has. The dashboard renders the same actions as its own controls.
 
 ### From the dashboard
 
-The Fleet screen offers **Evict…** and **Readmit…** on every node row, and the
+**Settings › Backups & retention** offers **Evict…** and **Readmit…** on every
+node row, and the
 dialog behind them is the same gesture as the command, answered the same way:
 one row per log with its outcome and position — no position for `unknown` —
 or the reason it was not written and what to do.

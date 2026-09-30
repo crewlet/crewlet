@@ -66,7 +66,12 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		floors[row.Domain] = row
 	}
 	backups, _ := r.fleet.BackupPoints(ctx)
-	newest, haveBackup := coord.NewestBackup(backups)
+	// THE POINT THE TRIM COUNTS, under the operator's own policy — not the
+	// newest of every owner. Under `backup_floor: operator` the nodes' own
+	// nightly copies are fresh while the trim waits on an acknowledgement,
+	// and an alarm aging the copies stayed green beside a log that could not
+	// be trimmed.
+	newest, haveBackup := r.newestCounted(backups)
 
 	// perLog is each identity-claiming log's own tombstones, which the node
 	// block folds into one answer per node below.

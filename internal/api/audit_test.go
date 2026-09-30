@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,6 +225,16 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		status: http.StatusInternalServerError,
 		want: &want{eventType: "backup_requested", outcome: types.AuditFailed, failed: true,
 			fields: map[string]any{"dir": "/var/backups/two"}},
+	}, {
+		// A DESTINATION REFUSAL IS BEFORE THE COPY: nothing was written, so
+		// it is not a failed backup in anybody's history.
+		name:  "a backup whose destination is refused",
+		taker: &fakeBackup{err: fmt.Errorf("%w: cannot create /etc/passwd", backup.ErrBadDestination)},
+		run: func(t *testing.T, a *api.App) int {
+			status, _ := post(t, a, "/backup?dir=/etc/passwd", "founder-secret")
+			return status
+		},
+		status: http.StatusBadRequest,
 	}, {
 		name: "a backup that names no destination",
 		run: func(t *testing.T, a *api.App) int {

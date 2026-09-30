@@ -117,6 +117,25 @@ var tagKeys = map[string]string{
 	// before this tag existed read back without it — a real discontinuity
 	// at that point in the timeline, not a bug to paper over.
 	"notification_source": "notification_source",
+	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
+	// queue stamps on the way out and which is therefore the node whose
+	// store holds the row. The envelope owns the key (a payload field under
+	// it is dropped), so it means one thing on every type. A tag because a
+	// listing never selects the payload, and a row read back from history
+	// had no other way to say where it came from: a runtime backup's row is
+	// the ONLY record of which host's disk holds the copy, and the backup
+	// record deliberately leaves the node to the envelope.
+	"node": "node",
+	// The RUNTIME AUDIT's three dimensions (types.OperatorActed and
+	// types.BackupRequested, the only events that carry them): the person
+	// the acting credential is bound to, the operator tool a call ran, and
+	// the directory a backup was written to. Tags for the reason every one
+	// here is — the Audit log and the backup history draw these rows from a
+	// listing, which never selects the payload, and without them a row
+	// could say only the summary's prose about who did what and where.
+	"actor_seat": "actor_seat",
+	"tool":       "tool",
+	"dir":        "dir",
 }
 
 // spendEventType is the one event that carries an LLM call's cost.

@@ -299,17 +299,29 @@ export function inTimeExact(ts: string | null | undefined, now: number): string 
  * (`tickLabel`) write one too. This wrote "340 ms" and "1.2 s" under a minute
  * and "1m 2s" above it, so a trace's duration column and the ruler over it
  * read as three conventions on one screen.
+ *
+ * NO ZERO FIELD — "30m", "24h", never "30m 0s" — because a finished span has
+ * no second hand to keep steady, and "inside the 30m 0s window" read as a
+ * measurement to the second of a setting nobody wrote that way. And ONE
+ * ROUNDING PER MAGNITUDE, split afterwards, so 59.6s is "1m" and 1h 59m 45s is
+ * "2h" rather than "60s" and "1h 60m" — the carry `attention.ts` documents.
+ * The engine's alarm sentences spell a duration by the same rule
+ * (`internal/statelog`'s `spoken`), so a figure and the sentence beside it
+ * agree.
  */
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return EMPTY_VALUE;
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  const rem = Math.round(s % 60);
-  if (m < 60) return `${m}m ${rem}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  const pair = (a: number, au: string, b: number, bu: string) =>
+    b === 0 ? `${a}${au}` : `${a}${au} ${b}${bu}`;
+  if (Math.round(ms) < 1000) return `${Math.round(ms)}ms`;
+  const tenths = Math.round(ms / 100);
+  if (tenths < 100)
+    return `${Number.isInteger(tenths / 10) ? tenths / 10 : (tenths / 10).toFixed(1)}s`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return pair(Math.floor(secs / 60), "m", secs % 60, "s");
+  const mins = Math.round(ms / 60_000);
+  return pair(Math.floor(mins / 60), "h", mins % 60, "m");
 }
 
 /**
@@ -743,13 +755,27 @@ export function nodeCountLabel(nodes: number | null | undefined): string {
  * paging early.
  */
 export function eventHistoryLabel(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) {
-    return "this engine did not report how far back the log goes";
-  }
+  const span = historySpan(seconds);
+  return span ? `the store keeps ${span}` : "this engine did not report how far back the log goes";
+}
+
+/**
+ * The span a read of the event log covers, as the tail of a sentence ("the last
+ * 30 days"), from the floor the engine REPORTED — for a count or an empty state
+ * that is bounded by that floor and must say by how much. The same rounding as
+ * {@link eventHistoryLabel}, so the two can never name different spans; an
+ * engine that did not report one gets the window's name, not a guessed number.
+ */
+export function eventHistorySpan(seconds: number | null | undefined): string {
+  const span = historySpan(seconds);
+  return span ? `the last ${span}` : "the event log's window";
+}
+
+function historySpan(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
   const days = Math.round(seconds / 86_400);
-  if (days >= 1) return `the store keeps ${plural(days, "day")}`;
-  const hours = Math.max(1, Math.round(seconds / 3_600));
-  return `the store keeps ${plural(hours, "hour")}`;
+  if (days >= 1) return plural(days, "day");
+  return plural(Math.max(1, Math.round(seconds / 3_600)), "hour");
 }
 
 /**

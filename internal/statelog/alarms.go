@@ -15,6 +15,7 @@ package statelog
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -326,7 +327,7 @@ var table = []rule{
 	{
 		kind: KindApplyLag,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("this node is %s behind the log", round(r.ApplyLag)),
+			return fmt.Sprintf("this node is %s behind the log", spoken(r.ApplyLag)),
 				r.ApplyLag > StallGrace
 		},
 		remedy: "Check this node's applier: `crewlet retention status` names the " +
@@ -339,7 +340,7 @@ var table = []rule{
 		kind: KindReadRefusals,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("reads have been refused for %s for a reason other "+
-					"than ordinary lag", round(r.RefusalsSince)),
+					"than ordinary lag", spoken(r.RefusalsSince)),
 				r.RefusalsSince > coord.ReconcileInterval
 		},
 		remedy: "Read the refusal code in the logs. Anything other than `" +
@@ -350,7 +351,7 @@ var table = []rule{
 		kind: KindBarrierSlow,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the read barrier's p95 is %s, a quarter of the "+
-					"read budget", round(r.BarrierP95)),
+					"read budget", spoken(r.BarrierP95)),
 				r.BarrierP95 > ReadBudget/4
 		},
 		remedy: "The barrier is an append and a wait: check the broker's own " +
@@ -397,10 +398,10 @@ var table = []rule{
 			}
 			if r.BackupAge == nil {
 				return fmt.Sprintf("no verified backup has been recorded, and "+
-					"the policy asks for one every %s", round(r.BackupMaxAge)), true
+					"the policy asks for one every %s", spoken(r.BackupMaxAge)), true
 			}
 			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", round(*r.BackupAge), round(r.BackupMaxAge)),
+					"policy asks for %s", spoken(*r.BackupAge), spoken(r.BackupMaxAge)),
 				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
@@ -412,7 +413,7 @@ var table = []rule{
 		kind: KindTrimBlocked,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the trim has not advanced for %s: %s",
-				round(r.TrimBlockedFor), r.TrimBlockedBy), r.TrimBlockedBy != ""
+				spoken(r.TrimBlockedFor), r.TrimBlockedBy), r.TrimBlockedBy != ""
 		},
 		remedy: "The blocking term names what to fix. Until it is fixed the log " +
 			"grows toward its ceiling.",
@@ -421,7 +422,7 @@ var table = []rule{
 		kind: KindDeferredOld,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the oldest record this node cannot apply is %s old, "+
-					"and its seats move at %s", round(r.DeferredAge), round(DeferralGrace)),
+					"and its seats move at %s", spoken(r.DeferredAge), spoken(DeferralGrace)),
 				r.DeferredAge > DeferralGrace
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
@@ -431,7 +432,7 @@ var table = []rule{
 		kind: KindFloorUnknown,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("the trim floor has been unreadable for %s",
-				round(r.FloorUnknownFor)), r.FloorUnknownFor > FloorCacheStale
+				spoken(r.FloorUnknownFor)), r.FloorUnknownFor > FloorCacheStale
 		},
 		remedy: "Coordination cannot be reached from this node. Every read is " +
 			"refused until it can be.",
@@ -440,7 +441,7 @@ var table = []rule{
 		kind: KindPrefetchSlow,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("turn-start context assembly is %s at p95, against "+
-					"a %s budget", round(r.PrefetchP95), round(PrefetchScanBudget)),
+					"a %s budget", spoken(r.PrefetchP95), spoken(PrefetchScanBudget)),
 				r.PrefetchP95 > PrefetchScanBudget
 		},
 		remedy: "Every turn on this node pays this before its first token. Check " +
@@ -450,7 +451,7 @@ var table = []rule{
 		kind: KindSearchSlow,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("interactive search is %s at p95, against a %s target",
-					round(r.SearchP95), round(InteractiveSearchTarget)),
+					spoken(r.SearchP95), spoken(InteractiveSearchTarget)),
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
@@ -489,7 +490,7 @@ var table = []rule{
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
 					"every node, because one did not answer inside the %s fleet read budget",
-					r.HistoryPartialFraction*100, round(eventfan.FleetReadBudget)),
+					r.HistoryPartialFraction*100, spoken(eventfan.FleetReadBudget)),
 				r.HistoryPartialFraction > 0
 		},
 		remedy: "Turn-level history lives only on the node that published it, so " +
@@ -545,7 +546,7 @@ var table = []rule{
 		kind: KindMaintenanceOpen,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("a maintenance operation has been open for %s in "+
-					"phase %q", round(r.MaintenanceOpenFor), r.MaintenancePhase),
+					"phase %q", spoken(r.MaintenanceOpenFor), r.MaintenancePhase),
 				r.MaintenanceOpenFor > MaintenanceAlarmAfter
 		},
 		remedy: "Maintenance stops every publisher on every node. Finish it or " +
@@ -575,7 +576,7 @@ var table = []rule{
 		kind: KindPoolStarved,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("a database connection takes %s at p95 to acquire",
-				round(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
+				spoken(r.PoolWaitP95)), r.PoolWaitP95 > PoolWaitAlarm
 		},
 		remedy: "Raise `store.max_open_conns`, or find the caller holding one. " +
 			"Every read on this node is queuing before it starts.",
@@ -634,18 +635,44 @@ func Kinds() []Kind {
 	return out
 }
 
-// round is a duration an operator reads rather than one a computer wrote.
-func round(d time.Duration) time.Duration {
-	switch {
-	case d >= time.Hour:
-		return d.Round(time.Minute)
-	case d >= time.Minute:
-		return d.Round(time.Second)
-	case d >= time.Second:
-		return d.Round(10 * time.Millisecond)
-	default:
-		return d.Round(time.Millisecond)
+// spoken is a duration as an operator reads it rather than as a computer
+// wrote it.
+//
+// `time.Duration.String` wrote every alarm's number: "85h58m0s", "11.39s",
+// "24h0m0s" — a trailing zero field on every whole value, hundredths nobody
+// measured to, and a spelling the dashboard beside it never uses. This is the
+// dashboard's own convention (`fmtDuration`, lib/format.ts): unit letters with
+// no space inside a field, a space between fields, two fields at most, and no
+// field that is zero — "340ms", "1.2s", "45s", "2m", "1m 2s", "2h 3m", "24h".
+// One reading, one spelling, whichever surface says it.
+func spoken(d time.Duration) string {
+	if d < 0 {
+		d = -d
 	}
+	pair := func(a int64, au string, b int64, bu string) string {
+		if b == 0 {
+			return fmt.Sprintf("%d%s", a, au)
+		}
+		return fmt.Sprintf("%d%s %d%s", a, au, b, bu)
+	}
+	// EACH MAGNITUDE ROUNDS AT ITS OWN GRAIN AND HANDS A CARRY UP, so 999.6ms
+	// is "1s" and 59m59.6s is "1h" rather than "1000ms" and "60m".
+	if ms := d.Round(time.Millisecond).Milliseconds(); ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if tenths := d.Round(100 * time.Millisecond); tenths < 10*time.Second {
+		// A tenth, where a tenth still means something.
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", tenths.Seconds()), ".0") + "s"
+	}
+	secs := int64(d.Round(time.Second) / time.Second)
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	if secs < 3600 {
+		return pair(secs/60, "m", secs%60, "s")
+	}
+	mins := int64(d.Round(time.Minute) / time.Minute)
+	return pair(mins/60, "h", mins%60, "m")
 }
 
 // bytesHuman is a size in the units an operator's disk is sold in.

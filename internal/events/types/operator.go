@@ -40,6 +40,17 @@ func init() {
 // knowing who they are.
 const OperatorSource = "operator"
 
+// RuntimeAuditTypes is every event type the runtime audit writes — each
+// published through the operator surface's one Audit, with [OperatorSource] on
+// its envelope. The Audit log reads exactly these as its "runtime" source, so a
+// third record added here without the dashboard learning to draw it fails
+// `TestTheAuditLogReadsEveryRuntimeAuditType` rather than arriving as rows the
+// screen labels as nothing.
+var RuntimeAuditTypes = []string{
+	OperatorActed{}.EventType(),
+	BackupRequested{}.EventType(),
+}
+
 // AuditOutcome is what became of an audited call.
 //
 // The first three are the state log's own write outcomes, spelled as it spells

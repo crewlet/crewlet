@@ -108,9 +108,9 @@ const draw = (node: React.ReactElement) => render(<Router>{node}</Router>);
 
 test("a turn's length spans its first phase, not the gap between landings", () => {
   draw(<TurnCard group={turn()} />);
-  expect(screen.getByText("4m 0s")).toBeTruthy();
+  expect(screen.getByText("4m")).toBeTruthy();
   // The review's own duration, which is what two landing instants gave.
-  expect(screen.queryByText("1m 0s")).toBeNull();
+  expect(screen.queryByText("1m")).toBeNull();
 });
 
 // AND THE ENGINE'S OWN MEASUREMENT WINS over the window this card derived, so
@@ -134,7 +134,7 @@ test("a settled row's measurement wins over the phase window", () => {
   } satisfies TurnRow;
   draw(<TurnCard group={turn()} row={row} />);
   expect(screen.getByText("4m 35s")).toBeTruthy();
-  expect(screen.queryByText("4m 0s")).toBeNull();
+  expect(screen.queryByText("4m")).toBeNull();
 });
 
 // A LIVE TURN COUNTS FROM THE INSTANT THE TURNS TABLE CALLS STARTED. `started_at`

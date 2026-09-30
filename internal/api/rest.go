@@ -89,6 +89,11 @@ var namedRoutes = []struct {
 	// /config/llm-providers either — the configuration names the keys, and
 	// this is what the pools and the fleet's ledger did with them.
 	{method: "GET", pattern: "/credential-pool", what: "credential_pool"},
+	// WHAT THE FLEET HAS BACKED UP, and every backup a person asked for.
+	// Plural beside `POST /backup`, which TAKES one: the read is a
+	// collection and the write is one act, and neither is the other's
+	// method on one path.
+	{method: "GET", pattern: "/backups", what: "backups"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
 	// above, so /work/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather

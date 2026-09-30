@@ -99,6 +99,7 @@ node means nothing was done.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/access` | Who can reach the company through this engine and as whom: the API token LABELS the guard accepts (never a value), the person each one acts as, every human seat with its contacts and the state of its binding, and the auth posture. **Always needs a token** (see [below](#get-access)) |
 | `GET` | `/credential-pool` | Every `providers.llm` entry, each key it rotates through by variable name, and which of them a vendor is refusing and until when — this node's pools beside the fleet's cooldown ledger (never a value). **Always needs a token** (see [below](#get-credential-pool)) |
+| `GET` | `/backups` | What the fleet has backed up: each owner's newest point as the trim reads it, and every backup a person asked a node for, failures included. **Always needs a token** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server did on each live node — started, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Always needs a token** (see [below](#get-mcp-servers)) |
 | `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
 | `GET` | `/work/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every node's position, and what this node costs to replace. **Operator-only, reads included** (see [below](#get-workretention--what-the-log-is-holding)) |
@@ -1736,9 +1737,18 @@ published it — and the backup route publishes from the node that took the copy
 company's content and already lives in the history of the object it changed;
 the audit says who called what, and what became of it.
 
+**A listing carries what a row needs without its payload.** `GET /events`
+never returns payloads, so the store promotes the runtime audit's dimensions
+into each row's `tags`: `actor_seat` (the bound person), `tool` (an
+`operator_acted` call's tool) and `dir` (a `backup_requested` copy's
+directory) — beside `node`, the envelope's publishing node, which every event
+row carries. That is what the dashboard's Audit log and backup history draw
+from. A row stored before these tags existed reads back without them.
+
 **What is not here.** A request refused before any tool ran — a read sent to
 the write transport, a token that is nobody, a malformed body, a backup with
-no destination — changed nothing and is not recorded. A proven read over MCP is
+no destination or with one it refused (the `400`s below) — changed nothing and
+is not recorded. A proven read over MCP is
 not recorded either: an assistant asks many questions, and a row per question
 would bury the writes. Configuration and credentials keep their own records
 (a revision names who created it, a credential who stored it), which is why
@@ -1995,6 +2005,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `access` | `{}` | `GET /access`: the token labels, the people and the posture the Settings › People & access screen draws. **Operator-only**. See [below](#get-access) |
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
+| `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
@@ -3949,9 +3960,12 @@ Three refusals, each pointing somewhere different:
   the read surface; this writes every credential the company holds to a path
   the caller chooses, so it is never eligible.
 - **400 for a destination this node cannot use** — relative, already occupied,
-  or a path the database engine mishandles. The reason is returned in `detail`
+  one this host cannot create, read or make private (a path through a regular
+  file, a parent that does not exist or is not writable, a read-only mount), or
+  a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the
-  caller's own command to fix.
+  caller's own command to fix. A disk that fails or fills while the directory
+  is prepared is the node's failure, not the path's, and answers `500`.
 - **A copy without the stream estate.** A node that dialled an external NATS
   cluster has no connection to snapshot the streams over, so its manifest
   carries the store copies alone and `crewlet backup` says where the rest
@@ -3959,8 +3973,65 @@ Three refusals, each pointing somewhere different:
 
 Every backup that began copying leaves a `backup_requested` event naming the
 caller, the node, the directory and whether it finished — a failed one
-included, since it may have left files there: see
+included, since it may have left files there. A destination refused with a
+`400` wrote nothing and leaves no event — a `400` is only ever answered before
+a byte is copied; a refusal that arrives with part of the copy already in the
+directory is a failed backup and is recorded as one: see
 [the runtime audit](#the-runtime-audit-sourceoperator).
+
+The request has no deadline of its own on the engine's side, and a client
+should give it a long one: `crewlet backup` and the dashboard both wait up to
+**30 minutes** for the answer, because the copy is bounded by the size of the
+store and the stream estate and a client that gave up early would report a
+failure while the engine finishes a good backup. Taking one from the dashboard
+is **Settings › Backups & retention › Take a backup**.
+
+### `GET /backups`
+
+Backs **Settings › Backups & retention**: what the fleet has backed up. **It
+needs a token, reads included** — every row names a directory on a named host
+that holds the company's sealed credentials — and `api.allow_anonymous_read`
+does not open it.
+
+Two records, because they answer two questions:
+
+- **`points`** — each owner's NEWEST backup, from the fleet's backup register:
+  what each node announced when its manifest was written, plus the operator's
+  acknowledgement (`crewlet retention ack`, `kind: "operator"`). `counted`
+  says the trim may count it — the `backup_floor` policy (`policy`) takes this
+  owner's word and the copy was verified — and exactly one counted point is
+  `newest`: the one the trim's backup term reads. `bytes` is the whole
+  artefact (every database copy and stream snapshot) and is absent on an
+  acknowledgement, which asserts a copy the engine never saw. `covers` is how
+  far the copy reaches in each state-log stream.
+- **`history`** — every `POST /backup` a person made, newest first, from the
+  [runtime audit](#the-runtime-audit-sourceoperator) every node keeps for the
+  event log's 30 days: when it finished, the `node` whose disk holds it, who
+  asked (`operator`, and the bound person in `actor_seat`), the `dir`, and
+  `outcome` — `applied` (the manifest was written) or `failed` (it was not: the
+  directory holds debris, not a backup). At most 100 rows; `more` says the page
+  filled. `coverage` names the nodes the history was read from, since a node
+  that did not answer takes its backups' rows with it.
+
+```json
+{
+  "policy": "engine",
+  "points": [
+    {"owner": "node-a", "kind": "node", "taken_at": "2026-09-30T02:00:00Z",
+     "dir": "/var/backups/crewlet-20260930-0200", "verified": true, "bytes": 83886080,
+     "covers": [{"stream": "CREWLET_TRACKER_LOG", "generation": 2, "seq": 9001}],
+     "counted": true, "newest": true}
+  ],
+  "history": [
+    {"id": "6ac15845-97c8-4ac2-9ac8-bfa7729a3572", "at": "2026-09-30T02:00:21Z",
+     "node": "node-a", "operator": "founder", "actor_seat": "jane-founder",
+     "dir": "/var/backups/crewlet-20260930-0200", "outcome": "applied",
+     "summary": "founder (jane-founder) backed up to /var/backups/crewlet-20260930-0200 (25 streams)"}
+  ],
+  "more": false,
+  "coverage": {"nodes": [{"id": "node-a", "answered": true, "error": ""}], "complete": true}
+}
+```
 
 ### `GET /integrations`
 

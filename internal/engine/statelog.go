@@ -1485,7 +1485,7 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 // says and a lag does not is that the node is not applying its way out.
 //
 // Until this had a caller the `deferred_old` alarm told an operator "its seats
-// move at 30m0s" and its remedy said "its seats have already moved", and
+// move at 30m" and its remedy said "its seats have already moved", and
 // neither was true — [seat.Host] sheds only on a lost lease, a drain and a
 // rebalance, and its own log line says a node that is not ready "keeps what it
 // holds". The alarm was reporting a mitigation the engine did not perform.

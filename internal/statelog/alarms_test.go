@@ -32,7 +32,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"a node behind the log": {
 			statelog.KindApplyLag,
 			statelog.Reading{ApplyLag: 2 * time.Minute},
-			"2m0s behind",
+			"2m behind",
 		},
 		"reads refused for something other than lag": {
 			statelog.KindReadRefusals,
@@ -55,7 +55,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				BackupAge:    statelog.Age(30 * time.Hour),
 				BackupMaxAge: 24 * time.Hour,
 			},
-			"30h0m0s old",
+			"30h old",
 		},
 		"no backup at all": {
 			statelog.KindBackupAge,
@@ -255,7 +255,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 			"advance until one exists", kindsOf(got))
 	}
 	if want := "no verified backup has been recorded, and the policy asks for " +
-		"one every 24h0m0s"; alarm.Detail != want {
+		"one every 24h"; alarm.Detail != want {
 		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
 	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was
@@ -271,7 +271,7 @@ func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 		BackupAge: statelog.Age(30 * time.Hour), BackupMaxAge: policy,
 	})
 	measured, firing := find(got, statelog.KindBackupAge)
-	if !firing || !strings.Contains(measured.Detail, "30h0m0s old") {
+	if !firing || !strings.Contains(measured.Detail, "30h old") {
 		t.Errorf("a 30h backup reported %q, want its own age", measured.Detail)
 	}
 }

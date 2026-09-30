@@ -279,6 +279,33 @@ func TestARelativeDestinationIsRefused(t *testing.T) {
 	}
 }
 
+// A DESTINATION THE HOST CANNOT PREPARE IS THE CALLER'S MISTAKE, not the
+// engine's failure. A path that runs through a regular file, or names one,
+// fails in mkdir before a byte is copied; answered as anything but
+// ErrBadDestination it reaches an operator as a 500 that sends them to the
+// engine's log for a typo in their own request.
+func TestADestinationTheHostCannotCreateIsTheCallersMistake(t *testing.T) {
+	t.Parallel()
+	svc := service(t, openStore(t), embeddedNATS(t))
+	file := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{
+		"the destination is a file":             file,
+		"a parent of the destination is a file": filepath.Join(file, "tonight"),
+	} {
+		_, err := svc.Take(t.Context(), dir)
+		if !errors.Is(err, backup.ErrBadDestination) {
+			t.Errorf("%s: %v, want ErrBadDestination", name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), dir) {
+			t.Errorf("%s: the refusal does not name the directory: %v", name, err)
+		}
+	}
+}
+
 // A NODE THAT DIALLED AN EXTERNAL BROKER BACKS UP ITS STORE, AND NO STREAMS.
 //
 // It holds no connection to snapshot over: the queue owns that connection and

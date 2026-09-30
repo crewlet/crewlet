@@ -17,6 +17,7 @@ import {
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
+  eventHistorySpan,
   nodeCountLabel,
   formatPhaseLLM,
   fmtCount,
@@ -177,6 +178,16 @@ describe("numbers", () => {
     expect(fmtDuration(420)).toBe("420ms");
     expect(fmtDuration(4_200)).toBe("4.2s");
     expect(fmtDuration(95_000)).toBe("1m 35s");
+    // NO ZERO FIELD, and a carry at every grain boundary.
+    expect(fmtDuration(1_000)).toBe("1s");
+    expect(fmtDuration(999.6)).toBe("1s");
+    expect(fmtDuration(9_960)).toBe("10s");
+    expect(fmtDuration(11_390)).toBe("11s");
+    expect(fmtDuration(59_600)).toBe("1m");
+    expect(fmtDuration(30 * 60_000)).toBe("30m");
+    expect(fmtDuration(24 * 3_600_000)).toBe("24h");
+    expect(fmtDuration((85 * 60 + 58) * 60_000)).toBe("85h 58m");
+    expect(fmtDuration(2 * 3_600_000 - 15_000)).toBe("2h");
     expect(fmtDuration(null)).toBe(EMPTY_VALUE);
     expect(fmtDuration(-1)).toBe(EMPTY_VALUE);
   });
@@ -342,6 +353,10 @@ describe("how many nodes", () => {
 describe("how far back the log goes", () => {
   test("the floor is the engine's own, said in days", () => {
     expect(eventHistoryLabel(30 * 24 * 3600)).toBe("the store keeps 30 days");
+    // THE SPAN A READ COVERS names the same number, never a second rounding.
+    expect(eventHistorySpan(30 * 24 * 3600)).toBe("the last 30 days");
+    expect(eventHistorySpan(6 * 3600)).toBe("the last 6 hours");
+    expect(eventHistorySpan(undefined)).toBe("the event log's window");
     expect(eventHistoryLabel(24 * 3600)).toBe("the store keeps 1 day");
     expect(eventHistoryLabel(6 * 3600)).toBe("the store keeps 6 hours");
   });

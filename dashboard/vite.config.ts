@@ -319,6 +319,9 @@ export default defineConfig({
       // (protocol/act.ts). Only the act route: /operator/mcp is a person's
       // assistant's surface, and nothing in the dashboard dials it.
       "/operator/act": { target: "http://localhost:8000" },
+      // Taking a backup (Settings › Backups & retention). The record it
+      // lands in is read over the socket.
+      "/backup": { target: "http://localhost:8000" },
     },
   },
 });

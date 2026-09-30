@@ -112,6 +112,8 @@ func everySeam(t *testing.T) queries.Sources {
 		Access: &queries.AccessPosture{},
 		// EVERY MODEL'S KEY BAG, which the engine always supplies.
 		CredentialPools: func() []engine.CredentialPool { return nil },
+		// THE FLEET'S BACKUP REGISTER, which every node opens.
+		Backups: register{},
 	}
 }
 

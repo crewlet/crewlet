@@ -662,16 +662,7 @@ func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
 func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 	seq uint64, at time.Time, generation uint32, have bool) {
 
-	eligible := points
-	if r.cfg.Floor() == config.BackupFloorOperator {
-		eligible = nil
-		for _, p := range points {
-			if p.Owner == coord.OperatorBackupOwner {
-				eligible = append(eligible, p)
-			}
-		}
-	}
-	newest, ok := coord.NewestBackup(eligible)
+	newest, ok := r.newestCounted(points)
 	if !ok {
 		return 0, time.Time{}, 0, false
 	}
@@ -684,6 +675,15 @@ func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 		return 0, time.Time{}, 0, false
 	}
 	return reach.Seq, newest.At, reach.Generation, true
+}
+
+// newestCounted is the newest verified backup the operator's policy takes the
+// word of — the one point both the trim's backup term and the backup-age alarm
+// read, through [coord.CountedBackups], so the alarm can never age a backup the
+// trim does not count.
+func (r *retention) newestCounted(points []coord.BackupPoint) (coord.BackupPoint, bool) {
+	return coord.NewestBackup(coord.CountedBackups(points,
+		r.cfg.Floor() == config.BackupFloorOperator))
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.

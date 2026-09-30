@@ -915,11 +915,18 @@ function offline(err) {
 *
 * It is the DEFAULT, not the only deadline: a call whose path is genuinely
 * longer passes [RequestOptions.timeoutMs] rather than removing the deadline.
-* The node gate is the one that does — the engine allows a gesture a minute
-* from its first record to its last answer, so thirty seconds gave up on a
-* gesture the node went on to finish, holding nothing to finish it with.
+* Two do. A backup copies the whole store before it answers. And the node
+* gate is allowed a minute from its first record to its last answer, so
+* thirty seconds gave up on a gesture the node went on to finish, holding
+* nothing to finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
+/** A deadline as a person would say it: seconds under two minutes, else
+*  minutes. */
+function waitWords(ms) {
+	const seconds = Math.round(ms / 1e3);
+	return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+}
 /** Whether a rejection is the caller's own abort rather than a failure. */
 function isAbort(err) {
 	return typeof err === "object" && err !== null && err.name === "AbortError";
@@ -982,7 +989,7 @@ async function request(method, path, options = {}) {
 		if (signal?.aborted) return signal.reason;
 		return timedOut ? new RestError(0, {
 			error: "unreachable",
-			detail: `the engine did not answer within ${timeoutMs / 1e3} seconds`
+			detail: `the engine did not answer within ${waitWords(timeoutMs)}`
 		}) : offline(err);
 	};
 	let response;

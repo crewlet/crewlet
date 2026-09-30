@@ -285,6 +285,19 @@ type Sources struct {
 		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
 	}
 
+	// Backups is the fleet's backup register — each owner's newest
+	// announced point, which is what the trim's backup term reads. With
+	// [Sources.Events] it answers `backups`; nil leaves that unregistered.
+	Backups interface {
+		BackupPoints(ctx context.Context) ([]coord.BackupPoint, error)
+	}
+
+	// BackupFloor is whose word the trim takes for what is backed up
+	// (`stream.tracker_retention.backup_floor`, Tier A, fixed for the life
+	// of the process), so `backups` marks exactly the points the trim
+	// counts. Empty reads as the default, `engine`.
+	BackupFloor config.BackupFloor
+
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to. The RESOLVED id
 	// (config.ResolveNodeID), which is also the name the node's presence
@@ -431,6 +444,14 @@ func Register(r *Registry, s Sources) {
 		// each is, is a map of which credential to take. See
 		// [Sources.access].
 		r.RegisterOperator("access", s.access)
+	}
+	if s.Backups != nil && s.Events != nil {
+		// OPERATOR-ONLY, for retention's reason and more: every row names
+		// a directory on a named host that holds the company's sealed
+		// credentials. Gated on BOTH halves, since an answer with the
+		// register and no history would read as a fleet nobody ever asked
+		// for a backup.
+		r.RegisterOperator("backups", s.backups)
 	}
 	if s.CredentialPools != nil {
 		// OPERATOR-ONLY: which variable holds each model's keys and which

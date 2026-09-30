@@ -256,10 +256,12 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
     },
   ]);
   const [header, row] = csv.split("\r\n");
-  expect(header).toBe('"at","where","who","who_kind","who_seat","what","to","detail"');
+  expect(header).toBe(
+    '"at","where","who","who_kind","who_seat","what","to","detail","node","failed"',
+  );
   expect(row).toContain('"turn on Slack, and say ""done"""');
-  // Eight columns, whatever the detail held.
-  expect(row?.match(/","/g)?.length).toBe(7);
+  // Ten columns, whatever the detail held.
+  expect(row?.match(/","/g)?.length).toBe(9);
 });
 
 // A CELL SOMEBODY ELSE WROTE IS NEVER A FORMULA. A summary is text a model or a
@@ -402,4 +404,133 @@ test("a config revision is labelled with the kind it recorded, not with operator
   expect(screen.queryByText("operator")).toBeNull();
   expect(screen.getByText("Not recorded")).toBeTruthy();
   expect(screen.queryByText("the engine")).toBeNull();
+});
+
+/** One runtime audit row, as the event log lists it: payload-free, with the
+ *  dimensions the store promoted into its tags. */
+function runtimeEvent(over: Record<string, unknown> = {}) {
+  return {
+    id: "ev-1",
+    type: "operator_acted",
+    timestamp: RECENTLY,
+    source: "operator",
+    actor: "U0FOUNDER",
+    summary: "U0FOUNDER (jane) ran update_work_item: refused (conflict)",
+    category: "lifecycle",
+    trace_id: "",
+    span_id: "",
+    parent_span_id: "",
+    topic: "",
+    failed: true,
+    tags: { node: "node-b", actor_seat: "jane", tool: "update_work_item" },
+    ...over,
+  };
+}
+
+// THE FIFTH SOURCE: EVERY CALL, WHATEVER BECAME OF IT.
+//
+// A refused tool call and a backup change no tracker or wiki record, so the
+// four histories hold nothing about either. The runtime audit does, and it is
+// asked for by the source the engine stamps on it, over the same window.
+test("runtime calls are merged in, drawn as the person, and narrowed by Where", async () => {
+  const query = serving({
+    work_activity: { records: [commit()], complete: true },
+    events: {
+      events: [
+        runtimeEvent(),
+        runtimeEvent({
+          id: "ev-2",
+          type: "backup_requested",
+          failed: false,
+          summary: "U0FOUNDER (jane) backed up to /var/backups/one (12 streams)",
+          tags: { node: "node-a", actor_seat: "jane", dir: "/var/backups/one" },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+      coverage: { nodes: [{ id: "node-a", answered: true, error: "" }], complete: true },
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
+  expect(asked(query, "events").source).toBe("operator");
+  expect(asked(query, "events").since).toBeTruthy();
+  expect(asked(query, "events").until).toBeTruthy();
+
+  // WHAT WAS DONE: the tool a call ran, and a backup as a backup.
+  expect(screen.getByText("update work item")).toBeTruthy();
+  expect(screen.getByText("backup")).toBeTruthy();
+  // TO WHAT: a backup's directory, linked to the backups it is one of; a tool
+  // call's arguments are never recorded, and the cell says so.
+  const dirLink = screen.getByRole("link", { name: "/var/backups/one" });
+  expect(dirLink.getAttribute("href")).toBe("#/settings/backups");
+  // CUT WITH AN ELLIPSIS AT THE COLUMN, the whole directory on the title.
+  expect(dirLink.getAttribute("title")).toBe("/var/backups/one");
+  expect(dirLink.classList.contains("truncate")).toBe(true);
+  expect(screen.getByText("Not recorded")).toBeTruthy();
+  // WHO: the person the token is bound to, never a seat named after it.
+  expect(screen.getAllByRole("link", { name: /Jane Founder/ }).length).toBe(2);
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+
+  // AND `kind=runtime` IS THE RUNTIME ROWS ALONE.
+  cleanup();
+  location.hash = "#/settings/audit?kind=runtime";
+  serving({
+    work_activity: { records: [commit()], complete: true },
+    events: { events: [runtimeEvent()], next: null, exhausted: true },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/ran update_work_item/)).toBeTruthy());
+  expect(screen.queryByText("took it off the board")).toBeNull();
+});
+
+// A WINDOWED PAGE THAT FILLED IS REPORTED TOO. The runtime audit and the
+// tracker's feed are windowed by the engine, but a page is still a page: a busy
+// week reaches further back than one, and the screen must not claim it saw the
+// whole window.
+test("a windowed source whose page filled says so", async () => {
+  serving({
+    events: {
+      events: Array.from({ length: 200 }, (_, i) => runtimeEvent({ id: `ev-${i}` })),
+      next: null,
+      exhausted: false,
+    },
+  });
+  mount();
+  await waitFor(() =>
+    expect(screen.getByText(/does not reach the start of this window/)).toBeTruthy(),
+  );
+  expect(screen.getByText(/does not reach the start of this window/).textContent).toContain(
+    "Runtime",
+  );
+  // A NOTICE OF ITS OWN, never the card header's one line, which cut the
+  // sentence before "not all of them" at every width.
+  const note = screen.getByText(/does not reach the start of this window/);
+  expect(note.textContent).toMatch(/not all of them\.$/);
+  expect(note.closest(".crewlet-card")).toBeNull();
+});
+
+// AN EMPTY "TO" SAYS WHY, IN THE ROW'S OWN TERMS. "Not recorded" is the
+// runtime audit's policy about a tool call's ARGUMENTS; a backup row that
+// carries no directory tag is a different fact and must not borrow it.
+test("an empty To cell says why in the row's own terms", async () => {
+  serving({
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-nodir",
+          type: "backup_requested",
+          failed: false,
+          summary: "U0FOUNDER backed up to /var/backups/two (12 streams)",
+          tags: { node: "node-a" },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText(/backed up to \/var\/backups\/two/)).toBeTruthy());
+  expect(screen.getByText("No directory recorded")).toBeTruthy();
+  expect(screen.queryByText("Not recorded")).toBeNull();
 });
