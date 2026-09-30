@@ -847,7 +847,7 @@ balance that did not converge, and a hold. Then one row per member:
 |---|---|
 | `SHARE` | its measured share of every partition copy the map places |
 | `SERVING` / `JOINING` / `LEAVING` | how many partitions the map lists it holding in each state |
-| `PLACED` | `-` where the map places on it; otherwise `out`, `probation N/40`, and `moved off N` for partitions an operator moved off it |
+| `PLACED` | `-` where the map places on it; otherwise `barred` for a node evicted (placed on nothing until it is readmitted, however often the map removes it and sees it back), `out`, `probation N/40`, and `moved off N` for partitions an operator moved off it |
 | `ABSENT` | how many of the maintainer's ticks have counted it gone, of the ticks that remove it |
 | `STORE` | what its estate lease says of its store: `ok`, `failed: why`, `unsaid` — a lease that does not say, which the map counts exactly as failed — `not counted: why` for a store that is healthy but runs another layout, or `no lease` |
 
@@ -857,8 +857,10 @@ that is not settled — fewer copies serving than its target wants, a holder not
 serving or on a node the map counts absent, or a move in force — with its
 copies, its target and its holders as `node:state`, what the node's own lease
 reports where it differs (`data-b:leaving(draining)`), and `!` on a node the map
-counts absent. `-all` lists every partition; `-json` prints the answer as the
-node gave it.
+counts absent. A node barred by an eviction that the map does not hold — removed
+for its absence, forgotten, or never seen — is named on a `BARRED:` line with
+who barred it and the `crewlet retention readmit` that lifts the bar. `-all`
+lists every partition; `-json` prints the answer as the node gave it.
 
 ### `crewlet estate out` / `in` / `move`
 

@@ -106,7 +106,16 @@ type estateView struct {
 	Moves      int                   `json:"moves"`
 	Members    []estateMemberView    `json:"members"`
 	Removed    []objectsRemovalView  `json:"removed"`
+	Barred     []estateBarView       `json:"barred"`
 	Partitions []estatePartitionView `json:"partitions"`
+}
+
+// estateBarView is a node barred from the map — evicted — that the map does not
+// hold.
+type estateBarView struct {
+	Node   string `json:"node"`
+	By     string `json:"by"`
+	Reason string `json:"reason"`
 }
 
 type estateLeaseView struct {
@@ -123,6 +132,7 @@ type estateMemberView struct {
 	Out          bool     `json:"out"`
 	OutBy        string   `json:"out_by"`
 	OutReason    string   `json:"out_reason"`
+	Barred       bool     `json:"barred"`
 	SharePercent float64  `json:"share_percent"`
 	Serving      int      `json:"serving"`
 	Joining      int      `json:"joining"`
@@ -271,6 +281,14 @@ func renderEstate(w io.Writer, v estateView, all bool) error {
 			"seen present and healthy; `crewlet estate in %s -confirm %s` vouches for it now.\n",
 			r.Gone, r.Node, r.Node)
 	}
+	for _, b := range v.Barred {
+		fmt.Fprintf(w, "\nBARRED: %s, by %s", b.Node, b.By)
+		if b.Reason != "" {
+			fmt.Fprintf(w, " (%s)", b.Reason)
+		}
+		fmt.Fprintf(w, ". The map does not hold it, and should it come back it is placed on "+
+			"nothing until it is readmitted: `crewlet retention readmit %s`.\n", b.Node)
+	}
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Partitions unserved %d · short of copies %d · holders joining %d · "+
@@ -328,7 +346,10 @@ func renderWholeEstate(w io.Writer, v estateView) error {
 // it.
 func estatePlaced(m estateMemberView) string {
 	var why []string
-	if m.Out {
+	switch {
+	case m.Barred:
+		why = append(why, "barred")
+	case m.Out:
 		why = append(why, "out")
 	}
 	if p := m.Probation; p != nil {

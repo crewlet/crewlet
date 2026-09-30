@@ -1207,6 +1207,18 @@ export interface MapProbation {
   detail?: string;
 }
 
+/**
+ * A node barred from a map — evicted — that the map does not hold: removed,
+ * forgotten or never seen. Should it come back it joins as a member out, placed
+ * on nothing, until it is put back.
+ */
+export interface MapBar {
+  node: string;
+  by: string;
+  reason?: string;
+  at: string;
+}
+
 /** One member as the MAP alone describes it — what a gesture's answer carries. */
 export interface MapMember {
   node: string;
@@ -1218,6 +1230,12 @@ export interface MapMember {
   out_by?: string;
   out_reason?: string;
   out_at?: string;
+  /**
+   * Barred — evicted — absent while it is not: out until it is put back,
+   * whatever becomes of its membership. `out_by`, `out_reason` and `out_at` are
+   * the bar's where no out of an operator's own was recorded beside it.
+   */
+  barred?: boolean;
   /**
    * On probation, absent while it is not: placed on nothing, like an out
    * member, but the maintainer's to end rather than an operator's — a member

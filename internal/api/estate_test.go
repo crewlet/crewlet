@@ -553,9 +553,20 @@ func renderEstateScenarios(t *testing.T) []byte {
 	if !waiting.Map.MoveWaiting(statelog.PartitionID{Space: statelog.SpaceTracker, Index: 2}, "data-c") {
 		t.Fatal("the premise: with data-b out, the move off data-c waits")
 	}
+	// THE FLEET WITH TWO NODES EVICTED: data-d, a member, barred and so out
+	// on its row; data-x, which the map has never held, barred all the same
+	// and listed beside the removed nodes.
+	barred, err := partmap.Bar(fleet, "data-d", "founder", "evicted", estateSince)
+	if err == nil {
+		barred, err = partmap.Bar(barred, "data-x", "founder", "evicted", estateSince)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	presence, wholeEstate := wholeLeases(t)
 	maps := map[string]queries.FleetEstate{
 		"placed":  queries.RenderEstate(fleet, estateLeases(t), estateSince),
+		"barred":  queries.RenderEstate(barred, estateLeases(t), estateSince),
 		"held":    queries.RenderEstate(held, estateLeases(t), estateSince),
 		"waiting": queries.RenderEstate(waiting, estateLeases(t), estateSince),
 		"whole":   queries.RenderEstateWhole(engine.LayoutZero(), presence, wholeEstate),

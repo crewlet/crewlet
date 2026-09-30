@@ -228,6 +228,11 @@ type PlacedEstate struct {
 	// and has not seen back.
 	Removed []MapRemoval `json:"removed"`
 
+	// Barred are the nodes barred from the map — evicted — that it does not
+	// hold, whether removed, forgotten or never seen. Each is placed on
+	// nothing should it come back, until it is put back.
+	Barred []MapBar `json:"barred"`
+
 	// Partitions are every partition of the layout, in its order.
 	Partitions []EstatePartition `json:"partitions"`
 }
@@ -388,6 +393,7 @@ func RenderEstate(state partmap.MapState, estate []coord.Lease, now time.Time) F
 		Balance:    renderEstateBalance(state.Balance),
 		Members:    make([]EstateMember, 0, len(m.Members)),
 		Removed:    RenderRemoved(state.State, d),
+		Barred:     RenderBarred(state.State, d),
 		Partitions: make([]EstatePartition, 0, len(m.Partitions)),
 	}
 	held := map[string]map[partmap.HolderState]int{}

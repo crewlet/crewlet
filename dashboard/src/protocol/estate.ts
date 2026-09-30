@@ -10,7 +10,7 @@
  * directions by `internal/api`'s `estate_client_test.go`.
  */
 
-import type { MapHold, MapMember, MapRemoval } from "./types.ts";
+import type { MapBar, MapHold, MapMember, MapRemoval } from "./types.ts";
 
 /**
  * Which of the five things the estate was when the question was asked —
@@ -172,6 +172,8 @@ export interface PlacedEstate {
   moves: number;
   members: EstateMember[];
   removed: MapRemoval[];
+  /** Nodes barred — evicted — that the map does not hold: placed on nothing should they return. */
+  barred: MapBar[];
   partitions: EstatePartition[];
 }
 

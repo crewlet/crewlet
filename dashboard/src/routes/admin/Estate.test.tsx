@@ -153,6 +153,18 @@ describe("a placed map", () => {
     expect(within(b).getByText("It holds no estate lease")).toBeTruthy();
   });
 
+  test("an evicted node is barred on its row, and one the map does not hold is listed", () => {
+    view(state("barred"));
+    const d = screen
+      .getAllByText("data-d")
+      .map((el) => el.closest(".grid-row"))
+      .find(Boolean) as HTMLElement;
+    expect(within(d).getByText("barred")).toBeTruthy();
+    expect(within(d).queryByText("out")).toBeNull();
+    expect(screen.getByText(/is barred from the estate map by founder/)).toBeTruthy();
+    expect(screen.getByText("data-x")).toBeTruthy();
+  });
+
   test("a hold in force is a banner, and the header offers its release", () => {
     view(state("held"));
     expect(screen.getByText("Held")).toBeTruthy();

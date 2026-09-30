@@ -517,6 +517,19 @@ function PlacedEstateView({
             },
           ]}
         />
+        {e.barred.length > 0 && (
+          <Card.Body padding="md">
+            <div className="col gap-2">
+              {e.barred.map((b) => (
+                <Callout key={b.node} variant="warning" role="status">
+                  <InlineCode>{b.node}</InlineCode> is barred from the estate map by {b.by}
+                  {b.reason ? ` (${b.reason})` : ""}: the map does not hold it, and should it come
+                  back it is placed on nothing until it is readmitted.
+                </Callout>
+              ))}
+            </div>
+          </Card.Body>
+        )}
         {e.removed.length > 0 && (
           <Card.Body padding="md">
             <div className="col gap-2">
@@ -694,7 +707,17 @@ function StoreCell({ lease, live }: { lease?: EstateLease; live: boolean }) {
  */
 function MemberPresence({ member: m, held }: { member: EstateMember; held: boolean }) {
   const parts: React.ReactNode[] = [];
-  if (m.out) {
+  if (m.barred) {
+    parts.push(
+      <StatusCell
+        key="out"
+        glyph="⊘"
+        label="barred"
+        tone="caution"
+        title={`barred${m.out_by ? ` by ${m.out_by}` : ""}${m.out_reason ? ` — ${m.out_reason}` : ""}: placed on nothing, whatever becomes of it, until it is readmitted`}
+      />,
+    );
+  } else if (m.out) {
     parts.push(
       <StatusCell
         key="out"

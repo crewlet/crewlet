@@ -276,6 +276,37 @@ func TestEstateMapSaysWhichMovesWait(t *testing.T) {
 	}
 }
 
+// AN EVICTED NODE IS BARRED: a member says so in its PLACED column, and one the
+// map does not hold is named below the members with the command that lifts it.
+func TestEstateMapNamesTheNodesItBars(t *testing.T) {
+	node := newFakeEstateNode(t)
+	node.mu.Lock()
+	next, err := partmap.Bar(node.state, "data-c", "ops", "evicted", objectsAt)
+	if err == nil {
+		next, err = partmap.Bar(next, "data-x", "ops", "evicted", objectsAt)
+	}
+	node.state = next
+	node.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := cli(t, "estate", "map", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"BARRED: data-x, by ops (evicted)",
+		"crewlet retention readmit data-x"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the map does not say %q:\n%s", want, out)
+		}
+	}
+	for line := range strings.Lines(out) {
+		if strings.HasPrefix(line, "data-c ") && !strings.Contains(line, "barred") {
+			t.Errorf("the barred member's row does not say so: %q", line)
+		}
+	}
+}
+
 // THE STATES WITH NOTHING TO SHOW say their sentence: a map not written yet
 // is a wait, and a map nobody could read is a failure.
 func TestEstateMapSaysTheStatesWithNothingToShow(t *testing.T) {

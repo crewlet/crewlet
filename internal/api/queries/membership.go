@@ -51,6 +51,13 @@ type MapMember struct {
 	OutReason string    `json:"out_reason,omitempty"`
 	OutAt     time.Time `json:"out_at,omitzero"`
 
+	// Barred is a member barred from the map — an eviction — which is out
+	// until it is put back, whatever becomes of its membership: a removal
+	// does not lift it, as it lifts an out ([membership.State.Barred]).
+	// Absent while it is not. OutBy, OutReason and OutAt are the bar's where
+	// no out of an operator's own was recorded beside it.
+	Barred bool `json:"barred,omitempty"`
+
 	// Probation is a node the map removed for absence and has seen back,
 	// absent while the member is not on it: read from and repaired from at
 	// once, placed on nothing until it has been present and healthy for
@@ -149,6 +156,8 @@ func RenderMember(s membership.State, d placement.Draw, node string) (MapMember,
 			RemovedAt: r.At, Reason: r.Reason, Detail: r.Detail,
 		}
 	}
+	bar, barred := s.Barred[node]
+	out.Barred = barred
 	if m.Out {
 		// THE GESTURE BESIDE THE FLAG. The flag is what nodes place by
 		// and the gesture the operator's intent; the maintainer derives
@@ -156,6 +165,8 @@ func RenderMember(s membership.State, d placement.Draw, node string) (MapMember,
 		// one whose record a tick has not reconciled yet.
 		if g, taken := s.TakenOut[node]; taken {
 			out.OutBy, out.OutReason, out.OutAt = g.By, g.Reason, g.At
+		} else if barred {
+			out.OutBy, out.OutReason, out.OutAt = bar.By, bar.Reason, bar.At
 		}
 	}
 	if run, gone := s.Absence[node]; gone {
@@ -177,6 +188,31 @@ func RenderHold(s membership.State, now time.Time) *MapHold {
 	}
 	h := s.Hold
 	return &MapHold{Until: h.Until, By: h.By, Reason: h.Reason, At: h.At}
+}
+
+// MapBar is a node barred from a map — an eviction — that the map does not hold:
+// removed for its absence, forgotten, or never seen. Should it come back it
+// joins as a member out, placed on nothing, until it is put back.
+type MapBar struct {
+	Node   string    `json:"node"`
+	By     string    `json:"by"`
+	Reason string    `json:"reason,omitempty"`
+	At     time.Time `json:"at"`
+}
+
+// RenderBarred is every node barred from a map that the map does not hold, in
+// node order. A barred node the map DOES hold is rendered on its member row
+// instead ([MapMember.Barred]), for [RenderRemoved]'s reason.
+func RenderBarred(s membership.State, d placement.Draw) []MapBar {
+	out := make([]MapBar, 0, len(s.Barred))
+	for node, g := range s.Barred {
+		if d.Holds(node) {
+			continue
+		}
+		out = append(out, MapBar{Node: node, By: g.By, Reason: g.Reason, At: g.At})
+	}
+	slices.SortFunc(out, func(a, b MapBar) int { return strings.Compare(a.Node, b.Node) })
+	return out
 }
 
 // RenderRemoved is every node a map removed for absence, remembers, and has not

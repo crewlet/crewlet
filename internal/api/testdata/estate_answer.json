@@ -105,6 +105,352 @@
     }
   },
   "estate": {
+    "barred": {
+      "state": "placed",
+      "layout": 1,
+      "generation": "7d3e2a10-4b6c-4e8f-9a1d-5c2b8f0e6a4d",
+      "epoch": 9,
+      "spaces": [
+        {
+          "space": "tracker",
+          "partitions": 4,
+          "domains": [
+            "tracker",
+            "vectors"
+          ]
+        },
+        {
+          "space": "pages",
+          "partitions": 1,
+          "domains": [
+            "pages",
+            "vectors"
+          ]
+        },
+        {
+          "space": "company",
+          "partitions": 1,
+          "domains": [
+            "tracker"
+          ]
+        }
+      ],
+      "replicas": 2,
+      "copies": 2,
+      "failure_domain": "zone",
+      "distinct_domains": 3,
+      "domain_limited": false,
+      "balance": {
+        "deviation_percent": 3.1,
+        "tolerance_percent": 5,
+        "converged": true,
+        "rounds": 4
+      },
+      "unserved": 1,
+      "short": 3,
+      "joining": 2,
+      "leaving": 1,
+      "moves": 1,
+      "members": [
+        {
+          "node": "data-a",
+          "weight": 2,
+          "domain": "eu-1",
+          "out": false,
+          "share_percent": 50,
+          "serving": 4,
+          "joining": 1,
+          "leaving": 0,
+          "live": true,
+          "lease": {
+            "weight": 2,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-b",
+          "weight": 1,
+          "domain": "eu-2",
+          "out": false,
+          "absence": {
+            "ticks": 12,
+            "out_after_ticks": 40,
+            "present": 3,
+            "clear_after_ticks": 40,
+            "since": "2026-09-01T12:00:00Z",
+            "reason": "absent"
+          },
+          "share_percent": 33.333333333333336,
+          "serving": 2,
+          "joining": 0,
+          "leaving": 0,
+          "live": false
+        },
+        {
+          "node": "data-c",
+          "weight": 1,
+          "domain": "eu-3",
+          "out": false,
+          "share_percent": 16.666666666666668,
+          "serving": 3,
+          "joining": 1,
+          "leaving": 0,
+          "moved_off": [
+            "tracker.002"
+          ],
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 9,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-d",
+          "weight": 1,
+          "domain": "eu-1",
+          "out": true,
+          "out_by": "founder",
+          "out_reason": "decommission",
+          "out_at": "2026-09-01T12:00:00Z",
+          "barred": true,
+          "share_percent": 0,
+          "serving": 0,
+          "joining": 0,
+          "leaving": 1,
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "map_epoch": 8,
+            "free_bytes": 549755813888
+          }
+        },
+        {
+          "node": "data-f",
+          "weight": 1,
+          "domain": "eu-2",
+          "out": false,
+          "probation": {
+            "present": 12,
+            "placed_after_ticks": 40,
+            "removed_at": "2026-09-01T11:00:00Z",
+            "reason": "absent"
+          },
+          "share_percent": 0,
+          "serving": 1,
+          "joining": 0,
+          "leaving": 0,
+          "live": true,
+          "lease": {
+            "weight": 1,
+            "layout": 1,
+            "healthy": true,
+            "able": true,
+            "free_bytes": 549755813888
+          }
+        }
+      ],
+      "removed": [
+        {
+          "node": "data-e",
+          "at": "2026-09-01T12:00:00Z",
+          "reason": "unhealthy",
+          "detail": "its store says it cannot hold partitions",
+          "gone": 6,
+          "forget_after_ticks": 40,
+          "placed_after_ticks": 40
+        }
+      ],
+      "barred": [
+        {
+          "node": "data-x",
+          "by": "founder",
+          "reason": "evicted",
+          "at": "2026-09-01T12:00:00Z"
+        }
+      ],
+      "partitions": [
+        {
+          "id": "company.000",
+          "space": "company",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "pages.000",
+          "space": "pages",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 1,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-b",
+              "state": "serving",
+              "since": 3,
+              "able": false
+            }
+          ]
+        },
+        {
+          "id": "tracker.000",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-c"
+          ],
+          "serving": 1,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "joining",
+              "since": 9,
+              "reports": "adopting",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-d",
+              "state": "leaving",
+              "since": 8,
+              "reports": "draining",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "tracker.001",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 0,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-b",
+              "state": "serving",
+              "since": 2,
+              "able": false
+            },
+            {
+              "node": "data-c",
+              "state": "joining",
+              "since": 7,
+              "reports": "catching_up",
+              "able": true
+            }
+          ]
+        },
+        {
+          "id": "tracker.002",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-c",
+              "state": "serving",
+              "since": 2,
+              "reports": "serving",
+              "able": true
+            }
+          ],
+          "moves": [
+            {
+              "node": "data-c",
+              "by": "founder",
+              "reason": "disk swap",
+              "at": "2026-09-01T12:00:00Z"
+            }
+          ]
+        },
+        {
+          "id": "tracker.003",
+          "space": "tracker",
+          "target": [
+            "data-a",
+            "data-b"
+          ],
+          "serving": 2,
+          "wanted": 2,
+          "holders": [
+            {
+              "node": "data-a",
+              "state": "serving",
+              "since": 4,
+              "reports": "serving",
+              "able": true
+            },
+            {
+              "node": "data-f",
+              "state": "serving",
+              "since": 3,
+              "reports": "serving",
+              "able": true
+            }
+          ]
+        }
+      ]
+    },
     "held": {
       "state": "placed",
       "layout": 1,
@@ -276,6 +622,7 @@
           "placed_after_ticks": 40
         }
       ],
+      "barred": [],
       "partitions": [
         {
           "id": "company.000",
@@ -618,6 +965,7 @@
           "placed_after_ticks": 40
         }
       ],
+      "barred": [],
       "partitions": [
         {
           "id": "company.000",
@@ -968,6 +1316,7 @@
           "placed_after_ticks": 40
         }
       ],
+      "barred": [],
       "partitions": [
         {
           "id": "company.000",
