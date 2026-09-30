@@ -113,4 +113,35 @@ func TestAKeySentWithOtherContentIsAnotherOperation(t *testing.T) {
 			}
 		}
 	})
+
+	// A CREATE's object is its address, so another body at the same address
+	// under the key is the one case the address cannot tell apart: bound to
+	// the key alone it was the first create's operation, answered as made
+	// with the page still reading the first body. Bound to what it says it
+	// is another create of a held address, and refused as one.
+	t.Run("a create", func(t *testing.T) {
+		asked := pages.NewPage{Container: "ENG", Title: "Handbook", Body: "one"}
+		first, err := r.store.Create(t.Context(), keyed, asked)
+		if err != nil {
+			t.Fatalf("first create: %v", err)
+		}
+		r.drain()
+		again, err := r.store.Create(t.Context(), keyed, asked)
+		if err != nil || again.Page.ID != first.Page.ID {
+			t.Errorf("the same create under the same key answered page %q (%v), "+
+				"want the first one's %q: a retry would file a second page",
+				again.Page.ID, err, first.Page.ID)
+		}
+		other := asked
+		other.Body = "two"
+		if got, err := r.store.Create(t.Context(), keyed, other); err == nil {
+			t.Errorf("another create at the address under the key was answered "+
+				"as made (page %q, the first was %q) — the ledger answered it as "+
+				"the first and wrote nothing", got.Page.ID, first.Page.ID)
+		}
+		r.drain()
+		if got := r.get(first.Page.ID).Page.Body; got != "one" {
+			t.Errorf("the first page reads %q, want one", got)
+		}
+	})
 }
