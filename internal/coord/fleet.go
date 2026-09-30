@@ -1313,6 +1313,16 @@ type Fleet interface {
 // migration 0012 moved `a2a_channels` out for and the one node migration 0010
 // moved four tables out for before that. See ADR-0003.
 //
+// # The seat is named by its identity
+//
+// Every method's seat is the handle the seat was CREATED under (ADR-0019) —
+// what internal/notify's FollowStore hands in — and never the one it answers
+// to now: a follow is the seat's own memory of a conversation, and keyed on
+// its address a rename made it deaf to every thread it had been following.
+// This store resolves nothing; it keys on the name it is given, which is still
+// a handle, so every follow written before a seat was first renamed is keyed
+// correctly.
+//
 // # Three methods, and no purge
 //
 // Retention here is the BUCKET's age, like every other aged slot: every
@@ -1327,7 +1337,7 @@ type Follows interface {
 	// following for the stronger reason, and an operator asking why it
 	// answered should see the mention rather than the shout that happened
 	// to come first.
-	Follow(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) error
+	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
 
 	// Following reports why a seat follows a thread, and whether it does.
 	//
@@ -1337,7 +1347,7 @@ type Follows interface {
 	// the third — internal/notify fails closed, because a missed thread
 	// reply is quiet and self-healing where a spurious wake is a burst of
 	// turns that cannot be taken back.
-	Following(ctx context.Context, backend, handle, channel, thread string) (string, bool, error)
+	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
 
 	// Unfollow drops a follow, reporting whether one was there.
 	//
@@ -1352,7 +1362,7 @@ type Follows interface {
 	// unfollow is in flight is therefore removed, exactly as it is when the
 	// re-assert loses by a nanosecond — and the next mention re-follows
 	// through the ordinary path.
-	Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error)
+	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 
 	// FollowIfAbsent records a follow only where none exists, reporting
 	// whether this call created it.
@@ -1368,7 +1378,7 @@ type Follows interface {
 	// nothing agreed between them: both hold their own local table, the
 	// keys overlap, exactly one create wins, and the loser removes its own
 	// row having learned the fleet already has the record.
-	FollowIfAbsent(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) (bool, error)
+	FollowIfAbsent(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) (bool, error)
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

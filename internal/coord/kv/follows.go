@@ -12,7 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// The chat thread-follows, as one record per (backend, seat, channel, thread).
+// The chat thread-follows, as one record per (backend, seat, channel, thread),
+// the seat named by the handle it was created under — see [coord.Follows].
 //
 // # Why the key is four segments and not a composed string
 //
