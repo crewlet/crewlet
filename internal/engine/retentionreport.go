@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sort"
 	"time"
@@ -52,19 +53,18 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	if positions, err := layoutPositions(ctx, r.fleet, r.state.layout.Number); err == nil {
 		in.Register, in.RegisterReadable = positions, true
 	}
+	var live []statelog.Presence
+	liveErr := errors.New("engine: this node reads no presence leases")
 	if r.leases != nil {
-		if live, err := livePresences(ctx, r.leases); err == nil {
+		if live, liveErr = livePresences(ctx, r.leases); liveErr == nil {
 			in.Live = live
 		}
 	}
 	// THE HOLDERS THE TRIM COUNTS, every partition's at once — the counted
 	// set's holder half, which is who holds a partition rather than who is
-	// running ([statelog.ReportInputs.Holders]).
-	if r.holders != nil {
-		if held, err := r.holders.Holders(ctx, r.state.layout.Partitions()); err == nil {
-			in.Holders = everyHolder(held)
-		}
-	}
+	// running ([statelog.DomainInputs.Holders]) — each log handed its own
+	// partition's below. Unread, each log's mark counts its rows alone.
+	holders, _ := r.reportHolders(ctx, live, liveErr)
 	// AN UNREADABLE FLOOR REGISTER IS NOT AN EMPTY ONE: every domain then
 	// reports its trim as unreadable rather than as a trim that has
 	// concluded nothing, which is a different thing to go and look at.
@@ -163,7 +163,9 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 			tombs, read := r.tombstones(ctx, running, d.Generation)
 			perLog = append(perLog, tombs)
 			d.EvictionsUnreadable = !read
+			d.Tombstones = tombs
 		}
+		d.Holders = holders[running.id.Partition]
 		d.SnapshotSkip = r.skipFor(in.Register, running)
 		in.Domains = append(in.Domains, d)
 	}
@@ -172,6 +174,29 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
 	in.Maintenance = r.openMaintenance(ctx)
 	return statelog.NewReport(in)
+}
+
+// reportHolders is who holds each partition of the layout, for the report.
+//
+// UNDER LAYOUT 0, THE LIVE DATA NODES THE REPORT ALREADY LISTED: that is what
+// [presenceHolders] answers there, and asking it would list the presence leases
+// a second time, a round trip after the first — two readings of one question
+// that could disagree about who is there, and a second certified listing on
+// every node's every tick for nothing. Under any other layout, the holders' own
+// answer.
+func (r *retention) reportHolders(ctx context.Context, live []statelog.Presence,
+	liveErr error) (map[statelog.PartitionID][]statelog.Presence, error) {
+
+	switch r.holders.(type) {
+	case nil:
+		return nil, nil
+	case presenceHolders:
+		if liveErr != nil {
+			return nil, liveErr
+		}
+		return heldByEvery(live, r.state.layout.Partitions()), nil
+	}
+	return r.holders.Holders(ctx, r.state.layout.Partitions())
 }
 
 // fleetTombstones folds each identity-claiming log's own tombstones into the

@@ -3,8 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
@@ -86,11 +84,7 @@ func (h viewHolders) Holders(ctx context.Context,
 	for _, id := range nodes {
 		live = append(live, statelog.Presence{NodeID: id})
 	}
-	out := make(map[statelog.PartitionID][]statelog.Presence, len(partitions))
-	for _, p := range partitions {
-		out[p] = live
-	}
-	return out, nil
+	return heldByEvery(live, partitions), nil
 }
 
 // estateMapView is this node's estate view, looked up at every read — the
@@ -120,11 +114,19 @@ func (h presenceHolders) Holders(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	return heldByEvery(live, partitions), nil
+}
+
+// heldByEvery is every one of partitions held by every node of live — layout
+// 0's answer, where every live data node holds the one partition whole.
+func heldByEvery(live []statelog.Presence,
+	partitions []statelog.PartitionID) map[statelog.PartitionID][]statelog.Presence {
+
 	out := make(map[statelog.PartitionID][]statelog.Presence, len(partitions))
 	for _, p := range partitions {
 		out[p] = live
 	}
-	return out, nil
+	return out
 }
 
 // estateHolderView is the estate view as a counted set reads it: the map it
@@ -213,21 +215,4 @@ func (h mapHolders) Holders(_ context.Context,
 		out[p] = presences
 	}
 	return out, nil
-}
-
-// everyHolder is every node holding any of the partitions answered, once each,
-// in node order.
-func everyHolder(held map[statelog.PartitionID][]statelog.Presence) []statelog.Presence {
-	seen := map[string]bool{}
-	var out []statelog.Presence
-	for _, holders := range held {
-		for _, h := range holders {
-			if !seen[h.NodeID] {
-				seen[h.NodeID] = true
-				out = append(out, h)
-			}
-		}
-	}
-	slices.SortFunc(out, func(a, b statelog.Presence) int { return strings.Compare(a.NodeID, b.NodeID) })
-	return out
 }

@@ -671,6 +671,16 @@ type DomainInputs struct {
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
+
+	// Holders is who holds this log's partition — the holder half of its
+	// counted set ([CountedSet]) — and Tombstones this log's own evictions
+	// and releases: with the register's rows naming the log, the three
+	// inputs the trim counts the log's nodes from, which the node block's
+	// counted mark is taken from ([ReportInputs.nodes]). Holders is nil
+	// where they could not be read — the mark then counts the rows alone,
+	// and the log's published floor says its counted set was unknown.
+	Holders    []Presence
+	Tombstones []Tombstone
 }
 
 // ReportInputs is everything the report is assembled from, already read.
@@ -702,15 +712,9 @@ type ReportInputs struct {
 	// block marks live.
 	Live []Presence
 
-	// Holders is every node holding any partition of the layout — the
-	// holder half of every log's counted set ([CountedSet]), which the node
-	// block's counted mark is taken from. Under layout 0 it is the live data
-	// nodes, which hold that layout's one partition; under any other it is
-	// the estate map's holders, and nil when they could not be read — the
-	// block then counts the register's rows alone, and each log's published
-	// floor says its counted set was unknown.
-	Holders []Presence
-
+	// Tombstones is one per node evicted or released on EVERY identity
+	// log, as of the latest — what the node block renders as evicted. Each
+	// log's own are its [DomainInputs.Tombstones].
 	Tombstones []Tombstone
 
 	Replica ReplicaReport
@@ -954,18 +958,28 @@ func (in ReportInputs) nodes() []NodeReport {
 	}
 
 	// THE COUNTED SET IS NOT RE-DERIVED HERE. It is the same function the
-	// trim itself calls, over the same three inputs, so the screen can
-	// never name a different fleet from the one the gate is waiting for —
-	// its holders the partitions' holders, never the live nodes: a live
-	// node holding nothing is counted on no log, and marking it counted
-	// named a node the trim does not wait for.
-	var flat []NodePosition
-	for id, row := range reported {
-		flat = append(flat, NodePosition{NodeID: id, At: row.At})
-	}
+	// trim itself calls, LOG BY LOG over the same three inputs — the rows
+	// naming the log (a released one as released), its partition's holders
+	// and its own tombstones — and a node is marked counted where some log's
+	// set holds it, so the screen can never name a different fleet from the
+	// one the gate is waiting for. Its holders are the partition's, never
+	// the live nodes: a live node holding nothing is counted on no log, and
+	// marking it counted named a node the trim does not wait for. Folded
+	// into one set over every log's rows, it counted a node whose row had
+	// released every log it named, and one evicted on a log beside another
+	// it never ran.
 	counted := make(map[string]bool)
-	for _, n := range CountedSet(in.At, flat, in.Holders, in.Tombstones) {
-		counted[n.NodeID] = true
+	for _, d := range in.Domains {
+		var named []NodePosition
+		for _, row := range in.Register {
+			if at, runs := row.Domains[d.Domain]; runs {
+				named = append(named, NodePosition{NodeID: row.NodeID, At: row.At,
+					Released: at.State == coord.LogReleased})
+			}
+		}
+		for _, n := range CountedSet(in.At, named, d.Holders, d.Tombstones) {
+			counted[n.NodeID] = true
+		}
 	}
 
 	named := map[string]bool{}
