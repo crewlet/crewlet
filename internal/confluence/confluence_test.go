@@ -1008,6 +1008,77 @@ func TestTheSubscriptionReadIsOneCallPerEvent(t *testing.T) {
 	}
 }
 
+// A RENAMED SEAT STILL HEARS THE PAGES IT TOUCHED.
+//
+// A subscription is the seat's own memory of a page, and keyed on the handle
+// it answered to when it edited, the chart renaming `swe` to `platform-swe`
+// made it deaf to every page it had touched: the list was asked about
+// `platform-swe`, found nobody, and the event fell through to the space lead.
+// A seat is subscribed and tested by the handle it was CREATED under
+// (ADR-0019), whatever it answers to now, and is woken under the handle it
+// answers to now.
+//
+// Mutation: test or record the subscription by the party's handle again and
+// the follow-up after the rename goes to the lead, and the post-rename edit
+// is filed under the new address.
+func TestARenamedSeatStillHearsThePagesItTouched(t *testing.T) {
+	t.Parallel()
+	renamed := func(t *testing.T) *notify.Registry {
+		t.Helper()
+		o := &org.Organization{Name: "nimbus", Roles: []*org.Role{
+			{Name: "Eng Lead", DeclaredHandle: "lead"},
+			{Name: "SWE", DeclaredHandle: "platform-swe", OriginHandle: "swe",
+				FormerHandles: []string{"swe"}},
+			{Name: "Writer", DeclaredHandle: "writer"},
+		}}
+		o.Normalize()
+		reg := notify.NewRegistry(o, nil)
+		for id, handle := range map[string]string{
+			acctLead: "lead", acctSWE: "platform-swe", acctWriter: "writer",
+		} {
+			if err := reg.Register(confluence.Backend, id, handle); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return reg
+	}
+	w := newWatchList()
+	p := parser(t, withWatchers(w))
+
+	// BEFORE THE RENAME: the seat edits the page, so it is subscribed.
+	route(t, p, pageEvent("page_updated", "ENG", "<p>Fixed a typo.</p>", acctSWE))
+	if !w.watching("1001", "swe") {
+		t.Fatal("the premise: the editing seat was not subscribed")
+	}
+
+	// AFTER IT, somebody else changes the page, and the seat hears it under
+	// the handle it answers to now.
+	got, err := p.Parse(context.Background(),
+		pageEvent("comment_created", "ENG", "<p>Anything else?</p>", acctWriter),
+		renamed(t))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(got) != 1 || got[0].To.Handle != "platform-swe" ||
+		got[0].Metadata[confluence.RoutedViaField] != confluence.ViaWatcher {
+		t.Fatalf("the follow-up after the rename went to %v (%v), want the "+
+			"renamed seat as a watcher", got, viaOf(got))
+	}
+
+	// AND WHAT IT TOUCHES AFTER THE RENAME is filed under the same identity,
+	// where the next rename cannot hide it either.
+	w2 := newWatchList()
+	if _, err := parser(t, withWatchers(w2)).Parse(context.Background(),
+		pageEvent("page_updated", "ENG", "<p>Another edit.</p>", acctSWE),
+		renamed(t)); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !w2.watching("1001", "swe") || w2.watching("1001", "platform-swe") {
+		t.Errorf("an edit after the rename was subscribed as %v, want the "+
+			"seat's identity swe", w2.pages["1001"])
+	}
+}
+
 // A SKILLS-SPACE PAGE SUBSCRIBES NOBODY. Its events are machinery — excluded
 // from routing entirely — and subscribing seats to them would build a list
 // that can only ever produce notifications the parser then drops.

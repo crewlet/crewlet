@@ -139,7 +139,8 @@ func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
 		if _, dup := r.byHandle[handle]; dup {
 			continue
 		}
-		p := Party{Handle: handle, Name: role.Name, Human: role.IsHuman()}
+		p := Party{Handle: handle, Origin: role.Origin(), Name: role.Name,
+			Human: role.IsHuman()}
 		if !p.Human {
 			// THROUGH THE ORGANIZATION, never by hashing the handle in
 			// hand. The id is derived from the handle a seat was CREATED

@@ -364,6 +364,14 @@ has to be found by whichever node handles the next event. Membership is asked
 as a single question per event ("which of my seats is subscribed to this
 page?"), so the cost does not grow with a page's history.
 
+A seat is on the list by the handle it was **created** under (see
+[ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)),
+never the one it answers to now, and it is woken under its current handle. A
+subscription is the seat's own memory of a page, so renaming `swe` to
+`platform-swe` keeps every page it touched: keyed on the address, the rename
+made it deaf to all of them and the next change fell through to the space
+lead. For a seat never renamed the two are the same handle.
+
 The list is bounded by the **coordination bucket's retention** rather than a
 per-page expiry: a page nobody has touched inside that window drops its
 subscribers, which is the right forgetting — a seat that edited a page a year

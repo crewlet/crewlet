@@ -49,25 +49,28 @@ func (w pageWatchers) watchScope(pageID string) string {
 	return w.prefix + strings.TrimSpace(pageID)
 }
 
-// Watching returns the subset of handles subscribed to the page.
-func (w pageWatchers) Watching(ctx context.Context, pageID string, handles []string) (map[string]bool, error) {
-	if w.ledger == nil || strings.TrimSpace(pageID) == "" || len(handles) == 0 {
+// Watching returns the subset of seats subscribed to the page, each named by
+// the handle it was CREATED under — see [confluence.Watchers], which is why a
+// renamed seat still hears the pages it touched.
+func (w pageWatchers) Watching(ctx context.Context, pageID string, seats []string) (map[string]bool, error) {
+	if w.ledger == nil || strings.TrimSpace(pageID) == "" || len(seats) == 0 {
 		return nil, nil
 	}
-	return w.ledger.Worked(ctx, w.watchScope(pageID), handles)
+	return w.ledger.Worked(ctx, w.watchScope(pageID), seats)
 }
 
-// Watch subscribes one handle to a page.
+// Watch subscribes one seat, named by the handle it was created under, to a
+// page.
 //
 // The DETAIL is what subscribed the seat, which is the only thing an operator
 // reading the coordination store could otherwise not reconstruct: a seat that
 // edited a page and a seat somebody delegated to are subscribed identically
 // and arrived there very differently.
-func (w pageWatchers) Watch(ctx context.Context, pageID, handle string, at time.Time) error {
-	if w.ledger == nil || strings.TrimSpace(pageID) == "" || strings.TrimSpace(handle) == "" {
+func (w pageWatchers) Watch(ctx context.Context, pageID, seat string, at time.Time) error {
+	if w.ledger == nil || strings.TrimSpace(pageID) == "" || strings.TrimSpace(seat) == "" {
 		return nil
 	}
-	return w.ledger.Record(ctx, w.watchScope(pageID), handle, "confluence_touch", at)
+	return w.ledger.Record(ctx, w.watchScope(pageID), seat, "confluence_touch", at)
 }
 
 // confluenceWatchers is the subscription list for this node's Confluence
