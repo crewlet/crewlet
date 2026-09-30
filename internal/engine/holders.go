@@ -76,7 +76,7 @@ type viewHolders struct{ view *coord.LeaseView }
 func (h viewHolders) Holders(ctx context.Context,
 	partitions []statelog.PartitionID) (map[statelog.PartitionID][]statelog.Presence, error) {
 
-	nodes, err := presenceRoster{view: h.view}.LiveDataNodes()
+	nodes, err := presenceRoster(h).LiveDataNodes()
 	if err != nil {
 		return nil, err
 	}
