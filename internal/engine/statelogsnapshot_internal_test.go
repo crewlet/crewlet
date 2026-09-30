@@ -754,6 +754,75 @@ func TestAPartitionServedAfterTheLoopStartsIsTakenSoon(t *testing.T) {
 	taker.await(t, "the partition it came to serve")
 }
 
+// WHAT THE LOOP FINDS IS WHAT THIS NODE RUNS, SORTED BY WHETHER IT SERVES IT.
+//
+// The snapshot loop's scope comes from the partitions this node runs a log of,
+// each asked of the node's own holding: a partition it serves is taken; one it
+// runs and does not serve yet — a joiner catching up — and one whose holding
+// could not be told this pass each leave the loop UNSETTLED, so it looks again
+// within the retry rather than a day later; and the one it could not tell
+// about is named, so its report is kept rather than dropped on a moment's blip.
+func TestTheLoopsScopeIsWhatThisNodeRunsAndServes(t *testing.T) {
+	t.Parallel()
+	layout := partitionedTestLayout()
+	parts := layout.Partitions()
+	if len(parts) < 3 {
+		t.Fatalf("the premise: the test layout has %d partitions, want three", len(parts))
+	}
+	served, joining, unknown := parts[0], parts[1], parts[2]
+	var runs []*runningLog
+	for _, id := range layout.AllLogs() {
+		runs = append(runs, &runningLog{id: id, key: id.String()})
+	}
+	scopeOf := func(h partitionAnswers) snapshotScope {
+		s := &stateLog{run: t.Context(), layout: layout, holding: h}
+		s.logs.Store((&logSet{}).with(layout, runs))
+		return s.servedPartitions()
+	}
+	stale := errors.New("the estate view is stale")
+
+	scope := scopeOf(partitionAnswers{served: {serves: true}, joining: {}, unknown: {err: stale}})
+	if !slices.Equal(scope.served, []statelog.PartitionID{served}) {
+		t.Errorf("the loop takes %v, want the one partition this node serves %v", scope.served, served)
+	}
+	if !slices.Equal(scope.unknown, []statelog.PartitionID{unknown}) {
+		t.Errorf("the loop names %v unknown, want the one whose holding could not be "+
+			"told %v", scope.unknown, unknown)
+	}
+	if !scope.unsettled {
+		t.Error("a pass with a partition joining and one unknown is settled: the loop " +
+			"would sleep its whole interval before either")
+	}
+
+	for name, c := range map[string]struct {
+		holding partitionAnswers
+		want    bool
+	}{
+		"a partition joining": {want: true, holding: partitionAnswers{
+			served: {serves: true}, joining: {}, unknown: {serves: true}}},
+		"a partition of unknown holding": {want: true, holding: partitionAnswers{
+			served: {serves: true}, joining: {serves: true}, unknown: {err: stale}}},
+		"every partition served": {holding: partitionAnswers{
+			served: {serves: true}, joining: {serves: true}, unknown: {serves: true}}},
+	} {
+		if got := scopeOf(c.holding).unsettled; got != c.want {
+			t.Errorf("%s: the pass is unsettled %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// partitionAnswers is a holding that answers each partition as it is told to,
+// and a partition it was told nothing of as not served.
+type partitionAnswers map[statelog.PartitionID]struct {
+	serves bool
+	err    error
+}
+
+func (h partitionAnswers) Serving(p statelog.PartitionID) (bool, error) {
+	a := h[p]
+	return a.serves, a.err
+}
+
 // A PARTITION WHOSE HOLDING IS UNKNOWN KEEPS ITS REPORT, and one this node does
 // not serve loses it: not knowing for a pass whether this node serves a
 // partition is not having left it, and a report dropped on that read stopped
