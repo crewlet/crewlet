@@ -93,7 +93,7 @@ func (unreadPages) Rename(context.Context, pages.Actor, string, string, bool) (
 // Unmounted it is a 404, and unguarded a 401 would have come first.
 func TestTheRealWriteSurfaceMountsBesideTheReads(t *testing.T) {
 	t.Parallel()
-	surface, err := workapi.New(workapi.Options{
+	halves := workapi.Halves{
 		Work: builtin.WorkDeps{
 			Reader: unreadWork{},
 			Writer: func(builtin.Actor) builtin.WorkWriter { return nil },
@@ -103,7 +103,10 @@ func TestTheRealWriteSurfaceMountsBesideTheReads(t *testing.T) {
 			return nil
 		},
 		PageStore: unreadPages{},
-		Chart:     authz.NoChart{},
+	}
+	surface, err := workapi.New(workapi.Options{
+		Halves: func() (workapi.Halves, bool) { return halves, true },
+		Chart:  authz.NoChart{},
 	})
 	if err != nil || surface == nil {
 		t.Fatalf("workapi.New: %v", err)

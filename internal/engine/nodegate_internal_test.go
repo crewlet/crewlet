@@ -28,7 +28,7 @@ import (
 func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	self := s.nodeID
 	const away = "node-away"
 	r := &retention{fleet: back.Fleet, state: s, db: back.Store, nodeID: self,
@@ -57,7 +57,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		return rows
 	}
 
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
 		Node: away, OpID: "op-evict", By: gateOperator})
 	if err != nil || !res.Complete() {
 		t.Fatalf("evict %s: %v (%+v)", away, err, res)
@@ -195,8 +195,8 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
-	gate := e.native.Load().gate
+	s := e.core.Load().log
+	gate := e.core.Load().gate
 	const away = "node-away"
 	identity := identityLogs(t, s)
 
@@ -248,8 +248,8 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
-	gate := e.native.Load().gate
+	s := e.core.Load().log
+	gate := e.core.Load().gate
 	identity := identityLogs(t, s)
 	const live = "node-live"
 	if _, err := back.Coord.TryAcquire(t.Context(), coord.NodeResource(live),

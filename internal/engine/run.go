@@ -314,35 +314,41 @@ type Engine struct {
 	// state — see learning.Reflector.
 	reflector *learning.Reflector
 
-	// native is this node's copy of the company's own durable state — the
-	// state log and every domain in its register (the org chart and the
-	// identity estate always; the tracker and the knowledge base where the
-	// company runs them natively), and the read and write sides over them.
-	// Nil on a node that has not yet been handed a company, which is the
-	// whole switch — see native.go.
+	// core is this node's always-on runtime: the state log for every
+	// registered domain, the node gate, and the org chart's and the
+	// identity estate's two sides with the loops that derive this node's
+	// views of them. See core.go.
 	//
-	// On the ENGINE rather than on an epoch, because the runtime follows
-	// the fleet's LOGS and a log does not change when a company revision
-	// does. Rebuilding it on an apply would drop the applied rows' runtime
-	// and re-run a boot bring-up on every configuration change, which for
-	// a company that edits its org chart twice a day is a runtime that is
-	// never hydrated.
+	// PUBLISHED ONCE, by [New], on EVERY node — with a company or without,
+	// in every mode — and never cleared, not even by the teardown. On the
+	// ENGINE rather than on an epoch, because the runtime follows the
+	// fleet's LOGS and a log does not change when a company revision does.
+	// Atomic because readers on every goroutine load it without a lock, and
+	// the monotonic nil-to-runtime transition is what lets a caller that
+	// reads it more than once rely on the later reads.
+	core atomic.Pointer[core]
+
+	// native is the half of this node's durable state only a company can
+	// say anything about: the tracker's and the knowledge base's read and
+	// write sides over the core's logs, where the company runs them
+	// natively, the lexical index and the change feeds. Nil on a node that
+	// has not yet been handed a company — see native.go.
 	//
 	// ATOMIC, AND WRITTEN AT MOST ONCE: nil until the node's first company
 	// is met — at boot, or by the apply that brings a node that booted with
-	// none its first ([Engine.startNativeFor]) — and never
-	// cleared after, not even by the teardown. A plain field was correct
-	// only while boot was the one writer, before any goroutine could read
-	// it; a node that booted unconfigured and met its company later wrote
-	// it with the seat host, the API and every tool already reading. The
-	// monotonic nil-to-runtime transition is what lets a caller that reads
-	// it more than once rely on the later reads.
+	// none its first ([Engine.startNativeFor]) — and never cleared after,
+	// not even by the teardown. A plain field was correct only while boot
+	// was the one writer, before any goroutine could read it; a node that
+	// booted unconfigured and met its company later wrote it with the seat
+	// host, the API and every tool already reading. The monotonic
+	// nil-to-runtime transition is what lets a caller that reads it more
+	// than once rely on the later reads.
 	native atomic.Pointer[native]
 
 	// boot is the operator's Tier A configuration this engine was built
-	// from. Immutable; kept because a node that meets its first company
-	// at an apply brings the state log up then, and the log's
-	// ceilings, volume and snapshot policy are Tier A's.
+	// from. Immutable; kept because the duties an apply or a later loop
+	// arms read Tier A — the trim's retention policy, the identity
+	// estate's horizons, the backup owner.
 	boot *config.Bootstrap
 
 	// env is this node's ${VAR} resolver and the store snapshot it answers
@@ -486,8 +492,8 @@ type Engine struct {
 	//
 	// REBUILT ONCE MORE on a node's FIRST company, the one time its job
 	// list changes after boot: a node that booted unconfigured built it
-	// with no native runtime and no company, so it swept no operation
-	// ledger, ran none of the tracker's repairs and read the conversation
+	// with no native halves and no company, so it ran none of the
+	// tracker's repairs, swept no inbox and read the conversation
 	// horizon's floor. The old worker is stopped — its in-flight tick
 	// waited out — before the new one starts, so there is never a second
 	// loop. Atomic because that write happens while the process runs. See
@@ -520,9 +526,9 @@ type Engine struct {
 	// loop this process runs, and rebuilding it on an apply would leave
 	// two loops publishing one fleet's floor.
 	//
-	// ATOMIC because it is armed with the native runtime, which a node
-	// that booted unconfigured meets at an apply — while the API is
-	// already reading it for `crewlet retention status`.
+	// ATOMIC because it is armed after the node exists, from the boot's
+	// publishing tail — while the API may already be reading it for
+	// `crewlet retention status` — and cleared by the teardown.
 	retention atomic.Pointer[retention]
 
 	// budgetReports is the live token-meter loop. Every node runs one —
@@ -676,7 +682,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// EVERYTHING THAT CAN FAIL WITH NOTHING OPEN COMES FIRST, which is why
 	// the telemetry receiver, the bridge and this node's identity are
 	// resolved above the backends rather than below them. It is the same
-	// ordering [Engine.startNative] uses on its own node-id read, for the
+	// ordering [Engine.startCore] uses on its own node-id read, for the
 	// same reason: a failure that has opened nothing has nothing to unwind.
 	// Placed below the backends, each of these returned past an ALREADY
 	// OPEN store and broker and closed neither — and the store is
@@ -769,7 +775,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// numbers into it, and before node.New, which hands the same
 		// value to every seat attachment.
 		batch: queue.DefaultBatchOptions(),
-		// BEFORE startNative, which threads the nudge into the chart's
+		// BEFORE startCore, which threads the nudge into the chart's
 		// applier: a nil channel there would make every send block for
 		// ever on the apply loop's own goroutine.
 		chartNudge: make(chan struct{}, 1),
@@ -809,7 +815,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// in a process whose boot had failed.
 	//
 	// Deferred rather than written at each return, for the reason
-	// [Engine.startNative]'s own guard is: the list of things to unwind
+	// [Engine.startCore]'s own guard is: the list of things to unwind
 	// grows down the function, and a per-return list stops matching it at
 	// the first loop somebody adds.
 	//
@@ -890,11 +896,26 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return nil, err
 		}
 	}
-	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Everything here is derived
-	// from a company — the sandbox backends it configures, the native
-	// runtime its backends ask for, the tools its seats are given — and an
-	// unconfigured node has none of them to build. The apply that brings it
-	// its first revision builds all of it then: the native runtime
+	// THE CORE RUNTIME, ON EVERY NODE AND BEFORE ANYTHING DERIVED FROM A
+	// COMPANY: the state log for every registered domain, the node gate,
+	// the org chart and the identity estate. A node with no company still
+	// signs people in, still enrols its first person under a Tier A token,
+	// and still lets a company be BUILT through its chart before a settings
+	// revision exists — and none of that waits for the first company any
+	// more. See core.go.
+	//
+	// It does NOT wait for hydration — the reconcile is O(keys), and a node
+	// that blocked here would serve no dashboard, answer no probe and run no
+	// duty until it finished. Seat acquisition is what waits; see
+	// [Engine.StateLogHydrated].
+	if err = e.startCore(ctx, opts.Bootstrap, company.Epoch()); err != nil {
+		return nil, err
+	}
+	// THE REST IS SKIPPED WHEN THERE IS NO EPOCH. Everything here is
+	// derived from a company — the sandbox backends it configures, the
+	// native halves its backends ask for, the tools its seats are given —
+	// and an unconfigured node has none of them to build. The apply that
+	// brings it its first revision builds all of it then: the native halves
 	// ([Engine.startNativeFor]) and the sandbox runtime
 	// ([Engine.startSandbox]), each before that apply equips.
 	if company != nil {
@@ -912,13 +933,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.
-		//
-		// It does NOT wait for hydration — the reconcile is O(keys), and
-		// a node that blocked here would serve no dashboard, answer no
-		// probe and run no duty until it finished. Seat acquisition is
-		// what waits; see [Engine.NativeHydrated].
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
+		if err := e.startNative(ctx, company); err != nil {
 			return nil, err
 		}
 		// NOT THE PROJECTS AND THE CONTAINERS HERE. They are derived from
@@ -944,14 +960,19 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// nothing and an edited file places what it names without
 		// touching whoever was hired through the API. See seed.go.
 		e.seedChartAtBoot(ctx, company.Config)
-		// AND A CHART AN OFFLINE IMPORT STAGED. It is the opposite of
-		// the seed above and runs after it for that reason: the seed
-		// bootstraps an EMPTY chart from a file, and a stage is an
-		// operator's explicit "this file is the chart again", performed
-		// at a node they had deliberately stopped. Ordering it second
-		// is what makes a first boot that both seeds and redeems settle
-		// on the staged structure. See seed.go.
-		e.publishStagedChartAtBoot(ctx)
+	}
+	// AND A CHART AN OFFLINE IMPORT STAGED, WITH A COMPANY OR WITHOUT ONE:
+	// it needs the chart, which is the core's, and not the company file.
+	// It is the opposite of the seed above and runs after it for that
+	// reason: the seed bootstraps an EMPTY chart from a file, and a stage
+	// is an operator's explicit "this file is the chart again", performed
+	// at a node they had deliberately stopped. Ordering it second is what
+	// makes a first boot that both seeds and redeems settle on the staged
+	// structure — and on a node with no company it makes the seed at the
+	// first apply find the chart already there, and publish nothing over
+	// it. See seed.go.
+	e.publishStagedChartAtBoot(ctx)
+	if company != nil {
 		// AND THE VIEW THE SEED JUST WROTE. The composition prefers the
 		// view where there is one, so building it here is what makes the
 		// engine's first published company the one derived from rows
@@ -1020,7 +1041,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		//
 		// Trivially true on a company running the vendor backends, which
 		// have no projection to wait for.
-		SeatsAdmitted: e.NativeHydrated,
+		SeatsAdmitted: e.StateLogHydrated,
 		// AND THE OTHER DIRECTION. Admission withholds new work from a
 		// node that is merely behind; this gives back work already held
 		// by a node whose rows are wrong. Two gates because the remedies
@@ -1126,20 +1147,23 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
-	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
-	// the same reason: its duty is claimed under the node's incarnation,
-	// and a trim that ran before the lease existed would run on every node
-	// at once. Without it a domain's log only ever grows — to its ceiling,
-	// where appends are refused.
 	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
 	// which nothing published — so every header carried zeroes. Armed
 	// before the native backends, because it needs neither: the counters
 	// are coordination's and the company's caps are the epoch's.
 	e.startBudgetReports(ctx)
-	// The native runtime's own duties — the trim, the vector domain's one
-	// writer and the identity estate's — where there is a runtime. An
-	// unconfigured node has none yet, and the apply that brings its first
-	// company arms them then — see [Engine.startNativeFor].
+	// THE CORE'S DUTIES — the log's own trim and the identity estate's —
+	// on every node that publishes, company or not: a fleet nobody has
+	// configured still writes its identity and chart logs, and without the
+	// trim a domain's log only ever grows, to its ceiling, where appends
+	// are refused. Beside the sweep and after the node exists for the same
+	// reason: each duty is claimed under the node's incarnation, and one
+	// that ran before the lease existed would run on every node at once.
+	e.startCoreDuties(ctx)
+	// AND THE NATIVE HALF'S — the vector domain's one writer — where there
+	// are native halves. An unconfigured node has none yet, and the apply
+	// that brings its first company arms it then — see
+	// [Engine.startNativeFor].
 	e.startNativeDuties(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
@@ -1482,7 +1506,7 @@ func (e *Engine) Stop(ctx context.Context) {
 // teardown stops everything a node started, in the one order that is correct.
 //
 // ONE IMPLEMENTATION FOR TWO CALLERS — [Engine.Stop] and [New]'s failure path
-// — for the reason [native.shutdown] gives about its own two: a half-built
+// — for the reason [core.shutdown] gives about its own two: a half-built
 // engine leaks precisely what a built one does. The apply loops do not know
 // their node never finished booting, a shared MCP server is a process tree
 // holding the company's credentials whether or not a seat ever used it, and an
@@ -1500,16 +1524,27 @@ func (e *Engine) Stop(ctx context.Context) {
 // it stops was never started, and the node is absent entirely where the
 // failure came before [node.New].
 func (e *Engine) teardown(ctx context.Context) {
+	// FIRST, THE TRIGGERS THAT RE-DERIVE A COMPANY: the chart view's and the
+	// party registry's. A rebuild ends in [Engine.convergeOn], which
+	// re-arms the scheduler, re-ensures the mailboxes and rebuilds the
+	// registry — so one left running past the stops below re-armed a
+	// scheduler loop nothing would ever stop again. They were ended with
+	// the logs, at the bottom of this list, and a chart record landing in
+	// between was all it took.
+	e.stopViewTriggers()
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
-	e.stopRetention()
-	e.stopBudgetReports()
+	// THE NATIVE HALF'S DUTY BEFORE THE CORE'S, in the order the halves
+	// come down below: the vector domain's writer publishes into a log the
+	// core's trim is deciding how far to purge.
 	e.stopEmbedding()
+	e.stopRetention()
 	e.stopIdentityDuties()
+	e.stopBudgetReports()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
@@ -1547,7 +1582,13 @@ func (e *Engine) teardown(ctx context.Context) {
 	// the apply loops and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
 	// cursor ahead of the rows it claims to describe.
+	//
+	// THE NATIVE HALF FIRST — its feeds, its index and its search
+	// answerer, every one of which reads what the logs write — and then
+	// the core, whose logs are the last thing standing: its view triggers
+	// were ended at the top of this list.
 	e.stopNative(ctx)
+	e.stopCore()
 	if e.node != nil {
 		e.node.Stop(ctx)
 	}
@@ -1913,12 +1954,12 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.Draining = host.Draining()
 		}
 	}
-	// The native replication loops — every state-log domain's applier —
-	// so an operator asking why a fresh node holds no seats can see the
-	// answer in the fleet view rather than inferring it from an empty claim
-	// list. See [coord.NodeStatus.ProjectionsReady] for why this is not a
-	// readiness signal.
-	for _, loop := range e.NativeStatus(ctx) {
+	// The replication loops — every state-log domain's applier, on every
+	// node — so an operator asking why a fresh node holds no seats can see
+	// the answer in the fleet view rather than inferring it from an empty
+	// claim list. See [coord.NodeStatus.ProjectionsReady] for why this is
+	// not a readiness signal.
+	for _, loop := range e.StateLogStatus(ctx) {
 		status.ProjectionsTotal++
 		if loop.Ready {
 			status.ProjectionsReady++

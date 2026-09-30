@@ -28,7 +28,7 @@ import (
 //
 //   - every answerer the native start registered — the search slice — is
 //     WITHDRAWN, which is the first step of [native.shutdown] and therefore
-//     says the native runtime was stopped rather than abandoned;
+//     says the native half was stopped rather than abandoned;
 //   - this node's ADMISSION is gone, which says the unwind is the whole
 //     teardown rather than the native part alone. An admission left behind
 //     tells a coordinator this process may be publishing — and it is the
@@ -150,7 +150,7 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	served, withdrawn := watched.tallies()
 	if got := served[search.SliceSubject]; got != 1 {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
-			"failed before the native runtime was up, so this case is no "+
+			"failed before the native half was up, so this case is no "+
 			"longer testing what it says", got)
 	}
 	for subject, n := range served {

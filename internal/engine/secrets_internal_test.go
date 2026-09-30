@@ -139,10 +139,11 @@ func TestABrokenKeyringFailsRatherThanDegrading(t *testing.T) {
 // NO KEYRING CONFIGURED FAILS THE BOOT, naming the field.
 //
 // It was a supported posture — secrets from the environment, the company
-// document read in plaintext — and it is the one a node that boots with no
-// company would still reach, because it starts no state log and so meets no
-// signer. Every node needs the keyring now, so the engine refuses to build
-// without one rather than handing every seam beneath it a nil to interpret.
+// document read in plaintext — and it was the one a node that booted with no
+// company still reached, because it started no state log until it had one and
+// so met no signer. Every node needs the keyring now, so the engine refuses to
+// build without one rather than handing every seam beneath it a nil to
+// interpret.
 func TestNoKeyringConfiguredFailsTheBoot(t *testing.T) {
 	t.Parallel()
 	cipher, err := openCipher(&config.Bootstrap{})

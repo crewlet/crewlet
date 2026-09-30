@@ -1,0 +1,108 @@
+package engine
+
+import (
+	"go/ast"
+	"slices"
+	"testing"
+	"time"
+)
+
+// THE VIEW TRIGGERS COME DOWN BEFORE ANYTHING THEY RE-ARM.
+//
+// A chart or directory trigger is not a reader so much as a WRITER of what a
+// company derives: a rebuild ends in [Engine.convergeOn], which re-arms the
+// scheduler, re-ensures the mailboxes and rebuilds the party registry. They
+// were ended with the logs at the bottom of the teardown, so a chart record
+// landing after the scheduler had been stopped re-armed a loop nothing would
+// ever stop again — ticking against a store and a broker the teardown then
+// closed. And the native half comes down before the core whose logs it reads.
+//
+// Read from the SOURCE, for [TestEveryVendorReconcilerRunsOnApply]'s reason:
+// the window is a race no case can open on demand. Mutation: move
+// stopViewTriggers below stopScheduler, or stopCore above stopNative, and
+// this fails naming the pair.
+func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
+	t.Parallel()
+	order := callsIn(t, "teardown")
+	at := func(name string) int {
+		t.Helper()
+		i := slices.Index(order, name)
+		if i < 0 {
+			t.Fatalf("the teardown calls %v and no %s", order, name)
+		}
+		return i
+	}
+	for _, rearmed := range []string{"stopScheduler", "stopNotifications",
+		"stopMaintenance", "stopSandbox"} {
+		if at("stopViewTriggers") > at(rearmed) {
+			t.Errorf("the teardown ends %s before the view triggers, which "+
+				"re-arm what it stopped on the next chart record", rearmed)
+		}
+	}
+	if at("stopNative") > at("stopCore") {
+		t.Error("the teardown stops the core's logs before the native half " +
+			"that reads them")
+	}
+}
+
+// AND ENDING THEM ENDS THEM: a nudge left after stopViewTriggers is one nothing
+// consumes, where a running trigger takes it within moments. The control runs
+// first, on the same node, so a nudge that sat unconsumed is the stop's doing
+// rather than a trigger that never ran.
+func TestEndingTheViewTriggersStopsTheChartRebuilding(t *testing.T) {
+	t.Parallel()
+	e, _, _ := trimmedTracker(t)
+	consumed := func() bool {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if len(e.chartNudge) == 0 {
+				return true
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+	e.nudgeChart()
+	if !consumed() {
+		t.Fatal("the control: a running trigger never took the nudge")
+	}
+	e.stopViewTriggers()
+	e.nudgeChart()
+	time.Sleep(200 * time.Millisecond)
+	if len(e.chartNudge) == 0 {
+		t.Error("a nudge after the view triggers were ended was consumed: " +
+			"something is still rebuilding the chart view")
+	}
+}
+
+// callsIn is the order of the `e.<method>(…)` calls one *Engine method's body
+// makes, however deeply nested.
+func callsIn(t *testing.T, method string) []string {
+	t.Helper()
+	for _, file := range enginePackage(t) {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != method || !receiverIsEngine(fn) {
+				continue
+			}
+			var out []string
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if recv, ok := sel.X.(*ast.Ident); ok && recv.Name == "e" {
+					out = append(out, sel.Sel.Name)
+				}
+				return true
+			})
+			return out
+		}
+	}
+	t.Fatalf("no (*Engine).%s in the engine package", method)
+	return nil
+}

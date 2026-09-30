@@ -64,6 +64,8 @@ import (
 	"time"
 
 	"encoding/json"
+
+	"github.com/crewlet/crewlet/internal/configplane"
 )
 
 // Code is the machine-readable `error` value a failed request carries.
@@ -531,14 +533,6 @@ const (
 	CodeUnknownStream Code = "unknown_stream"
 	// CodeAckFailed is a backup acknowledgement that was not recorded.
 	CodeAckFailed Code = "ack_failed"
-	// CodeNoStateLog is an eviction or readmission sent to a node whose API
-	// holds no gate to write it through: one that ran no state log when it
-	// started serving, because it started with no company. 503 with no
-	// Retry-After, because waiting does not hand this surface a gate — it is
-	// given one once, as the node starts serving — and the detail says to ask
-	// a node that runs the company. It was `no_tracker`, from when the
-	// tracker's log was the only one a gate was written to.
-	CodeNoStateLog Code = "no_state_log"
 	// CodeConfirmRequired is a destructive gesture whose confirmation did
 	// not repeat what it acts on. The detail says what to repeat.
 	CodeConfirmRequired Code = "confirm_required"
@@ -752,8 +746,6 @@ var codes = map[Code]string{
 		"the retention status.",
 	CodeAckFailed: "The acknowledgement was not recorded, so what the trim may " +
 		"delete has not moved. The reason is in this node's log.",
-	CodeNoStateLog: "This node has no state log to write an eviction or a " +
-		"readmission to. Send this to a node that runs the company.",
 	CodeConfirmRequired: "This change needs a confirmation that repeats what it " +
 		"acts on. The detail says what to repeat.",
 	CodeOpIDInvalid: "That operation id is not one this engine would have " +
@@ -1047,6 +1039,31 @@ func Refuse(w http.ResponseWriter, err error) {
 		return
 	}
 	Fail(w, http.StatusBadRequest, CodeUnreadableBody)
+}
+
+// NoActiveRevisionRetry is the Retry-After a `503 no_active_revision` carries:
+// the control plane's reconcile poll, because a node that has not been handed
+// a company takes the active revision on its next one, so a client told to
+// come back sooner only spends requests against a node that cannot have
+// converged yet.
+//
+// THE POLL ITSELF, not a copy of its value, for the reason the webhook edge's
+// copy was removed: a retune of the poll would have left every surface
+// telling its clients the old cadence.
+const NoActiveRevisionRetry = configplane.ReconcileInterval
+
+// NoActiveRevision writes `503 no_active_revision`: a request for something
+// only a company can have — a delivery to route, the company's own tracker or
+// knowledge base — on a node that has not been handed one yet.
+//
+// ONE WRITER FOR THE CODE AND ITS HINT, used by the webhook edge, the human
+// write surface, the operator's MCP surface and the read surface's native
+// questions alike, so a node with no company answers every one of them the
+// same way and a client branches on one spelling. The detail says what brings
+// the company.
+func NoActiveRevision(w http.ResponseWriter, detail Detail) {
+	UnavailableWith(w, CodeNoActiveRevision, RetrySeconds(NoActiveRevisionRetry),
+		detail)
 }
 
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client

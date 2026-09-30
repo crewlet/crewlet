@@ -129,8 +129,8 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
 	}
-	n := e.native.Load()
-	s := n.log
+	c := e.core.Load()
+	s := c.log
 	record, err := generationEncoder(running.domain)
 	if err != nil {
 		return statelog.ReanchorPlan{}, err
@@ -174,7 +174,7 @@ func (e *Engine) Reanchor(ctx context.Context, req ReanchorRequest) (statelog.Re
 		// author, the kind of party and the credential — in the actor
 		// vocabulary, which every domain's generation record reads.
 		By: req.By.Name, ByKind: string(req.By.Kind), OperatorID: req.By.OperatorID,
-		NodeID: n.nodeID,
+		NodeID: c.nodeID,
 		// THE BRING-UP BUDGET OF THIS BROKER, for the steps after the
 		// append: the consumer's rebuild is a delete and a create of a
 		// replicated object, which a clustered broker gives a raft round
@@ -349,14 +349,14 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 	// to re-anchor over a node every read and write refuses.
 	in.Diverged = in.Diverged || running.runner.Diverged()
 	in.ClaimsIdentity = running.domain.ClaimsIdentity()
-	n := e.native.Load()
 	if !in.ClaimsIdentity {
 		// NO FLEET GUARD APPLIES, and no generation is anybody's but this
 		// node's own: every node re-anchors its own copy of such a log.
 		return in, nil, nil
 	}
 	domain := running.domain.Name()
-	self := n.nodeID
+	c := e.core.Load()
+	self := c.nodeID
 
 	// UNREADABLE IS NOT "no peers". A register nobody could list is exactly
 	// the outage during which re-anchoring is most tempting and least
@@ -400,7 +400,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			candidates = append(candidates, writer)
 		}
 	}
-	evicted, err := n.log.evictedOn(ctx, running.domain, running.standing(), candidates)
+	evicted, err := c.log.evictedOn(ctx, running.domain, running.standing(), candidates)
 	if err != nil {
 		return statelog.ReanchorInputs{}, nil, fmt.Errorf("%w: whether the peers ahead "+
 			"of this node on %s are evicted could not be read, and an evicted "+
@@ -472,7 +472,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 			in.Abandoned = max(in.Abandoned, gen)
 		}
 	}
-	if err := e.restoredTail(ctx, running, n, enc, &in); err != nil {
+	if err := e.restoredTail(ctx, running, c, enc, &in); err != nil {
 		return statelog.ReanchorInputs{}, nil, err
 	}
 	return in, peers, nil
@@ -489,7 +489,7 @@ func (e *Engine) reanchorInputs(ctx context.Context,
 // it known which subject an earlier attempt of this node's would have written.
 // An unreadable log refuses, because whether the reanchor loses writes is the
 // question.
-func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *native,
+func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, c *core,
 	enc statelog.GenerationEncoder, in *statelog.ReanchorInputs) error {
 
 	// ONLY THE RESTORED CASE has a tail to fill — and a case that cannot be
@@ -500,7 +500,7 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *na
 	stream := running.domain.Stream().Name
 	next := max(in.Generation, in.Abandoned) + 1
 	opened, own, err := statelog.OwnGeneration(ctx, running.domain, enc, running.standing(),
-		next, n.nodeID)
+		next, c.nodeID)
 	if err != nil {
 		return fmt.Errorf("%w: whether an earlier reanchor of %s on this node already "+
 			"opened generation %d could not be read off the log — check the broker "+
@@ -511,7 +511,7 @@ func (e *Engine) restoredTail(ctx context.Context, running *runningDomain, n *na
 		in.Opened, bound = opened, opened-1
 	}
 	in.Unheld, err = statelog.UnheldTail(ctx, running.domain,
-		replicatedEstate{node: n.log.db}, running.standing(), in.Generation, in.FirstSeq, bound)
+		replicatedEstate{node: c.log.db}, running.standing(), in.Generation, in.FirstSeq, bound)
 	if err != nil {
 		return fmt.Errorf("%w: whether %s holds records written after the restore "+
 			"that this node's rows do not could not be read, and a restored reanchor "+
@@ -534,7 +534,8 @@ func sameStream(peer, keyed time.Time) bool {
 }
 
 // ErrUnknownStream reports a stream that is not a domain log this node runs —
-// a name mistyped, or a node running no state log at all.
+// a name mistyped, or an engine with no core runtime (one built by hand, since
+// every node [New] builds runs every domain's log from boot).
 //
 // A SENTINEL, because a caller answers it differently from every other failure
 // of the same calls: nothing about it is transient, while a stream that could
@@ -546,12 +547,12 @@ var ErrUnknownStream = errors.New("engine: not a domain log this node runs")
 // runningStream is the running domain whose log is stream, or
 // [ErrUnknownStream] naming the streams there are.
 func (e *Engine) runningStream(stream string) (*runningDomain, error) {
-	n := e.native.Load()
-	if n == nil || n.log == nil {
-		return nil, fmt.Errorf("%w: this node runs no state log, so %q is not "+
-			"one of its logs", ErrUnknownStream, stream)
+	s, err := e.stateLogOf()
+	if err != nil {
+		return nil, fmt.Errorf("%w: this engine runs no core runtime, so %q is "+
+			"not one of its logs", ErrUnknownStream, stream)
 	}
-	running := n.log.Domain(n.log.domainOf(stream))
+	running := s.Domain(s.domainOf(stream))
 	if running == nil {
 		return nil, fmt.Errorf("%w: %q — the streams this build runs are %v",
 			ErrUnknownStream, stream, maintenanceStreams())

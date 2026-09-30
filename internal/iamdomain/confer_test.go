@@ -233,7 +233,7 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
-	if anybody, err := rig.reader(t).AnyPerson(rig.t.Context()); err != nil || anybody {
+	if anybody, err := rig.anybody(t); err != nil || anybody {
 		t.Fatalf("the rig's estate is not empty (%v, %v)", anybody, err)
 	}
 	token := rig.writer.As(principalNamed("token:ops", iam.KindMachine, iam.AllGrants))
@@ -280,7 +280,7 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 		t.Errorf("the first person carries %v, want every grant the token "+
 			"conferred", held.Grants)
 	}
-	if anybody, err := rig.reader(t).AnyPerson(rig.t.Context()); err != nil || !anybody {
+	if anybody, err := rig.anybody(t); err != nil || !anybody {
 		t.Errorf("the estate still reads as empty once the first person is "+
 			"in (%v, %v)", anybody, err)
 	}

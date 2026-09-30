@@ -102,12 +102,12 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	// THIS NODE'S OWN TRIM DUTY PUBLISHES THE SAME FIELD, and it ticks
 	// immediately at boot: its first conclusion is `blocked_by
 	// backup_floor` at zero, which lands on top of the floor published
@@ -181,7 +181,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node replaying up to the floor refuses reads as %q, want %q — "+
 			"the records are on the log and it clears on its own", got, statelog.RefuseBehind)
 	}
-	if e.NativeHydrated() {
+	if e.StateLogHydrated() {
 		t.Fatal("the node admits seats while below the published floor")
 	}
 	// AND IT KEEPS THE SEATS IT HOLDS. Being behind is admission's concern
@@ -220,7 +220,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatalf("a node below the log refuses reads as %q, want %q", got,
 			statelog.RefuseBelowFloor)
 	}
-	if e.NativeHydrated() {
+	if e.StateLogHydrated() {
 		t.Fatal("the node admits seats while below the log")
 	}
 	if ok, _ := e.SeatsServiceable(t.Context()); ok {
@@ -239,7 +239,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 // and requires the fence's refusal under want, with nothing appended.
 func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want statelog.Reason) {
 	t.Helper()
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	_, before, err := running.log.Bounds(t.Context())
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)
@@ -288,12 +288,12 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	// The trim is the other thing that purges this log; stopped, every
 	// purge below is this test's own.
 	e.stopRetention()
 
-	s := e.native.Load().log
+	s := e.core.Load().log
 	name := tracker.Domain{}.Name()
 	spec := tracker.Domain{}.Stream()
 	running := s.Domain(name)
@@ -483,7 +483,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T) {
 	t.Parallel()
 	e, _, running := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	writer := e.native.Load().writer
 	if writer == nil {
 		t.Fatal("the node runs no tracker writer")
@@ -553,8 +553,8 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
-	s := e.native.Load().log
-	gate := e.native.Load().gate
+	s := e.core.Load().log
+	gate := e.core.Load().gate
 	if gate == nil {
 		t.Fatal("the node runs no node gate")
 	}
@@ -746,7 +746,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	if e.native.Load().writer == nil || e.native.Load().pages == nil {
 		t.Fatal("the node runs no tracker writer or no page store")
 	}

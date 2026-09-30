@@ -185,7 +185,7 @@ func TestABindingThisNodeCannotVouchForIsUnknown(t *testing.T) {
 
 // AN ENGINE WITH NO IDENTITY DIRECTORY CANNOT SAY, and says so.
 //
-// It has no identity rows at all — a nil engine, or one with no native runtime
+// It has no identity rows at all — a nil engine, or one with no core runtime
 // — and that is not the same fact as nobody being bound, so the answer is an
 // error, which the guard turns into 503, and never the zero row.
 func TestAnEngineWithNoDirectoryCannotSay(t *testing.T) {

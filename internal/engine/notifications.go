@@ -79,9 +79,9 @@ type notifications struct {
 	rebuilding sync.Mutex
 
 	// directory is this node's identity directory as the registry reads
-	// it, or nil on an engine with no native runtime — which keeps the
-	// chart-only behaviour. Set once, when the native runtime opens the
-	// domain, under mu.
+	// it, or nil on an engine with no core runtime — `crewlet validate` and
+	// a test, which keep the chart-only behaviour. Set once, when the core
+	// runtime opens the domain at boot, under mu.
 	directory notify.Directory
 
 	// directoryAt is the identity applier's committed position, and

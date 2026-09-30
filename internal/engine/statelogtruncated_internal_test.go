@@ -22,11 +22,11 @@ import (
 func publishLoaded(t *testing.T, d divergedBroker, want statelog.Position) {
 	t.Helper()
 	e, back := bootNode(t, &d.a, d.cfg)
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	waitUntil(t, 10*time.Second, "node A's tracker to load its checkpoint", func() bool {
 		return running.runner.Committed() == want
 	})
-	e.native.Load().log.publishPositions(t.Context())
+	e.core.Load().log.publishPositions(t.Context())
 	e.Stop(context.Background())
 	back.Close(context.Background())
 }
@@ -61,9 +61,9 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 	publishLoaded(t, d, d.checkpoint.at)
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.NativeHydrated)
-	running := eb.native.Load().log.Domain(tracker.Domain{}.Name())
-	eb.native.Load().log.publishPositions(t.Context())
+	waitUntil(t, 20*time.Second, "node B to admit seats", eb.StateLogHydrated)
+	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
+	eb.core.Load().log.publishPositions(t.Context())
 	if err := running.runner.Truncated(); !errors.Is(err, statelog.ErrLogTruncated) {
 		t.Fatalf("node B's truncation is %v, want node A's position past the end", err)
 	}
@@ -83,7 +83,7 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 		t.Fatalf("the eviction of node A from node B = %+v, %v — it is one of the "+
 			"operator's ways out, and a fence that refused it would take it away", res, err)
 	}
-	eb.native.Load().log.publishPositions(t.Context())
+	eb.core.Load().log.publishPositions(t.Context())
 	if err := running.runner.Truncated(); err != nil {
 		t.Fatalf("with node A evicted, node B's writes still refuse: %v", err)
 	}
@@ -106,9 +106,9 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 	publishLoaded(t, d, d.checkpoint.at)
 
 	eb, _ := bootNode(t, &d.b, d.cfg)
-	waitUntil(t, 20*time.Second, "node B to admit seats", eb.NativeHydrated)
-	running := eb.native.Load().log.Domain(tracker.Domain{}.Name())
-	eb.native.Load().log.publishPositions(t.Context())
+	waitUntil(t, 20*time.Second, "node B to admit seats", eb.StateLogHydrated)
+	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
+	eb.core.Load().log.publishPositions(t.Context())
 	err := running.runner.Truncated()
 	if !errors.Is(err, statelog.ErrLogTruncated) || !strings.Contains(err.Error(), "another record") {
 		t.Fatalf("node B's truncation is %v, want node A's divergence", err)
@@ -130,7 +130,7 @@ func TestANodeWhosePeerSaysTheLogDivergedRefusesItsWrites(t *testing.T) {
 func TestWhichPeersHoldWhatTheLogLost(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	for i := range 3 {
 		if res, err := e.native.Load().writer.EvictNode(t.Context(), fmt.Sprintf("op-%d", i),
@@ -285,10 +285,10 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	js := jetStreamOn(t, back)
 
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	spec := running.domain.Stream()
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -304,7 +304,7 @@ func TestAHeartbeatInFlightCannotPutAReanchoredNodesOldGenerationBack(t *testing
 
 	// A BEAT IN FLIGHT: it has read the tracker at the old generation and is
 	// held at its write.
-	fleet.arm(e.native.Load().nodeID, gen)
+	fleet.arm(e.core.Load().nodeID, gen)
 	beat := make(chan struct{})
 	go func() { defer close(beat); s.publishPositions(context.WithoutCancel(t.Context())) }()
 	select {
@@ -384,9 +384,9 @@ func TestTheTruncationFenceStaysUntilThePassedVerdictReplacesIt(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {

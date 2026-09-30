@@ -440,9 +440,21 @@ func newRigWith(t *testing.T, c authz.Chart, dir directory) *rig {
 	return r
 }
 
-// options are the surface's options over this rig's fakes.
+// options are the surface's options over this rig's fakes: its halves, served
+// on every request.
 func (r *rig) options(c authz.Chart) workapi.Options {
-	return workapi.Options{
+	return workapi.Options{Halves: serving(r.halves()), Chart: c}
+}
+
+// serving is a halves source that always answers with h — a node that has met
+// its company.
+func serving(h workapi.Halves) func() (workapi.Halves, bool) {
+	return func() (workapi.Halves, bool) { return h, true }
+}
+
+// halves are the two halves this rig's fakes make.
+func (r *rig) halves() workapi.Halves {
+	return workapi.Halves{
 		Work: builtin.WorkDeps{
 			Reader: r.reader,
 			Writer: func(a builtin.Actor) builtin.WorkWriter { return r.writes.as(a) },
@@ -465,7 +477,6 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 			return r.writes.as(a)
 		},
 		PageStore: r.kb,
-		Chart:     c,
 	}
 }
 

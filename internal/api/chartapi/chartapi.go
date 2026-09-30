@@ -225,11 +225,12 @@ type Options struct {
 	// directory is bound to, or nil where this node has no directory to
 	// ask.
 	//
-	// NIL IS AN ORDINARY WIRING rather than a mistake, and the report
-	// SKIPS the unheld arm rather than answering it: a node that started
-	// with no active company holds no identity rows at all, and reading
-	// that as "nobody holds any seat" would report every human seat in
-	// the company. See [Held].
+	// NIL IS A SURFACE WITH NO DIRECTORY BEHIND IT — a suite about
+	// something else; `crewlet run` always hands one over, since every
+	// node holds the identity estate from boot — and the report SKIPS
+	// the unheld arm rather than answering it: reading the absence as
+	// "nobody holds any seat" would report every human seat in the
+	// company. See [Held].
 	Held Held
 
 	// Resolve is this node's own `${VAR}` resolution, which the report's

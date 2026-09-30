@@ -117,18 +117,39 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 // an operator of a fresh install: nobody is enrolled yet, so the next step is
 // to invite the first person. A COUNT and never a listing, because it is asked
 // by an unauthenticated route and the answer is one bit.
+//
+// And "nobody" is PROVED against the log's end or not said: every node applies
+// the identity log from boot, company or none, so a node that has just joined
+// a fleet with people in it holds empty rows for a moment — and its /health
+// and its boot log would tell an operator to invite a founder into a company
+// that has one. Mutation: drop the coverage check and the behind arm answers
+// (false, nil).
 func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	reader := rig.reader(t)
 
-	held, err := reader.AnyPerson(t.Context())
+	held, err := rig.anybody(t)
 	if err != nil {
 		t.Fatalf("AnyPerson: %v", err)
 	}
 	if held {
 		t.Fatal("a fresh estate reports somebody in it, so its operator is " +
 			"never told to invite the first person")
+	}
+
+	// ROWS BEHIND THE LOG CANNOT SAY NOBODY: the record they have not
+	// applied may be the first person's.
+	behind, err := rig.behind(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	held, err = reader.AnyPerson(t.Context(), behind)
+	if !errors.Is(err, iamdomain.ErrNotCurrent) ||
+		!errors.Is(err, statelog.ErrUnavailable) || held {
+		t.Errorf("rows behind the log answered (%v, %v), want the unknown arm "+
+			"— their \"nobody\" is a joining node telling its operator to "+
+			"invite a founder into a company that has one", held, err)
 	}
 
 	if err := rig.enrol(iamdomain.Enrolment{
@@ -141,7 +162,7 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	}
 	rig.drain()
 
-	held, err = reader.AnyPerson(t.Context())
+	held, err = rig.anybody(t)
 	if err != nil {
 		t.Fatalf("AnyPerson: %v", err)
 	}
@@ -310,7 +331,7 @@ func TestAReservationIsReadAsOneAndNotAsAnUndecodablePerson(t *testing.T) {
 			seen.Credentials)
 	}
 
-	anybody, err := reader.AnyPerson(t.Context())
+	anybody, err := rig.anybody(t)
 	if err != nil {
 		t.Fatalf("AnyPerson: %v", err)
 	}

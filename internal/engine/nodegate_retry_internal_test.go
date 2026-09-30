@@ -47,7 +47,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e, back, _ := trimmedTracker(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			const away = "node-away"
 			identity := identityLogs(t, s)
 
@@ -157,8 +157,8 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	gate := e.native.Load().gate
-	identity := identityLogs(t, e.native.Load().log)
+	gate := e.core.Load().gate
+	identity := identityLogs(t, e.core.Load().log)
 	const opID = "op-shared"
 
 	first, err := gate.Evict(t.Context(), GateRequest{Node: "node-a", OpID: opID, By: gateOperator})
@@ -205,8 +205,8 @@ func TestAGestureIDCarriedToAnotherNodeEvictsThatNode(t *testing.T) {
 func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	gate := e.native.Load().gate
-	identity := identityLogs(t, e.native.Load().log)
+	gate := e.core.Load().gate
+	identity := identityLogs(t, e.core.Load().log)
 	const away = "node-away"
 	evict := GateRequest{Node: away, OpID: "op-evict", By: gateOperator}
 
@@ -274,7 +274,7 @@ func TestAnEvictionRetriedAfterItsReadmissionIsSuperseded(t *testing.T) {
 func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	gate, recs := recordingGate(t, e, back)
 	trackerName := tracker.Domain{}.Name()
 	req := GateRequest{Node: "node-away", OpID: "op-lagging", By: gateOperator}
@@ -626,8 +626,8 @@ func (r *recorder) setProbe(fn func()) {
 // [recorder] in front of the real log.
 func recordingGate(t *testing.T, e *Engine, back *Backends) (*NodeGate, map[string]*recorder) {
 	t.Helper()
-	s := e.native.Load().log
-	g := &NodeGate{live: e.native.Load().gate.live, readmissible: e.native.Load().gate.readmissible}
+	s := e.core.Load().log
+	g := &NodeGate{live: e.core.Load().gate.live, readmissible: e.core.Load().gate.readmissible}
 	recs := map[string]*recorder{}
 	for _, running := range identityLogs(t, s) {
 		name := running.domain.Name()

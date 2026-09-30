@@ -274,18 +274,6 @@ func gateVerb(evict bool) string {
 // again with it to read every log's answer.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.nodes == nil {
-			// NOT RETRYABLE HERE, so no Retry-After: the gate is the one
-			// this surface was built with, and a node that ran no state
-			// log when its API started has none to write to — waiting does
-			// not give it one. The detail sends the caller to a node that
-			// has one.
-			httpjson.UnavailableWith(w, httpjson.CodeNoStateLog, 0, httpjson.Detail{
-				"detail": "this node runs no state log, so there is no log to " +
-					"write an eviction to — ask a node that runs the company",
-			})
-			return
-		}
 		node := r.PathValue("node")
 		// THE CONFIRMATION ECHOES THE NODE ID, the same shape the
 		// destructive CLI gestures already use: an eviction stops a

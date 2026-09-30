@@ -599,10 +599,15 @@ that posture and why it could not simply be defaulted the other way.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
 with the API still serving — you can then bootstrap live without restarting.
-The first revision brings up everything the company needs, the engine's own
-tracker and knowledge base included, with their projects and spaces, and the
+An unconfigured node is not an idle one: its org chart and its identity
+estate run from boot, so the invitation above works before any company
+exists, you can sign in on it, and the dashboard's builder can write the
+company's units and seats. The work tracker's and the knowledge base's routes
+answer `503 no_active_revision` until the first revision arrives. That
+revision brings up everything the company needs, the engine's own tracker and
+knowledge base included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
-`providers.sandbox`:
+`providers.sandbox` — under the same API, with nothing restarted:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"

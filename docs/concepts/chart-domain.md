@@ -142,9 +142,10 @@ on whether this node could read it. `seat_unheld` is a human seat nobody in the
 directory is bound to — a seat the chart holds, work routes to, and no person
 can sign in and act as. Where the directory cannot be asked that arm is
 **left undecided rather than answered**: a seat whose holder this node failed
-to read is counted in the report's `unchecked` instead of reported unheld, and
-on a node that started with no active company — which holds no directory at
-all — the arm is skipped. A report that cannot ask does not guess.
+to read is counted in the report's `unchecked` instead of reported unheld. A
+report that cannot ask does not guess. Every node holds the directory from
+boot, company or none, so a node that has not been handed its first company
+yet answers this arm like any other.
 
 **And the seats nobody holds are listable.** `GET /chart/seats?kind=human&unheld=true`
 answers the same question as a filter, which is what an invite screen needs

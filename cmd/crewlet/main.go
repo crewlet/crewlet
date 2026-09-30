@@ -26,7 +26,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -34,18 +33,17 @@ import (
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -1491,17 +1489,28 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// written here is one this node and every peer opens with the key
 	// their Tier A names, and a second cipher would make a rotation
 	// readable only on the node that served the request.
-	// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a record can
-	// move — nil on a node with no active company, and never a typed nil,
-	// which the surface would read as an estate to ask.
-	secretOpts := secretsapi.Options{
+	//
+	// THE IDENTITY ESTATE, which the surfaces below read — the rotation's
+	// second half here, and who holds a seat for /chart and /health. It is
+	// the engine's CORE,
+	// opened on every node from boot, company or none, so an engine holding
+	// none is one engine.New did not build: refused here by name rather than
+	// handed to each surface as the nil it reads as "no directory to ask".
+	// It used to be exactly that nil on a node that had met no company, and
+	// each of those surfaces grew a third value for a node that no longer
+	// exists.
+	directory, keyring := e.IAM(), e.IdentityKeyring()
+	if directory == nil || keyring == nil {
+		return nil, errors.New("api: the engine opened no identity estate — " +
+			"engine.New opens it on every node, company or not")
+	}
+	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
-	}
-	if keyring := e.IdentityKeyring(); keyring != nil {
-		secretOpts.Identity = keyring
-	}
-	secretSurface, err := secretsapi.New(secretOpts)
+		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
+		// record can move.
+		Identity: keyring,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1509,14 +1518,25 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// of its own: until this one there was nowhere to hire, move, rename or
 	// edit anybody after a node's first chart was seeded from the company
 	// file at boot, and /config refuses a body carrying one BY NAME.
-	nodeChart := liveChart{reader: e.Chart, writer: e.ChartWriter}
+	//
+	// HANDED OVER ONCE, because the chart is the engine's CORE and open on
+	// every node from boot — a node with no company builds its first one
+	// through it. It used to be looked up per request, for a node that had
+	// met no company and so opened no chart; there is no such node, and an
+	// engine holding none is one engine.New did not build, refused here by
+	// name rather than handed to the surface as a typed nil.
+	chartReader, chartWriter := e.Chart(), e.ChartWriter()
+	if chartReader == nil || chartWriter == nil {
+		return nil, errors.New("api: the engine opened no org chart — " +
+			"engine.New opens it on every node, company or not")
+	}
 	chartSurface, err := chartapi.New(chartapi.Options{
-		// READ PER REQUEST, never captured: see [liveChart] for the typed
-		// nil a node with no active company used to hand over here.
-		Reader: nodeChart,
-		// WHO HOLDS A SEAT, or nil where this node cannot tell — see
-		// [seatHeld] for why the absence is the third value here.
-		Held: seatHeld(e),
+		Reader: chartReader,
+		// WHO HOLDS A SEAT, in ONE snapshot of this node's own directory.
+		// THE CALLER'S CONTEXT, which the seam carries: every evaluation is
+		// made for a request — /chart/check, /health, the seat listing — so
+		// a read for one that has gone has nobody to answer.
+		Held: directory.HeldSeats,
 		// HOW THIS NODE RESOLVES A ${VAR}, for the report's one finding
 		// that has to compare sealed addresses by what they hold.
 		Resolve: e.LookupSecret,
@@ -1528,7 +1548,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// so does the credential it acted through, which is the only
 		// thing telling a write made through somebody's token from one
 		// they made themselves.
-		Authority: nodeChart.authority,
+		Authority: func(actor string, kind chart.AuthorKind, grants []iam.Grant,
+			provenance chart.Provenance) chartapi.Writer {
+			return chartWriter.As(actor, kind, grants, provenance)
+		},
 		// WHO IS ASKING, THREE-VALUED, straight from what the guard
 		// resolved. It used to be a blunt translation beside the
 		// guard — a recognised token became a machine principal
@@ -1571,7 +1594,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// AND WHAT A COMPANY WITH NOBODY IN IT DOES NEXT: its first person is
 	// invited under a Tier A token like everybody after them, and the log
 	// says so once at boot.
-	announceUnclaimed(ctx, e)
+	announceUnclaimed(ctx, e.AnyPerson)
 
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
@@ -1669,6 +1692,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	workSource, pageSource, searchSource := api.NativeSources(e)
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1706,10 +1730,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
 		Bridge: e.Bridge(),
-		// The OPERATOR MCP surface. Built here rather than in the engine
-		// because it is an API concern, and because its writer identity
-		// comes off an HTTP request's own credential.
-		Operator: operatorMCP(e),
+		// The OPERATOR MCP surface, as each request finds the native
+		// halves: a node meets them at its first company, which it may
+		// meet by an apply long after this line ran. An API concern
+		// rather than the engine's, because its writer identity comes off
+		// an HTTP request's own credential.
+		Operator: api.NativeOperator(e),
 		// THE ENGINE'S TRAIL, which the guard reports a refused bearer
 		// and every Tier A token use through.
 		AuthEvents:   e.AuthEvents(),
@@ -1804,31 +1830,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
-			// THIS NODE'S PROJECTION of the company's own tracker and
+			// THIS NODE'S COPY of the company's own tracker and
 			// knowledge base — the same copy a seat's tools read, so an
-			// operator and an agent looking at one item see one item.
+			// operator and an agent looking at one item see one item —
+			// and its ranked item search.
 			//
-			// Nil on a company running Jira or Confluence, which leaves
-			// their questions unregistered: there is no native record
-			// for this node to have a copy of, and an empty board would
-			// claim otherwise.
-			//
-			// A METHOD VALUE is safe here where [Sources.Knowledge]
-			// needs a function: the readers belong to the NODE and are
-			// not rebuilt by an apply — see engine/native.go for why a
-			// projector's lifetime is the process rather than the
-			// epoch. Nil-typed-nil is not a risk either, because these
-			// accessors return an untyped nil for a node with no
-			// backend.
-			Work:  nativeWork(e),
-			Pages: nativePages(e),
-			// RANKED SEARCH, gated on its own index rather than on
-			// the tracker: the rows are the fleet's and the lexical
-			// index is this node's own, so a node still building one
-			// answers every board question and cannot rank a word.
-			// The accessor already returns an untyped nil in that
-			// case, which is what the registration check needs.
-			WorkSearch: nativeWorkSearch(e),
+			// RESOLVED PER QUESTION, never captured here: the readers
+			// belong to the node's native halves, which come up with
+			// its first company — at an apply, on a node that booted
+			// with none — and a value read once here was nothing for
+			// the life of such a process. A question on a node that
+			// has not met its company answers `503
+			// no_active_revision`, and one about a half the company
+			// keeps elsewhere (Jira, Confluence) is the question this
+			// node does not have. See [api.NativeSources].
+			Work:       workSource,
+			Pages:      pageSource,
+			WorkSearch: searchSource,
 			// The seat's own thread ledger, and its counterparty
 			// profiles. Both are per-node stores, both have been
 			// written since their subsystems landed, and neither
@@ -1843,7 +1861,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// call, because half of it is coordination that changes
 			// under the answer and the other half is this node's own
 			// loops.
-			Retention: nativeRetention(ctx, e),
+			Retention: retentionSource(ctx, e),
 			NodeID:    nodeID,
 		},
 		// The WRITE half of the counter, for POST /budgets/reset. On the
@@ -1860,7 +1878,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// identity-claiming log rather than a coordination write —
 		// judged once, written to each log, and answered per log with
 		// the same three-valued outcome every write has.
-		Nodes: nativeNodes(e),
+		Nodes: nodeGate(e),
 		// The capacity window. The engine itself refuses the verb when
 		// this node is publishing, so the route exists in every mode and
 		// answers "you are in the wrong one" rather than 404 — which is
@@ -1877,7 +1895,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Chart:   chartSurface,
 		// THE SAME ANSWER /chart/check reads, so a gauge on /health and
 		// the screen that renders the report cannot disagree.
-		SeatHeld: seatHeld(e),
+		SeatHeld: directory.HeldSeats,
 		// AND THIS NODE'S OWN RESOLUTION, which the report compares
 		// addresses through: the chart seals every address, so its rows
 		// carry references only a node that resolves them can compare.
@@ -1890,7 +1908,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// about the copy they are both reading.
 		//
 		// [engine.Engine.SeatsServiceable] rather than
-		// [engine.Engine.NativeHydrated], deliberately. Hydration is about
+		// [engine.Engine.StateLogHydrated], deliberately. Hydration is about
 		// a copy that is BEHIND, which catches up on its own — refusing
 		// traffic for the whole of a legitimate boot would take a node out
 		// of rotation at exactly the moment a fleet wants it back. This is
@@ -1908,9 +1926,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Estate: e.SeatsServiceable,
 		// WHETHER THIS COMPANY HAS ITS FIRST PERSON — the one thing an
 		// unclaimed company's dashboard can read, since /health is the
-		// probe every visitor reaches. Nil where this node holds no
-		// identity rows, which leaves the field out; see [identityOf].
-		Identity: identityOf(e),
+		// probe every visitor reaches. Read off this node's own identity
+		// rows, which every node applies from boot, so a node with no
+		// company answers for the fleet's estate — and a "nobody" is proved
+		// against the log's end, so a node still catching up answers
+		// `unknown` rather than an empty company.
+		Identity: e.AnyPerson,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner
@@ -2577,132 +2598,37 @@ func (w engineConfigWriter) SetSeat(
 	return err
 }
 
-// nativeWork and nativePages are this node's projections, as the read surface
-// wants them: an interface that is genuinely nil when the company runs the
-// vendor backends.
-//
-// THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
-// would satisfy its `!= nil` registration check and then panic on the first
-// question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
-// place where the check is a registration rather than a call.
-func nativeWork(e *engine.Engine) queries.WorkReader {
-	if r := e.Tracker(); r != nil {
-		return r
-	}
-	return nil
-}
-
-// nativeNodes is the eviction gate over every identity-claiming log, or nil
-// where this node runs no state log — converted for [nativeWork]'s reason: a
-// typed nil would pass the route's registration check and panic on the first
-// press.
+// nodeGate is the eviction gate over every identity-claiming log — the
+// engine's core, which every node runs from boot — or an UNTYPED nil where the
+// engine holds none, which [api.New] then refuses by name. A typed nil would
+// pass its check and panic on the first press.
 //
 // NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
 // log alone, so an eviction lifted one log's pin and left the pages, chart and
 // identity logs counting the node for ever — and a company whose tracker is
 // external, which still runs every log, could not evict anybody at all.
-func nativeNodes(e *engine.Engine) api.NodeGate {
+func nodeGate(e *engine.Engine) api.NodeGate {
 	if g := e.NodeGate(); g != nil {
 		return g
 	}
 	return nil
 }
 
-func nativePages(e *engine.Engine) queries.PageReader {
-	if r := e.Pages(); r != nil {
-		return r
-	}
-	return nil
-}
-
-// operatorMCP builds the operator's own MCP surface, or nil.
-//
-// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
-// is what makes this one implementation of ten tools rather than two — see
-// [builtin.WorkDeps.Actor].
-//
-// The DEFAULTS are deliberately absent. A seat files into its unit's project
-// when it names none, because a seat HAS a unit; an operator does not, so the
-// argument is required and the tool refuses naming it rather than guessing a
-// project on a person's behalf.
-//
-// Which UNIT the work is filed into is not a default of this surface and no
-// longer needs one: the tracker reads it off the project's own row at the
-// write, so an operator's item belongs to the team that owns the project it
-// named. It used to be stamped from the caller's own team, which an operator
-// has not got — so every item filed here read "Filed into: no unit" beside a
-// project page naming its unit.
-func operatorMCP(e *engine.Engine) *opsmcp.Server {
-	var opts opsmcp.Options
-	if c := e.Company(); c != nil && c.Config != nil {
-		opts.Company = c.Config.Name
-	}
-	opts.Work, opts.Pages = api.NativeToolDeps(e)
-	// THE PRINCIPAL IS THE PARTY, and it comes from the request's context
-	// rather than from the call: a tracker whose author field is chosen by
-	// the writer is not an audit trail, and there is deliberately no way to
-	// name a seat to act as. [builtin.PrincipalActor] is the one conversion
-	// the HTTP write surface makes too.
-	opts.Work.Actor = builtin.PrincipalActor
-	opts.Pages.Actor = builtin.PrincipalPageActor
-	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
-	// unlike the ten write tools, ranked search over the company's own
-	// wiki is exactly as useful to an operator's assistant on Confluence.
-	if e.Knowledge() != nil {
-		opts.Knowledge = operatorKnowledge{engine: e}
-		// AND THE CHART BESIDE IT. An operator has no turn, so the org
-		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it. Search is the only
-		// tool that reads it: WHO the caller is comes from the identity
-		// directory through the request's principal, never the chart.
-		opts.Org = func() *org.Organization {
-			c := e.Company()
-			if c == nil {
-				return nil
-			}
-			return c.Org
-		}
-	}
-	// THE AUTHORITY DECISION, which is the SAME one every seat's registry
-	// is built with — one table, one function, three surfaces. It reads
-	// the chart per call, because an apply replaces the epoch under a
-	// long-lived MCP session.
-	opts.Authorize = builtin.Decide(engine.ChartAuthorityOf(e))
-	return opsmcp.New(opts)
-}
-
-// operatorKnowledge resolves the node's searcher per call, for the reason the
-// engine's own liveKnowledge does: an apply REPLACES it, and a value captured
-// when the API was assembled searches with a rotated credential's predecessor.
-type operatorKnowledge struct{ engine *engine.Engine }
-
-func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
-	s := k.engine.Knowledge()
-	return s != nil && s.CanSearch(seat, o)
-}
-
-func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
-	s := k.engine.Knowledge()
-	if s == nil {
-		return nil
-	}
-	return s.Search(ctx, q)
-}
-
-// nativeRetention is the retention half of the API's node runtime, or nil on a
-// node that runs no state log.
+// retentionSource is the retention half of the API's node runtime, or nil on a
+// node that armed no trim — a maintenance-mode node, which publishes nothing,
+// its trim included.
 //
 // NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
-// follows: a process running no state log has no applier, no stream and no
-// floor, and a report of zeros would claim a fleet whose log is perfectly
-// trimmed. The question is simply unregistered instead.
+// follows: a process that runs no trim has no floor it published and no
+// terms it evaluated, and a report of zeros would claim a fleet whose log is
+// perfectly trimmed. The question is simply unregistered instead.
 //
 // IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
 // probe is a coordination read, so on a node whose store cannot be reached it
 // is exactly as slow as every other one — and a `context.Background()` here
 // made the ONE call that decides whether this surface exists at all the one
 // call a shutting-down process could not abandon.
-func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context) any {
+func retentionSource(ctx context.Context, e *engine.Engine) func(context.Context) any {
 	if _, runs := e.RetentionReport(ctx); !runs {
 		return nil
 	}
@@ -2710,18 +2636,4 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 		report, _ := e.RetentionReport(ctx)
 		return report
 	}
-}
-
-// nativeWorkSearch is this node's ranked item search, as the read surface
-// wants it — converted for [nativeWork]'s reason.
-//
-// SEPARATE FROM [nativeWork], because the two are absent independently: a node
-// can hold the whole board and no lexical index at all, while it is building
-// one. Folding them into one seam would leave the board unregistered on a node
-// that can answer every question on it.
-func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
-	if s := e.WorkSearch(); s != nil {
-		return s
-	}
-	return nil
 }

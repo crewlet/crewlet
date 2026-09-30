@@ -161,11 +161,11 @@ func (e *Engine) stopIdentityDuties() {
 // SEPARATE FROM THE START so a case can hold the arming decision — which
 // duties, at which interval — without running a loop.
 func (e *Engine) identityDutiesFor(boot *config.Bootstrap) []identityDuty {
-	n := e.native.Load()
-	if n == nil || boot == nil || !e.profile.RunsWorkers() {
+	c := e.core.Load()
+	if c == nil || boot == nil || !e.profile.RunsWorkers() {
 		return nil
 	}
-	reader, writer := n.iamReader, n.iamWriter
+	reader, writer := c.iamReader, c.iamWriter
 	horizons := iamdomain.Horizons{
 		Changes:  boot.API.Auth.Audit.Changes(),
 		Sessions: boot.API.Auth.Audit.Sessions(),

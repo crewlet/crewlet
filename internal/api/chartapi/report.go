@@ -64,9 +64,10 @@ import (
 // # Consumer-defined, and THREE-VALUED in two places
 //
 // An ERROR is this node failing to read a directory it holds, and a NIL Held
-// is a node with no directory to ask at all — one that started with no active
-// company, and so opened no native runtime, or a surface stood up with no
-// directory behind it. Neither is "nobody holds this seat", and collapsing
+// is a surface stood up with no directory behind it — a suite; `crewlet run`
+// hands every node's over, since the identity estate is the engine's core and
+// open from boot, company or none. Neither is "nobody holds this seat", and
+// collapsing
 // either into it is how every human seat in the company gets reported unheld
 // at once: the report then leaves [KindSeatUnheld] UNDECIDED rather than
 // answering it — the arm off under a nil, every human seat counted in

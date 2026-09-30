@@ -36,7 +36,7 @@ import (
 // chart had since given somebody else — a seat that was never its own.
 
 // errNoDirectory is what an engine holding no identity directory answers — a
-// nil one, or one with no native runtime.
+// nil one, or one with no core runtime.
 //
 // AN ERROR AND NOT AN EMPTY ANSWER. Every running node applies the identity
 // log, so reaching this is an engine wired without one, and reading that

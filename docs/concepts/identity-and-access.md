@@ -1184,9 +1184,10 @@ account it belongs to.
 token is no good answers `401`. A node that cannot tell answers `503` and a
 pipeline retries: one that has not yet applied the mint the token names (the
 position in the value is what tells "not yet" from "gone"), one whose identity
-applier is past the sixty-second stall grace, one holding a record it cannot
-decode about the owner, and one that started with no active company and so
-holds no directory at all. A `401` there would teach a pipeline that a
+applier is past the sixty-second stall grace, and one holding a record it
+cannot decode about the owner. Every node applies the directory from boot,
+company or none, so a token minted on a peer is one this node can answer for
+once it has applied the mint. A `401` there would teach a pipeline that a
 credential that is fine is broken.
 
 ---

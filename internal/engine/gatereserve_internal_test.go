@@ -105,7 +105,7 @@ func requireOrdinaryRefused(t *testing.T, running *runningDomain) {
 func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	identity := identityLogs(t, e.native.Load().log)
+	identity := identityLogs(t, e.core.Load().log)
 	// A HUNDRED AND TWENTY-EIGHT KIBIBYTES HELD keeps a reserve of about
 	// eight: room for many eviction records of a few hundred bytes each,
 	// and more than one barrier is counted at — so a reserve that admitted
@@ -116,7 +116,7 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 		requireOrdinaryRefused(t, running)
 	}
 
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
 		Node: "node-gone", OpID: "op-full", By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict on full logs: %v", err)
@@ -158,11 +158,11 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 	t.Parallel()
 	e, _, _ := trimmedTracker(t)
-	identity := identityLogs(t, e.native.Load().log)
+	identity := identityLogs(t, e.core.Load().log)
 	// SIXTY-FOUR BYTES OF ROOM, less than any eviction record.
 	fullForOrdinaryWrites(t, identity, 48<<10, func(held uint64) uint64 { return held + 64 })
 
-	res, err := e.native.Load().gate.Evict(t.Context(), GateRequest{
+	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
 		Node: "node-gone", OpID: "op-past", By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict: %v", err)
@@ -201,7 +201,7 @@ func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 func TestTheReportAndTheGaugeMeasureHeadroomAgainstTheOrdinaryCeiling(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	recorder, err := metrics.New()
 	if err != nil {
 		t.Fatalf("recorder: %v", err)

@@ -57,13 +57,7 @@ func (m *muxRefusal) WriteHeader(status int) {
 	switch status {
 	case http.StatusNotFound:
 		m.refused = true
-		FailWith(m.ResponseWriter, status, CodeNoRoute, map[string]string{
-			"detail": fmt.Sprintf("this node serves nothing at %s %s",
-				m.r.Method, m.r.URL.Path),
-			"hint": "Check the path. A route this node's build does not have, " +
-				"or one its configuration does not enable, is absent rather " +
-				"than refused.",
-		})
+		NoRoute(m.ResponseWriter, m.r)
 	case http.StatusMethodNotAllowed:
 		m.refused = true
 		// The mux set `Allow` before it wrote the status, so it is still
@@ -75,6 +69,26 @@ func (m *muxRefusal) WriteHeader(status int) {
 	default:
 		m.ResponseWriter.WriteHeader(status)
 	}
+}
+
+// NoRoute writes the answer for a route this node does not serve: `404
+// no_route`, naming the method and the path.
+//
+// THE MUX'S OWN ANSWER, and exported so a route that IS registered but serves
+// a half this company does not run — the work surface on a company whose
+// tracker is a vendor's, the operator's MCP surface with no native backend —
+// answers in exactly the bytes the route's absence would have. A handler that
+// wrote its own "not served here" would be the one refusal a client told apart
+// from a missing route, and a route that is absent by configuration and one
+// that is absent by build must read the same.
+func NoRoute(w http.ResponseWriter, r *http.Request) {
+	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
+		"detail": fmt.Sprintf("this node serves nothing at %s %s",
+			r.Method, r.URL.Path),
+		"hint": "Check the path. A route this node's build does not have, " +
+			"or one its configuration does not enable, is absent rather " +
+			"than refused.",
+	})
 }
 
 func (m *muxRefusal) Write(p []byte) (int, error) {

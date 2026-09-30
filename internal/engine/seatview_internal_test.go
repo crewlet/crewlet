@@ -13,7 +13,7 @@ import (
 
 // A NODE WITH NO CHART DOMAIN ANSWERS UNKNOWN, NEVER SEATLESS.
 //
-// The zero [SeatView] is what an engine with no native runtime passes, and the
+// The zero [SeatView] is what an engine with no core runtime passes, and the
 // one answer it must not give is "no seat" — [session.ResolveSeat] reads that as
 // the seatless arm and hands somebody bound to a lead's seat an empty handle,
 // which is the silent fall-through the whole three-valued shape exists to

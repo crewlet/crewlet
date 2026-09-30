@@ -485,14 +485,14 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		{"a reanchor", func(t *testing.T) (*Engine, func()) {
 			e, js := aRunningNode(t)
 			return e, func() {
-				running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+				running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 				spec := running.domain.Stream()
 				if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 					res.Outcome != statelog.OutcomeApplied {
 					t.Fatalf("a write before the rebuild: %+v, %v", res, err)
 				}
 				rebuildLog(t, js, spec)
-				e.native.Load().log.publishPositions(t.Context())
+				e.core.Load().log.publishPositions(t.Context())
 				view, err := e.ReanchorStatus(t.Context(), spec.Name)
 				if err != nil {
 					t.Fatalf("ReanchorStatus: %v", err)
@@ -507,8 +507,8 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		}},
 		{"an adoption", func(t *testing.T) (*Engine, func()) {
 			e, back, q := bootRejoinNode(t)
-			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
-			quietHeartbeat(e.native.Load().log)
+			waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+			quietHeartbeat(e.core.Load().log)
 			return e, func() {
 				running, at, last := pushBelowTheFloor(t, e, q)
 				rows := filepath.Join(t.TempDir(), "crewlet-replicated.db")
@@ -516,17 +516,17 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 				standUpDonor(t, q, rows, statelog.Position{
 					Stream: at.Stream, Generation: at.Generation, Seq: last,
 				}, running.runner.KeyedTo())
-				if err := e.rejoin(e.native.Load().log.run, e.native.Load().log); err != nil {
+				if err := e.rejoin(e.core.Load().log.run, e.core.Load().log); err != nil {
 					t.Fatalf("rejoin: %v", err)
 				}
 			}
 		}},
 		{"the restore of an estate a failed adoption left closed", func(t *testing.T) (*Engine, func()) {
 			e, back, _ := bootRejoinNode(t)
-			waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
-			quietHeartbeat(e.native.Load().log)
+			waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+			quietHeartbeat(e.core.Load().log)
 			return e, func() {
-				s := e.native.Load().log
+				s := e.core.Load().log
 				s.haltAppliers()
 				if err := back.Store.CloseReplicated(); err != nil {
 					t.Fatalf("close the replicated estate: %v", err)
@@ -543,7 +543,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 			parked := parkSnapshotLoop(t, e)
 			event()
 			waitUntil(t, 10*time.Second, "the snapshot loop to wake", func() bool {
-				return e.native.Load().log.snapshot.Load() != parked
+				return e.core.Load().log.snapshot.Load() != parked
 			})
 		})
 	}
@@ -560,7 +560,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 // that tick — declining as `recent` — goes back to the thirty-second retry.
 func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	t.Helper()
-	s := e.native.Load().log
+	s := e.core.Load().log
 	counted := time.Now().UTC()
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "a-counted-peer", At: counted,

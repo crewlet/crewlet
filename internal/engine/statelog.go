@@ -354,7 +354,7 @@ type stateLog struct {
 
 	// run is the context the runtime's loops run under — the heartbeat,
 	// the snapshot loop, the donor — and stop is what ends them. HELD
-	// rather than re-derived, for the reason the native runtime states: a
+	// rather than re-derived, for the reason the core runtime states: a
 	// goroutine started under the CALLER's context is one stop can never
 	// end, and the wait then blocks for ever.
 	run  context.Context

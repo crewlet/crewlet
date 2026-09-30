@@ -348,7 +348,7 @@ func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
 		{http.MethodPost, "/backup?dir=/tmp/x", http.StatusInternalServerError, httpjson.CodeBackupFailed},
 		{http.MethodPost, "/work/retention/ack?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodePositionRequired},
 		{http.MethodPost, "/work/retention/ack?stream=NOPE&position=9", http.StatusNotFound, httpjson.CodeUnknownStream},
-		{http.MethodPost, "/work/retention/evict/node-2?confirm=node-2", http.StatusServiceUnavailable, httpjson.CodeNoStateLog},
+		{http.MethodPost, "/work/retention/evict/node-2", http.StatusBadRequest, httpjson.CodeConfirmRequired},
 		{http.MethodGet, "/work/retention/reanchor", http.StatusBadRequest, httpjson.CodeStreamRequired},
 		{http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
 		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
@@ -651,41 +651,6 @@ func actionsOf(body map[string]any) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-// A NODE RUNNING NO STATE LOG ANSWERS 503 NAMING THAT, rather than 404 —
-// the route exists on this build, and telling an operator it does not sends
-// them looking for a version mismatch.
-//
-// AND IT SAYS NOT TO COME BACK HERE: no Retry-After, because waiting does not
-// hand this surface a gate, and one would teach a client to poll a node that
-// answers the same until it restarts. The envelope's sentence and the detail
-// send the caller to a node that runs the company instead.
-func TestAGateOnANodeWithNoStateLogSaysSo(t *testing.T) {
-	t.Parallel()
-	b := closedPosture()
-	a := newApp(t, api.Options{Bootstrap: &b})
-	for _, verb := range []string{"evict", "readmit"} {
-		req := httptest.NewRequest(http.MethodPost,
-			"/work/retention/"+verb+"/node-4?confirm=node-4", nil)
-		req.Header.Set("Authorization", "Bearer secret")
-		rec := httptest.NewRecorder()
-		a.ServeHTTP(rec, req)
-		var body map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("%s: the refusal is not JSON: %v", verb, err)
-		}
-		if rec.Code != http.StatusServiceUnavailable ||
-			body["error"] != string(httpjson.CodeNoStateLog) ||
-			body["message"] != httpjson.CodeNoStateLog.Message() || body["detail"] == nil {
-			t.Errorf("%s on a node with no state log answered %d %v, want 503 "+
-				"no_state_log with its sentence and a detail", verb, rec.Code, body)
-		}
-		if retry := rec.Header().Get("Retry-After"); retry != "" {
-			t.Errorf("%s on a node with no state log carries Retry-After %s, "+
-				"which no wait here clears", verb, retry)
-		}
-	}
 }
 
 // THE REANCHOR STATUS TELLS A NAME NOBODY RUNS FROM A LOG NOBODY COULD READ.

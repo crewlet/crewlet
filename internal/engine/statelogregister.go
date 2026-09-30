@@ -356,8 +356,9 @@ func register() []registration {
 				// apply is what notices a tool-skill page arriving or
 				// leaving and there is no other delivery to hang the
 				// resync off. The nudge is safe to take before the
-				// native runtime exists: it is a non-blocking send that
-				// returns when there is nothing to send to.
+				// knowledge base's native half exists: it is a
+				// non-blocking send that returns when there is nothing
+				// to send to.
 				return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 			},
 			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,

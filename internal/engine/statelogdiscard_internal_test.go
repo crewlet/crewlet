@@ -24,7 +24,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 	d := stageDivergedBroker(t)
 	e, _ := bootNode(t, &d.a, d.cfg)
 	stream := tracker.Domain{}.Stream().Name
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 
 	view, err := e.ReanchorStatus(t.Context(), stream)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 // sequence it landed at.
 func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	t.Helper()
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	in, _, err := e.reanchorInputs(t.Context(), running)
 	if err != nil {
 		t.Fatalf("reanchorInputs: %v", err)
@@ -101,7 +101,7 @@ func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	gen := max(in.Generation, in.Abandoned) + 1
 	record, keeps, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: gen, Case: statelog.ReanchorRestored, Inputs: in,
-		By: "ops-1", Writer: e.native.Load().nodeID, At: time.Now().UTC(),
+		By: "ops-1", Writer: e.core.Load().nodeID, At: time.Now().UTC(),
 	})
 	if err != nil || !keeps {
 		t.Fatalf("encode the generation record: (%v, %v)", keeps, err)
@@ -144,7 +144,7 @@ func TestARerunOfARestoredReanchorThatFailedAfterItsAppendFinishes(t *testing.T)
 			d := c.stage(t)
 			e, _ := bootNode(t, &d.a, d.cfg)
 			stream := tracker.Domain{}.Stream().Name
-			running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+			running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 			opened := appendOwnGeneration(t, e)
 
 			view, err := e.ReanchorStatus(t.Context(), stream)

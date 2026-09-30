@@ -40,7 +40,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
-	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -55,20 +54,12 @@ import (
 
 var log = logging.Get("api.webhooks")
 
-// The three Retry-After values, each the cadence of the thing the sender is
-// actually waiting on — which is why there are three and not one.
+// The Retry-After values, each the cadence of the thing the sender is actually
+// waiting on — which is why there is more than one. A node with no active
+// company revision asks for the control plane's reconcile poll, through
+// [httpjson.NoActiveRevision], the one writer every surface answers that
+// condition with.
 const (
-	// NoRevisionRetryAfter is what a node with no active company revision
-	// asks for: the control plane's reconcile poll, because a node that
-	// missed an activation picks the revision up on its next one, so
-	// telling a sender to come back sooner just burns deliveries against a
-	// node that cannot have converged yet.
-	//
-	// THE POLL ITSELF, not a copy of its value: it was a literal fifteen
-	// seconds here, which a retune of the poll would have left telling
-	// every sender the old cadence.
-	NoRevisionRetryAfter = configplane.ReconcileInterval
-
 	// NoSecretRetryAfter is what a route with no secret asks for.
 	// Deliberately much longer: the unconfigured case resolves itself on
 	// the next poll, this one waits on a human editing config, and a
@@ -81,8 +72,8 @@ const (
 	// ([statelog.ElectionRetryHint]). A publish the broker refused is
 	// waiting on the client's reconnection or on an election, and a hint
 	// shorter than the election sends the retry back before anything can
-	// have changed. It borrowed [NoRevisionRetryAfter] before, whose reason
-	// is a config poll that has nothing to do with a broker.
+	// have changed. It borrowed the no-revision hint before, whose reason is
+	// a config poll that has nothing to do with a broker.
 	BrokerRetryAfter = statelog.ElectionRetryHint
 )
 
@@ -308,13 +299,12 @@ func (r *Receiver) serving(w http.ResponseWriter, source, event string) bool {
 	log.Warn("webhook_rejected_unconfigured", "source", source, "event", event,
 		"detail", "no company revision is active on this node, so the delivery "+
 			"cannot be routed; answering 503 so the sender retries rather than discards it")
-	httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision,
-		httpjson.RetrySeconds(NoRevisionRetryAfter), httpjson.Detail{
-			"detail": "a node that missed an activation takes the active revision " +
-				"on its next reconcile poll, and the sender's retry lands once it " +
-				"has; a deployment that never imported one needs " +
-				"`crewlet config import`",
-		})
+	httpjson.NoActiveRevision(w, httpjson.Detail{
+		"detail": "a node that missed an activation takes the active revision " +
+			"on its next reconcile poll, and the sender's retry lands once it " +
+			"has; a deployment that never imported one needs " +
+			"`crewlet config import`",
+	})
 	return false
 }
 

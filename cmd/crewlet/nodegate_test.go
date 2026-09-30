@@ -33,7 +33,7 @@ type evictionLog interface {
 }
 
 // AN EVICTION IS WRITTEN AS WHOEVER PRESSED IT, ON EVERY LOG THE TRIM COUNTS
-// NODES ON — through the gate this binary hands the API ([nativeNodes]).
+// NODES ON — through the gate this binary hands the API ([nodeGate]).
 //
 // Two failures, both through the wiring here. The route handed the gate nothing
 // about its caller, so every log's record — and the row every node applies it
@@ -48,9 +48,9 @@ type evictionLog interface {
 func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	t.Parallel()
 	e := bootedEngine(t)
-	gate := nativeNodes(e)
+	gate := nodeGate(e)
 	if gate == nil {
-		t.Fatal("the node runs no state log, so the case would certify nothing")
+		t.Fatal("the engine holds no node gate, so the case would certify nothing")
 	}
 
 	// A PERSON THROUGH A MACHINE TOKEN, so the author a log records and the

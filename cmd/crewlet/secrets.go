@@ -214,8 +214,8 @@ type secretBackend interface {
 // estate's personal values, counted.
 //
 // IDENTITY IS NIL WHERE NOTHING MOVED IT, which is a different answer from
-// "nothing to move": this node's own table holds no identity estate, and a
-// node that started with no active company runs none.
+// "nothing to move": a stopped node's own table holds no identity estate, and
+// a node that answered `identity: null` was reached without one.
 type rotation struct {
 	fleetsecrets.Rekeyed
 	Identity *secretsapi.IdentityResealed
@@ -691,16 +691,17 @@ func waitOutInvitations(stdout io.Writer, held engineHeld, active string) {
 
 // noIdentityHere says that a rotation through this backend did not reach the
 // identity estate, where it could not: a stopped node's own table holds none,
-// and a running node with no active company runs none. SAID, because the
-// silence reads as an estate with nothing to move.
+// and a running node answering `identity: null` served its /secrets without
+// one — never a node `crewlet run` builds, which holds the estate from boot,
+// company or none, but an answer the wire can carry. SAID, because the silence
+// reads as an estate with nothing to move.
 func noIdentityHere(stdout io.Writer, sv *secretTarget, absent bool) {
 	if !absent {
 		return
 	}
 	if sv.fleet {
-		fmt.Fprintln(stdout, "this node runs no identity estate (it has no "+
-			"active company), so no person's values were counted or re-sealed "+
-			"through it")
+		fmt.Fprintln(stdout, "the node answered with no identity estate, so no "+
+			"person's values were counted or re-sealed through it")
 		return
 	}
 	fmt.Fprintln(stdout, "a stopped node's own table holds no identity estate: "+

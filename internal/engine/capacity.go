@@ -79,12 +79,12 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 				"quantity nothing can move, and what retires a request the " +
 				"broker already queued is the broker process restarting")
 	}
-	n := e.native.Load()
-	if e.backends == nil || e.backends.Fleet == nil || n == nil || n.log == nil {
+	s, err := e.stateLogOf()
+	if e.backends == nil || e.backends.Fleet == nil || err != nil {
 		return coord.MaintenanceOperation{}, errors.New(
-			"engine: this node runs no state log, so it has no stream to resize")
+			"engine: this engine runs no core runtime, so it has no stream to resize")
 	}
-	running := n.log.domains[n.log.domainOf(req.Stream)]
+	running := s.domains[s.domainOf(req.Stream)]
 	if running == nil {
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: %q is not a domain log this build runs — the streams a "+
@@ -143,8 +143,8 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 // far as this node can read it, and unstated where it cannot.
 //
 // ASKED OF THIS NODE'S OWN BROKER, which is the one holding the stream being
-// resized — see [Engine.capacityHost]. A node with no state log has no such
-// stream either, so the two absences are the same one.
+// resized — see [Engine.capacityHost]. An engine with no core runtime has no
+// such stream either, so the two absences are the same one.
 //
 // UNREAD IS UNSTATED, and the window still opens. The check this feeds only
 // spares an operator the restarts of learning a refusal late; the broker is the
@@ -520,17 +520,18 @@ func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation
 
 // streamVolume is the directory the state logs' ceilings were derived from,
 // which [limitSource] names where that volume is what bounds the broker. Empty
-// on a node with no state log, where no such limit can be the answer either.
+// on an engine with no core runtime, where no such limit can be the answer
+// either.
 func (e *Engine) streamVolume() string {
-	n := e.native.Load()
-	if n == nil || n.log == nil {
+	s, err := e.stateLogOf()
+	if err != nil {
 		return ""
 	}
-	return n.log.volume
+	return s.volume
 }
 
-// capacityHost is the broker a capacity question is put to, or nil on a node
-// that runs no state log.
+// capacityHost is the broker a capacity question is put to, or nil on an
+// engine that runs no core runtime.
 //
 // ASSERTED OFF THE ENGINE'S OWN QUEUE rather than read from a copy the state
 // log keeps. It was that copy, and the copy had ONE writer — a field in one
@@ -544,7 +545,7 @@ func (e *Engine) streamVolume() string {
 // stream to resize, and the assertion cannot fail behind that guard, since
 // startStateLog refuses to build one on a broker that does not satisfy this.
 func (e *Engine) capacityHost() domainHost {
-	if n := e.native.Load(); n == nil || n.log == nil || e.backends == nil {
+	if _, err := e.stateLogOf(); err != nil || e.backends == nil {
 		return nil
 	}
 	host, _ := e.backends.Queue.(domainHost)

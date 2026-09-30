@@ -241,6 +241,14 @@ Keeping them in one pointer would mean one of two wrong things: rebuilding every
 3. **A rejoin's adoption branch**, after the consumer reset and before the appliers relaunch. An adoption replaces the replicated file wholesale, so this node's rows are now a donor's with no apply call to say so.
 4. **A 30-second comparison** of the applier's cursor against the view's, as the net under all three.
 
+### What runs before the first revision
+
+A node started with no active revision is not an idle one. Its **core runtime** is started at boot on every node, company or not: every domain's state log, the node gate over every identity-claiming log, the chart and the [identity estate](identity-and-access.md) with the triggers that keep this node's views of both, and — on a node that publishes — the log's trim and the identity duties. That is what lets the [org builder](../guides/org-builder.md) write a company's units and seats into the chart before any settings revision exists, and what lets the company's first person be invited under a Tier A token and sign in on a node that has nothing else yet.
+
+What waits for the first revision is what only a company can say anything about: whether the engine keeps its own tracker and knowledge base at all, and so the writers and readers over those two logs, their lexical index, their change feeds and the embedding duty. The apply's `native` stage brings them up under the API already serving, and the surfaces over them — `/work`, `/pages`, `/operator/mcp` and the socket's work questions — read them per request, so they answer `503 no_active_revision` until then and serve from then on with no restart. The logs themselves have been applied all along: a join replaces the whole replicated file and a snapshot names every registered domain, so a node applying part of the register could neither adopt nor donate, and the trim, which counts nodes per log, would be pinned by it.
+
+A node's seats are admitted on the **core** log's hydration, so a node waiting for its first company is already caught up the moment it gets one. At a stop the order is the reverse of what depends on what: the chart's and the directory's view triggers first — a rebuild ends by re-arming the scheduler and the mailboxes, so a trigger still running after those stopped would start them again — then the native halves, then the core's duties, and the logs last.
+
 ### The boot seed
 
 A company has to start somewhere, and what an operator has on a first run is a file. `crewlet run -company acme.yaml` publishes that file's units and seats to the chart log — **only when the chart is empty**, and never again.

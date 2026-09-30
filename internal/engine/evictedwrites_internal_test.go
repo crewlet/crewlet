@@ -41,10 +41,10 @@ import (
 func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	n := e.native.Load()
-	s := n.log
+	n, c := e.native.Load(), e.core.Load()
+	s := c.log
 	self := s.nodeID
-	if n.writer == nil || n.pages == nil || n.chartWriter == nil || n.iamWriter == nil {
+	if n.writer == nil || n.pages == nil || c.chartWriter == nil || c.iamWriter == nil {
 		t.Fatal("the node runs no tracker writer, page store, chart writer or " +
 			"identity writer")
 	}
@@ -74,7 +74,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	}
 	createUnit := func(key string) chart.WriteResult {
 		t.Helper()
-		res, err := n.chartWriter.WriteBatch(t.Context(),
+		res, err := c.chartWriter.WriteBatch(t.Context(),
 			statelog.NewOpID(time.Now(), "unit-"+key), chart.Batch{
 				Operations: []chart.Operation{{Kind: chart.OpCreateUnit,
 					Object: chart.ObjectRef{Kind: chart.KindUnit, ID: key}}},
@@ -86,7 +86,7 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	}
 	invalidate := func(reason string) statelog.Result {
 		t.Helper()
-		res, err := n.iamWriter.InvalidateAll(t.Context(),
+		res, err := c.iamWriter.InvalidateAll(t.Context(),
 			statelog.NewOpID(time.Now(), "invalidate-"+reason), reason)
 		if err != nil {
 			t.Fatalf("invalidate every session (%s): %v", reason, err)

@@ -89,9 +89,11 @@ func TestABadConfigFailsBeforeAnythingIsClaimed(t *testing.T) {
 // ONE INCLUDED.
 //
 // The unconfigured node is the case, because it is the one nothing else
-// caught: it starts no state log until it has a company, so it met no signer
-// and booted keyless, and its first applied revision was read in whatever
-// shape the coordination store held. And "before anything opens" is the other
+// caught: it used to start no state log until it had a company, so it met no
+// signer and booted keyless, and its first applied revision was read in
+// whatever shape the coordination store held. It runs the core runtime from
+// boot now, and the refusal is still the keyring's own rather than a signer's
+// that happens to come first. And "before anything opens" is the other
 // half: the keyring is built from Tier A alone, so a refusal that came after
 // the store was open would leave the file behind for nothing.
 //

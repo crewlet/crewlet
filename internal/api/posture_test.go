@@ -57,7 +57,7 @@ import (
 // who should not (the dangerous direction) or one refused to somebody who
 // should reach it (the direction that gets a guard disabled by whoever is on
 // call). An ADMITTED cell carries whatever the route answers once it is
-// reached — a 400 for a missing parameter, a 503 for a tracker this fixture
+// reached — a 400 for a missing parameter, a 404 for a stream this fixture
 // does not run — because what the matrix asserts is that the authority layer
 // let it through, and 401 and 403 are the only two answers that layer gives.
 func TestThePostureMatrix(t *testing.T) {
@@ -198,7 +198,6 @@ func TestThePostureMatrix(t *testing.T) {
 		forbd  = http.StatusForbidden
 		bad    = http.StatusBadRequest
 		absent = http.StatusNotFound
-		down   = http.StatusServiceUnavailable
 		broken = http.StatusInternalServerError
 		// stepUp is a 403 that says `step_up_required`: the caller may
 		// take the verb and has not proved who they are recently enough.
@@ -253,12 +252,13 @@ func TestThePostureMatrix(t *testing.T) {
 		{"moving the trim's backup floor", "POST",
 			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, absent, absent, unath, forbd, absent, unath, forbd, stepUp}},
-		// ADMITTED AS A 503: this fixture runs no tracker to write the
-		// gate with.
+		// ADMITTED AS A 200: every API is handed a node gate — the
+		// engine's core, on every node from boot — and this fixture's
+		// lands every record it is asked for.
 		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
 		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, down, down, down, unath, forbd, down, unath, forbd, stepUp}},
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, ok, ok, unath, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 400: no target named.
 		{"resizing a stream", "POST", "/work/retention/capacity", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, bad, bad, unath, forbd, bad, unath, forbd, stepUp}},

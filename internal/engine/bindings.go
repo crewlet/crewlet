@@ -203,7 +203,7 @@ type classified struct {
 // claiming a persistence this process did not see.
 type bindingWatch struct {
 	// dir and chart are this node's directory and chart view. A nil dir
-	// is an engine with no native runtime, which observes nothing.
+	// is an engine with no core runtime, which observes nothing.
 	dir   bindingSource
 	chart session.Chart
 
@@ -239,7 +239,7 @@ type bindingWatch struct {
 }
 
 // newBindingWatch is the watch over one engine, or nil on an engine with no
-// native runtime — which has no directory to walk, so it reports nothing rather
+// core runtime — which has no directory to walk, so it reports nothing rather
 // than a company with no residue.
 func newBindingWatch(e *Engine) *bindingWatch {
 	dir := e.IAM()

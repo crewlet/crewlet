@@ -77,9 +77,8 @@ func TestAFreshNodeDoesNotAskTheFleetForASnapshot(t *testing.T) {
 	asks := tapSnapshotAsks(t, backends)
 
 	e := newEngine(t, engine.Options{Bootstrap: boot, Company: company, Backends: backends})
-	if e.Tracker() == nil || e.TrackerWriter() == nil {
-		t.Fatal("a default company got no tracker, so no state log ran and " +
-			"there was no join to decline")
+	if len(e.StateLogStatus(t.Context())) == 0 {
+		t.Fatal("the node runs no state log, so there was no join to decline")
 	}
 	if got := asks.drain(t); len(got) != 0 {
 		t.Errorf("a fresh node asked the fleet for a snapshot %d time(s) during "+
@@ -316,7 +315,7 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
 
-	rows := e.NativeStatus(t.Context())
+	rows := e.StateLogStatus(t.Context())
 	byName := map[string]engine.ReplicationStatus{}
 	for _, row := range rows {
 		if _, twice := byName[row.Name]; twice {

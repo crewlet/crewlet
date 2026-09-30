@@ -42,8 +42,9 @@ import (
 // credentials, through. Built by [NewHumanSurfaces] and handed to an API's
 // options by [HumanSurfaces.Mount].
 type HumanSurfaces struct {
-	// SignIn serves /auth — how a person BECOMES a principal — or nil on a
-	// node that started with no active company: see [signInSurface].
+	// SignIn serves /auth — how a person BECOMES a principal. Every node
+	// serves it, one that has met no company included: that is the node
+	// its company's first person is invited to.
 	//
 	// HELD BY WHOEVER SERVES IT as well as mounted, for
 	// [authapi.Service.Stop]: the work a sign-in runs after its answer — a
@@ -51,19 +52,18 @@ type HumanSurfaces struct {
 	// listener closes and before the engine it writes to does.
 	SignIn *authapi.Service
 
-	// Sessions is the other end of the cookie SignIn mints. Nil exactly
-	// when SignIn is: a node that cannot sign one has none to check.
+	// Sessions is the other end of the cookie SignIn mints, built from the
+	// same signer.
 	Sessions *auth.Sessions
 
 	// Tokens resolves the machine tokens /iam/credentials mints — `crewlet
-	// iam token`'s value, presented as CREWLET_API_TOKEN. Built on EVERY
-	// node: see [NewHumanSurfaces].
+	// iam token`'s value, presented as CREWLET_API_TOKEN.
 	Tokens *auth.Tokens
 
 	// Directory serves /iam, and Work the human write surface over the
-	// native tracker and knowledge base. Each is an UNTYPED nil where this
-	// node serves none: a nil *T inside the interface is a surface [New]
-	// reads as present, with every route mounted over nothing.
+	// native tracker and knowledge base — which reads the halves it serves
+	// per request, since a node meets them at its first company and may
+	// meet that long after this surface was built.
 	Directory guardedMounter
 	Work      guardedMounter
 }
@@ -71,34 +71,33 @@ type HumanSurfaces struct {
 // NewHumanSurfaces builds a node's human surfaces over its engine and the Tier
 // A it runs under.
 //
-// A NODE THAT SERVES NONE OF THEM IS NOT AN ERROR. One that started with no
-// active company runs no native runtime and holds no identity directory, and
-// its sign-in, directory and write surface are ABSENT — each nil, each logged
-// — rather than answering an error; what is returned as an error is a surface
-// this node should serve and could not build.
+// EVERY NODE SERVES ALL OF THEM, with a company or without one. The identity
+// estate is the engine's CORE, running from boot on every node, so a node
+// nobody has configured yet still signs people in, holds the directory its
+// first person is invited through, and serves the write surface — whose
+// routes answer `503 no_active_revision` until the first company brings the
+// tracker and the knowledge base up, and are served from then on with no
+// restart. They used to be ABSENT on such a node, each logged, so the node a
+// company is bootstrapped on was the one node nobody could sign in to until
+// it was restarted.
 func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, error) {
 	signIn, sessions, err := signInSurface(boot, e)
 	if err != nil {
 		return HumanSurfaces{}, err
 	}
-	// AND THE THIRD CREDENTIAL, a machine token the directory minted —
-	// built on EVERY node, not only those that sign people in: it needs no
-	// keyring, and on a node that started with no company, and so holds no
-	// directory, its read answers "cannot say" — a 503 rather than a 401
-	// telling a pipeline its credential is broken.
+	// AND THE THIRD CREDENTIAL, a machine token the directory minted.
 	tokens, err := auth.NewTokens(auth.TokensDeps{
 		Directory: e, Chart: engine.SeatViewOf(e),
 	})
 	if err != nil {
 		return HumanSurfaces{}, fmt.Errorf("api: the machine-token arm: %w", err)
 	}
-	// AND THE DIRECTORY, which is nil on exactly the nodes the sign-in
-	// surface is nil on.
+	// AND THE DIRECTORY.
 	directory, err := directorySurface(boot, e)
 	if err != nil {
 		return HumanSurfaces{}, err
 	}
-	// AND THE WRITE SURFACE, nil on a company on Jira and Confluence.
+	// AND THE WRITE SURFACE, over the halves each request finds.
 	work, err := workSurface(e)
 	if err != nil {
 		return HumanSurfaces{}, err
@@ -112,15 +111,12 @@ func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, 
 // Mount hands the surfaces to an API's options.
 //
 // THE ONE PLACE A NIL SURFACE BECOMES A NIL INTERFACE, and it is a method so
-// that no caller does the conversion for itself. An absent surface held as a
-// nil *T is a NON-NIL interface once it reaches [Options], so [New]'s own "is
-// there one" check passes and mounts every route over a nil service — which
-// answers each request with a nil dereference instead of the 404 an absent
-// surface is documented to be. The directory and the write surface were
-// converted where they were built; the sign-in surface was handed over as its
-// pointer, so on a node that started with no active company every /auth route
-// was mounted over nothing — `GET /auth/config`, the first thing the
-// dashboard reads, among them — and each request panicked inside its handler.
+// that no caller does the conversion for itself. A surface held as a nil *T is
+// a NON-NIL interface once it reaches [Options], so [New]'s own "is there one"
+// check passes and mounts every route over a nil service — which answers each
+// request with a nil dereference instead of the 404 an absent surface is
+// documented to be. [NewHumanSurfaces] builds every one on an engine [engine.New]
+// made; a zero HumanSurfaces — a suite's — is what this keeps honest.
 func (h HumanSurfaces) Mount(o *Options) {
 	if h.SignIn != nil {
 		o.Auth = h.SignIn
@@ -129,19 +125,15 @@ func (h HumanSurfaces) Mount(o *Options) {
 	o.IAM, o.Work = h.Directory, h.Work
 }
 
-// signInSurface builds /auth, or reports that this node serves none.
+// signInSurface builds /auth and the session arm beside it.
 //
-// # One posture produces a nil, and it is not a fault
+// ON EVERY NODE. The identity estate is the engine's core, so a node that has
+// met no company holds its directory too — and is exactly where the company's
+// first person is invited and signs in. An engine with no identity estate is
+// one [engine.New] did not build, which is a wiring mistake to refuse by
+// name rather than a posture to serve around.
 //
-// THIS NODE STARTED WITH NO COMPANY. Every node runs the identity domain,
-// whatever its roles, but the state log it rides on is part of the native
-// runtime, and a node that booted before any revision was active opens none —
-// it serves its HTTP surface unconfigured until the first revision arrives.
-// Such a node has no directory to sign anybody in against, and the routes are
-// ABSENT rather than answering an error, as every other surface the native
-// runtime feeds is on that node.
-//
-// A keyring that cannot sign for the fleet USED TO BE a second such posture,
+// A keyring that cannot sign for the fleet USED TO BE a narrower posture too,
 // and it is not any more: Tier A refuses a file without a usable keyring and
 // the engine refuses to start without one, so a session signer this function
 // cannot build is a fault it returns rather than a node it quietly narrows.
@@ -150,11 +142,7 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
-		log.Info("api_sign_in_absent",
-			"reason", "this node started with no active company, so it runs "+
-				"no native runtime and holds no identity directory",
-			"hint", "activate a company revision and restart the node")
-		return nil, nil, nil
+		return nil, nil, errNoIdentityEstate
 	}
 	signer, err := session.New(session.Options{
 		Material: boot.Secrets.TokenMaterial(),
@@ -228,23 +216,11 @@ func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	return surface, sessions, nil
 }
 
-// directorySurface builds /iam, or reports that this node serves none.
-//
-// NIL IS A REAL POSTURE, exactly as [signInSurface]'s is and for the same
-// reason: a node that started with no active company holds no identity rows,
-// and a surface over it would serve an empty directory as though the company
-// had nobody in it. The routes are ABSENT rather than answering an error —
-// which takes returning an untyped nil: a typed one reaches [Options] as a
-// surface that is there, and every route is mounted over nothing.
+// directorySurface builds /iam, on every node for [signInSurface]'s reason.
 func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter, error) {
-
 	reader, writer := e.IAM(), e.IAMWriter()
 	if reader == nil || writer == nil {
-		log.Info("api_directory_absent",
-			"reason", "this node started with no active company, so it runs "+
-				"no native runtime and holds no identity directory",
-			"hint", "activate a company revision and restart the node")
-		return nil, nil
+		return nil, errNoIdentityEstate
 	}
 	// THE KEYRING'S OPENER, checked here rather than handed in as a typed
 	// nil: an interface holding a nil pointer is not nil, so the surface's
@@ -295,9 +271,9 @@ func directorySurface(boot *config.Bootstrap, e *engine.Engine) (guardedMounter,
 // person bound to an AGENT seat went unreported while every request they made
 // was refused.
 //
-// NIL ON A NODE WITH NO CHART READER — one that started with no active
-// company — which is the same third value a nil [Options.SeatHeld] is: there
-// are no rows to ask, so the arm is skipped rather than asked.
+// NIL ON AN ENGINE WITH NO CHART READER — one [engine.New] did not build —
+// which is the same third value a nil [Options.SeatHeld] is: there are no rows
+// to ask, so the arm is skipped rather than asked.
 func danglingBindings(e *engine.Engine) iamapi.Bindings {
 	if e.Chart() == nil {
 		return nil
@@ -308,8 +284,15 @@ func danglingBindings(e *engine.Engine) iamapi.Bindings {
 	}
 }
 
-// workSurface builds the human write surface, or nil where this node runs
-// neither a native tracker nor a native knowledge base.
+// errNoIdentityEstate is a human surface asked of an engine that holds no
+// identity estate — one [engine.New] did not build, since every engine it
+// builds runs the estate from boot.
+var errNoIdentityEstate = errors.New("api: the engine runs no identity estate, " +
+	"so there is nobody to sign in or enrol — an engine built by engine.New " +
+	"always does, from boot, whether or not it has a company")
+
+// workSurface builds the human write surface over the halves each request
+// finds.
 //
 // FROM THE SAME DEPS the operator's assistant is served from — see
 // [NativeToolDeps] — and deciding on the same chart, so a route and the tool
@@ -317,13 +300,35 @@ func danglingBindings(e *engine.Engine) iamapi.Bindings {
 // tools never reach: the tracker's, bound to the caller, for a rank move, a
 // comment edit and the purge, and the knowledge base's store for its rename
 // and its three destructive verbs.
+//
+// PER REQUEST, never captured here: the halves come up with the node's first
+// company, which a node that booted with none meets at an apply after this
+// surface is serving. See [workapi.Options.Halves].
 func workSurface(e *engine.Engine) (guardedMounter, error) {
-	work, kb := NativeToolDeps(e)
-	opts := workapi.Options{
-		Work: work, Pages: kb, Chart: engine.ChartAuthorityOf(e),
+	surface, err := workapi.New(workapi.Options{
+		Halves: func() (workapi.Halves, bool) { return nativeHalves(e) },
+		Chart:  engine.ChartAuthorityOf(e),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: the work surface: %w", err)
 	}
+	return surface, nil
+}
+
+// nativeHalves are the tracker and knowledge-base halves this engine serves
+// now, and false where it has not been handed a company yet.
+//
+// [engine.Engine.NativeStarted] FIRST, and the halves after: it is monotonic,
+// so a half read as absent after it said "started" is one this company does
+// not run rather than one not published yet — see native.go.
+func nativeHalves(e *engine.Engine) (workapi.Halves, bool) {
+	if !e.NativeStarted() {
+		return workapi.Halves{}, false
+	}
+	work, kb := NativeToolDeps(e)
+	halves := workapi.Halves{Work: work, Pages: kb}
 	if writer := e.TrackerWriter(); writer != nil {
-		opts.Tracker = func(actor builtin.Actor) workapi.TrackerWriter {
+		halves.Tracker = func(actor builtin.Actor) workapi.TrackerWriter {
 			return personWriter(writer, actor)
 		}
 	}
@@ -331,16 +336,9 @@ func workSurface(e *engine.Engine) (guardedMounter, error) {
 	// interface would pass the surface's own check and panic on the first
 	// press.
 	if store := e.PagesStore(); store != nil {
-		opts.PageStore = store
+		halves.PageStore = store
 	}
-	surface, err := workapi.New(opts)
-	if err != nil {
-		return nil, fmt.Errorf("api: the work surface: %w", err)
-	}
-	if surface == nil {
-		return nil, nil
-	}
-	return surface, nil
+	return halves, true
 }
 
 // personWriter is the node's tracker writer acting as one person-facing

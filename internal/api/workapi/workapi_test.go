@@ -620,9 +620,10 @@ func TestEveryRouteThatChangesAToolSkillNeedsConfigWrite(t *testing.T) {
 			r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
 				writes: &writes{}, kb: newKB()}
 			r.kb.page.Page.Container = "TS"
-			opts := r.options(chart{})
-			opts.Pages.SkillsContainer = func() string { return "ts" }
-			svc, err := workapi.New(opts)
+			halves := r.halves()
+			halves.Pages.SkillsContainer = func() string { return "ts" }
+			svc, err := workapi.New(workapi.Options{
+				Halves: serving(halves), Chart: chart{}})
 			if err != nil || svc == nil {
 				t.Fatalf("New: %v (%v)", err, svc)
 			}

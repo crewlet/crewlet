@@ -68,6 +68,21 @@ func (e *Engine) collectChartSeals(ctx context.Context, now time.Time) (int64, e
 	if reader == nil || e.backends == nil || e.backends.Fleet == nil {
 		return 0, nil
 	}
+	// A NODE SERVING NO COMPANY CANNOT VOUCH FOR THE SETTINGS' HALF, and
+	// collects nothing for the reason rows that cannot vouch collect
+	// nothing. A person may point a setting at a chart's sealed value by
+	// hand, and a node that has not applied the fleet's settings — one that
+	// booted before any revision, or cannot apply the current one — would
+	// read every such value as named by nothing. The chart is the core's
+	// and open on every node, so this sweep reaches such a node now; before
+	// the chart was, a node with no company had no chart to sweep from.
+	settings := e.Company()
+	if settings == nil || settings.Config == nil {
+		log.InfoContext(ctx, "chart_seal_sweep_deferred",
+			"reason", "this node serves no company, so it cannot say whether "+
+				"the running settings name a sealed value")
+		return 0, nil
+	}
 	// THE END FIRST, then the rows proved against it: see
 	// [chart.Reader.SealedNames].
 	end, err := e.chartLogEnd(ctx)
@@ -85,10 +100,8 @@ func (e *Engine) collectChartSeals(ctx context.Context, now time.Time) (int64, e
 	// AND WHATEVER THE SETTINGS NAME, which a person may point at a chart's
 	// sealed value by hand: a value a running provider resolves is not one
 	// nothing names.
-	if c := e.Company(); c != nil && c.Config != nil {
-		for _, name := range config.ReferencedNames(c.Config) {
-			named[name] = true
-		}
+	for _, name := range config.ReferencedNames(settings.Config) {
+		named[name] = true
 	}
 	store := fleetsecrets.New(e.backends.Fleet, e.cipher)
 	held, err := store.List(ctx)
@@ -125,12 +138,12 @@ type chartSealSightings struct {
 // chartLogEnd is the chart log's last sequence, as the broker holds it now —
 // what a census of this node's chart rows is proved against.
 func (e *Engine) chartLogEnd(ctx context.Context) (uint64, error) {
-	n := e.native.Load()
-	if n == nil || n.log == nil {
-		return 0, errors.New("engine: this node runs no chart domain, so there " +
-			"is no chart log to read the end of")
+	s, err := e.stateLogOf()
+	if err != nil {
+		return 0, fmt.Errorf("engine: this node runs no chart domain, so there "+
+			"is no chart log to read the end of: %w", err)
 	}
-	running := n.log.Domain(chart.Domain{}.Name())
+	running := s.Domain(chart.Domain{}.Name())
 	if running == nil {
 		return 0, errors.New("engine: the chart log is not running on this node")
 	}

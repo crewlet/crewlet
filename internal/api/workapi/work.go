@@ -16,6 +16,11 @@ import (
 
 // workRoutes mounts the tracker half.
 func (s *Service) workRoutes(mount mounter) {
+	// EVERY ROUTE OF THIS HALF asks for it when a request arrives, and is
+	// handed the halves its request found — see [Service.on].
+	route := func(pattern string, p authz.Policy, h servedHandler) {
+		mount(pattern, p, s.onWork(h))
+	}
 	task := func(a authz.Action) authz.Policy { return kinded(a, authz.KindTask) }
 	// A PROJECT IS NAMED BY ITS PATH, so its routes decide the verb there.
 	project := func(a authz.Action) authz.Policy {
@@ -46,53 +51,53 @@ func (s *Service) workRoutes(mount mounter) {
 		}}
 	}
 
-	mount("POST /work/items", task(authz.ActionWorkCreate), s.postItem)
-	mount("PATCH /work/items/{key}", task(authz.ActionWorkUpdate), s.patchItem)
-	mount("POST /work/items/{key}/comments", task(authz.ActionWorkComment),
-		s.postItemComment)
+	route("POST /work/items", task(authz.ActionWorkCreate), (*served).postItem)
+	route("PATCH /work/items/{key}", task(authz.ActionWorkUpdate), (*served).patchItem)
+	route("POST /work/items/{key}/comments", task(authz.ActionWorkComment),
+		(*served).postItemComment)
 	// WHO WROTE THE REMARK IS A ROW, so the route admits the colleague
 	// write that commenting is and the handler decides the edit once it
 	// has read the author.
-	mount("PATCH /work/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
-		s.patchItemComment)
-	mount("POST /work/items/{key}/rank", task(authz.ActionWorkRank), s.postRank)
+	route("PATCH /work/items/{key}/comments/{cid}", task(authz.ActionWorkComment),
+		(*served).patchItemComment)
+	route("POST /work/items/{key}/rank", task(authz.ActionWorkRank), (*served).postRank)
 	// DEPENDING AND RELATING ARE EDITS OF THE ITEM, made through
 	// update_work_item's own set-valued arguments; the routes are narrower
 	// doors onto the same verb.
-	mount("POST /work/items/{key}/depend", task(authz.ActionWorkUpdate), s.postDepend)
-	mount("POST /work/items/{key}/relate", task(authz.ActionWorkUpdate), s.postRelate)
+	route("POST /work/items/{key}/depend", task(authz.ActionWorkUpdate), (*served).postDepend)
+	route("POST /work/items/{key}/relate", task(authz.ActionWorkUpdate), (*served).postRelate)
 	// THE TRASH IS THE ITEM'S PROJECT'S LEAD'S, and which project that is
 	// comes out of the row: the route admits a reader of the board and the
 	// tool decides the verb once it has read it.
-	mount("DELETE /work/items/{key}", task(authz.ActionWorkRead), s.deleteItem)
-	mount("POST /work/items/{key}/restore", task(authz.ActionWorkRead), s.postRestore)
+	route("DELETE /work/items/{key}", task(authz.ActionWorkRead), (*served).deleteItem)
+	route("POST /work/items/{key}/restore", task(authz.ActionWorkRead), (*served).postRestore)
 	// A MOVE IS THE LEAD'S OF THE PROJECT THE ITEM IS IN, which is the row's
 	// for the trash's reason — and a move into the project it is already in
 	// is the retry of one that landed, which the tool answers from the
 	// move's own ledger rather than asking anybody's authority again.
-	mount("POST /work/items/{key}/move", task(authz.ActionWorkRead), s.postMove)
+	route("POST /work/items/{key}/move", task(authz.ActionWorkRead), (*served).postMove)
 	// THE PURGE NEEDS NO ROW TO DECIDE: it is the fleet's grant and never
 	// an agent's, whatever the item is.
-	mount("POST /work/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
-		s.postPurge)
-	mount("PUT /work/projects/{key}", project(authz.ActionProjectWrite), s.putProject)
-	mount("POST /work/projects/{key}/tags", project(authz.ActionProjectWrite),
-		s.postProjectTags)
+	route("POST /work/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
+		(*served).postPurge)
+	route("PUT /work/projects/{key}", project(authz.ActionProjectWrite), (*served).putProject)
+	route("POST /work/projects/{key}/tags", project(authz.ActionProjectWrite),
+		(*served).postProjectTags)
 	// A VIEW'S AUTHORITY IS IN ITS BODY — personal to its owner or shared on
 	// its container — so the route admits a reader of the views and the
 	// tool's own gate decides the save on what the body says.
-	mount("POST /work/views", kinded(authz.ActionViewList, authz.KindView), s.postView)
-	mount("PUT /work/catalogue", authz.Policy{Action: authz.ActionCatalogueWrite},
-		s.putCatalogue)
-	mount("PUT /work/people/{handle}/inbox", person(authz.ActionInboxMark), s.putInbox)
-	mount("PUT /work/people/{handle}/pins", person(authz.ActionPinsSet), s.putPins)
-	mount("PUT /work/people/{handle}/priorities", person(authz.ActionPrioritiesSet),
-		s.putPriorities)
+	route("POST /work/views", kinded(authz.ActionViewList, authz.KindView), (*served).postView)
+	route("PUT /work/catalogue", authz.Policy{Action: authz.ActionCatalogueWrite},
+		(*served).putCatalogue)
+	route("PUT /work/people/{handle}/inbox", person(authz.ActionInboxMark), (*served).putInbox)
+	route("PUT /work/people/{handle}/pins", person(authz.ActionPinsSet), (*served).putPins)
+	route("PUT /work/people/{handle}/priorities", person(authz.ActionPrioritiesSet),
+		(*served).putPriorities)
 }
 
 // ---- the tool-backed routes -------------------------------------------- //
 
-func (s *Service) postItem(w http.ResponseWriter, r *http.Request) {
+func (s *served) postItem(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok {
 		return
@@ -100,7 +105,7 @@ func (s *Service) postItem(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.CreateWorkItemTool, args)
 }
 
-func (s *Service) patchItem(w http.ResponseWriter, r *http.Request) {
+func (s *served) patchItem(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !fromPath(w, args, "item", r.PathValue("key")) ||
 		!ifMatch(w, r, args, "if_match") {
@@ -109,7 +114,7 @@ func (s *Service) patchItem(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.UpdateWorkItemTool, args)
 }
 
-func (s *Service) postItemComment(w http.ResponseWriter, r *http.Request) {
+func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
@@ -117,7 +122,7 @@ func (s *Service) postItemComment(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.CommentOnWorkTool, args)
 }
 
-func (s *Service) postDepend(w http.ResponseWriter, r *http.Request) {
+func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "waiting_on", "blocking", "dependency_note", "if_match") ||
 		!fromPath(w, args, "item", r.PathValue("key")) ||
@@ -127,7 +132,7 @@ func (s *Service) postDepend(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.UpdateWorkItemTool, args)
 }
 
-func (s *Service) postRelate(w http.ResponseWriter, r *http.Request) {
+func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "linked", "linked_pages", "if_match") ||
 		!fromPath(w, args, "item", r.PathValue("key")) ||
@@ -137,7 +142,7 @@ func (s *Service) postRelate(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.UpdateWorkItemTool, args)
 }
 
-func (s *Service) deleteItem(w http.ResponseWriter, r *http.Request) {
+func (s *served) deleteItem(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "subtree") ||
 		!fromPath(w, args, "item", r.PathValue("key")) {
@@ -146,7 +151,7 @@ func (s *Service) deleteItem(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.RemoveWorkItemTool, args)
 }
 
-func (s *Service) postRestore(w http.ResponseWriter, r *http.Request) {
+func (s *served) postRestore(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args) || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
@@ -160,7 +165,7 @@ func (s *Service) postRestore(w http.ResponseWriter, r *http.Request) {
 // THE PERSON'S OWN DOOR ONTO IT. The tool was served to a seat and to the
 // operator's assistant, and a person who had filed an item in the wrong
 // project could only ask one of them to move it.
-func (s *Service) postMove(w http.ResponseWriter, r *http.Request) {
+func (s *served) postMove(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "project") ||
 		!fromPath(w, args, "item", r.PathValue("key")) {
@@ -174,7 +179,7 @@ func (s *Service) postMove(w http.ResponseWriter, r *http.Request) {
 // colleague's. Two routes because the tool's two halves are two records on
 // two subjects with two authorities — a request that could carry both would
 // be answered for one of them.
-func (s *Service) putProject(w http.ResponseWriter, r *http.Request) {
+func (s *served) putProject(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "fields", "default_assignee", "archived") ||
 		!fromPath(w, args, "project", tracker.ProjectKey(r.PathValue("key"))) {
@@ -183,7 +188,7 @@ func (s *Service) putProject(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.WriteProjectTool, args)
 }
 
-func (s *Service) postProjectTags(w http.ResponseWriter, r *http.Request) {
+func (s *served) postProjectTags(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "tags_add", "tags_rename", "tags_archive") ||
 		!fromPath(w, args, "project", tracker.ProjectKey(r.PathValue("key"))) {
@@ -192,7 +197,7 @@ func (s *Service) postProjectTags(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.WriteProjectTool, args)
 }
 
-func (s *Service) postView(w http.ResponseWriter, r *http.Request) {
+func (s *served) postView(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok {
 		return
@@ -200,7 +205,7 @@ func (s *Service) postView(w http.ResponseWriter, r *http.Request) {
 	s.call(w, r, tracker.SaveWorkViewTool, args)
 }
 
-func (s *Service) putCatalogue(w http.ResponseWriter, r *http.Request) {
+func (s *served) putCatalogue(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok {
 		return
@@ -210,7 +215,7 @@ func (s *Service) putCatalogue(w http.ResponseWriter, r *http.Request) {
 
 // putPriorities is set_priorities, which names whose queue it sets and asks
 // the lead relation itself.
-func (s *Service) putPriorities(w http.ResponseWriter, r *http.Request) {
+func (s *served) putPriorities(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "items") ||
 		!fromPath(w, args, "handle", strings.TrimSpace(r.PathValue("handle"))) {
@@ -232,16 +237,16 @@ func (s *Service) putPriorities(w http.ResponseWriter, r *http.Request) {
 // own rule sits on top: a SEAT never writes a colleague's record. The tools
 // are not widened: no seat, and no assistant, gains a way to name another
 // person's record.
-func (s *Service) putInbox(w http.ResponseWriter, r *http.Request) {
+func (s *served) putInbox(w http.ResponseWriter, r *http.Request) {
 	s.personRecord(w, r, builtin.MarkInboxFor)
 }
 
-func (s *Service) putPins(w http.ResponseWriter, r *http.Request) {
+func (s *served) putPins(w http.ResponseWriter, r *http.Request) {
 	s.personRecord(w, r, builtin.SetPinsFor)
 }
 
 // personRecord is the one body both person routes share.
-func (s *Service) personRecord(w http.ResponseWriter, r *http.Request,
+func (s *served) personRecord(w http.ResponseWriter, r *http.Request,
 	write func(ctx context.Context, deps builtin.WorkDeps, name string,
 		args map[string]any) tools.Result) {
 
@@ -275,7 +280,7 @@ func (s *Service) personRecord(w http.ResponseWriter, r *http.Request,
 // project's: a card cannot be placed between two cards on somebody else's
 // board. Naming neither is refused rather than read as "the head", because a
 // move to nowhere is a request somebody built wrong.
-func (s *Service) postRank(w http.ResponseWriter, r *http.Request) {
+func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "after", "before") {
 		return
@@ -320,7 +325,7 @@ func (s *Service) postRank(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := s.tracker(actor).MoveTask(r.Context(),
+	result, err := s.Tracker(actor).MoveTask(r.Context(),
 		keyedOp(key, "rank", item.Task.ID, args), item.Task.Project, item.Task.ID,
 		bounds[0], bounds[1])
 	if err != nil {
@@ -342,7 +347,7 @@ func (s *Service) postRank(w http.ResponseWriter, r *http.Request) {
 // attributed to a person who did not make it. An administrator is admitted by
 // the first and refused by the second, which is internal/pages' own rule for
 // the same gesture.
-func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
+func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "body") {
 		return
@@ -378,8 +383,8 @@ func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	notify := tracker.Wake{
 		Kind: tracker.ChangeCommentEdited, Before: detail.Task, After: detail.Task,
 		Comment: &edited, Mentions: edited.Mentions,
-	}.Notify(s.workDeps.Leads)
-	result, err := s.tracker(actor).EditComment(r.Context(),
+	}.Notify(s.Work.Leads)
+	result, err := s.Tracker(actor).EditComment(r.Context(),
 		keyedOp(key, "comment-edit", cid, args), detail.Task.ID, detail.Task.Project,
 		cid,
 		body, notify)
@@ -419,7 +424,7 @@ func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
 // `unknown` is the one outcome to retry — under the SAME key, because a fresh
 // one would append a second purge of an item the first may already have
 // destroyed.
-func (s *Service) postPurge(w http.ResponseWriter, r *http.Request) {
+func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args) {
 		return
@@ -458,7 +463,7 @@ func (s *Service) postPurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := s.tracker(actor).PurgeTask(r.Context(),
+	result, err := s.Tracker(actor).PurgeTask(r.Context(),
 		keyedOp(key, "purge", detail.Task.ID, purgeArgs(confirm, reason)),
 		detail.Task.ID, detail.Task.Project, reason)
 	if err != nil {
@@ -486,10 +491,10 @@ func purgeArgs(confirm, reason string) map[string]any {
 }
 
 // readTask is a work item read before a decision is taken on it.
-func (s *Service) readTask(w http.ResponseWriter, r *http.Request, ref string,
+func (s *served) readTask(w http.ResponseWriter, r *http.Request, ref string,
 	want tracker.DetailWants) (tracker.TaskDetail, bool) {
 
-	detail, err := s.workDeps.Reader.Task(r.Context(), strings.TrimSpace(ref),
+	detail, err := s.Work.Reader.Task(r.Context(), strings.TrimSpace(ref),
 		want, decisionRead)
 	if err != nil {
 		readFailed(w, err)

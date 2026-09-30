@@ -42,7 +42,7 @@ type SeatView struct{ reader *chart.Reader }
 var _ session.Chart = SeatView{}
 
 // SeatViewOf is the seam over one engine, or the zero value over an engine with
-// no native runtime, which holds no chart rows.
+// no core runtime, which holds no chart rows.
 //
 // THE ZERO VALUE IS NOT NIL, and the difference is what such an engine
 // answers. A nil [session.Chart] would make every bound person seatless — the

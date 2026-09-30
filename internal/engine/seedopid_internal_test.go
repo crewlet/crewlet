@@ -23,7 +23,7 @@ import (
 func TestEveryOperationTheBootPublishedCarriesItsInstant(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	seen := 0
 	for _, name := range s.order {
 		running := s.domains[name]
@@ -69,7 +69,7 @@ func TestEveryOperationTheBootPublishedCarriesItsInstant(t *testing.T) {
 func TestTheSeedsOperationIsDerivedFromTheChartLogAndTheFile(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	running := e.native.Load().log.Domain(chart.Domain{}.Name())
+	running := e.core.Load().log.Domain(chart.Domain{}.Name())
 	if running == nil {
 		t.Fatal("this node runs no chart log")
 	}

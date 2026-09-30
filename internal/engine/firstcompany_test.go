@@ -16,7 +16,8 @@ import (
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS ITS NATIVE BACKENDS UP WITH THE
 // FIRST ONE IT IS HANDED — the tracker, the knowledge base, their tools, the
-// chart, and the loops a boot arms beside them — with no restart.
+// chart's projects and spaces, and the loops a boot arms beside them — with no
+// restart.
 //
 // The quickstart's own path: start a node, then `PUT /config` or create the
 // company from the dashboard. The runtime was built by boot alone, so a node
@@ -27,15 +28,12 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 	e := unconfiguredEngine(t)
 	// RUNNING, as a node waiting for its first company is: the seat host is
 	// already asking whether this node may take seats, which reads the very
-	// runtime the apply below brings up.
+	// log the apply below brings its halves up over.
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if e.TrackerWriter() != nil || e.PagesStore() != nil {
+	if e.TrackerWriter() != nil || e.PagesStore() != nil || e.NativeStarted() {
 		t.Fatal("the premise: a node with no company runs no native backend")
-	}
-	if _, ok := e.RetentionReport(t.Context()); ok {
-		t.Fatal("the premise: a node with no state log has no trim")
 	}
 
 	status, applied, err := e.Apply(t.Context(),
@@ -74,7 +72,7 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 
 	// A WORKING TRACKER: work filed into the chart's project lands.
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated() {
+	for !e.StateLogHydrated() {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never admitted seats on its new runtime")
 		}
@@ -93,11 +91,8 @@ func TestAFirstCompanyBringsUpTheNativeBackendsWithoutARestart(t *testing.T) {
 		t.Errorf("the first task was keyed %q, want ENG-1", filed.Key)
 	}
 
-	// THE LOOPS A BOOT ARMS BESIDE THE RUNTIME: the trim, and the sweep
-	// rebuilt with the tracker's repairs and every operation ledger.
-	if _, ok := e.RetentionReport(t.Context()); !ok {
-		t.Error("the node's new state log has no trim — its logs only grow")
-	}
+	// AND THE SWEEP, rebuilt with the tracker's repairs beside the operation
+	// ledgers the core contributed from boot.
 	jobs := e.Maintenance().Jobs()
 	for _, job := range []string{"tracker_respread", "tracker_ops", "pages_ops"} {
 		if !slices.Contains(jobs, job) {
@@ -122,8 +117,9 @@ func unconfiguredEngineOn(t *testing.T, mutate func(*config.Bootstrap)) *engine.
 // AT THE APPLY, as it is at boot — before anything is started.
 //
 // The check ran at boot alone, so a node that booted unconfigured accepted
-// such a company; now that an apply brings the native runtime up, it would
-// start the log whose first restart leaves the node unable to serve for good.
+// such a company; now that an apply brings the native halves up, it would
+// start writing the log whose first restart leaves the node unable to serve for
+// good.
 func TestAnApplyRefusesANativeBackendOnAnInMemoryStream(t *testing.T) {
 	t.Parallel()
 	e := unconfiguredEngineOn(t, func(b *config.Bootstrap) {

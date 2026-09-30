@@ -317,8 +317,8 @@ That makes the rotation a runbook with no window in it:
    estate's too: every person's name, address and second factor is sealed
    under the keyring in rows derived from the identity log, which only a
    record can change, so the node publishes one per person still under an old
-   key and reports how many (`identity` in the answer; `null` from a node
-   that runs no identity estate). An **outstanding invitation's** address is
+   key and reports how many (`identity` in the answer — every node holds the
+   identity estate from boot, company or none). An **outstanding invitation's** address is
    counted and left — only a re-issue could carry it again — so the rekey says
    how many are still under an old key.
 5. **Drop** the old key once the longest token lifetime has passed, every

@@ -543,11 +543,11 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningDomain) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
 	// log's first sequence; stopped, it waits out an in-flight tick.
 	e.stopRetention()
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -693,10 +693,10 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	// written and the tick is decided by the other five. Set on the loop
 	// rather than through validated config: the 24-hour floor exists for
 	// an operator, and this case is about a different term.
-	r := &retention{fleet: back.Fleet, state: e.native.Load().log, nodeID: "node-a",
+	r := &retention{fleet: back.Fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
-	for _, name := range e.native.Load().log.order {
-		running := e.native.Load().log.Domain(name)
+	for _, name := range e.core.Load().log.order {
+		running := e.core.Load().log.Domain(name)
 		t.Run(name, func(t *testing.T) {
 			group := running.domain.FeedGroup()
 			if group == "" {
@@ -1129,7 +1129,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	// THE ENGINE'S OWN TRIM DUTY IS ENDED FIRST. It ticks the moment it
 	// starts, and on a loaded runner that first tick can land after the
 	// reanchor below — publishing a floor at the pages log's NEW generation,
@@ -1223,7 +1223,7 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	closed, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "closed.db"),
 		store.Options{})
 	if err != nil {
@@ -1282,7 +1282,7 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	e.stopRetention()
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	pagesName := pages.Domain{}.Name()

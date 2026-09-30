@@ -43,7 +43,7 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	t.Parallel()
 	grants := []iam.Grant{iam.GrantStateRead}
 	r := newRig(t, chart{})
-	deps := r.options(chart{}).Work
+	deps := r.halves().Work
 	args := map[string]any{"title": "rotate the key", "project": "ENG"}
 
 	// A SEAT'S OWN TURN.

@@ -441,19 +441,18 @@ func (s *Service) getSeats(w http.ResponseWriter, r *http.Request) {
 	kind := chart.SeatKind(strings.TrimSpace(r.URL.Query().Get(KindParam)))
 	if unheld && s.held == nil {
 		// THE FILTER CANNOT BE ANSWERED, so it is REFUSED rather than
-		// applied to an empty directory. A node that started with no
-		// active company holds no identity rows at all, so filtering
-		// against them would return EVERY human seat in the company under
-		// a parameter that promised the opposite — which is the one
-		// failure a screen renders as a finished answer.
+		// applied to an empty directory: this surface was stood up with no
+		// directory behind it, and filtering against nothing would return
+		// EVERY human seat in the company under a parameter that promised
+		// the opposite — which is the one failure a screen renders as a
+		// finished answer.
 		//
-		// NO Retry-After, because waiting never changes it: what opens
-		// this node's directory is a company revision and a restart, and
-		// a header saying "come back" would send the caller back here.
+		// NO Retry-After, because waiting never changes it: what gives
+		// this surface a directory is its wiring, and a header saying
+		// "come back" would send the caller back here.
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
-			"detail": "this node started with no active company, so it " +
-				"holds no identity directory and cannot say which seats " +
-				"nobody holds",
+			"detail": "this surface was given no identity directory, so it " +
+				"cannot say which seats nobody holds",
 		})
 		return
 	}

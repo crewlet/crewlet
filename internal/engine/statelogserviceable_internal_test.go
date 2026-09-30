@@ -63,12 +63,12 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	// AND FOR THE APPLIER'S OWN DRAIN, which is a separate instant from a
 	// lag of zero: the loop learns the log is empty on the fetch AFTER it
 	// commits the last record, up to [statelog.FetchWait] later. Halting
@@ -120,7 +120,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// claims, because a seat attaching here would act on rows that are
 	// behind; serviceability keeps what is held, because rows that are
 	// behind catch up and dropping the work would be pure loss.
-	if e.NativeHydrated() {
+	if e.StateLogHydrated() {
 		t.Error("the node admits new seats with a record unapplied, so a seat " +
 			"attaches to a copy that is behind and answers \"there is no such " +
 			"item\" about work it was just handed")
@@ -134,7 +134,7 @@ func TestANodeBehindOnItsLogKeepsTheSeatsItHolds(t *testing.T) {
 	// AND THE FLEET VIEW STILL SAYS SO. The shed is what must not happen;
 	// reporting the node as caught up would be the opposite error, and is
 	// how an operator watching a node fall behind would see nothing.
-	for _, row := range e.NativeStatus(t.Context()) {
+	for _, row := range e.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}

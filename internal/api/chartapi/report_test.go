@@ -470,8 +470,8 @@ func TestARenamedSeatIsAskedAboutByItsIdentity(t *testing.T) {
 
 // AND A NODE WITH NO DIRECTORY DOES NOT GUESS.
 //
-// A node that started with no active company holds no identity rows at all, so
-// asking it would produce false for every seat in the company, which renders as
+// A surface given no directory has nobody to ask, so reading the absence as an
+// answer would produce false for every seat in the company, which renders as
 // "nobody works here" on a screen an operator is about to act on. The absence
 // of a reader is the third value, and the arm is SKIPPED — with nothing
 // counted, since it is one fact about the node rather than one per seat.

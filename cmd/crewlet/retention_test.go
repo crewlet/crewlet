@@ -917,7 +917,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	// the command takes one there and nowhere else.
 	node := []string{"-url", base}
 	deadline := time.Now().Add(20 * time.Second)
-	for !e.NativeHydrated() {
+	for !e.StateLogHydrated() {
 		if time.Now().After(deadline) {
 			t.Fatal("the node never established its state log")
 		}

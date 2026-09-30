@@ -207,6 +207,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
+	if opts.Nodes == nil {
+		opts.Nodes = &fakeNodeGate{}
+	}
 	if opts.AuthEvents == nil {
 		opts.AuthEvents = silentAudit{}
 	}
@@ -250,7 +253,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Sources.Holders",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
-		"AuthEvents", "Inbox",
+		"AuthEvents", "Inbox", "Nodes",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

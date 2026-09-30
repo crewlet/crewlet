@@ -663,6 +663,17 @@ func testCipher(t *testing.T, ring secrets.Keyring) secrets.Cipher {
 // a node that has drained the log is proved against.
 func (r *writeRig) end(ctx context.Context) (uint64, error) { return r.log.End(ctx) }
 
+// anybody asks [iamdomain.Reader.AnyPerson] as the engine does: against the
+// log's end, read first.
+func (r *writeRig) anybody(t *testing.T) (bool, error) {
+	t.Helper()
+	end, err := r.end(t.Context())
+	if err != nil {
+		t.Fatalf("read the log's end: %v", err)
+	}
+	return r.reader(t).AnyPerson(t.Context(), end)
+}
+
 // behind is the log's end as a node that has not applied its tail sees it —
 // the state every node is in for a moment after it boots: records past what
 // this rig drained.

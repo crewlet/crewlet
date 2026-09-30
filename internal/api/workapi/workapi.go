@@ -57,7 +57,13 @@
 //   - 403 — a credential this node knows, refused by the authority table.
 //   - 503 with Retry-After — this node could not decide (the identity estate
 //     or the chart could not be read), or could not establish the outcome.
-//   - 404 — the item, page or comment does not exist, or a purge destroyed it.
+//   - 503 `no_active_revision` — this node has not been handed a company yet,
+//     so neither half is up; the Retry-After is the reconcile poll that
+//     brings it one, and the halves come up with its first revision, with no
+//     restart ([Options.Halves]).
+//   - 404 — the item, page or comment does not exist, or a purge destroyed it;
+//     and `no_route`, in the mux's own bytes, for a route of a half this
+//     company does not run — its tracker or its wiki is a vendor's.
 //   - 409 — somebody changed it since it was read: a stale version, a title
 //     taken, a race lost.
 //   - 422 — the domain refused the write on its own rules; the detail is its
@@ -182,12 +188,13 @@ type PageStore interface {
 		authority pages.CommentAuthority) (pages.Written, error)
 }
 
-// Options configure the surface.
-type Options struct {
-	// Work and Pages are the deps the tools are built from — the SAME
-	// values the operator's assistant is served from. Their Actor and
-	// Authorize fields are this surface's to set and are overwritten: the
-	// actor is the request's principal, and the decision is [Options.Chart]'s.
+// Halves are the two halves this surface serves, as one request finds them:
+// the deps the tools are built from — the SAME values the operator's
+// assistant is served from — and the two writers for the gestures no tool
+// makes. Their Actor and Authorize fields are this surface's to set and are
+// overwritten: the actor is the request's principal, and the decision is
+// [Options.Chart]'s.
+type Halves struct {
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
 
@@ -198,6 +205,42 @@ type Options struct {
 	// PageStore is the knowledge base's writer, for the verbs no tool makes.
 	// Nil leaves the pages half unserved.
 	PageStore PageStore
+}
+
+// servesWork reports whether these halves hold the tracker's whole surface.
+func (h Halves) servesWork() bool {
+	return h.Work.Reader != nil && h.Work.Writer != nil && h.Tracker != nil
+}
+
+// servesPages reports whether these halves hold the knowledge base's.
+func (h Halves) servesPages() bool {
+	return h.Pages.Reader != nil && h.Pages.Writer != nil && h.PageStore != nil
+}
+
+// Options configure the surface.
+type Options struct {
+	// Halves is what this surface serves NOW, read at the start of every
+	// request — never once, when the surface is built.
+	//
+	// # Why a source and not the halves themselves
+	//
+	// A node's tracker and knowledge base come up with its FIRST COMPANY, and
+	// a node may meet that at an apply, long after its API is serving: taken
+	// once, the halves of a node that booted with no company were none, and
+	// the surface served nothing until a restart — the one gap left in "a
+	// company can be bootstrapped live". Read per request, the routes are
+	// mounted once and serve the moment the halves exist.
+	//
+	// It answers FALSE for a node that has not been handed a company yet,
+	// and every route then answers `503 no_active_revision` with the
+	// reconcile poll as its Retry-After ([httpjson.NoActiveRevision]): the
+	// halves are coming, and a client that waits is served. A half the
+	// company does not run — its tracker or its wiki is a vendor's — is
+	// answered as the route's absence would be ([httpjson.NoRoute]), since
+	// no wait brings it: switching a backend takes a restart.
+	//
+	// REQUIRED.
+	Halves func() (Halves, bool)
 
 	// Chart is what every decision on this surface reads, routes and tools
 	// alike.
@@ -212,39 +255,29 @@ type Options struct {
 
 // Service is the surface.
 type Service struct {
-	workOn, pagesOn bool
-
-	workDeps  builtin.WorkDeps
-	pageDeps  builtin.PageDeps
-	tracker   func(actor builtin.Actor) TrackerWriter
-	store     PageStore
+	halves    func() (Halves, bool)
 	chart     authz.Chart
 	authorize builtin.Authorizer
 }
 
-// New builds the surface, or nil when there is nothing to serve.
+// New builds the surface.
 //
-// NIL RATHER THAN AN EMPTY SURFACE, on opsmcp's rule: a company on Jira and
-// Confluence has no native tracker or knowledge base, and routes that exist
-// to answer 503 read as an outage where absent ones match the configuration.
+// ALWAYS A SURFACE, never the nil an empty one used to be: which halves exist
+// is a question a request asks ([Options.Halves]), and a route of a half the
+// company does not run answers in the very bytes its absence would have.
 func New(opts Options) (*Service, error) {
+	if opts.Halves == nil {
+		return nil, errors.New("workapi: no halves: every route reads the " +
+			"tracker and knowledge base this node serves as the request finds them")
+	}
 	if opts.Chart == nil {
 		return nil, errors.New("workapi: no chart: every decision here reads " +
 			"one — pass authz.NoChart to decide on grants alone")
 	}
-	s := &Service{
-		workDeps: opts.Work, pageDeps: opts.Pages,
-		tracker: opts.Tracker, store: opts.PageStore, chart: opts.Chart,
+	return &Service{
+		halves: opts.Halves, chart: opts.Chart,
 		authorize: builtin.Decide(opts.Chart),
-	}
-	s.workOn = opts.Work.Reader != nil && opts.Work.Writer != nil &&
-		opts.Tracker != nil
-	s.pagesOn = opts.Pages.Reader != nil && opts.Pages.Writer != nil &&
-		opts.PageStore != nil
-	if !s.workOn && !s.pagesOn {
-		return nil, nil
-	}
-	return s, nil
+	}, nil
 }
 
 // Routes registers the surface on a mux.
@@ -253,6 +286,9 @@ func New(opts Options) (*Service, error) {
 // reader of the matched pattern — see the package doc for which routes decide
 // the verb there and which admit on a precondition and decide once they have
 // read the row.
+//
+// BOTH HALVES ARE MOUNTED, whatever this node serves when it is built: each
+// route asks for its half when a request arrives ([Service.on]).
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, s.guard).Refusing(s.refuse)
 	var failures []error
@@ -261,13 +297,56 @@ func (s *Service) Routes(mux authz.Mux) error {
 			failures = append(failures, err)
 		}
 	}
-	if s.workOn {
-		s.workRoutes(mount)
-	}
-	if s.pagesOn {
-		s.pageRoutes(mount)
-	}
+	s.workRoutes(mount)
+	s.pageRoutes(mount)
 	return errors.Join(failures...)
+}
+
+// served is the surface for ONE request: the Service's decisions, over the
+// halves this node served when the request arrived.
+//
+// AN ARGUMENT, not state the Service keeps: two requests arriving either side
+// of a node's first company must each be served by the halves they found, and
+// a handler that re-read them part of the way through could decide a verb on
+// one half and write through another.
+type served struct {
+	*Service
+	Halves
+}
+
+// servedHandler is one route's body, over the halves its request found.
+type servedHandler func(*served, http.ResponseWriter, *http.Request)
+
+// on is the handler a route is mounted with: it reads the halves this node
+// serves now and hands the route's body the request's own, or answers why it
+// cannot — `503 no_active_revision` where the halves are not up yet, and the
+// route's absence where this company does not run the half at all.
+func (s *Service) on(serves func(Halves) bool, h servedHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		halves, up := s.halves()
+		if !up {
+			httpjson.NoActiveRevision(w, httpjson.Detail{
+				"detail": "this node has not been handed a company yet, so the " +
+					"company's own tracker and knowledge base are not running " +
+					"here; they come up with its first revision, with no restart",
+			})
+			return
+		}
+		if !serves(halves) {
+			httpjson.NoRoute(w, r)
+			return
+		}
+		h(&served{Service: s, Halves: halves}, w, r)
+	}
+}
+
+// onWork and onPages mount a route of one half.
+func (s *Service) onWork(h servedHandler) http.HandlerFunc {
+	return s.on(Halves.servesWork, h)
+}
+
+func (s *Service) onPages(h servedHandler) http.HandlerFunc {
+	return s.on(Halves.servesPages, h)
 }
 
 // mounter is the one registration shape both halves use.
@@ -517,10 +596,10 @@ const (
 // args are the tool call's own arguments: the tracker's tools bind every id
 // they derive to them themselves, and the knowledge base is handed the key
 // bound to them ([pageKey]), because it binds nothing.
-func (s *Service) deps(key string, args map[string]any) (builtin.WorkDeps,
+func (s *served) deps(key string, args map[string]any) (builtin.WorkDeps,
 	builtin.PageDeps) {
 
-	work, kb := s.workDeps, s.pageDeps
+	work, kb := s.Work, s.Pages
 	work.Actor = func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
 		actor, err := builtin.PrincipalActor(ctx, turn)
 		seed(&actor, key)
@@ -600,7 +679,7 @@ func (s *Service) pageActor(w http.ResponseWriter, r *http.Request, key string,
 }
 
 // call runs one tool as the request's principal and answers its receipt.
-func (s *Service) call(w http.ResponseWriter, r *http.Request, verb string,
+func (s *served) call(w http.ResponseWriter, r *http.Request, verb string,
 	args map[string]any) {
 
 	if !noOperationArg(w, args) {

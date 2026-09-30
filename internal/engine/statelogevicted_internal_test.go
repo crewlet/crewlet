@@ -56,7 +56,7 @@ func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	t.Helper()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
 	spec := running.domain.Stream()

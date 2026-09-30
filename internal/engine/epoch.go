@@ -211,9 +211,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// check [New] makes of the company a node boots with. A boot was the
 	// only place it ran, so a node that booted unconfigured accepted a first
 	// company whose state log — which every company runs, for its org chart
-	// if for nothing else — would live on an in-memory stream: now that an
-	// apply brings the state log up, that revision would start the
-	// unrecoverable state the rule exists to refuse.
+	// if for nothing else — lives on an in-memory stream.
 	if err := config.CheckTiers(e.boot, cfg); err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
 			"detail", "the revision was refused before anything changed; "+
@@ -250,36 +248,38 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 				"this node still serves the previous epoch")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
-	// THE NATIVE RUNTIME, on a node whose FIRST company this is — before
-	// the tools, which are registered only where its halves exist, before
-	// the inbound edge, whose parsers include its own, and before the
-	// company is composed with this node's chart, which that runtime is what
-	// reads. See [Engine.startNativeFor], and the bug it fixes.
+	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
+	// tools, which are registered only where they exist, and before the
+	// inbound edge, whose parsers include their own. The state log, the org
+	// chart and the identity estate they ride are the CORE's, running since
+	// boot on every node, so this starts only what depends on the company.
+	// See [Engine.startNativeFor], and the bug it fixes.
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the state log, the org chart and the identity estate "+
-				"could not be started for this node's first company; the "+
-				"previous epoch is still current")
+			"detail", "the native tracker and knowledge base could not be "+
+				"started for this node's first company; the previous epoch is "+
+				"still current")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	if startedNative {
 		applied = append(applied, "native")
-		// THE CHART THIS NODE'S BOOT WOULD HAVE PUBLISHED, now that it can:
-		// the document's own chart where the chart is empty, and a chart
-		// an offline import staged — in the boot's order and for its
-		// reasons ([New]), because this IS that boot, one company later.
-		// Each is a no-op where there is nothing to publish (a stored
-		// revision carries no chart), and neither refuses the apply: a
-		// seed that did not land is warned about exactly as at boot.
+		// THE CHART THIS NODE'S BOOT WOULD HAVE SEEDED, now that there is
+		// a company file to seed it from: the document's own chart, where
+		// the chart is empty — in the boot's order and for its reasons
+		// ([New]), because this IS that boot, one company later. A no-op
+		// where there is nothing to publish (a stored revision carries no
+		// chart, and a chart an offline import staged was redeemed at
+		// boot, which the seed then finds), and it does not refuse the
+		// apply: a seed that did not land is warned about exactly as at
+		// boot.
 		e.seedChartAtBoot(ctx, next.Config)
-		e.publishStagedChartAtBoot(ctx)
-		// AND THE CHART VIEW OVER THE ROWS IT JUST OPENED, so the
-		// composition below wires every stage against this node's own
-		// chart rather than a roster of nobody. Its derivation only: what
-		// follows a published company runs once this one is, below. A
-		// failure is not a refusal, for the boot's own reason — the view's
-		// triggers are running now and retry it.
+		// AND THE CHART VIEW OVER WHAT IT JUST WROTE, so the composition
+		// below wires every stage against this node's own chart rather
+		// than one read before the seed. Its derivation only: what follows
+		// a published company runs once this one is, below. A failure is
+		// not a refusal, for the boot's own reason — the view's triggers
+		// are running and retry it.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := e.rebuildChart(ctx); err != nil {
 			log.WarnContext(ctx, "chart_view_unbuilt_at_apply", "error", err,
@@ -295,7 +295,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	view := e.epoch.withView(next)
 	// THE SANDBOX RUNTIME, on a node that has never run one and whose
 	// revision reaches a sandbox cell — before the tools for the reason the
-	// native runtime is: run_sandbox and an agent-mode executor are offered
+	// native halves are: run_sandbox and an agent-mode executor are offered
 	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
 	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
 	if err != nil {

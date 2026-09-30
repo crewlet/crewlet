@@ -69,7 +69,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if stats.CreatedAt.IsZero() {
 		t.Fatal("the broker reports no creation instant, so nothing below can be checked")
 	}
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -121,7 +121,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running = e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	running = e2.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -157,7 +157,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	// AND THE OPERATOR SURFACE SAYS SO rather than reporting a caught-up
 	// loop: a stopped applier has a lag of zero, and the row read as ready
 	// for as long as nobody looked at the error beside the number.
-	for _, row := range e2.NativeStatus(t.Context()) {
+	for _, row := range e2.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
@@ -187,7 +187,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -247,7 +247,7 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -320,7 +320,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Errorf("reads on a rebuilt log refuse with %q, want %q", code,
 			statelog.RefuseWrongStream)
 	}
-	for _, row := range e.NativeStatus(t.Context()) {
+	for _, row := range e.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
@@ -373,14 +373,14 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		back.Close(context.Background())
 		t.Fatalf("New: %v", err)
 	}
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-evict-x", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		e.Stop(context.Background())
 		back.Close(context.Background())
 		t.Fatalf("the write before the restore: %+v, %v", res, err)
 	}
-	end := endOf(t, e.native.Load().log.Domain(tracker.Domain{}.Name()))
+	end := endOf(t, e.core.Load().log.Domain(tracker.Domain{}.Name()))
 	e.Stop(context.Background())
 
 	// THE CHECKPOINT MOVES PAST THE LOG'S END, and nothing else does: the
@@ -409,7 +409,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running := e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e2.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -455,7 +455,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	}
 
 	// AND THE READS, FROM THE SAME FACT, and the operator surface with them.
-	health, err := e2.native.Load().log.health(t.Context(), running)
+	health, err := e2.core.Load().log.health(t.Context(), running)
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Error("the health names a rebuild — this stream kept its instant, and " +
 			"an operator told it was recreated looks for a delete that never happened")
 	}
-	for _, row := range e2.NativeStatus(t.Context()) {
+	for _, row := range e2.StateLogStatus(t.Context()) {
 		if row.Name != (tracker.Domain{}).Name() {
 			continue
 		}
@@ -637,7 +637,7 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend — there is no "+

@@ -131,10 +131,11 @@ type Health struct {
 	// [IdentityReady], [IdentityUnclaimed] or [IdentityUnknown]. See
 	// [Identity] for why it is on this body.
 	//
-	// ABSENT on a node that holds no identity rows: one that started with
-	// no active company has an empty estate for want of any records, and
-	// `unclaimed` from it would be the one false line this body carries.
-	// Like [Health.Consistency], IT DOES NOT MOVE Status — a company
+	// ABSENT where the API was given no [Identity] seam — a suite about
+	// something else. `crewlet run` always wires it, over the identity
+	// estate every node applies from boot, company or none, so a node with
+	// no company answers for the fleet's estate. Like
+	// [Health.Consistency], IT DOES NOT MOVE Status — a company
 	// waiting for its first person is not a node that should leave
 	// rotation.
 	Identity string `json:"identity,omitempty"`
@@ -273,7 +274,7 @@ func (a *App) health(ctx context.Context) Health {
 }
 
 // identityOf fills in whether the company has its first person, leaving it out
-// on a node that holds no identity rows.
+// where the API was given nothing to ask.
 func (a *App) identityOf(ctx context.Context, body *Health) {
 	if a.identity == nil {
 		return

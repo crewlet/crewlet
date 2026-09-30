@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -93,9 +94,12 @@ func serveAPI(
 // because a fleet member is built off the test's goroutine, where t.Fatalf
 // ends only that goroutine and leaves the test running with a nil member.
 //
-// What it leaves out is what a case here never reaches: the operator MCP
-// surface and the native tracker and knowledge readers, each of which has its
-// own suite.
+// THE NATIVE SOURCES ARE NOT COPIED EITHER — the read surface's board, pages
+// and search and the operator's assistant — and for the same cure: each is
+// built by internal/api ([api.NativeSources], [api.NativeOperator]) over the
+// engine, resolved per request, because a node meets its tracker and knowledge
+// base at its first company, which a node that booted with none meets after
+// its API is serving.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -145,14 +149,16 @@ func wireAPI(
 		return fail("config surface", err)
 	}
 	// AND THE IDENTITY ESTATE'S HALF of a rotation, as cmd/crewlet passes it:
-	// nil where the node runs no identity estate, never a typed nil.
-	secretOpts := secretsapi.Options{
+	// the engine's core, which every node holds from boot, company or none —
+	// so an engine without one is refused, never handed over as a typed nil.
+	keyring := e.IdentityKeyring()
+	if keyring == nil {
+		return fail("secret surface", errors.New("the engine opened no identity estate"))
+	}
+	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
-	}
-	if keyring := e.IdentityKeyring(); keyring != nil {
-		secretOpts.Identity = keyring
-	}
-	secretSurface, err := secretsapi.New(secretOpts)
+		Identity: keyring,
+	})
 	if err != nil {
 		return fail("secret surface", err)
 	}
@@ -233,6 +239,7 @@ func wireAPI(
 		return fail("chart surface", err)
 	}
 
+	workSource, pageSource, searchSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
@@ -240,6 +247,8 @@ func wireAPI(
 		Inbox:        e,
 		Chart:        chartSurface,
 		QueueBackend: backends.Queue.Backend(),
+		// THE OPERATOR'S ASSISTANT, as cmd/crewlet mounts it.
+		Operator: api.NativeOperator(e),
 		Sources: queries.Sources{
 			Events:  backends.Store.Events(),
 			Company: company,
@@ -248,6 +257,9 @@ func wireAPI(
 			// WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES, as cmd/crewlet
 			// hands it: api.New refuses a missing one by name.
 			Holders: e,
+			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
+			// them.
+			Work: workSource, Pages: pageSource, WorkSearch: searchSource,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
@@ -256,6 +268,9 @@ func wireAPI(
 		Retention: backends.Fleet,
 		Capacity:  e,
 		Backup:    copier,
+		// THE EVICTION GATE, which every node holds from boot and api.New
+		// requires.
+		Nodes: e.NodeGate(),
 		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
 		// reports every refused bearer and every token use through it.
 		AuthEvents: e.AuthEvents(),

@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -83,9 +82,8 @@ type App struct {
 
 	// nodes installs and lifts the eviction gate. A RECORD on every
 	// identity-claiming log rather than a coordination write, which is why
-	// it is a different seam from the one above. Nil where the process ran
-	// no state log when this surface was built, whose gate routes answer
-	// `503 no_state_log` for as long as it serves.
+	// it is a different seam from the one above. Never nil: see
+	// [Options.Nodes].
 	nodes NodeGate
 
 	// capacity drives a stream's byte ceiling through the maintenance
@@ -126,7 +124,7 @@ type App struct {
 // "There is no such work item" is how a duplicate gets filed.
 //
 // The engine already decides this, twice and for two purposes — seat admission
-// (`engine.Engine.NativeHydrated`, which is the strict form of
+// (`engine.Engine.StateLogHydrated`, which is the strict form of
 // `statelog.Health.Established`) and whether the seats it holds may STAY
 // (`engine.Engine.SeatsServiceable`). This seam is the same question asked for
 // TRAFFIC, so the node that will not admit a seat also stops being sent work
@@ -155,16 +153,18 @@ type EstateFloor func(ctx context.Context) (ok bool, refusal string)
 // sign-in that is failing — and /health is the one surface an install with
 // nobody in it can reach: it is a probe, exempt from the guard, and before the
 // first person there is no credential but the deployment's own to present
-// anywhere else. It is one EXISTS over the node's own rows, which a probe does
-// not notice.
+// anywhere else. It is one EXISTS over the node's own rows, and one read of
+// the identity log's end beside it, neither of which a probe notices.
 //
 // A CONTEXT and a live read, for [EstateFloor]'s reason: the answer changes
 // the moment the first person lands, and a cached one would go on telling an
 // operator to invite somebody who has already signed in.
 //
-// THREE-VALUED: an error is this node unable to read its identity estate,
-// which is `unknown` and never `unclaimed` — told there is nobody, a dashboard
-// would offer an empty company's guidance to one that has started.
+// THREE-VALUED: an error is this node unable to read its identity estate, or
+// holding rows that have not applied the whole identity log — every node
+// applies it from boot, so a node that has just joined a fleet holds none for
+// a moment — which is `unknown` and never `unclaimed`: told there is nobody, a
+// dashboard would offer an empty company's guidance to one that has started.
 type Identity func(ctx context.Context) (enrolled bool, err error)
 
 // authMounter is the /auth surface's own mount, over a mux it can NAME.
@@ -242,12 +242,13 @@ type Options struct {
 	SeatBindings auth.SeatBindings
 
 	// SeatHeld reports whether a seat is one somebody in the identity
-	// directory is bound to, or nil on a node with no directory to ask.
+	// directory is bound to, or nil where there is no directory to ask.
 	//
-	// NIL SKIPS THE QUESTION rather than answering it. A node that started
-	// with no active company holds no identity rows at all, and reading
-	// that as "nobody holds any seat" would report every human seat in the
-	// company as unheld on /health — see [chartapi.Held].
+	// NIL SKIPS THE QUESTION rather than answering it, which is what a
+	// suite has: reading the absence as "nobody holds any seat" would
+	// report every human seat in the company as unheld on /health — see
+	// [chartapi.Held]. `crewlet run` always wires it: every node runs the
+	// identity estate from boot, one that has met no company included.
 	SeatHeld chartapi.Held
 
 	// Resolve is this node's own `${VAR}` resolution, which the continuous
@@ -259,10 +260,11 @@ type Options struct {
 
 	// Sessions turns a browser's cookie into the person holding it.
 	//
-	// OPTIONAL, and nil is the same posture that leaves [Options.Auth]
-	// nil: a node that started with no active company holds no identity
-	// directory, mints no cookie and therefore has none to resolve. Tier
-	// A tokens remain the whole of authentication there.
+	// OPTIONAL, and nil is what a suite about something else has: Tier A
+	// tokens are then the whole of authentication. `crewlet run` always
+	// wires it, beside [Options.Auth], on every node — the identity estate
+	// is the engine's core and runs from boot, so a node with no company
+	// signs its first person in like any other.
 	Sessions *auth.Sessions
 
 	// Tokens turns a machine token — a person's own access token or a
@@ -270,12 +272,8 @@ type Options struct {
 	// See [auth.Tokens].
 	//
 	// NIL IS AN API THAT RESOLVES NO MACHINE TOKEN, which is what a suite
-	// has. `crewlet run` ALWAYS builds one over its engine, including on a
-	// node that started with no active company and so holds no identity
-	// directory: there the read answers "this node cannot say", so a
-	// token minted elsewhere in the fleet is a 503 a pipeline retries
-	// rather than a 401 that tells it a credential that is fine is
-	// broken.
+	// has. `crewlet run` ALWAYS builds one over its engine's directory,
+	// which every node holds from boot.
 	Tokens *auth.Tokens
 
 	// AuthEvents is where the guard counts a refused credential and
@@ -371,14 +369,15 @@ type Options struct {
 	// registered on it, so the gate holding the exemption list against
 	// the registration could not read one half of what it is about.
 	//
-	// OPTIONAL, unlike the four above, and its absence is a real posture
-	// rather than a wiring mistake: a node that started with no active
-	// company holds no identity directory to sign anybody in against, and
-	// the honest shape is a sign-in surface that is ABSENT rather than one
-	// that answers 503 to every attempt. ABSENT MEANS A NIL INTERFACE,
-	// never a nil *authapi.Service inside one, which [New] cannot tell
-	// from a surface that is there — [HumanSurfaces.Mount] is the one
-	// place the conversion happens.
+	// OPTIONAL, unlike the four above, for a suite about something else:
+	// `crewlet run` mounts one on every node, since every node holds the
+	// identity directory from boot, company or none — it used to be absent
+	// on a node that had met no company, which was the node its first
+	// person had to sign in on. An API with none serves no /auth at all
+	// rather than one that answers 503 to every attempt. ABSENT MEANS A
+	// NIL INTERFACE, never a nil *authapi.Service inside one, which [New]
+	// cannot tell from a surface that is there — [HumanSurfaces.Mount] is
+	// the one place the conversion happens.
 	Auth authMounter
 
 	// Chart serves /chart and /company/export, normally a
@@ -394,12 +393,10 @@ type Options struct {
 	// IAM serves /iam, normally an iamapi.Service: the company's identity
 	// directory.
 	//
-	// OPTIONAL, and nil is the same posture that leaves [Options.Auth]
-	// nil — a node that started with no active company holds no identity
-	// directory to serve — so the routes are ABSENT rather than refusing.
-	// A 404 says this node does not hold the directory; a 503 would say it
-	// does and is broken, and send an operator looking for an outage on
-	// the node least able to help.
+	// OPTIONAL, and nil — the routes ABSENT — is what a suite about
+	// something else has. `crewlet run` always mounts it: every node holds
+	// the directory from boot, and a node with nobody in its company is
+	// exactly where the first person is invited.
 	IAM guardedMounter
 
 	// Work serves the human write surface over the company's own tracker
@@ -407,9 +404,12 @@ type Options struct {
 	// and the operator's assistant hold, as routes a person reaches from a
 	// browser or a script.
 	//
-	// OPTIONAL, and nil is a company on Jira and Confluence — there is no
-	// native tracker or knowledge base to write — so the routes are ABSENT
-	// rather than refusing, for [Options.IAM]'s reason. It is also where
+	// OPTIONAL, and nil — the routes ABSENT — is what a suite about
+	// something else has. `crewlet run` always mounts it, and the surface
+	// reads the halves it serves PER REQUEST: a node's tracker and
+	// knowledge base come up with its first company, which it may meet
+	// long after this API started serving, and a route of a half the
+	// company does not run answers as its absence would. It is also where
 	// the one operation nothing undoes, destroying a work item, lives: it
 	// had a route of its own beside the retention gestures, with an
 	// operator check written there, and that check was the second answer
@@ -442,15 +442,22 @@ type Options struct {
 	Bridge *mcpbridge.Bridge
 
 	// Operator is the company's own tracker and knowledge base, served to
-	// an operator's AI assistant over MCP. Nil serves none and the route
-	// is ABSENT, which is the honest shape for a company on Jira and
-	// Confluence: there is nothing here it could manage.
+	// an operator's AI assistant over MCP, as each request finds them —
+	// [NativeOperator]. Nil serves none and the route is ABSENT, which is
+	// what a suite about something else has.
+	//
+	// A SOURCE, not a server, for [Options.Work]'s reason: the catalogue
+	// is the native halves', which a node meets at its first company. A
+	// request before that answers `503 no_active_revision`, and one to a
+	// node whose company keeps nothing this surface could manage — its
+	// tracker and its wiki both a vendor's — answers as the route's
+	// absence would.
 	//
 	// GUARDED, like every route the exemption list does not name. It
 	// writes to the company, and the credential's own name is what lands
 	// on each record as the author — so a request with no principal has
 	// nobody to attribute the write to.
-	Operator *opsmcp.Server
+	Operator OperatorSource
 
 	// Budgets is the fleet's token counter. Supplied separately from
 	// Sources.Budget, which is the READ half: a reset is an operator
@@ -463,8 +470,13 @@ type Options struct {
 	// operator's backup acknowledgement.
 	Retention retentionWriter
 
-	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
-	// readmit routes answering `503 no_state_log`.
+	// Nodes installs and lifts the eviction gate.
+	//
+	// REQUIRED. It was optional, and nil answered `503 no_state_log`, for
+	// a node that had met no company and so ran no state log. There is no
+	// such node: the state log is the engine's core, started on every node
+	// at boot, so every engine this API runs beside holds a gate — and a
+	// nil is a wiring mistake, not a narrower node.
 	Nodes NodeGate
 
 	// Capacity drives a stream's byte ceiling.
@@ -477,11 +489,11 @@ type Options struct {
 	// Identity says whether anybody is enrolled, for /health. See
 	// [Identity].
 	//
-	// Optional, and nil is a real configuration: a node that holds no
-	// identity rows at all — one that started with no active company —
-	// has nothing honest to say about who is in the company, so its
-	// health body leaves the field out rather than calling the company
-	// unclaimed.
+	// Optional, and nil is what a suite about something else has: with
+	// nothing to ask about who is in the company, the health body leaves
+	// the field out rather than calling the company unclaimed. `crewlet
+	// run` always wires it, over the identity estate every node runs from
+	// boot.
 	Identity Identity
 
 	// Estate answers whether this node's replicated estate can be read at
@@ -776,6 +788,7 @@ func (o Options) missing() error {
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"Backup", o.Backup == nil},
+		{"Nodes", o.Nodes == nil},
 		{"AuthEvents", o.AuthEvents == nil},
 	} {
 		if field.absent {
@@ -1228,6 +1241,17 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeBadParams)
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.Is(err, errNoCompanyYet):
+		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
+		// every surface answers that node — the webhook edge, the human
+		// write surface, the operator's assistant — with the reconcile
+		// poll as the wait, rather than as the state log's `unavailable`,
+		// whose hint is the scale of a node catching up. See native.go.
+		httpjson.NoActiveRevision(w, httpjson.Detail{
+			"detail": "this node has not been handed a company yet, so the " +
+				"company's own tracker and knowledge base are not running " +
+				"here; they come up with its first revision, with no restart",
+		})
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503, because this node could not serve the question and nothing
 		// about the request was wrong: it is behind the log and draining,

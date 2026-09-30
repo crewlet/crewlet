@@ -130,11 +130,11 @@ type Options struct {
 	// secrets.active_key_id. Required for the same reason.
 	ActiveKeyID string
 
-	// Identity is the identity estate's half of a rotation. NIL-ABLE, and
-	// the absence is a real state rather than a fault: a node that started
-	// with no active company runs no identity estate, so it has none to
-	// count or move — and every answer here SAYS so (`identity: null`)
-	// rather than reading as an estate with nothing under an old key.
+	// Identity is the identity estate's half of a rotation. NIL-ABLE for a
+	// suite about the store alone — `crewlet run` always hands one over,
+	// since every node holds the identity estate from boot — and every
+	// answer made without one SAYS so (`identity: null`) rather than
+	// reading as an estate with nothing under an old key.
 	Identity Identity
 
 	// Now is injectable so a test can pin a row's timestamp.
@@ -210,7 +210,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 // step to every one of those; what an operator does need is to see a rotation
 // reach it, so `engine_keys` says how many there are under each keyring key and
 // nothing else. `identity_values` is the same count for the identity estate's
-// sealed values, by key — null on a node that runs no identity estate.
+// sealed values, by key — null where this surface was given no identity
+// estate, which `crewlet run` never does: every node holds one from boot.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {

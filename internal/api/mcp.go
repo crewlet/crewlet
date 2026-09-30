@@ -82,15 +82,18 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 		servedOverHTTPS(bootstrap))
 }
 
-// mountOperator registers the operator MCP surface, or says why it did not.
+// mountOperator registers the operator MCP surface over its source.
 //
-// A nil server is an ordinary configuration — a company on Jira and
-// Confluence has no native record for this to manage — and the route is then
-// ABSENT rather than answering 404 from a registered handler: an endpoint
-// that exists and lists no tools reads to an operator as broken, while one
-// that is not there matches what their config says.
-func (a *App) mountOperator(mux *http.ServeMux, server *opsmcp.Server) {
-	if server == nil {
+// A nil source is a surface this API serves none of — a suite about something
+// else — and the route is then ABSENT. Otherwise the route is mounted ONCE and
+// every request reads the source ([Options.Operator]): a node that has not met
+// its company answers `503 no_active_revision`, one whose company keeps
+// nothing this surface could manage answers as the route's absence would —
+// an endpoint that exists and lists no tools reads to an operator as broken —
+// and anything else is served by the server over the catalogue the request
+// found.
+func (a *App) mountOperator(mux *http.ServeMux, source OperatorSource) {
+	if source == nil {
 		return
 	}
 	// EVERY METHOD, so the transport's own verbs reach the SDK: this surface
@@ -98,10 +101,24 @@ func (a *App) mountOperator(mux *http.ServeMux, server *opsmcp.Server) {
 	// DELETE for a session with its own `405 Allow: POST`, which a client
 	// reads as "no stream offered" — a mux 405 would read as a route
 	// registered wrong. See opsmcp's Handler.
-	mux.Handle(opsmcp.Path, server.Handler())
+	mux.Handle(opsmcp.Path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server, up := source()
+		switch {
+		case !up:
+			httpjson.NoActiveRevision(w, httpjson.Detail{
+				"detail": "this node has not been handed a company yet, so the " +
+					"company's own tracker and knowledge base are not running " +
+					"here; they come up with its first revision, with no restart",
+			})
+		case server == nil:
+			httpjson.NoRoute(w, r)
+		default:
+			server.Handler().ServeHTTP(w, r)
+		}
+	}))
 	log.Info("operator_mcp_mounted", "path", opsmcp.Path,
-		"tools", server.Tools(),
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
-			"an api.auth.tokens entry")
+			"an api.auth.tokens entry or a person's own credential; the tools "+
+			"it lists are the ones this node serves when it asks")
 }

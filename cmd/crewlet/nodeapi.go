@@ -9,10 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -118,47 +115,6 @@ func nodeAPIToken(surface string) (string, error) {
 			"by `crewlet iam token`", surface, apiTokenEnv)
 }
 
-// seatHeld reports whether a seat is one somebody in the identity directory is
-// bound to, or nil on a node with no directory to ask.
-//
-// # The nil says nobody can be asked, which is not "nobody holds it"
-//
-// A node that started with no active company runs no native runtime and holds
-// no identity rows at all, and read as a directory that would answer "not
-// held" for every seat in the company — which reads as "nobody works here".
-// That is the shape of the bug the continuous report already had for a
-// different reason: it read a seat's declared contact block, so a company
-// managing its people elsewhere saw every human seat reported.
-//
-// So such a node supplies NO ANSWER, and the report skips that arm rather than
-// answering it. A directory that is there and cannot be read answers an error,
-// which leaves the arm undecided the same way. See [chartapi.Held].
-func seatHeld(e *engine.Engine) chartapi.Held {
-	reader := e.IAM()
-	if reader == nil {
-		return nil
-	}
-	// THE CALLER'S CONTEXT, which the seam carries: every evaluation is
-	// made for a request — /chart/check, /health, the seat listing — so a
-	// read for one that has gone has nobody to answer.
-	return reader.HeldSeats
-}
-
-// identityOf is what /health says about whether anybody is enrolled, or nil
-// where this node holds no identity rows — one that started with no active
-// company — which the health body answers by leaving the field out rather than
-// calling the company unclaimed.
-//
-// NIL AND NEVER A FUNCTION OVER A NIL READER, which would panic on the first
-// probe.
-func identityOf(e *engine.Engine) api.Identity {
-	reader := e.IAM()
-	if reader == nil {
-		return nil
-	}
-	return reader.AnyPerson
-}
-
 // announceUnclaimed says, once at boot, what an operator does next with a
 // company nobody is enrolled in yet: invite its first person under a Tier A
 // token, exactly as every later person is invited.
@@ -166,15 +122,12 @@ func identityOf(e *engine.Engine) api.Identity {
 // A LOG LINE AND NOTHING ELSE. There is no founder route and no code to
 // write: the Tier A token every serving node already requires is the
 // credential a company has before it has anybody, so the first invitation is
-// an ordinary one. An estate this node cannot read says nothing here — /health
-// answers `unknown` for it — rather than telling an operator to invite
-// somebody into a company that may have started.
-func announceUnclaimed(ctx context.Context, e *engine.Engine) {
-	reader := e.IAM()
-	if reader == nil {
-		return
-	}
-	enrolled, err := reader.AnyPerson(ctx)
+// an ordinary one. An estate this node cannot read, or has not caught up with,
+// says nothing here — /health answers `unknown` for it — rather than telling an
+// operator to invite somebody into a company that may have started: at boot a
+// node joining a fleet has usually applied none of its identity log yet.
+func announceUnclaimed(ctx context.Context, anybody func(context.Context) (bool, error)) {
+	enrolled, err := anybody(ctx)
 	if err != nil || enrolled {
 		return
 	}

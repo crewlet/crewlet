@@ -266,13 +266,13 @@ func (s personBlindSource) Blinder(ctx context.Context) (*iamdomain.Blinder, err
 // — see [iamdomain.CoversLog]. A node behind the log, or holding a record it
 // retained, may simply not have the blinded rows yet.
 func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
-	n := e.native.Load()
-	if n == nil || n.log == nil {
-		return fmt.Errorf("%w: this engine runs no native runtime, so it has no "+
+	c := e.core.Load()
+	if c == nil || c.log == nil {
+		return fmt.Errorf("%w: this engine runs no core runtime, so it has no "+
 			"identity rows to tell whether %s was ever in use",
 			iamdomain.ErrNoBlindKey, iamdomain.BlindKeyName)
 	}
-	return judgeBlindKeyMint(ctx, e.IdentityLogEnd, n.iamReader.HoldsBlinds)
+	return judgeBlindKeyMint(ctx, e.IdentityLogEnd, c.iamReader.HoldsBlinds)
 }
 
 // IdentityLogEnd is the identity log's last sequence, as the broker holds it
@@ -285,12 +285,12 @@ func (e *Engine) mayMintPersonBlindKey(ctx context.Context) error {
 // from the applier's checkpoint, is the one that moved past a record the node
 // retained and called the node current while that record's rows were missing.
 func (e *Engine) IdentityLogEnd(ctx context.Context) (uint64, error) {
-	n := e.native.Load()
-	if n == nil || n.log == nil {
-		return 0, errors.New("engine: this engine runs no native runtime, so " +
-			"there is no identity log to read the end of")
+	s, err := e.stateLogOf()
+	if err != nil {
+		return 0, fmt.Errorf("engine: there is no identity log to read the end "+
+			"of: %w", err)
 	}
-	running := n.log.Domain(iamdomain.Domain{}.Name())
+	running := s.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
 		return 0, errors.New("engine: the identity log is not running on this node")
 	}

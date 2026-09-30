@@ -155,7 +155,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
 	}
-	waitUntil(t, 30*time.Second, "the node to admit seats again", e.NativeHydrated)
+	waitUntil(t, 30*time.Second, "the node to admit seats again", e.StateLogHydrated)
 	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
@@ -225,7 +225,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	// flush, and a Stop inside that flush says nothing about the window.
 	// An in-process broker answers a flush in microseconds.
 	time.Sleep(200 * time.Millisecond)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	started := time.Now()
 	s.Stop()
 	took := time.Since(started)
@@ -308,7 +308,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running = s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -418,7 +418,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			quietHeartbeat(s)
 			if c.below {
 				pushBelowTheFloor(t, e, q)
@@ -491,7 +491,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			quietHeartbeat(s)
 			running, at, _, last := appendPastTheNode(t, e, q)
 			artefact := filepath.Join(t.TempDir(), "artefact.db")
@@ -713,8 +713,8 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
-	s := e.native.Load().log
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -765,7 +765,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	t.Parallel()
 	e, back, _ := bootRejoinNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	quietHeartbeat(s)
 	s.haltAppliers()
 	if err := back.Store.CloseReplicated(); err != nil {

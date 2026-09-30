@@ -142,7 +142,7 @@ type retention struct {
 	rates map[string]*uint64
 
 	// bindings follows the seat bindings this node's chart does not hold,
-	// for `iam_binding_dangling`. Nil on an engine with no native runtime.
+	// for `iam_binding_dangling`. Nil on an engine with no core runtime.
 	// See bindings.go.
 	bindings *bindingWatch
 
@@ -239,7 +239,8 @@ func (r *retention) clock() time.Time {
 
 // RetentionReport answers "is the log being trimmed, and what is stopping it"
 // from outside the package — the question `crewlet retention status` exists
-// for. The bool is false on a node running no state log, which is a real
+// for. The bool is false on a node that armed no trim — a maintenance-mode
+// node, which publishes nothing, its trim included — and that is a real
 // deployment and NOT a report of zeros: a document full of zeros would claim a
 // fleet whose log is perfectly trimmed.
 func (e *Engine) RetentionReport(ctx context.Context) (statelog.Report, bool) {

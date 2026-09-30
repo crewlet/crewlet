@@ -679,17 +679,27 @@ func sightingIn(ctx context.Context, tx *sql.Tx, column, token string,
 // kind and may do nothing — and a REMOVED person is nobody, their row a
 // tombstone. A SUSPENDED one is somebody: the company has started.
 //
-// # "Nobody" is an absence, and a retained record can hide somebody
+// # "Nobody" is an absence, and it is proved against the log's end
 //
-// SETTLED IS NOT APPLIED: this node's checkpoint moves past a record it
-// RETAINS — a newer build's, one signed under a keyring key it was not
-// restarted with — without writing its rows, so an enrolment it retained reads
-// here exactly like nobody. So "nobody" is said only where no retained record
-// could be the somebody — the whole deferral index, because a retained
-// enrolment may be in any bucket — and otherwise this is the unknown arm,
-// [statelog.ErrUnavailable], which clears once the node applies what it holds.
-// "Somebody" needs no such proof: a row is a fact.
-func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
+// Two ways a node's rows read as nobody while the company has somebody, and
+// "nobody" is said only where neither holds — otherwise this is the unknown
+// arm, wrapping [statelog.ErrUnavailable] (and, for the first, [ErrNotCurrent]),
+// which clears on its own. "Somebody" needs no such proof: a row is a fact.
+//
+//   - BEHIND. end is the identity log's last sequence, read BEFORE this call
+//     (the engine's IdentityLogEnd), and rows that have not applied through it
+//     cannot say the enrolment is not among what they are missing
+//     ([CoversLog]). Every node applies this log from boot, company or none,
+//     so a node that has just joined a fleet with people in it is exactly the
+//     node whose empty rows would otherwise tell /health and its own boot log
+//     that nobody works there — and tell an operator to invite a founder into
+//     a company that has one.
+//   - RETAINED. Settled is not applied: this node's checkpoint moves past a
+//     record it RETAINS — a newer build's, one signed under a keyring key it
+//     was not restarted with — without writing its rows, so an enrolment it
+//     retained reads here exactly like nobody. So the whole deferral index is
+//     asked too, because a retained enrolment may be in any bucket.
+func (r *Reader) AnyPerson(ctx context.Context, end uint64) (bool, error) {
 	var held bool
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `
@@ -699,6 +709,16 @@ func (r *Reader) AnyPerson(ctx context.Context) (bool, error) {
 		}
 		if held {
 			return nil
+		}
+		prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+		if err != nil {
+			return fmt.Errorf("iamdomain: read how much of the log these rows "+
+				"hold: %w", err)
+		}
+		if behind := CoversLog(prefix, end); behind != nil {
+			return fmt.Errorf("%w: %w — so its empty directory may be a "+
+				"company whose first person it has not applied yet",
+				statelog.ErrUnavailable, behind)
 		}
 		retained, err := deferredFor(ctx, tx, "")
 		if err != nil {

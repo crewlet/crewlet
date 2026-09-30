@@ -49,8 +49,8 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	s := e.native.Load().log
-	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	s := e.core.Load().log
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.StateLogHydrated)
 
 	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the
 	// floor this case forges. `PutFloor` replaces a domain's floor

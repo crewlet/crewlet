@@ -322,8 +322,8 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 // mints its own operation, is what publishes that file.
 func (e *Engine) seedGesture(revision string) string {
 	var created time.Time
-	if n := e.native.Load(); n != nil && n.log != nil {
-		if running := n.log.Domain(chart.Domain{}.Name()); running != nil {
+	if s, err := e.stateLogOf(); err == nil {
+		if running := s.Domain(chart.Domain{}.Name()); running != nil {
 			created = running.runner.StreamCreatedAt()
 		}
 	}

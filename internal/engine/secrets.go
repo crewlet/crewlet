@@ -230,9 +230,10 @@ func (e *Engine) secretSnapshot(ctx context.Context) (map[string]string, error) 
 // is signed and verified under it, and the document a peer fetches from the
 // coordination store is authenticated by its seal. Tier A refuses a file
 // without one ([config.Bootstrap.Validate]); this is the engine's own
-// refusal, for a Bootstrap that did not come through that door, and it is
-// what an unconfigured node — which starts no state log, and so meets no
-// signer — would otherwise boot past. A keyring that is configured but broken
+// refusal, for a Bootstrap that did not come through that door, and it runs
+// BEFORE anything opens, so a keyless node leaves no store file behind — the
+// unconfigured node included, which used to start no state log until it had a
+// company and so met no signer at all. A keyring that is configured but broken
 // fails here too, naming the key.
 func openCipher(boot *config.Bootstrap) (secrets.Cipher, error) {
 	if boot == nil {
@@ -368,8 +369,8 @@ func (e *Engine) PersonSealer() *iamdomain.Sealer {
 }
 
 // IdentityKeyring is the identity estate's half of a keyring rotation, or nil
-// on an engine with no native runtime (one that started with no active company,
-// or one a test built by hand).
+// on an engine with no core runtime — one a test built by hand, since every
+// engine [New] builds opens the identity estate at boot, company or none.
 //
 // ITS OWN HALF, because a store write cannot do it: the same keyring seals
 // every person's name, address and second factor, in rows derived from the

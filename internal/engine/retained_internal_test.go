@@ -55,7 +55,7 @@ func retentionNode(t *testing.T) (*Engine, config.Bootstrap) {
 		t.Fatalf("boot a node: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	if n := e.native.Load(); n == nil || n.iamReader == nil || n.log == nil {
+	if c := e.core.Load(); c == nil || c.iamReader == nil || c.log == nil {
 		t.Fatal("the node runs no identity domain")
 	}
 	return e, b
@@ -84,7 +84,7 @@ func retain(t *testing.T, e *Engine, b config.Bootstrap, why retentionCause,
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	running := e.native.Load().log.Domain(domain.Name())
+	running := e.core.Load().log.Domain(domain.Name())
 	seq, _, err := running.log.Append(t.Context(), rec.Subject.Wire(), "", nil,
 		signer.Seal(payload))
 	if err != nil {

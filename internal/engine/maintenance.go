@@ -106,69 +106,64 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// per-node job list: the duty is a singleton, so exactly one
 		// node's list runs per tick, and a node with no backend
 		// contributes nothing rather than an empty sweep.
-		if n := e.native.Load(); n != nil {
-			if n.writer != nil {
-				// THE TRACKER'S OWN JOBS, and they are a different
-				// kind of thing from a sweep: its records are a log
-				// and nothing deletes them here. They finish work a
-				// crash left half-done — a re-spread walk, an
-				// abandoned merge or cross-project move, a one-sided
-				// dependency — and tell
-				// the tasks a close unblocked. Every one is GATED,
-				// so a tick with nothing to do costs one indexed
-				// read.
-				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
-					DB: e.backends.Store, Writer: n.writer,
-					NodeID: n.nodeID,
-					// AND THE LEAD MAP, for the one repair whose
-					// commit carries a wake. Read per call against
-					// the epoch current when the job runs, for the
-					// reason every other live seam here is: the duty
-					// outlives a revision, and a captured map would
-					// route by an org chart that has since moved.
-					Leads: liveLeads{engine: e},
-				})...)
-				// AND THE INBOX'S OWN SWEEP, which is a range
-				// delete rather than a repair and is therefore
-				// PER NODE — `tracker_notifications` is
-				// Divergent, so each node holds its own rows and
-				// a singleton would tidy one and let the rest
-				// grow for ever. Contributed here rather than in
-				// tracker.Jobs because that list runs under the
-				// duty and this one must not.
-				jobs = append(jobs, tracker.InboxJobs(
-					e.backends.Store, e.inboxRetention())...)
-			}
+		core := e.core.Load()
+		if n := e.native.Load(); n != nil && n.writer != nil && core != nil {
+			// THE TRACKER'S OWN JOBS, and they are a different kind of
+			// thing from a sweep: its records are a log and nothing
+			// deletes them here. They finish work a crash left half-done
+			// — a re-spread walk, an abandoned merge or cross-project
+			// move, a one-sided dependency — and tell the tasks a close
+			// unblocked. Every one is GATED, so a tick with nothing to do
+			// costs one indexed read.
+			jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+				DB: e.backends.Store, Writer: n.writer,
+				NodeID: core.nodeID,
+				// AND THE LEAD MAP, for the one repair whose commit
+				// carries a wake. Read per call against the epoch
+				// current when the job runs, for the reason every other
+				// live seam here is: the duty outlives a revision, and a
+				// captured map would route by an org chart that has
+				// since moved.
+				Leads: liveLeads{engine: e},
+			})...)
+			// AND THE INBOX'S OWN SWEEP, which is a range delete rather
+			// than a repair and is therefore PER NODE —
+			// `tracker_notifications` is Divergent, so each node holds
+			// its own rows and a singleton would tidy one and let the
+			// rest grow for ever. Contributed here rather than in
+			// tracker.Jobs because that list runs under the duty and
+			// this one must not.
+			jobs = append(jobs, tracker.InboxJobs(
+				e.backends.Store, e.inboxRetention())...)
+		}
+		if core != nil {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
-			// registered domain. Every `<domain>_ops` migration says
-			// the table is swept and ships the index a range delete
-			// needs, and nothing swept them: a row per applied record,
-			// kept for ever, on every node. PER NODE rather than under
-			// the singleton, because each node owns its own copy —
-			// see [maintenance.StatelogJobs].
-			if n.log != nil {
-				jobs = append(jobs, maintenance.StatelogJobs(
-					n.log.opsLedgers())...)
-			}
-			// THE ORG CHART'S SEALED VALUES THAT NOTHING NAMES ANY
-			// MORE — a cleared address, a token replaced by the
-			// operator's own reference, a removed seat's credentials.
-			// A FLEET job: the store is one shared bucket, and the
-			// judgement is proved from this node's rows against the
-			// chart log before anything is deleted. See
-			// chartsweep.go.
-			if n.chartReader != nil && e.backends.Fleet != nil {
-				jobs = append(jobs, e.chartSealJob())
-			}
-			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
-			// absence is a consequence rather than an omission. Its
-			// three passes were a change retention, a revision prune
-			// and an orphan collector; the prune now RIDES EACH
-			// COMMIT as the record's own list of retired versions, the
-			// orphans cannot occur because a create is one
-			// transaction, and the history is a Replicated table an
-			// applier owns — so deleting a row here on one node's own
-			// authority is exactly what the identity claim forbids.
+			// registered domain — the CORE's, so they are swept from
+			// boot on every node, a node with no company included: its
+			// identity and chart logs are written from the first
+			// invitation. Every `<domain>_ops` migration says the table
+			// is swept and ships the index a range delete needs, and
+			// nothing swept them: a row per applied record, kept for
+			// ever, on every node. PER NODE rather than under the
+			// singleton, because each node owns its own copy — see
+			// [maintenance.StatelogJobs].
+			jobs = append(jobs, maintenance.StatelogJobs(core.log.opsLedgers())...)
+			// THE ORG CHART'S SEALED VALUES THAT NOTHING NAMES ANY MORE
+			// — a cleared address, a token replaced by the operator's
+			// own reference, a removed seat's credentials. A FLEET job:
+			// the store is one shared bucket, and the judgement is
+			// proved from this node's rows against the chart log before
+			// anything is deleted. See chartsweep.go.
+			jobs = append(jobs, e.chartSealJob())
+			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
+			// is a consequence rather than an omission. Its three passes
+			// were a change retention, a revision prune and an orphan
+			// collector; the prune now RIDES EACH COMMIT as the record's
+			// own list of retired versions, the orphans cannot occur
+			// because a create is one transaction, and the history is a
+			// Replicated table an applier owns — so deleting a row here
+			// on one node's own authority is exactly what the identity
+			// claim forbids.
 		}
 	}
 	if e.mailboxes != nil {
@@ -210,9 +205,10 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 //
 // FOR A NODE'S FIRST COMPANY, and nothing else: [Engine.startMaintenance]
 // reads its job list once, and on a node that booted unconfigured "once" was
-// before there was a native runtime to contribute the operation ledgers, the
-// tracker's repairs and the inbox sweep, or a company to state the
-// conversation horizon. The old worker stops — its in-flight tick waited out
+// before there were native halves to contribute the tracker's repairs and the
+// inbox sweep, or a company to state the conversation horizon. The operation
+// ledgers and the chart's sealed values are the core's, and were in the list
+// from boot. The old worker stops — its in-flight tick waited out
 // — before the new one is built, so two sweeps never run at once.
 //
 // A node that does not publish never started a sweep, and does not start one

@@ -35,8 +35,9 @@ import (
 // within its own apply. The change feed would be the wrong carrier for the same
 // reason it is for the chart view: it relays a record to one node, and the rest
 // would go on attributing a suspended person's messages to their seat. The
-// chart-only reading is left to an engine with no native runtime at all, which
-// is `crewlet validate` and a test.
+// chart-only reading is left to an engine with no core runtime at all, which
+// is `crewlet validate` and a test — every engine [New] builds opens the
+// directory at boot, a node with no company included.
 //
 // # Serialised, because two triggers now rebuild one pointer
 //
@@ -81,8 +82,8 @@ func (d iamDirectory) SeatHolders(ctx context.Context) ([]notify.Holder, error) 
 // is a directory with no applier behind it, which the net reads on every tick;
 // only a test hands one over.
 //
-// Called once, by the native runtime. An engine with no native runtime never
-// calls it and keeps the chart-only behaviour.
+// Called once, by the core runtime at boot. An engine with no core runtime
+// never calls it and keeps the chart-only behaviour.
 func (e *Engine) useDirectory(dir notify.Directory, at func() statelog.Position) {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
