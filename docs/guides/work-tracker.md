@@ -270,11 +270,18 @@ Every one of these writes carries an operation id derived from what it records
 completion or a completion collected again after a failed resume can never
 count anything twice.
 
-**Recording never fails the turn.** A spend that could not be written is
-logged as `turn_spend_unrecorded` (or `turn_spend_unknown` when the write's
-outcome is not known) and the turn stands. A turn that ends after its task was
-purged records nothing: the purge destroyed the counters it would have added
-to.
+**Recording never fails the turn.** A turn's own spend that could not be
+written — or whose write's outcome is not known — is logged as
+`turn_spend_unrecorded` and the turn stands. A coding run's spend is the one
+that waits: the collect holds the run, without failing it, until the write is
+confirmed, and collects it again, because the collect is the only moment that
+spend is ever written (see [budgets](../concepts/code-sandbox.md#budgets)). It
+waits only on an answer a retry can change. A turn or a run that ends after its
+task was purged records nothing: the purge destroyed the counters it would have
+added to. And a write the answering node's operation ledger cannot vouch for —
+the operation predates what that ledger may have lost — is logged as
+`turn_spend_unvouched` and not repeated, since that node answers every repeat
+the same way.
 
 ## The catalogue
 

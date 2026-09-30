@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
@@ -119,16 +120,34 @@ func (e *Engine) recordTaskSpend(ctx context.Context, t turnTelemetry,
 	record := turnRecordOf(t, spend, res, time.Now().UTC())
 	opID := statelog.DeriveOpID(t.startedAt, "turn_spend", t.runID,
 		strconv.Itoa(t.resumedRound))
-	writeSpend(ctx, halves, opID, record)
+	// TELEMETRY NEVER FAILS THE WORK, and a turn's own spend has no retry:
+	// the turn is over when it is written. So a spend that could not be
+	// recorded is logged and whatever spent it stands.
+	if err := writeSpend(ctx, halves, opID, record); err != nil {
+		log.WarnContext(ctx, "turn_spend_unrecorded", "handle", record.Seat,
+			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
+			"error", err.Error(),
+			"detail", "the work stands; what it cost may be missing from the "+
+				"task's spend, and every other spend surface still counts it")
+	}
 }
 
-// writeSpend writes one spend record as the seat it belongs to, bounded and
-// logged — see the file's doc.
-//
-// TELEMETRY NEVER FAILS THE WORK, so a spend that could not be recorded is
-// logged and whatever spent it stands.
+// errSpendUnknown is a spend write whose outcome never came back: it may
+// have landed. The operation id makes a repeat of it count it at most once.
+var errSpendUnknown = errors.New("engine: whether the task's spend counts this " +
+	"is unknown")
+
+// writeSpend writes one spend record as the seat it belongs to, bounded — see
+// the file's doc — and answers whether its fate is SETTLED: nil when the
+// task's spend counts it, or never can because the task was purged
+// ([tracker.ErrNoTask], which no retry changes), or when no repeat here can
+// learn whether it does (an unknown the answering node's ledger cannot vouch
+// for); and an error when whether it counts is not known YET — the write
+// refused for now, unanswered, or answered with an outcome a repeat resolves —
+// which a repeat under the same operation id settles without counting it
+// twice.
 func writeSpend(ctx context.Context, halves trackerSeams, opID string,
-	record tracker.TurnRecord) {
+	record tracker.TurnRecord) error {
 
 	writer := halves.as(builtin.Actor{
 		Handle: record.Seat, Kind: tracker.AuthorAgent, TurnID: record.TurnID,
@@ -137,40 +156,59 @@ func writeSpend(ctx context.Context, halves trackerSeams, opID string,
 	defer cancel()
 	result, err := writer.RecordTurn(bounded, opID, record)
 	switch {
+	case err == nil && result.Outcome == statelog.OutcomeUnknown && result.Unvouched:
+		// UNKNOWN FOR GOOD HERE, unlike a lost acknowledgement: the ledger
+		// of the node that answered cannot vouch for an operation minted
+		// before it may have lost rows, and answers every repeat of it the
+		// same way until the record reaches it — which, if the first
+		// attempt never landed, it never does. Repeating it is a caller
+		// held for ever on telemetry, so the fate is settled as unknown
+		// and said by name.
+		minted, _ := statelog.OpMintedAt(opID)
+		log.WarnContext(ctx, "turn_spend_unvouched", "handle", record.Seat,
+			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
+			"minted_at", minted,
+			"detail", "the data node that answered cannot say whether the task's "+
+				"spend counts this: its operation ledger may have lost rows from "+
+				"before the operation was minted, and holds none for it; every "+
+				"other spend surface still counts it")
+		return nil
+	case errors.Is(err, tracker.ErrNoTask):
+		log.InfoContext(ctx, "turn_spend_task_purged", "handle", record.Seat,
+			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
+			"detail", "the task was purged, so nothing it cost can be recorded "+
+				"against it; every other spend surface still counts it")
+		return nil
 	case err != nil:
-		log.WarnContext(ctx, "turn_spend_unrecorded", "handle", record.Seat,
-			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
-			"error", err.Error(),
-			"detail", "the work stands; what it cost is missing from the task's "+
-				"spend, and every other spend surface still counts it")
+		return err
 	case result.Outcome == statelog.OutcomeUnknown:
-		log.WarnContext(ctx, "turn_spend_unknown", "handle", record.Seat,
-			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
-			"detail", "whether the task's spend counts this is unknown — the "+
-				"operation id means a repeat could never count it twice")
+		return errSpendUnknown
 	}
+	return nil
 }
 
 // runSpender records a collected coding run's tokens on the task its turn is
 // spent on — [sandbox.Spender], and see the file's doc.
 type runSpender struct{ engine *Engine }
 
-// RunSpent implements [sandbox.Spender].
+// RunSpent implements [sandbox.Spender]: nil when the run's spend is on its
+// task or never can be, and an error — which holds the collect for its retry —
+// when whether it is on it is not known yet ([writeSpend]).
 func (s runSpender) RunSpent(ctx context.Context, run sandbox.PendingRun,
-	result sandbox.Result) {
+	result sandbox.Result) error {
 
 	if run.WorkItem == "" || result.InputTokens+result.OutputTokens == 0 {
-		return
+		return nil
 	}
 	halves, ok := s.engine.trackerHalves()
 	if !ok {
-		return
+		return nil
 	}
 	// THE LAUNCH, at the instant its row was written: every retry of the
 	// completion collects the same finished job from the same row, and a
 	// second job in the same turn is a new launch with spend of its own.
 	opID := statelog.DeriveOpID(run.CreatedAt, "run_spend", run.TurnID, run.LaunchID)
-	writeSpend(ctx, halves, opID, runRecordOf(run, result))
+	return writeSpend(ctx, halves, opID, runRecordOf(run, result))
 }
 
 // runRecordOf is one collected run's spend as the tracker's turn record

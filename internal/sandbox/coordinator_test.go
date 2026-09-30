@@ -158,10 +158,13 @@ func (s *resumeSpy) failWith(err error) {
 	s.err = err
 }
 
-// spendSpy records every collected run the coordinator offered as spent.
+// spendSpy records every collected run the coordinator offered as spent, and
+// answers each with err: nil for a record whose fate is settled, an error for
+// one whose outcome is not known yet.
 type spendSpy struct {
 	mu      sync.Mutex
 	offered []spentRun
+	err     error
 }
 
 type spentRun struct {
@@ -169,10 +172,17 @@ type spentRun struct {
 	result Result
 }
 
-func (s *spendSpy) RunSpent(_ context.Context, run PendingRun, result Result) {
+func (s *spendSpy) RunSpent(_ context.Context, run PendingRun, result Result) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.offered = append(s.offered, spentRun{run: run, result: result})
+	return s.err
+}
+
+func (s *spendSpy) failWith(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
 }
 
 func (s *spendSpy) runs() []spentRun {
@@ -2377,28 +2387,407 @@ func TestARunThatReportedNothingPublishesNoUsage(t *testing.T) {
 	}
 }
 
-// A USAGE RECORD THAT COULD NOT BE PUBLISHED DOES NOT STOP THE RUN.
+// A USAGE RECORD THAT COULD NOT BE PUBLISHED HOLDS THE COLLECT FOR ITS RETRY.
 //
-// The record is telemetry, like the charge beside it: the run is collected and
-// resumed either way, and handing the claim back over a publish would repeat a
-// resume that already had everything it needed.
-func TestAnUnpublishedUsageRecordDoesNotStopTheRun(t *testing.T) {
+// The record's only retry is the collect's own, and a collect was retried only
+// when the resume failed: a publish that failed and a resume that then
+// succeeded left the run's spend on the budgets and the task and missing from
+// every token view for good. So the run is neither resumed nor parked until the
+// record is out. The claim goes back carrying the charge that did land, the
+// waiter's next poll fires the completion again — whatever became of the
+// broker's own redelivery — and the retry publishes the SAME record, at the
+// first collect's instant, charging nothing a second time.
+func TestAnUnpublishedUsageRecordHoldsTheCollectForItsRetry(t *testing.T) {
 	rig := newCoordRig(t)
-	rig.launch("t1")
+	launched := rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 300})
-	rig.queue.mu.Lock()
-	rig.queue.err = errors.New("the broker is away")
-	rig.queue.mu.Unlock()
+	usageTopic := topics.Event(types.SandboxRunUsage{}.EventType())
+	rig.queue.refuse(usageTopic, errors.New("the broker is away"))
+	collected := rig.now
+
 	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a collect whose usage record was never published was acked")
 	}
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("resumed %d time(s) with the run's usage recorded nowhere", len(calls))
+	}
+	held := rig.get("t1")
+	if held.Status != StatusRunning {
+		t.Fatalf("status = %q, want the run handed back to %q for the retry",
+			held.Status, StatusRunning)
+	}
+	// EVERY STEP WAS MADE, the ones that landed recorded on the hand-back.
+	if !held.Charged || !held.CollectedAt.Equal(collected) {
+		t.Fatalf("the hand-back recorded charged=%v collected at %v, want the charge "+
+			"that landed and the first collect's instant %v", held.Charged,
+			held.CollectedAt, collected)
+	}
+	if offered := rig.spent.runs(); len(offered) != 1 {
+		t.Fatalf("the held collect offered the task its spend %d time(s), want once", len(offered))
+	}
+	if !rig.coordinator.SeatHeldBySandbox("swe") {
+		t.Fatal("the seat took new turns while its run waited for the retry")
+	}
+
+	// THE RETRY, from the waiter's next poll, with the broker back and the
+	// clock moved on. THE RESUMED TURN HAS ITS SEAT: the hand-back counted
+	// the run back into the seat's holding set only if this node's count no
+	// longer held it — which it still did, the claim never having reached a
+	// resume — so the retry's resume gives the seat back once. Counted twice,
+	// the seat stayed parked through the whole resumed turn, every delivery
+	// to it waiting on a run that was already being continued.
+	rig.queue.refuse(usageTopic, nil)
+	rig.now = rig.now.Add(time.Minute)
+	parked := false
+	rig.resumer.during = func(context.Context, PendingRun) {
+		parked = rig.coordinator.SeatHeldBySandbox("swe")
+	}
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("the next poll fired %d completion(s) for the held run, want 1", fired)
+	}
+	rig.deliverControl(t)
 	if calls := rig.resumer.calls(); len(calls) != 1 {
-		t.Fatalf("resumed %d times, want 1 — the publish decided the run's fate", len(calls))
+		t.Fatalf("resumed %d time(s), want once the record was out", len(calls))
+	}
+	if parked {
+		t.Fatal("the seat stayed held by the run while the retry resumed its turn")
+	}
+	usages := rig.usages()
+	if len(usages) != 1 {
+		t.Fatalf("published %d usage record(s), want the one the retry published", len(usages))
+	}
+	if u := usages[0]; u.event.ID != usageEventID(launched) || !u.event.Timestamp.Equal(collected) ||
+		u.payload.TotalTokens != 300 {
+		t.Fatalf("the retry published %s at %v for %d tokens, want %s at the first "+
+			"collect's %v for 300", u.event.ID, u.event.Timestamp, u.payload.TotalTokens,
+			usageEventID(launched), collected)
 	}
 	if got := rig.accountant.total(); got != 300 {
-		t.Errorf("charged %d, want the run's 300", got)
+		t.Fatalf("charged %d, want the run's 300 once across the hold", got)
 	}
+	rig.finished("t1")
+}
+
+// A CHARGE THE COUNTER NEVER ANSWERED HOLDS THE COLLECT FOR ITS RETRY.
+//
+// Only a charge that moved the counter is recorded, so the retry offers it
+// again — and a retry came only when the resume failed: a charge unanswered
+// and a resume that succeeded were never offered again, and the run's spend
+// was in every token view and never on the budgets. It must land BEFORE the
+// turn goes on, too: a resumed turn's next round is refused against the figure
+// that includes the run, and a counter short by the whole run admits it. The
+// hold is not a lost turn either: the retry resumes it once the counter
+// answers.
+func TestAnUnansweredChargeHoldsTheCollectForItsRetry(t *testing.T) {
+	rig := newCoordRig(t)
+	launched := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.accountant.set(false, errors.New("counter unreachable"))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a collect whose charge the counter never answered was acked")
+	}
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("resumed %d time(s) on a counter short by the run", len(calls))
+	}
+	held := rig.get("t1")
+	if held.Status != StatusRunning || held.Charged {
+		t.Fatalf("the hand-back left %q charged=%v, want %q with no charge recorded",
+			held.Status, held.Charged, StatusRunning)
+	}
+	if usages := rig.usages(); len(usages) != 1 || usages[0].event.ID != usageEventID(launched) {
+		t.Fatalf("the held collect published %+v, want the run's usage record", usages)
+	}
+
+	rig.accountant.set(false, nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d, want the retry to count the 1000 the first pass did not", got)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d time(s), want once the charge landed", len(calls))
+	}
+	rig.finished("t1")
+}
+
+// A SPEND THE TASK NEVER CONFIRMED HOLDS THE COLLECT FOR ITS RETRY, which
+// offers the same launch again — the operation derived from it counts the run
+// on the task once whatever the first attempt did.
+func TestAnUnconfirmedTaskSpendHoldsTheCollectForItsRetry(t *testing.T) {
+	rig := newCoordRig(t)
+	launched := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 500})
+	rig.spent.failWith(errors.New("no data node answered"))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a collect whose task spend was never confirmed was acked")
+	}
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("resumed %d time(s) with the task's spend unconfirmed", len(calls))
+	}
+	if held := rig.get("t1"); held.Status != StatusRunning || !held.Charged {
+		t.Fatalf("the hand-back left %q charged=%v, want %q with the charge that landed",
+			held.Status, held.Charged, StatusRunning)
+	}
+
+	rig.spent.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	offered := rig.spent.runs()
+	if len(offered) != 2 {
+		t.Fatalf("offered the task its spend %d time(s), want the retry to offer it again", len(offered))
+	}
+	for i, o := range offered {
+		if o.run.LaunchID != launched.LaunchID || !o.run.CreatedAt.Equal(launched.CreatedAt) {
+			t.Fatalf("offer %d named launch %s of %v, want %s of %v — what its "+
+				"operation is derived from", i+1, o.run.LaunchID, o.run.CreatedAt,
+				launched.LaunchID, launched.CreatedAt)
+		}
+	}
+	if got := rig.accountant.total(); got != 500 {
+		t.Fatalf("charged %d, want the run's 500 once across the hold", got)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d time(s), want once the spend was confirmed", len(calls))
+	}
+}
+
+// A QUESTION IS NOT ASKED UNTIL WHAT THE RUN SPENT IS RECORDED. A run that
+// parks is resumed by a person's answer, which collects nothing, so a park
+// that went ahead of an unpublished record lost it exactly as a resume did —
+// and a question already asked cannot be asked again by the retry, since a
+// parked run is not what a completion claims.
+func TestARunIsNotParkedUntilWhatItSpentIsRecorded(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?",
+		AskTo: "requester", InputTokens: 300})
+	usageTopic := topics.Event(types.SandboxRunUsage{}.EventType())
+	rig.queue.refuse(usageTopic, errors.New("the broker is away"))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a collect whose usage record was never published was acked")
+	}
+	if got := rig.get("t1").Status; got != StatusRunning {
+		t.Fatalf("status = %q, want the run held in %q rather than parked", got, StatusRunning)
+	}
+	if asked := rig.questions(); len(asked) != 0 {
+		t.Fatalf("asked %+v with the run's usage recorded nowhere", asked)
+	}
+	if stopped := rig.stoppedTurns(); len(stopped) != 0 {
+		t.Fatalf("reported %v as stopped for a run still held", stopped)
+	}
+
+	rig.queue.refuse(usageTopic, nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if got := rig.get("t1").Status; got != StatusAwaiting {
+		t.Fatalf("status = %q, want the retry to park the run on its question", got)
+	}
+	if asked := rig.questions(); len(asked) != 1 {
+		t.Fatalf("asked %d question(s), want the one", len(asked))
+	}
+	if usages := rig.usages(); len(usages) != 1 || usages[0].payload.TotalTokens != 300 {
+		t.Fatalf("published %+v, want the run's 300 tokens once", usages)
+	}
+}
+
+// AND A HELD COLLECT WHOSE CLAIM CANNOT BE GIVEN BACK ENDS THE RUN, as every
+// hand-back that cannot be written does: a row left in the claim is picked up
+// by nothing, so the run is settled — box reclaimed, loss announced, stop
+// reported — rather than destroyed in silence.
+func TestAHeldCollectWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 300})
+	rig.queue.refuse(topics.Event(types.SandboxRunUsage{}.EventType()),
+		errors.New("the broker is away"))
+	rig.coordinator.pending = &refusingStore{
+		inner: rig.pending, refuse: []string{"ReleaseClaim"},
+	}
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted = %v, want nil: the run is settled, so a redelivery would "+
+			"find nothing to claim", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("resumed %d time(s) a run whose spend was not recorded", len(calls))
+	}
+	rig.finished("t1")
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Errorf("killed %v, want the paused box of a turn nothing can resume reclaimed", killed)
+	}
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureClaimStranded ||
+		failed[0].Detail != collectUnaccountedDetail {
+		t.Fatalf("announced %+v, want one %q saying what was lost", failed,
+			types.SandboxFailureClaimStranded)
+	}
+	if got := rig.stoppedTurns(); len(got) != 1 || got[0] != "swe/t1" {
+		t.Errorf("reported %v as stopped, want the turn whose claim is stuck", got)
+	}
+}
+
+// A HELD COLLECT WHOSE CLAIM DOES NOT GO BACK STILL TRIES TO RECORD WHAT ITS
+// RUN SPENT — whichever way it did not go back.
+//
+// The hold's retry comes from the run's row, and two things leave the row
+// carrying none: a hand-back that cannot be written, which ends the run, and a
+// claim the run had already MOVED ON from — the seat's next owner reaped it
+// while the collect held it — where the release answers "nothing to hand
+// back" without an error. The second read as a hand-back: the completion was
+// sent back to a redelivery that found nothing to claim, and the spend this
+// pass held was dropped with no line saying so. So both make the spend once
+// more before the delivery is let go: the usage record and the task's spend
+// need nothing from the coordination store, so a broker back by then publishes
+// the record the first pass could not, and a broker still away leaves it
+// unrecorded — logged by name, since nothing can retry it — rather than
+// silently gone. A charge that landed on the first pass is not made twice, and
+// one the counter never answered is offered once more; and the line says
+// whether the charge is on the budgets as the LAST attempt left it, because a
+// line saying it was not would send an operator to add by hand a run the
+// budgets already hold.
+func TestAHeldCollectWhoseClaimDoesNotGoBackTriesItsSpendOnceMore(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// movedOn is the seat's next owner reaping the run while its collect
+		// is held, so the release finds no claim to hand back; otherwise the
+		// release is refused and the run is ended here.
+		movedOn bool
+		// brokerBack is the broker answering again by the last attempt.
+		brokerBack bool
+		// chargeLost is the first pass's charge going unanswered, and the
+		// last attempt's landing.
+		chargeLost bool
+		wantUsages int
+	}{
+		{name: "ended, the broker back by then", brokerBack: true, wantUsages: 1},
+		{name: "ended, the broker still away", wantUsages: 0},
+		{name: "ended, the broker away and the charge answered only now", chargeLost: true},
+		{name: "moved on, the broker back by then", movedOn: true, brokerBack: true, wantUsages: 1},
+		{name: "moved on, the broker still away", movedOn: true},
+		{name: "moved on, the broker away and the charge answered only now",
+			movedOn: true, chargeLost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			rig := newCoordRig(t)
+			launched := rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 300})
+			usageTopic := topics.Event(types.SandboxRunUsage{}.EventType())
+			rig.queue.refuse(usageTopic, errors.New("the broker is away"))
+			if tc.chargeLost {
+				rig.accountant.set(false, errors.New("counter unreachable"))
+			}
+			// The seat's next owner: a coordinator of its own over the same
+			// store, taking the seat under a newer lease.
+			successor, err := NewCoordinator(CoordinatorOptions{
+				Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+				Resume: &resumeSpy{},
+			})
+			if err != nil {
+				t.Fatalf("NewCoordinator: %v", err)
+			}
+			var store PendingStore = &refusingStore{inner: rig.pending, refuse: []string{"ReleaseClaim"}}
+			if tc.movedOn {
+				store = rig.pending
+			}
+			rig.coordinator.pending = &releaseHook{
+				PendingStore: store,
+				before: func() {
+					if tc.brokerBack {
+						rig.queue.refuse(usageTopic, nil)
+					}
+					rig.accountant.set(false, nil)
+					if tc.movedOn {
+						if err := successor.RecoverSeat(t.Context(), "swe", "node-b", 1); err != nil {
+							t.Fatalf("the next owner's recovery: %v", err)
+						}
+					}
+				},
+			}
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted = %v, want nil: no retry of this claim is coming, "+
+					"so a redelivery would find nothing to claim", err)
+			}
+			rig.finished("t1")
+			if calls := rig.resumer.calls(); len(calls) != 0 {
+				t.Fatalf("resumed %d time(s) a run whose spend was not recorded", len(calls))
+			}
+			// ONE ENDING, ANNOUNCED BY WHOEVER ENDED IT: this node's for a
+			// hand-back it could not write, the next owner's for a run it
+			// reaped — never a second one from here naming a reason the run
+			// did not end for.
+			wantReason, wantDetail := types.SandboxFailureClaimStranded, collectUnaccountedDetail
+			if tc.movedOn {
+				wantReason, wantDetail = types.SandboxFailureAbandoned, ""
+			}
+			if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != wantReason ||
+				(wantDetail != "" && failed[0].Detail != wantDetail) {
+				t.Fatalf("announced %+v, want one %q", failed, wantReason)
+			}
+			usages := rig.usages()
+			if len(usages) != tc.wantUsages {
+				t.Fatalf("published %d usage record(s) after the claim did not go back, "+
+					"want %d", len(usages), tc.wantUsages)
+			}
+			if len(usages) == 1 && usages[0].event.ID != usageEventID(launched) {
+				t.Fatalf("the last attempt published %s, want the launch's own record %s",
+					usages[0].event.ID, usageEventID(launched))
+			}
+			if offered := rig.spent.runs(); len(offered) != 2 {
+				t.Fatalf("the task was offered the run's spend %d time(s), want the "+
+					"collect's and the last attempt's", len(offered))
+			}
+			if got := rig.accountant.total(); got != 300 {
+				t.Fatalf("charged %d, want the run's 300 once across both attempts", got)
+			}
+
+			var unrecorded []string
+			for line := range strings.Lines(logs.String()) {
+				if strings.Contains(line, "sandbox_spend_unrecorded") &&
+					strings.Contains(line, "turn_id=t1") {
+					unrecorded = append(unrecorded, line)
+				}
+			}
+			switch {
+			case tc.brokerBack && len(unrecorded) != 0:
+				t.Fatalf("logged %q with every step of the spend landed", unrecorded)
+			case !tc.brokerBack && len(unrecorded) != 1:
+				t.Fatalf("logged %d sandbox_spend_unrecorded line(s), want the one that "+
+					"records the usage nothing will publish: %q", len(unrecorded), logs.String())
+			case !tc.brokerBack && !strings.Contains(unrecorded[0], "charged=true"):
+				t.Fatalf("the line %q does not say the charge is on the budgets, which "+
+					"it is as the last attempt left it", unrecorded[0])
+			}
+		})
+	}
+}
+
+// releaseHook runs before every ReleaseClaim: the world changing while a
+// hand-back is being written.
+type releaseHook struct {
+	PendingStore
+	before func()
+}
+
+func (h *releaseHook) ReleaseClaim(ctx context.Context, turnID string, r Release) (bool, error) {
+	h.before()
+	return h.PendingStore.ReleaseClaim(ctx, turnID, r)
 }
 
 // THE RECORD IS THE FLEET'S, NOT THE COORDINATOR'S. A failed resume's retry
@@ -2543,30 +2932,6 @@ func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
 	}
 }
 
-// ONLY A CHARGE THAT MOVED THE COUNTER IS RECORDED. A counter that never
-// answered left it where it was, so the retry offers the spend again rather
-// than inheriting an answer about a counter that may be reachable by then.
-func TestAnUnrecordedChargeIsOfferedAgainOnTheRetry(t *testing.T) {
-	rig := newCoordRig(t)
-	rig.launch("t1")
-	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
-	rig.accountant.set(false, errors.New("counter unreachable"))
-	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
-
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
-		t.Fatal("a failed resume was acked")
-	}
-	rig.accountant.set(false, nil)
-	rig.resumer.failWith(nil)
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("the retry: %v", err)
-	}
-	if got := rig.accountant.total(); got != 1000 {
-		t.Fatalf("charged %d, want the retry to count the spend the first pass did not", got)
-	}
-}
-
 // A RUN THAT WENT OVER A CAP IS STILL CHARGED ONCE.
 //
 // The post-charge records the spend whatever the caps say, so the boolean it
@@ -2592,23 +2957,6 @@ func TestARunThatWentOverItsCapIsChargedOnceAcrossARetry(t *testing.T) {
 	if got := rig.accountant.total(); got != 1000 {
 		t.Fatalf("charged %d tokens for one run of 1000: an over-cap charge was "+
 			"read as unrecorded and offered again", got)
-	}
-}
-
-// Accounting is a store call that can fail on its own, and its failing is not
-// a reason to lose the turn.
-func TestAFailedChargeDoesNotAbortTheResume(t *testing.T) {
-	rig := newCoordRig(t)
-	rig.launch("t1")
-	rig.accountant.err = errors.New("counter unreachable")
-	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 100})
-
-	payload, ev := rig.completion("t1")
-	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	if len(rig.resumer.calls()) != 1 {
-		t.Fatal("an unreachable counter cost the turn")
 	}
 }
 

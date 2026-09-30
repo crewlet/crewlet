@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -121,10 +124,16 @@ func TestACollectedRunsTokensLandOnItsTaskOncePerLaunch(t *testing.T) {
 		WorkItem: "task-9", CreatedAt: launched,
 	}
 	result := sandbox.Result{Success: true, InputTokens: 900_000, OutputTokens: 40_000}
-	spender.RunSpent(t.Context(), run, result)
-	spender.RunSpent(t.Context(), run, result)
+	spent := func() {
+		t.Helper()
+		if err := spender.RunSpent(t.Context(), run, result); err != nil {
+			t.Fatalf("RunSpent: %v", err)
+		}
+	}
+	spent()
+	spent()
 	run.LaunchID = "launch-2"
-	spender.RunSpent(t.Context(), run, result)
+	spent()
 
 	turns, ops := served.recorded()
 	if len(turns) != 3 {
@@ -149,9 +158,66 @@ func TestACollectedRunsTokensLandOnItsTaskOncePerLaunch(t *testing.T) {
 
 	// A RUN NO TASK'S TURN LAUNCHED records nothing.
 	run.WorkItem, run.LaunchID = "", "launch-3"
-	spender.RunSpent(t.Context(), run, result)
+	spent()
 	if turns, _ := served.recorded(); len(turns) != 3 {
 		t.Fatalf("a run no task woke recorded spend: %+v", turns[3:])
+	}
+}
+
+// A COLLECTED RUN'S SPEND SAYS WHETHER ITS FATE IS SETTLED, because the
+// collect holds the run until it is: a write that landed, and one refused
+// because the task was purged — which no retry changes — are settled, while one
+// refused for now or answered with an outcome nobody knows is not, and the
+// collect's retry repeats it under the same operation. Read the other way, a
+// purged task would hold its run for ever, and a write that never answered
+// would leave the run's tokens off its task for good.
+func TestACollectedRunsSpendSaysWhetherItsFateIsSettled(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		answer  func() (tracker.WriteResult, error)
+		settled bool
+	}{
+		{"applied", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+		}, true},
+		{"pending on the log", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomePending}}, nil
+		}, true},
+		{"the task was purged", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{}, fmt.Errorf("%w: task task-9 was purged, and "+
+				"nothing it cost can be recorded against it", tracker.ErrNoTask)
+		}, true},
+		{"an outcome nobody knows", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}, nil
+		}, false},
+		// AN UNKNOWN THE ANSWERING NODE'S LEDGER CANNOT VOUCH FOR is answered
+		// the same way on every repeat there, so it is settled — unknown, and
+		// said so — rather than holding the run for ever.
+		{"an unknown no ledger here can vouch for", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{
+				Outcome: statelog.OutcomeUnknown, Unvouched: true}}, nil
+		}, true},
+		{"refused for now", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{}, fmt.Errorf("tracker: task task-9 is not on "+
+				"this node: %w", statelog.ErrUnavailable)
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, served := spendingEngine(t)
+			served.answering(tc.answer)
+			err := runSpender{engine: e}.RunSpent(t.Context(), sandbox.PendingRun{
+				TurnID: "run-1", LaunchID: "launch-1", AgentHandle: "swe",
+				WorkItem: "task-9", CreatedAt: time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC),
+			}, sandbox.Result{Success: true, InputTokens: 900})
+			if turns, _ := served.recorded(); len(turns) != 1 {
+				t.Fatalf("the run's spend reached the task %d time(s), want once", len(turns))
+			}
+			if settled := err == nil; settled != tc.settled {
+				t.Fatalf("RunSpent = %v, want settled=%v", err, tc.settled)
+			}
+		})
 	}
 }
 
@@ -161,9 +227,67 @@ func TestACollectedRunsTokensLandOnItsTaskOncePerLaunch(t *testing.T) {
 // coordinator cannot see. A run that parks on a question is the case: a
 // person's answer resumes it and collects nothing, so the collect is the one
 // moment its tokens can reach the task.
+//
+// AND THE COLLECT HOLDS ONLY ON AN ANSWER A RETRY CAN CHANGE. A lost
+// acknowledgement holds it, since the retry settles it under the same
+// operation; an unknown the answering node's ledger cannot vouch for is
+// answered the same way on every retry, and holding on it held the seat for
+// ever.
 func TestTheEnginesCoordinatorRecordsWhatARunSpent(t *testing.T) {
 	t.Parallel()
-	e, served := spendingEngine(t)
+	for _, tc := range []struct {
+		name   string
+		answer func() (tracker.WriteResult, error)
+		held   bool
+	}{
+		{"recorded", nil, false},
+		{"an acknowledgement lost", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}, nil
+		}, true},
+		{"an unknown no ledger here can vouch for", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{
+				Outcome: statelog.OutcomeUnknown, Unvouched: true}}, nil
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, served := spendingEngine(t)
+			if tc.answer != nil {
+				served.answering(tc.answer)
+			}
+			rt, run, completed := aParkingRun(t, e)
+			err := rt.coordinator.OnCompleted(t.Context(), completed,
+				events.New(completed, events.TraceContext{}))
+			turns, _ := served.recorded()
+			if len(turns) != 1 || turns[0].Task != "task-9" ||
+				turns[0].Spend.Input != 500_000 || turns[0].Spend.Output != 20_000 {
+				t.Fatalf("the engine's coordinator recorded %+v, want the run's "+
+					"500000/20000 tokens on task-9", turns)
+			}
+			after, _, getErr := rt.pending.Get(t.Context(), run.TurnID)
+			if getErr != nil {
+				t.Fatalf("Get: %v", getErr)
+			}
+			switch {
+			case tc.held && (err == nil || after.Status != sandbox.StatusRunning):
+				t.Fatalf("OnCompleted = %v leaving %q, want the collect held for "+
+					"its retry, back in %q", err, after.Status, sandbox.StatusRunning)
+			case !tc.held && (err != nil || !slices.Contains(sandbox.Awaiting, after.Status)):
+				t.Fatalf("OnCompleted = %v leaving %q, want the run parked on its "+
+					"question (%v) — no retry changes this answer", err, after.Status,
+					sandbox.Awaiting)
+			}
+		})
+	}
+}
+
+// aParkingRun brings the engine's sandbox runtime up over a fake provider and
+// leaves one suspended run of task-9's turn whose job has finished asking a
+// question, with the completion that collects it.
+func aParkingRun(t *testing.T, e *Engine) (*sandboxRuntime, sandbox.PendingRun,
+	types.SandboxRunCompleted) {
+
+	t.Helper()
 	e.backends.Fleet = coordmem.NewFleet()
 	provider, runner := sandbox.NewFakeProvider(), sandbox.NewFakeRunner("claude-code")
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
@@ -204,19 +328,9 @@ func TestTheEnginesCoordinatorRecordsWhatARunSpent(t *testing.T) {
 	}
 	runner.Finish(sandbox.Result{NeedsInput: true, Question: "which branch?",
 		AskTo: "requester", InputTokens: 500_000, OutputTokens: 20_000})
-	completed := types.SandboxRunCompleted{
+	return rt, run, types.SandboxRunCompleted{
 		AgentHandle: "swe", RoleName: "SWE", TurnID: "run-1",
 		LaunchID: run.LaunchID, SandboxID: box.ID(), CodingAgent: "claude-code",
-	}
-	if err := rt.coordinator.OnCompleted(t.Context(), completed,
-		events.New(completed, events.TraceContext{})); err != nil {
-		t.Fatalf("OnCompleted: %v", err)
-	}
-	turns, _ := served.recorded()
-	if len(turns) != 1 || turns[0].Task != "task-9" ||
-		turns[0].Spend.Input != 500_000 || turns[0].Spend.Output != 20_000 {
-		t.Fatalf("the engine's coordinator recorded %+v, want the run's "+
-			"500000/20000 tokens on task-9", turns)
 	}
 }
 
@@ -248,12 +362,14 @@ func (billingModel) Complete(_ context.Context, req llm.Request) (*llm.Completio
 	}, nil
 }
 
-// servedWriter is a data node's tracker, recording every turn it was handed.
+// servedWriter is a data node's tracker, recording every turn it was handed
+// and answering each with answer — applied when it is unset.
 type servedWriter struct {
 	estate.TrackerWriter
-	mu    sync.Mutex
-	turns []tracker.TurnRecord
-	ops   []string
+	mu     sync.Mutex
+	turns  []tracker.TurnRecord
+	ops    []string
+	answer func() (tracker.WriteResult, error)
 }
 
 func (w *servedWriter) RecordTurn(_ context.Context, opID string,
@@ -261,7 +377,17 @@ func (w *servedWriter) RecordTurn(_ context.Context, opID string,
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.turns, w.ops = append(w.turns, turn), append(w.ops, opID)
-	return tracker.WriteResult{}, nil
+	if w.answer != nil {
+		return w.answer()
+	}
+	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+}
+
+// answering makes every later write answer with answer.
+func (w *servedWriter) answering(answer func() (tracker.WriteResult, error)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.answer = answer
 }
 
 func (w *servedWriter) recorded() ([]tracker.TurnRecord, []string) {

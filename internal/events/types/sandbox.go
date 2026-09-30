@@ -291,12 +291,15 @@ const (
 
 	// SandboxFailureClaimStranded is a run whose tail this node claimed and
 	// then could not give back: the park or the resume the claim was taken
-	// for did not land, and the row could not be reverted to the status it
-	// was claimed from either. A row left in the at-most-once claim is read
-	// by no completion poll, re-claimed by no redelivery and matched by no
-	// answer, so the run is ended here rather than left to strand its box
-	// until the seat changes hands. It names the coordination store: two
-	// writes on one row failed in a row.
+	// for did not land, or the collect was held because what the run spent
+	// was not recorded yet, and the row could not be reverted to the status
+	// it was claimed from either. A row left in the at-most-once claim is
+	// read by no completion poll, re-claimed by no redelivery and matched by
+	// no answer, so the run is ended here rather than left to strand its box
+	// until the seat changes hands. The failed hand-back is the coordination
+	// store's; the failure before it is the store's after a park or a
+	// resume, and after a held collect whichever of the broker, the tracker
+	// or the token counter did not record the run's spend.
 	SandboxFailureClaimStranded = "claim_unreverted"
 
 	// SandboxFailureSeatRemoved is a run of a seat that was removed from the

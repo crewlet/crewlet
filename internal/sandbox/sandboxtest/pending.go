@@ -65,6 +65,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AReleaseNeverMovesACollectInstant", testAReleaseNeverMovesACollectInstant},
 		{"ARefusedReleaseRecordsNoCollectInstant", testARefusedReleaseRecordsNoCollectInstant},
 		{"OnlyALaunchClearsTheCollectsRecords", testOnlyALaunchClearsTheCollectsRecords},
+		{"AHandBackKeepsWhatTheCollectIsNamedBy", testAHandBackKeepsWhatTheCollectIsNamedBy},
 		{"ParkingCarriesTheBranch", testParkingCarriesTheBranch},
 		{"OwnershipIsNotStolenByAnOlderLease", testOwnershipIsNotStolenByAnOlderLease},
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
@@ -941,6 +942,39 @@ func testARefusedReleaseRecordsNoCharge(t *testing.T, s sandbox.PendingStore) {
 	}
 	if got := mustGet(t, s, "t1"); got.Charged {
 		t.Error("a refused release recorded its charge on the next launch")
+	}
+}
+
+func testAHandBackKeepsWhatTheCollectIsNamedBy(t *testing.T, s sandbox.PendingStore) {
+	// A COLLECT IS RETRIED UNTIL WHAT THE RUN SPENT IS RECORDED — its usage
+	// record published, its task's spend confirmed, its charge answered —
+	// and the retry makes again only what did not land because each of the
+	// three is NAMED by the row: the usage record by the turn and the
+	// launch, at the first collect's instant; the task's spend by an
+	// operation derived from the row's creation, the turn and the launch.
+	// So the retry's claim must come back with every one of them as the
+	// first claim read it. A store that restamped the row's creation on a
+	// write — the natural mistake beside its last-write stamp — would name
+	// the task's spend anew and count the run on it twice.
+	mustLaunched(t, s, run("t1"))
+	first := mustClaim(t, s, "t1")
+	collected := base.Add(3 * time.Minute)
+	release := releaseOf(first)
+	release.Charged, release.CollectedAt = true, collected
+	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || !released {
+		t.Fatalf("hand back t1: released=%v err=%v", released, err)
+	}
+	retry := mustClaim(t, s, "t1")
+	switch {
+	case retry.TurnID != first.TurnID || retry.LaunchID != first.LaunchID:
+		t.Fatalf("the retry's claim names %s/%s, want the first's %s/%s",
+			retry.TurnID, retry.LaunchID, first.TurnID, first.LaunchID)
+	case !retry.CreatedAt.Equal(first.CreatedAt):
+		t.Fatalf("the retry's claim was created at %v, want the first's %v",
+			retry.CreatedAt, first.CreatedAt)
+	case !retry.CollectedAt.Equal(collected) || !retry.Charged:
+		t.Fatalf("the retry's claim came back collected at %v charged=%v, want %v "+
+			"and charged", retry.CollectedAt, retry.Charged, collected)
 	}
 }
 

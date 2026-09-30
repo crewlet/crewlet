@@ -20,6 +20,11 @@ type recorder struct {
 	published []publication
 	err       error
 
+	// refused is the error a publish to one topic answers, beside err's
+	// answer for every topic: how a case fails one record — a run's usage —
+	// while the announcements beside it still go out.
+	refused map[string]error
+
 	// before, when set, runs at the top of every Publish, OUTSIDE this
 	// recorder's own lock so the hook can read the rest of the world.
 	//
@@ -48,8 +53,21 @@ func (r *recorder) Publish(_ context.Context, topic string, ev *events.Event) er
 	if r.err != nil {
 		return r.err
 	}
+	if err := r.refused[topic]; err != nil {
+		return err
+	}
 	r.published = append(r.published, publication{topic: topic, event: ev})
 	return nil
+}
+
+// refuse makes every publish to topic answer err, and nil lets them through.
+func (r *recorder) refuse(topic string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refused == nil {
+		r.refused = map[string]error{}
+	}
+	r.refused[topic] = err
 }
 
 func (r *recorder) topics() []string {
