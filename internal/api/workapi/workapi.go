@@ -100,7 +100,9 @@
 // operation only for the same request: sent with another one, it derives
 // operations of its own, which land as asked. Bound to the key alone, the
 // ledger answered the second request with the first one's outcome — `applied`,
-// with nothing of it written — see [keyedOp] and [pageKey].
+// with nothing of it written — see [keyedOp], builtin's own binding for the
+// tools, and the knowledge base's ([pages.Store], which binds what each write
+// says).
 //
 // # What is NOT here
 //
@@ -498,40 +500,11 @@ func keyedOp(key, verb, object string, args map[string]any) string {
 		turnctx.ArgsDigest(args))
 }
 
-// pageKey is the key the knowledge base derives every write of ONE REQUEST
-// from ([pages.Actor.OpKey]): the request's key, bound to what the request
-// asks.
-//
-// # Why the knowledge base is not handed the request's key itself
-//
-// It derives a write's operation from the key, the verb and the page
-// ([pages.Store]) — never from what the write says — so under the request's key
-// as sent, the same key with another request was the first request's
-// operation: a rename to another title, a save of another body, answered
-// `applied` from the ledger with nothing of it written. Bound here, the same
-// request derives the same key and is one operation however often it is
-// retried, and any other request under the key derives another — [keyedOp]'s
-// rule, for the writes this surface makes itself.
-//
-// A BARE OPERATION ID AT THE KEY'S OWN INSTANT, with no name: the knowledge
-// base holds its key to [statelog.CheckCallerOpID] and dates every id it
-// derives by the key's instant, and the request's key is what the ledger's
-// vouching is measured against.
-func pageKey(key string, args map[string]any) string {
-	at, _ := statelog.OpMintedAt(key)
-	return statelog.DeriveOpID(at, "", pageKeyNamespace, key,
-		turnctx.ArgsDigest(args))
-}
-
-// keyedOpNamespace and pageKeyNamespace keep [keyedOp]'s and [pageKey]'s ids
-// apart from each other and from every other derivation over the same key —
-// builtin's for the tool-backed routes, the knowledge base's own inside it.
-// FIXED for the life of the format: a new one would make a retry that
-// straddles the change a second write.
-const (
-	keyedOpNamespace = "crewlet.workapi"
-	pageKeyNamespace = "crewlet.workapi.pages"
-)
+// keyedOpNamespace keeps [keyedOp]'s ids apart from every other derivation
+// over the same key — builtin's for the tool-backed routes, the knowledge
+// base's own inside it. FIXED for the life of the format: a new one would make
+// a retry that straddles the change a second write.
+const keyedOpNamespace = "crewlet.workapi"
 
 // deps are this surface's deps for ONE request: the actor is the request's
 // principal carrying the request's operation key, and the decision is the
@@ -547,11 +520,10 @@ const (
 // ([builtin.Actor.OperationSince]). Left zero, every write this surface made
 // was one the ledger read as minted at the epoch — see [operationKey].
 //
-// args are the tool call's own arguments: the tracker's tools bind every id
-// they derive to them themselves, and the knowledge base is handed the key
-// bound to them ([pageKey]), because it binds nothing.
-func (s *served) deps(key string, args map[string]any) (builtin.WorkDeps,
-	builtin.PageDeps) {
+// THE KEY AS SENT, to both: the tracker's tools bind every id they derive to
+// the call's own arguments, and the knowledge base binds every id to what each
+// write says ([pages.Store]), so neither needs it bound here.
+func (s *served) deps(key string) (builtin.WorkDeps, builtin.PageDeps) {
 
 	work, kb := s.Work, s.Pages
 	work.Actor = func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
@@ -559,10 +531,9 @@ func (s *served) deps(key string, args map[string]any) (builtin.WorkDeps,
 		seed(&actor, key)
 		return actor, err
 	}
-	bound := pageKey(key, args)
 	kb.Actor = func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
 		actor, err := builtin.PrincipalPageActor(ctx, turn)
-		actor.OpKey = bound
+		actor.OpKey = key
 		return actor, err
 	}
 	work.Authorize, kb.Authorize = s.authorize, s.authorize
@@ -619,16 +590,16 @@ func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
 }
 
 // pageActor is [Service.actor] for the knowledge base, carrying the request's
-// key bound to what the request asks ([pageKey]).
-func (s *Service) pageActor(w http.ResponseWriter, r *http.Request, key string,
-	args map[string]any) (pages.Actor, bool) {
+// key, which the store binds to what each write says.
+func (s *Service) pageActor(w http.ResponseWriter, r *http.Request,
+	key string) (pages.Actor, bool) {
 
 	actor, err := builtin.PrincipalPageActor(r.Context(), nil)
 	if err != nil {
 		s.refuseDecision(w, r, "", authz.Decision{Err: err})
 		return pages.Actor{}, false
 	}
-	actor.OpKey = pageKey(key, args)
+	actor.OpKey = key
 	return actor, true
 }
 
@@ -643,7 +614,7 @@ func (s *served) call(w http.ResponseWriter, r *http.Request, verb string,
 	if !ok {
 		return
 	}
-	work, kb := s.deps(key, args)
+	work, kb := s.deps(key)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Authorize: s.authorize,
 	}) {
@@ -778,7 +749,7 @@ func moveStoppedHere(receipt map[string]any) {
 	total, _ := receipt["subtree_total"].(float64)
 	duty := "the tracker duty finishes the move on its own once nobody is " +
 		"walking it"
-	sameKey := "the SAME " + IdempotencyHeader + " — send op_id back as that " +
+	sameKey := "the SAME " + opkey.Header + " — send op_id back as that " +
 		"header, which is this request's key whether it sent one or not"
 	next := fmt.Sprintf("To finish it, send this request again under %s. A "+
 		"new key is refused, since the item is already in %s. Or leave it: %s.",

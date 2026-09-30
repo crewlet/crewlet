@@ -258,7 +258,7 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	work, _ := s.deps(key, args)
+	work, _ := s.deps(key)
 	answerTool(w, key, write(r.Context(), work,
 		strings.TrimSpace(r.PathValue("handle")), args))
 }

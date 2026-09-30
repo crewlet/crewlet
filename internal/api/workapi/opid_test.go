@@ -308,14 +308,14 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 2, Of: 5, Err: errors.New("refused")},
 			want: []string{"ENG-1 moved to OPS as OPS-7", "2 of the 5",
-				"SAME " + workapi.IdempotencyHeader, "send op_id back",
+				"SAME " + opkey.Header, "send op_id back",
 				"A new key is refused"},
 		},
 		"a task in the trash": {
 			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 4, Of: 5, Waiting: "ENG-9", Err: errors.New("frozen")},
 			want: []string{"ENG-9 is in the trash", "/work/items/ENG-9/restore",
-				"SAME " + workapi.IdempotencyHeader, "send op_id back"},
+				"SAME " + opkey.Header, "send op_id back"},
 		},
 		"a step this node cannot vouch for": {
 			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
@@ -470,15 +470,15 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 // decided, so an id derived from the key, the verb and the object alone made
 // the same key sent with ANOTHER request the first request's operation:
 // answered `applied`, with nothing of the second written — a card dropped
-// elsewhere, a remark rewritten, a page renamed or saved again, each reported
-// as made and silently dropped. The tools behind the other routes already put
-// a digest of their arguments in every id they derive; the writes this surface
-// makes itself, and the key the knowledge base derives from, are held to the
-// same rule here: the same request under the same key is the same operation
-// (the retry), and any other request under it is another.
+// elsewhere, a remark rewritten, a purge for another reason, each reported as
+// made and silently dropped. The tools behind the other routes already put a
+// digest of their arguments in every id they derive, and the knowledge base
+// binds every id to what its write says (internal/pages holds that); the
+// writes this surface makes itself are held to the same rule here: the same
+// request under the same key is the same operation (the retry), and any other
+// request under it is another.
 //
-// Mutation: drop the arguments from [keyedOp] and the tracker rows go red;
-// hand the knowledge base the request's key unbound and the page rows do.
+// Mutation: drop the arguments from [keyedOp] and every row goes red.
 func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -502,16 +502,6 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 			target: "/work/items/t-1/purge?confirm=ENG-1&reason=",
 			first:  "an erasure request", second: "a retention request",
 			op: func(r *rig) []string { return r.writes.opIDs }},
-		{name: "a page's rename", method: http.MethodPost,
-			target: "/pages/p-1/rename",
-			first:  map[string]any{"title": "Runbook v2"},
-			second: map[string]any{"title": "Runbook v3"},
-			op:     pageKeys},
-		{name: "a page saved through its tool", method: http.MethodPut,
-			target: "/pages/p-1", headers: []string{"If-Match", "2"},
-			first:  map[string]any{"body": "new steps"},
-			second: map[string]any{"body": "newer steps"},
-			op:     pageKeys},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -550,6 +540,54 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 			}
 			for _, op := range ops {
 				assertMintedWith(t, op, key)
+			}
+		})
+	}
+}
+
+// THE KNOWLEDGE BASE IS HANDED THE REQUEST'S KEY AS SENT.
+//
+// It binds every operation it derives to what the write says — the title, the
+// body, the reason — so the same key sent with another request is another
+// operation there (internal/pages' own suite holds that). Bound here as well,
+// through the request's arguments, it was a second binding of one rule that
+// could only drift from the first, over a key the store then dated and
+// derived from: this surface's job is to hand over the caller's key, which is
+// also what lets the trail find every write by the key the caller holds.
+//
+// Mutation: bind the key to the request here again and every row goes red.
+func TestTheKnowledgeBaseIsHandedTheKeyAsSent(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+		headers              []string
+	}{
+		{name: "a page's rename", method: http.MethodPost,
+			target: "/pages/p-1/rename", body: map[string]any{"title": "Runbook v2"}},
+		{name: "a page saved through its tool", method: http.MethodPut,
+			target: "/pages/p-1", headers: []string{"If-Match", "2"},
+			body: map[string]any{"body": "new steps"}},
+		{name: "a page trashed", method: http.MethodDelete, target: "/pages/p-1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			key := statelog.NewOpID(time.Now(), "")
+			headers := append([]string{opkey.Header, key}, c.headers...)
+			if got := r.do(as(admin("ana")), c.method, c.target, c.body,
+				headers...); got.status != http.StatusOK {
+				t.Fatalf("answered %d: %v", got.status, got.body)
+			}
+			keys := pageKeys(r)
+			if len(keys) == 0 {
+				t.Fatal("no page write was made")
+			}
+			for _, handed := range keys {
+				if handed != key {
+					t.Errorf("the knowledge base was handed %q for the key %q",
+						handed, key)
+				}
 			}
 		})
 	}

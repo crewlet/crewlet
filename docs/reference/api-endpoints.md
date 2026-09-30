@@ -3710,6 +3710,13 @@ as `op_id`. An `unknown` outcome is the one to retry — **with the same key**,
 sent back as `Idempotency-Key`, because a fresh one would defeat the ledger
 that makes a retry safe and a retried create would file the item twice.
 
+Every operation is bound to what its write SAYS as well as to the key: the
+same key sent with another request — a page saved with another body, renamed
+to another title, a remark rewritten again — is another operation and lands
+as asked, rather than being answered from the ledger as the first one with
+nothing of it written. The same request again is the same operation, which is
+what makes it a retry.
+
 ### A purge
 
 `POST /work/items/{key}/purge?confirm=<KEY>&reason=<why>` destroys an item and

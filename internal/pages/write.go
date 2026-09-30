@@ -117,7 +117,10 @@ func (s *Store) create(ctx context.Context, actor Actor, in NewPage) (Written, e
 
 	at := s.now()
 	title := strings.Join(strings.Fields(in.Title), " ")
-	opID := s.operation(actor, "create", container+"/"+NormalizeTitle(title))
+	opID, opErr := s.operation(actor, "create", container+"/"+NormalizeTitle(title), in)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	page := Page{
 		V: DocumentVersion, ID: pageIDOf(opID), Container: container,
 		ParentID: strings.TrimSpace(in.ParentID),
@@ -262,7 +265,10 @@ func (s *Store) savePage(ctx context.Context, actor Actor, pageID string,
 	}
 
 	at := s.now()
-	opID := s.operation(actor, "save", pageID)
+	opID, opErr := s.operation(actor, "save", pageID, save)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	var out Page
 	var read uint64
 	subject := PageSubject(pageID)
@@ -327,6 +333,13 @@ func (s *Store) savePage(ctx context.Context, actor Actor, pageID string,
 	}, nil
 }
 
+// renameAsk is what a rename SAYS, which its operation is bound to
+// ([Store.operation]): the title asked for, and whether the change is quiet.
+type renameAsk struct {
+	Title string
+	Quiet bool
+}
+
 // Rename puts a page at a title, and there are TWO records behind that one
 // gesture because there are two different things to contend for.
 //
@@ -379,11 +392,18 @@ func (s *Store) rename(ctx context.Context, actor Actor, pageID string,
 	// ledger row on the title's subject and be refused as an operation
 	// reused. Under its own verb the retry decides again and finds nothing
 	// left to change, which is the true answer.
+	asked := renameAsk{Title: title, Quiet: quiet}
 	if NormalizeTitle(head.Title) == NormalizeTitle(title) {
-		return s.retitle(ctx, actor, pageID, title,
-			s.operation(actor, "retitle", pageID), at, quiet)
+		retitleID, opErr := s.operation(actor, "retitle", pageID, asked)
+		if opErr != nil {
+			return Written{}, opErr
+		}
+		return s.retitle(ctx, actor, pageID, title, retitleID, at, quiet)
 	}
-	opID := s.operation(actor, "rename", pageID)
+	opID, opErr := s.operation(actor, "rename", pageID, asked)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 
 	subject := TitleSubject(head.Container, title)
 	scope := ScopeSet{Terms: []ScopeTerm{
@@ -568,7 +588,10 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 		return Written{}, err
 	}
 	at := s.now()
-	opID := s.operation(actor, string(op), pageID)
+	opID, opErr := s.operation(actor, string(op), pageID, reason)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	subject := PageSubject(pageID)
 	var out Page
 	var read uint64

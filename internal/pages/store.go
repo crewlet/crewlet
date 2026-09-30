@@ -2,7 +2,9 @@ package pages
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -379,6 +381,18 @@ type Actor struct {
 // dot begins a gesture's STEP ([statelog.StepOpID]), and `comment.edit` would
 // read as the edit step of an operation called `comment`.
 //
+// AND WHAT THE WRITE SAYS IS PART OF IT: content is the write's own input —
+// the new page, the save, the title, the reason — digested whole. The ledger
+// answers an operation it already holds BEFORE the write is decided
+// ([statelog.Result.Collapsed]), so derived from the key, the verb and the
+// object alone, the same key sent with another body, another title or another
+// reason was the first write's operation: answered from the ledger, with
+// nothing of the second written — a change reported as made and silently
+// dropped. The human write surface bound its key to the request for exactly
+// that reason before handing it here; bound here, every caller that brings a
+// key is held to it, and a retry — which resends the same input — is still the
+// same operation.
+//
 // AND IT CARRIES THE KEY'S OWN INSTANT. The key is an operation id the engine
 // minted — every surface that takes one holds it to
 // [statelog.CheckCallerOpID] — and the ledger vouches for a retry by the
@@ -386,13 +400,21 @@ type Actor struct {
 // dropped it (a name-based uuid over the key) would be read as minted before
 // every loss the ledger ever had, and once it had swept anything such a write
 // was answered `unknown` without being published, on every attempt.
-func (s *Store) operation(actor Actor, verb, object string) string {
+//
+// An error is an input that will not encode, which is a type this package
+// declared wrongly rather than anything a caller sent.
+func (s *Store) operation(actor Actor, verb, object string, content any) (string, error) {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
-		return s.newSeqID()
+		return s.newSeqID(), nil
 	}
+	said, err := json.Marshal(content)
+	if err != nil {
+		return "", fmt.Errorf("pages: digest what a %s says: %w", verb, err)
+	}
+	sum := sha256.Sum256(said)
 	at, _ := statelog.OpMintedAt(key)
-	return statelog.DeriveOpID(at, verb, key, object)
+	return statelog.DeriveOpID(at, verb, key, object, hex.EncodeToString(sum[:])), nil
 }
 
 // pageIDOf is the id a create gives its page: a FUNCTION OF THE OPERATION, so

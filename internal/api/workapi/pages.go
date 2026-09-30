@@ -115,7 +115,7 @@ func (s *served) postPageRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	quiet, _ := args["quiet"].(bool)
-	s.pageGesture(w, r, authz.ActionPageRename, args,
+	s.pageGesture(w, r, authz.ActionPageRename,
 		func(ctx context.Context, actor pages.Actor, id string) (pages.Written, error) {
 			return s.PageStore.Rename(ctx, actor, id, title, quiet)
 		})
@@ -127,7 +127,7 @@ func (s *served) deletePage(w http.ResponseWriter, r *http.Request) {
 	if !ok || !only(w, args) {
 		return
 	}
-	s.pageGesture(w, r, authz.ActionPageTrash, args, s.PageStore.Trash)
+	s.pageGesture(w, r, authz.ActionPageTrash, s.PageStore.Trash)
 }
 
 func (s *served) postPageRestore(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +135,7 @@ func (s *served) postPageRestore(w http.ResponseWriter, r *http.Request) {
 	if !ok || !only(w, args) {
 		return
 	}
-	s.pageGesture(w, r, authz.ActionPageRestore, args, s.PageStore.Restore)
+	s.pageGesture(w, r, authz.ActionPageRestore, s.PageStore.Restore)
 }
 
 // postPagePurge destroys a page permanently.
@@ -174,7 +174,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.pageActor(w, r, key, purgeArgs(confirm, reason))
+	actor, ok := s.pageActor(w, r, key)
 	if !ok {
 		return
 	}
@@ -215,7 +215,7 @@ func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.pageActor(w, r, key, args)
+	actor, ok := s.pageActor(w, r, key)
 	if !ok {
 		return
 	}
@@ -232,10 +232,9 @@ func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
 
 // pageGesture is the shape of the three row-decided page verbs: read the page,
 // decide the verb on its container, act, answer. act is handed the request's
-// context, the one every other step here reads under; args are what the
-// request asks, which its operation is bound to ([pageKey]).
+// context, the one every other step here reads under.
 func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
-	action authz.Action, args map[string]any,
+	action authz.Action,
 	act func(context.Context, pages.Actor, string) (pages.Written, error)) {
 
 	detail, ok := s.readPage(w, r, r.PathValue("id"))
@@ -254,7 +253,7 @@ func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	actor, ok := s.pageActor(w, r, key, args)
+	actor, ok := s.pageActor(w, r, key)
 	if !ok {
 		return
 	}

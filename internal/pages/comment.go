@@ -190,7 +190,10 @@ func (s *Store) editComment(ctx context.Context, actor Actor, pageID,
 	}
 
 	at := s.now()
-	opID := s.operation(actor, "comment-edit", commentID)
+	opID, opErr := s.operation(actor, "comment-edit", commentID, body)
+	if opErr != nil {
+		return Comment{}, Written{}, opErr
+	}
 	subject := PageSubject(pageID)
 	var out Comment
 	// THE REVISION AN UNCHANGED EDIT ANSWERS WITH, taken in the decision's
@@ -305,7 +308,12 @@ func (s *Store) removeComment(ctx context.Context, actor Actor, pageID,
 		return Written{}, err
 	}
 	at := s.now()
-	opID := s.operation(actor, "comment-remove", commentID)
+	// NOTHING BUT THE COMMENT: a removal says nothing else, and the
+	// authority it is taken under is who is asking rather than what.
+	opID, opErr := s.operation(actor, "comment-remove", commentID, nil)
+	if opErr != nil {
+		return Written{}, opErr
+	}
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
