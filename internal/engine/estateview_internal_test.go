@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -435,5 +436,87 @@ func TestTheEstateReadingNamesWhatHasHeldLongest(t *testing.T) {
 	if r.EstateJoiningFor != 40*time.Minute || r.EstateJoiningWhich != "tracker.001 on c" {
 		t.Errorf("joining reads %v: %q, want tracker.001 on c for forty minutes",
 			r.EstateJoiningFor, r.EstateJoiningWhich)
+	}
+}
+
+// UNDER LAYOUT 0 THE ONE PARTITION IS UNSERVED WHEN NO DATA NODE A ROUTER WOULD
+// ASK HAS A COPY THAT SERVES IT — every live data node's copy wrong, each of
+// which stops serving it — and estate_partition_unserved says so, by the rule
+// the router routes by: a data node from the presence view whose estate lease
+// says its copy serves or is catching up. One copy that recovers clears it.
+func TestUnderLayoutZeroAPartitionNoCopyServesIsUnserved(t *testing.T) {
+	t.Parallel()
+	c := &viewClock{now: gestureNow}
+	presences := coordmemory.New()
+	for _, id := range []string{"data-a", "data-b"} {
+		if _, _, err := presences.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+			Owner: id + ":1", TTL: time.Hour, Meta: map[string]any{"roles": []string{"data", "seats"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	presence, err := coord.NewLeaseView(presences, coord.ClassNode, coord.ViewOptions{
+		Every: time.Hour, Trust: time.Hour, Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = presence.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitUntil(t, 5*time.Second, "the presence view to list", func() bool {
+		return !presence.ListedAt().IsZero()
+	})
+
+	leases := coordmemory.New()
+	layout := 0
+	healthy := true
+	claim := func(node string, state partmap.PartitionState) {
+		t.Helper()
+		meta, err := partmap.Meta{Weight: 1, Layout: &layout, Healthy: &healthy,
+			Partitions: map[string]partmap.PartitionState{
+				statelog.EstatePartition.String(): state}}.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := leases.TryAcquire(t.Context(), coord.EstateResource(node), coord.AcquireOptions{
+			Owner: node + ":1", TTL: time.Hour, Meta: meta, Ungated: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim("data-a", partmap.PartFaulted)
+	claim("data-b", partmap.PartFaulted)
+	w := runningWatch(t, coordmemory.NewFleet(), leases, presence, LayoutZero(), c)
+	confirm(t, w)
+	w.sample(c.Now())
+
+	var r statelog.Reading
+	w.reading(c.Now(), &r)
+	if r.EstateUnserved != 1 || r.EstateUnservedWhich != statelog.EstatePartition.String() {
+		t.Fatalf("every data node's copy wrong reads %d unserved (%q), want estate.000",
+			r.EstateUnserved, r.EstateUnservedWhich)
+	}
+	if !slices.ContainsFunc(statelog.Evaluate(r), func(a statelog.Alarm) bool {
+		return a.Kind == statelog.KindEstateUnserved
+	}) || r.EstateShort != 0 {
+		t.Fatalf("an unserved layout-0 estate raised %v with %d short, want "+
+			"estate_partition_unserved alone", statelog.Evaluate(r), r.EstateShort)
+	}
+
+	claim("data-b", partmap.PartCatchingUp)
+	c.advance(2 * coord.MinViewRefresh)
+	w.view.Invalidate()
+	waitUntil(t, 5*time.Second, "the view to list data-b catching up", func() bool {
+		live, err := w.view.Presences()
+		return err == nil && slices.ContainsFunc(live, func(p partmap.Presence) bool {
+			return p.Node == "data-b" &&
+				p.Meta.Partitions[statelog.EstatePartition.String()] == partmap.PartCatchingUp
+		})
+	})
+	w.sample(c.Now())
+	r = statelog.Reading{}
+	w.reading(c.Now(), &r)
+	if r.EstateUnserved != 0 {
+		t.Fatalf("a copy catching up — which serves — left the estate unserved: %+v", r)
 	}
 }

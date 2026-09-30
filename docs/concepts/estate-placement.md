@@ -281,9 +281,14 @@ asked for. So a slow answer never makes the view look fresher than anything the
 store said. A watch the store closes is opened again, no sooner than a second
 after the one it replaces was asked for, and one the store refuses is asked for
 again fifteen seconds later, while the reads go on confirming the map. At
-layout 0 there is no map, so only `estate_view_stale` can fire; the fleet's
-presence, which names layout 0's servers, is not judged, since it answers
-routing alone.
+layout 0 there is no map, so nothing can be short of copies or stalled joining,
+and `estate_under_replicated` and `estate_move_stalled` never fire.
+`estate_partition_unserved` still can: the one partition is unserved when no
+data node a router would ask — a live data node in the fleet's presence — has
+an estate lease saying its copy serves or is catching up, which is every data
+node's copy wrong at once. The fleet's presence itself is not judged, since it
+answers routing alone; a presence that cannot be read makes a sighting no
+sighting, as a stale view does.
 
 ## The gestures
 

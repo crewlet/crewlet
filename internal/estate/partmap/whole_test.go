@@ -62,3 +62,35 @@ func TestWithNoMapEveryLiveDataNodeServesTheOnePartition(t *testing.T) {
 		}
 	}
 }
+
+// WITH NO MAP, WHO SERVES LAYOUT 0'S PARTITION IS THE ROUTER'S RULE: a live data
+// node whose estate lease says its copy serves or is catching up — never one
+// that says `faulted`, which answers `not_holder`, and never one the router
+// would not ask because its presence is gone. Nobody serving is unserved; a
+// fleet whose leases name no estate at all has nothing to serve and is not.
+func TestWithNoMapTheOnePartitionIsServedByTheCopiesARouterWouldAsk(t *testing.T) {
+	t.Parallel()
+	lease := func(node string, state PartitionState) Presence {
+		return Presence{Node: node, Meta: Meta{Weight: 1,
+			Partitions: map[string]PartitionState{estateZero.String(): state}}}
+	}
+	live := []Presence{lease("a", PartFaulted), lease("b", PartCatchingUp),
+		lease("c", PartServing), lease("d", PartServing)}
+
+	c, named := WholeCoverage(estateZero, live, []string{"a", "b", "c"})
+	if !named || !slices.Equal(c.Serving, []string{"b", "c"}) || c.Wanted != 1 || c.Unserved() {
+		t.Fatalf("coverage = (%+v, %v), want b and c serving — a faulted, d's presence gone", c, named)
+	}
+	c, named = WholeCoverage(estateZero, live[:1], []string{"a", "b", "c"})
+	if !named || !c.Unserved() {
+		t.Fatalf("every copy faulted reads (%+v, %v), want unserved", c, named)
+	}
+	c, named = WholeCoverage(estateZero, live[2:], []string{"a", "b"})
+	if !named || !c.Unserved() {
+		t.Fatalf("every serving copy on a node without presence reads (%+v, %v), want unserved", c, named)
+	}
+	if _, named := WholeCoverage(estateZero, []Presence{{Node: "a",
+		Meta: Meta{Partitions: map[string]PartitionState{}}}}, []string{"a"}); named {
+		t.Fatal("a fleet whose leases name no estate read as one with a partition to serve")
+	}
+}

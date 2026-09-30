@@ -96,3 +96,32 @@ func (w Whole) valid() error {
 	}
 	return nil
 }
+
+// WholeCoverage is layout 0's one partition's [Coverage] where there is no map,
+// by the rule a router under layout 0 routes by, read the way a surface reads a
+// map's: a server is a live data node — dataNodes, the presence a router asks
+// ([Roster]) — whose estate lease names p in a state that answers for it:
+// `serving`, or `catching_up`, since under layout 0 a data node serves the
+// estate from boot and a copy that lags is asked last rather than never. Never
+// `faulted`, a copy that has stopped serving and answers `not_holder`. Wanted is
+// one: a layout-0 fleet keeps a copy on every data node rather than holding a
+// target, so the one shortfall it can have is nobody serving.
+//
+// named is false where no live estate lease names p at all — a fleet running
+// no native estate, which has nothing to serve.
+func WholeCoverage(p statelog.PartitionID, live []Presence, dataNodes []string) (c Coverage, named bool) {
+	c = Coverage{Partition: p, Wanted: 1}
+	for _, presence := range live {
+		state, ok := presence.Meta.Partitions[p.String()]
+		if !ok {
+			continue
+		}
+		named = true
+		if (state == PartServing || state == PartCatchingUp) &&
+			slices.Contains(dataNodes, presence.Node) && !slices.Contains(c.Serving, presence.Node) {
+			c.Serving = append(c.Serving, presence.Node)
+		}
+	}
+	slices.Sort(c.Serving)
+	return c, named
+}

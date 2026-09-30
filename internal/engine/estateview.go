@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -40,12 +41,16 @@ import (
 //
 // # Under layout 0
 //
-// There is no map, so there is nothing to be short or stalled, and the three
-// map alarms never fire. The view is still run and its staleness still judged
-// — the store answering that there is no map confirms the map half — and the
-// fleet's presence is its roster, which layout 0's one partition is served by.
-// The roster is not judged: it answers routing alone, which may use any age
-// (partmap.View's doc).
+// There is no map, so there is nothing to be short or stalled, and those two
+// alarms never fire. The one partition can still go UNSERVED — every data
+// node's copy of it wrong, which stops each serving it — and that is read by
+// the rule a router under layout 0 routes by (partmap.WholeCoverage): a live
+// data node from the presence roster whose estate lease says its copy serves
+// or is catching up. A roster that cannot say is a sample the watch could not
+// see through, like a view that is not fresh. The view is still run and its
+// staleness still judged — the store answering that there is no map confirms
+// the map half — and the roster is not judged: it answers routing alone, which
+// may use any age (partmap.View's doc).
 
 // estateSampleInterval is how often the watch samples the view: the map
 // maintainer's own tick (coord.ReconcileInterval, fifteen seconds), so a
@@ -56,6 +61,10 @@ const estateSampleInterval = coord.ReconcileInterval
 // estateWatch is this node's estate view and what its alarms read of it.
 type estateWatch struct {
 	view *partmap.View
+
+	// roster is the fleet's live data nodes as the router asks them —
+	// under layout 0, who may serve the one partition.
+	roster partmap.Roster
 
 	// budget is the operator's rejoin window — what a join is sized
 	// against.
@@ -141,7 +150,8 @@ func newEstateWatch(b *config.Bootstrap, maps partmap.MapSource, leases coord.Ba
 	if err != nil {
 		return nil, fmt.Errorf("engine: watch the estate map: %w", err)
 	}
-	return &estateWatch{view: view, budget: b.Stream.TrackerRetention.RejoinWindow(), now: now}, nil
+	return &estateWatch{view: view, roster: roster, budget: b.Stream.TrackerRetention.RejoinWindow(),
+		now: now}, nil
 }
 
 // run samples the view on [estateSampleInterval] until ctx ends.
@@ -163,18 +173,61 @@ func (w *estateWatch) run(ctx context.Context) {
 func (w *estateWatch) sample(now time.Time) {
 	m, _, found, err := w.view.Map()
 	var live []partmap.Presence
-	if err == nil && found {
+	if err == nil {
 		live, err = w.view.Presences()
+	}
+	var whole partmap.Findings
+	if err == nil && !found {
+		whole, err = w.whole(live)
 	}
 	fresh := w.view.Fresh()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err != nil || !found || !fresh {
+	if err != nil || !fresh {
 		w.watch.Forget()
 		w.found = partmap.Findings{}
 		return
 	}
+	if !found {
+		// NO MAP, so no lineage to measure a duration across: what
+		// holds is this sighting's.
+		w.watch.Forget()
+		w.found = whole
+		return
+	}
 	w.found = w.watch.Observe(m, live, now)
+}
+
+// whole is what a sighting finds where the store holds no map: under layout 0,
+// its one partition unserved when no data node the router would ask has a copy
+// that serves it — nothing where no live lease names the estate at all, and
+// nothing under a partitioned layout whose first map is not written yet, which
+// places nothing. An error is a roster that cannot say who the data nodes are.
+func (w *estateWatch) whole(live []partmap.Presence) (partmap.Findings, error) {
+	layout, err := w.view.Layout()
+	switch {
+	case errors.Is(err, partmap.ErrNoMap):
+		// A PARTITIONED LAYOUT whose first map is not written yet places
+		// nothing, so nothing is unserved.
+		return partmap.Findings{}, nil
+	case err != nil:
+		return partmap.Findings{}, err
+	case layout.Number != 0 || w.roster == nil:
+		return partmap.Findings{}, nil
+	}
+	nodes, err := w.roster.LiveDataNodes()
+	if err != nil {
+		return partmap.Findings{}, err
+	}
+	var out partmap.Findings
+	for _, p := range layout.Partitions() {
+		c, named := partmap.WholeCoverage(p, live, nodes)
+		if named && c.Unserved() {
+			out.Unserved = append(out.Unserved, partmap.Finding{Partition: p.String(),
+				Wanted: c.Wanted})
+		}
+	}
+	return out, nil
 }
 
 // reading fills the estate alarms' half of a reading: the view's staleness by

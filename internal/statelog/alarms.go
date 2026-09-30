@@ -428,8 +428,9 @@ type Reading struct {
 
 	// EstateUnserved is how many partitions of the estate map no copy can
 	// answer for — no holder the map lists serving whose node it counts
-	// present and healthy — as this node's view of the map sees them now,
-	// and EstateUnservedWhich names them, the first few.
+	// present and healthy, or under layout 0 no live data node whose copy
+	// serves the one partition — as this node's view sees them now, and
+	// EstateUnservedWhich names them, the first few.
 	EstateUnserved      int
 	EstateUnservedWhich string
 
@@ -932,6 +933,10 @@ var table = []rule{
 				r.EstateUnserved, r.EstateUnservedWhich), r.EstateUnserved > 0
 		},
 		remedy: "Every read and write routed to these partitions is refused. " +
+			"Under layout 0, where every data node holds the whole estate, each data " +
+			"node's copy has stopped serving it: the per-log alarms on each name what " +
+			"is wrong with its copy (`crewlet retention status`), and a copy that " +
+			"recovers serves again at once. Under a partitioned layout, " +
 			"`crewlet estate map` lists each one's holders and marks a node the map " +
 			"counts absent or unhealthy with `!`: bring one of them back and it serves " +
 			"again at once. If none is coming back, restore the partition from a backup " +

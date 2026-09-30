@@ -102,7 +102,8 @@ var alarmMeaning = map[Kind]string{
 		"absence grace; a full one keeps serving while writes go elsewhere.",
 	KindEstateUnserved: "A partition of the estate map has no copy that can answer: every " +
 		"holder the map lists serving it is on a node the map counts absent or unhealthy, " +
-		"or it has none. Every read and write routed to it is refused.",
+		"or it has none — or, under layout 0, every live data node's copy of the estate " +
+		"has stopped serving it. Every read and write routed to it is refused.",
 	KindEstateShort: "A partition has fewer copies that can answer than its target has, and " +
 		"this node has seen it so for longer than the grace after which the map replaces a " +
 		"member it counts gone.",
