@@ -38,16 +38,26 @@ type Actor struct {
 }
 
 // opClass is what a failover may do with an operation that went unanswered.
+//
+// EVERY CLASS MOVES ON FROM A NODE THAT RAN NOTHING — one that answered it does
+// not serve the partition, has no backend for it, is not serving yet or is
+// behind the caller's floor, and a write refused by the write authority's gate
+// 3 (`not_holder`, `holding_unknown`), which appends nothing. What differs is
+// what may be repeated once a node MAY have run it.
 type opClass int
 
 const (
-	// opRead runs anywhere and changes nothing: an unanswered one is asked
-	// of the next node.
+	// opRead runs on any serving holder of its partition and changes
+	// nothing: an unanswered one is asked of the next.
 	opRead opClass = iota
 
 	// opIdempotentWrite carries an operation id the caller minted once, and
 	// the ledger answers a repeat with the first copy's result — so an
-	// unanswered one is asked of the next node under the same id.
+	// unanswered one is asked of the next serving holder under the same id.
+	// So is one a holder answered `unvouched` ([statelog.Result.Unvouched]):
+	// that holder's ledger cannot say whether the operation landed, and
+	// another holder's may, so the answer is not final until every holder
+	// has been asked.
 	opIdempotentWrite
 
 	// opOnceWrite has no id a caller holds, so a repeat is a second write.
@@ -62,8 +72,21 @@ type request struct {
 	Args  json.RawMessage `json:"args,omitempty"`
 	Actor *Actor          `json:"actor,omitempty"`
 
+	// Partitions are the partitions this request addresses AT THIS NODE —
+	// the one a single-partition operation resolved to, by the asker's
+	// layout. Empty for an operation that addresses none ([opSpec.partitions]
+	// nil), and on a request from a build that predates partitions, which
+	// the serving node resolves by its own layout instead.
+	Partitions []string `json:"partitions,omitempty"`
+
+	// MapEpoch is the estate map's epoch the asker routed by, 0 where there
+	// is no map (layout 0). It is what a `not_holder` is weighed against on
+	// the asking side, and the serving node names it in its refusal.
+	MapEpoch uint64 `json:"map_epoch,omitempty"`
+
 	// Floors are the positions the serving node must have applied before it
-	// runs the operation — the asking node's session. See the package doc.
+	// runs the operation — the asking node's session, on the logs of the
+	// partition asked for. See the package doc.
 	Floors []statelog.Position `json:"floors,omitempty"`
 
 	// Deadline is the asker's, so the serving node stops working on an
@@ -89,6 +112,13 @@ const (
 	// unservedBehind: this node could not reach the caller's floor within
 	// the read budget.
 	unservedBehind unservedReason = "behind"
+
+	// unservedNotHolder: this node does not serve the partition asked for —
+	// it never held it, has begun to leave it, has not finished joining it,
+	// or has stopped serving it on a fault. The reply carries the node's own
+	// map epoch ([reply.Epoch]), which is what tells the asker whether ITS
+	// view or the server's is the stale one.
+	unservedNotHolder unservedReason = "not_holder"
 )
 
 // reply is what a serving node answers.
@@ -101,6 +131,12 @@ type reply struct {
 	Unserved unservedReason `json:"unserved,omitempty"`
 	Detail   string         `json:"detail,omitempty"`
 
+	// Epoch is the SERVER's estate-map epoch, set with a `not_holder`: newer
+	// than the asker's view says the asker is routing by an old map, and
+	// not newer says the server is the one behind (a joiner not yet
+	// serving) or on its way out.
+	Epoch uint64 `json:"epoch,omitempty"`
+
 	// Result is the operation's answer, and Err its failure. At most one.
 	Result json.RawMessage `json:"result,omitempty"`
 	Err    *wireError      `json:"error,omitempty"`
@@ -112,27 +148,53 @@ type reply struct {
 }
 
 // opSpec is one operation's declaration: what it is called, how a failover
-// treats it, which stream's floor applies, and its server half.
+// treats it, which partitions it addresses, and its server half.
 type opSpec struct {
 	name   string
 	class  opClass
-	stream string
 	args   reflect.Type
 	result reflect.Type
+
+	// partitions resolves a request's arguments, decoded, to the partitions
+	// it addresses under a layout — exactly one for every operation this
+	// build declares — or is nil for an operation that addresses none (the
+	// node's own event log), which any data node answers. A floor's
+	// streams are derived from the partition's logs, so an operation names
+	// no stream of its own.
+	partitions func(ctx context.Context, l statelog.Layout, r Resolver,
+		raw json.RawMessage) ([]statelog.PartitionID, error)
 
 	// actor says whether the operation acts AS somebody, which a request
 	// then has to name.
 	actor bool
 
-	// ungated operations run on a node whose replicated estate is not
-	// established: they touch only what the node keeps for itself.
+	// ungated operations run on a node whose copy is not serving yet: they
+	// touch only what the node keeps for itself, or ask the gate
+	// themselves.
 	ungated bool
+
+	// floorless operations carry no session floor, because what they read
+	// is not the log's rows at a position — see [opWorkSearch].
+	floorless bool
 
 	serve func(ctx context.Context, b Backend, actor *Actor, raw json.RawMessage) (any, error)
 }
 
-// op is a typed handle on one registered operation.
-type op[A, R any] struct{ spec *opSpec }
+// op is a typed handle on one registered operation: its declaration, and its
+// two halves in the caller's own types, which the router calls in-process
+// where this node serves the partition — no encoding, and an error keeps its
+// own identity rather than the wire's rebuilt one.
+type op[A, R any] struct {
+	spec       *opSpec
+	serve      func(ctx context.Context, b Backend, actor *Actor, args A) (R, error)
+	partitions partitionsFunc[A]
+}
+
+// partitionsFunc resolves an operation's arguments to the partitions it
+// addresses under a layout. It may READ through the resolver first — a bare
+// id resolving to the partition that holds it — and says so by calling it.
+type partitionsFunc[A any] func(ctx context.Context, l statelog.Layout, r Resolver,
+	args A) ([]statelog.PartitionID, error)
 
 // registry is every operation this build serves, keyed by name.
 //
@@ -143,41 +205,67 @@ type op[A, R any] struct{ spec *opSpec }
 var registry = map[string]*opSpec{}
 
 // define declares an operation. Package-level, at init: a duplicate name is a
-// build that cannot serve, so it panics rather than silently shadowing.
-func define[A, R any](name string, class opClass, stream string, actor bool,
+// build that cannot serve, so it panics rather than silently shadowing. A nil
+// partitions is an operation that addresses no partition ([opSpec.partitions]).
+func define[A, R any](name string, class opClass, partitions partitionsFunc[A], actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {
 	if _, dup := registry[name]; dup {
 		panic(fmt.Sprintf("estate: operation %q declared twice", name))
 	}
 	spec := &opSpec{
-		name: name, class: class, stream: stream, actor: actor,
+		name: name, class: class, actor: actor,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
-	spec.serve = func(ctx context.Context, b Backend, who *Actor, raw json.RawMessage) (any, error) {
+	decode := func(raw json.RawMessage) (A, error) {
 		var args A
 		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &args); err != nil {
-				return nil, fmt.Errorf("estate: %s: decode the arguments: %w", name, err)
+				return args, fmt.Errorf("estate: %s: decode the arguments: %w", name, err)
 			}
 		}
+		return args, nil
+	}
+	if partitions != nil {
+		spec.partitions = func(ctx context.Context, l statelog.Layout, r Resolver,
+			raw json.RawMessage) ([]statelog.PartitionID, error) {
+			args, err := decode(raw)
+			if err != nil {
+				return nil, err
+			}
+			return partitions(ctx, l, r, args)
+		}
+	}
+	checked := func(ctx context.Context, b Backend, who *Actor, args A) (R, error) {
 		if spec.actor && (who == nil || who.Handle == "") {
-			return nil, fmt.Errorf("estate: %s acts as somebody and the request "+
+			var zero R
+			return zero, fmt.Errorf("estate: %s acts as somebody and the request "+
 				"names nobody — a write whose author was not stated is not an "+
 				"audit trail", name)
 		}
 		return serve(ctx, b, who, args)
 	}
+	spec.serve = func(ctx context.Context, b Backend, who *Actor, raw json.RawMessage) (any, error) {
+		args, err := decode(raw)
+		if err != nil {
+			return nil, err
+		}
+		return checked(ctx, b, who, args)
+	}
 	registry[name] = spec
-	return op[A, R]{spec: spec}
+	return op[A, R]{spec: spec, serve: checked, partitions: partitions}
 }
 
-// defineUngated declares an operation the establishment gate does not hold
+// ungated declares that the establishment gate does not hold this operation
 // back — see [opSpec.ungated].
-func defineUngated[A, R any](name string, class opClass, stream string, actor bool,
-	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
-) op[A, R] {
-	o := define(name, class, stream, actor, serve)
+func (o op[A, R]) ungated() op[A, R] {
 	o.spec.ungated = true
+	return o
+}
+
+// floorless declares that this operation carries no session floor — see
+// [opSpec.floorless].
+func (o op[A, R]) floorless() op[A, R] {
+	o.spec.floorless = true
 	return o
 }

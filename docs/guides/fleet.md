@@ -285,14 +285,18 @@ refuses either without `data`, naming the field and saying the refusal lasts
 only as long as that layout. Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
-- **Reads and writes** go to one data node the asking node picks, and move to
-  the next if it does not answer — except a knowledge-base write, which has no
-  operation id a repeat could be collapsed on and is reported as unknown
-  rather than sent twice.
+- **Reads and writes** go to a data node that serves the partition the call
+  addresses — under this release's layout, any data node — picked by the asking
+  node, and move to the next if it does not answer or ran nothing — except a
+  knowledge-base write, which has no operation id a repeat could be collapsed
+  on and is reported as unknown rather than sent twice. A data node's own seats
+  go through the same router and are answered from its own copy
+  ([how a request reaches its partition](../concepts/estate-placement.md#how-a-request-reaches-its-partition)).
 - **Its own writes are visible to its next read** on whichever data node
   answers it: every request carries the furthest position the node has been
   told landed, and a data node that has not applied that far says so rather
-  than answer from before it.
+  than answer from before it. When no data node can serve the call, the tool
+  fails naming the partition nobody served.
 - **Its audit trail is kept by a data node.** What it publishes about its
   turns is handed to a data node's event log, where `GET /events` on that node
   shows it.
@@ -308,8 +312,8 @@ node's seats do, and each of those tools asks a data node over the broker:
   queues nothing, so a stateless leaf is not asked
   ([who has to acknowledge](retention.md#who-has-to-acknowledge)).
 
-Seat admission on a stateless node asks a data node whether its copy is
-established, so a stateless node claims no seat until one is. While no data
+Seat admission on a stateless node asks a data node whether its copy is level
+with its logs, so a stateless node claims no seat until one is. While no data
 node answers, its seats' tracker and knowledge tools fail saying so, and
 `fleet_role_unmanned` names `data` if no live node holds it.
 

@@ -278,15 +278,21 @@ type Engine struct {
 	// it more than once rely on the later reads.
 	native atomic.Pointer[native]
 
-	// remote is the same thing on a node that holds no data: the seams its
-	// seats' tools take, answered by a data node. At most one of the two is
+	// remote is the same thing on a node that holds no data: which halves
+	// its seats' tools reach through the router. At most one of the two is
 	// ever set, and on the same terms — see remote.go.
 	remote atomic.Pointer[remoteNative]
 
-	// estate is a stateless node's client of the data nodes, and custody
-	// the forwarder that hands them this node's event records. Both nil on
-	// a node that holds data; built in [New] before anything publishes.
-	estate  *estate.Client
+	// router is how every seat tool on this node reaches the estate — this
+	// node's own copy where it serves the partition, a holder's otherwise —
+	// built in [New] on EVERY node, before anything publishes; see
+	// router.go. local is what this node serves, nil on a node that holds
+	// no data.
+	router *estate.Router
+	local  *localEstate
+
+	// custody hands a stateless node's event records to a data node; nil
+	// on a node that holds data.
 	custody *observe.Custody
 
 	// stopEstate withdraws this data node as a server of the estate, nil
@@ -769,8 +775,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
 
-	// THE VIEW OF THE FLEET'S DATA NODES, built before the estate client
-	// that asks it on every request. Building it lists nothing: it runs
+	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
+	// it on every request. Building it lists nothing: it runs
 	// once the boot's failure path is armed below, and answers unknown
 	// until its first listing — see remote.go.
 	if e.dataView, err = newDataView(opts.Bootstrap, backends.Coord); err != nil {
@@ -780,20 +786,26 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, err
 	}
 
-	// A NODE WITHOUT `data` ASKS A DATA NODE FOR EVERYTHING IT DOES NOT
-	// HOLD, and hands it the record of what it did — built before anything
-	// publishes, because the custody listener must be in place before the
-	// first turn a restarted node picks up off its durable inbox.
-	if !holdsData(opts.Bootstrap) {
-		if e.estate, err = estate.NewClient(estate.ClientOptions{
-			Queue: backends.Queue, Roster: viewRoster{view: e.dataView}, Self: nodeID,
-		}); err != nil {
-			if ownsBackends {
-				backends.Close(ctx)
-			}
-			return nil, fmt.Errorf("engine: estate client: %w", err)
+	// EVERY NODE ROUTES THE ESTATE: a data node answers what it serves and
+	// asks for the rest, and a node without `data` asks for everything —
+	// see router.go. Built before anything publishes, because a tool is
+	// handed its facades as soon as a seat is.
+	if holdsData(opts.Bootstrap) {
+		e.local = newLocalEstate(e, opts.Bootstrap)
+	}
+	if e.router, err = e.newRouter(backends.Queue, nodeID); err != nil {
+		if ownsBackends {
+			backends.Close(ctx)
 		}
-		e.custody = observe.NewCustody(e.estate)
+		return nil, err
+	}
+
+	// A NODE WITHOUT `data` HANDS A DATA NODE THE RECORD OF WHAT IT DID —
+	// before anything publishes, because the custody listener must be in
+	// place before the first turn a restarted node picks up off its durable
+	// inbox.
+	if !holdsData(opts.Bootstrap) {
+		e.custody = observe.NewCustody(e.router)
 		backends.Queue.AddPublishListener(e.custody.Listen())
 		e.custody.Start(ctx)
 	}

@@ -4,14 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -24,9 +21,9 @@ import (
 // A node without the `data` role runs no state log, keeps no replicated
 // estate and has no lexical index. Its seats still read and write the
 // company's tracker and knowledge base through exactly the tools a data node's
-// seats have — so what is here is the SAME seam each of those tools takes,
-// satisfied by [estate.Client] rather than by this node's own reader and
-// writer. The tool layer cannot tell, and must not: a tool that behaved
+// seats have — the same [estate.Router] facades every node's tools are handed,
+// which on this node answer nothing in-process and ask a data node for
+// everything. The tool layer cannot tell, and must not: a tool that behaved
 // differently on a stateless node would be two tools, and only one of them
 // tested.
 //
@@ -38,31 +35,24 @@ import (
 // and the embedding duty. Each is either a copy this node does not keep or a
 // job a data node already does for the whole fleet.
 
-// remoteNative is a stateless node's native runtime. Written once, like
-// [native], before it is published.
+// remoteNative is a stateless node's native runtime: which halves the company
+// runs natively, reached through the router. Written once, like [native],
+// before it is published.
 type remoteNative struct {
-	client *estate.Client
-
 	// tracker and wiki are the halves this company runs natively. A half
 	// the company runs on a vendor is not served from here at all.
 	tracker bool
 	wiki    bool
-
-	// ready caches the last admission answer — see [remoteNative.admitted].
-	mu      sync.Mutex
-	readyAt time.Time
-	ready   bool
 }
 
-// startRemote brings up a stateless node's native runtime, over the estate
-// client [New] built before anything published.
+// startRemote brings up a stateless node's native runtime, over the router
+// [New] built before anything published.
 func (e *Engine) startRemote(c *Company) error {
-	if e.estate == nil {
-		return errors.New("engine: this node holds no data and has no estate " +
-			"client to reach a node that does")
+	if e.router == nil {
+		return errors.New("engine: this node holds no data and has no router " +
+			"to reach a node that does")
 	}
 	e.remote.Store(&remoteNative{
-		client:  e.estate,
 		tracker: c.Config.TrackerBackendFor() == config.TrackerNative,
 		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
 	})
@@ -72,45 +62,6 @@ func (e *Engine) startRemote(c *Company) error {
 		"detail", "this node holds no data: its seats read and write the "+
 			"company's tracker and knowledge base through a data node")
 	return nil
-}
-
-// remoteAdmission is how long a stateless node trusts its last answer about
-// whether a data node can serve its seats.
-//
-// FIVE SECONDS: the admission gate is asked on every placement sweep, and a
-// fresh ask per sweep is a request to a data node per heartbeat per node for
-// an answer that changes when a node joins or leaves — which the presence
-// lease's own TTL already bounds at the same order.
-const remoteAdmission = 5 * time.Second
-
-// admitted is the stateless node's seat admission: a data node answered, and
-// it runs the halves this company needs natively. A data node answers only
-// once its own copy is established, so this is the same gate a data node's
-// own seats wait on, asked of the node that will serve them.
-func (r *remoteNative) admitted(ctx context.Context) bool {
-	r.mu.Lock()
-	if time.Since(r.readyAt) < remoteAdmission {
-		ready := r.ready
-		r.mu.Unlock()
-		return ready
-	}
-	r.mu.Unlock()
-	asked, cancel := context.WithTimeout(ctx, remoteAdmission)
-	defer cancel()
-	trackerServed, pagesServed, err := r.client.Serves(asked)
-	ready := err == nil && (!r.tracker || trackerServed) && (!r.wiki || pagesServed)
-	if !ready {
-		detail := "no data node serves a half this company runs natively"
-		if err != nil {
-			detail = err.Error()
-		}
-		log.DebugContext(ctx, "seat_admission_withheld", "reason", "no_data_node",
-			"detail", detail)
-	}
-	r.mu.Lock()
-	r.ready, r.readyAt = ready, time.Now()
-	r.mu.Unlock()
-	return ready
 }
 
 // dataRoster is every live node that holds data, by id, as this node's WATCHED
@@ -137,33 +88,8 @@ func (r *remoteNative) admitted(ctx context.Context) bool {
 // each runs on a duty's tick rather than per request, and each decides
 // something a roster up to a heartbeat old must not — what may be trimmed,
 // who may be evicted, whether a fleet-wide operation may proceed.
-func (e *Engine) dataRoster(ctx context.Context) ([]string, error) {
-	return viewRoster{view: e.dataView}.DataNodes(ctx)
-}
-
-// viewRoster is the watched view as the estate client's roster.
-type viewRoster struct{ view *coord.LeaseView }
-
-// DataNodes implements [estate.Roster]. A node with no view has no
-// coordination and so no fleet: nobody else to ask, which is an answer rather
-// than an unknown.
-func (r viewRoster) DataNodes(context.Context) ([]string, error) {
-	if r.view == nil {
-		return nil, nil
-	}
-	leases, _, err := r.view.Leases()
-	if err != nil {
-		return nil, fmt.Errorf("engine: which nodes hold data: %w", err)
-	}
-	return dataNodesOf(leases), nil
-}
-
-// Unanswered implements [estate.Roster]: a node the view named went silent,
-// so it lists again rather than waiting out its heartbeat.
-func (r viewRoster) Unanswered(string) {
-	if r.view != nil {
-		r.view.Invalidate()
-	}
+func (e *Engine) dataRoster(context.Context) ([]string, error) {
+	return presenceRoster{view: e.dataView}.LiveDataNodes()
 }
 
 // newDataView builds the watched view of the fleet's presence leases, or nil
@@ -240,18 +166,20 @@ func dataNodesOf(held []coord.Lease) []string {
 	return out
 }
 
-// serveEstate makes this data node answer the fleet's stateless nodes.
+// serveEstate makes this data node answer the fleet for the partitions it
+// serves.
 //
-// EVERY DATA NODE SERVES, whether or not such a node exists yet — one joins
-// without anybody reconfiguring the members — and from BEFORE its native
-// runtime is up: the backend is resolved per request, so a request arriving
-// first is answered "not here" rather than refused, and custody of a
-// stateless node's event records does not wait on the tracker at all.
+// EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
+// without anybody reconfiguring the others — and from BEFORE its native runtime
+// is up: the backend is resolved per request, so a request arriving first is
+// answered "not here" rather than refused, and custody of a stateless node's
+// event records does not wait on the tracker at all.
 func (e *Engine) serveEstate(ctx context.Context) error {
-	if !holdsData(e.boot) || e.backends == nil || e.backends.Queue == nil {
+	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	stop, err := estate.Serve(ctx, e.backends.Queue, e.id, e.estateBackend)
+	stop, err := estate.Serve(ctx, e.backends.Queue, e.id, e.local, e.estatePlacement(),
+		e.serverSeams())
 	if err != nil {
 		return fmt.Errorf("engine: serve the estate: %w", err)
 	}
@@ -283,64 +211,4 @@ func provenanceOf(actor builtin.Actor) tracker.Provenance {
 // remoteActor is a tool's actor as the estate carries it.
 func remoteActor(actor builtin.Actor) estate.Actor {
 	return estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: provenanceOf(actor)}
-}
-
-// estateBackend is this data node's answer to a stateless node, resolved per
-// request — see [estate.Backend].
-//
-// WRITES ONLY WHILE THIS NODE PUBLISHES. A node restarted into a maintenance
-// mode is the evidence a capacity operation is established from, and a write
-// it took on a stateless node's behalf would be the publish the mode exists to
-// rule out — so its writers are absent ([Engine.writeSide] hands none out) and
-// every write is answered "not here".
-//
-// ALWAYS A BACKEND, native runtime or not: the event log is this node's own
-// and takes custody of a stateless node's records whatever backends the
-// company runs. The native halves are there once the runtime is.
-func (e *Engine) estateBackend() (estate.Backend, bool) {
-	b := estate.Backend{Events: e.backends.Store.Events()}
-	n := e.native.Load()
-	if n == nil {
-		return b, true
-	}
-	b = estate.Backend{
-		Events: b.Events,
-		Units:  liveUnits{engine: e}, Leads: liveLeads{engine: e},
-		Seat: func(handle string) (*org.Role, *org.Organization) {
-			c := e.Company()
-			if c == nil || c.Org == nil {
-				return nil, nil
-			}
-			return c.Org.AgentSeatByHandle(handle), c.Org
-		},
-		Committed:   e.WaitCommitted,
-		Established: e.NativeHydrated,
-	}
-	if n.trackerReader != nil {
-		b.Tracker = n.trackerReader
-	}
-	if n.itemSearch != nil {
-		b.WorkSearch = n.itemSearch
-	}
-	if n.pageReader != nil {
-		b.Pages = n.pageReader
-	}
-	if n.searcher != nil {
-		b.Knowledge = n.searcher
-	}
-	writer, store := e.writeSide()
-	if writer != nil {
-		b.Writer = func(a estate.Actor) estate.TrackerWriter {
-			// A NIL INTERFACE, never a typed nil: the server reads nil
-			// as "the tracker refused to act as this party".
-			if w := writer.As(a.Handle, a.Kind, a.Provenance); w != nil {
-				return w
-			}
-			return nil
-		}
-	}
-	if store != nil {
-		b.PageWriter = store
-	}
-	return b, true
 }

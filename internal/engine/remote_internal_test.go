@@ -48,8 +48,8 @@ func TestTheTrimAndTheGateCountOnlyDataNodes(t *testing.T) {
 
 // A DATA NODE IN A MAINTENANCE MODE TAKES NO WRITE FOR ANYBODY. The mode is
 // the evidence a capacity operation is established from — no publisher on
-// this node — and a write it took on a stateless node's behalf would be the
-// publish the mode rules out. Its reads are still served.
+// this node — and a write it took on another node's behalf, or its own seats',
+// would be the publish the mode rules out. Its reads are still served.
 func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 	t.Parallel()
 	for mode, wantWriters := range map[statelog.MaintenanceMode]bool{
@@ -58,19 +58,17 @@ func TestAMaintenanceModeDataNodeServesNoWriter(t *testing.T) {
 		statelog.ModeSeal:        false,
 	} {
 		e := &Engine{mode: mode, backends: &Backends{}}
-		e.native.Store(&native{
+		n := &native{
 			writer: &tracker.Writer{}, pages: &pages.Store{},
 			trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{},
-		})
-		b, ok := e.estateBackend()
-		if !ok {
-			t.Fatalf("%s: no backend", mode)
 		}
+		e.native.Store(n)
+		b := e.partitionBackend(n, statelog.EstatePartition)
 		if got := b.Writer != nil && b.PageWriter != nil; got != wantWriters {
 			t.Errorf("%s: writers offered = %v, want %v", mode, got, wantWriters)
 		}
-		if b.Tracker == nil || b.Pages == nil || b.Events == nil {
-			t.Errorf("%s: a read half or the event log is missing", mode)
+		if b.Tracker == nil || b.Pages == nil {
+			t.Errorf("%s: a read half is missing", mode)
 		}
 	}
 }

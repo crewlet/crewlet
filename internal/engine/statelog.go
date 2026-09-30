@@ -2016,7 +2016,16 @@ func (s *stateLog) identityDomains() []*runningLog {
 // domain is what keeps that a property of the domain rather than a list
 // somewhere of the ones to skip.
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, func(h statelog.Health) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, everyPartition, func(h statelog.Health) (bool, statelog.ReadRefusal) {
+		return h.Established(strict)
+	})
+}
+
+// PartitionEstablished is [stateLog.Established] over p's logs alone — what a
+// seat's admission asks of the copy of p that will serve it.
+func (s *stateLog) PartitionEstablished(ctx context.Context, p statelog.PartitionID,
+	strict bool) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, onlyPartition(p), func(h statelog.Health) (bool, statelog.ReadRefusal) {
 		return h.Established(strict)
 	})
 }
@@ -2027,21 +2036,36 @@ func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog
 // zero this instant, which is admission's question and not this one. What a
 // node's estate lease says of its copy (estatelease.go).
 func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
-	return s.everyReadiness(ctx, statelog.Health.Serving)
+	return s.everyReadiness(ctx, everyPartition, statelog.Health.Serving)
 }
 
-// everyReadiness is judge over every domain whose health gates seat admission,
-// in the register's order, answering the first refusal — and
+// PartitionAnswers is whether this node's copy of p may answer a request now,
+// every log of p judged by [statelog.Health.Answers] — what the estate's router
+// asks of every copy it would answer from (see [localEstate]).
+func (s *stateLog) PartitionAnswers(ctx context.Context, p statelog.PartitionID) (bool, statelog.ReadRefusal) {
+	return s.everyReadiness(ctx, onlyPartition(p), statelog.Health.Answers)
+}
+
+// everyPartition selects every running log.
+func everyPartition(*runningLog) bool { return true }
+
+// onlyPartition selects the running logs of partition p.
+func onlyPartition(p statelog.PartitionID) func(*runningLog) bool {
+	return func(running *runningLog) bool { return running.id.Partition == p }
+}
+
+// everyReadiness is judge over every selected domain whose health gates seat
+// admission, in the register's order, answering the first refusal — and
 // [statelog.RefuseBrokerUnreachable] for a domain whose health could not be
 // read. A node with no state log is judged ready: it has nothing to wait for.
-func (s *stateLog) everyReadiness(ctx context.Context,
+func (s *stateLog) everyReadiness(ctx context.Context, selected func(*runningLog) bool,
 	judge func(statelog.Health) (bool, statelog.ReadRefusal)) (bool, statelog.ReadRefusal) {
 
 	if s == nil {
 		return true, ""
 	}
 	for _, running := range s.running() {
-		if !running.domain.ReadinessInput() {
+		if !selected(running) || !running.domain.ReadinessInput() {
 			continue
 		}
 		health, err := s.health(ctx, running)

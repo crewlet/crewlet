@@ -62,6 +62,76 @@ stateDiagram-v2
     serving --> [*]: membership removed the node
 ```
 
+## How a request reaches its partition
+
+Every node — with `data` or without — reaches the estate through one
+**router**, and a seat's tools behave the same on either kind of node. Each
+operation says which partition it addresses: an operation on one task the
+partition that holds the task, a query over a domain that domain's partition.
+At layout 0 every one of them addresses `estate.000`.
+
+```mermaid
+flowchart TD
+    op[A seat's tool call] --> part[Resolve its partition]
+    part --> local{Does this node serve it?}
+    local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
+    local -- no --> order[Ask its holders in order:<br/>last to answer, rendezvous, silent ones last]
+    own -- behind, or not answering yet --> order
+    order --> reply{The holder's answer}
+    reply -- ran it --> done[The answer]
+    reply -- not_holder at a newer map epoch --> refresh[Read the map again, once,<br/>and ask the holders it names]
+    reply -- ran nothing --> order
+    refresh --> order
+    order -- nobody left --> unserved[Refused, naming the partition]
+```
+
+- **This node first, where it serves the partition.** A data node answers its
+  own seats' calls from its own copy, in-process, and asks nobody.
+- **Otherwise the partition's holders, in order**: the node that last answered
+  for this partition, then an order that spreads askers across the holders, with
+  a node that went silent in the last thirty seconds asked last. At layout 0 the
+  holders are every live data node the fleet's presence names; once the estate
+  is divided they are the map's serving holders.
+- **A node that ran nothing is passed over, whatever the operation**: one that
+  does not serve the partition (`not_holder`), runs no native backend for it,
+  whose copy answers no request yet, or that is behind the caller's floor. A
+  write the answering node refused because it does not serve the log's
+  partition — or could not tell whether it does — appended nothing, and moves on
+  too. What may be repeated once a node *may* have run a write is the
+  operation's own rule: a tracker write moves on under the same operation id, a
+  knowledge-base write that went unanswered is reported as unknown and never sent
+  twice, and a tracker write one holder answered *unvouched* — its ledger cannot
+  say whether the operation landed — is asked of the next holder under the same
+  id before the caller is told the outcome is unknown.
+- **`not_holder` carries the answering node's map epoch.** Newer than the one
+  the asker routed by, it means the asker's view is old: it reads the map again,
+  once per request, and asks the holders the fresh map names. Otherwise the
+  answering node is the one behind — joining and not serving yet, or leaving —
+  and the asker moves on.
+- **Nobody serving is an answer that names the partition** — *no node serves
+  `tracker.007` right now*, with what each holder said — never an empty list,
+  which would say the company has none of what was asked for.
+
+A read waits up to ten seconds on one holder before the next is asked, a write
+up to a minute (or the caller's own deadline); neither is ever longer than the
+caller's deadline.
+
+**Read-your-writes, on every node.** Each node keeps one table of the furthest
+position its writes reached on each log. Every request for a partition carries
+this node's floors on that partition's logs, and whichever holder answers —
+this node included — first waits up to two seconds to have applied them, or
+says it is behind and the next holder is asked. A data node's own copy is held
+to the same floors, because its seats may have written a partition through
+another holder while it was not serving it. Floors on another partition's logs
+are never carried: a lag there is not one this partition's holders could close.
+
+**Which copy answers.** A copy answers requests once it is level with its logs,
+or has drained them since it started and stays within a thousand records of
+their ends. Seat admission is stricter, and asks it of the copy that will serve
+the seat: a node's own where it serves the partition, otherwise the first
+holder that answers — so a node claims no seat while its own copy is behind,
+and a node holding no data claims none until a data node's copy is level.
+
 ## Who is in the map
 
 A data node offers itself on its **estate lease** (`estate:<node>`): its share

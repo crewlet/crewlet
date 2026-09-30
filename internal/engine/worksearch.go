@@ -88,18 +88,18 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // one-line exported wrapper around it — which is two places for the typed-nil
 // rule above to be stated and one of them to stop matching.
 //
-// ON A NODE THAT HOLDS NO DATA it is a data node's search, asked over the
-// estate — the same verb over the same fleet-wide index, answered by a node
-// that has one.
+// THROUGH THE ROUTER ON EVERY NODE, like every other tool seam: a data node's
+// router answers from its own index, and a node that holds no data asks a node
+// that has one — the same verb over the same fleet-wide index.
 func WorkSearcher(e *Engine) builtin.WorkSearcher {
 	if r := e.remote.Load(); r != nil {
 		if !r.tracker {
 			return nil
 		}
-		return r.client.Work()
+		return e.router.Work()
 	}
-	if s := e.WorkSearch(); s != nil {
-		return s
+	if s := e.WorkSearch(); s != nil && e.router != nil {
+		return e.router.Work()
 	}
 	return nil
 }

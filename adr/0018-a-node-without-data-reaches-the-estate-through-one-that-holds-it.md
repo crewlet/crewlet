@@ -60,3 +60,31 @@ any case.
 Where the bulk of the company's data lives. Every data node still holds the
 whole replicated estate; this record decides how a node that holds none reaches
 it, not how the estate is divided between the nodes that hold it.
+
+## Amendment — every node routes
+
+The client a node without `data` ran is now a ROUTER that every node runs,
+and the decision above holds through it unchanged: one subject per serving
+node, the asker's choice of node, the failover rule stated per operation and
+the session floor on every request. What the amendment adds is the unit the
+router routes by — a PARTITION of the estate, which every operation names —
+and three consequences of routing by one on every node rather than by "any
+data node" on the nodes that hold none:
+
+- A data node reaches its OWN copy through the same router, in-process, held to
+  the same floors as a remote holder — its seats may have written a partition
+  through another holder while it was not serving it — and passes a copy that
+  answers no request over for another holder, exactly as a remote asker does.
+- A node that does not serve the partition it is asked for answers
+  `not_holder` with its map epoch, and ran nothing; a newer epoch sends the
+  asker to read the map once and ask again, and a partition no holder serves is
+  refused naming it.
+- A tracker write one holder answered UNVOUCHED is asked of the next under the
+  same operation id before the caller is told the outcome is unknown: that
+  holder's ledger cannot say whether it landed, and another's may.
+
+Under the single-file layout every data node serves the one partition, so what
+a fleet sees of this is routing through the watched view of the presence
+leases, a data node's reads waiting on its floors, and the request gate asking
+whether a copy answers rather than whether it is level this instant.
+`internal/estate` states the rules; the authority and the gate are unchanged.

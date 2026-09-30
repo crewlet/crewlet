@@ -20,8 +20,10 @@ var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " 
 	"that did not answer, so whether it landed is unknown — read it back " +
 	"before writing again")
 
-// ErrNoDataNode is an operation no data node could run: none is live, none
-// answered, or every one that answered was not ready for it.
+// ErrNoDataNode is an operation that addresses no partition — custody of a
+// node's event records — that no data node could run: none is live, none
+// answered, or every one that answered was not ready for it. An operation on
+// a partition answers [ErrPartitionUnserved] instead, naming it.
 var ErrNoDataNode = errors.New("estate: no data node answered")
 
 // sentinel is one error value whose identity crosses the wire.
@@ -98,6 +100,7 @@ var sentinels = []sentinel{
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 	{"estate.ErrNoDataNode", ErrNoDataNode},
+	{"estate.ErrUnaddressed", ErrUnaddressed},
 }
 
 // typedKind is one error type whose value crosses the wire.
@@ -128,6 +131,8 @@ var typedKinds = []typedKind{
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
+
+	{"estate.ErrPartitionUnserved", reflect.TypeFor[*ErrPartitionUnserved]()},
 }
 
 // wireError is an error as it crosses: what it says, and what it is.

@@ -234,19 +234,3 @@ func (e *Engine) estateReading(now time.Time, out *statelog.Reading) {
 		w.reading(now, out)
 	}
 }
-
-// presenceRoster is the fleet's presence view as the estate view's layout-0
-// roster: every live data node, from memory.
-type presenceRoster struct{ view *coord.LeaseView }
-
-// LiveDataNodes implements [partmap.Roster].
-func (r presenceRoster) LiveDataNodes() ([]string, error) {
-	leases, _, err := r.view.Leases()
-	if err != nil {
-		return nil, fmt.Errorf("engine: which nodes hold the estate: %w", err)
-	}
-	return dataNodesOf(leases), nil
-}
-
-// Invalidate implements [partmap.Roster].
-func (r presenceRoster) Invalidate() { r.view.Invalidate() }

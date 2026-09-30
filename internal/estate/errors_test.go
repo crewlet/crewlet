@@ -108,6 +108,40 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	}
 }
 
+// THE ROUTER'S OWN WORDS CROSS TOO, and so does every refusal the router's
+// failover turns on. A partition nobody served names the partition on the far
+// side of a second hop; and a gate-3 refusal rebuilt from the wire must still
+// read as one that appended nothing, or a router that met it on another node
+// would stop at it rather than take the write, under its operation id, to a
+// holder that can.
+func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
+	t.Parallel()
+	var unserved *ErrPartitionUnserved
+	if !errors.As(throughWire(t, &ErrPartitionUnserved{Partition: "tracker.007",
+		Detail: "data-a: no answer"}), &unserved) ||
+		unserved.Partition != "tracker.007" || unserved.Detail != "data-a: no answer" {
+		t.Fatalf("an unserved partition crossed as %+v", unserved)
+	}
+	for _, reason := range []statelog.Reason{statelog.ReasonNotHolder, statelog.ReasonHoldingUnknown} {
+		got := throughWire(t, fmt.Errorf("create: %w", &statelog.Unavailable{
+			Reason: reason, OpID: "op-1", Cause: statelog.ErrNotHolder}))
+		if !appendedNothing(got) {
+			t.Errorf("%s crossed as %v, which the router no longer reads as a "+
+				"refusal that appended nothing", reason, got)
+		}
+		if reason == statelog.ReasonNotHolder && !errors.Is(got, statelog.ErrNotHolder) {
+			t.Errorf("%s lost its cause's identity: %v", reason, got)
+		}
+	}
+	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", tracker.ErrStepUnvouched))
+	if !unvouched(opCreateTask.spec, nil, unvouchedStep) {
+		t.Errorf("an unvouched step crossed as %v, which the router reads as final", unvouchedStep)
+	}
+	if unvouched(opCommentPage.spec, nil, unvouchedStep) {
+		t.Error("a page write — never repeated — was read as one to ask again")
+	}
+}
+
 // A TAG CLASH CROSSES AS A TAG CLASH, whose other tag is what the tool names
 // back to the model.
 func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
@@ -152,7 +186,9 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 		registeredTypes[k.code] = true
 	}
 	var found int
-	for _, pkg := range []string{"tracker", "pages", "statelog"} {
+	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
+	// answers on another's behalf carries them back across a second hop.
+	for _, pkg := range []string{"tracker", "pages", "statelog", "estate"} {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", pkg))
 		for _, name := range vars {
 			found++

@@ -604,29 +604,63 @@ func (n *native) shutdown(ctx context.Context) {
 // native backend is trivially hydrated, which is what a company on Jira and
 // Confluence has.
 //
-// IT TAKES A CONTEXT because on a node that holds no data the answer is a
-// request: the node that will serve the seat's tools is asked, and a sweep
-// that is shutting down must not wait on it.
+// ONE GATE ON EVERY NODE, asked of the copy that will serve the seat through
+// the estate's router ([estate.Router.Serves]): this node's own where it serves
+// the partition a seat needs — STRICT, because this is seat admission rather
+// than a read, and a node merely inside the trim floor still serves rows that
+// are behind, which a seat attaching to it acts on — and otherwise the first
+// holder that answers, which admits only once its own copy is established:
+// the same gate, one hop away. And the router's view must have answered at
+// least once, since a seat on a node that cannot route has no copy to read.
+//
+// IT TAKES A CONTEXT because where this node does not serve the partition the
+// answer is a request, and a sweep that is shutting down must not wait on it.
 func (e *Engine) NativeHydrated(ctx context.Context) bool {
-	if r := e.remote.Load(); r != nil {
-		// ASKED OF THE NODE THAT WILL SERVE THE SEAT: a data node
-		// answers only once its own copy is established, so this is the
-		// same gate, one hop away.
-		return r.admitted(ctx)
-	}
-	n := e.native.Load()
-	if n == nil {
+	runTracker, wiki, ok := e.nativeHalves()
+	if !ok || (!runTracker && !wiki) || e.router == nil {
 		return true
 	}
-	// STRICT, because this is seat admission rather than a read: a node
-	// that is merely inside the trim floor still serves rows that are
-	// behind, and a seat attaching to one acts on them.
-	ok, refusal := n.log.Established(ctx, true)
-	if !ok && refusal != "" {
-		log.DebugContext(ctx, "seat_admission_withheld",
-			"reason", string(refusal))
+	placement := e.estatePlacement()
+	layout, err := placement.Layout()
+	if err != nil {
+		log.DebugContext(ctx, "seat_admission_withheld", "reason", "unroutable",
+			"detail", err.Error())
+		return false
 	}
-	return ok
+	trackerPart := layout.OnlyPartition(tracker.Domain{}.Name())
+	pagesPart := layout.OnlyPartition(pages.Domain{}.Name())
+	for _, p := range admissionPartitions(layout, runTracker, wiki) {
+		if _, _, err := placement.Serving(p); err != nil {
+			log.DebugContext(ctx, "seat_admission_withheld", "reason", "unroutable",
+				"partition", p.String(), "detail", err.Error())
+			return false
+		}
+		trackerServed, pagesServed, err := e.router.Serves(ctx, p)
+		needTracker := runTracker && p == trackerPart
+		needPages := wiki && p == pagesPart
+		if err != nil || (needTracker && !trackerServed) || (needPages && !pagesServed) {
+			detail := "no copy of it admits a seat yet"
+			if err != nil {
+				detail = err.Error()
+			}
+			log.DebugContext(ctx, "seat_admission_withheld", "reason", "no_serving_holder",
+				"partition", p.String(), "detail", detail)
+			return false
+		}
+	}
+	return true
+}
+
+// nativeHalves is which halves this company runs natively here, however this
+// node reaches them — false where it runs no native runtime at all.
+func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
+	if r := e.remote.Load(); r != nil {
+		return r.tracker, r.wiki, true
+	}
+	if n := e.native.Load(); n != nil {
+		return n.trackerReader != nil, n.pageReader != nil, true
+	}
+	return false, false, false
 }
 
 // SeatsServiceable reports whether this node may KEEP the seats it holds.
@@ -1473,38 +1507,40 @@ type trackerSeams struct {
 // trackerHalves is this node's tracker seams, or false where it runs no
 // native tracker.
 //
-// ONE PLACE DECIDES BETWEEN THE TWO, so every tool is handed the same kind of
-// half: a tool whose reader was local and whose writer was remote would read
-// its own write back from a copy that had not seen it.
+// THE ROUTER'S, ON EVERY NODE, so every tool is handed the same kind of half:
+// a data node's router answers from its own copy and a stateless node's asks a
+// data node, and a read after a write waits for the write whichever answers it
+// — the node's floors ([estate.Session]), which the write raises and every
+// holder, this node included, waits for before it reads. A tool whose reader
+// was local and whose writer was remote would read its own write back from a
+// copy that had not seen it; one whose every call goes through the router
+// cannot.
+//
+// A data node that hands out no writer — one in a maintenance mode, which may
+// publish nothing ([Engine.writeSide]) — hands out no tracker tools either,
+// rather than tools whose every write is taken to a peer.
 func (e *Engine) trackerHalves() (trackerSeams, bool) {
 	if r := e.remote.Load(); r != nil {
 		if !r.tracker {
 			return trackerSeams{}, false
 		}
-		return trackerSeams{
-			reader: r.client.Work(),
-			files:  r.client.Work(),
-			as: func(actor builtin.Actor) trackerWriter {
-				return r.client.WriterAs(remoteActor(actor))
-			},
-			// THE SESSION FLOOR IS THE WAIT: a data node applies the
-			// write itself, and what the next read needs is that whichever
-			// node answers it has applied this far.
-			await: r.client.Await,
-		}, true
+	} else {
+		n := e.native.Load()
+		writer, _ := e.writeSide()
+		if n == nil || n.trackerReader == nil || writer == nil {
+			return trackerSeams{}, false
+		}
 	}
-	n := e.native.Load()
-	writer, _ := e.writeSide()
-	if n == nil || n.trackerReader == nil || writer == nil {
-		return trackerSeams{}, false
-	}
+	r := e.router
 	return trackerSeams{
-		reader: n.trackerReader,
-		files:  n.trackerReader,
+		reader: r.Work(),
+		files:  r.Work(),
 		as: func(actor builtin.Actor) trackerWriter {
-			return writer.As(actor.Handle, actor.Kind, provenanceOf(actor))
+			return r.WriterAs(remoteActor(actor))
 		},
-		await: e.WaitCommitted,
+		// THE SESSION FLOOR IS THE WAIT: what the next read needs is that
+		// whichever holder answers it has applied this far.
+		await: r.Await,
 	}, true
 }
 
@@ -1694,21 +1730,21 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 }
 
 // pageHalves is this node's knowledge-base seams, on the terms
-// [Engine.trackerHalves] gives: all local or all remote, never a mixture.
+// [Engine.trackerHalves] gives: the router's on every node.
 func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 	func(context.Context, statelog.Position) error, bool) {
 	if r := e.remote.Load(); r != nil {
 		if !r.wiki {
 			return nil, nil, nil, false
 		}
-		return r.client.Pages(), r.client.Pages(), r.client.Await, true
+	} else {
+		n := e.native.Load()
+		_, store := e.writeSide()
+		if n == nil || n.pageReader == nil || store == nil {
+			return nil, nil, nil, false
+		}
 	}
-	n := e.native.Load()
-	_, store := e.writeSide()
-	if n == nil || n.pageReader == nil || store == nil {
-		return nil, nil, nil, false
-	}
-	return n.pageReader, store, e.WaitCommitted, true
+	return e.router.Pages(), e.router.Pages(), e.router.Await, true
 }
 
 // reservedContainers are the containers a seat's own writes may not target.
@@ -1822,11 +1858,10 @@ func (e *Engine) nudgeSkills() { e.skillSync.Announce(string(config.KnowledgeNat
 // the floor this node carries is its own writes' — so the answering node is
 // at or past both.
 func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skills.Page, error) {
-	r := e.remote.Load()
-	if r == nil {
+	if e.remote.Load() == nil || e.router == nil {
 		return nil, errors.New("engine: this node reaches no data node for its skills")
 	}
-	found, err := r.client.Pages().SkillPages(ctx, container,
+	found, err := e.router.Pages().SkillPages(ctx, container,
 		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		return nil, err

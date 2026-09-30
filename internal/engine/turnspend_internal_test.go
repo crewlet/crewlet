@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -432,8 +433,15 @@ func (w *servedWriter) recorded() ([]tracker.TurnRecord, []string) {
 // staticRoster names one data node.
 type staticRoster struct{ node string }
 
-func (r staticRoster) DataNodes(context.Context) ([]string, error) { return []string{r.node}, nil }
-func (staticRoster) Unanswered(string)                             {}
+func (r staticRoster) LiveDataNodes() ([]string, error) { return []string{r.node}, nil }
+func (staticRoster) Invalidate()                        {}
+
+// servedEstate is a data node serving the whole estate from one backend.
+type servedEstate struct{ backend estate.Backend }
+
+func (s servedEstate) For(context.Context, statelog.PartitionID) (estate.Backend, bool) {
+	return s.backend, true
+}
 
 // spendingEngine is an engine WITHOUT the data role running one seat on the
 // native tracker, whose writes are served by one data node over the estate.
@@ -449,22 +457,20 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 		return q
 	}
 	served := &servedWriter{}
-	stop, err := estate.Serve(t.Context(), start(), "data-1", func() (estate.Backend, bool) {
-		return estate.Backend{
-			Writer:      func(estate.Actor) estate.TrackerWriter { return served },
-			Established: func(context.Context) bool { return true },
-		}, true
-	})
+	placement := partmap.Whole{Running: LayoutZero(), Roster: staticRoster{node: "data-1"}}
+	stop, err := estate.Serve(t.Context(), start(), "data-1", servedEstate{backend: estate.Backend{
+		Writer: func(estate.Actor) estate.TrackerWriter { return served },
+	}}, placement, estate.ServerSeams{})
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 	t.Cleanup(func() { _ = stop(context.Background()) })
 	q := start()
-	client, err := estate.NewClient(estate.ClientOptions{
-		Queue: q, Roster: staticRoster{node: "data-1"}, Self: "agent-1",
+	router, err := estate.NewRouter(estate.RouterOptions{
+		Queue: q, Placement: placement, Self: "agent-1", Session: estate.NewSession(),
 	})
 	if err != nil {
-		t.Fatalf("estate client: %v", err)
+		t.Fatalf("estate router: %v", err)
 	}
 
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
@@ -473,8 +479,8 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	if err != nil {
 		t.Fatalf("phase.NewRegistry: %v", err)
 	}
-	e := &Engine{backends: &Backends{Queue: q}, estate: client}
-	e.remote.Store(&remoteNative{client: client, tracker: true})
+	e := &Engine{backends: &Backends{Queue: q}, router: router}
+	e.remote.Store(&remoteNative{tracker: true})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
