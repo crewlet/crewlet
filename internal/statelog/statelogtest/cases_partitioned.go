@@ -287,6 +287,8 @@ func Partitioned(t *testing.T, new PartitionedFactory) error {
 	// 4. A RELEASE RACING A WRITER.
 	leaver, stayer := w.servers(p)[0], w.servers(p)[1]
 	racing := c.Object(p, 93)
+	// COUNTED FROM BEFORE THE RACE, for case 3's reason.
+	releasedBefore := w.gated(p, statelog.ReasonReleased)
 	var released bool
 	leaving := leaver.parts[p]
 	leaving.race.Before(func(subject string) bool { return strings.HasSuffix(subject, "."+racing) },
@@ -353,6 +355,17 @@ func Partitioned(t *testing.T, new PartitionedFactory) error {
 		if holds, readErr := c.Holds(ctx, node.parts[p].db.Reader(), racing); readErr != nil || !holds {
 			add("%s's copy of %s does not hold %s, written by %s under a fresh "+
 				"operation id (%v)", node.id, p, racing, stayer.id, readErr)
+		}
+		// ONE RECORD DROPPED, SO ONE COUNT ON EVERY NODE — the leaver,
+		// whose own write was refused over it, and the server whose write
+		// was collapsed onto it, included. A write refused over a dropped
+		// record is a refusal, counted as one; counted as a drop as well,
+		// the writer's alarm read two dropped records where there was one,
+		// and every retry of the operation added another.
+		if got := w.gated(p, statelog.ReasonReleased)[node.id] - releasedBefore[node.id]; got != 1 {
+			add("%s counted %d record(s) on %s's log gated %q, want the one %s "+
+				"wrote after its release — however many writes met it", node.id, got, p,
+				statelog.ReasonReleased, leaver.id)
 		}
 	}
 	after := c.Object(p, 94)

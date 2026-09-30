@@ -1746,13 +1746,19 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 		// THE RECORD APPLIED NOWHERE AND NEVER WILL. A refusal rather
 		// than an outcome, and never a re-decide: republishing produces
 		// another durable record nothing applies.
+		//
+		// NOT COUNTED AS A DROPPED RECORD HERE. This node's applier
+		// counted the drop when it applied `at` — the wait above is what
+		// guarantees it has — so a second count from the write that meets
+		// it reported one record twice on the writer, and once more on
+		// every node a retry of the same operation id reached inside the
+		// duplicate window. The write's refusal is counted where every
+		// refusal is, by reason ([Publisher.observe]), and this line keeps
+		// the writer and the position.
 		p.logger.WarnContext(ctx, "statelog_write_gated",
 			"domain", p.domain.Name(), "subject", req.Subject.String(),
 			"gate", string(reason), "position", at.String(), "op_id", req.OpID,
 			"writer", writer)
-		p.count(metrics.StatelogRecordsGated, metrics.Attrs{
-			"gate": string(reason), "subject_kind": req.Subject.Kind,
-		})
 		// AND THAT THE OPERATION ID IS SPENT FOR A WHILE, which decides
 		// how it is retried: the broker collapses the same id onto the
 		// record for its duplicate window, and the answer is this refusal
