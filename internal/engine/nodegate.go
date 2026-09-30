@@ -407,8 +407,21 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 // wrote, which this node's append was collapsed onto
 // ([statelog.Unavailable.CopyWriter]) and a gate dropped: an operation id
 // carried to this node inside the log's duplicate window from a node that had
-// already written under it, and has since been evicted, left the partition or
-// been overtaken.
+// already written under it, and has since been evicted or left the partition,
+// or wrote it in a generation a reanchor abandoned or from rows one overtook.
+//
+// # Why those four gates and no others
+//
+// A copy's writer is named only under a gate that blames it
+// ([statelog.Reason.BlamesWriter]), and of those a GATE RECORD meets exactly
+// four. It is never `wrong_partition`: an eviction, a readmission and a release
+// are the log's own records, which both identity-claiming domains place in no
+// partition — their PartitionOf answers none for the eviction kind, which
+// statelogtest.Placement holds both to — so no copy of one is ever on the
+// wrong log. And never `deleted`, which blames no writer and is asked only of
+// a task or a page. The fallback names the reason of a gate a later build adds
+// to that set without a sentence here, rather than describing it as one of the
+// four.
 //
 // # Why here, and not another node
 //
@@ -430,8 +443,6 @@ func (d DomainGate) anotherNodesCopy(refusal *statelog.Unavailable) string {
 		why = "that node wrote it from rows a restored reanchor had overtaken"
 	case statelog.ReasonAbandoned:
 		why = "that node wrote it in a generation a reanchor abandoned"
-	case statelog.ReasonWrongPartition:
-		why = "its domain places it in another partition than the log it is on"
 	}
 	return fmt.Sprintf("the record of this gesture at %s on %s is node %s's copy, "+
 		"which this node's own write was collapsed onto, and it applies nowhere "+

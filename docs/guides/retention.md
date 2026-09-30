@@ -597,8 +597,9 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
 - **Another node's copy** — any of the four above, with a hint naming another
   node as the writer of the record at that position. The `-op-id` you sent had
   already been written under by that node — you ran the gesture through it
-  first, and by the time its record landed it had been evicted, had left the
-  log's partition or had been overtaken — and the node you ran it on this time
+  first, and by the time its record landed it had been evicted or had left the
+  log's partition, or it had written the record from rows a reanchor left
+  behind (overtaken or abandoned) — and the node you ran it on this time
   had its append collapsed onto that node's record, which applies nowhere. The
   refusal is about that node, not this one, which was counted and served the
   partition when it tried: once the duplicate window (two minutes from when the

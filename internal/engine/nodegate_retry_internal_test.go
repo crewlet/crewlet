@@ -570,6 +570,13 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"abandoned, another node's copy": {gate: copied(statelog.ReasonAbandoned),
 			actions: []statelog.GateAction{retry},
 			detail:  "because that node wrote it in a generation a reanchor abandoned"},
+		// A GATE A LATER BUILD ADDS to those that blame a writer, with no
+		// sentence here yet: still this node's to finish, and named by its
+		// reason rather than described as one of the four a gate record's
+		// copy meets today.
+		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
+			actions: []statelog.GateAction{retry},
+			detail:  "applies nowhere because a gate dropped it (a_later_gate) — a fact about node node-x"},
 		// A NODE THAT DOES NOT SERVE THE LOG'S PARTITION never writes it,
 		// whichever id it retries under; one that cannot tell may again.
 		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{other},
