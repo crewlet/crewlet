@@ -240,6 +240,9 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 			"no level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	}
+	if err := activityFilters(q); err != nil {
+		return ActivityAnswer{}, err
+	}
 	if err := gateActivityQuery(q, now); err != nil {
 		return ActivityAnswer{}, err
 	}
@@ -293,6 +296,42 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 		answer.Incomplete = incompleteFrom(served.Incomplete)
 	}
 	return answer, nil
+}
+
+// activityFilters refuses a change kind or an author kind this build does not
+// have, naming the set.
+//
+// A FILTER THAT MATCHES NOTHING ANSWERS LIKE A QUIET COMPANY: a kind reached
+// the SQL as it came, matched no row, and the empty feed it answered is
+// indistinguishable from nothing having happened. The query surface refused a
+// mistyped one by name while a seat's `task_activity` built a kind from any
+// string it was handed, so a model asking for `status_changed` was told the
+// project had been still. Refused HERE, before the read, where every surface's
+// request passes — [ErrBadQuery], because the same filter is refused again on
+// every node however often it is sent.
+func activityFilters(q ActivityQuery) error {
+	for _, kind := range q.Kinds {
+		if !kind.Valid() {
+			return fmt.Errorf("%w: %q is not a change kind — the kinds are %s",
+				ErrBadQuery, kind, joinKinds(ChangeKinds))
+		}
+	}
+	for _, kind := range q.ActorKinds {
+		if !kind.Valid() {
+			return fmt.Errorf("%w: %q is not an author kind — the kinds are %s",
+				ErrBadQuery, kind, joinKinds(AuthorKinds))
+		}
+	}
+	return nil
+}
+
+// joinKinds spells a closed set of kinds for a refusal naming it.
+func joinKinds[K ~string](kinds []K) string {
+	out := make([]string, len(kinds))
+	for i, kind := range kinds {
+		out[i] = string(kind)
+	}
+	return strings.Join(out, ", ")
 }
 
 // gateActivityQuery refuses what this feed cannot serve.

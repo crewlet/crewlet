@@ -405,3 +405,49 @@ func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 			"none of them", len(got.Records))
 	}
 }
+
+// A KIND THE FEED HAS NO ROWS OF IS REFUSED NAMING THE SET, never answered with
+// an empty page.
+//
+// A filter matching nothing answers exactly like a quiet project. The query
+// surface refused a mistyped kind by name while a seat's `task_activity` built
+// a kind from any string it was handed, so a model asking for `status_changed`
+// was told nothing had happened. The read itself refuses it now, as
+// [tracker.ErrBadQuery], so every surface inherits one answer — and the
+// control, a kind the feed does have, still pages.
+//
+// Mutation: drop activityFilters from Activity and both refusals read an empty
+// page instead.
+func TestAnActivityFilterOnAKindThisBuildDoesNotHaveIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	for _, c := range []struct {
+		name string
+		q    tracker.ActivityQuery
+		want string
+	}{
+		{"a change kind", tracker.ActivityQuery{Workspace: true,
+			Kinds: []tracker.ChangeKind{"status_changed"}}, "status_changed"},
+		{"an author kind", tracker.ActivityQuery{Workspace: true,
+			ActorKinds: []tracker.AuthorKind{"robot"}}, "robot"},
+	} {
+		c.q.Level = statelog.ReadStale
+		_, err := r.reader.Activity(t.Context(), c.q, wednesday)
+		if !errors.Is(err, tracker.ErrBadQuery) {
+			t.Errorf("%s nobody has: %v, want %v", c.name, err, tracker.ErrBadQuery)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "created") &&
+			!strings.Contains(err.Error(), "agent") {
+			t.Errorf("%s: %q does not name what was asked and what is accepted",
+				c.name, err)
+		}
+	}
+	// THE CONTROL.
+	if got := r.activity(tracker.ActivityQuery{Workspace: true,
+		Kinds: []tracker.ChangeKind{tracker.ChangeCreated}}); len(got.Records) != 1 {
+		t.Errorf("a kind the feed has answered %d records, want the one create",
+			len(got.Records))
+	}
+}

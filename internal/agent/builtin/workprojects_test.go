@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -277,5 +278,46 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 	if !got.Failed || !strings.Contains(got.Output, "RFC3339") {
 		t.Errorf("an unparseable `since` gave %q, want a refusal naming the "+
 			"two shapes", got.Output)
+	}
+}
+
+// A KIND task_activity DOES NOT HAVE IS REFUSED AS THE ARGUMENT, and the schema
+// offers the set it is refused against.
+//
+// The tool built a change kind from any string it was handed and never checked
+// it, so a model asking for `status_changed` read an empty feed as a project
+// where nothing had happened. The tracker's read refuses such a kind naming
+// every kind it has ([tracker.ErrBadQuery]); what this holds is the tool's
+// half — the kinds are in the schema a model picks from, and the refusal is
+// worded as an argument to change rather than a tracker that could not be
+// read "right now", which a model retries with the same argument.
+func TestTaskActivityOffersItsKindsAndRefusesAnotherAsTheArgument(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	entry, _ := reg.Lookup(tracker.TaskActivityTool)
+	props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+	kinds, _ := props["kinds"].(map[string]any)
+	offered, _ := kinds["description"].(string)
+	for _, kind := range tracker.ChangeKinds {
+		if !strings.Contains(offered, "`"+string(kind)+"`") {
+			t.Errorf("task_activity's `kinds` does not offer %s: %q", kind, offered)
+		}
+	}
+
+	trk.readErr = fmt.Errorf("%w: %q is not a change kind", tracker.ErrBadQuery,
+		"status_changed")
+	got := callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+		"task": "ENG-1", "kinds": "status_changed",
+	})
+	if !got.Failed || !errors.Is(got.Cause, tracker.ErrBadQuery) ||
+		!strings.Contains(got.Output, "change the arguments") ||
+		!strings.Contains(got.Output, "status_changed") {
+		t.Errorf("a kind nobody has answered %q, want a refusal of the argument", got.Output)
+	}
+	if got := trk.activityQuery.Kinds; len(got) != 1 || got[0] != "status_changed" {
+		t.Errorf("the read was asked for %v, want the kind as it came — the "+
+			"tracker's read is what refuses it", got)
 	}
 }

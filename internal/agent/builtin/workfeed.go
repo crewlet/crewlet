@@ -64,7 +64,8 @@ func (t *taskActivity) Parameters() map[string]any {
 			"kinds": map[string]any{
 				"type": "string",
 				"description": "Comma-separated change kinds to keep, such as " +
-					"`status,assignee`. Omit for everything.",
+					"`status,assignee`, from: " + changeKindNames() +
+					". Omit for everything.",
 			},
 			"actor": map[string]any{
 				"type": "string",
@@ -120,6 +121,11 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Cursor:  strings.TrimSpace(argString(args, "cursor")),
 		Level:   seatReadLevel,
 	}
+	// A KIND IS PASSED AS IT CAME and the tracker's read refuses one it
+	// does not have, naming the set ([tracker.ErrBadQuery], which
+	// [readFailure] words as an argument to change): built from any string
+	// and never checked, a mistyped kind answered an empty feed that reads
+	// exactly like a project where nothing happened.
 	for _, kind := range strings.Split(argString(args, "kinds"), ",") {
 		if kind = strings.TrimSpace(kind); kind != "" {
 			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
@@ -154,6 +160,16 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return readFailed(tracker.TaskActivityTool, err), nil
 	}
 	return jsonResult(answer)
+}
+
+// changeKindNames is every change kind, for the schema that offers them: the
+// set a model picks from is the one the read refuses anything outside of.
+func changeKindNames() string {
+	names := make([]string, len(tracker.ChangeKinds))
+	for i, kind := range tracker.ChangeKinds {
+		names[i] = "`" + string(kind) + "`"
+	}
+	return strings.Join(names, ", ")
 }
 
 type myWork struct{ deps WorkDeps }
