@@ -834,6 +834,115 @@ func TestALocalCopyBehindItsFloorAsksAnotherHolder(t *testing.T) {
 	}
 }
 
+// A COPY THAT LAGS ITS LOGS IS A WORSE HOLDER, NEVER NO HOLDER.
+//
+// Whether a copy answers requests is its DISTANCE from its logs — the floors
+// and the read's own level hold what it answers to what the caller must see —
+// so a lagging copy is passed over for one that does not lag, and asked again,
+// told to take the request anyway, once no such holder is left. Refused
+// outright, a single data node a burst put past the snapshot slack refused its
+// own seats every call until it caught up, and a fleet the same burst put
+// behind together refused everybody's.
+func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	_, first := f.first(t, f.client)
+	second := f.other(first)
+	first.set(func(n *fakeNode) { n.notReady = true })
+
+	// A HOLDER WHOSE COPY DOES NOT LAG IS PREFERRED.
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks with one copy lagging: %v", err)
+	}
+	if first.askedFor("tasks") || !second.askedFor("tasks") {
+		t.Fatal("the lagging copy ran the read while a holder whose copy does not lag was there")
+	}
+
+	// AND WHEN EVERY COPY LAGS, ONE OF THEM ANSWERS — a read, a tracker
+	// write and a page write alike — held to the caller's floor.
+	for _, n := range f.nodes {
+		n.set(func(n *fakeNode) { n.notReady, n.asked, n.floors = true, nil, nil })
+	}
+	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 9}
+	f.client.Observe(floor)
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks with every copy lagging: %v", err)
+	}
+	for _, n := range f.nodes {
+		n.mu.Lock()
+		ran, waited := slices.Contains(n.asked, "tasks"), slices.Contains(n.floors, floor)
+		n.mu.Unlock()
+		if ran && !waited {
+			t.Fatalf("%s ran the read on a lagging copy without waiting for the caller's floor", n.name)
+		}
+	}
+	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-lag",
+		tracker.Task{Project: "ENG"}, nil); err != nil {
+		t.Fatalf("a tracker write with every copy lagging: %v", err)
+	}
+	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1",
+		pages.NewComment{Body: "hi"}); err != nil {
+		t.Fatalf("a page write with every copy lagging: %v", err)
+	}
+
+	// THIS NODE'S OWN COPY, where it is the only holder: its seats are
+	// answered, not refused naming a partition it serves.
+	local := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
+	alone := newFleet(t).router(t, "data-self", local)
+	if _, err := alone.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("the only copy, lagging, refused its own seat's read: %v", err)
+	}
+	if _, err := alone.WriterAs(swe).CreateTask(t.Context(), "op-own",
+		tracker.Task{Project: "ENG"}, nil); err != nil {
+		t.Fatalf("the only copy, lagging, refused its own seat's write: %v", err)
+	}
+
+	// AND STILL ASKED LAST: a peer whose copy does not lag answers first.
+	peered := newFleet(t, "data-a")
+	own := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
+	r := peered.router(t, "data-self", own)
+	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if own.askedFor("tasks") || !peered.nodes["data-a"].askedFor("tasks") {
+		t.Fatal("this node's lagging copy ran the read ahead of a peer whose copy does not lag")
+	}
+}
+
+// A COPY THAT ANSWERS REQUESTS SERVES THEM AT ONCE, EVEN WHILE IT ADMITS NO
+// SEAT. Admission's gate is strict — a lag of zero this instant — and a busy
+// company's copy fails it on most instants, with a record in flight; a request
+// gate that asked it sent every request to whichever holder happened to be
+// level at that moment. Only admission's own ping asks it.
+func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	peer := f.nodes["data-a"]
+	peer.set(func(n *fakeNode) { n.notAdmitting = true })
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if !peer.askedFor("tasks") || peer.askedFor("admits") {
+		t.Fatalf("the holder was asked %v, want the read served without admission's question",
+			peer.asked)
+	}
+
+	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
+	r := newFleet(t).router(t, "data-self", local)
+	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("tasks on this node's own copy: %v", err)
+	}
+	if !local.askedFor("tasks") || local.askedFor("admits") {
+		t.Fatalf("this node's copy was asked %v, want the read served without admission's "+
+			"question", local.asked)
+	}
+	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
+	if trackerServed, _, err := r.Serves(t.Context(), statelog.EstatePartition); err != nil ||
+		trackerServed {
+		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	}
+}
+
 // A NODE THAT DOES NOT SERVE THE PARTITION RIGHT NOW is never asked
 // in-process — a copy that stopped serving on a fault is read from the
 // partition's other holders — and answers another node's request

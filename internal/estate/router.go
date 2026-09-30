@@ -312,8 +312,41 @@ type held struct {
 	err   error
 }
 
+// walk is one request's account of the holders it asked: why each ran
+// nothing, the answer it keeps while it asks the next, and the copies it
+// passed over for LAGGING their logs, which it comes back to last.
+type walk struct {
+	reasons  []string
+	fallback *held
+
+	// lagging is every holder that answered [unservedLagging], and
+	// laggingHere the partition this node's own copy lagged on, if it did.
+	lagging     []string
+	laggingHere *statelog.PartitionID
+}
+
+func (w *walk) note(format string, args ...any) {
+	w.reasons = append(w.reasons, fmt.Sprintf(format, args...))
+}
+
 // route runs one single-partition operation — this node first where it serves
-// the partition, then the partition's holders in order.
+// the partition, then the partition's holders in order, and LAST the copies
+// that answered that they lag their logs.
+//
+// # A copy that lags is a worse holder, never no holder
+//
+// [Backend.Answers] says whether a copy is level, or drained and within the
+// snapshot slack of its logs' ends — a copy that is not is one a request should
+// not choose while another holder's is. But it is the copy's DISTANCE from its
+// log, not its correctness: the floors a request carries and the level a read
+// asks for are what hold an answer to what the caller must see, and the write
+// authority decides from its own snapshot and lets the broker arbitrate. So a
+// copy that lags is asked again, told to take the request anyway
+// ([request.AcceptLagging]), once every holder whose copy answers has run
+// nothing — rather than refused as though the partition had no server. A
+// single data node whose applier a burst put a thousand records behind refused
+// every call its own seats made until it caught up; a fleet the same burst put
+// behind together refused every node's.
 func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
 	layout, err := r.placement.Layout()
 	if err != nil {
@@ -323,50 +356,20 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	if err != nil {
 		return nil, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
-	var (
-		reasons  []string
-		fallback *held
-	)
+	w := &walk{}
 	// THIS NODE FIRST, where it serves the partition — in-process, with
 	// the node's floors enforced exactly as a remote holder enforces them.
-	if r.local != nil {
-		b, ok, unknown := r.local.For(ctx, p)
-		if unknown != nil {
-			reasons = append(reasons, fmt.Sprintf("%s: cannot tell whether it serves %s: %v",
-				r.self, p, unknown))
-		}
-		if ok {
-			b.ServerSeams = r.seams
-			value, why, ran := r.runLocal(ctx, spec, b, layout, p, x)
-			switch {
-			case why != "":
-				reasons = append(reasons, r.self+": "+why)
-			case appendedNothing(ran):
-				reasons = append(reasons, r.self+": "+ran.Error())
-			case unvouched(spec, value, ran):
-				fallback = &held{value: value, err: ran}
-			default:
-				return value, ran
-			}
-		}
+	if value, final, ranErr := r.tryLocal(ctx, spec, layout, p, x, false, w); final {
+		return value, ranErr
 	}
 	nodes, epoch, err := r.placement.Serving(p)
 	if err != nil {
-		if fallback != nil {
-			return fallback.value, fallback.err
+		if w.fallback != nil {
+			return w.fallback.value, w.fallback.err
 		}
 		return nil, fmt.Errorf("estate: %s: read who serves %s: %w", spec.name, p, err)
 	}
-	budget := r.readBudget
-	if spec.class != opRead {
-		// A WRITE takes the caller's deadline where there is one,
-		// because a gesture the caller gave five minutes must not be
-		// abandoned after one.
-		budget = r.writeBudget
-		if _, bounded := ctx.Deadline(); bounded {
-			budget = 0
-		}
-	}
+	budget := r.budgetFor(ctx, spec)
 	tried := map[string]bool{r.self: true}
 	refreshed := false
 	for {
@@ -376,83 +379,218 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 				continue
 			}
 			tried[node] = true
-			floors := r.floorsFor(spec, layout, p)
-			req := request{
-				Op: spec.name, Args: x.encoded, Actor: actor,
-				Partitions: []string{p.String()}, MapEpoch: epoch,
-				Floors: floors, From: r.self,
-			}
-			rep, answered, err := r.ask(ctx, node, req, budget)
+			rep, answered, err := r.askFor(ctx, spec, actor, x, layout, p, epoch, node, budget, false)
 			if err != nil {
-				return nil, fmt.Errorf("estate: %s: %w", spec.name, err)
+				return nil, err
 			}
 			if !answered {
-				if spec.class == opOnceWrite {
-					return nil, fmt.Errorf("%w (%s on %s, asked of %s)", ErrOutcomeUnknown,
-						spec.name, p, node)
+				if err := r.silent(ctx, spec, p, node, w); err != nil {
+					return nil, err
 				}
-				if ctx.Err() != nil {
-					return nil, fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
-				}
-				reasons = append(reasons, node+": no answer")
 				continue
 			}
-			r.session.Forget(named(floors, rep.Obsolete)...)
 			if rep.Unserved == unservedNotHolder && rep.Epoch > epoch && !refreshed {
 				// THE SERVER KNOWS A NEWER MAP. Read ours again,
 				// resolve again, and walk the new holders — once:
 				// a server that keeps outrunning a view just read is
 				// one this request does not wait for.
 				refreshed = true
-				reasons = append(reasons, fmt.Sprintf("%s: %s (at map epoch %d, "+
-					"this node routed by %d)", node, rep.Detail, rep.Epoch, epoch))
+				w.note("%s: %s (at map epoch %d, this node routed by %d)", node, rep.Detail,
+					rep.Epoch, epoch)
 				fresh, freshEpoch, freshLayout, freshP, refreshErr := r.refresh(ctx, x, p)
 				if refreshErr != nil {
-					reasons = append(reasons, "refresh: "+refreshErr.Error())
+					w.note("refresh: %v", refreshErr)
 					continue
 				}
+				moved := freshP != p
 				nodes, epoch, layout, p = fresh, freshEpoch, freshLayout, freshP
+				if moved {
+					// A NEW PARTITION, which this node may serve
+					// although it did not serve the old one.
+					if value, final, ranErr := r.tryLocal(ctx, spec, layout, p, x, false, w); final {
+						return value, ranErr
+					}
+				}
 				restart = true
 				break
 			}
-			if rep.Unserved != "" {
-				reasons = append(reasons, fmt.Sprintf("%s: %s", node, rep.Detail))
-				continue
+			if value, final, ranErr := r.settle(spec, x, p, node, rep, w); final {
+				return value, ranErr
 			}
-			r.markAnswered(p, node)
-			if rep.Err != nil {
-				failure := decodeError(rep.Err)
-				switch {
-				case appendedNothing(failure):
-					reasons = append(reasons, node+": "+failure.Error())
-					continue
-				case unvouched(spec, nil, failure):
-					fallback = &held{err: failure}
-					reasons = append(reasons, node+": unvouched")
-					continue
-				}
-				return nil, failure
-			}
-			value, err := x.decode(rep.Result)
-			if err != nil {
-				return nil, fmt.Errorf("estate: %s: %s answered with a result this "+
-					"build cannot decode: %w", spec.name, node, err)
-			}
-			if unvouched(spec, value, nil) {
-				fallback = &held{value: value}
-				reasons = append(reasons, node+": unvouched")
-				continue
-			}
-			return value, nil
 		}
 		if !restart {
 			break
 		}
 	}
-	if fallback != nil {
-		return fallback.value, fallback.err
+	if value, final, ranErr := r.lastResort(ctx, spec, actor, x, layout, p, epoch, budget, w); final {
+		return value, ranErr
 	}
-	return nil, &ErrPartitionUnserved{Partition: p.String(), Detail: strings.Join(reasons, "; ")}
+	if w.fallback != nil {
+		return w.fallback.value, w.fallback.err
+	}
+	return nil, &ErrPartitionUnserved{Partition: p.String(), Detail: strings.Join(w.reasons, "; ")}
+}
+
+// lastResort asks the copies the walk passed over for lagging their logs —
+// this node's own first, where it lagged on p, then each holder that said so —
+// telling each to take the request anyway. final is set when one of them gives
+// the answer.
+func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
+	layout statelog.Layout, p statelog.PartitionID, epoch uint64, budget time.Duration,
+	w *walk) (value any, final bool, err error) {
+
+	if here := w.laggingHere; here != nil && *here == p {
+		w.laggingHere = nil
+		if value, final, ranErr := r.tryLocal(ctx, spec, layout, p, x, true, w); final {
+			return value, true, ranErr
+		}
+	}
+	lagging := w.lagging
+	w.lagging = nil
+	for _, node := range lagging {
+		rep, answered, askErr := r.askFor(ctx, spec, actor, x, layout, p, epoch, node, budget, true)
+		if askErr != nil {
+			return nil, true, askErr
+		}
+		if !answered {
+			if silentErr := r.silent(ctx, spec, p, node, w); silentErr != nil {
+				return nil, true, silentErr
+			}
+			continue
+		}
+		if value, final, ranErr := r.settle(spec, x, p, node, rep, w); final {
+			return value, true, ranErr
+		}
+	}
+	return nil, false, nil
+}
+
+// tryLocal runs the operation on this node's own copy of p, where it serves p.
+// final is set when that is the answer; otherwise the walk says why not, and
+// the router asks the partition's holders.
+func (r *Router) tryLocal(ctx context.Context, spec *opSpec, layout statelog.Layout,
+	p statelog.PartitionID, x exchange, acceptLagging bool, w *walk) (value any, final bool, err error) {
+
+	if r.local == nil {
+		return nil, false, nil
+	}
+	b, ok, unknown := r.local.For(ctx, p)
+	if unknown != nil {
+		w.note("%s: cannot tell whether it serves %s: %v", r.self, p, unknown)
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	b.ServerSeams = r.seams
+	value, refusal, why, ran := r.runLocal(ctx, spec, b, layout, p, x, acceptLagging)
+	switch {
+	case why != "":
+		if refusal == unservedLagging {
+			w.laggingHere = &p
+		}
+		w.note("%s: %s", r.self, why)
+	case appendedNothing(ran):
+		w.note("%s: %v", r.self, ran)
+	case unvouched(spec, value, ran):
+		w.fallback = &held{value: value, err: ran}
+	default:
+		return value, true, ran
+	}
+	return nil, false, nil
+}
+
+// askFor asks one holder to run the operation on p, carrying this node's
+// floors on p's logs, and stops carrying every floor the holder says is on a
+// generation its log abandoned. err is set only where the request could not
+// be made at all.
+func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
+	layout statelog.Layout, p statelog.PartitionID, epoch uint64, node string,
+	budget time.Duration, acceptLagging bool) (reply, bool, error) {
+
+	floors := r.floorsFor(spec, layout, p)
+	rep, answered, err := r.ask(ctx, node, request{
+		Op: spec.name, Args: x.encoded, Actor: actor,
+		Partitions: []string{p.String()}, MapEpoch: epoch,
+		Floors: floors, From: r.self, AcceptLagging: acceptLagging,
+	}, budget)
+	if err != nil {
+		return reply{}, false, fmt.Errorf("estate: %s: %w", spec.name, err)
+	}
+	if answered {
+		r.session.Forget(named(floors, rep.Obsolete)...)
+	}
+	return rep, answered, nil
+}
+
+// silent is what a holder that did not answer costs the walk: nothing more
+// for a class that may be repeated, the request itself for a once-write —
+// which that holder may have run — and the caller's own ending.
+func (r *Router) silent(ctx context.Context, spec *opSpec, p statelog.PartitionID, node string,
+	w *walk) error {
+
+	if spec.class == opOnceWrite {
+		return fmt.Errorf("%w (%s on %s, asked of %s)", ErrOutcomeUnknown, spec.name, p, node)
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
+	}
+	w.note("%s: no answer", node)
+	return nil
+}
+
+// settle is what one holder's reply decides: final when it is the answer, and
+// otherwise noted on the walk — a holder that ran nothing, a write gate 3
+// refused, which appended nothing, or an answer not final for its class, kept
+// in case no holder gives a better one.
+func (r *Router) settle(spec *opSpec, x exchange, p statelog.PartitionID, node string, rep reply,
+	w *walk) (value any, final bool, err error) {
+
+	if rep.Unserved != "" {
+		if rep.Unserved == unservedLagging {
+			w.lagging = append(w.lagging, node)
+		}
+		w.note("%s: %s", node, rep.Detail)
+		return nil, false, nil
+	}
+	r.markAnswered(p, node)
+	if rep.Err != nil {
+		failure := decodeError(rep.Err)
+		switch {
+		case appendedNothing(failure):
+			w.note("%s: %v", node, failure)
+			return nil, false, nil
+		case unvouched(spec, nil, failure):
+			w.fallback = &held{err: failure}
+			w.note("%s: unvouched", node)
+			return nil, false, nil
+		}
+		return nil, true, failure
+	}
+	value, err = x.decode(rep.Result)
+	if err != nil {
+		return nil, true, fmt.Errorf("estate: %s: %s answered with a result this build "+
+			"cannot decode: %w", spec.name, node, err)
+	}
+	if unvouched(spec, value, nil) {
+		w.fallback = &held{value: value}
+		w.note("%s: unvouched", node)
+		return nil, false, nil
+	}
+	return value, true, nil
+}
+
+// budgetFor is one attempt's budget on one holder: [readAttempt] for a read,
+// and for a write [writeAttempt] — or, where the caller has a deadline, that
+// deadline, since a gesture the caller gave five minutes must not be
+// abandoned after one.
+func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
+	if spec.class == opRead {
+		return r.readBudget
+	}
+	if _, bounded := ctx.Deadline(); bounded {
+		return 0
+	}
+	return r.writeBudget
 }
 
 // refresh reads the placement again after a server named a newer map, and
@@ -475,24 +613,29 @@ func (r *Router) refresh(ctx context.Context, x exchange, was statelog.Partition
 
 // runLocal runs one operation in-process on a partition this node serves. why
 // is set, and nothing ran, when the node's own copy could not take it — the
-// same answers a remote holder gives, and the router moves on from each.
+// same answers a remote holder gives, and the router moves on from each —
+// with refusal the reason a remote holder would have answered.
 func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, layout statelog.Layout,
-	p statelog.PartitionID, x exchange) (value any, why string, err error) {
+	p statelog.PartitionID, x exchange, acceptLagging bool) (
+	value any, refusal unservedReason, why string, err error) {
 
 	floors := r.floorsFor(spec, layout, p)
-	reason, detail, obsolete := ready(ctx, r.self, spec, b, p, floors, streamsOf(layout, p))
+	reason, detail, obsolete := ready(ctx, r.self, spec, b, p, floors, streamsOf(layout, p),
+		acceptLagging)
 	r.session.Forget(obsolete...)
 	if reason != "" {
-		return nil, detail, nil
+		return nil, reason, detail, nil
 	}
 	value, err = x.local(ctx, b)
 	switch {
 	case errors.Is(err, errNoHalf):
-		return nil, fmt.Sprintf("%s runs no native backend for %s", r.self, spec.name), nil
+		return nil, unservedNoBackend, fmt.Sprintf("%s runs no native backend for %s",
+			r.self, spec.name), nil
 	case errors.Is(err, errNotAdmitting):
-		return nil, fmt.Sprintf("%s's copy of %s admits no seat yet", r.self, p), nil
+		return nil, unservedNotEstablished, fmt.Sprintf("%s's copy of %s admits no seat yet",
+			r.self, p), nil
 	}
-	return value, "", err
+	return value, "", "", err
 }
 
 // floorsFor is the floors a request for spec on p carries: this node's
@@ -557,13 +700,7 @@ func (r *Router) anyNode(ctx context.Context, spec *opSpec, actor *Actor, x exch
 			}
 		}
 	}
-	budget := r.readBudget
-	if spec.class != opRead {
-		budget = r.writeBudget
-		if _, bounded := ctx.Deadline(); bounded {
-			budget = 0
-		}
-	}
+	budget := r.budgetFor(ctx, spec)
 	var reasons []string
 	for _, node := range r.order(statelog.PartitionID{}, nodes) {
 		rep, answered, err := r.ask(ctx, node, request{

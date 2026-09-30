@@ -120,8 +120,10 @@ type Backend struct {
 	// Answers is whether this copy of the partition may answer a request
 	// now ([statelog.Health.Answers]): serving — drained since its appliers
 	// started and within the snapshot slack of every log's end — or level
-	// this instant. A copy that does not is passed over for another holder,
-	// by a remote asker and by this node's own router alike.
+	// this instant. A copy that does not LAGS: it is asked only once every
+	// holder whose copy does not has run nothing, by a remote asker and by
+	// this node's own router alike — a worse holder, never no holder
+	// ([Router.route]).
 	//
 	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
 	// company has a record in flight on most instants, and a request gate

@@ -68,13 +68,14 @@ and the decision above holds through it unchanged: one subject per serving
 node, the asker's choice of node, the failover rule stated per operation and
 the session floor on every request. What the amendment adds is the unit the
 router routes by — a PARTITION of the estate, which every operation names —
-and three consequences of routing by one on every node rather than by "any
+and four consequences of routing by one on every node rather than by "any
 data node" on the nodes that hold none:
 
 - A data node reaches its OWN copy through the same router, in-process, held to
   the same floors as a remote holder — its seats may have written a partition
-  through another holder while it was not serving it — and passes a copy that
-  answers no request over for another holder, exactly as a remote asker does.
+  through another holder while it was not serving it — and asks a copy that
+  LAGS its logs only once every holder whose copy does not has run nothing,
+  exactly as a remote asker does: a worse holder, never no holder.
 - A node that does not serve the partition it is asked for answers
   `not_holder` with its map epoch, and ran nothing; a newer epoch sends the
   asker to read the map once and ask again, and a partition no holder serves is
@@ -90,5 +91,6 @@ data node" on the nodes that hold none:
 Under the single-file layout every data node serves the one partition, so what
 a fleet sees of this is routing through the watched view of the presence
 leases, a data node's reads waiting on its floors, and the request gate asking
-whether a copy answers rather than whether it is level this instant.
+whether a copy lags rather than whether it is level this instant — and choosing
+a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.

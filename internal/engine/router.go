@@ -42,11 +42,12 @@ import (
 //
 // [localEstate]: the partitions its write authority's gate 3 says it serves
 // ([holdingOf], the one rule the files it opens and the logs it may write are
-// read from), each answered from this node's own copy — and a copy that answers
-// no request ([statelog.Health.Answers]: neither level this instant nor drained
-// and within the snapshot slack) is passed over for another holder, by this
-// node's router and by every other node's alike. A copy that is WRONG is not
-// served at all ([localEstate.For]), and the node keeps its seats.
+// read from), each answered from this node's own copy — and a copy that LAGS
+// ([statelog.Health.Answers] false: neither level this instant nor drained and
+// within the snapshot slack) is asked only once every holder whose copy does
+// not has run nothing, by this node's router and by every other node's alike: a
+// worse holder, never no holder (estate's [estate.Router] doc). A copy that is
+// WRONG is not served at all ([localEstate.For]), and the node keeps its seats.
 
 // Every placement the router may be handed.
 var (

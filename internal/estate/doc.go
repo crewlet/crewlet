@@ -54,14 +54,25 @@
 // writing again".
 //
 // A node that answers "I did not run it" — it does not serve the partition,
-// cannot tell whether it does, runs no native backend, its copy answers no
-// request yet, or it could not reach the caller's floor in time — did not
-// execute anything, so every class
-// moves on from it; and so does a write the write authority refused at gate 3
-// (`not_holder`, `holding_unknown`), which appended nothing. When no holder
-// serves, the operation is refused as [ErrPartitionUnserved], naming the
-// partition — never an empty answer, which would say the company has none of
-// what was asked for.
+// cannot tell whether it does, runs no native backend, its copy lags its logs,
+// or it could not reach the caller's floor in time — did not execute anything,
+// so every class moves on from it; and so does a write the write authority
+// refused at gate 3 (`not_holder`, `holding_unknown`), which appended nothing.
+// When no holder serves, the operation is refused as [ErrPartitionUnserved],
+// naming the partition — never an empty answer, which would say the company
+// has none of what was asked for.
+//
+// # A copy that lags is a worse holder, never no holder
+//
+// Whether a copy answers requests ([Backend.Answers]) is its distance from its
+// logs, not its correctness: the floors and the read's own level hold an answer
+// to what the caller must see, and a write is decided from the authority's own
+// snapshot and arbitrated by the broker. So a copy that lags is passed over
+// only for one that does not, and asked again — told to take the request
+// anyway ([request.AcceptLagging]) — once every holder whose copy does not lag
+// has run nothing. A single data node a burst put past the snapshot slack would
+// otherwise refuse its own seats until it caught up, and a fleet the same burst
+// put behind together would refuse everybody's.
 //
 // # `not_holder` carries the server's map epoch
 //

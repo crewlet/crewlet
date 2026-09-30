@@ -95,6 +95,14 @@ type request struct {
 
 	// From is the asking node, for the serving node's log.
 	From string `json:"from,omitempty"`
+
+	// AcceptLagging is the asker's LAST RESORT: every holder whose copy does
+	// not lag its logs has run nothing, so this one runs the operation
+	// although its copy does ([unservedLagging]) — held to the floors above
+	// and to the read's own level, which are what make its answer sound. An
+	// older build ignores it and refuses again, which is the answer it gave
+	// before.
+	AcceptLagging bool `json:"accept_lagging,omitempty"`
 }
 
 // unservedReason is why a node answered without running an operation.
@@ -105,9 +113,16 @@ const (
 	// half — the company is on a vendor for it, or the runtime is not up.
 	unservedNoBackend unservedReason = "no_backend"
 
-	// unservedNotEstablished: this node's copy is not one a seat's tools
-	// may read yet — the same gate that withholds seats from it.
+	// unservedNotEstablished: this node's copy admits no seat yet — the
+	// strict gate admission's ping asks ([Backend.Admits]).
 	unservedNotEstablished unservedReason = "not_established"
+
+	// unservedLagging: this node's copy lags its logs ([Backend.Answers]
+	// false) — not drained since its appliers started, or past the snapshot
+	// slack of their ends. A worse holder rather than none: the asker comes
+	// back to it with [request.AcceptLagging] when no holder whose copy does
+	// not lag runs the operation.
+	unservedLagging unservedReason = "lagging"
 
 	// unservedBehind: this node could not reach the caller's floor within
 	// the read budget.

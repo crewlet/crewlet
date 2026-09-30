@@ -76,13 +76,17 @@ flowchart TD
     part --> local{Does this node serve it?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
     local -- no --> order[Ask its holders in order:<br/>last to answer, rendezvous, silent ones last]
-    own -- behind, or not answering yet --> order
+    own -- behind its floor, or lagging its logs --> order
     order --> reply{The holder's answer}
     reply -- ran it --> done[The answer]
     reply -- not_holder at a newer map epoch --> refresh[Read the map again, once,<br/>and ask the holders it names]
     reply -- ran nothing --> order
     refresh --> order
-    order -- nobody left --> unserved[Refused, naming the partition]
+    order -- nobody left --> lagging{Did a copy decline<br/>only for lagging?}
+    lagging -- yes --> last[Ask it again, told to take the request,<br/>held to the same floors]
+    last -- ran it --> done
+    lagging -- no --> unserved[Refused, naming the partition]
+    last -- nobody ran it --> unserved
 ```
 
 - **This node first, where it serves the partition.** A data node answers its
@@ -94,7 +98,8 @@ flowchart TD
   is divided they are the map's serving holders.
 - **A node that ran nothing is passed over, whatever the operation**: one that
   does not serve the partition (`not_holder`), runs no native backend for it,
-  whose copy answers no request yet, or that is behind the caller's floor. A
+  whose copy lags its logs (asked again last — see *Which copy answers* below),
+  or that is behind the caller's floor. A
   write the answering node refused because it does not serve the log's
   partition — or could not tell whether it does — appended nothing, and moves on
   too. What may be repeated once a node *may* have run a write is the
@@ -129,10 +134,17 @@ are never carried: a lag there is not one this partition's holders could close.
 
 **Which copy answers.** A copy answers requests once it is level with its logs,
 or has drained them since it started and stays within a thousand records of
-their ends. Seat admission is stricter, and asks it of the copy that will serve
-the seat: a node's own where it serves the partition, otherwise the first
-holder that answers — so a node claims no seat while its own copy is behind,
-and a node holding no data claims none until a data node's copy is level.
+their ends. A copy that does not — catching up after a restart, or pushed past
+the thousand by a burst of writes — *lags*: it is passed over for a holder whose
+copy does not, and asked again, told to take the request anyway, when no such
+holder is left, because lagging is a copy's distance from its logs rather than
+a fault. The floors and the read's own level still hold what it answers to, so
+a single data node a burst put behind keeps answering its own seats rather than
+refusing them until it catches up. Seat admission is stricter, and asks it of
+the copy that will serve the seat: a node's own where it serves the partition,
+otherwise the first holder that answers — so a node claims no seat while its
+own copy is behind, and a node holding no data claims none until a data node's
+copy is level.
 
 **A copy that is wrong is not served, and its node keeps its seats.** A copy
 whose applier halted, whose node was evicted, that is below its log, whose
