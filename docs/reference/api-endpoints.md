@@ -88,10 +88,12 @@ one JSON object, and it always has the same three parts in the same places:
   A `503` about a write this node cannot account for — its outcome is
   `unknown` — carries **`"outcome": "unknown"`** and the **`op_id`** to retry
   under, on every surface that writes through a state log (`/chart`, `/work`,
-  `/pages`, `/iam`, `/auth`); a `503` without `outcome` is a refusal and wrote
-  nothing. The two send a client opposite ways — the unknown is retried under
-  the **same** `op_id`, never a fresh one, which would make the change twice if
-  the first landed — so branch on the field rather than on the sentence. Where
+  `/pages`, `/iam`, `/auth`); a `503` without `outcome` is a refusal, and
+  what it refused was not written — a gesture refused partway lists what did
+  land before it as `landed`. The two send a client opposite ways — the
+  unknown is retried under the **same** `op_id`, never a fresh one, which
+  would make the change twice if the first landed — so branch on the field
+  rather than on the sentence. Where
   this node's operation ledger cannot vouch for the operation it also carries
   **`"unvouched": true`** and **no** `Retry-After`: the same request here answers
   the same way until the change reaches this node, so send it, with the same
