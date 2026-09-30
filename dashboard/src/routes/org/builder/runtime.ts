@@ -49,7 +49,12 @@ export async function answerOf(call: Promise<RestResponse>): Promise<HttpAnswer>
     return { status, body, etag };
   } catch (err) {
     if (isAbort(err)) throw err;
-    if (err instanceof RestError) return { status: err.status, body: err.body, etag: null };
+    // THE ENGINE'S RETRY HINT RIDES THE ANSWER ([HttpAnswer.retryAfter]),
+    // read by the rule [RestError.retryHint] keeps, so the model holds no
+    // second copy of which 503 is the engine's.
+    if (err instanceof RestError) {
+      return { status: err.status, body: err.body, etag: null, retryAfter: err.retryHint };
+    }
     return unreachable(err);
   }
 }

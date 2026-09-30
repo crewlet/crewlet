@@ -18,6 +18,7 @@
  */
 
 import { api } from "./api.ts";
+import { retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
 import { needSession } from "./session.ts";
 import type { Store } from "./store.ts";
 import type {
@@ -111,7 +112,11 @@ const MAX_BACKOFF_MS = 30_000;
 /** Application-level keepalive, comfortably inside the 60 s idle timeout most reverse proxies apply. */
 const PING_MS = 25_000;
 
-/** Degraded-mode poll — only ever runs while the socket is down. */
+/**
+ * Degraded-mode poll — only ever runs while the socket is down. A `503` the
+ * engine wrote replaces its next tick with the answer's own `Retry-After`
+ * (see `fallbackFetch`).
+ */
 const FALLBACK_MS = 5_000;
 
 /**
@@ -126,21 +131,25 @@ const QUERY_TIMEOUT_MS = 10_000;
 
 /**
  * How soon something the engine answered `unavailable` is asked again — a
- * query (see `useQuery`) or a watch.
+ * query (see `useQuery`), the shared health read, or a watch — in
+ * milliseconds, or `null` for "not on a timer".
  *
- * `unavailable` is the engine saying "ask me in a moment": its projection is
- * catching up, its coordination store did not answer, or its chart view is
- * behind. The banner for it tells a person the screen fills in on its own, and
- * a request with nothing behind it never asked again, so a screen opened during
- * a restart held that banner until somebody reloaded. Five seconds is the
- * engine's own Retry-After when it has no better hint, which is its shared
- * health tick (`stream.HealthInterval`): sooner asks before anything could
- * have changed, later leaves a recovered node looking broken.
+ * `unavailable` is the engine saying it cannot answer HERE, and its frame says
+ * when that may change: `retry_after`, read through {@link retryAfterMs} —
+ * waited out, bounded, and ZERO meaning waiting will not change it, so nothing
+ * re-asks. An answer carrying no hint waits {@link UNAVAILABLE_RETRY_MS}, what
+ * the engine says when it has nothing better; so does a refusal that is not
+ * the state log's, which no `unavailable` answer carries.
  *
- * ONE DECLARATION for both, because the engine's answer is one: a query and a
- * watch refused `unavailable` by the same node are waiting on the same thing.
+ * ONE READING for all three, because the engine's answer is one: a query, the
+ * health read and a watch refused `unavailable` by the same node are waiting
+ * on the same thing. The fixed five seconds every one of them re-asked at
+ * whatever the frame said is what this replaced.
  */
-export const UNAVAILABLE_RETRY_MS = 5_000;
+export function unavailableRetryMs(refusal: QueryRefusal | LogRefusal | null): number | null {
+  if (refusal === null || !isLogRefusal(refusal)) return UNAVAILABLE_RETRY_MS;
+  return retryAfterMs(refusal.retryAfter);
+}
 
 /**
  * What a watch refusal's error frame names in `what` — the engine's
@@ -176,11 +185,14 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
  */
 function refusalOf(msg: Frame): QueryRefusal | LogRefusal | null {
   // AN `unavailable` ANSWER'S REFUSAL AND HINT, where the engine sent them:
-  // the state log's code and words, and whether asking this node again can
-  // change the answer. A frame with no `retry_after` is a node too old to say,
-  // which reads as it always did — ask again soon.
+  // the state log's code and words, and whether — and when — asking this node
+  // again can change the answer. A frame with no `retry_after` is a node too
+  // old to say, which reads as no hint at all (see `unavailableRetryMs`); so
+  // does a negative one, which is not a number of seconds the engine writes,
+  // exactly as a `Retry-After` that is not whole seconds is none to
+  // `rest.ts`.
   if (msg.error === "unavailable") {
-    if (typeof msg.retry_after !== "number") return null;
+    if (typeof msg.retry_after !== "number" || !(msg.retry_after >= 0)) return null;
     return {
       code: typeof msg.refusal === "string" ? msg.refusal : null,
       detail: typeof msg.detail === "string" ? msg.detail : null,
@@ -223,7 +235,15 @@ export class LiveSocket {
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | 0 = 0;
   private pingTimer: ReturnType<typeof setInterval> | 0 = 0;
-  private fallbackTimer: ReturnType<typeof setInterval> | 0 = 0;
+  private fallbackTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  /**
+   * The degraded-mode poll now running, or 0 for none. A NUMBER PER RUN rather
+   * than a flag, because a read can be in flight when its run is stopped, and
+   * one that landed after a new run began would schedule a second chain of
+   * reads beside the new one's.
+   */
+  private fallbackRun = 0;
+  private fallbackRuns = 0;
   private isClosed = false;
   /**
    * Whether the engine refused this browser the surface (see `accessRefused`).
@@ -377,18 +397,28 @@ export class LiveSocket {
    * re-decided when it re-checked this socket's credential.
    *
    * `unavailable` means this node could not read the chart that decides it,
-   * which clears on its own, so it is asked again after the engine's own
-   * retry hint. ANY OTHER CODE IS A DECISION, and asking again would only be
-   * refused again: the screen's poll carries on as it did before there was a
-   * push at all, and the next socket asks once more in case the answer moved.
+   * or the directory a login resolves through, so it is asked again when the
+   * frame's `retry_after` says that may have changed ({@link
+   * unavailableRetryMs}) — which this used to claim and did not do: it re-asked
+   * at a fixed five seconds whatever the frame said. A ZERO is a read no wait
+   * clears, and ANY OTHER CODE IS A DECISION; either way asking again on a
+   * timer would only be answered the same: the screen's poll carries on as it
+   * did before there was a push at all, and the next socket asks once more in
+   * case the answer moved.
    */
-  private watchAnswered(code: string | undefined): void {
-    if (code !== "unavailable" || this.watched === "") return;
+  private watchAnswered(msg: Frame): void {
+    // ANY ANSWER SUPERSEDES A RETRY an earlier one scheduled: a refusal that
+    // lands while it is pending is a decision, and the retry would only be
+    // refused the same.
     clearTimeout(this.watchRetry);
+    this.watchRetry = 0;
+    if (msg.error !== "unavailable" || this.watched === "") return;
+    const wait = unavailableRetryMs(refusalOf(msg));
+    if (wait === null) return;
     this.watchRetry = setTimeout(() => {
       this.watchRetry = 0;
       this.sendWatch();
-    }, UNAVAILABLE_RETRY_MS);
+    }, wait);
   }
 
   // ---- connection --------------------------------------------------------
@@ -636,7 +666,7 @@ export class LiveSocket {
       case "error":
         // A WATCH'S REFUSAL carries no query id, only what it is about.
         if (msg.what === WATCH_WHAT && msg.id === undefined) {
-          this.watchAnswered(msg.error);
+          this.watchAnswered(msg);
           break;
         }
         // An error frame always carries a code. One that does not is still
@@ -709,23 +739,38 @@ export class LiveSocket {
     // without it a stopped client left a 5-second fetch loop hammering the
     // engine for the life of the tab, with no socket and nothing to render
     // into.
-    if (this.isClosed || this.refused || this.fallbackTimer) return;
-    void this.fallbackFetch();
-    this.fallbackTimer = setInterval(() => void this.fallbackFetch(), FALLBACK_MS);
+    if (this.isClosed || this.refused || this.fallbackRun !== 0) return;
+    this.fallbackRun = ++this.fallbackRuns;
+    void this.fallbackFetch(this.fallbackRun);
   }
 
   private stopFallback(): void {
-    clearInterval(this.fallbackTimer);
+    clearTimeout(this.fallbackTimer);
     this.fallbackTimer = 0;
+    this.fallbackRun = 0;
   }
 
-  private async fallbackFetch(): Promise<void> {
-    const snap = await api.snapshot();
+  private async fallbackFetch(run: number): Promise<void> {
+    this.fallbackTimer = 0;
+    const read = await api.snapshot();
     // A fetch started while the socket was down can land after it came back, by
     // which time the handshake snapshot and any pushes since are fresher than
     // this one. Degraded mode must not overwrite live state with a reading it
-    // took before the connection recovered.
-    if (this.connected) return;
-    if (snap) this.store.applySnapshot(snap);
+    // took before the connection recovered — and the open that stopped this
+    // run is what says so, as is a `stop()`.
+    if (this.fallbackRun !== run || this.connected) return;
+    if (read.state === "read") this.store.applySnapshot(read.snapshot);
+    // THE NEXT READ WAITS WHAT THE ENGINE SAID, as every other re-ask does: a
+    // 503 it wrote replaces the next tick with its `Retry-After`, and one with
+    // none is its statement that waiting will not change the answer, so this
+    // run stops there — the reconnect loop goes on, and a socket that opens
+    // and later drops starts a fresh one. Anything else it could not read —
+    // the network, a proxy — is the ordinary tick.
+    const next =
+      read.state === "unread" && read.retryAfter !== null
+        ? retryAfterMs(read.retryAfter)
+        : FALLBACK_MS;
+    if (next === null) return;
+    this.fallbackTimer = setTimeout(() => void this.fallbackFetch(run), next);
   }
 }

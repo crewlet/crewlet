@@ -17,8 +17,9 @@ export {
   isLogRefusal,
   queryErrorCode,
   queryFailure,
-  UNAVAILABLE_RETRY_MS,
+  unavailableRetryMs,
 } from "./socket.ts";
+export { RETRY_AFTER_MAX_MS, retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
 export type { QueryFailure } from "./socket.ts";
 export { api } from "./api.ts";
 export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, refusedGrants } from "./rest.ts";

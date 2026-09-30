@@ -2863,7 +2863,8 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 > arrives here — pushes plus a request/response query channel — and the
 > REST snapshot exists only for degraded mode, when the socket is down. The
 > dashboard survives losing it by polling `/stream/snapshot` every five
-> seconds, which is exactly the kind of failure that is easy to miss:
+> seconds — or when a `503` it answers says, and not at all after one with no
+> `Retry-After` — which is exactly the kind of failure that is easy to miss:
 > nothing looks broken, the page is simply always a few seconds stale.
 > `internal/e2e` closes that gap by replaying the frames a real server
 > produced through the dashboard's own `store.js`, so both halves of the

@@ -18,9 +18,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import {
   queryErrorCode,
-  isLogRefusal,
   queryFailure,
-  UNAVAILABLE_RETRY_MS,
+  unavailableRetryMs,
   type LogRefusal,
   type QueryErrorCode,
   type QueryMap,
@@ -67,6 +66,10 @@ export interface QueryOptions {
   /**
    * Re-ask every N ms. Only for answers with NO push behind them; anything the
    * projection pushes must not be polled on top of it.
+   *
+   * AN `unavailable` ANSWER REPLACES THE NEXT TICK with the engine's own hint
+   * (`unavailableRetryMs`), sooner or later than the poll, and a hint of zero
+   * stops the poll until something a person does asks again — see `useQuery`.
    */
   pollMs?: number;
   /** Ask again when the socket reconnects. Default true. */
@@ -163,7 +166,9 @@ export function useQuery<K extends QueryName>(
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
 
     const run = async (): Promise<void> => {
-      let retrySoon = false;
+      // When this answer is asked again: the screen's own poll, unless the
+      // engine said otherwise. `null` is never on a timer.
+      let next: number | null = pollMs !== undefined && pollMs > 0 ? pollMs : null;
       try {
         const data = await socket.query(what, JSON.parse(key) as Record<string, unknown>);
         if (generation.current !== mine) return;
@@ -174,14 +179,17 @@ export function useQuery<K extends QueryName>(
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
         const { refusal } = queryFailure(err);
-        // NOT SOON when the engine said waiting changes nothing — a full
-        // log, a record this node cannot decode, a barrier its broker
-        // refused. Asked every five seconds, each of those is refused the
-        // same until an operator acts, which is a loop rather than a retry;
-        // the screen's own poll, where it has one, still asks again.
-        retrySoon =
-          code === "unavailable" &&
-          !(refusal !== null && isLogRefusal(refusal) && refusal.retryAfter === 0);
+        // AN `unavailable` ANSWER IS ASKED AGAIN WHEN THE ENGINE SAID, and
+        // that replaces the poll's next tick in both directions. Sooner,
+        // because a minute-long poll would leave a recovered node looking
+        // broken for most of that minute; later, because a node that said
+        // "twenty seconds" refuses a five-second poll every time it asks. And
+        // NOT AT ALL when the hint is zero — a full log, a record this node
+        // cannot decode, a barrier its broker refused: each is refused the
+        // same until an operator acts, so the poll stops too, the banner
+        // says the node refused and what would change it, and a reconnect, a
+        // refetch or the screen's next mount asks again.
+        if (code === "unavailable") next = unavailableRetryMs(refusal);
         setState((prev) => ({
           // KEEP the last good answer. A screen that blanks on one failed poll
           // tells the reader less than one that shows the last reading and
@@ -192,14 +200,7 @@ export function useQuery<K extends QueryName>(
           refusal,
         }));
       } finally {
-        // THE SOONER OF THE TWO. A poll keeps its own cadence; an
-        // `unavailable` answer comes back within UNAVAILABLE_RETRY_MS whether
-        // or not anything polls, because a minute-long poll would leave a
-        // recovered node looking broken for most of that minute.
-        const next = retrySoon
-          ? Math.min(pollMs ?? UNAVAILABLE_RETRY_MS, UNAVAILABLE_RETRY_MS)
-          : pollMs;
-        if (generation.current === mine && next) {
+        if (generation.current === mine && next !== null) {
           timer = setTimeout(() => void run(), next);
         }
       }

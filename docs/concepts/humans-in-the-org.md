@@ -395,7 +395,9 @@ sequenceDiagram
 - **A watch is decided like the inbox itself.** You may watch your own seat;
   a lead may watch a seat they lead; the admin grant may watch any. A watch
   this node cannot decide because its chart view is behind is not installed,
-  and the dashboard asks again a few seconds later.
+  and the dashboard asks again when the refusal's `retry_after` says it may
+  have changed — never, on a timer, when that is `0` (a log waiting will not
+  clear); the next socket asks once more.
 - **The poll is still there** — a minute for the rail, thirty seconds for the
   screens — and it is the fallback, not the mechanism: a frame dropped under
   backpressure or lost to a reconnect is never re-sent.

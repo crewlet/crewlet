@@ -18,6 +18,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { ChartRead } from "~/protocol/index.ts";
+import { RETRY_AFTER_MAX_MS } from "~/protocol/retry.ts";
 import { chartPrint, fingerprint, fromChart } from "./document.ts";
 import { EMPTY_DRAFT } from "./draft.ts";
 import {
@@ -152,6 +153,7 @@ describe("what the chart read says", () => {
     expect(classifyChart({ status: 0, body: null }, "edit", print)).toEqual({
       status: "unreachable",
       detail: "The engine could not be reached.",
+      retryAfter: null,
     });
     expect(
       classifyChart(
@@ -159,7 +161,19 @@ describe("what the chart read says", () => {
         "edit",
         print,
       ),
-    ).toEqual({ status: "unreachable", detail: "behind the log" });
+    ).toEqual({ status: "unreachable", detail: "behind the log", retryAfter: null });
+  });
+
+  // THE ENGINE'S HINT RIDES THE OUTCOME, a zero included: it is what the
+  // check waits instead of its own backoff.
+  test.each([12, 0])("a 503 the engine wrote carries its hint of %i seconds", (retryAfter) => {
+    expect(
+      classifyChart(
+        { status: 503, body: { error: "behind", detail: "behind the log" }, retryAfter },
+        "edit",
+        print,
+      ),
+    ).toEqual({ status: "unreachable", detail: "behind the log", retryAfter });
   });
 });
 
@@ -219,7 +233,13 @@ describe("what the settings dry run says", () => {
     });
     expect(outcome({ status: 503, body: { error: "draining", detail: "restarting" } })).toEqual({
       kind: "outcome",
-      outcome: { status: "unreachable", detail: "restarting" },
+      outcome: { status: "unreachable", detail: "restarting", retryAfter: null },
+    });
+    expect(
+      outcome({ status: 503, body: { error: "draining", detail: "restarting" }, retryAfter: 30 }),
+    ).toEqual({
+      kind: "outcome",
+      outcome: { status: "unreachable", detail: "restarting", retryAfter: 30 },
     });
     const problem = {
       path: "name",
@@ -264,8 +284,15 @@ describe("what the settings read says", () => {
     });
     expect(classifySettingsRead({ status: 0, body: null }, "r1")).toEqual({
       kind: "outcome",
-      outcome: { status: "unreachable", detail: "The engine could not be reached." },
+      outcome: {
+        status: "unreachable",
+        detail: "The engine could not be reached.",
+        retryAfter: null,
+      },
     });
+    expect(
+      classifySettingsRead({ status: 503, body: { error: "unavailable" }, retryAfter: 2 }, "r1"),
+    ).toMatchObject({ outcome: { status: "unreachable", retryAfter: 2 } });
     // A 404 that is not the engine's own word for "no company" is a process
     // that does not serve the configuration, never a company that went away.
     expect(classifySettingsRead({ status: 404, body: { error: "not_found" } }, "r1")).toMatchObject(
@@ -296,8 +323,29 @@ describe("combining a check", () => {
     expect(combineCheck(conflict, guarded, [problem])).toEqual({ status: "guarded", grants: [] });
     expect(combineCheck(conflict, null, [problem])).toBe(conflict);
     expect(
-      combineCheck(null, { kind: "outcome", outcome: { status: "unreachable", detail: "x" } }, []),
-    ).toEqual({ status: "unreachable", detail: "x" });
+      combineCheck(
+        null,
+        { kind: "outcome", outcome: { status: "unreachable", detail: "x", retryAfter: null } },
+        [],
+      ),
+    ).toEqual({ status: "unreachable", detail: "x", retryAfter: null });
+  });
+
+  // THE NEXT CHECK ASKS BOTH REQUESTS AGAIN, so it waits for whichever said
+  // it needs longer — and never, when either said waiting will not change it.
+  // A request nobody answered says nothing about the one the engine did.
+  test.each([
+    [12, 30, 30],
+    [12, null, 12],
+    [null, 0, 0],
+    [30, 0, 0],
+    [null, null, null],
+  ])("a chart hint of %s and a settings hint of %s wait %s", (chart, settings, want) => {
+    const unreachable = (retryAfter: number | null) =>
+      ({ status: "unreachable", detail: "x", retryAfter }) as const;
+    expect(
+      combineCheck(unreachable(chart), { kind: "outcome", outcome: unreachable(settings) }, []),
+    ).toEqual({ status: "unreachable", detail: "x", retryAfter: want });
   });
 
   test("the draft's own problems and the settings' findings are judged together", () => {
@@ -428,6 +476,49 @@ describe("transition", () => {
       now,
     });
     expect(recovered.state.failures).toBe(0);
+  });
+
+  // THE ENGINE SAID WHEN, so the retry waits exactly that rather than the
+  // backoff, which asked a node twelve seconds behind at one, two, four and
+  // eight seconds first — and bounded, like every hint.
+  test.each([
+    [12, 12_000],
+    [600, RETRY_AFTER_MAX_MS],
+  ])("an unreachable answer hinting %i seconds is retried then", (retryAfter, wait) => {
+    const settled = transition(loaded.state, {
+      type: "settled",
+      request: 1,
+      status: "unreachable",
+      now: T0,
+      retryAfter,
+    });
+    expect(settled.effects).toEqual([{ type: "wake", at: T0 + wait }]);
+    expect(settled.state).toMatchObject({ status: "unreachable", dueAt: T0 + wait });
+  });
+
+  // AND A ZERO IS NOT RETRIED ON A TIMER AT ALL: the engine said waiting will
+  // not change it. A change to the draft is then a fresh question, asked at
+  // the debounce like any other, rather than a retry nothing scheduled.
+  test("an unreachable answer no wait clears schedules nothing, and a change asks afresh", () => {
+    const settled = transition(loaded.state, {
+      type: "settled",
+      request: 1,
+      status: "unreachable",
+      now: T0,
+      retryAfter: 0,
+    });
+    expect(settled.effects).toEqual([]);
+    expect(settled.state).toMatchObject({
+      status: "unreachable",
+      dueAt: null,
+      failures: 0,
+      halted: false,
+    });
+    const idle = transition(settled.state, { type: "timer", now: T0 + 10 * CHECK_BACKOFF_MAX_MS });
+    expect(idle.effects).toEqual([]);
+    const changed = transition(settled.state, { type: "changed", generation: 2, now: T0 + 5 });
+    expect(changed.effects).toEqual([{ type: "wake", at: T0 + 5 + CHECK_DEBOUNCE_MS }]);
+    expect(changed.state.status).toBe("checking");
   });
 
   test("a conflict and a refused credential halt checking until a reset", () => {
@@ -649,6 +740,40 @@ describe("CheckRunner", () => {
     clock.advance(1);
     expect(transport.of("chart")).toHaveLength(2);
     expect(transport.of("settings")[1]!.request!.body).toEqual({ name: "generation 2" });
+  });
+
+  // THE HINT TRAVELS FROM THE ANSWER TO THE TIMER: a node that said twelve
+  // seconds is not asked at the backoff's first second.
+  test("an engine that said when is retried then, not after the backoff", async () => {
+    const { clock, transport, runner, reset } = harness();
+    reset();
+    transport.of("chart")[0]!.resolve({
+      status: 503,
+      body: { error: "behind", detail: "behind the chart's log" },
+      retryAfter: 12,
+    });
+    transport.of("settings")[0]!.resolve({ status: 200, body: { valid: true } });
+    await flush();
+    expect(runner.state.status).toBe("unreachable");
+    clock.advance(12_000 - 1);
+    expect(transport.of("chart")).toHaveLength(1);
+    clock.advance(1);
+    expect(transport.of("chart")).toHaveLength(2);
+  });
+
+  test("an engine that said waiting will not change it is not asked again on a timer", async () => {
+    const { clock, transport, runner, reset } = harness();
+    reset();
+    transport.of("chart")[0]!.resolve({
+      status: 503,
+      body: { error: "log_full", detail: "raise the chart log's ceiling" },
+      retryAfter: 0,
+    });
+    transport.of("settings")[0]!.resolve({ status: 200, body: { valid: true } });
+    await flush();
+    expect(runner.state.status).toBe("unreachable");
+    clock.advance(10 * CHECK_BACKOFF_MAX_MS);
+    expect(transport.of("chart")).toHaveLength(1);
   });
 
   test("a reset of the same generation, as a change of reader sends, never delivers the replaced answer", async () => {

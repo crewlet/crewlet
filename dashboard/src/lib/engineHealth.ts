@@ -27,10 +27,9 @@
 import { useSyncExternalStore } from "react";
 import { useClient } from "./store-hooks.ts";
 import {
-  isLogRefusal,
   queryErrorCode,
   queryFailure,
-  UNAVAILABLE_RETRY_MS,
+  unavailableRetryMs,
   type LiveSocket,
   type LogRefusal,
   type QueryErrorCode,
@@ -65,10 +64,11 @@ export interface EngineHealth {
  *
  * Its failure handling is `useQuery`'s, stated once more because this is the
  * one question asked outside that hook: the last good answer is KEPT through a
- * failed ask, an `unavailable` answer is asked again within
- * `UNAVAILABLE_RETRY_MS` unless the engine said waiting changes nothing, and a
- * reconnect asks again, because an answer from before it is an answer about an
- * engine that has since moved.
+ * failed ask, an `unavailable` answer is asked again when the engine's hint
+ * says (`unavailableRetryMs`) in place of the next tick — and not on a timer
+ * at all when the hint is zero, since asking every five seconds a node that
+ * said waiting changes nothing is a loop — and a reconnect asks again, because
+ * an answer from before it is an answer about an engine that has since moved.
  */
 class SharedHealth {
   private snapshot: EngineHealth = { data: null, loading: true, error: null, refusal: null };
@@ -130,7 +130,9 @@ class SharedHealth {
     const mine = ++this.generation;
     clearTimeout(this.timer);
     this.timer = 0;
-    let retrySoon = false;
+    // When this is asked again: the next tick, unless the engine said
+    // otherwise. `null` is never on a timer.
+    let next: number | null = HEALTH_POLL_MS;
     this.socket
       .query("stream", {})
       .then(
@@ -142,15 +144,12 @@ class SharedHealth {
           if (this.generation !== mine) return;
           const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
           const { refusal } = queryFailure(err);
-          retrySoon =
-            code === "unavailable" &&
-            !(refusal !== null && isLogRefusal(refusal) && refusal.retryAfter === 0);
+          if (code === "unavailable") next = unavailableRetryMs(refusal);
           this.set({ data: this.snapshot.data, loading: false, error: code, refusal });
         },
       )
       .finally(() => {
-        if (this.generation !== mine) return;
-        const next = retrySoon ? Math.min(HEALTH_POLL_MS, UNAVAILABLE_RETRY_MS) : HEALTH_POLL_MS;
+        if (this.generation !== mine || next === null) return;
         this.timer = setTimeout(() => this.ask(), next);
       });
   }

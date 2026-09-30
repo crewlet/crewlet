@@ -472,15 +472,17 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
  * again on its own", which for these would be a promise of a loop: the same
  * read is refused until an operator acts or another node is asked. So the
  * banner names the refusal and its own words, the remedy, and says the screen
- * is NOT asking again soon. FROM THE ANSWER, NEVER WRITTEN HERE, for the reason
- * `RefusedOnAuthority` gives.
+ * is NOT asking again — nothing re-asks it on a timer, a poll included, so it
+ * says what does: a reload once somebody has acted (a reconnect asks again
+ * too, when the fix restarted the node). FROM THE ANSWER, NEVER WRITTEN HERE,
+ * for the reason `RefusedOnAuthority` gives.
  */
 function RefusedByTheLog({ refusal }: { refusal: LogRefusal }) {
   return (
     <Callout variant="warning" icon={<WarningGlyph size="md" />}>
       This node refused the read, and asking it again will not change that
       {refusal.detail ? <>: {refusal.detail}</> : null}. Another node can answer it, or an operator
-      has to act on this one; the screen does not keep asking it.
+      has to act on this one; the screen does not keep asking it, so reload it once they have.
       <strong> This is not an empty company.</strong>
       {refusal.code ? (
         <>

@@ -61,6 +61,18 @@
  * each wait out the transport's deadline. After a failure the next check waits
  * [backoffDelay], doubling per consecutive failure up to a cap, and changes
  * made meanwhile ride that retry instead of scheduling their own.
+ *
+ * UNLESS THE ENGINE SAID WHEN. A `503` the engine wrote carries a
+ * `Retry-After` — a node behind the chart's log says how far, a draining one
+ * says thirty seconds — and the retry waits exactly that
+ * (`~/protocol/retry.ts`, bounded like every hint), where the backoff asked a
+ * node twelve seconds behind at one, two, four and eight seconds first. And a
+ * `503` it wrote with NO `Retry-After` is its statement that waiting will not
+ * change the answer — a chart log at its ceiling, a record the node cannot
+ * decode — so nothing re-asks it on a timer: the check stays `unreachable`
+ * with no retry due, and the next change to the draft is asked about as a
+ * fresh question, because a person editing is the one thing that may come
+ * after an operator's fix.
  */
 
 import type { ChartRead, ConfigProblem, ConfigWarning, DryRunResult } from "~/protocol/index.ts";
@@ -68,6 +80,7 @@ import { chartPrint, fingerprint } from "./document.ts";
 import type { Draft } from "./draft.ts";
 import { isRecord } from "./json.ts";
 import { placeSettingsFindings, preflight, type PlacedProblem } from "./problems.ts";
+import { retryAfterMs } from "~/protocol/retry.ts";
 import {
   revisionOfEtag,
   type BuilderMode,
@@ -160,7 +173,16 @@ export type CheckOutcome =
        */
       readonly grants: readonly string[];
     }
-  | { readonly status: "unreachable"; readonly detail: string };
+  | {
+      readonly status: "unreachable";
+      readonly detail: string;
+      /**
+       * When the engine said to ask again — [HttpAnswer.retryAfter], seconds,
+       * zero for "waiting will not change it" — or null where it said nothing
+       * and the check backs off on its own.
+       */
+      readonly retryAfter: number | null;
+    };
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 const list = <T>(value: unknown): readonly T[] => (Array.isArray(value) ? (value as T[]) : []);
@@ -230,7 +252,11 @@ export function classifySettings(
   if (answer.status === 0 || answer.status >= 500) {
     return {
       kind: "outcome",
-      outcome: { status: "unreachable", detail: text(body.detail) || code },
+      outcome: {
+        status: "unreachable",
+        detail: text(body.detail) || code,
+        retryAfter: answer.retryAfter ?? null,
+      },
     };
   }
   // Every other refusal is about the document or the request that carried it:
@@ -281,6 +307,7 @@ export function classifySettingsRead(
       (answer.status === 0
         ? "The engine could not be reached."
         : `The engine answered the settings read with status ${answer.status}.`),
+    retryAfter: answer.retryAfter ?? null,
   });
 }
 
@@ -306,6 +333,7 @@ export function classifyChart(
         (answer.status === 0
           ? "The engine could not be reached."
           : `The engine answered the chart read with status ${answer.status}.`),
+      retryAfter: answer.retryAfter ?? null,
     };
   }
   const chart = body as unknown as ChartRead;
@@ -330,9 +358,18 @@ export function combineCheck(
   own: readonly PlacedProblem[],
 ): CheckOutcome {
   const settingsOutcome = settings?.kind === "outcome" ? settings.outcome : null;
-  for (const status of ["guarded", "conflict", "unreachable"] as const) {
+  for (const status of ["guarded", "conflict"] as const) {
     if (chart?.status === status) return chart;
     if (settingsOutcome?.status === status) return settingsOutcome;
+  }
+  const unanswered = [chart, settingsOutcome].filter(
+    (o): o is Extract<CheckOutcome, { status: "unreachable" }> => o?.status === "unreachable",
+  );
+  if (unanswered.length > 0) {
+    // THE CHART'S WORDS, AND BOTH REQUESTS' HINTS: the next check asks both
+    // again, so it waits for whichever said it needs longer — and never,
+    // when either said waiting will not change it.
+    return { ...unanswered[0]!, retryAfter: joinHints(unanswered.map((o) => o.retryAfter)) };
   }
   const findings: PlacedProblem[] = [...own];
   let code = "";
@@ -347,6 +384,18 @@ export function combineCheck(
   return findings.some((f) => f.severity === "problem")
     ? { status: "problems", findings, code, hint }
     : { status: "clean", findings };
+}
+
+/**
+ * One retry hint for a check whose requests each said one: zero if either said
+ * waiting will not change it, the longer of two that said when, and null only
+ * where neither said anything — a request the engine did not answer says
+ * nothing about the one it did.
+ */
+function joinHints(hints: readonly (number | null)[]): number | null {
+  if (hints.some((h) => h === 0)) return 0;
+  const said = hints.filter((h): h is number => h !== null);
+  return said.length > 0 ? Math.max(...said) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +423,11 @@ export interface CheckState {
   readonly requests: number;
   /** When the next request is due, if one is scheduled. */
   readonly dueAt: number | null;
-  /** Consecutive unanswered or failed checks. */
+  /**
+   * Consecutive unanswered or failed checks that a later retry may clear. A
+   * refusal the engine said waiting will not change is not one: nothing
+   * re-asks it on a timer, so there is no backoff for it to lengthen.
+   */
   readonly failures: number;
   /** A halting status holds: changes send nothing until a reset. */
   readonly halted: boolean;
@@ -397,6 +450,11 @@ export type CheckEvent =
       readonly request: number;
       readonly status: Exclude<CheckStatus, "checking">;
       readonly now: number;
+      /**
+       * For an `unreachable` answer, when the engine said to ask again (see
+       * the outcome's `retryAfter`); absent or null where it said nothing.
+       */
+      readonly retryAfter?: number | null;
     };
 
 export type CheckEffect =
@@ -486,8 +544,26 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
         return { state: { ...state, inFlight: null }, effects };
       }
       if (event.status === "unreachable") {
+        const hint = event.retryAfter ?? null;
         const failures = state.failures + 1;
-        const dueAt = event.now + backoffDelay(failures);
+        const wait = hint === null ? backoffDelay(failures) : retryAfterMs(hint);
+        if (wait === null) {
+          // THE ENGINE SAID WAITING WILL NOT CHANGE IT, so no retry is due,
+          // and a change to the draft is asked about as a fresh question
+          // rather than riding a retry nothing scheduled.
+          return {
+            state: {
+              ...state,
+              status: "unreachable",
+              inFlight: null,
+              failures: 0,
+              dueAt: null,
+              halted: false,
+            },
+            effects,
+          };
+        }
+        const dueAt = event.now + wait;
         effects.push({ type: "wake", at: dueAt });
         return {
           state: {
@@ -714,6 +790,7 @@ export class CheckRunner {
         request,
         status: outcome.status,
         now: this.options.clock.now(),
+        retryAfter: outcome.status === "unreachable" ? outcome.retryAfter : null,
       });
       if (current) {
         this.options.onSettled({
@@ -747,7 +824,11 @@ export class CheckRunner {
       // and the check is reported as unanswered rather than left in flight for
       // ever, which would stop every later check.
       (err: unknown) =>
-        settle({ status: "unreachable", detail: err instanceof Error ? err.message : String(err) }),
+        settle({
+          status: "unreachable",
+          detail: err instanceof Error ? err.message : String(err),
+          retryAfter: null,
+        }),
     );
   }
 }

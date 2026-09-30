@@ -18,32 +18,58 @@
  * use it.
  */
 
+import { RestError, retryAfterOf } from "./rest.ts";
 import type { Snapshot } from "./types.ts";
 
+/**
+ * What one read of the degraded-mode snapshot came to: the snapshot, or no
+ * snapshot and when the engine said to ask again.
+ *
+ * TWO STATES THE CALLER CANNOT MISTAKE FOR EACH OTHER, and never an error
+ * object beside a snapshot's fields. That shape was tried: the caller guarded
+ * with `!snap._error`, which is TRUE for zero, so the one case this whole
+ * fallback exists for — the network completely gone — applied the error object
+ * as if it were a snapshot and replaced agents, events, sandboxes, org and
+ * tools with empties. The page went blank at the exact moment the last state it
+ * received was the only thing it had.
+ */
+export type SnapshotRead =
+  | { readonly state: "read"; readonly snapshot: Snapshot }
+  | {
+      readonly state: "unread";
+      /**
+       * [RestError.retryHint]: a `503` the engine wrote says when to ask
+       * again, zero where waiting will not change it; null for everything
+       * else — the network, a proxy, any other refusal.
+       */
+      readonly retryAfter: number | null;
+    };
+
 export const api = {
-  /**
-   * The degraded-mode snapshot, or `null` if it could not be read.
-   *
-   * `null` and not an `{_error}` object. That shape was tried: the caller
-   * guarded with `!snap._error`, which is TRUE for zero, so the one case this
-   * whole fallback exists for — the network completely gone — applied the
-   * error object as if it were a snapshot and replaced agents, events,
-   * sandboxes, org and tools with empties. The page went blank at the exact
-   * moment the last state it received was the only thing it had.
-   */
-  async snapshot(): Promise<Snapshot | null> {
+  /** The degraded-mode snapshot, or why not and when to ask again. */
+  async snapshot(): Promise<SnapshotRead> {
     try {
       // The session cookie is the credential, as it is on every request this
       // dashboard makes (see rest.ts).
       const response = await fetch(location.origin + "/stream/snapshot", {
         credentials: "same-origin",
       });
-      if (!response.ok) return null;
-      return (await response.json()) as Snapshot;
+      if (!response.ok) {
+        // WHOSE REFUSAL, read by the rule every other read takes: only a
+        // 503 carrying the engine's own error code carries its hint.
+        const body = (await response.json().catch(() => null)) as unknown;
+        const envelope =
+          body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+        return {
+          state: "unread",
+          retryAfter: new RestError(response.status, envelope, retryAfterOf(response)).retryHint,
+        };
+      }
+      return { state: "read", snapshot: (await response.json()) as Snapshot };
     } catch {
       // A refused connection, a DNS failure, or a proxy answering 200 with an
       // HTML error page (which fails to parse as JSON).
-      return null;
+      return { state: "unread", retryAfter: null };
     }
   },
 };

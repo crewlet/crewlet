@@ -3107,12 +3107,28 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   engine understood the question and refused it, so retrying sends the same bad
   request again. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
-  reload — unless the engine's frame says waiting will not change the answer
-  (`retry_after: 0`, a state-log refusal such as a full log or a record the
-  node cannot decode). Then `useQuery` stops the quick re-ask, keeping only
-  the screen's own poll, and `QueryState` says the node refused the read and
-  what the refusal names rather than that it is catching up — five-second
-  re-asks of a read an operator has to unblock are a loop, not a retry. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  reload — WHEN the engine's frame says. Its `retry_after` is waited out in
+  place of the screen's next poll tick, sooner or later than the poll,
+  because a node that said twenty seconds refuses every five-second tick
+  before it and a minute-long poll holds a recovered node for the minute. A
+  hint is bounded at thirty seconds (`RETRY_AFTER_MAX_MS` in
+  `protocol/retry.ts`), which cuts only the one hint the engine DERIVES — a
+  backlog over a drain rate, which runs to minutes on a node that has just
+  joined a busy log; every hint it fixes (two, four, five, fifteen and thirty
+  seconds) is waited out exactly, and a Go gate in `internal/api` fails the
+  day one grows past the bound. An answer carrying no hint at all waits five
+  seconds, the engine's own health tick, which is what it says when it has
+  nothing better. And a `retry_after` of `0` means waiting will not change
+  the answer (a state-log refusal such as a full log or a record the node
+  cannot decode): then NOTHING re-asks on a timer, the screen's own poll
+  included — a reconnect, a write the screen makes or a reload asks again —
+  and `QueryState` says the node refused the read, what the refusal names,
+  and to reload once somebody has acted, rather than that it is catching up;
+  re-asks of a read an operator has to unblock are a loop, not a retry. The
+  same reading governs the shared health read, the snapshot the page polls
+  while its socket is down, a seat watch the engine could not decide, and the
+  org builder's check, which waits out a `503`'s `Retry-After` in place of its
+  own backoff and stops retrying a `503` the engine wrote with none. The table is keyed on the protocol's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends —
   and a second one pins those codes to the engine's own
@@ -3219,7 +3235,7 @@ treats each part as exactly one kind of thing:
   and acts: `fields` puts a marker beside each input an integration is still
   missing, `problems` puts a located failure beside the line of the document it
   is about, `current_revision_id` tells a lost update from a stale form, a
-  `retry_after_ms` is waited out rather than shown as a number. Parsing a
+  `503`'s `refusal` names the state log's reason. Parsing a
   sentence to find any of those is what this envelope exists to end.
 - **`error` decides WHICH screen state it is**, because it is the only closed
   set of the three. A code the client does not know is rendered with the

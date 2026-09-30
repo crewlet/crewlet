@@ -12,7 +12,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { HEALTH_POLL_MS, useEngineHealth } from "./engineHealth.ts";
 import { ClientContext } from "./store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryRefusedError, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -119,6 +119,74 @@ test("a reconnect asks again: an answer from before it is about an engine that m
   act(() => store.setConnected(true));
   await flush();
   expect(asked).toEqual(["stream", "stream"]);
+});
+
+/**
+ * A socket whose `stream` answers are scripted, one per ask, the last one
+ * repeating.
+ */
+function scripted(answers: Array<() => Promise<unknown>>) {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  let next = 0;
+  const asked = vi.fn(() => answers[Math.min(next++, answers.length - 1)]!());
+  (socket as unknown as { query: () => Promise<unknown> }).query = asked;
+  return { store, socket, asked };
+}
+
+const healthy = () => Promise.resolve({ configured: true, status: "healthy" });
+
+/** An `unavailable` rejection carrying the engine's hint, as the socket makes one. */
+function unavailable(retryAfter: number) {
+  return () =>
+    Promise.reject(new QueryRefusedError("unavailable", { code: null, detail: null, retryAfter }));
+}
+
+async function wait(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+// THE SHARED READ WAITS WHAT THE ENGINE SAID, like every other question: a
+// node that said twelve seconds is not asked at the next five-second tick,
+// when it could only refuse again, and the tick resumes once it answers.
+test("an unavailable answer is asked again when its hint says, in place of the tick", async () => {
+  const { store, socket, asked } = scripted([unavailable(12), healthy]);
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Reading label="rail" />
+    </ClientContext.Provider>,
+  );
+  await flush();
+  expect(asked).toHaveBeenCalledTimes(1);
+  await wait(11_999);
+  expect(asked).toHaveBeenCalledTimes(1);
+  await wait(1);
+  expect(asked).toHaveBeenCalledTimes(2);
+  await wait(HEALTH_POLL_MS);
+  expect(asked).toHaveBeenCalledTimes(3);
+});
+
+// AND A ZERO IS NOT ASKED ON A TIMER AT ALL: the node said waiting will not
+// change it, and a five-second poll of that is a loop. A reconnect asks again,
+// which is the control.
+test("an unavailable answer no wait clears stops the poll until a reconnect", async () => {
+  const { store, socket, asked } = scripted([unavailable(0), healthy]);
+  store.setConnected(true);
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Reading label="rail" />
+    </ClientContext.Provider>,
+  );
+  await flush();
+  await wait(HEALTH_POLL_MS * 10);
+  expect(asked).toHaveBeenCalledTimes(1);
+
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  await flush();
+  expect(asked).toHaveBeenCalledTimes(2);
 });
 
 test("two tabs are two sockets, and each has its own read", async () => {

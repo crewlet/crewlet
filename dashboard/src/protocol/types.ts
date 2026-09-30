@@ -3419,15 +3419,18 @@ export interface Frame {
   /** On an `unauthorized` error frame: the grants any one of which would have
    *  admitted the caller. An EMPTY list is an answer — no grant would. */
   grants?: string[];
-  /** On an `unavailable` error frame: the state log's own refusal code, when
-   *  one is behind the answer, or `no_active_revision` for a work, page or
-   *  search question on a node that has no company yet — see
-   *  {@link LogRefusal}. */
+  /** On a QUERY's `unavailable` error frame: the state log's own refusal
+   *  code, when one is behind the answer, or `no_active_revision` for a work,
+   *  page or search question on a node that has no company yet — see
+   *  {@link LogRefusal}. Never on a watch's, whose words stay in the node's
+   *  log because what the directory says about a login names its seat. */
   refusal?: string;
-  /** On an `unavailable` error frame: that refusal's own words. */
+  /** On a query's `unavailable` error frame: that refusal's own words. */
   detail?: string;
-  /** On an `unavailable` error frame: seconds before asking this node again,
-   *  and ZERO when waiting will not change the answer. Never omitted there. */
+  /** On an `unavailable` error frame, a query's or a watch's: seconds before
+   *  asking this node again, and ZERO when waiting will not change the
+   *  answer. Never omitted there — and waited out, through
+   *  `unavailableRetryMs`, by everything that asks again. */
   retry_after?: number;
 }
 
@@ -3456,8 +3459,8 @@ export interface QueryRefusal {
  * a node whose state log is full, that holds a record it cannot decode or whose
  * broker refused the read's barrier answers it the same however often it is
  * asked. `retryAfter` is what tells them apart, and its ZERO is the answer:
- * asking this node again changes nothing, so a screen stops asking soon and
- * says what would.
+ * asking this node again changes nothing, so a screen stops asking on a timer
+ * and says what would.
  */
 export interface LogRefusal {
   /** The state log's own code (`behind`, `log_full`, `deferred`, …), or
@@ -3468,7 +3471,8 @@ export interface LogRefusal {
   /** The refusal's own words: what it is about and what changes it. */
   detail: string | null;
   /** Seconds before asking THIS node again; zero when waiting will not
-   *  change the answer. */
+   *  change the answer, and then nothing re-asks on a timer. Read through
+   *  `retryAfterMs`, which bounds it at `RETRY_AFTER_MAX_MS`. */
   retryAfter: number;
 }
 

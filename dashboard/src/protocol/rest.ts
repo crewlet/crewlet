@@ -111,14 +111,30 @@ export class RestError extends Error {
         grants: this.grants,
       };
     }
-    if (this.status === 503 && !this.unanswered) {
+    const hint = this.retryHint;
+    if (hint !== null) {
       return {
         code: typeof this.body.refusal === "string" ? this.body.refusal : null,
         detail: this.detail || null,
-        retryAfter: this.retryAfter ?? 0,
+        retryAfter: hint,
       };
     }
     return null;
+  }
+
+  /**
+   * When the engine said to ask again, in whole seconds, or null where it said
+   * nothing: a `503` it wrote says its `Retry-After`, and ZERO where it sent
+   * none — its statement that waiting will not change the answer. Every other
+   * answer, a `503` something in front of the engine wrote included, carries
+   * no hint, because nobody at the engine decided one.
+   *
+   * What a retry loop waits out (`retryAfterMs` in `retry.ts`), and what
+   * [refusal] hands `QueryState` for a `503`: the rule for which `503` is the
+   * engine's lives here and nowhere else.
+   */
+  get retryHint(): number | null {
+    return this.status === 503 && !this.unanswered ? (this.retryAfter ?? 0) : null;
   }
 
   /**
@@ -191,8 +207,11 @@ function noteSession(refusal: RestError): void {
  * The seconds a `Retry-After` header names, or null for none. The engine
  * writes whole seconds and never an HTTP date; anything else is not its
  * answer and is read as none.
+ *
+ * Exported for the one read that does not go through [request] — the
+ * degraded-mode snapshot (`api.ts`) — so both read the header one way.
  */
-function retryAfterOf(response: Response): number | null {
+export function retryAfterOf(response: Response): number | null {
   const raw = response.headers.get("Retry-After")?.trim() ?? "";
   return /^\d+$/.test(raw) ? Number(raw) : null;
 }

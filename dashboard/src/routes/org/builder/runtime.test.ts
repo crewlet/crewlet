@@ -51,6 +51,21 @@ test("a refusal resolves with the engine's status and body", async () => {
   expect(answer.body).toEqual({ error: "revision_advanced", current_revision_id: "r2" });
 });
 
+// A 503 THE ENGINE WROTE SAYS WHEN TO ASK AGAIN, and the check waits it out:
+// its Retry-After, or zero where it sent none — the engine's word that
+// waiting will not change it. A 503 nobody at the engine wrote, a proxy's,
+// says nothing, and neither does any other refusal.
+test.each([
+  ["a 503 with a Retry-After", json({ error: "behind" }, 503, { "Retry-After": "12" }), 12],
+  ["a 503 the engine wrote with none", json({ error: "log_full" }, 503), 0],
+  ["a proxy's 503", new Response("<html>bad gateway</html>", { status: 503 }), null],
+  ["a refusal that is not a 503", json({ error: "revision_advanced" }, 409), null],
+])("%s carries the hint the check waits", async (_, response, hint) => {
+  stub(async () => response);
+  const answer = await restTransport.chart(new AbortController().signal);
+  expect(answer.retryAfter).toBe(hint);
+});
+
 test("a request that never reached the engine resolves as status 0", async () => {
   stub(() => Promise.reject(new TypeError("Failed to fetch")));
   const answer = await restTransport.settings(new AbortController().signal);

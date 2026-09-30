@@ -47,6 +47,8 @@ let probeStatus = 426;
 let probeBody: unknown = {};
 /** How long the plain-HTTP re-ask takes to answer. */
 let probeDelayMs = 0;
+/** What the degraded-mode snapshot read answers: by default nothing the engine wrote. */
+let snapshotAnswer: () => Promise<Response> = async () => new Response("{}", { status: 503 });
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -56,6 +58,7 @@ beforeEach(() => {
   probeStatus = 426;
   probeBody = {};
   probeDelayMs = 0;
+  snapshotAnswer = async () => new Response("{}", { status: 503 });
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: ScriptedWebSocket });
   vi.stubGlobal(
     "fetch",
@@ -67,7 +70,7 @@ beforeEach(() => {
         if (probeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, probeDelayMs));
         return new Response(JSON.stringify(probeBody), { status: probeStatus });
       }
-      return new Response("{}", { status: 503 });
+      return snapshotAnswer();
     }),
   );
 });
@@ -207,5 +210,77 @@ describe("what a dial presents", () => {
     const probe = fetchInits[fetches.findIndex((url) => url.endsWith("/ws/stream"))];
     expect(probe?.credentials).toBe("same-origin");
     expect(new Headers(probe?.headers).has("Authorization")).toBe(false);
+  });
+});
+
+// THE DEGRADED-MODE POLL WAITS WHAT THE ENGINE SAID, as every other re-ask
+// does. It read the snapshot every five seconds whatever came back, so a node
+// that answered "come back in twelve" was asked twice first, and one whose
+// identity estate refused every guarded read until an operator acted — a 503
+// the engine wrote with no Retry-After — was asked for as long as the socket
+// stayed down. Anything the engine did not write is the ordinary tick.
+describe("the degraded-mode poll", () => {
+  const snapshotReads = () => fetches.filter((url) => url.endsWith("/stream/snapshot")).length;
+  const refusal = (headers: Record<string, string>) => async () =>
+    new Response(JSON.stringify({ error: "identity_unavailable" }), { status: 503, headers });
+
+  /** A socket that opened and then dropped, which starts the poll. */
+  async function dropped(): Promise<LiveSocket> {
+    const { socket } = started();
+    dial(0).open();
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    return socket;
+  }
+
+  test("a 503 the engine wrote is asked again when its Retry-After says", async () => {
+    snapshotAnswer = refusal({ "Retry-After": "12" });
+    await dropped();
+    expect(snapshotReads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(11_999);
+    expect(snapshotReads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(snapshotReads()).toBe(2);
+  });
+
+  test("a 503 the engine wrote with no Retry-After is not asked again on a timer", async () => {
+    snapshotAnswer = refusal({});
+    await dropped();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(snapshotReads()).toBe(1);
+  });
+
+  test("a read nothing at the engine answered is the ordinary tick", async () => {
+    snapshotAnswer = () => Promise.reject(new TypeError("Failed to fetch"));
+    await dropped();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(snapshotReads()).toBe(2);
+  });
+
+  // A READ IN FLIGHT WHEN ITS RUN ENDS SCHEDULES NOTHING. `stop()` ends the
+  // run with the socket closed, so "is the socket back" cannot be what says
+  // so: a read that landed after it started a new chain for the life of the
+  // tab, with nothing to render into.
+  test("a read that lands after the client stopped schedules no more", async () => {
+    snapshotAnswer = () =>
+      new Promise((resolve) =>
+        setTimeout(() => resolve(new Response("{}", { status: 503 })), 1_000),
+      );
+    const socket = await dropped();
+    socket.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(snapshotReads()).toBe(1);
+  });
+
+  test("a snapshot read keeps the tick, and the poll ends when the socket is back", async () => {
+    snapshotAnswer = async () =>
+      new Response(JSON.stringify({ agents: [], events: [] }), { status: 200 });
+    await dropped();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(snapshotReads()).toBe(2);
+    const reconnected = ScriptedWebSocket.dials.at(-1)!;
+    reconnected.open();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(snapshotReads()).toBe(2);
   });
 });

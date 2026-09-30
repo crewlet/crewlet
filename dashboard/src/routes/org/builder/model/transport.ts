@@ -51,6 +51,15 @@ export interface HttpAnswer {
   readonly status: number;
   readonly body: unknown;
   readonly etag?: string | null;
+  /**
+   * When the engine said to ask again, on a `503` it wrote itself: its
+   * `Retry-After` in whole seconds, and ZERO where it sent none — the engine's
+   * word that waiting will not change the answer. Absent or null on every
+   * other answer, a `503` a proxy wrote included, since a hint nobody at the
+   * engine decided is no hint. Read by the check ([transition]) in place of
+   * its own backoff.
+   */
+  readonly retryAfter?: number | null;
 }
 
 /** A write or a dry run, ready for the transport. */

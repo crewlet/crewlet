@@ -11,7 +11,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { LiveSocket, QueryRefusedError, UNAVAILABLE_RETRY_MS } from "./socket.ts";
+import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "./retry.ts";
+import { LiveSocket, QueryRefusedError } from "./socket.ts";
 import { Store } from "./store.ts";
 
 /** A WebSocket the test drives and whose outgoing frames it reads. */
@@ -114,6 +115,8 @@ describe("watching a seat", () => {
     dial(0).open();
     socket.watch("ana");
 
+    // A FRAME WITH NO HINT waits what the engine says when it has nothing
+    // better — a node older than the field.
     socket.onMessage(JSON.stringify({ kind: "error", what: "watch", error: "unavailable" }));
     await vi.advanceTimersByTimeAsync(UNAVAILABLE_RETRY_MS);
     expect(dial(0).watches()).toEqual(["ana", "ana"]);
@@ -121,6 +124,60 @@ describe("watching a seat", () => {
     socket.onMessage(JSON.stringify({ kind: "error", what: "watch", error: "unauthorized" }));
     await vi.advanceTimersByTimeAsync(10 * UNAVAILABLE_RETRY_MS);
     expect(dial(0).watches()).toEqual(["ana", "ana"]);
+  });
+
+  // THE WATCH WAITS WHAT ITS FRAME SAYS. It re-asked at a fixed five seconds
+  // while its own comment claimed the engine's hint: sooner than a node that
+  // said twelve seconds could answer, and for ever against a chart log no
+  // wait clears. A zero is not asked again on a timer; the next socket asks.
+  test("a watch's retry waits its hint, and a zero is not retried on a timer", async () => {
+    const { socket } = started();
+    dial(0).open();
+    socket.watch("ana");
+
+    const unavailable = (retryAfter: number) =>
+      socket.onMessage(
+        JSON.stringify({
+          kind: "error",
+          what: "watch",
+          error: "unavailable",
+          retry_after: retryAfter,
+        }),
+      );
+    unavailable(12);
+    await vi.advanceTimersByTimeAsync(11_999);
+    expect(dial(0).watches()).toEqual(["ana"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(dial(0).watches()).toEqual(["ana", "ana"]);
+
+    // BOUNDED, like every hint: a derived one of minutes is asked at the bound.
+    unavailable(600);
+    await vi.advanceTimersByTimeAsync(RETRY_AFTER_MAX_MS);
+    expect(dial(0).watches()).toEqual(["ana", "ana", "ana"]);
+
+    unavailable(0);
+    await vi.advanceTimersByTimeAsync(10 * RETRY_AFTER_MAX_MS);
+    expect(dial(0).watches()).toEqual(["ana", "ana", "ana"]);
+
+    // THE NEXT SOCKET asks once more, in case the answer moved.
+    dial(0).closeWith(1006);
+    await vi.advanceTimersByTimeAsync(1_000);
+    dial(1).open();
+    expect(dial(1).watches()).toEqual(["ana"]);
+  });
+
+  // A REFUSAL THAT LANDS WHILE A RETRY IS PENDING IS A DECISION, and the retry
+  // an earlier `unavailable` scheduled would only be refused the same.
+  test("a refusal cancels a retry an earlier unavailable scheduled", async () => {
+    const { socket } = started();
+    dial(0).open();
+    socket.watch("ana");
+    socket.onMessage(
+      JSON.stringify({ kind: "error", what: "watch", error: "unavailable", retry_after: 12 }),
+    );
+    socket.onMessage(JSON.stringify({ kind: "error", what: "watch", error: "unauthorized" }));
+    await vi.advanceTimersByTimeAsync(10 * RETRY_AFTER_MAX_MS);
+    expect(dial(0).watches()).toEqual(["ana"]);
   });
 });
 
@@ -214,6 +271,9 @@ describe("a query frame", () => {
       { code: null, detail: null, retryAfter: 5 },
     ],
     ["a node too old to say", {}, null],
+    // NOT A NUMBER OF SECONDS THE ENGINE WRITES, so no hint — read as a
+    // zero it would stop the screen asking on a value nobody decided.
+    ["a negative hint", { refusal: "behind", retry_after: -1 }, null],
   ])("%s reaches the screen as the engine said it", async (_, extra, want) => {
     const store = new Store();
     const socket = new LiveSocket(store);

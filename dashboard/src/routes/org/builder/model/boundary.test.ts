@@ -10,9 +10,12 @@
  * notices. So the rule is read off the source text, in the idiom of
  * `ui/boundary.test.ts`:
  *
- * - runtime imports name a file in this directory or `~/lib/format.ts` (pure
- *   formatting); `~/protocol` is imported for TYPES only, because its runtime
- *   half is the socket and `fetch`;
+ * - runtime imports name a file in this directory, `~/lib/format.ts` (pure
+ *   formatting) or `~/protocol/retry.ts` — pure arithmetic over the engine's
+ *   retry hint, which the check waits out exactly as the socket's questions
+ *   do, so it is one reading rather than a copy, and which is held to
+ *   importing nothing itself; the rest of `~/protocol` is imported for TYPES
+ *   only, because its runtime half is the socket and `fetch`;
  * - no module names a browser or time global.
  */
 
@@ -22,6 +25,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
 const MODEL = dirname(fileURLToPath(import.meta.url));
+
+/** The one protocol file the core may import at runtime, and where it is. */
+const RETRY = { spec: "~/protocol/retry.ts", path: join(MODEL, "../../../../protocol/retry.ts") };
 
 /** The modules of this directory, tests excluded: a test may use whatever it needs. */
 const sources = readdirSync(MODEL)
@@ -91,11 +97,24 @@ describe("the builder core", () => {
         const allowed =
           spec.startsWith("./") ||
           spec === "~/lib/format.ts" ||
+          spec === RETRY.spec ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }
     }
     expect(offending).toEqual([]);
+  });
+
+  // THE PROTOCOL FILE IT MAY IMPORT IS ONLY AS PURE AS WHAT IT IMPORTS: one
+  // that reached for the socket would bring the socket in with it, past every
+  // rule above. So it imports nothing, and names no global either.
+  test("the protocol file it may import imports nothing and names no global", () => {
+    const text = readFileSync(RETRY.path, "utf8");
+    expect(imports(text)).toEqual([]);
+    const body = code(text);
+    expect(FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(([l]) => l)).toEqual(
+      [],
+    );
   });
 
   test("names no browser, network, clock or randomness global", () => {
