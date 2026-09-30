@@ -135,6 +135,12 @@ type Accountant interface {
 // its retry ([Coordinator.recordSpend]), which offers the same record again
 // under the same identity — so an answer no retry changes must never be one,
 // or the run is held for ever.
+//
+// run.CollectedAt is always set, and is part of that identity: the collect
+// stamps it before it records anything, and every retry carries the FIRST one
+// on the row — so an operation minted at it is the same on every offer, where
+// one minted at the retry's own clock would count a held run on its task
+// twice.
 type Spender interface {
 	RunSpent(ctx context.Context, run PendingRun, result Result) error
 }

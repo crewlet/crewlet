@@ -507,14 +507,17 @@ type PendingRun struct {
 	// clears it, and nothing else does.
 	Charged bool `json:"charged,omitempty"`
 
-	// CollectedAt is the instant this launch was FIRST collected, and the
-	// timestamp of its usage record ([types.SandboxRunUsage]).
+	// CollectedAt is the instant this launch was FIRST collected: the
+	// timestamp of its usage record ([types.SandboxRunUsage]), and the
+	// instant the operation that puts its spend on its task is minted at
+	// ([Spender]).
 	//
 	// ON THE ROW, for the reason Charged is and written by the same release:
 	// the collect is retried, and the event store keys a row on its instant
 	// as well as its id. Restamped by each retry, one launch's usage was a
 	// second row at a second instant — counted twice by any window holding
-	// both, and once by each of two windows that split them.
+	// both, and once by each of two windows that split them — and its task's
+	// spend a second operation, counted on the task twice.
 	//
 	// THE FIRST COLLECT, never the launch: the budgets are charged at the
 	// collect too, so a run's usage and its charge fall on the same side of

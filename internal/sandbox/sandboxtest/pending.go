@@ -950,12 +950,19 @@ func testAHandBackKeepsWhatTheCollectIsNamedBy(t *testing.T, s sandbox.PendingSt
 	// record published, its task's spend confirmed, its charge answered —
 	// and the retry makes again only what did not land because each of the
 	// three is NAMED by the row: the usage record by the turn and the
-	// launch, at the first collect's instant; the task's spend by an
-	// operation derived from the row's creation, the turn and the launch.
-	// So the retry's claim must come back with every one of them as the
-	// first claim read it. A store that restamped the row's creation on a
-	// write — the natural mistake beside its last-write stamp — would name
-	// the task's spend anew and count the run on it twice.
+	// launch, stamped with the first collect's instant; the task's spend by
+	// an operation minted at that same instant from the turn and the
+	// launch; the charge by the row's own flag. So the retry's claim must
+	// come back with every one of them as the hand-back wrote it. A store
+	// that dropped the collect instant on the hand-back, or kept the retry's
+	// own, would name the task's spend anew and count the run on it twice;
+	// one that dropped the flag would charge it twice. The row's creation
+	// names none of the three, and is held here for the RESUME the retry
+	// goes on to: a row with no work_since mints the resumed half's
+	// operation ids at its creation ([sandbox.PendingRun.WorkBegan]), so a
+	// store that restamped it beside its last-write stamp — the natural
+	// mistake — would give each resume ids of its own and repeat the
+	// turn's writes.
 	mustLaunched(t, s, run("t1"))
 	first := mustClaim(t, s, "t1")
 	collected := base.Add(3 * time.Minute)

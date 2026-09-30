@@ -118,10 +118,14 @@ func TestACollectedRunsTokensLandOnItsTaskOncePerLaunch(t *testing.T) {
 	t.Parallel()
 	e, served := spendingEngine(t)
 	spender := runSpender{engine: e}
-	launched := time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC)
+	// THE ROW IS FORTY DAYS OLDER THAN THE COLLECT — a turn parked on a
+	// question past the operation ledger's retention and launched again —
+	// and the operation is still minted at the collect.
+	collected := time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC)
 	run := sandbox.PendingRun{
 		TurnID: "run-1", LaunchID: "launch-1", AgentHandle: "swe",
-		WorkItem: "task-9", CreatedAt: launched,
+		WorkItem: "task-9", CreatedAt: collected.Add(-40 * 24 * time.Hour),
+		CollectedAt: collected,
 	}
 	result := sandbox.Result{Success: true, InputTokens: 900_000, OutputTokens: 40_000}
 	spent := func() {
@@ -154,6 +158,24 @@ func TestACollectedRunsTokensLandOnItsTaskOncePerLaunch(t *testing.T) {
 	if ops[2] == ops[0] {
 		t.Fatal("a second launch in the same turn reused the first's operation, " +
 			"so its spend is never counted")
+	}
+	// MINTED AT THE FIRST COLLECT, the first moment it is attempted: minted at
+	// the row's creation, a ledger swept past that instant answered it
+	// `unknown` on every node and never published it.
+	if minted, ok := statelog.OpMintedAt(ops[0]); !ok || !minted.Equal(collected) {
+		t.Fatalf("the run's spend is minted at %v (%v), want its first collect %v",
+			minted, ok, collected)
+	}
+
+	// AND A RUN WITH NO COLLECT INSTANT is refused rather than minted at the
+	// zero instant, which every ledger that has lost anything cannot vouch for.
+	stray := run
+	stray.CollectedAt, stray.LaunchID = time.Time{}, "launch-stray"
+	if err := spender.RunSpent(t.Context(), stray, result); err == nil {
+		t.Fatal("a run's spend with no collect instant was written")
+	}
+	if turns, _ := served.recorded(); len(turns) != 3 {
+		t.Fatalf("a run's spend with no collect instant reached the task: %+v", turns[3:])
 	}
 
 	// A RUN NO TASK'S TURN LAUNCHED records nothing.
@@ -211,9 +233,10 @@ func TestACollectedRunsSpendSaysWhetherItsFateIsSettled(t *testing.T) {
 			t.Parallel()
 			e, served := spendingEngine(t)
 			served.answering(tc.answer)
+			at := time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC)
 			err := runSpender{engine: e}.RunSpent(t.Context(), sandbox.PendingRun{
 				TurnID: "run-1", LaunchID: "launch-1", AgentHandle: "swe",
-				WorkItem: "task-9", CreatedAt: time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC),
+				WorkItem: "task-9", CreatedAt: at, CollectedAt: at,
 			}, sandbox.Result{Success: true, InputTokens: 900})
 			if turns, _ := served.recorded(); len(turns) != 1 {
 				t.Fatalf("the run's spend reached the task %d time(s), want once", len(turns))

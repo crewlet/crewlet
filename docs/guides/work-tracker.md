@@ -266,9 +266,10 @@ the turn without collecting anything — and it adds tokens only: no turn, no
 round, and no wall-clock, because a task's wall-clock is the time the engine's
 own turns on it ran, which is what a turn's duration means everywhere else.
 Every one of these writes carries an operation id derived from what it records
-— the execution, or the launch a collect read — so a retry, a redelivered
-completion or a completion collected again after a failed resume can never
-count anything twice.
+— the execution, or the launch a collect read, stamped with the instant that
+launch was first collected — so a retry, a redelivered completion or a
+completion collected again after a failed resume can never count anything
+twice.
 
 **Recording never fails the turn.** A turn's own spend that could not be
 written — or whose write's outcome is not known — is logged as
@@ -281,8 +282,8 @@ task was purged records nothing: the purge destroyed the counters it would have
 added to. Nor does one whose task no record on the log ever created — a create
 voided with the generation it was written in — which the write finds out by
 reading the log's end, since a task a node has merely not applied yet is one it
-will. And a write the answering node's operation ledger cannot vouch for —
-the operation predates what that ledger may have lost — is logged as
+will. And a write the answering node's operation ledger cannot vouch for — the
+operation predates what that ledger may have lost — is logged as
 `turn_spend_unvouched` and not repeated, since that node answers every repeat
 the same way.
 

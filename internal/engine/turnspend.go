@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -62,8 +63,22 @@ import (
 // The operation id is DERIVED from the run and the round it began at, so a
 // retry of the write — the outcome unknown, the data node that took it gone —
 // reproduces it, and the applier adds a turn's spend only for an operation it
-// has not applied. A collected run's is derived from the launch it collected,
-// so every retry of the completion that collects the same job reproduces it.
+// has not applied. A collected run's is derived from the launch it collected
+// and MINTED AT ITS FIRST COLLECT ([sandbox.PendingRun.CollectedAt]), which the
+// run's row carries across every retry of that collect, so every retry of the
+// completion that collects the same job reproduces it.
+//
+// # Minted at the collect, never at the row's creation
+//
+// An operation's instant is what an operation ledger that lost rows judges it
+// by ([statelog.Result.Unvouched]): one minted before the instant the ledger
+// may have lost rows from, with no row for it, is answered `unknown` and never
+// published, on every node whose ledger the retention sweep has passed. The
+// row is created at the turn's FIRST launch and a later launch keeps it, so a
+// turn parked on a question for longer than the ledger's retention and then
+// launched again derived its run's spend from an instant every node's sweep
+// had passed — a spend no node would ever record. The first collect is the
+// first attempt, so nothing any node lost can predate it.
 
 // turnSpendBudget bounds the write of one turn's spend.
 //
@@ -141,12 +156,11 @@ var errSpendUnknown = errors.New("engine: whether the task's spend counts this "
 // the file's doc — and answers whether its fate is SETTLED: nil when the
 // task's spend counts it, or never can because the task is gone for good —
 // purged, or created by no record on its log ([tracker.ErrNoTask], which no
-// retry changes) — or when no repeat here can
-// learn whether it does (an unknown the answering node's ledger cannot vouch
-// for); and an error when whether it counts is not known YET — the write
-// refused for now, unanswered, or answered with an outcome a repeat resolves —
-// which a repeat under the same operation id settles without counting it
-// twice.
+// retry changes) — or when no repeat here can learn whether it does (an
+// unknown the answering node's ledger cannot vouch for); and an error when
+// whether it counts is not known YET — the write refused for now, unanswered,
+// or answered with an outcome a repeat resolves — which a repeat under the
+// same operation id settles without counting it twice.
 func writeSpend(ctx context.Context, halves trackerSeams, opID string,
 	record tracker.TurnRecord) error {
 
@@ -207,10 +221,16 @@ func (s runSpender) RunSpent(ctx context.Context, run sandbox.PendingRun,
 	if !ok {
 		return nil
 	}
-	// THE LAUNCH, at the instant its row was written: every retry of the
-	// completion collects the same finished job from the same row, and a
-	// second job in the same turn is a new launch with spend of its own.
-	opID := statelog.DeriveOpID(run.CreatedAt, "run_spend", run.TurnID, run.LaunchID)
+	// THE LAUNCH, minted at its FIRST COLLECT — see the file's doc: every
+	// retry of the completion collects the same finished job from the same
+	// row, which carries that instant, and a second job in the same turn is
+	// a new launch with spend of its own.
+	if run.CollectedAt.IsZero() {
+		return fmt.Errorf("engine: run %s's launch %s reached its spend with no "+
+			"collect instant, which its operation is minted at — the collect "+
+			"stamps it before it records anything", run.TurnID, run.LaunchID)
+	}
+	opID := statelog.DeriveOpID(run.CollectedAt, "run_spend", run.TurnID, run.LaunchID)
 	return writeSpend(ctx, halves, opID, runRecordOf(run, result))
 }
 

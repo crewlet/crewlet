@@ -2516,13 +2516,18 @@ func TestAnUnansweredChargeHoldsTheCollectForItsRetry(t *testing.T) {
 }
 
 // A SPEND THE TASK NEVER CONFIRMED HOLDS THE COLLECT FOR ITS RETRY, which
-// offers the same launch again — the operation derived from it counts the run
-// on the task once whatever the first attempt did.
+// offers the same launch again AT THE SAME INSTANT — the first collect's. The
+// task's spend is an operation minted at that instant from the turn and the
+// launch ([Spender]), so it counts the run on the task once whatever the first
+// attempt did only if every offer names both alike: a retry that offered its
+// own instant, which moved on with the clock, would name the spend anew and
+// count the run on its task twice.
 func TestAnUnconfirmedTaskSpendHoldsTheCollectForItsRetry(t *testing.T) {
 	rig := newCoordRig(t)
 	launched := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 500})
 	rig.spent.failWith(errors.New("no data node answered"))
+	collected := rig.now
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
@@ -2536,7 +2541,10 @@ func TestAnUnconfirmedTaskSpendHoldsTheCollectForItsRetry(t *testing.T) {
 			held.Status, held.Charged, StatusRunning)
 	}
 
+	// THE RETRY, a minute on: the clock has moved, and the spend it offers
+	// must not have.
 	rig.spent.failWith(nil)
+	rig.now = rig.now.Add(time.Minute)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
@@ -2545,10 +2553,11 @@ func TestAnUnconfirmedTaskSpendHoldsTheCollectForItsRetry(t *testing.T) {
 		t.Fatalf("offered the task its spend %d time(s), want the retry to offer it again", len(offered))
 	}
 	for i, o := range offered {
-		if o.run.LaunchID != launched.LaunchID || !o.run.CreatedAt.Equal(launched.CreatedAt) {
-			t.Fatalf("offer %d named launch %s of %v, want %s of %v — what its "+
-				"operation is derived from", i+1, o.run.LaunchID, o.run.CreatedAt,
-				launched.LaunchID, launched.CreatedAt)
+		if o.run.TurnID != launched.TurnID || o.run.LaunchID != launched.LaunchID ||
+			o.run.CollectedAt.IsZero() || !o.run.CollectedAt.Equal(collected) {
+			t.Fatalf("offer %d named %s/%s collected at %v, want %s/%s at the first "+
+				"collect's %v — what the task's spend is minted from", i+1, o.run.TurnID,
+				o.run.LaunchID, o.run.CollectedAt, launched.TurnID, launched.LaunchID, collected)
 		}
 	}
 	if got := rig.accountant.total(); got != 500 {
