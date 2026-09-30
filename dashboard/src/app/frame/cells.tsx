@@ -57,7 +57,7 @@ import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
-import type { SeatKind } from "~/lib/seats.ts";
+import { handleLabel, type SeatKind } from "~/lib/seats.ts";
 import { workItemLabel } from "~/lib/turns.ts";
 import type { WorkItemRef } from "~/protocol/index.ts";
 
@@ -226,7 +226,11 @@ export function SeatCell({
 }) {
   if (!handle) return <EmptyValue label="Nobody" />;
   return (
-    <a className="cell-seat" href={href(["agents", "seats", handle])} title={title ?? `@${handle}`}>
+    <a
+      className="cell-seat"
+      href={href(["agents", "seats", handle])}
+      title={title ?? handleLabel(handle)}
+    >
       <SeatAvatar
         name={name || handle}
         size="xs"

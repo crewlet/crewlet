@@ -1,9 +1,13 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,9 +18,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -26,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // GATE G5, third leg — "a golden company runs end-to-end with the UI showing
@@ -123,6 +130,58 @@ func (c *capture) liveCalls(t *testing.T) []map[string]any {
 		}
 	}
 	return out
+}
+
+// agentRows reports every seat row an `agents` push carried, in order.
+func (c *capture) agentRows(t *testing.T) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string           `json:"kind"`
+			Data []map[string]any `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != "agents" {
+			continue
+		}
+		out = append(out, env.Data...)
+	}
+	return out
+}
+
+// turnStages reports the stage of every turn an `agents` push put a seat on.
+func (c *capture) turnStages(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, row := range c.agentRows(t) {
+		if turn, _ := row["turn"].(map[string]any); turn != nil {
+			if stage, _ := turn["stage"].(string); stage != "" {
+				out = append(out, stage)
+			}
+		}
+	}
+	return out
+}
+
+// sawRefusal reports whether a seat's pushed meter carried a refused window:
+// stamped, and judged `refusing` by the engine. By ROLE, which is the key an
+// `agents` push carries its changed rows under.
+func (c *capture) sawRefusal(t *testing.T, role string) bool {
+	t.Helper()
+	for _, row := range c.agentRows(t) {
+		if row["role"] != role {
+			continue
+		}
+		meter, _ := row["budget"].(map[string]any)
+		windows, _ := meter["windows"].([]any)
+		for _, raw := range windows {
+			w, _ := raw.(map[string]any)
+			if at, _ := w["refused_at"].(string); at != "" && w["state"] == "refusing" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // seatStates reports every activity an `agents` push put a seat in, by role.
@@ -672,7 +731,134 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 const (
 	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
 	replayTimeout = 60 * time.Second
+
+	// replayOperator and replayToken are the founder's credential in the
+	// capture: the token's id is the operator id the founder's seat binds,
+	// which is what admits them to the act transport as a person.
+	replayOperator = "founder"
+	replayToken    = "e2e-replay-founder-token-0123456789"
 )
+
+// actCapture is one `/operator/act` exchange as the replay receives it: the
+// tool and arguments the dashboard would send, the request id it would send
+// them under, and the engine's answer, status and body byte for byte.
+type actCapture struct {
+	Tool      string         `json:"tool"`
+	Args      map[string]any `json:"args"`
+	RequestID string         `json:"request_id"`
+	Status    int            `json:"status"`
+	Body      string         `json:"body"`
+}
+
+// captureAct makes one real write as the founder, through the route the
+// dashboard writes through, and returns the exchange for the replay.
+//
+// THE SERVER'S HALF OF THE SESSION FLOOR, held here before the client reads
+// it: the answer names a position in the grammar a read accepts back, and a
+// read of the person's own state AT that position is served at `session` and
+// already holds the write. A position the engine then refused as
+// `min_position`, or one it served from before the write landed, is a floor
+// the dashboard would wait on for ever or wait on for nothing — and nothing
+// else in the tree holds the answer and the read to one another.
+//
+// A PIN, because it wakes nobody: the capture has already ended, and a write
+// that routed a notice would start a turn the test then tears down under.
+func captureAct(t *testing.T, n *node) []byte {
+	t.Helper()
+	authed := func(method, path string, body []byte) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method,
+			n.server.URL+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+replayToken)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		res, err := n.server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatalf("%s %s: reading the answer: %v", method, path, err)
+		}
+		return res.StatusCode, raw
+	}
+
+	// WHO THE TOKEN IS, and that the node offers them the write: the viewer
+	// names the act transport's verbs from the same surface that serves it.
+	status, raw := authed(http.MethodGet, "/viewer", nil)
+	var viewer struct {
+		Handle string   `json:"handle"`
+		Acts   []string `json:"acts"`
+	}
+	if status != http.StatusOK || json.Unmarshal(raw, &viewer) != nil || viewer.Handle == "" {
+		t.Fatalf("the founder's token names no seat: %d %s", status, raw)
+	}
+	exchange := actCapture{
+		Tool: "set_pins",
+		Args: map[string]any{"favorites": map[string]any{
+			"add": []any{map[string]any{"kind": "project", "id": "ENG"}},
+		}},
+		RequestID: uuid.Must(uuid.NewV7()).String(), // the act transport requires a UUIDv7
+	}
+	if !slices.Contains(viewer.Acts, exchange.Tool) {
+		t.Fatalf("the viewer does not offer %s to the founder (acts %v)",
+			exchange.Tool, viewer.Acts)
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"request_id": exchange.RequestID, "args": exchange.Args,
+	})
+	if err != nil {
+		t.Fatalf("encoding the act request: %v", err)
+	}
+	exchange.Status, raw = authed(http.MethodPost, "/operator/act/"+exchange.Tool, body)
+	exchange.Body = string(raw)
+	var answer struct {
+		Outcome  string `json:"outcome"`
+		Position string `json:"position"`
+	}
+	if exchange.Status != http.StatusOK || json.Unmarshal(raw, &answer) != nil {
+		t.Fatalf("the founder's %s was not answered: %d %s", exchange.Tool,
+			exchange.Status, raw)
+	}
+	if answer.Outcome != "applied" && answer.Outcome != "pending" {
+		t.Fatalf("the founder's %s came to %q, want applied or pending: %s",
+			exchange.Tool, answer.Outcome, raw)
+	}
+	if _, err := tracker.ParseLogPosition(answer.Position); err != nil {
+		t.Fatalf("the act answer's position is not one a read accepts back: %v", err)
+	}
+
+	// THE READ AT THE FLOOR: served at `session`, and holding the write.
+	query := url.Values{"read_level": {"session"}, "min_position": {answer.Position}}
+	status, raw = authed(http.MethodGet,
+		"/work/people/"+url.PathEscape(viewer.Handle)+"?"+query.Encode(), nil)
+	var person struct {
+		Level     string             `json:"read_level"`
+		Favorites []tracker.Favorite `json:"favorites"`
+	}
+	if status != http.StatusOK || json.Unmarshal(raw, &person) != nil {
+		t.Fatalf("a read at the act's floor was not served: %d %s", status, raw)
+	}
+	if person.Level != "session" {
+		t.Errorf("a read at the act's floor was served at %q, want session", person.Level)
+	}
+	if !slices.Contains(person.Favorites, tracker.Favorite{Kind: "project", ID: "ENG"}) {
+		t.Errorf("a read at the act's floor does not hold the write: favorites %v",
+			person.Favorites)
+	}
+
+	out, err := json.Marshal(exchange)
+	if err != nil {
+		t.Fatalf("encoding the act capture: %v", err)
+	}
+	return out
+}
 
 func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// THE OTHER HALF OF THE GATE. The test above asserts the frames say the
@@ -691,16 +877,41 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The client is the compatibility reference and wins any disagreement
 	// — so a failure here is the SERVER's.
 	node := nodeBinary(t)
-	// A CEILING the turn cannot reach, so the capture carries the live
-	// token meters as well: the `budget` push is a frame the client folds
-	// like any other, and one only a capped company is sent.
-	n := startWith(t, func(doc string) string {
+	// A CEILING the company's turn cannot reach, so the capture carries the
+	// live token meters as well: the `budget` push is a frame the client
+	// folds like any other, and one only a capped company is sent.
+	//
+	// AND A SECOND SEAT WHOSE OWN DAY IS SMALLER THAN ONE MODEL CALL, so the
+	// capture carries a window the gate has actually REFUSED. A meter that is
+	// only ever `ok` proves the happy half of the frame and nothing about
+	// `refused_at` — the field that was once dropped on its way from the
+	// counter to the push, which left every "refusing charges" row the
+	// dashboard draws unreachable. The refusal is the engine's own, made by
+	// the gate a real turn charges through; the seat is its own scope, so
+	// the company's turn beside it is charged against nothing it spent.
+	//
+	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
+	// the capture can end with a real `/operator/act` answer — the one the
+	// dashboard's session floor is raised from.
+	n := startBooted(t, func(doc string) string {
+		doc = strings.Replace(doc, "roles:\n", "roles:\n"+
+			"  - name: CFO\n"+
+			"    handle: cfo\n"+
+			"    llm: scripted\n"+
+			"    token_budget: {day: 100}\n", 1)
+		doc = strings.Replace(doc, "      slack_user_id: U0FOUNDER\n",
+			"      slack_user_id: U0FOUNDER\n"+
+				"      crewlet_operator_id: "+replayOperator+"\n", 1)
 		return doc + "\ntoken_budget: {day: 100000000}\n"
+	}, func(boot *config.Bootstrap) {
+		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
 	})
 
-	waitFor(t, "the seat to be claimed", func() bool {
-		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+	waitFor(t, "the seats to be claimed", func() bool {
+		held := n.engine.Node().Host().Held()
+		return slices.Contains(held, "ceo") && slices.Contains(held, "cfo")
 	})
+	waitFor(t, "the native backends to hydrate", n.engine.NativeHydrated)
 	conn := n.dial(t)
 	frames := &capture{}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -710,16 +921,113 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		return slices.Contains(frames.kinds(t), "snapshot")
 	})
 
-	n.wake(t, "ceo", "How did the week go?")
-	waitFor(t, "the turn to complete", func() bool {
-		return slices.Contains(frames.eventTypes(t), "agent_turn_completed")
+	// THE REFUSAL FIRST, and settled on the counter's own stamp, so the
+	// budget push waited for below is one published after it.
+	n.wake(t, "cfo", "What did we spend this week?")
+	budgets := n.engine.Backends().Fleet
+	company := n.engine.Company()
+	cfoID, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("cfo"))
+	waitFor(t, "the seat's own ceiling to refuse a charge", func() bool {
+		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID.String()),
+			coord.WindowsAt(time.Now(), time.UTC))
+		return err == nil && !got.In(period.Day).RefusedAt.IsZero()
+	})
+
+	// THE COMPANY'S TURN IS ON A WORK ITEM, woken the way a task wakes its
+	// assignee: filed to the tracker, applied, and routed by the change feed
+	// to the seat it names. A chat wake names no item, so every
+	// `live_call.work_item` this capture held was null and the client's
+	// reading of the field went untested — the one field every task page,
+	// turn row and live row now keys its link on.
+	task := newTask("ENG", "Summarise how the week went")
+	task.Assignee = "ceo"
+	// WITH ITS WAKE, built the way every create surface builds one: a
+	// record carrying no notification is a change nobody asked to hear about.
+	wake := tracker.Wake{Kind: tracker.ChangeCreated, After: task}.Notify(nil)
+	filed, err := operator(t, n).CreateTask(t.Context(), "e2e-replay-item", task, wake)
+	if err != nil {
+		t.Fatalf("file the task that wakes the seat: %v", err)
+	}
+	// BOTH TURNS, the refused seat's and the company's — counted rather than
+	// matched on the item, so a live call that stopped naming it fails the
+	// assertion below by name instead of timing this wait out.
+	waitFor(t, "both seats' turns to complete", func() bool {
+		ended := 0
+		for _, kind := range frames.eventTypes(t) {
+			if kind == "agent_turn_completed" {
+				ended++
+			}
+		}
+		return ended >= 2
+	}, func() string {
+		var items []any
+		for _, call := range frames.liveCalls(t) {
+			items = append(items, call["work_item"])
+		}
+		return fmt.Sprintf("events %v; live calls' items %v; filed %s (%s); model saw %v",
+			frames.eventTypes(t), items, filed.Key, filed.Outcome, n.model.seen())
 	})
 	// The meters are published on engine.BudgetReportInterval, so one
-	// lands within an interval of the turn at the latest.
-	waitFor(t, "a budget push", func() bool {
-		return slices.Contains(frames.kinds(t), "budget")
+	// carrying the refusal lands within an interval of it at the latest.
+	waitFor(t, "a budget push carrying the refusal", func() bool {
+		return frames.sawRefusal(t, "CFO")
 	})
 	cancel()
+
+	// --- what the frames say, before the client reads them ------------- //
+	// The server's half of each field the replay then holds the client to,
+	// so a red replay can be told apart from a server that never sent it.
+	calls := frames.liveCalls(t)
+	var onItem, capped int
+	for _, call := range calls {
+		if item, _ := call["work_item"].(map[string]any); item != nil {
+			onItem++
+			// READ AS A STRING, like the other two: a missing key decodes
+			// to nil, which is not "" and would pass an equality test.
+			id, _ := item["id"].(string)
+			if item["key"] != filed.Key || item["project"] != "ENG" || id == "" {
+				t.Errorf("a live call names work item %v, want %s in ENG", item, filed.Key)
+			}
+		}
+		if limit, _ := call["max_rounds"].(float64); limit > 0 {
+			capped++
+		}
+	}
+	if onItem == 0 {
+		t.Errorf("no live call named the work item %s its turn was woken for", filed.Key)
+	}
+	if capped == 0 {
+		t.Error("no live call stated its round cap, so no running phase can say " +
+			"how far through it is")
+	}
+	stages := frames.turnStages(t)
+	if !slices.Contains(stages, "phase") {
+		t.Errorf("no agents push put a seat's turn in the `phase` stage; saw %v", stages)
+	}
+	for _, stage := range stages {
+		if !slices.Contains([]string{"context", "phase", "parked"}, stage) {
+			t.Errorf("a turn's stage %q is not one the engine defines", stage)
+		}
+	}
+
+	// THE FLEET AND ITS ALARMS, the server's half of what the replay holds
+	// the health card to: a live node counted, and a standing alarm with its
+	// worst severity — the company has never taken a backup.
+	health := frames.lastHealth(t)
+	if nodes, _ := health["nodes"].(float64); nodes < 1 {
+		t.Errorf("the last health push counts %v live nodes, want at least this one",
+			health["nodes"])
+	}
+	alarms, _ := health["alarms"].(map[string]any)
+	count, _ := alarms["count"].(float64)
+	worst, _ := alarms["worst"].(string)
+	if count < 1 || worst == "" {
+		t.Errorf("the last health push carries no standing alarm with a worst "+
+			"severity (%v) on a company that has never taken a backup", alarms)
+	}
+
+	// --- a write, and the floor it raises ------------------------------- //
+	answer := captureAct(t, n)
 
 	// The RAW bytes, as strings, in arrival order. Not re-encoded: the
 	// client must be fed what the server wrote, or the replay certifies
@@ -744,7 +1052,11 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()
-	cmd := exec.CommandContext(runCtx, node, script, path)
+	actPath := filepath.Join(t.TempDir(), "act.json")
+	if err := os.WriteFile(actPath, answer, 0o600); err != nil {
+		t.Fatalf("writing the act answer: %v", err)
+	}
+	cmd := exec.CommandContext(runCtx, node, script, path, actPath)
 	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
 	out, err := cmd.CombinedOutput()
 	if runCtx.Err() != nil {
@@ -759,10 +1071,13 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 
 // nodeBinary finds node, or explains its absence the right way for the run.
 //
-// Locally a missing node skips: the dashboard's half is somebody else's
-// problem and the rest of the gate still runs. In CI it is a red build — this
-// is the only place the two halves of the wire protocol are checked against
-// each other, so letting it go quiet retires the check behind a green tick.
+// In CI it is a red build — this is the only place the two halves of the wire
+// protocol are checked against each other, so letting it go quiet retires the
+// check behind a green tick. Elsewhere a missing node skips, and that skip is
+// deliberately NOT declared in `internal/skipgate/allowed.go`: `make test-solo`
+// refuses to start without node (`require-node`), and a run that got past it
+// anyway fails on the undeclared skip rather than reporting a pass. Only a
+// bare `go test ./internal/e2e/` — the fast loop, not a gate — skips quietly.
 func nodeBinary(t *testing.T) string {
 	t.Helper()
 	node, err := exec.LookPath("node")

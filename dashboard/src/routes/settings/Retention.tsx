@@ -60,7 +60,7 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
+import { fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { apiToken } from "~/protocol/authToken.ts";
 import type {
@@ -434,7 +434,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                 <span className="row wrap gap-1">
                   {Object.entries(s.domains ?? {}).map(([domain, seq]) => (
                     <Tag key={domain} appearance="outline">
-                      {domain} @{seq}
+                      {domain} through {fmtExact(seq)}
                     </Tag>
                   ))}
                   {!s.domains && <EmptyValue label="This node holds no snapshot" />}

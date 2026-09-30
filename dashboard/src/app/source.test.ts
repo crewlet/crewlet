@@ -79,6 +79,83 @@ test("no JSX guard is a bare number", () => {
 });
 
 /**
+ * A HANDLE IS PRINTED THROUGH `handleLabel`, NEVER AS A BARE `@`.
+ *
+ * `@{seat.handle}` in markup prints a lone `@` for a seat the engine reported
+ * no handle for — a claim that the seat HAS a handle and it is empty, which is
+ * a statement about the seat rather than about what this client was told. It
+ * shipped twice (a common chip and the seat peek) before `lib/seats.ts` grew
+ * `handleLabel`, which prints `@pm` or nothing, and the only thing that kept
+ * the next one out was memory.
+ *
+ * Read off the syntax tree, in both spellings markup has: JSX text ending in
+ * `@` directly before an expression (`@{handle}`), and a template literal
+ * inside a JSX expression whose text before a substitution ends in `@`
+ * (`` title={`@${handle}`} ``). A template built OUTSIDE markup — a mention
+ * the composer inserts into a draft, a sentence a dialog assembles — is not
+ * this rule's subject: it is text a person edits or a value with its own
+ * guard, and it never reaches a reader as a lone character in a layout.
+ */
+function bareAts(text: string, lang: Lang): number[] {
+  // A SET, because a template inside a container nested in another container
+  // is reached from both, and one offence is one line of the report.
+  const out = new Set<number>();
+  walk(parse(text, lang), (n) => {
+    if (n.type === "JSXElement" || n.type === "JSXFragment") {
+      const children = n.children as Node[];
+      children.forEach((child, i) => {
+        const next = children[i + 1];
+        if (
+          child.type === "JSXText" &&
+          String(child.value).endsWith("@") &&
+          next?.type === "JSXExpressionContainer"
+        ) {
+          out.add(child.end - 1);
+        }
+      });
+    }
+    if (n.type === "JSXExpressionContainer") {
+      walk(n, (inner) => {
+        if (inner.type !== "TemplateLiteral") return;
+        const quasis = inner.quasis as Node[];
+        quasis.forEach((q, i) => {
+          if (i === quasis.length - 1) return;
+          const value = q.value as { cooked?: string | null; raw: string };
+          if ((value.cooked ?? value.raw).endsWith("@")) out.add(q.end - 1);
+        });
+      });
+    }
+  });
+  return [...out].sort((a, b) => a - b);
+}
+
+test("no markup prints a handle behind a bare @", () => {
+  const offenders: string[] = [];
+  for (const mod of modules()) {
+    if (mod.lang !== "tsx") continue;
+    const line = lineOf(mod.text);
+    for (const at of bareAts(mod.text, mod.lang)) offenders.push(`${mod.path}:${line(at)}`);
+  }
+  expect(offenders, "print a handle with handleLabel from lib/seats.ts").toEqual([]);
+});
+
+test("the bare-@ reading sees both markup spellings and nothing outside markup", () => {
+  const count = (text: string) => bareAts(text, "tsx").length;
+  expect(count("const a = <span>@{seat.handle}</span>;")).toBe(1);
+  expect(count("const a = <a title={`@${handle}`}>x</a>;")).toBe(1);
+  expect(count("const a = <a title={t ?? `@${handle}`}>x</a>;")).toBe(1);
+  // Markup INSIDE an expression is still markup, and a template nested two
+  // containers deep is one offence, not two.
+  expect(count("const a = <div>{open && <span>@{handle}</span>}</div>;")).toBe(1);
+  expect(count("const a = <div>{open && <b title={`@${h}`} />}</div>;")).toBe(1);
+  // THE CONTROLS: a handle printed through the label, an address that merely
+  // contains an @, and a mention a composer builds outside any markup.
+  expect(count("const a = <span>{handleLabel(seat.handle)}</span>;")).toBe(0);
+  expect(count("const a = <span>ops@example.com</span>;")).toBe(0);
+  expect(count("const draft = text.replace(/@\\w*$/, `@${handle} `);")).toBe(0);
+});
+
+/**
  * EVERY INTERNAL LINK NAMES A LIVE ROUTE.
  *
  * `href(["seats", handle])` compiles, renders, and takes the reader to a
@@ -157,37 +234,74 @@ test("the link pattern reads every spelling a route literal is written in", () =
   expect(heads('samePath(["events", id], route.path)')).toEqual(["events"]);
 });
 
-test("every link names a segment a workspace owns, and a whole literal path resolves", () => {
+/** Every link in one module's text that reaches no screen, as `line — #/path`. */
+function deadLinks(text: string): string[] {
   const owned = new Set(WORKSPACES.map((w) => w.path[0]));
-  const literal = LINK_LITERAL;
+  const literal = new RegExp(LINK_LITERAL.source, LINK_LITERAL.flags);
   const whole = /^(?:\s*,\s*"[^"]*")*\s*,?\s*$/;
   const dead: string[] = [];
-  for (const { path, text } of sources([".tsx", ".ts"])) {
-    const lines = text.split("\n");
-    lines.forEach((line, i) => {
-      literal.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = literal.exec(line))) {
-        const head = m[1]!;
-        const tail = m[2] ?? "";
-        // `href(` and `nav.to(` are unambiguous; only the bare `path:`
-        // spelling collides with the document pointer.
-        if (m[0].startsWith("path") && documentPointer(line)) continue;
-        if (!owned.has(head)) {
-          dead.push(`${path}:${i + 1} — #/${head}`);
-          continue;
-        }
-        // A PATH WRITTEN WHOLLY IN LITERALS is checked against the resolver
-        // itself, because a known head is not a known route: `["live",
-        // "traces"]` has one and drew the turns list under a traces title.
-        if (whole.test(tail)) {
-          const segs = [head, ...[...tail.matchAll(/"([^"]*)"/g)].map((x) => x[1]!)];
-          if (!resolves(segs)) dead.push(`${path}:${i + 1} — #/${segs.join("/")}`);
-        }
+  text.split("\n").forEach((line, i) => {
+    literal.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = literal.exec(line))) {
+      const head = m[1]!;
+      const tail = m[2] ?? "";
+      // `href(` and `nav.to(` are unambiguous; only the bare `path:`
+      // spelling collides with the document pointer.
+      if (m[0].startsWith("path") && documentPointer(line)) continue;
+      if (!owned.has(head)) {
+        dead.push(`${i + 1} — #/${head}`);
+        continue;
       }
-    });
+      // A PATH WRITTEN WHOLLY IN LITERALS is checked against the resolver
+      // itself, because a known head is not a known route: `["live",
+      // "traces"]` has one and drew the turns list under a traces title.
+      if (whole.test(tail)) {
+        const segs = [head, ...[...tail.matchAll(/"([^"]*)"/g)].map((x) => x[1]!)];
+        if (!resolves(segs)) dead.push(`${i + 1} — #/${segs.join("/")}`);
+      }
+    }
+  });
+  return dead;
+}
+
+test("every link names a segment a workspace owns, and a whole literal path resolves", () => {
+  const dead: string[] = [];
+  for (const { path, text } of sources([".tsx", ".ts"])) {
+    for (const hit of deadLinks(text)) dead.push(`${path}:${hit}`);
   }
   expect(dead, "these links go to a screen that does not exist").toEqual([]);
+});
+
+/**
+ * THE HEADS THE REBUILD RENAMED ARE DEAD, AND THE RULE SAYS SO.
+ *
+ * Every workspace moved once: the event log from `#/activity` to
+ * `#/live/events`, spend from `#/cost` to `#/spend`, the fleet, the runs, the
+ * configuration and the seats under Settings, Live and Agents, and pages from
+ * `#/pages` to `#/knowledge/pages`. A link still written against one of those
+ * resolves to nothing, and the rule above is only as good as its reading of
+ * that — so each retired head is fed through it here, beside the address it
+ * became, which has to come back clean. A rule that stopped reporting the old
+ * head, or started reporting the new one, fails here rather than letting a
+ * whole family of dead links through.
+ */
+test("a link to a head the rebuild renamed is reported, and its new address is not", () => {
+  const moves: [retired: string, current: string][] = [
+    ['href(["activity"])', 'href(["live", "events"])'],
+    ['href(["cost"])', 'href(["spend"])'],
+    ['nav.to(["fleet"])', 'nav.to(["settings", "nodes"])'],
+    ['nav.to(["runs"])', 'nav.to(["live", "runs"])'],
+    ['  path: ["config"],', '  path: ["settings", "config"],'],
+    ['href(["seats", handle])', 'href(["agents", "seats", handle])'],
+    ['href(["pages", id])', 'href(["knowledge", "pages", id])'],
+    ['href(["company"])', 'href(["home"])'],
+    ['href(["admin"])', 'href(["settings"])'],
+  ];
+  for (const [retired, current] of moves) {
+    expect(deadLinks(retired), retired).toHaveLength(1);
+    expect(deadLinks(current), current).toEqual([]);
+  }
 });
 
 /**

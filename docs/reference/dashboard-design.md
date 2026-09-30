@@ -79,7 +79,10 @@ gate.
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
 
 A handle is written `@pm`, and a seat the engine reported no handle for gets
-nothing rather than a bare `@`. A live round that has not moved in two minutes
+nothing rather than a bare `@` — which is why no markup prints `@{handle}`
+itself: every handle goes through `handleLabel` in `lib/seats.ts`, and
+`app/source.test.ts` refuses JSX text ending in `@` before an expression and a
+template inside markup that does the same. A live round that has not moved in two minutes
 is called stale, in ten stalled — except while the turn is **parked** on a
 detached coding run, which is silent by design for as long as the run takes:
 the executor's phase card then reads "parked on its coding run", because the
@@ -5584,6 +5587,38 @@ sent", not "did the server send something". That is the gate that caught a full
 turn's worth of `agents` pushes being sent as an object keyed by role while the
 client guarded on `Array.isArray`: both sides' own suites passed and the seat
 rendered idle from the first phase to the last.
+
+The captured company is shaped so that every field a live screen keys on has
+a real value to be read, rather than a null the client would read as easily
+as the value it replaced: its turn is woken by a TASK assigned to the seat, so
+a live call names its `work_item` whole and states its `max_rounds`; a seat's
+`turn.stage` is seen in `phase`; a second seat caps its own day below one
+model call, so the gate refuses it for real and its meter arrives with
+`refused_at`, `resets_at` and `state: refusing`; and the health push has to
+count its live `nodes` and name the worst of its standing `alarms` (the company
+has never taken a backup, so one stands). The replay and the Go half each hold
+all of it, so a red run says which side stopped.
+
+The capture ends with a **write**. The founder's seat binds a bearer token, and
+the test pins a project through `POST /operator/act/set_pins` — served by the
+node's own operator surface, the one `crewlet run` builds
+(`api.NewEngineOperator`), so the harness wires no second catalogue. The Go
+half holds the answer to the read it promises: its `position` is in the grammar
+a read accepts back, and `GET /work/people/{handle}` at
+`read_level=session&min_position=<position>` is served at `session` and already
+holds the pin. The replay hands the same answer, byte for byte, to the client's
+own `act` and `SessionFloors`: the tab's `tracker` floor must be that position,
+and a read of `work_person` or `work_items` must name it as its `min_position`.
+A floor the client could not parse raises nothing, and the screen that pressed
+the button would redraw from before the press with nothing to say so.
+
+The suites themselves run in **Europe/Berlin** under jsdom (`vitest.config.ts`), and
+`src/test/environment.test.tsx` says so by what the zone produces — both
+offsets and the 23- and 25-hour days — rather than by reading the config: under
+UTC, the zone of every runner, a whole family of date bugs cannot be
+reproduced at all. The same suite renders one design-system component, because
+every kit component imports its own stylesheet and a suite that cannot load a
+`.css` file fails to LOAD, reporting no tests rather than a failure.
 
 **The engine's own suite loads the shell the way a browser does.**
 `internal/api` fetches `/dashboard` from the server, never from disk, and

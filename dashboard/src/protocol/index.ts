@@ -27,4 +27,10 @@ export {
   onTokenRequested,
   onTokenChanged,
 } from "./authToken.ts";
+// THE WRITE AND THE FLOOR IT RAISES, so the replay can hand a captured
+// `/operator/act` answer to the client's own `act` and read the floor back off
+// the client's own `SessionFloors` — the floor a later read then names.
+export { act } from "./act.ts";
+export type { ActResult } from "./act.ts";
+export { SessionFloors, domainOf } from "./session.ts";
 export type * from "./types.ts";

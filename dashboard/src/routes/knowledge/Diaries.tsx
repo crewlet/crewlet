@@ -41,7 +41,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DiaryCard, EpisodesCard, heldWords } from "~/components/memory.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
+import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime, tsKey } from "~/lib/format.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
@@ -244,8 +244,8 @@ export function Diary({ handle }: { handle: string }) {
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
-          No agent in the chart is called <code className="inline">@{handle}</code> — this is
-          whatever memory the fleet still holds under that handle.
+          No agent in the chart is called <code className="inline">{handleLabel(handle)}</code> —
+          this is whatever memory the fleet still holds under that handle.
         </Callout>
       )}
       <QueryState error={memory.error} loading={memory.loading && !data}>

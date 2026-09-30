@@ -59,8 +59,12 @@ func serveAPI(
 // because a fleet member is built off the test's goroutine, where t.Fatalf
 // ends only that goroutine and leaves the test running with a nil member.
 //
-// What it leaves out is what a case here never reaches: the operator MCP
-// surface and the native tracker and knowledge readers, each of which has its
+// THE OPERATOR SURFACE IS THE NODE'S OWN, from [api.NewEngineOperator] — the
+// constructor `crewlet run` calls — so `/operator/act` here is the route a
+// person's dashboard writes through, and the viewer names the same verbs.
+// AND THE NATIVE TRACKER'S READS, so a read that names the floor an act
+// answered with is asked of the route the dashboard asks. What it leaves out
+// is what a case here never reaches: the knowledge readers, which have their
 // own suite.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
@@ -123,6 +127,10 @@ func wireAPI(
 	if err != nil {
 		return fail("setup surface", err)
 	}
+	operators, err := api.NewEngineOperator(e)
+	if err != nil {
+		return fail("operator surface", err)
+	}
 	copier, err := backup.New(backup.Options{
 		Store: backends.Store, Conn: backends.Conn(),
 		Holds: backends.Fleet, Backups: backends.Fleet, NodeID: nodeID,
@@ -131,30 +139,42 @@ func wireAPI(
 		return fail("backup", err)
 	}
 
+	// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so the node the
+	// harness serves answers history the way a real node does — from every
+	// live member.
+	sources := queries.Sources{
+		Events:  e.History(),
+		Usage:   e.UsageEstate(),
+		Company: company,
+		NodeID:  nodeID,
+		// THE FLEET'S LEASE TABLE, as cmd/crewlet wires it: the seat
+		// states the dashboard is served read placement from it.
+		Coord: backends.Coord,
+		// WHAT A PERSON MAY DO, off the same surface the act route
+		// serves, as cmd/crewlet wires it.
+		OperatorActs: operators.Acts,
+	}
+	// THE TRACKER'S READS, set only when this node runs one: a nil reader in
+	// the interface would register every work question and panic on the
+	// first ask, where an unset one leaves them honestly unregistered.
+	if reader := e.Tracker(); reader != nil {
+		sources.Work = reader
+	}
+
 	opts := api.Options{
 		Bootstrap:    boot,
 		Runtime:      runtime,
 		QueueBackend: backends.Queue.Backend(),
 		EventLog:     backends.Store.Events(),
-		// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so the
-		// node the harness serves answers history the way a real node
-		// does — from every live member.
-		Sources: queries.Sources{
-			Events:  e.History(),
-			Usage:   e.UsageEstate(),
-			Company: company,
-			NodeID:  nodeID,
-			// THE FLEET'S LEASE TABLE, as cmd/crewlet wires it: the seat
-			// states the dashboard is served read placement from it.
-			Coord: backends.Coord,
-		},
-		Config:    configSurface,
-		Secrets:   secretSurface,
-		Setup:     setupSurface,
-		Retention: backends.Fleet,
-		Capacity:  e,
-		Backup:    copier,
-		Audit:     backends.Queue,
+		Sources:      sources,
+		Operator:     operators,
+		Config:       configSurface,
+		Secrets:      secretSurface,
+		Setup:        setupSurface,
+		Retention:    backends.Fleet,
+		Capacity:     e,
+		Backup:       copier,
+		Audit:        backends.Queue,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,

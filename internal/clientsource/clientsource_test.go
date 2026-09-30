@@ -188,6 +188,46 @@ func TestASecondDeclarationInTheSameFileIsTwo(t *testing.T) {
 	}
 }
 
+// A NEIGHBOUR IS ANOTHER DECLARATION, AND SO IS A NAME THAT CONTAINS THE NAME.
+//
+// The wake reasons' `PHRASES` has a neighbour of the same SHAPE: the Inbox's
+// `CONDITION_PILLS`, a map of words keyed by a state, kept out of that table
+// because its keys are not reasons. The fixture holds the real pair, so a
+// reader that matched a declaration by its shape rather than its name would
+// read two tables where there is one.
+//
+// And it holds two names that CONTAIN the name asked for, one before it and one
+// after — `WAKE_PHRASES` and `PHRASES_SHOWN`. A regular expression over a
+// declaration's head is one missing word boundary from reading either as a
+// second copy; names are read as TOKENS here, so neither is a copy, and
+// neither is the copy.
+func TestANameThatContainsTheNameIsAnotherDeclaration(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"contract/reasons.ts": "export const PHRASES = {\n" +
+			"  mention: { short: \"Mentioned\" },\n" +
+			"  asked: { short: \"Asked\" },\n" +
+			"};\n",
+		"routes/inbox/model.ts": "export const CONDITION_PILLS = {\n" +
+			"  run: \"Run waiting\",\n" +
+			"  seat: \"Seat stopped\",\n" +
+			"};\n" +
+			"export const WAKE_PHRASES = { assigned: \"Assigned\" };\n" +
+			"export const PHRASES_SHOWN = [\"answered\"] as const;\n",
+	})
+	body, err := clientsource.Literal(root, "PHRASES")
+	if err != nil {
+		t.Fatalf("a neighbour, or a name containing PHRASES, was read as a copy of it: %v", err)
+	}
+	got, err := clientsource.Keys(body)
+	if err != nil {
+		t.Fatalf("PHRASES' keys: %v", err)
+	}
+	if !slices.Equal(got, []string{"mention", "asked"}) {
+		t.Errorf("PHRASES read as %v, want the one declaration named exactly that", got)
+	}
+}
+
 // AND TWO FILES ARE TOO — the failure that was always reported, kept so the
 // count is over declarations in both arrangements rather than over one.
 func TestASecondDeclarationInAnotherFileIsTwo(t *testing.T) {

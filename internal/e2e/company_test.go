@@ -119,6 +119,16 @@ func start(t *testing.T) *node { return startWith(t, nil) }
 // the cases whose subject is a config field rather than a turn.
 func startWith(t *testing.T, amend func(doc string) string) *node {
 	t.Helper()
+	return startBooted(t, amend, nil)
+}
+
+// startBooted stands a node up over a company document and a bootstrap the
+// caller may both amend, for the cases that need the operator's own half of
+// the configuration too — a bearer token a person writes with.
+func startBooted(
+	t *testing.T, amend func(doc string) string, amendBoot func(*config.Bootstrap),
+) *node {
+	t.Helper()
 	model := newScriptedModel(t)
 
 	doc := fmt.Sprintf(companyDoc, model.url)
@@ -132,6 +142,9 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	if amendBoot != nil {
+		amendBoot(&boot)
+	}
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,

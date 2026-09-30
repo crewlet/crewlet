@@ -215,7 +215,9 @@ What follows are the prerequisites that legitimately vary by machine.
   gate asks "does the client understand what the server sent" rather than "did
   the server send something", and it is the only place both halves of the wire
   protocol are checked against each other. Without node it SKIPS, so the
-  `make` targets that run it refuse to start without one, and CI installs it.
+  `make` targets that run it refuse to start without one, CI installs it, and
+  the skip has no entry in `internal/skipgate/allowed.go` — a run that got past
+  `require-node` fails on it rather than reporting a pass.
 
   It needs no npm and no build: `static/dashboard/protocol.js` is committed
   along with the rest of the built tree.

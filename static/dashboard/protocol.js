@@ -1177,4 +1177,630 @@ function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.ge
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${node}`);
 }
 //#endregion
-export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };
+//#region src/contract/actions.ts
+/**
+* Every change the dashboard makes, as the tool the engine runs for it.
+*
+* The dashboard writes through ONE route — `POST /operator/act/{tool}`, as the
+* person the presented token is bound to (ADR-0024) — and the tools behind it
+* are the operator catalogue's, the same implementations a person's own
+* assistant calls. This table is what the dashboard is allowed to send there:
+* `protocol/act.ts` takes only a key of it, and only the arguments its row
+* names.
+*
+* ONE ROW PER TOOL A CONTROL PRESSES, and no other: `app/source.test.ts` holds
+* the keys to the `useAct("…")` literals outside the suites, both ways, so a
+* row lands with the control that sends it rather than ahead of it.
+*
+* Each row is:
+*
+*  - `args` — the arguments a screen may pass. Every one is a property of the
+*    tool's own schema, and every property the schema REQUIRES is here;
+*  - `domain` — the log the write lands in, whose position raises this tab's
+*    read floor for that domain (`protocol/session.ts`), or `null` for a
+*    write that lands in no log a question reads;
+*  - `refreshes` — questions OUTSIDE that domain's session set
+*    (`contract/domains.ts`) that the write also moves, asked again without a
+*    floor because they cannot take one;
+*  - `scope` — `person` for a change any bound person makes to the company's
+*    work in their own name, `company` for one that rewrites what every seat's
+*    tracker means (a project's settings, the catalogue), which a screen
+*    offers only where it says so.
+*
+* HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
+* `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
+* served by the act transport and is not a read, every argument is one its
+* schema takes, every required one is present, and every scope is the
+* engine's. A renamed argument in Go is a red build here rather than a button
+* that is refused `invalid` the first time somebody presses it.
+*/
+var ACTIONS = {
+	create_work_item: {
+		args: [
+			"title",
+			"body",
+			"project",
+			"assignee",
+			"ask",
+			"parent",
+			"type",
+			"status",
+			"priority",
+			"due",
+			"labels"
+		],
+		domain: "tracker",
+		refreshes: ["work_search"],
+		scope: "person"
+	},
+	answer_knowledge: {
+		args: ["q"],
+		domain: null,
+		refreshes: [],
+		scope: "person"
+	},
+	update_work_item: {
+		args: [
+			"item",
+			"assignee",
+			"reason",
+			"status",
+			"priority",
+			"if_match",
+			"linked",
+			"linked_pages",
+			"title",
+			"body",
+			"labels",
+			"due",
+			"start",
+			"estimate_minutes",
+			"points",
+			"fields",
+			"checklist",
+			"watch"
+		],
+		domain: "tracker",
+		refreshes: ["work_search"],
+		scope: "person"
+	},
+	restore_work_item: {
+		args: ["item"],
+		domain: "tracker",
+		refreshes: ["work_search"],
+		scope: "person"
+	},
+	write_project: {
+		args: ["project", "target_date"],
+		domain: "tracker",
+		refreshes: [],
+		scope: "company"
+	},
+	set_pins: {
+		args: ["views", "favorites"],
+		domain: "tracker",
+		refreshes: [],
+		scope: "person"
+	},
+	set_priorities: {
+		args: [
+			"handle",
+			"items",
+			"if_match"
+		],
+		domain: "tracker",
+		refreshes: [],
+		scope: "person"
+	},
+	comment_on_work_item: {
+		args: [
+			"item",
+			"answers",
+			"choice",
+			"body",
+			"reply_to",
+			"ask",
+			"decision"
+		],
+		domain: "tracker",
+		refreshes: [],
+		scope: "person"
+	},
+	answer_run: {
+		args: ["turn_id", "answer"],
+		domain: null,
+		refreshes: ["sandbox_runs", "decisions"],
+		scope: "person"
+	},
+	pause_seat: {
+		args: [
+			"handle",
+			"reason",
+			"stop_running"
+		],
+		domain: null,
+		refreshes: [],
+		scope: "person"
+	},
+	resume_seat: {
+		args: ["handle"],
+		domain: null,
+		refreshes: [],
+		scope: "person"
+	},
+	steer_turn: {
+		args: ["turn_id", "note"],
+		domain: null,
+		refreshes: ["turn"],
+		scope: "person"
+	},
+	write_page: {
+		args: [
+			"title",
+			"body",
+			"container",
+			"parent"
+		],
+		domain: "pages",
+		refreshes: ["knowledge"],
+		scope: "person"
+	},
+	save_page: {
+		args: [
+			"page",
+			"base_version",
+			"body",
+			"message"
+		],
+		domain: "pages",
+		refreshes: ["knowledge"],
+		scope: "person"
+	},
+	comment_on_page: {
+		args: [
+			"page",
+			"body",
+			"reply_to"
+		],
+		domain: "pages",
+		refreshes: [],
+		scope: "person"
+	},
+	place_work_item: {
+		args: [
+			"item",
+			"before",
+			"after",
+			"status",
+			"if_match"
+		],
+		domain: "tracker",
+		refreshes: ["work_search"],
+		scope: "person"
+	},
+	save_work_view: {
+		args: [
+			"container",
+			"name",
+			"type",
+			"params",
+			"owner"
+		],
+		domain: "tracker",
+		refreshes: [],
+		scope: "person"
+	},
+	mark_inbox: {
+		args: [
+			"read",
+			"unread",
+			"snooze",
+			"unsnooze",
+			"read_through"
+		],
+		domain: "tracker",
+		refreshes: [],
+		scope: "person"
+	}
+};
+//#endregion
+//#region src/contract/errors.ts
+/**
+* Every `error` a write through `POST /operator/act/{tool}` can come back
+* with, and the sentence the dashboard shows for it.
+*
+* EXACTLY THE ENGINE'S TWO SETS, held both ways by `internal/api/operator`'s
+* `TestTheDashboardKnowsExactlyTheActRefusals`: the transport's own codes
+* (`operator.ActTransportCodes` — a token, a body, a drain) and the tool
+* refusal classes (`mcp.Refusals` — what the tool itself refused). One union
+* because a caller branching on `error` must never need to know which half a
+* code came from, and the engine keeps them disjoint for that reason. A code
+* missing here is a refusal rendered as "something went wrong"; one listed
+* that nothing sends is a sentence nobody will ever read.
+*
+* THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
+* which means "show the tool's own `detail`". Those are the two classes whose
+* sentence names the argument that was wrong (`invalid`) or the rule that
+* forbade it (`forbidden`); every other class's sentence is written for a
+* model reading a tool result, and a person reading it would be told about
+* `if_match` and record ids.
+*/
+var ACT_ERRORS = {
+	invalid_token: "The engine refused your API token. Set it again to make changes.",
+	unbound: "This token is not bound to a person, so there is nobody to record the change under.",
+	unknown_tool: "This engine does not make that change. It may be running a different version from this page — reload.",
+	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
+	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
+	invalid_request_id: "The dashboard sent the change without a usable request id.",
+	invalid_body: "The dashboard sent a change the engine could not read.",
+	body_too_large: "The change is larger than the engine accepts in one request.",
+	unreadable_body: "The change could not be read in full by the engine.",
+	draining: "This node is shutting down and takes no changes now. Try again in a moment.",
+	internal_error: "The change failed inside the engine. Its log has the reason; nothing was refused on purpose.",
+	invalid: null,
+	not_found: "It is not there any more. Somebody may have removed or moved it.",
+	forbidden: null,
+	stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
+	conflict: "It collided with another change landing at the same moment. Look again, then retry.",
+	exists: "That already exists.",
+	already_answered: "Somebody has already answered it.",
+	reassignment_budget: "It has been handed between seats too many times. A person has to pick it up now.",
+	inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
+	not_running: "It is not running any more.",
+	steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
+	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
+	unavailable: "This node could not make the change just now. Try again in a moment.",
+	peer_upgrading: "The node that would make this change is mid-upgrade. Try again in a moment."
+};
+//#endregion
+//#region src/contract/domains.ts
+/**
+* Which questions a write can be read back through.
+*
+* A write through `/operator/act` answers with the POSITION its record landed
+* at in its domain's log, and a read that names that position as its floor
+* (`read_level=session&min_position=…`) waits until this node has applied it —
+* so the screen that pressed the button never shows the state from before the
+* press. That is only true of a question that READS a floor: one that ignores
+* the key answers from whatever this node holds, and a refetch of it after a
+* write is the optimistic guess this dashboard refuses to make.
+*
+* So the list is the ENGINE'S, per domain, and held both ways by
+* `internal/api/queries`' `TestEverySessionQueryTakesAFreshnessFloor`: every
+* kind here is asked there with a bare `read_level=session` (refused — no
+* floor named) and with a floor (served at `session`), and every question the
+* engine serves at a floor is listed here under the domain whose log it
+* reads. A kind missing from here is a screen that stays stale after its own
+* write; a kind listed that takes no floor is a screen that believes it waited
+* and did not.
+*/
+var SESSION_QUERIES = {
+	tracker: [
+		"work_items",
+		"work_item",
+		"work_comments",
+		"work_item_turns",
+		"work_views",
+		"work_saved_views",
+		"work_catalogue",
+		"work_person",
+		"work_projects",
+		"work_project",
+		"work_workload",
+		"work_activity",
+		"work_my_work",
+		"work_inbox",
+		"work_routing",
+		"work_flow",
+		"company_feed",
+		"decisions"
+	],
+	pages: [
+		"pages",
+		"page",
+		"containers",
+		"page_activity",
+		"page_revision"
+	]
+};
+//#endregion
+//#region src/protocol/session.ts
+/**
+* This tab's read floors: the newest position each domain has been written at
+* from here, which every later read of that domain waits for.
+*
+* WRITES ARE CONFIRMED, NEVER OPTIMISTIC. A change made through
+* `protocol/act.ts` answers with the position its record landed at in its
+* domain's log, and the node serving the next read may not have applied it
+* yet — a board redrawn from that node shows the card where it was before the
+* drag, which reads as "the change did not take". The engine's answer to that
+* is a SESSION read: `read_level=session&min_position=<p>` waits until the
+* node holds `p`, then answers. So a write raises this tab's floor for its
+* domain, and every read of a question that takes a floor
+* (`contract/domains.ts`) names it from then on — the refetch the write fires
+* included. Nothing is drawn ahead of the engine, and nothing drawn after the
+* write is older than it.
+*
+* PER TAB AND MONOTONIC. A floor only ever rises: a slow answer to an earlier
+* write arriving after a later one must not lower what the tab has already
+* seen. And it is this tab's alone — another tab's writes are its own
+* business, reached by its own polls.
+*
+* `unknown` RAISES NOTHING. An outcome nobody can vouch for has no position
+* worth waiting on, and a floor at a position that never lands would make
+* every read of the domain wait for it.
+*/
+/**
+* A position off the wire, or null for one this client cannot read.
+*
+* THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
+* back as `min_position` is one the engine will accept: a stream name, then a
+* generation and a sequence that are both non-negative integers.
+*/
+function parsePosition(raw) {
+	const match = /^([^@\s]+)@(\d+):(\d+)$/.exec(raw ?? "");
+	if (!match) return null;
+	const generation = Number(match[2]);
+	const seq = Number(match[3]);
+	if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(seq)) return null;
+	return {
+		stream: match[1],
+		generation,
+		seq
+	};
+}
+/**
+* Whether `next` is later than `held` on one log.
+*
+* GENERATION FIRST, as the engine orders them (`statelog.Later`): a log
+* restored or re-anchored starts a new generation whose sequence may restart
+* below the old one, and a comparison by sequence alone would keep the old
+* floor for ever. A position on ANOTHER stream is taken as later — the only
+* way the stream behind a domain changes is the engine replacing its log, and
+* a floor on a log that no longer exists is one no read could ever meet.
+*/
+function isLater(next, held) {
+	if (next.stream !== held.stream) return true;
+	if (next.generation !== held.generation) return next.generation > held.generation;
+	return next.seq > held.seq;
+}
+/**
+* One tab's floors. A class rather than module state so a suite can hold its
+* own; the dashboard uses [session], the one per tab.
+*/
+var SessionFloors = class {
+	floors = /* @__PURE__ */ new Map();
+	listeners = /* @__PURE__ */ new Set();
+	/** The floor a read of `domain` names, or null before this tab wrote to it. */
+	floor(domain) {
+		return this.floors.get(domain)?.raw ?? null;
+	}
+	/**
+	* Record a write this tab made to `domain` (null for one that lands in no
+	* log a question reads), landed at `position`, and tell
+	* every listener the domain moved — whether or not the floor rose, because
+	* a write that appended nothing (`position` null) still answered, and the
+	* questions it named are worth asking again.
+	*
+	* Returns whether the floor rose.
+	*/
+	written(domain, position, refreshes) {
+		let rose = false;
+		const at = parsePosition(position);
+		if (domain !== null && at && position) {
+			const held = this.floors.get(domain);
+			if (!held || isLater(at, held.at)) {
+				this.floors.set(domain, {
+					raw: position,
+					at
+				});
+				rose = true;
+			}
+		}
+		for (const listener of this.listeners) listener(domain, refreshes);
+		return rose;
+	}
+	/** Subscribe to writes. Returns the unsubscribe. */
+	onWritten(listener) {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+	/**
+	* Whether a write heard by a listener moves the answer to `kind`: a question
+	* that reads the written domain at a floor, or one the write names as
+	* moving beside it.
+	*/
+	static moves(kind, domain, refreshes) {
+		return domain !== null && domainOf(kind) === domain || refreshes.includes(kind);
+	}
+	/**
+	* The freshness a read of `kind` names, or null when it names none: the
+	* question takes no floor, or this tab has not written its domain.
+	*/
+	freshness(kind) {
+		const domain = domainOf(kind);
+		if (domain === null) return null;
+		const floor = this.floor(domain);
+		return floor === null ? null : {
+			read_level: "session",
+			min_position: floor
+		};
+	}
+};
+/** The domain whose log a question reads at a floor, or null for one that takes none. */
+function domainOf(kind) {
+	for (const domain of Object.keys(SESSION_QUERIES)) if (SESSION_QUERIES[domain].includes(kind)) return domain;
+	return null;
+}
+/** This tab's floors. */
+var session = new SessionFloors();
+//#endregion
+//#region src/protocol/act.ts
+/**
+* The dashboard's one write: a change, made as the person the token is bound
+* to (ADR-0024).
+*
+* EVERY BUTTON THAT CHANGES THE COMPANY COMES THROUGH HERE, and here goes to
+* exactly one route — `POST /operator/act/{tool}` — where the engine runs the
+* same operator tool a person's own assistant would, attributed to the token
+* as author and to the seat it is bound to as the person. There is no second
+* write path to keep in step with it: `app/source.test.ts` holds every `act(`
+* to a literal tool, `protocol/transport.test.ts` holds every network read to
+* `src/protocol/`, and `contract/actions.ts` is the whole vocabulary, held
+* against the engine's catalogue by a Go gate.
+*
+* # What an answer can be, and what each tells a person
+*
+*  - `applied` — the record landed at `position`, and this tab's read floor
+*    for its domain rose to it (`protocol/session.ts`), so every read after
+*    this one includes it;
+*  - `pending` — the engine accepted it and this node has not applied it
+*    yet: the floor rises, and the reads wait for it;
+*  - `unknown` — nobody can say whether it landed: the connection dropped
+*    after the request left, a gateway gave up, or the engine itself said so.
+*    NEVER RETRIED HERE. A retry is the person's decision, and when they make
+*    it the same `requestId` goes again, which the engine derives the same
+*    operations from — so a retry is the first attempt's write rather than a
+*    second one;
+*  - `refused` — the engine said no, with a code from `contract/errors.ts`
+*    and the sentence a person is shown for it.
+*
+* AND IT NEVER THROWS for an answer, a refusal or a lost connection — those
+* are all values a screen renders. It rejects only for the caller's own
+* abort, which is not an answer at all.
+*/
+var ROWS = ACTIONS;
+/**
+* The codes the act transport itself answers with a 5xx, each of which says
+* nothing was written: the drain gate refused before the handler ran, a tool
+* refused before it appended (an interrupted call says `outcome: unknown`
+* beside its class, and is read before this), or a tool failed without a
+* class. Any other 5xx is somebody else's.
+*/
+var ENGINE_5XX = /* @__PURE__ */ new Set([
+	"draining",
+	"unavailable",
+	"peer_upgrading",
+	"internal_error"
+]);
+/** The refusal classes a later attempt may clear: the node, not the request. */
+var RETRYABLE = /* @__PURE__ */ new Set([
+	"draining",
+	"unavailable",
+	"peer_upgrading"
+]);
+/** Whether a code off the wire is one this build knows. */
+function isActErrorCode(code) {
+	return Object.hasOwn(ACT_ERRORS, code);
+}
+/**
+* A fresh request id: a UUIDv7, stamped with the instant the gesture began.
+*
+* VERSION 7 BECAUSE THE ENGINE READS THE INSTANT. The act transport derives
+* the call's operation from this id, and the operation's mint instant is the
+* id's own — the instant the engine uses to decide whether its operation
+* ledger can still vouch for a retry. An id carrying no instant is refused
+* `invalid_request_id`. The layout is the engine's operation-id grammar with
+* no name ([layoutOpID]), so there is one encoder rather than two.
+*
+* `crypto.getRandomValues`, never `crypto.randomUUID`: the second exists only
+* in a secure context, and a node's dashboard reached at
+* `http://10.0.0.4:8000` is not one — every write there would throw.
+*/
+function newRequestId(now = Date.now()) {
+	return layoutOpID(now, crypto.getRandomValues(/* @__PURE__ */ new Uint8Array(10)), "");
+}
+/**
+* Make one change, as the signed-in person.
+*
+* The body is `{request_id, args}` as JSON — the engine refuses any other
+* content type, which is what keeps a cross-site form from reaching a write.
+*/
+async function act(tool, args, options = {}) {
+	const requestId = options.requestId ?? newRequestId();
+	const floors = options.floors ?? session;
+	const unknown = (reason) => ({
+		kind: "unknown",
+		tool,
+		requestId,
+		reason
+	});
+	let body;
+	try {
+		({body} = await rest.request("POST", `/operator/act/${encodeURIComponent(tool)}`, {
+			body: {
+				request_id: requestId,
+				args
+			},
+			contentType: "application/json",
+			signal: options.signal
+		}));
+	} catch (err) {
+		if (isAbort(err)) throw err;
+		if (!(err instanceof RestError)) return unknown(String(err));
+		return refusalOf(tool, requestId, err, floors);
+	}
+	const answer = body ?? {};
+	const outcome = answer.outcome;
+	if (outcome !== "applied" && outcome !== "pending") return unknown("The engine accepted the change and could not confirm it landed.");
+	const position = typeof answer.position === "string" ? answer.position : null;
+	const { domain, refreshes } = ROWS[tool];
+	floors.written(domain, position, refreshes);
+	return {
+		kind: outcome,
+		tool,
+		requestId,
+		position,
+		domain,
+		receipt: answer.receipt
+	};
+}
+/**
+* The refusals that say the screen the press was made from is OUT OF DATE:
+* somebody else changed the object since it was drawn (`stale_version`,
+* `conflict`), removed it (`not_found`), made it already (`exists`) or answered
+* it (`already_answered`). Each asks again every question the write would have
+* moved — without raising a floor, since nothing of this tab's landed — so the
+* page redraws what IS there and the next press is made against it. Without
+* that a task page kept sending the version it was drawn at and was refused
+* `stale_version` on every press until its own poll happened to come round.
+*/
+var LOOK_AGAIN = /* @__PURE__ */ new Set([
+	"stale_version",
+	"conflict",
+	"not_found",
+	"exists",
+	"already_answered"
+]);
+/** What a refusal, or a request that never got an answer, came to. */
+function refusalOf(tool, requestId, err, floors) {
+	if (err.body.outcome === "unknown") return {
+		kind: "unknown",
+		tool,
+		requestId,
+		reason: err.detail || err.code
+	};
+	const code = isActErrorCode(err.code) ? err.code : "";
+	if (err.status === 0 || err.status >= 500 && !ENGINE_5XX.has(code)) return {
+		kind: "unknown",
+		tool,
+		requestId,
+		reason: err.detail || `The answer was lost (status ${err.status}).`
+	};
+	if (err.status === 401) requestToken();
+	if (LOOK_AGAIN.has(code)) {
+		const { domain, refreshes } = ROWS[tool];
+		floors.written(domain, null, refreshes);
+	}
+	return {
+		kind: "refused",
+		tool,
+		requestId,
+		code,
+		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || `The engine refused the change (status ${err.status}).`),
+		hint: err.hint,
+		retryable: RETRYABLE.has(code)
+	};
+}
+//#endregion
+export { LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SessionFloors, Store, act, api, apiToken, clearToken, domainOf, isAbort, keepsOperation, layoutOpID, newGateOpID, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, retryAfterSeconds, storeToken };
