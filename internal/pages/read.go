@@ -501,45 +501,95 @@ func deferredRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
 }
 
 // absentRefusal is [deferredRefusal] for a page NO ROW holds, by the reference
-// that found none.
+// that found none, decided in the snapshot that found none — the framework's
+// own probe runs only where the node reported a retained record before the
+// read began, so a record retained while the read waited would otherwise be
+// seen by neither.
 //
-// An address is already covered by [refScope]'s title term, which a create or
-// a rename into it is filed under. An id is not: the object path a create
-// files it under names a container the absent row cannot supply, so it is
-// matched against every container's object path for that id — an id this
-// engine mints is a uuid, so the pattern holds no wildcard of its own, and
-// anything else names no page any record could create.
+// An ADDRESS names its own term: the title a create or a rename into it is
+// filed under, and every term above it — its container's included — which is
+// [refScope]'s closure. An ID does not: the object path a create files it
+// under names a container the absent row cannot supply, so it is judged
+// against the object path for that id UNDER EVERY CONTAINER, and against every
+// term that contains such a path — the domain, the containers' root, and ANY
+// container's own term, since a scope is the complete set of objects its
+// apply may write and a container term covers every page that may come to be
+// in it. Anything that is neither names no page any record could create.
+//
+// THE CONTAINER IS MATCHED IN GO, segment by segment, rather than by a LIKE
+// pattern: `%` spans the separator, so a pattern for "any container's own
+// term" also matches every page path under every container, and LIKE folds
+// case where a path does not. The retained set it walks is this node's
+// undecodable records, which a node holds few of and a node holding many has
+// a louder problem than this read.
 func absentRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
 	ref string) error {
 
+	if _, _, byAddress := strings.Cut(ref, "/"); byAddress {
+		return deferredRefusal(ctx, tx, level, refScope(ref), "the address "+ref)
+	}
 	id, minted := mintedID(ref)
 	if !minted {
 		return nil
 	}
-	var (
-		position sql.NullInt64
-		version  sql.NullInt64
-	)
-	if err := tx.QueryRowContext(ctx, `
-		SELECT MIN(d.position), MIN(d.version)
+	rows, err := tx.QueryContext(ctx, `
+		SELECT s.path, d.position, d.version
 		  FROM pages_log_deferred_scope s
 		  JOIN pages_log_deferred d ON d.position = s.position
-		 WHERE s.path LIKE ?`,
-		ScopeTerm{Kind: TermObject, Container: "%", ID: id.String()}.Path()).
-		Scan(&position, &version); err != nil {
+		 ORDER BY d.position`)
+	if err != nil {
 		return fmt.Errorf("pages: ask whether a retained record creates page %s: %w",
 			id, err)
 	}
-	if !position.Valid {
-		return nil
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			path              string
+			position, version int64
+		)
+		if err := rows.Scan(&path, &position, &version); err != nil {
+			return fmt.Errorf("pages: read a retained record's scope: %w", err)
+		}
+		if !mayHoldPage(path, id.String()) {
+			continue
+		}
+		return &statelog.Refused{
+			Code: statelog.RefuseDeferred, Level: level,
+			Detail: fmt.Sprintf("this node holds no page %s, and a record at version "+
+				"%d it cannot decode, at %s, may be the one that creates it", id,
+				version, statelog.Unpack(Domain{}.Stream().Name, position)),
+		}
 	}
-	return &statelog.Refused{
-		Code: statelog.RefuseDeferred, Level: level,
-		Detail: fmt.Sprintf("this node holds no page %s, and a record at version "+
-			"%d it cannot decode, at %s, is about it", id, version.Int64,
-			statelog.Unpack(Domain{}.Stream().Name, position.Int64)),
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("pages: read the retained records' scopes: %w", err)
 	}
+	return nil
 }
+
+// mayHoldPage reports whether a retained record's scope path covers page id
+// in SOME container: whether path is the page's object path, or any term
+// above it, with the container segment matching whatever it names — see
+// [absentRefusal].
+func mayHoldPage(path, id string) bool {
+	within := strings.Split(ScopeTerm{Kind: TermObject, Container: anyContainer,
+		ID: id}.Path(), statelog.ScopeSeparator)
+	held := strings.Split(strings.Trim(strings.TrimSpace(path),
+		statelog.ScopeSeparator), statelog.ScopeSeparator)
+	if len(held) > len(within) {
+		return false
+	}
+	for i, segment := range held {
+		if within[i] != anyContainer && segment != within[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// anyContainer stands in the container segment of the path [mayHoldPage]
+// compares against. A space key is upper-case and slug-shaped, so no real
+// container is spelled with a byte a path never carries.
+const anyContainer = "\x00"
 
 // mintedID is ref as the uuid an id this engine mints is, and whether it is
 // one — an address, or any other text, names no page a record could create.

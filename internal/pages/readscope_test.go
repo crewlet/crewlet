@@ -19,6 +19,17 @@ import (
 // makes the framework consult the index at all.
 func (r *roundTrip) retain(position int64, paths ...string) *pages.Reader {
 	r.t.Helper()
+	return r.retainReported(1, position, paths...)
+}
+
+// retainReported is [roundTrip.retain] over a node whose health reports
+// `reported` retained records: zero is a record retained after the read took
+// its health reading, which the framework's own probe never consults the
+// index for — so only a decision made in the read's own snapshot sees it.
+func (r *roundTrip) retainReported(reported uint64, position int64,
+	paths ...string) *pages.Reader {
+
+	r.t.Helper()
 	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(r.t.Context(), `
 			INSERT INTO pages_log_deferred
@@ -51,7 +62,7 @@ func (r *roundTrip) retain(position int64, paths ...string) *pages.Reader {
 				Lag:       &behind,
 				FirstSeq:  &first,
 				TrimFloor: &floor,
-				Deferred:  1,
+				Deferred:  reported,
 			}
 		},
 		Drain: func() float64 { return 2000 },
@@ -169,4 +180,90 @@ func TestAPageReadRefusesWhatARetainedRecordCovers(t *testing.T) {
 		t.Errorf("an id no row holds and no record is about answered %v, want "+
 			"not found", err)
 	}
+}
+
+// A PAGE NO ROW HOLDS IS REFUSED WHILE ANY RETAINED RECORD MAY CREATE IT — ONE
+// ABOUT A WHOLE SPACE INCLUDED — AND EVERY POINT READ IS DECIDED IN ITS OWN
+// SNAPSHOT.
+//
+// A record's scope is the complete set of objects its apply may write, and a
+// space's own term covers every page that may come to be in it: a record about
+// all of OPS that this node cannot decode may be the one that creates a page,
+// so "no such page", read by id from rows that record never wrote, is the
+// stale answer a point read refuses. The absent row names no space, so every
+// space's term is asked. And the decision is the read's own: the framework
+// consults the deferral index only where the node reported a retained record
+// before the read began, so one retained while the read waited — a node that
+// reports none, here — is seen by the read's snapshot or by nothing, for a page
+// that is held, one absent by id and one absent by address alike.
+//
+// Mutation: match an absent id against its object path alone, or leave an
+// absent page (by id or by address) or a held one to the framework's probe,
+// and a row goes red.
+func TestAnAbsentPageIsDecidedAgainstEveryRecordThatMayCreateIt(t *testing.T) {
+	t.Parallel()
+	unwritten := uuid.Must(uuid.NewV7()).String()
+	postmortem := pages.ScopeTerm{Kind: pages.TermTitle, Container: "ENG",
+		ID: pages.TitleToken("Postmortem")}.Path()
+	for _, c := range []struct {
+		name     string
+		reported uint64
+		ref      func(held pages.Written) string
+		paths    func(held pages.Written) []string
+	}{
+		{"an id, under a record about a whole space", 1,
+			func(pages.Written) string { return unwritten },
+			func(pages.Written) []string {
+				return []string{pages.ScopeTerm{Kind: pages.TermContainer, ID: "OPS"}.Path()}
+			}},
+		{"an id, under a record retained while the read waited", 0,
+			func(pages.Written) string { return unwritten },
+			func(pages.Written) []string { return []string{objectPath("OPS", unwritten)} }},
+		{"an address, under a record retained while the read waited", 0,
+			func(pages.Written) string { return "eng/Postmortem" },
+			func(pages.Written) []string { return []string{postmortem} }},
+		{"a held page, under a record retained while the read waited", 0,
+			func(held pages.Written) string { return held.Page.ID },
+			func(held pages.Written) []string {
+				return []string{objectPath("ENG", held.Page.ID)}
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			held := r.write(author("jane"), pages.NewPage{Container: "ENG", Title: "Runbook"})
+			reader := r.retainReported(c.reported, 1_000_000, c.paths(held)...)
+			_, err := reader.Get(t.Context(), c.ref(held),
+				statelog.Freshness{Level: statelog.ReadStale})
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferred {
+				t.Errorf("reading %q answered %v, want the `deferred` refusal: a "+
+					"retained record may be what wrote it", c.ref(held), err)
+			}
+		})
+	}
+
+	// THE CONTROLS: records about ANOTHER page and ANOTHER title leave an
+	// absent id and an absent address answered as absent, retained while
+	// the read waited or not — the walk is about the page asked for, not
+	// about every retained record there is.
+	t.Run("records about something else", func(t *testing.T) {
+		t.Parallel()
+		r := newRoundTrip(t)
+		other := uuid.Must(uuid.NewV7()).String()
+		elsewhere := pages.ScopeTerm{Kind: pages.TermTitle, Container: "OPS",
+			ID: pages.TitleToken("Postmortem")}.Path()
+		for _, reported := range []uint64{0, 1} {
+			reader := r.retainReported(reported, 1_000_000+int64(reported),
+				objectPath("OPS", other), elsewhere)
+			for _, ref := range []string{unwritten, "ENG/Postmortem"} {
+				_, err := reader.Get(t.Context(), ref,
+					statelog.Freshness{Level: statelog.ReadStale})
+				if !errors.Is(err, pages.ErrNotFound) {
+					t.Errorf("reporting %d retained: %q answered %v, want not "+
+						"found", reported, ref, err)
+				}
+			}
+		}
+	})
 }

@@ -361,8 +361,12 @@ or a feed of one knowledge-base space is scoped to that space's canonical key,
 so `eng` and `ENG` are one question. A read of one page is judged on the page
 it resolved to — by id or by `SPACE/Title` — in the snapshot that read it, and
 refused `deferred` when a retained record covers that page; a page no row holds
-is refused the same way while a retained record may be the one that creates it,
-rather than answered "not found" from rows that record never wrote.
+is refused the same way while a retained record may be the one that creates it
+— one about that page or that address, or one about a whole space, since a
+record about a space may write any page in it — rather than answered "not
+found" from rows that record never wrote. The node decides that in the same
+snapshot it read the page from, so a record retained while the read was
+waiting is seen too.
 
 ## What no level can strengthen
 
