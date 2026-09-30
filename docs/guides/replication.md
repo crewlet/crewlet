@@ -597,8 +597,8 @@ from the work tracker, are the first retired kind.
    so each takes a flat default and its own floor. A full log **refuses**
    appends rather than shedding old records; see [Retention](retention.md).
    On every log that claims identity — the tracker's, the knowledge base's,
-   the org chart's and the identity estate's — ordinary writes are refused a
-   sixteenth short of it, the rest being
+   the org chart's and the identity estate's — ordinary writes are refused
+   short of it, the top being
    [kept for gate records](retention.md#the-gate-reserve) so that an eviction
    can still unpin a full log.
 3. **The trim floor** — how far back the log can be replayed from, which is

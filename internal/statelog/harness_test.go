@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,13 @@ import (
 const (
 	probeStream = "CREWLET_PROBE_LOG"
 	probePrefix = "crewlet.probe.log"
+
+	// probeMaxRecord is the probe log's declared largest record: a
+	// hundred and twenty-eight kibibytes, enough for the sixty-kibibyte
+	// bodies the capacity cases fill a log with and the gate record they
+	// size to cross its soft ceiling, and small enough that the reserve
+	// it sizes leaves a test-sized log most of itself.
+	probeMaxRecord = 128 << 10
 )
 
 // probeDomain is a domain with one table and a strict log.
@@ -37,6 +45,7 @@ func (probeDomain) Stream() statelog.StreamSpec {
 		Subjects:        []string{probePrefix + ".>"},
 		SubjectPrefix:   probePrefix,
 		MaxBytes:        16 << 20,
+		MaxRecordBytes:  probeMaxRecord,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 		ArbitratedKinds: []string{"object"},
@@ -598,7 +607,7 @@ func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) 
 // about something other than capacity.
 func noCeiling(t testing.TB) *statelog.Reserve {
 	t.Helper()
-	reserve, err := statelog.NewReserve(probeStream,
+	reserve, err := statelog.NewReserve(probeDomain{}.Stream(),
 		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
 	if err != nil {
 		t.Fatalf("NewReserve: %v", err)
@@ -606,11 +615,11 @@ func noCeiling(t testing.TB) *statelog.Reserve {
 	return reserve
 }
 
-// reserveOn is the gate reserve on a real log, reading its usage from the
-// broker as the engine's does.
-func reserveOn(t testing.TB, log *js.DomainLog) *statelog.Reserve {
+// reserveOn is the gate reserve on the real log spec declares, reading its
+// usage from the broker as the engine's does.
+func reserveOn(t testing.TB, spec statelog.StreamSpec, log *js.DomainLog) *statelog.Reserve {
 	t.Helper()
-	reserve, err := statelog.NewReserve(probeStream,
+	reserve, err := statelog.NewReserve(spec,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -640,10 +649,11 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	})
 	spec := domain.Stream()
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
-		Name:       spec.Name,
-		Subjects:   spec.Subjects,
-		MaxBytes:   spec.MaxBytes,
-		Duplicates: spec.Duplicates,
+		Name:            spec.Name,
+		Subjects:        spec.Subjects,
+		MaxBytes:        spec.MaxBytes,
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		Duplicates:      spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
 	}
@@ -683,7 +693,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	// through the harness is admitted against the broker's usage, as the
 	// engine's are.
 	if statelog.KeepsGateReserve(domain) {
-		h.reserve = reserveOn(t, log)
+		h.reserve = reserveOn(t, spec, log)
 		deps.Admission = h.reserve
 	}
 	pub, err := statelog.NewPublisher(deps)
@@ -704,6 +714,25 @@ func (h *harness) write(subject statelog.Subject, opID string, body string) (sta
 		Pattern: statelog.PatternArbitrated,
 		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			return statelog.Decision{Payload: probeRecord(stamp, opID, body), Version: 1}, nil
+		},
+	})
+}
+
+// writeSized is [harness.write] with a record of exactly size bytes — the
+// body padded to it inside the decision, where the stamp it carries is known.
+func (h *harness) writeSized(subject statelog.Subject, opID string, size int) (statelog.Result, error) {
+	h.t.Helper()
+	return h.pub.Publish(h.t.Context(), statelog.Request{
+		Subject: subject,
+		Scope:   statelog.ScopeSet{Paths: []string{subject.String()}},
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// A BODY OF `x` IS CARRIED AS IT IS, so the record grows by
+			// exactly what the body does.
+			pad := size - len(probeRecord(stamp, opID, ""))
+			return statelog.Decision{Payload: probeRecord(stamp, opID,
+				strings.Repeat("x", pad)), Version: 1}, nil
 		},
 	})
 }

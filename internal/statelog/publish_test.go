@@ -1203,19 +1203,18 @@ func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 	}
 }
 
-// A RECORD TOO LARGE FOR THE BROKER AND A LOG AT ITS CEILING ARE TWO
-// REFUSALS, with two remedies — and both are decided at round one.
+// A RECORD TOO LARGE AND A LOG AT ITS CEILING ARE TWO REFUSALS, with two
+// remedies — and both are decided at round one.
 //
-// The broker cannot store either, and neither changes between rounds, so
-// neither may be retried. But the remedies are different people's: a full
-// log is the operator's retention (raise the ceiling, unblock the trim), and a
-// record too large is the writer's change or the NATS server's max_payload,
+// Neither changes between rounds, so neither may be retried. But the remedies
+// are different people's: a full log is the operator's retention (raise the
+// ceiling, unblock the trim), and a record too large is the writer's change,
 // with a log that has room to spare. Both were `log_full`, so a record too
 // large told whoever read it to raise a ceiling nothing was near.
 //
-// Both are staged on a REAL broker, so what is classified is what a broker
-// actually answers: the embedded one takes no message past eight mebibytes,
-// and a log created at a few kilobytes fills after a handful of records.
+// Both are staged on a REAL broker: a record past its domain's declared
+// largest is refused before anything is sent, naming the declaration, and a
+// log created at a few kilobytes fills after a handful of records.
 func TestATooLargeRecordAndAFullLogAreRefusedApart(t *testing.T) {
 	t.Parallel()
 
@@ -1235,11 +1234,12 @@ func TestATooLargeRecordAndAFullLogAreRefusedApart(t *testing.T) {
 				"broker is asked, and nothing a retry does makes it smaller",
 				res.Rounds, h.appends.appends.Load())
 		}
-		// WHAT TO CHANGE: the limit that refused it and the knob behind
-		// it. Never the ceiling or the trim, which is the remedy this
-		// refusal used to carry.
-		for _, want := range []string{strconv.Itoa(queue.MaxPayloadBytes),
-			"max_payload", "split the change"} {
+		// WHAT TO CHANGE: the limit that refused it, which is the
+		// domain's own declaration, and the writer's remedy. Never the
+		// ceiling or the trim, which is the remedy this refusal used to
+		// carry.
+		for _, want := range []string{strconv.Itoa(probeMaxRecord),
+			"declared largest record", "split the change"} {
 			if !strings.Contains(refusal.Detail, want) {
 				t.Errorf("the refusal does not say %q: %s", want, refusal.Detail)
 			}

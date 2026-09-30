@@ -49,14 +49,17 @@ import (
 // MaxBatchOperations bounds one structural batch.
 //
 // FIVE HUNDRED, and the number is a size rather than a taste. A batch is ONE
-// record on the wire, and a record is refused permanently by the broker above
-// [queue.MaxPayloadBytes] — 8 MiB — with no retry that can ever place it. A
-// structural operation carries keys rather than content: an object reference, a
-// parent key and a lead handle, each bounded at [MaxKey], which is at most
-// about 200 bytes of JSON per operation. Five hundred of them is ~100 KiB,
-// comfortably inside the ceiling with room for the envelope, the scope and the
-// signature frame — and an order of magnitude above the largest reorganisation
-// a company of a thousand seats performs in one gesture.
+// record on the wire, and a record past this log's declared largest
+// ([ChartMaxRecordBytes], 2 MiB) is refused permanently, with no retry that can
+// ever place it. A structural operation carries keys rather than content: an
+// object reference, a parent key and a lead handle, each bounded at [MaxKey],
+// which is at most about 200 bytes of JSON per operation. Five hundred of them
+// is ~100 KiB — measured, beside the declaration — with room for the envelope,
+// the scope and the signature frame, and an order of magnitude above the
+// largest reorganisation a company of a thousand seats performs in one
+// gesture. A `set_manages` carries a list besides, up to [MaxManages] keys,
+// and five hundred of those at their cap is past the declaration: that batch
+// is refused `record_too_large`, which says to split it.
 //
 // It also bounds the TRANSACTION the applier runs. Every operation is a read
 // and a write inside one transaction holding this store's only writer, so a

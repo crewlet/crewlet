@@ -181,6 +181,7 @@ func (controlBase) Stream() statelog.StreamSpec {
 		SubjectPrefix:   "crewlet.control.log",
 		ArbitratedKinds: []string{"widget"},
 		MaxBytes:        16 << 20,
+		MaxRecordBytes:  64 << 10,
 		Duplicates:      2 * time.Minute,
 		Replay:          statelog.ReplayStrict,
 	}

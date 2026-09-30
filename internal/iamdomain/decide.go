@@ -515,6 +515,16 @@ func (in Enrolment) validate() error {
 			"%s or %s", ErrNotEnrollable, in.Kind, iam.KindPerson, iam.KindMachine)
 	case !in.Stage.Valid():
 		return fmt.Errorf("%w: %q is not an enrolment stage", ErrInvalid, in.Stage)
+	case len(in.Name) > MaxName:
+		return fmt.Errorf("%w: the name is %d bytes and the cap is %d",
+			ErrInvalid, len(in.Name), MaxName)
+	case len(in.Email) > MaxAddress:
+		return fmt.Errorf("%w: the address is %d bytes and the cap is %d, the "+
+			"longest RFC 5321 permits", ErrInvalid, len(in.Email), MaxAddress)
+	case len(in.Credentials) > MaxHeldCredentials:
+		return fmt.Errorf("%w: an enrolment carries %d credentials and a "+
+			"person holds at most %d", ErrInvalid, len(in.Credentials),
+			MaxHeldCredentials)
 	case len(in.Reason) > MaxReason:
 		return fmt.Errorf("%w: the reason on this enrolment is %d bytes and "+
 			"the cap is %d — it is rendered into an authentication trail "+
@@ -1952,6 +1962,9 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		if person.Credentials, err = in.Apply(person.Credentials); err != nil {
 			return err
 		}
+		if err = heldWithin(person.Credentials, w.Now(), ErrInvalid); err != nil {
+			return err
+		}
 		mutation, err = EncodePerson(person)
 		return err
 	}
@@ -2159,6 +2172,9 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 			kept = append(kept, c)
 		}
 		kept = append(kept, token)
+		if err = heldWithin(kept, now, ErrInvalidToken); err != nil {
+			return err
+		}
 		owner.Credentials = kept
 		minted = TokenMinted{Grants: grants, Colleague: colleague,
 			ExpiresAt: in.ExpiresAt, Epoch: epoch, Generation: generation}
@@ -2418,6 +2434,10 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, errors.New("iamdomain: an invitation needs " +
 			"the address it is for — it arbitrates on that address, so one " +
 			"with none would contend with nothing and two would both win")
+	case len(in.Email) > MaxAddress:
+		return InviteIssued{}, fmt.Errorf("%w: the address is %d bytes and the "+
+			"cap is %d, the longest RFC 5321 permits", ErrInvalid,
+			len(in.Email), MaxAddress)
 	case in.ExpiresAt.IsZero():
 		return InviteIssued{}, errors.New("iamdomain: an invitation needs " +
 			"an expiry; one read as `never` is a superuser claim that stays " +
@@ -2832,6 +2852,10 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	// inside it, every run would draw a fresh nonce for the same name, and
 	// the ciphertext the record carries would be whichever run landed.
 	sealedName := ""
+	if in.Name != nil && len(*in.Name) > MaxName {
+		return statelog.Result{}, fmt.Errorf("%w: the name is %d bytes and the "+
+			"cap is %d", ErrInvalid, len(*in.Name), MaxName)
+	}
 	if in.Name != nil {
 		if w.sealer == nil {
 			return statelog.Result{}, fmt.Errorf("iamdomain: this node "+
@@ -2861,6 +2885,9 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 			return err
 		}
 		if err = w.MayConfer(person.Grants, updated.Grants); err != nil {
+			return err
+		}
+		if err = heldWithin(updated.Credentials, w.Now(), ErrInvalid); err != nil {
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)

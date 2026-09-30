@@ -288,12 +288,15 @@ func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T
 // reserve itself is reported beside the ceiling it is kept under.
 func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	t.Parallel()
-	// 12% of the broker's ceiling is left, and 6% of the 1500 bytes
-	// ordinary writes are held to.
+	// 12% of the broker's ceiling is left, and 6% of the 1500 MiB
+	// ordinary writes are held to: at this ceiling the sixteenth is the
+	// larger term of the reserve, the fleet term of a log whose largest
+	// append is four kibibytes being about a mebibyte.
 	reserved := healthyDomain("tracker", true)
-	reserved.Bytes, reserved.MaxBytes, reserved.Reserved = 1408, 1600, true
+	reserved.Bytes, reserved.MaxBytes = 1408<<20, 1600<<20
+	reserved.Reservation = statelog.Reservation{Kept: true, MaxAppend: 4 << 10}
 	plain := healthyDomain("vectors", false)
-	plain.Bytes, plain.MaxBytes = 1408, 1600
+	plain.Bytes, plain.MaxBytes = 1408<<20, 1600<<20
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID: "node-1", At: reportAt,
 		Domains: []statelog.DomainInputs{reserved, plain},
@@ -306,7 +309,7 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 		headroom float64
 		reserve  uint64
 	}{
-		"tracker": {headroom: 92.0 / 1500, reserve: 100},
+		"tracker": {headroom: 92.0 / 1500, reserve: 100 << 20},
 		"vectors": {headroom: 192.0 / 1600, reserve: 0},
 	} {
 		d := byName[name]

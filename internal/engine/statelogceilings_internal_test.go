@@ -18,36 +18,101 @@ import (
 
 const gib = int64(1) << 30
 
-// THE GATE RESERVE AT THE SMALLEST CEILING ABSORBS A FLEET'S APPENDS IN FLIGHT.
+// THE GATE RESERVE AT EVERY LOG'S FLOOR ABSORBS A FLEET'S APPENDS IN FLIGHT,
+// AND LEAVES THE LOG MOST OF ITSELF.
 //
-// The reserve is a fraction of the ceiling and the overshoot it absorbs is not:
-// every peer of the admitting node may hold up to [statelog.MaxAppendBytes] in
-// flight that its reading cannot see. So the fraction is only sound down to
-// some ceiling, and every floor a log's ceiling can reach — the one the
-// division of the broker holds a log at, and Tier A's floor for each
-// identity-claiming log — must be at or above it, with room left for the gate
-// records themselves. A divisor raised, a fleet size raised or a floor lowered
-// without the others moving fails here, rather than as an eviction refused on
-// a full log.
+// The overshoot the reserve absorbs is a property of the LOG — every peer of
+// the admitting node may hold one of its largest appends in flight that the
+// admitting node's reading cannot see — so the reserve has to hold that much
+// and a gate room beside it at every ceiling the log can reach, down to the
+// floor Tier A holds its field to. It was a sixteenth of the ceiling, argued
+// at a gibibyte called every log's floor, and asserted here against a hand
+// list of the three floors that were a gibibyte: the org chart's and the
+// identity estate's are 64 MiB, where a sixteenth was less than one append at
+// the transport's size. So the walk is over the REGISTER, each log at its own
+// field's floor as Tier A's own validation finds it, and a log added to the
+// register is held to the rule without this test learning its name.
+//
+// And the other side, which is what makes the first a finding rather than a
+// tautology: the reserve is kept FROM ordinary writes, so a log whose largest
+// record is sized as though it were somebody else's keeps most of itself for
+// gate records at its floor. Ordinary writes keep at least half — the org
+// chart's declared at the transport's eight mebibytes would keep an eighth.
 func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
-	// A thousand gate records, each under a kibibyte: an eviction and a
-	// readmission per node per identity log, many times over.
-	const gateRoom = 1 << 20
-	peers := uint64(statelog.GateReserveFleet-1) * statelog.MaxAppendBytes
-	for name, floor := range map[string]int64{
-		"the division's MinDomainCeiling":             MinDomainCeiling,
-		"Tier A's stream.tracker_log_max_bytes floor": config.TrackerLogMaxBytesFloor,
-		"Tier A's stream.pages_log_max_bytes floor":   config.PagesLogMaxBytesFloor,
-	} {
-		reserve := statelog.GateReserve(uint64(floor))
-		if reserve < peers+gateRoom {
-			t.Errorf("at %s (%d bytes) the gate reserve is %d bytes: %d peers' "+
-				"appends in flight at %d bytes each, plus %d for the gate records, "+
-				"need %d — an eviction on a log full to its ordinary ceiling can "+
-				"find the reserve spent", name, floor, reserve,
-				statelog.GateReserveFleet-1, int64(statelog.MaxAppendBytes),
-				gateRoom, peers+gateRoom)
+	t.Parallel()
+	keys := streamKeys(t)
+	reserved := 0
+	for _, domain := range registeredDomains() {
+		if !statelog.KeepsGateReserve(domain) {
+			continue
 		}
+		reserved++
+		t.Run(domain.Name(), func(t *testing.T) {
+			t.Parallel()
+			ceiling, err := tierACeiling(config.Stream{}, domain, 0)
+			if err != nil {
+				t.Fatalf("tierACeiling: %v", err)
+			}
+			floor := tierAFloor(t, keys, ceiling.Field, ceiling.Bytes)
+			if floor != ceiling.Floor {
+				t.Errorf("the register holds %s to a floor of %d and Tier A's "+
+					"validation to %d — the capacity verb and a refused boot "+
+					"would offer an operator a ceiling Tier A does not take",
+					ceiling.Field, ceiling.Floor, floor)
+			}
+			spec := domain.Stream()
+			reservation := statelog.ReservationOf(domain)
+			fleet := uint64(statelog.GateReserveFleet-1)*uint64(spec.MaxAppendBytes()) +
+				statelog.GateRoom
+			if got := reservation.Bytes(uint64(floor)); got < fleet {
+				t.Errorf("at %s's floor of %d bytes the gate reserve is %d: %d "+
+					"peers' appends in flight at %d bytes each, plus %d for the "+
+					"gate records, need %d — an eviction on a log full to its "+
+					"ordinary ceiling can find the reserve spent", ceiling.Field,
+					floor, got, statelog.GateReserveFleet-1, spec.MaxAppendBytes(),
+					statelog.GateRoom, fleet)
+			}
+			if ordinary := reservation.Ordinary(uint64(floor)); ordinary < uint64(floor)/2 {
+				t.Errorf("at %s's floor of %d bytes ordinary writes keep %d — "+
+					"under half the log, because its declared largest record "+
+					"(%d bytes) sizes a reserve the floor cannot afford",
+					ceiling.Field, floor, ordinary, spec.MaxRecordBytes)
+			}
+		})
+	}
+	if reserved == 0 {
+		t.Fatal("no registered domain keeps a gate reserve, so this walked nothing")
+	}
+}
+
+// A LOG'S DECLARED CEILING IS TIER A'S DEFAULT WHERE THE DEFAULT IS FIXED.
+//
+// A domain's declared ceiling is what the framework's own suites provision
+// its stream with, so they certify the log a node runs only if the two are
+// the same number. The org chart's declared a gibibyte while an unset Tier A
+// field created it at 64 MiB, so every suite exercised its gate reserve at
+// sixteen times the size any node had. A ceiling that follows the volume has
+// no one number to agree with, and is left to its own derivation.
+func TestADomainsDeclaredCeilingIsItsFixedTierADefault(t *testing.T) {
+	t.Parallel()
+	fixed := 0
+	for _, domain := range registeredDomains() {
+		ceiling, err := tierACeiling(config.Stream{}, domain, 200*gib)
+		if err != nil {
+			t.Fatalf("tierACeiling: %v", err)
+		}
+		if ceiling.FollowsVolume {
+			continue
+		}
+		fixed++
+		if declared := domain.Stream().MaxBytes; declared != ceiling.Bytes {
+			t.Errorf("%s declares a %d-byte ceiling and an unset %s creates its "+
+				"stream at %d — its suites certify a log no node runs",
+				domain.Name(), declared, ceiling.Field, ceiling.Bytes)
+		}
+	}
+	if fixed == 0 {
+		t.Fatal("no registered domain has a fixed Tier A default, so this walked nothing")
 	}
 }
 

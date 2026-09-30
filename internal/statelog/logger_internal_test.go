@@ -119,6 +119,7 @@ func (loggerProbe) Stream() StreamSpec {
 		Subjects:        []string{"crewlet.loggerprobe.log.>"},
 		SubjectPrefix:   "crewlet.loggerprobe.log",
 		MaxBytes:        16 << 20,
+		MaxRecordBytes:  64 << 10,
 		Duplicates:      2 * time.Minute,
 		Replay:          ReplayStrict,
 		ArbitratedKinds: []string{"object"},

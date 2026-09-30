@@ -1091,7 +1091,7 @@ may carry, at the owner's own reach, for 90 days. The answer is `201` with
 | Answer | When |
 |---|---|
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
-| `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, a reach that is no level |
+| `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, a reach that is no level, an owner already holding 64 credentials — revoked and expired ones count until the retention sweep collects them, seven days after they lapse |
 | `403` | The request presented a machine token; a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; a reach wider than the owner's; an owner who may not act |
 | `404` | Nobody by that id |
 
@@ -3949,8 +3949,9 @@ evictions were read.
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
 the one alarm an operator cannot ignore fires on. It is a fraction of the
 ceiling **ordinary writes** are held to: `max_bytes` less `reserve_bytes`,
-which on every identity-claiming log is the top sixteenth kept for the records
-that install or lift a gate, so that an eviction still lands on a log full for
+which on every identity-claiming log is the top of the ceiling kept for the
+records that install or lift a gate — the larger of a sixteenth of it and
+seven of the log's largest records with a mebibyte beside them — so that an eviction still lands on a log full for
 everything else ([the gate reserve](../guides/retention.md#the-gate-reserve)).
 `reserve_bytes` is absent on a log that keeps none — the vector changelog —
 where the headroom is of the whole ceiling.
@@ -4069,8 +4070,8 @@ a fresh one is equally safe.
 | `restore` | Restore the store and the stream from one backup | `skew` |
 
 A log with a `hint` and **no** `actions` is one no gesture clears — a record
-larger than the broker's `max_payload`, or a refusal reason this build has no
-word for — and the hint says what does. Only `retry_same_op` makes the same
+larger than its log's declared largest or the broker's `max_payload`, or a
+refusal reason this build has no word for — and the hint says what does. Only `retry_same_op` makes the same
 request, sent again **now**, the remedy. But four actions — `retry_same_op`,
 `other_node`, `reanchor` and `set_capacity` — keep the gesture's own `op_id` as
 how it is finished once the operator has acted: a gesture sent afresh after

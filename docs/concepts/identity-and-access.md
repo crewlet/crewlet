@@ -1108,6 +1108,17 @@ position are in the clear so that checking one is a single keyed read of this
 node's own rows; the secret is 32 random bytes, and what the estate stores is a
 SHA-256 over the prefix, the id and the secret.
 
+**Somebody holds at most 64 credentials.** A password, an authenticator and a
+recovery set are three; the rest are machine tokens — and revoked and expired
+ones count until the retention sweep collects them, seven days after they
+lapse. A mint past it is refused `400 invalid_body`, saying how many of the
+64 have lapsed, so you can tell revoking a token nothing uses from waiting for
+the sweep. The bound is what keeps a person's record — every credential change
+republishes all of them — inside the identity log's 128 KiB largest record,
+which its [gate reserve](../guides/retention.md#the-gate-reserve) is sized by;
+a person's name and address are bounded for the same reason, at 256 and 320
+bytes.
+
 **It acts as its owner.** A person's token is that person — their seat when the
 directory binds them to one, exactly as their session would be — and a service
 account's is that machine, or the seat it is bound to. There is no way to mint
@@ -2325,8 +2336,12 @@ for a company of a few hundred people, and about five years at a realistic one.
 
 Set it down toward its **64 MiB** floor for a small company — the broker
 reserves a stream's whole ceiling when it creates it, so this number is free
-space a node needs before it can boot at all — and up for a large one. See
-[Configuration](configuration.md) and [Retention](../guides/retention.md).
+space a node needs before it can boot at all — and up for a large one. Its top
+sixteenth is the log's
+[gate reserve](../guides/retention.md#the-gate-reserve), kept for evictions:
+one record here is at most 128 KiB, so seven nodes' appends in flight need
+less than that. See [Configuration](configuration.md) and
+[Retention](../guides/retention.md).
 
 ---
 

@@ -94,9 +94,15 @@ const StreamBudgetShare = 0.5
 
 // MinDomainCeiling is the floor a scaled-down ceiling never goes below.
 //
-// A gibibyte, which is the same floor Tier A's own validation enforces on an
-// explicit value: below it a log is not a log, it is a window that refuses
-// appends within a week of a company starting work.
+// A gibibyte, which is the floor Tier A's own validation enforces on the
+// CORPUS-SIZED logs' fields — the tracker's, the vector changelog's and the
+// knowledge base's — because below it a log that grows with a corpus is not a
+// log, it is a window that refuses appends within a week of a company starting
+// work. It is where SCALING stops and it is nobody's floor but theirs: the org
+// chart's and the identity estate's fields go down to 64 MiB, a log that asks
+// for less than this keeps what it asked for because scaling never raises, and
+// the capacity verb holds a target to the floor of the log's own field
+// ([capacityBounds]), never to this.
 const MinDomainCeiling int64 = 1 << 30
 
 // tierACeiling is where Tier A puts one domain's ceiling on a volume with free

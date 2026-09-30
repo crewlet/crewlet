@@ -581,8 +581,9 @@ stream:
                                     #   about, and a chart does not — it is
                                     #   hundreds of objects and it changes when
                                     #   somebody is hired, moved or promoted, so
-                                    #   this is FOUR YEARS of a completely
-                                    #   blocked trim. It is deliberately below
+                                    #   this is about TWO AND A HALF YEARS of a
+                                    #   completely blocked trim, once the gate
+                                    #   reserve is kept. It is deliberately below
                                     #   every other log's floor: the broker
                                     #   grants a ceiling in full when it creates
                                     #   the stream, so the number is free space a

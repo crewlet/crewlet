@@ -171,7 +171,7 @@ type DomainReport struct {
 	//
 	// ReserveBytes is the top of MaxBytes kept for gate records — an
 	// eviction, a readmission — on a log that keeps a reserve
-	// ([GateReserve]), and HeadroomFraction is what is left of the rest:
+	// ([Reservation.Bytes]), and HeadroomFraction is what is left of the rest:
 	// the ceiling ordinary writes are refused `log_full` at.
 	FirstSeq         uint64   `json:"first_seq"`
 	LastSeq          uint64   `json:"last_seq"`
@@ -652,9 +652,10 @@ type DomainInputs struct {
 	// was measured. See [DomainReport.BytesPerDay].
 	BytesPerDay *uint64
 
-	// Reserved says the log keeps a gate reserve under MaxBytes
-	// ([KeepsGateReserve]), which is what its headroom is measured against.
-	Reserved bool
+	// Reservation is how the log divides MaxBytes between ordinary writes
+	// and gate records ([ReservationOf]), which is what its headroom is
+	// measured against. Its zero value keeps no reserve.
+	Reservation Reservation
 
 	// TrimFloor is the published floor, and Decision is what this tick
 	// concluded from the six terms — both meaningful only where FloorState
@@ -852,12 +853,10 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 	}
 	if d.StreamReadable && d.MaxBytes > 0 {
 		out.MaxBytes = d.MaxBytes
-		if d.Reserved {
-			out.ReserveBytes = GateReserve(d.MaxBytes)
-		}
+		out.ReserveBytes = d.Reservation.Bytes(d.MaxBytes)
 		// OF THE CEILING ORDINARY WRITES ARE HELD TO, because that is
-		// where they start being refused — see [Headroom].
-		out.HeadroomFraction = Headroom(d.Bytes, d.MaxBytes, d.Reserved)
+		// where they start being refused — see [Reservation.Headroom].
+		out.HeadroomFraction = d.Reservation.Headroom(d.Bytes, d.MaxBytes)
 	}
 	for _, t := range d.Decision.Terms {
 		state := termState(t)

@@ -918,12 +918,16 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 		return nil, err
 	}
 	if err = host.EnsureDomainStream(ctx, jetstream.DomainStream{
-		Name:          spec.Name,
-		Subjects:      spec.Subjects,
-		MaxBytes:      ceiling.Bytes,
-		MaxPerSubject: spec.MaxPerSubject,
-		MaxAge:        spec.MaxAge,
-		Duplicates:    spec.Duplicates,
+		Name:     spec.Name,
+		Subjects: spec.Subjects,
+		MaxBytes: ceiling.Bytes,
+		// THE DOMAIN'S LARGEST RECORD, as the broker counts a message:
+		// what holds a peer that does not refuse a larger one itself to
+		// the size every node's gate reserve was sized by.
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		MaxPerSubject:   spec.MaxPerSubject,
+		MaxAge:          spec.MaxAge,
+		Duplicates:      spec.Duplicates,
 	}); err != nil {
 		if errors.Is(err, jetstream.ErrInsufficientStorage) {
 			return nil, s.storageRefused(ctx, host, domain, ceiling, err)
@@ -1149,7 +1153,7 @@ func reserveFor(domain statelog.Domain, appendTo *jetstream.DomainLog) (*statelo
 	if !statelog.KeepsGateReserve(domain) {
 		return nil, nil
 	}
-	reserve, err := statelog.NewReserve(domain.Stream().Name,
+	reserve, err := statelog.NewReserve(domain.Stream(),
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := appendTo.Stats(ctx)
 			if err != nil {

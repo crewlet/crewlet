@@ -67,13 +67,17 @@ func newWriteRig(t *testing.T) *writeRig {
 		}
 	})
 	spec := chart.Domain{}.Stream()
-	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
-	// property under test: the shipped default is sized for years of a real
-	// company's growth, and an embedded broker in a temporary directory
-	// refuses to reserve it.
+	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is the
+	// floor Tier A holds stream.chart_log_max_bytes to: the smallest log any
+	// node runs, which is the one the gate reserve takes the largest share
+	// of, so every write here is admitted against the tightest ordinary
+	// ceiling a production log has — and a reservation an embedded broker
+	// in a temporary directory can grant, where a default sized for years
+	// of a company's growth may not be. Everything else is the domain's
+	// own declaration, its largest record included.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
-		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
-		Duplicates: spec.Duplicates,
+		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.ChartLogMaxBytesFloor,
+		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
 	}
@@ -115,7 +119,7 @@ func newWriteRig(t *testing.T) *writeRig {
 	fence.Committed = waiter.Committed
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(spec.Name,
+	reserve, err := statelog.NewReserve(spec,
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err

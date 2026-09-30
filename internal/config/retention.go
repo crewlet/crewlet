@@ -100,15 +100,17 @@ const (
 	//
 	// At the reference company's rate — a few hundred structural records and
 	// a few thousand content records a year, a few kilobytes each, so under
-	// twenty mebibytes a year at the pessimistic end — this is FOUR YEARS of
-	// a COMPLETELY BLOCKED trim. A blocked trim is not a quiet state: the
+	// twenty mebibytes a year at the pessimistic end — the forty-nine
+	// mebibytes ordinary writes keep of it, the rest being the gate reserve
+	// its two-mebibyte largest record sizes, are ABOUT TWO AND A HALF YEARS
+	// of a COMPLETELY BLOCKED trim. A blocked trim is not a quiet state: the
 	// retention screen names its term from the first tick, a backup behind
 	// it that is missing or past the policy raises `backup_age`, and a trim
 	// blocked for longer than `min_age` and a tick while its log keeps
 	// records older than `min_age` raises `trim_blocked` — so somebody has
 	// been told within `min_age` (ninety days at the most) and a couple of
 	// trim ticks of the log first keeping what a working trim would have
-	// removed, and four years past that is not a window that refuses an
+	// removed, and two years past that is not a window that refuses an
 	// append before anybody could act.
 	//
 	// It took a gibibyte first, on the reasoning that a gibibyte is the
@@ -169,7 +171,7 @@ const (
 	// long somebody has to act on a firing alarm, not how long until anyone
 	// notices.
 	//
-	// IT IS NOT 64 MiB. The chart's number is four years because a chart
+	// IT IS NOT 64 MiB. The chart's number is years because a chart
 	// changes when somebody is hired, moved or promoted; this log moves
 	// every morning, and at 64 MiB the pessimistic rate fills it in under
 	// three months — a window that could refuse an append before somebody

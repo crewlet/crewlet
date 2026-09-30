@@ -656,8 +656,19 @@ func aRunningNode(t *testing.T) (*Engine, natsjs.JetStream) {
 // THROUGH THE BROKER'S OWN API rather than the queue's, which remembers what
 // it has provisioned and would no-op — and a broker-level rebuild is precisely
 // a stream this process did not create.
+//
+// AT THE CEILING AND THE MESSAGE LIMIT THE STREAM HAD, as an operator's rebuild
+// of a log would be: the node sized both, and a log of an arbitrary size is
+// one whose gate reserve — seven of its largest appends and a mebibyte — may
+// be all of it, so every ordinary write after the rebuild would be refused
+// for a reason the rebuild is not about.
 func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	t.Helper()
+	old, err := js.Stream(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("read the stream before rebuilding it: %v", err)
+	}
+	was := old.CachedInfo().Config
 	if err := js.DeleteStream(t.Context(), spec.Name); err != nil {
 		t.Fatalf("delete the stream: %v", err)
 	}
@@ -667,7 +678,8 @@ func rebuildLog(t *testing.T, js natsjs.JetStream, spec statelog.StreamSpec) {
 	time.Sleep(2 * time.Millisecond)
 	if _, err := js.CreateStream(t.Context(), natsjs.StreamConfig{
 		Name: spec.Name, Subjects: spec.Subjects,
-		MaxBytes: 16 << 20, Duplicates: spec.Duplicates,
+		MaxBytes: was.MaxBytes, MaxMsgSize: was.MaxMsgSize,
+		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("rebuild the stream: %v", err)
 	}

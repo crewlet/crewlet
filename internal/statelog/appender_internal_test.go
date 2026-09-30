@@ -93,7 +93,7 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 			[]string{"max_payload", "max_msg_size"}},
 		{"a message past the stream's own per-message limit",
 			wire(server.NewJSStreamMessageExceedsMaximumError()), faultTooLarge,
-			[]string{"max_msg_size", "reconfigured", "unlimited (-1)",
+			[]string{"max_msg_size", "declared largest record", "split the change",
 				server.NewJSStreamMessageExceedsMaximumError().Description},
 			[]string{"max_payload", "file store"}},
 		{"a message-count limit nobody declared on a state log",

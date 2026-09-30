@@ -795,11 +795,16 @@ the verb that raises it. It does not silently delete old records to make room:
 shedding a record no node has applied is exactly the loss the whole gate
 exists to prevent.
 
-A single record larger than the broker takes in one message is a different
-refusal, `record_too_large`: a per-message limit refuses it — the NATS
-server's `max_payload`, the stream's own `max_msg_size`, or the file store's
-per-record limit, and the detail says which — on a log with room to spare, and
-no ceiling or trim changes it. See
+A single record larger than its log takes is a different refusal,
+`record_too_large`, on a log with room to spare, and no ceiling or trim
+changes it. Every log declares the largest record it publishes — 8 MiB on the
+tracker's, the knowledge base's and the vector changelog's, 2 MiB on the org
+chart's, 128 KiB on the identity estate's — and a record past it is refused
+before it is sent; the stream's own `max_msg_size` is that declaration plus
+4 KiB for what a stored record carries beside it, so the broker holds a peer
+on another build to it too. Past the declaration, the NATS server's
+`max_payload` and the file store's per-record limit can refuse a record as
+well, and the detail says which limit it was. See
 [Read consistency](consistency.md#a-writes-refusals).
 
 A full log costs `linearizable` reads, because those append a barrier — which
@@ -822,8 +827,8 @@ eviction was refused, run again, and refused again.
 
 So on the four logs that carry gate records — every log that claims identity:
 the tracker's, the knowledge base's, the org chart's and the identity
-estate's — **ordinary writes are refused at a soft ceiling** a sixteenth below
-the broker's, and the top sixteenth — the **gate reserve**, `reserve_bytes`
+estate's — **ordinary writes are refused at a soft ceiling** below the
+broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
 ordinary writes still takes an eviction, and once the evicted node's minute
@@ -843,19 +848,27 @@ eviction is excused.
 | gate records refused at | the ceiling | — (it carries none) |
 | `headroom_fraction` measured against | the ceiling less the reserve | the ceiling |
 
-A sixteenth is sized so the reserve holds however the fleet's writes race:
-each node reads the log's usage **after** it starts an append and counts its
-own appends still in flight, so what can land past the soft ceiling is only
-what other nodes have in flight at that instant — at most one maximum record
-(8 MiB) each. At a gibibyte, the smallest ceiling the tracker's and the
-knowledge base's logs may have, the reserve is 64 MiB: seven other nodes'
-maximum records with room to spare for the gate records themselves, and every
-larger ceiling holds more. The org chart's and the identity estate's logs are
-sized from their corpus instead, and their floor is 64 MiB, whose sixteenth is
-4 MiB — less than one maximum record — so at a ceiling that small the reserve
-holds only while what the other nodes have in flight totals less than that. While a rolling
-upgrade runs, a node on an older build keeps no reserve, so the reserve
-holds once every node counts its own.
+The reserve is sized so it holds however the fleet's writes race. Each node
+reads the log's usage **after** it starts an append and counts its own
+appends still in flight, so what can land past the soft ceiling is only what
+other nodes have in flight at that instant — at most one of **that log's**
+largest records each, plus 4 KiB for what a stored record carries beside it.
+So the reserve is the larger of two terms:
+
+- the **fleet term** — seven other nodes' largest appends, and a mebibyte for
+  the gate records themselves — which holds at every ceiling a log may have,
+  down to its floor;
+- **a sixteenth of the ceiling**, which grows with the ceiling while the fleet
+  term does not, so a larger log absorbs a larger fleet.
+
+| log | largest record | floor | reserve at the floor | ordinary writes at the floor |
+|---|---|---|---|---|
+| tracker, knowledge base | 8 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| org chart | 2 MiB | 64 MiB | 15 MiB (the fleet term) | 49 MiB |
+| identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+
+While a rolling upgrade runs, a node on an older build keeps no reserve, so
+the reserve holds once every node counts its own.
 
 If a gate record is refused even there, the refusal says so and points at
 `crewlet retention set-capacity` rather than suggesting a retry; the
@@ -880,11 +893,11 @@ maintenance window**, and the reason is not caution:
   target on the vector changelog — is at or below what the log already holds
   is refused, naming both and the least target that would do, because that
   ceiling would refuse every ordinary append the moment it applied. So is a
-  target under a gibibyte, on every log — the org chart's and the identity
-  estate's included, although Tier A creates those two as small as 64 MiB —
-  because it is the ceiling the reserve is sized against. Anything else is fair, including a target under
-  the current ceiling, which is how a log created larger than its budget gives
-  the reservation back.
+  target under the floor Tier A holds that log's field to — a gibibyte on the
+  tracker's, the knowledge base's and the vector changelog's, 64 MiB on the
+  org chart's and the identity estate's — naming the field. Anything else is
+  fair, including a target under the current ceiling, which is how a log
+  created larger than its budget gives the reservation back.
 - A raise is a reservation too, and the broker refuses one it cannot honour.
   Where the node can read the limit the broker holds an update to (a lone
   embedded node, or a NATS account's own JetStream limit on any topology), a

@@ -420,7 +420,8 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	// broker in a temporary directory refuses to reserve it.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
-		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		MaxPerSubject:   spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)

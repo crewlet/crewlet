@@ -345,6 +345,61 @@ type Credential struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
+// The bounds on a person's document, each refused `ErrInvalid` at the write
+// that would cross it, never cut to fit.
+//
+// THEY ARE WHAT BOUND THIS LOG'S LARGEST RECORD ([IamMaxRecordBytes]). A
+// person's document is FULL POST-STATE — a change to any credential
+// republishes every one, and a rename republishes the name — so a field with
+// no bound is a record with none, and the log's gate reserve is sized by its
+// largest record. The HTTP surfaces bounded a body, which bounded nothing a
+// CLI, a duty or a test publishes.
+const (
+	// MaxName bounds a person's display name before it is sealed: two
+	// hundred and fifty-six bytes, the org chart's cap on a seat's name
+	// (chart.MaxName) and for its reason — it has to fit on a roster
+	// row and beside every change they make.
+	MaxName = 256
+
+	// MaxAddress bounds a person's address before it is sealed: three
+	// hundred and twenty bytes, the longest RFC 5321 permits and the org
+	// chart's cap on a seat's (chart.MaxEmail).
+	MaxAddress = 320
+
+	// MaxHeldCredentials is the most credentials one person's document
+	// holds, lapsed ones included until the retention sweep collects them
+	// ([SessionRowGrace] after they lapse).
+	//
+	// SIXTY-FOUR. A person proves themselves with a password, an
+	// authenticator and a recovery set — three — and everything else is a
+	// machine token, which only that person mints, by hand, for an
+	// assistant or a pipeline. Sixty-one of those at once, counting the
+	// week's revoked and expired ones, is far past any person's working
+	// set, and at the widest a token can be it keeps the document inside
+	// the record the log declares.
+	MaxHeldCredentials = 64
+)
+
+// heldWithin refuses a credential set past [MaxHeldCredentials] as cause,
+// saying how many of them have lapsed — revoked or expired, which the sweep
+// collects — so the person can tell revoking one from waiting.
+func heldWithin(set []Credential, now time.Time, cause error) error {
+	if len(set) <= MaxHeldCredentials {
+		return nil
+	}
+	lapsed := 0
+	for _, c := range set {
+		if !c.RevokedAt.IsZero() || (!c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now)) {
+			lapsed++
+		}
+	}
+	return fmt.Errorf("%w: this would leave %d credentials on one person and "+
+		"the cap is %d. %d of them are revoked or expired, and the retention "+
+		"sweep collects one %d days after it lapses: revoke a token nothing "+
+		"uses, or wait for the sweep", cause, len(set), MaxHeldCredentials,
+		lapsed, int(SessionRowGrace/(24*time.Hour)))
+}
+
 // CredentialMethod is how somebody proves themselves.
 type CredentialMethod string
 

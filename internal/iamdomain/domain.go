@@ -100,6 +100,29 @@ const SessionOpsRetention = time.Hour
 // sets it up. That is what the field is for.
 const IamLogMaxBytes = 512 << 20
 
+// IamMaxRecordBytes is the largest record this domain publishes
+// ([statelog.StreamSpec.MaxRecordBytes]), and it is what this log's gate
+// reserve is sized by.
+//
+// A HUNDRED AND TWENTY-EIGHT KIBIBYTES, from the one record here that grows:
+// a person's document, which every credential change and every edit
+// republishes whole. Everything else — a claim, a session's opening and
+// closing, an invitation, a sweep, a gate — is a few hundred bytes. The
+// document is bounded by the caps it is held to ([MaxName], [MaxAddress],
+// [MaxHeldCredentials], [MaxTokenLabel]), and at every one of them, with every
+// token carrying every grant and a label JSON escapes six-fold, it is under
+// a hundred kibibytes: a test builds that record the way the writer does and
+// holds it here, so a cap raised without this fails there.
+//
+// WHY NOT THE TRANSPORT'S EIGHT MEBIBYTES, which is what every log was sized
+// by before a log declared its own: the reserve's fleet term is seven peers'
+// largest appends, and at this log's 64 MiB Tier A floor seven of eight
+// mebibytes is most of the log. At a hundred and twenty-eight kibibytes the
+// fleet term is under two mebibytes and a sixteenth of the ceiling is the
+// larger, so the reserve is what it would be anyway and ordinary writes keep
+// fifteen sixteenths.
+const IamMaxRecordBytes = 128 << 10
+
 // IamLogDuplicates is the window the broker collapses a repeated operation id
 // in.
 //
@@ -113,12 +136,13 @@ const IamLogDuplicates = 2 * time.Minute
 // Stream is the identity estate's log.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.IamLogStream,
-		Subjects:      []string{topics.IamLogWildcard},
-		SubjectPrefix: topics.IamLogPrefix,
-		MaxBytes:      IamLogMaxBytes,
-		Duplicates:    IamLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+		Name:           topics.IamLogStream,
+		Subjects:       []string{topics.IamLogWildcard},
+		SubjectPrefix:  topics.IamLogPrefix,
+		MaxBytes:       IamLogMaxBytes,
+		MaxRecordBytes: IamMaxRecordBytes,
+		Duplicates:     IamLogDuplicates,
+		Replay:         statelog.ReplayStrict,
 		// NINE OF THE TEN KINDS. A barrier shares one subject across the
 		// whole domain, so an expectation there would serialise every
 		// linearizable read behind every other one and write an anchor

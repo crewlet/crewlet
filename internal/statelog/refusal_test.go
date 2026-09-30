@@ -2,7 +2,6 @@ package statelog_test
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -11,32 +10,38 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD LARGER THAN THE BROKER CARRIES IS REFUSED ONCE, AS TOO LARGE — on a
-// real broker, whose client refuses it before sending anything.
+// A RECORD TOO LARGE IS REFUSED ONCE, AS TOO LARGE — on a real broker.
 //
-// That refusal is a plain error rather than the broker's, and it was read as
-// no answer: the write asked the log what landed, found nothing, retook its
-// snapshot, decided the same record and was refused again — sixteen times —
-// and then told its caller a colleague kept editing the object.
+// The client's refusal is a plain error rather than the broker's, and it was
+// read as no answer: the write asked the log what landed, found nothing,
+// retook its snapshot, decided the same record and was refused again —
+// sixteen times — and then told its caller a colleague kept editing the
+// object.
 //
-// TWO PATHS TO ONE ANSWER. On a log that keeps a gate reserve the reserve
-// refuses the record before it is sent, since no record above the budget it
-// admits against can be counted in it; on a log that keeps none the client
-// refuses it, and that refusal is what has to be read as too large.
+// TWO PATHS TO ONE ANSWER. A record past its domain's declared largest is
+// refused by the publisher before it is sent, on a log that keeps a gate
+// reserve or none; one inside the declaration that the transport still cannot
+// carry — a payload at the transport's own maximum, which the signature frame
+// takes past it — is refused by the client, and that refusal is what has to
+// be read as too large.
 func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		domain statelog.Domain
+		size   int
 		sent   int64
 	}{
-		"on a log that keeps a gate reserve": {probeDomain{}, 0},
-		"on a log that keeps none":           {unreservedDomain{}, 1},
+		"past the declaration, on a log that keeps a gate reserve": {
+			probeDomain{}, probeMaxRecord + 1, 0},
+		"past the declaration, on a log that keeps none": {
+			unreservedDomain{}, queue.MaxPayloadBytes + 1, 0},
+		"inside the declaration and past the transport": {
+			unreservedDomain{}, queue.MaxPayloadBytes, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarnessFor(t, tc.domain)
-			_, err := h.write(probeSubject("a"), "op-large",
-				strings.Repeat("x", queue.MaxPayloadBytes))
+			_, err := h.writeSized(probeSubject("a"), "op-large", tc.size)
 			if !errors.Is(err, queue.ErrTooLarge) {
 				t.Fatalf("an oversized record answered %v, want queue.ErrTooLarge", err)
 			}
@@ -52,10 +57,17 @@ func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 }
 
 // unreservedDomain is the probe log claiming no identity, which is what keeps
-// no gate reserve — the vector changelog's shape.
+// no gate reserve — the vector changelog's shape, down to declaring the
+// transport's own maximum as its largest record.
 type unreservedDomain struct{ probeDomain }
 
 func (unreservedDomain) ClaimsIdentity() bool { return false }
+
+func (unreservedDomain) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.MaxRecordBytes = queue.MaxPayloadBytes
+	return spec
+}
 
 // A BROKER REFUSAL THAT IS NOT A FULL LOG IS NOT REPORTED AS ONE.
 //

@@ -202,7 +202,18 @@ whose default is *not* derived from your disk: unset, it takes a flat **64
 MiB**. The corpus-sized logs grow with something your volume has an opinion
 about, and a chart does not — it is hundreds of objects, and it changes when
 somebody is hired, moved or promoted rather than on every comment or every
-save. At the modelled rate that is **four years** of a completely blocked trim.
+save. Ordinary writes keep about 49 MiB of it — the top 15 MiB is the log's
+[gate reserve](../guides/retention.md#the-gate-reserve), sized by the chart's
+largest record — which at the modelled rate is **about two and a half years**
+of a completely blocked trim.
+
+**One record is at most 2 MiB.** That is the org chart log's declared largest
+record, which its gate reserve is sized by. A seat's content with every prose
+field at its cap is about a mebibyte, and a batch of 500 operations about a
+hundred kibibytes; a batch whose operations each carry a full `manages:` list
+is refused `record_too_large` and splits. An import is one record whatever the
+company's size, so this is also the largest chart one import places — about ten
+thousand seats.
 
 It is deliberately *below* every corpus-sized log's 1 GiB floor, because a
 floor is a property of the log it was written for: the broker grants a stream

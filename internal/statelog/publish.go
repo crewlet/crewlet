@@ -313,9 +313,9 @@ type Request struct {
 	// write a peer's truncated rows do not stop ([Publisher.checkTruncated]).
 	//
 	// And it is the one write that may use the GATE RESERVE at the top of
-	// the log's byte ceiling, which every other write is refused `log_full`
-	// short of ([GateReserve]): a log a gone node has filled is unpinned by
-	// that node's eviction, a record on that log. So the three excuses are
+	// the log's byte ceiling, which every other write is refused
+	// `log_full` short of ([Reservation.Bytes]): a log a gone node has
+	// filled is unpinned by that node's eviction, a record on that log. So the three excuses are
 	// one flag, and a node gate passes every fence that could otherwise
 	// stand between an operator and the gesture that ends the fault. The
 	// publisher holds the flag to the record, refusing a NodeGate write
@@ -473,9 +473,14 @@ var ErrExists = errors.New("statelog: the object already exists")
 //   - Never guess: an unknown outcome is resolved, not retried blindly and not
 //     reported as a loss.
 type Publisher struct {
-	domain   Domain
-	stream   string
-	prefix   string
+	domain Domain
+	stream string
+	prefix string
+
+	// maxRecord is the domain's [StreamSpec.MaxRecordBytes], which every
+	// record is held to before anything is sent.
+	maxRecord int64
+
 	log      Appender
 	rows     Rows
 	fence    Fence
@@ -612,6 +617,7 @@ func NewPublisher(d Deps) (*Publisher, error) {
 		domain:        d.Domain,
 		stream:        spec.Name,
 		prefix:        spec.SubjectPrefix,
+		maxRecord:     spec.MaxRecordBytes,
 		log:           log,
 		rows:          d.Rows,
 		fence:         d.Fence,
@@ -996,6 +1002,28 @@ func (p *Publisher) attempt(ctx context.Context, req Request, snap Snap, expect 
 	// own.
 	if err := p.fence0(ctx, req); err != nil {
 		return Result{Rounds: round}, dispDone, err
+	}
+	// THE DOMAIN'S LARGEST RECORD, for every append, a node gate's too,
+	// and before the reserve: it is what the reserve's budget and every
+	// peer's reserve are sized by, so a record above it is one no
+	// admission was sized for. The broker refuses it as well, at the
+	// stream's max_msg_size ([StreamSpec.MaxAppendBytes]) — which is what
+	// holds a peer that does not ask — but by then it has been sent, and
+	// the refusal names a stream setting rather than the declaration.
+	// Nothing a retry does makes the record smaller, so it ends the write
+	// here, at round one.
+	if size := int64(len(snap.Decision.Payload)); size > p.maxRecord {
+		return Result{Rounds: round}, dispDone, &Unavailable{
+			Reason: ReasonRecordTooLarge,
+			Detail: fmt.Sprintf("the record is %d bytes and %s takes none larger "+
+				"than %d — the %s log's declared largest record, which its gate "+
+				"reserve is sized by and the broker enforces as the stream's "+
+				"max_msg_size — so no retry places it, here or on any node: split "+
+				"the change into smaller writes", size, p.stream, p.maxRecord,
+				p.domain.Name()),
+			OpID:  req.OpID,
+			Cause: queue.ErrTooLarge,
+		}
 	}
 	// THE RESERVE, for every append but a node gate's, held until the
 	// broker answers: the reading it is admitted against cannot see this

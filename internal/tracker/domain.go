@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -35,6 +36,18 @@ func (Domain) Name() string { return "tracker" }
 // three-year-old company the ceiling is two years away.
 const TrackerLogMaxBytes = 16 << 30
 
+// TrackerMaxRecordBytes is the largest record this domain publishes
+// ([statelog.StreamSpec.MaxRecordBytes]).
+//
+// THE TRANSPORT'S OWN MAXIMUM, because a smaller declaration would buy this
+// log nothing. What the declaration sizes is the fleet term of the gate
+// reserve, and at the tracker's gibibyte floor a sixteenth of the ceiling is
+// already the larger term — 64 MiB against the 57 seven peers' records at this
+// size can overshoot by — so the reserve is the same whatever is declared
+// here, and what the declaration would otherwise bound (a task's description, a
+// comment's body, a batch of fields) each has a cap of its own.
+const TrackerMaxRecordBytes = queue.MaxPayloadBytes
+
 // TrackerLogDuplicates is the window the broker collapses a repeated
 // operation id in.
 //
@@ -47,12 +60,13 @@ const TrackerLogDuplicates = 2 * time.Minute
 // Stream is the mutation domain's log.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.TrackerLogStream,
-		Subjects:      []string{topics.TrackerLogWildcard},
-		SubjectPrefix: topics.TrackerLogPrefix,
-		MaxBytes:      TrackerLogMaxBytes,
-		Duplicates:    TrackerLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+		Name:           topics.TrackerLogStream,
+		Subjects:       []string{topics.TrackerLogWildcard},
+		SubjectPrefix:  topics.TrackerLogPrefix,
+		MaxBytes:       TrackerLogMaxBytes,
+		MaxRecordBytes: TrackerMaxRecordBytes,
+		Duplicates:     TrackerLogDuplicates,
+		Replay:         statelog.ReplayStrict,
 		// ELEVEN OF THE THIRTEEN KINDS. A turn is additive and races
 		// nobody; a barrier shares one subject across the whole company,
 		// so an expectation there would serialise every linearizable

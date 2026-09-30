@@ -494,7 +494,7 @@ func (r *retention) domain(ctx context.Context, name string, shared fleetInputs)
 	}
 
 	decision := statelog.Trim(in.Terms())
-	r.gauges(name, statelog.KeepsGateReserve(running.domain), stats, decision, shared)
+	r.gauges(name, statelog.ReservationOf(running.domain), stats, decision, shared)
 	return r.apply(ctx, running.log, name, generation, decision, stats.FirstSeq, shared)
 }
 
@@ -1019,11 +1019,11 @@ func ageFloorOf(first, last, messages uint64, cutoff time.Time,
 // on the report either way, and a collector is what this adds.
 //
 // THE HEADROOM IS OF THE CEILING ORDINARY WRITES ARE HELD TO, which on a log
-// that keeps a gate reserve is [statelog.GateReserve] below the broker's —
+// that keeps a gate reserve is [statelog.Reservation.Bytes] below the broker's —
 // the figure the report prints and the alarm fires on, from the one function
 // all three read, so a collector's graph reaches zero exactly where writes
 // start being refused.
-func (r *retention) gauges(domain string, reserved bool, stats jetstream.LogStats,
+func (r *retention) gauges(domain string, reservation statelog.Reservation, stats jetstream.LogStats,
 	decision statelog.TrimDecision, shared fleetInputs) {
 
 	if r.metrics == nil {
@@ -1036,7 +1036,7 @@ func (r *retention) gauges(domain string, reserved bool, stats jetstream.LogStat
 		// unbounded log is not zero headroom, and zero is the value the
 		// one alarm an operator cannot ignore fires on.
 		r.metrics.Set(metrics.StatelogLogMaxBytes, float64(stats.MaxBytes), at)
-		if free := statelog.Headroom(stats.Bytes, stats.MaxBytes, reserved); free != nil {
+		if free := reservation.Headroom(stats.Bytes, stats.MaxBytes); free != nil {
 			r.metrics.Set(metrics.StatelogLogHeadroomFraction, *free, at)
 		}
 	}

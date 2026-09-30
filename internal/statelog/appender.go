@@ -81,9 +81,9 @@ const (
 	// names which one refused ([tooLargeDetail]): the NATS server's
 	// max_payload, the stream's own max_msg_size, and the file store's
 	// per-record limit. Folded into one remedy — raise max_payload — the
-	// second sent an operator to a server setting when the stream had been
-	// reconfigured under the engine, and the third to a setting they had
-	// already turned past the limit that refused the record.
+	// second sent an operator to a server setting when the record was past
+	// the domain's own declared largest, and the third to a setting they
+	// had already turned past the limit that refused the record.
 	faultTooLarge
 
 	// faultRefused is any other refusal the broker made and named, and
@@ -206,9 +206,11 @@ func classify(err error) (fault, string) {
 			return faultUnsettled, apiErr.Description
 		case codeStreamMessageExceedsMaximum:
 			// THE STREAM'S OWN PER-MESSAGE LIMIT, a structured code of
-			// its own. No state log declares one, so reaching it means
-			// the stream was reconfigured under the engine — and it is
-			// still a record too large, not a log that is full.
+			// its own: the domain's declared largest record, which the
+			// publisher refuses a record past before sending it — so
+			// reaching it here is a record something else sent, or a
+			// stream reconfigured under the engine — and it is still a
+			// record too large, not a log that is full.
 			return faultTooLarge, tooLargeDetail(limitStreamMsgSize, apiErr.Description)
 		}
 		// ANY OTHER API ERROR is a refusal the server made and named —
@@ -271,10 +273,13 @@ const (
 	// contract's own ceiling.
 	limitMaxPayload sizeLimit = iota
 
-	// limitStreamMsgSize is the stream's own max_msg_size. No state log
-	// declares one, so meeting it means somebody reconfigured the stream
-	// under the engine, and restoring it is the remedy — raising the
-	// server's max_payload changes nothing about it.
+	// limitStreamMsgSize is the stream's own max_msg_size: every state
+	// log's is its declared largest record plus what a stored record
+	// carries beside it ([StreamSpec.MaxAppendBytes]). This build's
+	// publisher refuses a larger record before it is sent, so meeting it
+	// means a peer that does not ask sent one, or the stream was
+	// reconfigured under the engine — and raising the server's
+	// max_payload changes nothing about it.
 	limitStreamMsgSize
 
 	// limitFileStore is the file store's per-record limit, which no
@@ -294,10 +299,9 @@ const (
 func tooLargeDetail(limit sizeLimit, words string) string {
 	switch limit {
 	case limitStreamMsgSize:
-		return fmt.Sprintf("the stream's own max_msg_size refused it (%s) — no "+
-			"state log declares one, so the stream was reconfigured under the "+
-			"engine: restore its max_msg_size to unlimited (-1), or split the "+
-			"change into smaller writes", words)
+		return fmt.Sprintf("the stream's own max_msg_size refused it (%s) — the "+
+			"domain's declared largest record, which no retry and no server "+
+			"setting moves: split the change into smaller writes", words)
 	case limitFileStore:
 		return fmt.Sprintf("the broker's file store refused it as larger than one "+
 			"stored record may be (%s) — a limit of the store itself that no "+

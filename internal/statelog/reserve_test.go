@@ -21,17 +21,17 @@ import (
 // record on that log.
 
 // reserveCeiling is the byte ceiling the unit cases below admit against, and
-// softCeiling what ordinary appends are held to under it.
-const (
-	reserveCeiling = 16 << 20
-	softCeiling    = reserveCeiling - reserveCeiling/statelog.GateReserveDivisor
-)
+// softCeiling what ordinary appends are held to under it — the probe log's
+// reservation, read through the same arithmetic the admission uses.
+const reserveCeiling = 16 << 20
+
+var softCeiling = statelog.ReservationOf(probeDomain{}).Ordinary(reserveCeiling)
 
 // usageOf is a reserve whose every reading answers bytes held of the unit
 // cases' ceiling.
 func usageOf(t *testing.T, bytes uint64) *statelog.Reserve {
 	t.Helper()
-	reserve, err := statelog.NewReserve(probeStream,
+	reserve, err := statelog.NewReserve(probeDomain{}.Stream(),
 		func(context.Context) (statelog.Usage, error) {
 			return statelog.Usage{Bytes: bytes, MaxBytes: reserveCeiling}, nil
 		})
@@ -77,15 +77,71 @@ func TestAnOrdinaryAppendIsRefusedAtTheSoftCeiling(t *testing.T) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
 	}
-	if statelog.OrdinaryCeiling(reserveCeiling, true) != softCeiling {
-		t.Errorf("the ordinary ceiling of a %d-byte log is %d, want %d",
-			reserveCeiling, statelog.OrdinaryCeiling(reserveCeiling, true), softCeiling)
-	}
-	if statelog.OrdinaryCeiling(reserveCeiling, false) != reserveCeiling {
-		t.Error("a log that keeps no reserve holds its ordinary writes short of " +
-			"its ceiling, refusing writes to keep room nothing is written into")
+}
+
+// THE RESERVE IS THE LARGER OF A SIXTEENTH OF THE CEILING AND THE FLEET TERM.
+//
+// The fleet term — seven peers' largest appends and a gate room — is what the
+// admission's blind spot can spend, and it is the LOG's: at a ceiling a
+// sixteenth of which is less, the reserve is the fleet term, and at one a
+// sixteenth of which is more, it is the sixteenth, so a larger log absorbs a
+// larger fleet. It was the sixteenth alone, which at the 64 MiB floor of the
+// two smallest logs was under one append at the size the budget admitted.
+// Mutation: drop the fleet term and the small ceiling's row keeps 4 MiB.
+func TestTheReserveIsTheLargerOfASixteenthAndTheFleetTerm(t *testing.T) {
+	t.Parallel()
+	const maxAppend = 2<<20 + 4<<10
+	kept := statelog.Reservation{Kept: true, MaxAppend: maxAppend}
+	fleet := uint64(statelog.GateReserveFleet-1)*maxAppend + statelog.GateRoom
+	for name, tc := range map[string]struct {
+		r              statelog.Reservation
+		ceiling        uint64
+		reserve        uint64
+		headroomAtZero *float64
+	}{
+		"a floor-sized log keeps the fleet term": {
+			r: kept, ceiling: 64 << 20, reserve: fleet},
+		"a large log keeps a sixteenth": {
+			r: kept, ceiling: 16 << 30, reserve: (16 << 30) / statelog.GateReserveDivisor},
+		"a log smaller than the fleet term is all reserve": {
+			r: kept, ceiling: fleet - 1, reserve: fleet - 1, headroomAtZero: ptr(0.0)},
+		"a log that keeps none keeps nothing": {
+			r: statelog.Reservation{}, ceiling: 64 << 20, reserve: 0},
+		"an unbounded log keeps nothing and has no headroom": {
+			r: kept, ceiling: 0, reserve: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.r.Bytes(tc.ceiling); got != tc.reserve {
+				t.Errorf("the reserve of a %d-byte log is %d, want %d", tc.ceiling,
+					got, tc.reserve)
+			}
+			if got := tc.r.Ordinary(tc.ceiling); got != tc.ceiling-tc.reserve {
+				t.Errorf("the ordinary ceiling of a %d-byte log is %d, want %d",
+					tc.ceiling, got, tc.ceiling-tc.reserve)
+			}
+			headroom := tc.r.Headroom(0, tc.ceiling)
+			switch {
+			case tc.ceiling == 0:
+				if headroom != nil {
+					t.Errorf("an unbounded log reports a headroom of %v, want none",
+						*headroom)
+				}
+			case headroom == nil:
+				t.Errorf("a %d-byte log reports no headroom", tc.ceiling)
+			case tc.headroomAtZero != nil && *headroom != *tc.headroomAtZero:
+				t.Errorf("an empty %d-byte log reports a headroom of %v, want %v",
+					tc.ceiling, *headroom, *tc.headroomAtZero)
+			case tc.headroomAtZero == nil && *headroom != 1:
+				t.Errorf("an empty %d-byte log reports a headroom of %v, want all of it",
+					tc.ceiling, *headroom)
+			}
+		})
 	}
 }
+
+// ptr is a pointer to v.
+func ptr[T any](v T) *T { return &v }
 
 // THIS NODE'S APPENDS IN FLIGHT ARE COUNTED BESIDE WHAT THE BROKER HOLDS.
 //
@@ -131,7 +187,7 @@ func TestAReadingAlreadyOutIsNotALaterAdmissionsReading(t *testing.T) {
 	const size = 4096
 	started, answer := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	reserve, err := statelog.NewReserve(probeStream,
+	reserve, err := statelog.NewReserve(probeDomain{}.Stream(),
 		func(context.Context) (statelog.Usage, error) {
 			if calls.Add(1) == 1 {
 				close(started)
@@ -189,8 +245,8 @@ func TestAnAppendThatLandsDuringTheReadingIsStillCounted(t *testing.T) {
 	const size = 4096
 	started, answer := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	held := uint64(softCeiling - 2*size)
-	reserve, err := statelog.NewReserve(probeStream,
+	held := softCeiling - 2*size
+	reserve, err := statelog.NewReserve(probeDomain{}.Stream(),
 		func(context.Context) (statelog.Usage, error) {
 			if calls.Add(1) == 2 {
 				close(started)
@@ -233,7 +289,8 @@ func TestAnAppendThatLandsDuringTheReadingIsStillCounted(t *testing.T) {
 // is not the problem. Either way the budget it took is given back.
 func TestAReserveRefusesWhatItCannotAdmitWithoutCallingItFull(t *testing.T) {
 	t.Parallel()
-	_, err := usageOf(t, 0).Admit(t.Context(), statelog.MaxAppendBytes+1)
+	maxAppend := probeDomain{}.Stream().MaxAppendBytes()
+	_, err := usageOf(t, 0).Admit(t.Context(), maxAppend+1)
 	if !errors.Is(err, queue.ErrTooLarge) || logFull(err) {
 		t.Fatalf("a record past the budget answered %v, want ErrTooLarge", err)
 	}
@@ -241,7 +298,7 @@ func TestAReserveRefusesWhatItCannotAdmitWithoutCallingItFull(t *testing.T) {
 	unread := errors.New("the stream's state could not be read")
 	var fail atomic.Bool
 	fail.Store(true)
-	reserve, err := statelog.NewReserve(probeStream,
+	reserve, err := statelog.NewReserve(probeDomain{}.Stream(),
 		func(context.Context) (statelog.Usage, error) {
 			if fail.Load() {
 				return statelog.Usage{}, unread
@@ -251,13 +308,13 @@ func TestAReserveRefusesWhatItCannotAdmitWithoutCallingItFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReserve: %v", err)
 	}
-	if _, err := reserve.Admit(t.Context(), statelog.MaxAppendBytes); !errors.Is(err, unread) || logFull(err) {
+	if _, err := reserve.Admit(t.Context(), maxAppend); !errors.Is(err, unread) || logFull(err) {
 		t.Fatalf("an unreadable log answered %v, want the reading's own error", err)
 	}
 	fail.Store(false)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	release, err := reserve.Admit(ctx, statelog.MaxAppendBytes)
+	release, err := reserve.Admit(ctx, maxAppend)
 	if err != nil {
 		t.Fatalf("a whole budget's append after a failed reading answered %v — "+
 			"the failed admission kept the budget it took", err)
@@ -269,8 +326,11 @@ func TestAReserveRefusesWhatItCannotAdmitWithoutCallingItFull(t *testing.T) {
 // eviction record installs a gate.
 type smallGatingDomain struct{ gatingDomain }
 
-// smallLogBytes is its ceiling: sixteen reserves of 64 KiB.
-const smallLogBytes = 1 << 20
+// smallLogBytes is its ceiling: four mebibytes, of which the probe log's
+// fleet term — seven of its largest appends and the gate room — keeps a
+// little under two, leaving ordinary writes a few dozen of the sixty-kibibyte
+// records the cases fill it with.
+const smallLogBytes = 4 << 20
 
 func (smallGatingDomain) Stream() statelog.StreamSpec {
 	spec := probeDomain{}.Stream()
@@ -354,10 +414,10 @@ func TestALogFullForOrdinaryWritesStillTakesAGateRecord(t *testing.T) {
 	h := newHarnessFor(t, smallGatingDomain{})
 	h.applier.auto = true
 	body := strings.Repeat("x", 60<<10)
-	soft := statelog.OrdinaryCeiling(smallLogBytes, true)
+	soft := statelog.ReservationOf(smallGatingDomain{}).Ordinary(smallLogBytes)
 
 	var refused error
-	for i := 0; i < 32 && refused == nil; i++ {
+	for i := 0; i < 64 && refused == nil; i++ {
 		_, refused = h.write(statelog.Subject{Kind: "object", ID: fmt.Sprintf("o%d", i)},
 			fmt.Sprintf("fill-%d", i), body)
 	}
@@ -434,10 +494,10 @@ func TestAnEvictionPassesTheTruncationFenceAndTheReserveTogether(t *testing.T) {
 	h := newHarnessFor(t, smallPurgingDomain{})
 	h.applier.auto = true
 	body := strings.Repeat("x", 60<<10)
-	soft := statelog.OrdinaryCeiling(smallLogBytes, true)
+	soft := statelog.ReservationOf(smallGatingDomain{}).Ordinary(smallLogBytes)
 
 	var refused error
-	for i := 0; i < 32 && refused == nil; i++ {
+	for i := 0; i < 64 && refused == nil; i++ {
 		_, refused = h.write(statelog.Subject{Kind: "object", ID: fmt.Sprintf("o%d", i)},
 			fmt.Sprintf("fill-%d", i), body)
 	}

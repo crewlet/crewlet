@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -579,14 +580,15 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 	}
 	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
 		stream := domain.Stream().Name
+		reservation, field, _ := capacityBounds(stream)
 		err := open(stream, target)
 		if err == nil {
 			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
 				"its ordinary writes are held to %d and would all be refused",
 				uint64(target), stream, current.Bytes,
-				statelog.OrdinaryCeiling(target, true))
+				reservation.Ordinary(target))
 		}
-		least := smallestTargetAbove(current.Bytes, true)
+		least := smallestTargetAbove(current.Bytes, reservation, uint64(field.Floor))
 		for _, want := range []string{
 			"holds 16106127360 bytes", "ordinary writes are held to 16106127360",
 			fmt.Sprintf("at least %d bytes", least),
@@ -611,38 +613,83 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 	}
 }
 
-// A TARGET UNDER THE FLOOR IS REFUSED ON EVERY LOG, whatever it holds.
+// A TARGET UNDER A LOG'S FLOOR IS REFUSED, AND ITS FLOOR IS ITS FIELD'S.
 //
-// Tier A refuses an explicit ceiling below a gibibyte and the division of the
-// broker's budget never scales one below it; the capacity verb was the one way
-// round both. And on a log that claims identity the floor is what the gate
-// reserve is sized against, so a smaller ceiling keeps too small a reserve for
-// the appends in flight it has to absorb.
+// Tier A refuses an explicit ceiling below its field's floor; the capacity
+// verb was the one way round it. And the floor differs by log: the verb held
+// every log to a gibibyte, calling it the floor Tier A enforces, while Tier A
+// takes the org chart's and the identity estate's down to 64 MiB — so a
+// target Tier A would accept on either was refused with a reason that was not
+// true of it. The floor each case expects is read from Tier A's own
+// validation of the field, not from the register the verb reads, so the two
+// cannot agree by sharing a mistake.
 func TestATargetUnderTheFloorIsRefused(t *testing.T) {
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
+	keys := streamKeys(t)
 	for _, domain := range registeredDomains() {
 		stream := domain.Stream().Name
+		_, field, known := capacityBounds(stream)
+		if !known {
+			t.Fatalf("%s is registered and the capacity verb reads no bounds for it", stream)
+		}
+		floor := tierAFloor(t, keys, field.Field, field.Bytes)
 		e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 		_, err := e.openCapacity(ctx, CapacityRequest{
-			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling) - 1, By: "ops-3",
+			Stream: stream, TargetMaxBytes: uint64(floor) - 1, By: "ops-3",
 		}, current, unstatedRoom)
 		if err == nil {
 			t.Fatalf("a target a byte under the floor was accepted on %s", stream)
 		}
-		if !strings.Contains(err.Error(), fmt.Sprintf("at least %d bytes", MinDomainCeiling)) {
-			t.Errorf("the refusal on %s does not name the floor: %v", stream, err)
+		for _, want := range []string{fmt.Sprintf("at least %d bytes", floor), field.Field} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal on %s does not say %q: %v", stream, want, err)
+			}
 		}
 		if op, found, _ := fleet.Maintenance(ctx, stream); found {
 			t.Fatalf("a window was opened anyway on %s: %+v", stream, op)
 		}
 		e, _ = capacityFixture(t, "node-1", statelog.ModeMaintenance)
 		if _, err := e.openCapacity(ctx, CapacityRequest{
-			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling), By: "ops-3",
+			Stream: stream, TargetMaxBytes: uint64(floor), By: "ops-3",
 		}, current, unstatedRoom); err != nil {
-			t.Errorf("a target at the floor was refused on %s: %v", stream, err)
+			t.Errorf("a target at %s's floor of %d was refused: %v", stream, floor, err)
 		}
 	}
+}
+
+// tierAFloor is the smallest value Tier A's own validation accepts for the
+// stream field named field — found by asking it, not by reading a constant —
+// bisected below accepted, a value it takes (the one an unset field derives,
+// which [TestEveryRegisteredDomainIsSizedFromTierA] holds it to taking).
+func tierAFloor(t *testing.T, keys map[string][]int, field string, accepted int64) int64 {
+	t.Helper()
+	index, found := keys[strings.TrimPrefix(field, "stream.")]
+	if !found {
+		t.Fatalf("%s is not a Tier A stream key", field)
+	}
+	accepts := func(v int64) bool {
+		boot := testBootstrap(t)
+		boot.Stream.StoreDir = t.TempDir()
+		reflect.ValueOf(&boot.Stream).Elem().FieldByIndex(index).SetInt(v)
+		return boot.Validate() == nil
+	}
+	// BISECTED between a byte, which no field accepts, and a value this
+	// one does.
+	low, high := int64(1), accepted
+	if accepts(low) || !accepts(high) {
+		t.Fatalf("%s accepts %v at 1 byte and %v at %d, so it has no floor "+
+			"between them", field, accepts(low), accepts(high), high)
+	}
+	for high-low > 1 {
+		mid := low + (high-low)/2
+		if accepts(mid) {
+			high = mid
+		} else {
+			low = mid
+		}
+	}
+	return high
 }
 
 // unstatedRoom is a broker that states no limit this node can read, which

@@ -103,7 +103,7 @@ func Stamped(t *testing.T, new Factory) error {
 	// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps one: what
 	// is under test is what the decision writes, not the log's room.
 	if statelog.KeepsGateReserve(c.Domain) {
-		reserve, reserveErr := statelog.NewReserve(c.Domain.Stream().Name,
+		reserve, reserveErr := statelog.NewReserve(c.Domain.Stream(),
 			func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
 		if reserveErr != nil {
 			t.Fatalf("build a reserve over %s: %v", name, reserveErr)

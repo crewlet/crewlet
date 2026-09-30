@@ -38,18 +38,43 @@ func (Domain) Name() string { return "chart" }
 // nothing on this stream is derivable from anything else, so shedding history
 // is data loss with a tidy name.
 //
-// ONE GIBIBYTE, which is the framework's own minimum domain ceiling and the
-// smallest number the engine's scaling will hold a log at. It is sized from the
-// CORPUS rather than by analogy with its neighbours, and the corpus is the
-// company's own shape: a chart is hundreds of objects where the tracker is
-// hundreds of thousands of items, and it changes when somebody is hired, moved
-// or promoted rather than on every comment. At the reference company's rate —
-// a few hundred structural records and a few thousand content records a year,
-// each a few kilobytes — a COMPLETELY BLOCKED trim reaches this in well over a
-// century. There is no number below it worth having, so the honest choice is
-// the floor rather than a smaller one that buys nothing and a larger one that
-// reserves disk no chart will ever use.
-const ChartLogMaxBytes = 1 << 30
+// SIXTY-FOUR MEBIBYTES, Tier A's own default for the field
+// ([config.DefaultChartLogMaxBytes] says why that number and not the
+// gibibyte the corpus-sized logs take), and held equal to it by the engine's
+// register test, because the suites that provision at this value are the
+// ones that certify what a real node runs. It was a gibibyte, justified as
+// the framework's floor for every domain, while the node that runs this log
+// created it at sixty-four: the suites certified a log sixteen times the size
+// of the one anybody ran, whose gate reserve they therefore never met at the
+// size it is.
+const ChartLogMaxBytes = 64 << 20
+
+// ChartMaxRecordBytes is the largest record this domain publishes
+// ([statelog.StreamSpec.MaxRecordBytes]), and it is what this log's gate
+// reserve is sized by.
+//
+// TWO MEBIBYTES, from the records this domain's caps produce, each measured
+// by a test built the way the writer builds a record:
+//
+//   - A SEAT'S CONTENT with every prose field at its cap — a backstory and a
+//     goal at [MaxProse], thirty-two responsibilities and thirty-two
+//     guidelines at [MaxList] entries of it — is a little over a mebibyte,
+//     which leaves a quarter of the declaration for its runtime half, the
+//     one field this domain cannot bound: it is configuration, and its
+//     credentials travel as `${VAR}` references.
+//   - A BATCH at [MaxBatchOperations], every key at [MaxKey], is about a
+//     hundred kibibytes; one whose operations each carry a full `manages:`
+//     list is a batch that splits, which is what the refusal says.
+//   - AN IMPORT is one record whatever the company's size, so this is the
+//     largest chart one can place: ten thousand seats at their caps fit,
+//     ten times the thousand the batch cap is sized against.
+//
+// WHY NOT THE TRANSPORT'S EIGHT, which is what every log was sized by before
+// a log declared its own: the reserve's fleet term is seven peers' largest
+// appends, and at this log's 64 MiB Tier A floor seven of eight mebibytes is
+// most of the log. At two it is fifteen mebibytes, and ordinary writes keep
+// the other forty-nine.
+const ChartMaxRecordBytes = 2 << 20
 
 // ChartLogDuplicates is the window the broker collapses a repeated operation id
 // in.
@@ -64,12 +89,13 @@ const ChartLogDuplicates = 2 * time.Minute
 // Stream is the org chart's log.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.ChartLogStream,
-		Subjects:      []string{topics.ChartLogWildcard},
-		SubjectPrefix: topics.ChartLogPrefix,
-		MaxBytes:      ChartLogMaxBytes,
-		Duplicates:    ChartLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+		Name:           topics.ChartLogStream,
+		Subjects:       []string{topics.ChartLogWildcard},
+		SubjectPrefix:  topics.ChartLogPrefix,
+		MaxBytes:       ChartLogMaxBytes,
+		MaxRecordBytes: ChartMaxRecordBytes,
+		Duplicates:     ChartLogDuplicates,
+		Replay:         statelog.ReplayStrict,
 		// SIX OF THE SEVEN KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an

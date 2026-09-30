@@ -80,10 +80,11 @@ const (
 	// raising a ceiling needs a maintenance window, and a tenth of a
 	// 29 GiB log is days of writing at this engine's rate.
 	//
-	// OF THE CEILING ORDINARY WRITES ARE HELD TO ([Headroom]), which on a
-	// log that keeps a gate reserve is [GateReserve] below the broker's:
-	// that is where writes start being refused, so it is what "full"
-	// means to everybody but an eviction.
+	// OF THE CEILING ORDINARY WRITES ARE HELD TO
+	// ([Reservation.Headroom]), which on a log that keeps a gate reserve
+	// is [Reservation.Bytes] below the broker's: that is where writes
+	// start being refused, so it is what "full" means to everybody but an
+	// eviction.
 	HeadroomAlarmFraction = 0.10
 
 	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
@@ -204,7 +205,7 @@ type Reading struct {
 	BarrierP95 time.Duration
 
 	// HeadroomFraction is how much of the byte ceiling the log's ordinary
-	// writes are held to is unused, as a fraction ([Headroom]).
+	// writes are held to is unused, as a fraction ([Reservation.Headroom]).
 	//
 	// A POINTER, because zero is a real value here and it is the worst
 	// one: a full log and a node that has not measured its log are

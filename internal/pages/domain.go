@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -52,6 +53,15 @@ func (Domain) Name() string { return "pages" }
 // to the tracker's on every volume.
 const PagesLogMaxBytes = 4 << 30
 
+// PagesMaxRecordBytes is the largest record this domain publishes
+// ([statelog.StreamSpec.MaxRecordBytes]).
+//
+// THE TRANSPORT'S OWN MAXIMUM, for the tracker's reason: at this log's
+// gibibyte floor a sixteenth of the ceiling is already the larger term of the
+// gate reserve, so a smaller declaration would change no reserve — and a
+// page's body is the largest value any domain carries, bounded by its own cap.
+const PagesMaxRecordBytes = queue.MaxPayloadBytes
+
 // PagesLogDuplicates is the window the broker collapses a repeated operation
 // id in.
 //
@@ -65,12 +75,13 @@ const PagesLogDuplicates = 2 * time.Minute
 // Stream is the knowledge base's log.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.PagesLogStream,
-		Subjects:      []string{topics.PagesLogWildcard},
-		SubjectPrefix: topics.PagesLogPrefix,
-		MaxBytes:      PagesLogMaxBytes,
-		Duplicates:    PagesLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+		Name:           topics.PagesLogStream,
+		Subjects:       []string{topics.PagesLogWildcard},
+		SubjectPrefix:  topics.PagesLogPrefix,
+		MaxBytes:       PagesLogMaxBytes,
+		MaxRecordBytes: PagesMaxRecordBytes,
+		Duplicates:     PagesLogDuplicates,
+		Replay:         statelog.ReplayStrict,
 		// FIVE OF THE SIX KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an

@@ -1022,8 +1022,9 @@ type Stream struct {
 	// NOT derived from the disk. The reason is that the other three grow
 	// with a corpus the operator's volume has something to say about, and
 	// this one does not: a chart is hundreds of objects, it changes when
-	// somebody is hired, moved or promoted, and 64 MiB is four years of a
-	// COMPLETELY BLOCKED trim at the modelled rate. A quarter of a storage
+	// somebody is hired, moved or promoted, and 64 MiB is about two and a
+	// half years of a COMPLETELY BLOCKED trim at the modelled rate, once the
+	// gate reserve its largest record sizes is kept. A quarter of a storage
 	// array would be disk reserved for records no company will ever write,
 	// and a quarter of a laptop would be the same number by coincidence.
 	//

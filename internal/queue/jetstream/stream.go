@@ -153,6 +153,16 @@ type streamSpec struct {
 	// it would take a fleet down for a number nobody is losing data to.
 	maxBytes int64
 
+	// maxMsgSize is the largest message the stream stores — headers and
+	// body, never the subject. Zero means unlimited, the server's own -1.
+	//
+	// CAPACITY, for maxBytes' reason: a stream created by a build that
+	// declared none, or a different one, loses no record over it — a
+	// record past it is REFUSED, loudly, as too large — so a boot that
+	// refused to run over the difference would take a fleet down for a
+	// number nobody is losing data to.
+	maxMsgSize int32
+
 	// discard decides what a full stream does. DiscardNew REFUSES the
 	// append; DiscardOld drops the oldest message to make room.
 	//
@@ -249,6 +259,7 @@ func classifyStreamSpec() map[string]specFieldClass {
 		"mirrorDirect":  classSafety,
 
 		"maxBytes":   classCapacity,
+		"maxMsgSize": classCapacity,
 		"duplicates": classCapacity,
 	}
 }
@@ -505,6 +516,14 @@ type DomainStream struct {
 	// wants: a log with no ceiling fills the volume instead of refusing.
 	MaxBytes int64
 
+	// MaxMessageBytes is the largest message the stream stores, its
+	// headers included — a domain's largest record plus what a stored
+	// record carries beside it. Zero is unlimited, which no shipped domain
+	// wants: the broker's refusal is what holds a PEER to the declaration,
+	// since this build's publisher refuses a larger record before it is
+	// sent and a peer on another build may not.
+	MaxMessageBytes int64
+
 	// Duplicates is the window a repeated Nats-Msg-Id is collapsed in. It
 	// has to outlast a publisher's whole retry budget, or a retry that
 	// takes longer than the window appends the record twice.
@@ -551,6 +570,10 @@ func (d DomainStream) spec() streamSpec {
 		subjects:  d.Subjects,
 		retention: jetstream.LimitsPolicy,
 		maxBytes:  d.MaxBytes,
+
+		// CHECKED AT THE DOOR ([Queue.EnsureDomainStream]), which is
+		// the only caller, so this conversion never wraps.
+		maxMsgSize: int32(d.MaxMessageBytes),
 
 		// REFUSE THE APPEND rather than drop the oldest record. The
 		// records here are the company's own state, so a full log is an

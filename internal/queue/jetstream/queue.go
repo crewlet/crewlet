@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -500,6 +501,7 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		MaxAge:            spec.maxAge,
 		MaxMsgsPerSubject: int64(spec.maxPerSubject),
 		MaxBytes:          spec.maxBytes,
+		MaxMsgSize:        spec.maxMsgSize,
 		Discard:           spec.discard,
 		Duplicates:        spec.duplicates,
 		DenyDelete:        spec.denyDelete,
@@ -514,6 +516,9 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	}
 	if spec.maxBytes == 0 {
 		config.MaxBytes = -1
+	}
+	if spec.maxMsgSize == 0 {
+		config.MaxMsgSize = -1
 	}
 	// CREATE IF ABSENT, OBSERVE IF PRESENT.
 	//
@@ -812,6 +817,10 @@ func capacityDifferences(want, got jetstream.StreamConfig) []string {
 		out = append(out, fmt.Sprintf("max_bytes: running %d, this node %d",
 			got.MaxBytes, want.MaxBytes))
 	}
+	if got.MaxMsgSize != want.MaxMsgSize {
+		out = append(out, fmt.Sprintf("max_msg_size: running %d, this node %d",
+			got.MaxMsgSize, want.MaxMsgSize))
+	}
 	if got.Duplicates != want.Duplicates {
 		out = append(out, fmt.Sprintf("duplicates: running %v, this node %v",
 			got.Duplicates, want.Duplicates))
@@ -826,6 +835,14 @@ func capacityDifferences(want, got jetstream.StreamConfig) []string {
 // stays the list of streams the engine itself defines. It is also what lets a
 // test stand up a throwaway log stream without touching that table.
 func (q *Queue) EnsureDomainStream(ctx context.Context, spec DomainStream) error {
+	// THE BROKER'S FIELD IS 32 BITS, and a negative is how it spells
+	// unlimited — so a value past it would be sent as the one setting it
+	// was never meant to be, the way a ceiling past int64 would.
+	if spec.MaxMessageBytes < 0 || spec.MaxMessageBytes > math.MaxInt32 {
+		return fmt.Errorf("jetstream: stream %s declares a largest message of %d "+
+			"bytes, outside the 0..%d the broker's max_msg_size can carry",
+			spec.Name, spec.MaxMessageBytes, math.MaxInt32)
+	}
 	return q.ensureStream(ctx, spec.spec())
 }
 

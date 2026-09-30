@@ -1284,12 +1284,14 @@ A target whose ordinary ceiling is at or below what the log already holds is
 refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
 applied. On the four identity logs the ordinary ceiling is the target less
-its [gate reserve](../guides/retention.md#the-gate-reserve), a sixteenth; on
-the vector changelog it is the whole target. A target under a gibibyte is
-refused too, on every log — the ceiling the reserve is sized against, and
-Tier A's floor for every log but the org chart's and the identity estate's,
-whose own floor is 64 MiB. A target under the current ceiling and above the usage is accepted,
-and is how a log gives a reservation back. A raise the broker cannot
+its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
+sixteenth of it and seven of the log's largest records with a mebibyte beside
+them; on the vector changelog it is the whole target. A target under the floor
+Tier A holds the log's own field to is refused too, naming the field — a
+gibibyte on the tracker's, the knowledge base's and the vector changelog's,
+64 MiB on the org chart's and the identity estate's. A target under the
+current ceiling and above the usage is accepted, and is how a log gives a
+reservation back. A raise the broker cannot
 reserve is refused before the window opens too, naming what it reserves and
 what the broker has left, wherever the node can read that limit: a lone
 embedded node, or a NATS account's own limit. A clustered member cannot, and

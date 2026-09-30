@@ -565,6 +565,13 @@ func wire(s Subject) statelog.Subject {
 //
 // IT IS QUIET. A revision that touches forty seats would otherwise wake forty
 // seats to tell each of them their goal was reworded.
+//
+// AND IT IS ONE RECORD WHATEVER THE COMPANY'S SIZE, so the log's declared
+// largest record ([ChartMaxRecordBytes]) is the largest chart one import
+// places: about ten thousand seats with every key at its cap, ten times the
+// thousand the batch cap is sized against. A chart past it is refused
+// `record_too_large` rather than split, because an import split in two is two
+// revisions' worth of structure under one revision's ledger key.
 func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 	edges []Edge) (WriteResult, error) {
 
