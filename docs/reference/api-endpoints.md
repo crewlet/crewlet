@@ -93,7 +93,10 @@ one JSON object, and it always has the same three parts in the same places:
   land before it as `landed`. The two send a client opposite ways — the
   unknown is retried under the **same** `op_id`, never a fresh one, which
   would make the change twice if the first landed — so branch on the field
-  rather than on the sentence. Where
+  rather than on the sentence. The routes that read no `Idempotency-Key` — a
+  token's mint, and every `/auth` gesture — are the exception the `detail`
+  names: there the `op_id` finds the attempt in the trail, and the retry is
+  the gesture asked again. Where
   this node's operation ledger cannot vouch for the operation it also carries
   **`"unvouched": true`** and **no** `Retry-After`: the same request here answers
   the same way until the change reaches this node, so send it, with the same
