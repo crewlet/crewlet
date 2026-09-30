@@ -71,10 +71,17 @@ type MentionGrammar interface {
 // state, so this IS that state — and holding it in memory means every
 // restart makes every seat deaf to every thread it was following, with no
 // way back but for somebody to mention it again.
+//
+// THE SEAT IS NAMED BY THE HANDLE IT WAS CREATED UNDER (ADR-0019), never by
+// the one it answers to now: a follow is the seat's own memory of a
+// conversation, and keyed on its address a rename made it deaf to every thread
+// it had been following, with no way back but for somebody to mention it
+// again. The value is still a handle, and for every seat never renamed its
+// origin IS its handle, so every follow already written is keyed correctly.
 type FollowStore interface {
-	Follow(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) error
-	Following(ctx context.Context, backend, handle, channel, thread string) (string, bool, error)
-	Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error)
+	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
+	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
+	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }
 
 // ChatMessage is one inbound chat message, in backend-neutral terms.
@@ -186,19 +193,22 @@ type Delivery struct {
 // would wake the seat for every reply in every thread of every channel its
 // bot sits in, which is a burst of turns nobody asked for and cannot be
 // taken back. The error rides along so the caller can log it.
-func (t *ThreadTracker) Reaches(ctx context.Context, handle, selfIdentity string, m ChatMessage, at time.Time) (Delivery, error) {
+//
+// seat is the handle the seat was CREATED under — see [FollowStore] — and
+// never the address the delivery came in on.
+func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, m ChatMessage, at time.Time) (Delivery, error) {
 	reason, triggered := t.trigger(m, selfIdentity)
 
 	var err error
 	if triggered && m.Thread != "" {
-		err = t.store.Follow(ctx, t.Backend(), handle, m.Channel, m.Thread, string(reason), at)
+		err = t.store.Follow(ctx, t.Backend(), seat, m.Channel, m.Thread, string(reason), at)
 		if err != nil {
 			// The follow was not recorded, but this message still
 			// named the seat — deliver it and let the next mention
 			// re-establish the follow. Dropping it too would mean a
 			// store blip eats a message somebody addressed by name.
 			log.WarnContext(ctx, "thread_follow_not_recorded", "backend", t.Backend(),
-				"handle", handle, "thread", m.Thread, "error", err.Error())
+				"seat", seat, "thread", m.Thread, "error", err.Error())
 			return Delivery{Deliver: true, Reason: reason}, err
 		}
 	}
@@ -210,7 +220,7 @@ func (t *ThreadTracker) Reaches(ctx context.Context, handle, selfIdentity string
 		return Delivery{Deliver: true}, nil
 	}
 
-	held, following, err := t.store.Following(ctx, t.Backend(), handle, m.Channel, m.Thread)
+	held, following, err := t.store.Following(ctx, t.Backend(), seat, m.Channel, m.Thread)
 	if err != nil {
 		return Delivery{}, err
 	}
@@ -251,26 +261,27 @@ func (t *ThreadTracker) trigger(m ChatMessage, selfIdentity string) (FollowReaso
 // it was named keeps that reason, because participation is the weaker
 // signal and an operator reading `participated` on a thread the seat was
 // summoned to would be reading a lie.
-func (t *ThreadTracker) Participated(ctx context.Context, handle, channel, thread string, at time.Time) error {
+func (t *ThreadTracker) Participated(ctx context.Context, seat, channel, thread string, at time.Time) error {
 	if thread == "" {
 		return nil
 	}
-	if _, following, err := t.store.Following(ctx, t.Backend(), handle, channel, thread); err != nil {
+	if _, following, err := t.store.Following(ctx, t.Backend(), seat, channel, thread); err != nil {
 		return err
 	} else if following {
 		return nil
 	}
-	return t.store.Follow(ctx, t.Backend(), handle, channel, thread,
+	return t.store.Follow(ctx, t.Backend(), seat, channel, thread,
 		string(FollowParticipated), at)
 }
 
-// Follow subscribes a seat to a thread explicitly.
-func (t *ThreadTracker) Follow(ctx context.Context, handle, channel, thread string, at time.Time) error {
-	return t.store.Follow(ctx, t.Backend(), handle, channel, thread,
+// Follow subscribes a seat to a thread explicitly. seat is the handle it was
+// created under — see [FollowStore].
+func (t *ThreadTracker) Follow(ctx context.Context, seat, channel, thread string, at time.Time) error {
+	return t.store.Follow(ctx, t.Backend(), seat, channel, thread,
 		string(FollowExplicit), at)
 }
 
 // Unfollow drops a subscription, reporting whether one was there.
-func (t *ThreadTracker) Unfollow(ctx context.Context, handle, channel, thread string) (bool, error) {
-	return t.store.Unfollow(ctx, t.Backend(), handle, channel, thread)
+func (t *ThreadTracker) Unfollow(ctx context.Context, seat, channel, thread string) (bool, error) {
+	return t.store.Unfollow(ctx, t.Backend(), seat, channel, thread)
 }

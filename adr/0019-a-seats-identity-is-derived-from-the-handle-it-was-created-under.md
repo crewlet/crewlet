@@ -51,7 +51,9 @@ surface showing a row resolve it back to the seat's current address;
 it end to end. The completion ledger is in that family for the same reason
 with a sharper cost: a trigger worked under the old handle is redelivered
 after a rename under the new one, and keyed on the address it found nothing
-and ran the turn again.
+and ran the turn again. So are its chat thread follows: keyed on the address,
+a rename left the seat deaf to every thread it had been following until
+somebody named it again.
 
 ## Why the obvious alternative is wrong
 

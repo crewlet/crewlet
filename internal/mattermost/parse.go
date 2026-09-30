@@ -39,6 +39,11 @@ var Grammar = notify.LiteralGrammar{
 type Seat struct {
 	Handle string
 
+	// Origin is the handle the seat was CREATED under ([org.Role.Origin],
+	// ADR-0019), and what its thread follows are keyed on — see
+	// [Seat.Identity].
+	Origin string
+
 	// Username is how a human and an MCP tool address this bot: Mattermost
 	// addresses a bot by NAME, not by id, so a prompt telling an agent how
 	// to mention a colleague needs this.
@@ -52,6 +57,19 @@ type Seat struct {
 	// and an agent that cannot recognise its own posts answers itself, one
 	// inbound message per reply, for ever, at one turn each.
 	UserID string
+}
+
+// Identity is the name this seat's thread follows are filed under: the handle
+// it was created under, never the one it answers to now. A follow is the
+// seat's own memory of a conversation, and keyed on its address a rename made
+// it deaf to every thread it had been following. A seat with no origin
+// recorded answers to the handle it was created under, which is the rule
+// [org.Role.Origin] states for the same empty value.
+func (s Seat) Identity() string {
+	if s.Origin != "" {
+		return s.Origin
+	}
+	return s.Handle
 }
 
 // Seats resolves a handle to the bot this node has registered for it.
@@ -141,7 +159,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// running has joined a conversation.
 	if seat.UserID != "" && sender == seat.UserID {
 		if root != "" && p.threads != nil {
-			if err := p.threads.Participated(ctx, handle, channel, root, p.now()); err != nil {
+			if err := p.threads.Participated(ctx, seat.Identity(), channel, root, p.now()); err != nil {
 				log.WarnContext(ctx, "mattermost_participation_not_recorded",
 					"handle", handle, "thread", root, "error", err.Error())
 			}
@@ -159,7 +177,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	reach := notify.Delivery{Deliver: true}
 	if p.threads != nil {
 		var err error
-		reach, err = p.threads.Reaches(ctx, handle, seat.Username, msg, p.now())
+		reach, err = p.threads.Reaches(ctx, seat.Identity(), seat.Username, msg, p.now())
 		if err != nil {
 			log.WarnContext(ctx, "mattermost_thread_follow_unreadable",
 				"handle", handle, "thread", root, "error", err.Error())
@@ -173,7 +191,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// thread every reply carries — so a seat named in a channel hears the
 	// answers to what it was asked, without being named again.
 	if p.threads != nil && root == "" && reach.Reason != "" {
-		if err := p.threads.Follow(ctx, handle, channel, postID, p.now()); err != nil {
+		if err := p.threads.Follow(ctx, seat.Identity(), channel, postID, p.now()); err != nil {
 			log.WarnContext(ctx, "mattermost_follow_not_recorded",
 				"handle", handle, "thread", postID, "error", err.Error())
 		}
