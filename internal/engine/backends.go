@@ -538,6 +538,7 @@ func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered
 		LedgerRetention: coord.LedgerRetention,
 		FireRetention:   coord.FireRetention,
 		FollowRetention: coord.FollowRetention,
+		RebaseRetention: coord.RebaseRetention,
 		CooldownMax:     coord.CooldownMax,
 		StatusFreshness: coord.StatusFreshness,
 		Replicas:        replicas,

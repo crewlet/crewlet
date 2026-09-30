@@ -39,6 +39,7 @@ type Fleet struct {
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
 	fires        map[string]time.Time
+	rebases      map[string]rebaseEntry
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
@@ -82,6 +83,12 @@ type workedEntry struct {
 	detail string
 }
 
+// rebaseEntry is one recorded rebase and the version it was written at.
+type rebaseEntry struct {
+	at      time.Time
+	version uint64
+}
+
 var _ coord.Fleet = (*Fleet)(nil)
 
 // NewFleet returns an empty twin.
@@ -96,6 +103,7 @@ func NewFleet() *Fleet {
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		fires:        map[string]time.Time{},
+		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
@@ -600,6 +608,45 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 		return false, nil
 	}
 	f.fires[key] = at.UTC()
+	return true, nil
+}
+
+// ---- the rebases -------------------------------------------------------- //
+
+// Rebase reads the instant recorded for a seed and its version.
+//
+// The bucket's age is not modelled, for the reason the completion ledger's is
+// not: it is a property of the bucket the KV backend creates, held there, and
+// a twin inside one test process never runs for a month.
+func (f *Fleet) Rebase(_ context.Context, seed string) (time.Time, uint64, error) {
+	if seed == "" {
+		return time.Time{}, 0, errors.New("coord/memory: a rebase needs a seed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.rebases[seed]
+	if !ok {
+		return time.Time{}, 0, nil
+	}
+	return entry.at, entry.version, nil
+}
+
+// RecordRebase writes a seed's instant, conditional on the version read.
+func (f *Fleet) RecordRebase(_ context.Context, seed string, at time.Time, version uint64) (bool, error) {
+	if seed == "" {
+		return false, errors.New("coord/memory: a rebase needs a seed")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.rebases[seed]
+	switch {
+	case version == 0 && ok, version != 0 && (!ok || entry.version != version):
+		return false, nil
+	}
+	// DRAWN FROM THE STORE-WIDE COUNTER, like every versioned write here, so
+	// a version a caller holds can never name a later record.
+	f.version++
+	f.rebases[seed] = rebaseEntry{at: at.UTC(), version: f.version}
 	return true, nil
 }
 

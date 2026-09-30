@@ -437,8 +437,8 @@ func openCoordination(ctx context.Context, b *testing.B, q *js.Queue) {
 		RateWindow: coord.RateWindow, ClaimTTL: coord.ClaimTTL,
 		LedgerRetention: coord.LedgerRetention, FireRetention: coord.FireRetention,
 		FollowRetention: coord.FollowRetention, CooldownMax: coord.CooldownMax,
-		StatusFreshness: coord.StatusFreshness,
-		Replicas:        holdersPerPartition, Clustered: true,
+		StatusFreshness: coord.StatusFreshness, RebaseRetention: coord.RebaseRetention,
+		Replicas: holdersPerPartition, Clustered: true,
 	}); err != nil {
 		b.Fatalf("open the fleet's coordination buckets: %v", err)
 	}

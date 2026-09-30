@@ -51,6 +51,14 @@ import "time"
 // retry that happens to cross the line pays whatever the margin, so a smaller
 // margin would narrow a window nobody can close without widening the one that
 // loses writes.
+//
+// THE FLEET'S RECORD OF A REBASE MOVES WITH IT. The instant an attempt rebases
+// onto is recorded in the coordination store (coord.Rebases), whose bucket
+// forgets a record after coord.RebaseRetention — [OpsRetention] itself, so a
+// record outlives every attempt that could still inherit it and is gone once
+// none can. A change to this horizon or to the retention moves that age too;
+// coord cannot import this package (this package imports it), so what holds the
+// three together is coordtest's TestTheRetentionsOutlastWhatTheyCover.
 const MintHorizon = OpsRetention - 24*time.Hour
 
 // MintAt is the instant an attempt running at `at` mints its derived operation

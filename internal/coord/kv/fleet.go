@@ -358,7 +358,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why SEVENTEEN buckets and not one
+// # Why EIGHTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -391,6 +391,12 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
+//	rebases    the operation ledger's retention, a month: a rebase is
+//	           inherited only while it lies within the state log's mint
+//	           horizon of the attempt reading it, a day short of that, so
+//	           the bucket forgets a record exactly when no attempt could
+//	           still inherit it — and one forgotten sooner sends a retry to
+//	           mint anew and write again what the attempt before it wrote
 //	runs       none at all, a sharper version of the channels case: a run
 //	           parked on a person's answer waits DAYS, and its record is
 //	           the only thing that knows a billed box exists
@@ -449,6 +455,7 @@ const (
 	channelSuffix      = "_channels"
 	followsSuffix      = "_follows"
 	firesSuffix        = "_fires"
+	rebasesSuffix      = "_rebases"
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
@@ -493,6 +500,10 @@ type FleetConfig struct {
 	// the record, so the age is a true last-activity stamp.
 	FollowRetention time.Duration
 
+	// RebaseRetention is how long a unit of work's recorded rebase is kept
+	// — see [coord.RebaseRetention], which is what every deployment passes.
+	RebaseRetention time.Duration
+
 	// CooldownMax is the longest credential cooldown, and therefore the
 	// bucket's age: a cooldown is stored as its own end instant, so the
 	// bucket only has to outlive the longest one anybody sets.
@@ -535,6 +546,7 @@ func (c *FleetConfig) normalize() error {
 		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
+		{"RebaseRetention", c.RebaseRetention},
 		{"CooldownMax", c.CooldownMax},
 		{"StatusFreshness", c.StatusFreshness},
 	}
@@ -570,6 +582,7 @@ type FleetStore struct {
 	follows      jetstream.KeyValue
 	secrets      jetstream.KeyValue
 	fires        jetstream.KeyValue
+	rebases      jetstream.KeyValue
 	runs         jetstream.KeyValue
 	integrations jetstream.KeyValue
 	mailboxes    jetstream.KeyValue
@@ -619,7 +632,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, seventeen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -689,6 +702,9 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},
+		{&store.rebases, rebasesSuffix,
+			"Crewlet operation-id rebases; the bucket TTL outlasts the horizon a rebase is inherited within",
+			cfg.RebaseRetention},
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 		{&store.secrets, secretsSuffix,
@@ -2199,6 +2215,77 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 // reads it out of the bucket — and nothing branches on it.
 type fireRecord struct {
 	At time.Time `json:"at"`
+}
+
+// ---- the rebases -------------------------------------------------------- //
+
+// rebaseRecord is one recorded rebase on the wire.
+type rebaseRecord struct {
+	At time.Time `json:"at"`
+}
+
+// Rebase reads the instant recorded for a seed and the revision it was read
+// at, (zero, 0) where nothing is recorded.
+//
+// FROM THE LEADER, like every single-key read here ([FleetStore.get]): a
+// replica behind the quorum answers "not found" for a record a peer's attempt
+// wrote a moment ago, and "not found" is the answer that sends this attempt to
+// mint anew.
+func (f *FleetStore) Rebase(ctx context.Context, seed string) (time.Time, uint64, error) {
+	if seed == "" {
+		return time.Time{}, 0, errors.New("coord/kv: a rebase needs a seed")
+	}
+	entry, err := f.get(ctx, f.rebases, encodeKey(seed))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return time.Time{}, 0, nil
+	}
+	if err != nil {
+		return time.Time{}, 0, unavailable("read the rebase", err)
+	}
+	var rec rebaseRecord
+	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		// A record nobody can read is not "nothing recorded": answered as
+		// absent, the caller would mint anew over an instant an earlier
+		// attempt wrote under.
+		return time.Time{}, 0, fmt.Errorf("coord/kv: the rebase recorded for %q "+
+			"does not decode: %w", seed, err)
+	}
+	return rec.At.UTC(), entry.Revision(), nil
+}
+
+// RecordRebase writes a seed's instant, conditional on the revision read: 0
+// creates it only where nothing is recorded.
+func (f *FleetStore) RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error) {
+	if seed == "" {
+		return false, errors.New("coord/kv: a rebase needs a seed")
+	}
+	value, err := json.Marshal(rebaseRecord{At: at.UTC()})
+	if err != nil {
+		return false, fmt.Errorf("coord/kv: encode the rebase: %w", err)
+	}
+	if version == 0 {
+		_, err = f.create(ctx, f.rebases, encodeKey(seed), value)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyExists):
+			return false, nil
+		default:
+			return false, unavailable("record the rebase", err)
+		}
+	}
+	_, err = f.rebases.Update(ctx, encodeKey(seed), value, version)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		// A LOST RACE, not a fault: another attempt moved it since this
+		// one read it, or the bucket aged it out — and either way the
+		// caller reads again and decides from what is there now.
+		return false, nil
+	default:
+		return false, unavailable("record the rebase", err)
+	}
 }
 
 // ---- the detached sandbox runs ----------------------------------------- //

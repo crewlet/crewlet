@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The retentions have to stay consistent with the cadences they are sized
@@ -47,6 +48,24 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 		t.Errorf("coord.FireRetention %v can expire a claim a catchup pass could still "+
 			"evaluate (catchup ceiling %v), so a scheduled fire runs twice",
 			coord.FireRetention, schedule.DefaultCatchupMax)
+	}
+
+	// A rebase is inherited while it lies within the state log's mint
+	// horizon of the attempt reading it, and the bucket's age counts from
+	// the write, which is no earlier than the instant recorded. A bucket
+	// that ages a record out inside that horizon sends the attempt after it
+	// to mint anew — and to write a second copy of every write the attempt
+	// that recorded it made.
+	if coord.RebaseRetention <= statelog.MintHorizon {
+		t.Errorf("coord.RebaseRetention %v can age out a rebase an attempt must still "+
+			"inherit (mint horizon %v), so a retry writes its first attempt's writes twice",
+			coord.RebaseRetention, statelog.MintHorizon)
+	}
+	// And it is sized FROM the ledger's retention rather than beside it: a
+	// longer ledger lengthens the horizon, and the two must move together.
+	if coord.RebaseRetention != statelog.OpsRetention {
+		t.Errorf("coord.RebaseRetention %v has drifted from statelog.OpsRetention %v",
+			coord.RebaseRetention, statelog.OpsRetention)
 	}
 
 	// The thread-follow horizon is the one here that is not sized from

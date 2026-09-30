@@ -102,6 +102,23 @@ const (
 	// floor with it.
 	FireRetention = 7 * 24 * time.Hour
 
+	// RebaseRetention is how long a recorded rebase is kept — see
+	// [Rebases] — and so the bucket's age.
+	//
+	// THE OPERATION LEDGER'S OWN RETENTION (statelog.OpsRetention), which
+	// is a day past the horizon a rebase is inherited within
+	// (statelog.MintHorizon). An attempt inherits a recorded instant only
+	// while it lies within that horizon of the attempt's own clock, and the
+	// bucket's age is counted from the write, which is no earlier than the
+	// instant it records — so a record the bucket has aged out is one the
+	// rule would have replaced anyway. Shorter would forget an instant a
+	// retry still has to inherit, and the retry would mint anew and write
+	// again whatever the attempt before it wrote; longer keeps a record per
+	// rebased unit of work that nothing can ever read. This package cannot
+	// import the state log, so coordtest's retention guard holds the two
+	// together.
+	RebaseRetention = 30 * 24 * time.Hour
+
 	// CooldownMax is the longest credential cooldown anything sets, and
 	// therefore the bucket's age. A cooldown carries its own end instant,
 	// so the bucket only has to outlive the longest one.
@@ -769,6 +786,46 @@ type Fires interface {
 	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
 }
 
+// Rebases is the fleet's record of the instant a unit of work's derived
+// operation ids are minted at, for the work whose own start is too old for the
+// operation ledger to vouch for.
+//
+// A derived id carries the instant its work began, so a retry reproduces it;
+// an attempt that finds that instant past the state log's horizon mints at its
+// own instant instead (statelog.MintAt) and records it HERE, keyed by the seed
+// the ids are derived from — the work key, or the run where the turn has none.
+// Every later attempt at the same work reads it back and inherits it: a crash
+// re-run of a dispatched turn, a failed resume retried, the next half of a
+// turn a coding run parked. Each of those can run on another node — a crash
+// re-run lands wherever the seat's delivery is taken next, a resume on the
+// seat's next owner — so the record has to be the fleet's: on the node's own
+// database the successor found nothing, minted anew, and wrote a second copy
+// of every write the attempt before it made.
+//
+// A READ AND A CONDITIONAL WRITE, with the value typed. The rule deciding the
+// instant is the state log's, applied by the caller between the two, and the
+// condition is what makes two attempts racing on one seed agree: the loser's
+// write is refused, it reads the winner's instant, and the rule then keeps it.
+//
+// Retention is the bucket's age, [RebaseRetention].
+type Rebases interface {
+	// Rebase reads the instant recorded for seed and the version it was
+	// read at: the zero instant and version 0 where nothing is recorded.
+	//
+	// RAISES rather than answering "nothing", because "nothing" sends the
+	// caller to mint at its own instant — which, for a retry of an attempt
+	// that did record one, is a second copy of that attempt's every write.
+	Rebase(ctx context.Context, seed string) (time.Time, uint64, error)
+
+	// RecordRebase writes at as seed's instant, conditional on version:
+	// version 0 writes only where nothing is recorded, any other only
+	// where that version still holds. False is a LOST RACE — another
+	// attempt recorded first, or moved it since — and the caller reads
+	// again and re-decides, because the instant it would have replaced
+	// may be one it now has to inherit.
+	RecordRebase(ctx context.Context, seed string, at time.Time, version uint64) (bool, error)
+}
+
 // Record is one stored value with the version it was read at.
 //
 // The version is an OPAQUE token: pass back exactly what a read handed you.
@@ -1127,6 +1184,7 @@ type Fleet interface {
 	Channels
 	Follows
 	Fires
+	Rebases
 	SandboxRuns
 	Secrets
 	Integrations
