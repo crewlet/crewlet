@@ -702,17 +702,23 @@ func (s *stateLog) holdSnapshot(p statelog.PartitionID, h snapshotHeld) {
 	s.snapshots.Store(&next)
 }
 
-// keepSnapshotsOf forgets what the loop concluded about any partition not in
-// served: this node no longer takes artefacts of it, and its row must not go
-// on naming one as a donation.
-func (s *stateLog) keepSnapshotsOf(served []statelog.PartitionID) {
+// keepSnapshotsOf forgets what the loop concluded about any partition the scope
+// neither serves nor cannot tell about: this node no longer takes artefacts of
+// it, and its row must not go on naming one as a donation.
+//
+// ONE WHOSE HOLDING IS UNKNOWN IS KEPT. Not knowing whether this node serves a
+// partition for a pass is not having left it, and a report dropped on that
+// read stopped the row naming an artefact still on this node's disk — a donor
+// the trim's snapshot term then did not count — until the next pass that could
+// tell.
+func (s *stateLog) keepSnapshotsOf(scope snapshotScope) {
 	held := s.snapshots.Load()
 	if held == nil {
 		return
 	}
 	next := heldSnapshots{}
 	for p, h := range *held {
-		if slices.Contains(served, p) {
+		if slices.Contains(scope.served, p) || slices.Contains(scope.unknown, p) {
 			next[p] = h
 		}
 	}
@@ -3549,38 +3555,76 @@ func (e *Engine) snapshotterOf(s *stateLog, p statelog.PartitionID, dir string,
 	})
 }
 
-// servedPartitions is every partition this node runs a log of and SERVES now,
-// in the layout's order — the partitions its snapshot loop takes artefacts of.
-// A partition whose holding cannot be told is left out and said: a copy nobody
+// snapshotScope is what one pass of the snapshot loop finds this node running:
+// the partitions it serves now, in the layout's order — the ones it takes
+// artefacts of — and those it runs a log of and does not serve yet, or cannot
+// tell whether it does.
+type snapshotScope struct {
+	served []statelog.PartitionID
+
+	// unknown is every partition whose holding could not be told this pass.
+	unknown []statelog.PartitionID
+
+	// unsettled reports a partition this node runs a log of and does not
+	// serve, or cannot tell about: one it is joining or leaving, or whose
+	// answer a moment's blip withheld. The loop looks again soon rather
+	// than an interval later — see [Engine.snapshotLoop].
+	unsettled bool
+}
+
+// servedPartitions is what this node runs a log of and whether it SERVES each —
+// the partitions its snapshot loop takes artefacts of are the served ones. A
+// partition whose holding cannot be told is not taken and said: a copy nobody
 // can vouch this node serves is not one to offer a joiner.
-func (s *stateLog) servedPartitions() []statelog.PartitionID {
-	var out []statelog.PartitionID
+func (s *stateLog) servedPartitions() snapshotScope {
+	var out snapshotScope
+	var seen []statelog.PartitionID
 	for _, running := range s.running() {
 		p := running.id.Partition
-		if slices.Contains(out, p) {
+		if slices.Contains(seen, p) {
 			continue
 		}
+		seen = append(seen, p)
 		serving, err := s.holding.Serving(p)
-		if err != nil {
+		switch {
+		case err != nil:
 			log.WarnContext(s.run, "statelog_snapshot_holding_unknown", "partition", p.String(),
 				"error", err.Error(), "detail", "whether this node serves the partition "+
-					"is unknown, so no artefact of it is taken this round")
-			continue
-		}
-		if serving {
-			out = append(out, p)
+					"is unknown, so no artefact of it is taken this round; the loop "+
+					"looks again soon")
+			out.unknown = append(out.unknown, p)
+			out.unsettled = true
+		case serving:
+			out.served = append(out.served, p)
+		default:
+			out.unsettled = true
 		}
 	}
 	return out
 }
 
 // snapshotPlan is what the snapshot loop takes artefacts of, and how: the
-// partitions this node serves now, where each one's artefacts are, and a
-// snapshotter of each.
+// partitions this node serves now, where each one's artefacts are, a
+// snapshotter of each, and how soon a pass is retried.
 type snapshotPlan struct {
-	served func() []statelog.PartitionID
+	served func() snapshotScope
 	dir    func(statelog.PartitionID) string
 	taker  func(statelog.PartitionID) (snapshotTaker, error)
+
+	// retry is how soon a partition that could not be taken is tried again,
+	// and the longest the loop waits while a partition it runs a log of is
+	// unsettled. Zero is [snapshotSkipRetry], the loop's own; a case sets a
+	// shorter one rather than wait out thirty seconds.
+	retry time.Duration
+}
+
+// retryIn is the plan's retry, bounded by interval.
+func (p snapshotPlan) retryIn(interval time.Duration) time.Duration {
+	retry := p.retry
+	if retry == 0 {
+		retry = snapshotSkipRetry
+	}
+	return min(retry, interval)
 }
 
 // snapshotLoop takes one of every partition this node serves at boot, one at a
@@ -3627,6 +3671,19 @@ type snapshotPlan struct {
 // will refuse, so each wakes the loop at once ([stateLog.nudgeSnapshot]) and
 // makes EVERY partition due, rather than leaving it to whichever wait it is in
 // — the interval, a day by default, after a taken snapshot.
+//
+// # Nor may a partition the node does not serve yet wait out a day
+//
+// The loop takes the partitions this node SERVES, and which those are changes
+// while it runs: a node serves a partition only once its copy of it is
+// established, which is after this loop has started — at every boot — and a
+// moment's unanswered holding withholds a partition from one pass. A wait
+// measured only from the partitions served sat out the whole interval behind
+// the last one taken, or behind none: every restart took no artefact of what
+// the node came to serve for a day, while its row advertised none — and the
+// trim, whose snapshot term wants two donors of every log, blocked everywhere
+// after a rolling restart. So while any partition this node runs a log of is
+// unsettled, the wait is at most the retry.
 func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Duration) {
 	ctx := s.run
 	// WHAT THIS NODE HOLDS is what decides how LOUD a skip is, and the
@@ -3651,8 +3708,9 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 	reported := map[statelog.PartitionID]statelog.SkipReason{}
 	due := map[statelog.PartitionID]time.Time{}
 	for {
-		served := plan.served()
-		s.keepSnapshotsOf(served)
+		scope := plan.served()
+		served := scope.served
+		s.keepSnapshotsOf(scope)
 		for p := range due {
 			if !slices.Contains(served, p) {
 				delete(due, p)
@@ -3666,6 +3724,9 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 			due[p] = time.Now().Add(e.snapshotOne(ctx, s, plan, p, reported, interval))
 		}
 		wait := interval
+		if scope.unsettled {
+			wait = plan.retryIn(interval)
+		}
 		for _, p := range served {
 			wait = min(wait, max(time.Until(due[p]), 0))
 		}
@@ -3700,7 +3761,7 @@ func (e *Engine) snapshotOne(ctx context.Context, s *stateLog, plan snapshotPlan
 				"partition, so it can donate none of it; its other holders still can")
 		held := heldAfter(statelog.Manifest{}, err, dir, s.layout.Number, p)
 		s.holdSnapshot(p, held)
-		return min(snapshotSkipRetry, interval)
+		return plan.retryIn(interval)
 	}
 	m, err := snap.Take(ctx)
 	// THE REGISTER IS TOLD ON EVERY TICK, taken or skipped, because that row
@@ -3728,7 +3789,7 @@ func (e *Engine) snapshotOne(ctx context.Context, s *stateLog, plan snapshotPlan
 		emitNoSnapshot(ctx, p, reportForSkip(reason, reported[p], held.Have))
 		reported[p] = remembered(reason, held.Have)
 	}
-	return min(snapshotSkipRetry, interval)
+	return plan.retryIn(interval)
 }
 
 // oldestFirst is every partition of served that is due at now, the one whose

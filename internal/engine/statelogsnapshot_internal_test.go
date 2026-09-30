@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -440,8 +441,8 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 				defer close(done)
 				dir := t.TempDir()
 				(&Engine{}).snapshotLoop(s, snapshotPlan{
-					served: func() []statelog.PartitionID {
-						return []statelog.PartitionID{statelog.EstatePartition}
+					served: func() snapshotScope {
+						return snapshotScope{served: []statelog.PartitionID{statelog.EstatePartition}}
 					},
 					dir: func(statelog.PartitionID) string { return dir },
 					taker: func(statelog.PartitionID) (snapshotTaker, error) {
@@ -636,8 +637,10 @@ func TestTheLoopTakesEachServedPartitionOldestFirst(t *testing.T) {
 	go func() {
 		defer close(done)
 		(&Engine{}).snapshotLoop(s, snapshotPlan{
-			served: func() []statelog.PartitionID { return []statelog.PartitionID{p0, p1, p2} },
-			dir:    func(statelog.PartitionID) string { return t.TempDir() },
+			served: func() snapshotScope {
+				return snapshotScope{served: []statelog.PartitionID{p0, p1, p2}}
+			},
+			dir: func(statelog.PartitionID) string { return t.TempDir() },
 			taker: func(p statelog.PartitionID) (snapshotTaker, error) {
 				return takerFunc(func() (statelog.Manifest, error) {
 					mu.Lock()
@@ -692,12 +695,81 @@ func TestAPartitionNoLongerServedIsForgotten(t *testing.T) {
 	s := &stateLog{}
 	s.holdSnapshot(p0, snapshotHeld{Have: true})
 	s.holdSnapshot(p1, snapshotHeld{Have: true})
-	s.keepSnapshotsOf([]statelog.PartitionID{p1})
+	s.keepSnapshotsOf(snapshotScope{served: []statelog.PartitionID{p1}})
 	if _, held := s.snapshotOf(p0); held {
 		t.Error("a partition no longer served is still this node's donation")
 	}
 	if _, held := s.snapshotOf(p1); !held {
 		t.Error("the partition still served lost what the loop concluded about it")
+	}
+}
+
+// A PARTITION THIS NODE COMES TO SERVE AFTER ITS LOOP STARTED IS TAKEN WITHIN
+// THE RETRY, NOT A DAY LATER.
+//
+// A node serves a partition only once its copy is established — after the loop
+// has started, at every boot — so the loop's first pass finds a partition it
+// runs a log of and does not serve yet. Waiting only on the partitions served
+// then sat out the whole interval, and the node took no artefact of what it
+// came to serve for a day. While any partition is unsettled, the loop looks
+// again within the retry.
+func TestAPartitionServedAfterTheLoopStartsIsTakenSoon(t *testing.T) {
+	t.Parallel()
+	p := statelog.PartitionID{Space: statelog.SpaceTracker}
+	ctx, stop := context.WithCancel(t.Context())
+	s := &stateLog{run: ctx, snapshotNudge: make(chan struct{}, 1)}
+	var serves atomic.Bool
+	taker := &countingTaker{took: make(chan struct{}, 8), take: func() (statelog.Manifest, error) {
+		return statelog.Manifest{TakenAt: time.Now().UTC(), Partition: p.String()}, nil
+	}}
+	passes := make(chan struct{}, 64)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&Engine{}).snapshotLoop(s, snapshotPlan{
+			served: func() snapshotScope {
+				select {
+				case passes <- struct{}{}:
+				default:
+				}
+				if serves.Load() {
+					return snapshotScope{served: []statelog.PartitionID{p}}
+				}
+				// A JOINER: it runs the partition's log and does not
+				// serve it yet.
+				return snapshotScope{unsettled: true}
+			},
+			dir:   func(statelog.PartitionID) string { return t.TempDir() },
+			taker: func(statelog.PartitionID) (snapshotTaker, error) { return taker, nil },
+			retry: 20 * time.Millisecond,
+		}, 24*time.Hour)
+	}()
+	t.Cleanup(func() { stop(); <-done })
+	select {
+	case <-passes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop never looked at what it serves")
+	}
+	serves.Store(true)
+	taker.await(t, "the partition it came to serve")
+}
+
+// A PARTITION WHOSE HOLDING IS UNKNOWN KEEPS ITS REPORT, and one this node does
+// not serve loses it: not knowing for a pass whether this node serves a
+// partition is not having left it, and a report dropped on that read stopped
+// the row naming an artefact still on the node's disk.
+func TestAPartitionOfUnknownHoldingKeepsItsReport(t *testing.T) {
+	t.Parallel()
+	p := statelog.PartitionID{Space: statelog.SpaceTracker}
+	s := &stateLog{}
+	s.holdSnapshot(p, snapshotHeld{Have: true})
+	s.keepSnapshotsOf(snapshotScope{unknown: []statelog.PartitionID{p}, unsettled: true})
+	if _, held := s.snapshotOf(p); !held {
+		t.Fatal("a partition whose holding is unknown for a pass lost its report")
+	}
+	s.keepSnapshotsOf(snapshotScope{unsettled: true})
+	if _, held := s.snapshotOf(p); held {
+		t.Error("a partition this node does not serve kept its report")
 	}
 }
 

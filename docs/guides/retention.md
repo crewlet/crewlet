@@ -283,7 +283,11 @@ whole estate, as it has always been; under a [partitioned
 layout](../concepts/estate-placement.md) a node takes one artefact of each
 partition it serves, one at a time — the partition whose newest artefact is
 oldest first — each on `snapshot_interval` and each judged against its own
-file's size for free space. Its manifest names the partition and the layout it
+file's size for free space. A partition the node runs and does not serve yet
+— at every boot until its copy is established, while it joins one, or while
+whether it serves one cannot be told — is looked at again every thirty seconds
+rather than an interval later, and an artefact it already holds of a partition
+whose holding is only unknown for a moment stays advertised. Its manifest names the partition and the layout it
 is a copy of, and every log of that partition: a joiner refuses an artefact of
 another partition, or one naming a log its partition does not carry, before a
 byte moves, and a donor answers only for a partition it serves. A request that
