@@ -2286,7 +2286,7 @@ const ReprocessPage = 256
 // already running.
 func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 	var after int64
-	var applied, kept int
+	var applied, gated, kept int
 	for {
 		var page []retained
 		if err := r.db.Read(ctx, func(tx *sql.Tx) error {
@@ -2321,40 +2321,53 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Payload:  row.payload,
 				StoredAt: row.storedAt,
 			}
-			landed, err := r.reprocessOne(ctx, w, rec)
-			if err != nil {
+			landed, dropped, err := r.reprocessOne(ctx, w, rec)
+			switch {
+			case err != nil:
 				return err
-			}
-			if landed {
-				applied++
-				r.applier.Committed(ctx)
-			} else {
+			case !landed:
 				kept++
+				continue
+			case dropped:
+				// A GATE DROPPED IT, which the build that retained it
+				// could not ask — and that is not a reprocess: it
+				// wrote no row, so it is counted as the live loop
+				// counts one, under `gated`, beside the gate's own
+				// counter.
+				gated++
+			default:
+				applied++
 			}
+			r.applier.Committed(ctx)
 		}
 	}
-	if applied == 0 && kept == 0 {
+	if applied == 0 && gated == 0 && kept == 0 {
 		return nil
 	}
 	if err := r.refreshDeferred(ctx); err != nil {
 		return err
 	}
 	r.logger.InfoContext(ctx, "statelog_retained_reprocessed",
-		"domain", r.domain.Name(), "applied", applied, "kept", kept,
-		"build_reads", r.domain.RecordVersion())
-	if applied > 0 && r.metrics != nil {
-		r.metrics.Add(metrics.StatelogApplyRecords, uint64(applied),
-			metrics.Attrs{"domain": r.domain.Name(), "result": "reprocessed"})
+		"domain", r.domain.Name(), "applied", applied, "gated", gated,
+		"kept", kept, "build_reads", r.domain.RecordVersion())
+	if r.metrics != nil {
+		for result, n := range map[string]int{"reprocessed": applied, "gated": gated} {
+			if n > 0 {
+				r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),
+					metrics.Attrs{"domain": r.domain.Name(), "result": result})
+			}
+		}
 	}
 	return nil
 }
 
 // reprocessOne applies one retained record unless an earlier retained record
-// still covers it, reporting whether it landed.
-func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, error) {
-	landed := false
+// still covers it, reporting whether it landed — released from the retained
+// table — and whether a gate dropped it rather than applied it.
+func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, bool, error) {
+	var landed, gated bool
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		landed = false
+		landed, gated = false, false
 		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
 			return err
 		} else if covered {
@@ -2363,20 +2376,21 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		opts := r.opts
 		opts.Now = r.now()
 		opts.MaxVariables = r.db.Caps().MaxVariables
-		if _, _, err := r.applyOne(ctx, tx, rec, opts); err != nil {
+		_, dropped, err := r.applyOne(ctx, tx, rec, opts)
+		if err != nil {
 			return err
 		}
 		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
 			return err
 		}
-		landed = true
+		landed, gated = true, dropped
 		return nil
 	})
 	if err != nil {
-		return false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
+		return false, false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
 			rec.Position, err)
 	}
-	return landed, nil
+	return landed, gated, nil
 }
 
 // nextRun fills a run toward the transaction budget, starting from whatever

@@ -285,7 +285,9 @@ func Catalogue() []Instrument {
 			Attributes: []string{"domain", "result"},
 			Shows: "Records consumed, by what happened to them: applied, " +
 				"retained, gated, skipped, or reprocessed by a build that could " +
-				"read what an earlier one retained. A node applying nothing " +
+				"read what an earlier one retained — a retained record a gate " +
+				"drops when it is reprocessed is counted `gated`, as it would " +
+				"have been live, since it wrote no row. A node applying nothing " +
 				"while its position advances is healthy on lag alone.",
 		},
 		{

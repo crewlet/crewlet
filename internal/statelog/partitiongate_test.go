@@ -317,4 +317,25 @@ func TestAReprocessedRecordAnotherPartitionOwnsIsGated(t *testing.T) {
 			t.Errorf("the ledger holds %s: %v, want %v", op, held, applied)
 		}
 	}
+	// AND COUNTED AS THE LIVE LOOP COUNTS IT: a record a gate dropped wrote
+	// no row, so it is `gated` and not `reprocessed` — a reprocess tally
+	// that took every released record for an applied one reported rows
+	// this node does not hold.
+	for result, want := range map[string]uint64{"reprocessed": 1, "gated": 1} {
+		if got := appliedAs(h, result); got != want {
+			t.Errorf("the upgraded build counted %d record(s) %q, want %d", got,
+				result, want)
+		}
+	}
+}
+
+// appliedAs is how many records the runner counted consumed with result.
+func appliedAs(h *applyHarness, result string) uint64 {
+	var total uint64
+	for _, snapshot := range h.metrics.Read() {
+		if snapshot.Name == metrics.StatelogApplyRecords && snapshot.Attrs["result"] == result {
+			total += snapshot.Total
+		}
+	}
+	return total
 }
