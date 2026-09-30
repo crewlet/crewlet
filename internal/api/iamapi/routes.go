@@ -1,8 +1,6 @@
 package iamapi
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -25,14 +24,6 @@ import (
 // be: every route here is guarded, reads included, for the reason /secrets
 // guards its listing.
 const Prefix = "/iam/"
-
-// IdempotencyHeader carries an operation id back on a retry.
-//
-// THE SAME SPELLING /chart USES, because a caller retrying an identity write
-// and a caller retrying a chart write are the same script: a fresh id would
-// defeat the ledger that makes the retry safe, so the answer to an `unknown`
-// carries the id and the route accepts it back.
-const IdempotencyHeader = "Idempotency-Key"
 
 // Routes registers the fifteen on a mux.
 //
@@ -214,7 +205,7 @@ type operation struct {
 // swept anything — and every step the domain derives from the id
 // ([statelog.StepOpID]) inherited the same nothing. So a fresh key is minted
 // through [statelog.NewOpID], and a caller's is held to
-// [statelog.CheckCallerOpID] and refused naming it ([refuseKey]).
+// [statelog.CheckCallerOpID] and refused naming it ([opkey.Key]).
 //
 // # The published id is bound to the request
 //
@@ -241,17 +232,11 @@ type operation struct {
 func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 	asks any) (operation, bool) {
 
-	key := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
-	switch {
-	case key == "":
-		key = statelog.NewOpID(s.now(), "")
-	default:
-		if err := statelog.CheckCallerOpID(key); err != nil {
-			refuseKey(w, err)
-			return operation{}, false
-		}
+	key, ok := opkey.Key(w, r, s.now())
+	if !ok {
+		return operation{}, false
 	}
-	digest, err := requestDigest(r, asks)
+	digest, err := opkey.Digest(r, asks)
 	if err != nil {
 		// A BODY THAT DECODED AND WILL NOT ENCODE is a type this surface
 		// declared wrongly, not the caller's to fix.
@@ -261,49 +246,6 @@ func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 		return operation{}, false
 	}
 	return operation{key: key, id: statelog.StepOpID(key, name, digest)}, true
-}
-
-// requestDigest is what binds a gesture's operation to its request: the path
-// (the object), the query and the decoded body, in a form one request always
-// produces — the body re-encoded from its decoded value, so the same fields in
-// another order or spacing are the same request.
-//
-// SIXTEEN HEX DIGITS, 64 bits of SHA-256: it tells an accidental change of
-// request apart with certainty, which is all it is for — a caller can mint any
-// key it likes, so this is not a credential — in an id that is published in
-// every record and ledger row the gesture makes.
-func requestDigest(r *http.Request, asks any) (string, error) {
-	body, err := json.Marshal(asks)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	for _, part := range [][]byte{[]byte(r.URL.Path),
-		[]byte(r.URL.Query().Encode()), body} {
-		_, _ = h.Write(part)
-		_, _ = h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))[:requestDigestLen], nil
-}
-
-// requestDigestLen is how many hex digits of a request's digest its operation
-// carries — see [requestDigest].
-const requestDigestLen = 16
-
-// refuseKey answers an `Idempotency-Key` this surface cannot publish under:
-// `400 op_id_invalid`, naming the header and the rule, with nothing read or
-// written — a key outside the grammar, and a create's key carrying anything
-// after its uuid7 ([Service.createKey]).
-//
-// [httpjson.CodeOpIDInvalid], THE ONE CODE EVERY SURFACE REFUSES A CALLER'S
-// OPERATION ID WITH — the node gate's `?op_id=`, the org chart's and the human
-// write surface's keys, this one — so a client branches on one spelling
-// whichever route it sent the id to. It was `invalid_input`, from before the
-// table carried a code of its own for it. The field still names the header,
-// and the detail says which rule the key broke.
-func refuseKey(w http.ResponseWriter, err error) {
-	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
-		httpjson.Detail{"field": IdempotencyHeader, "detail": err.Error()})
 }
 
 // createKey is the operation key a CREATE is published under — the caller's
@@ -328,22 +270,20 @@ func refuseKey(w http.ResponseWriter, err error) {
 // would be a second key naming the same person. The fresh one is minted
 // through [statelog.NewOpID] with no name, for the same reason.
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (string, bool) {
-	given := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
-	if given == "" {
-		return statelog.NewOpID(s.now(), ""), true
-	}
-	if err := statelog.CheckCallerOpID(given); err != nil {
-		refuseKey(w, err)
+	key, ok := opkey.Key(w, r, s.now())
+	if !ok {
 		return "", false
 	}
-	if id, err := uuid.Parse(given); err != nil || id.Version() != 7 {
-		refuseKey(w, fmt.Errorf("the %s on a create is the seed of the id it "+
+	// A FRESH KEY IS ONE ALREADY: [statelog.NewOpID] with no name is a bare
+	// uuid7, so only a caller's can fail this.
+	if id, err := uuid.Parse(key); err != nil || id.Version() != 7 {
+		opkey.Refuse(w, fmt.Errorf("the %s on a create is the seed of the id it "+
 			"creates, so it is a bare uuid7 with nothing after it — send back "+
 			"the op_id the first attempt answered with, or omit it for a new "+
-			"create", IdempotencyHeader))
+			"create", opkey.Header))
 		return "", false
 	}
-	return given, true
+	return key, true
 }
 
 // unavailable answers a read this node could not perform.
@@ -586,7 +526,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		detail := httpjson.Detail{
 			"detail": "this node cannot establish what happened to this " +
 				"change. Retry it with the SAME operation id — send it back " +
-				"as the " + IdempotencyHeader + " header — because a fresh " +
+				"as the " + opkey.Header + " header — because a fresh " +
 				"one would defeat the ledger that makes the retry safe.",
 			"op_id": opID,
 		}
@@ -600,7 +540,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			detail["detail"] = "this node's operation ledger cannot vouch " +
 				"for this change, so the same request asked here answers the " +
 				"same way until the change reaches this node. Read whether it " +
-				"landed, or send it with the SAME " + IdempotencyHeader +
+				"landed, or send it with the SAME " + opkey.Header +
 				" to another node; never under a fresh one, which is a second " +
 				"change if the first one landed."
 			detail["unvouched"] = true

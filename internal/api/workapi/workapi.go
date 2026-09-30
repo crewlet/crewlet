@@ -126,6 +126,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -136,13 +137,6 @@ import (
 )
 
 var log = logging.Get("api.workapi")
-
-// IdempotencyHeader carries a caller's operation key.
-//
-// THE SAME SPELLING /chart AND /iam USE, because a script retrying any write
-// on this engine is one script: the answer to an `unknown` carries the key
-// and the route accepts it back.
-const IdempotencyHeader = "Idempotency-Key"
 
 // MaxBodyBytes bounds one request body.
 //
@@ -453,57 +447,20 @@ func unavailableFor(w http.ResponseWriter, cause error, detail string,
 // operationKey is the seed every write this request makes derives its
 // operation id from: the caller's own where they sent one, and fresh where
 // they did not — which is then handed back, so a retry can send it. It answers
-// false once it has refused a key that is not one.
+// false once it has refused a key that is not one ([opkey.Key]).
 //
-// # An operation id the engine's grammar minted, or none
-//
-// Every id a write derives from the key carries the KEY'S instant
-// ([statelog.OpMintedAt]) — the tracker's through [builtin.Actor.WorkSince],
-// the knowledge base's inside [pages.Store] — and the publisher vouches for a
-// retry by that instant against the point its operation ledger may have lost
-// rows from. A key minted outside the grammar carries none and reads as minted
-// at the epoch, before every loss the ledger will ever have: once it had swept
-// anything, each such write was answered `unknown` without being published, on
-// the first attempt and on every retry. This surface minted one exactly like
-// that for every request that sent no key — a v4 uuid — and passed a caller's
-// through unread, so both halves of the rule are here: a fresh key is minted
-// through [statelog.NewOpID], and a key a caller sends is held to
-// [statelog.CheckCallerOpID], the one rule every surface that takes one holds
-// it to, and refused naming it rather than published into a write nothing
-// could ever settle. The knowledge base refuses such a key itself
-// ([pages.ErrInvalid] on `actor.op_key`), so without this every page write
-// through this surface was refused.
+// Every id a write derives from the key carries the KEY'S instant — the
+// tracker's through [builtin.Actor.WorkSince], the knowledge base's inside
+// [pages.Store] — which is what the publisher vouches for a retry by; the
+// knowledge base refuses a key outside the grammar itself ([pages.ErrInvalid]
+// on `actor.op_key`), so without the check every page write through this
+// surface was refused.
 //
 // BARE, with no name: the key is a SEED rather than the id of any one write —
 // each write derives its own, named for its verb and its object — so a name
 // here would label nothing in the ledger.
 func operationKey(w http.ResponseWriter, r *http.Request) (string, bool) {
-	given := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
-	if given == "" {
-		return statelog.NewOpID(time.Now(), ""), true
-	}
-	if err := statelog.CheckCallerOpID(given); err != nil {
-		refuseKey(w, err)
-		return "", false
-	}
-	return given, true
-}
-
-// refuseKey answers an `Idempotency-Key` outside the operation-id grammar:
-// `400 op_id_invalid`, naming the header and the rule, with nothing read or
-// written.
-//
-// [httpjson.CodeOpIDInvalid], THE ONE CODE EVERY SURFACE REFUSES A CALLER'S
-// OPERATION ID WITH — the node gate's `?op_id=`, the org chart's and the
-// identity directory's keys, this one — so a client branches on one spelling
-// for "the id you sent is not one this engine would have minted" whichever
-// route it sent it to. It was `invalid_input`, from before the table carried a
-// code of its own for it, which left the same mistake two codes apart. The
-// field still names the header, because a key is sent there rather than in the
-// body or the query.
-func refuseKey(w http.ResponseWriter, err error) {
-	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
-		httpjson.Detail{"field": IdempotencyHeader, "detail": err.Error()})
+	return opkey.Key(w, r, time.Now())
 }
 
 // keyedOp is the operation id of one write this surface makes ITSELF — a rank
@@ -631,7 +588,7 @@ func noOperationArg(w http.ResponseWriter, args map[string]any) bool {
 	}
 	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 		map[string]string{"detail": "this surface takes the operation from the " +
-			IdempotencyHeader + " header, which every write the request makes " +
+			opkey.Header + " header, which every write the request makes " +
 			"derives its id from; leave `" + operationArg + "` out of the body " +
 			"and send the op_id an earlier answer returned as the header"})
 	return false
@@ -775,7 +732,7 @@ func subtreeStoppedHere(receipt map[string]any) {
 		"it as done. To finish it, send this request again under a NEW %s, or "+
 		"none: a new operation decides each task afresh, so whatever has not "+
 		"followed yet goes and what already has is left where it is.",
-		key, done, int(followed), int(total), IdempotencyHeader)
+		key, done, int(followed), int(total), opkey.Header)
 }
 
 // moveStoppedHere rewrites a stopped move's instruction for THIS surface.
@@ -932,14 +889,14 @@ func unknownOutcome(w http.ResponseWriter, key string, unvouched bool, what stri
 
 	retry := authz.RetryUndecidedSeconds
 	next := "Retry it with the SAME key — send op_id back as the " +
-		IdempotencyHeader + " header — because a fresh one would defeat the " +
+		opkey.Header + " header — because a fresh one would defeat the " +
 		"ledger that makes the retry safe."
 	if unvouched {
 		retry = 0
 		next = "This node's operation ledger cannot vouch for this change, so " +
 			"the same request asked here answers the same way until the change " +
 			"reaches this node. Read whether it landed, or send it with the SAME " +
-			IdempotencyHeader + " to another node; never under a fresh key, " +
+			opkey.Header + " to another node; never under a fresh key, " +
 			"which is a second change if the first one landed."
 	}
 	body := httpjson.Detail{}
@@ -1047,8 +1004,8 @@ func refusedFor(err error, reason statelog.Reason) bool {
 // carrying the key.
 func refuseReusedKey(w http.ResponseWriter, detail, key string) {
 	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput,
-		httpjson.Detail{"field": IdempotencyHeader, "op_id": key,
-			"detail": detail + " — under this " + IdempotencyHeader + " the " +
+		httpjson.Detail{"field": opkey.Header, "op_id": key,
+			"detail": detail + " — under this " + opkey.Header + " the " +
 				"write already landed on something else, since what this " +
 				"request names has changed; read it again and send this one " +
 				"under a new key"})

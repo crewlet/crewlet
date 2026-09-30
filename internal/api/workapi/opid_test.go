@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/workapi"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -69,13 +69,13 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 				t.Parallel()
 				r := newRig(t, chart{})
 				got := r.do(as(admin("ana")), c.method, c.target, c.body,
-					workapi.IdempotencyHeader, key)
+					opkey.Header, key)
 				if got.status != http.StatusBadRequest ||
 					got.body["error"] != string(httpjson.CodeOpIDInvalid) ||
 					got.body["message"] != httpjson.CodeOpIDInvalid.Message() ||
-					got.body["field"] != workapi.IdempotencyHeader {
+					got.body["field"] != opkey.Header {
 					t.Fatalf("answered %d %v, want 400 op_id_invalid naming %s",
-						got.status, got.body, workapi.IdempotencyHeader)
+						got.status, got.body, opkey.Header)
 				}
 				if len(r.writes.opIDs) != 0 || len(r.kb.did) != 0 {
 					t.Errorf("a refused key still wrote %v %v", r.writes.opIDs,
@@ -109,7 +109,7 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 			t.Parallel()
 			headers := []string{}
 			if key != "" {
-				headers = []string{workapi.IdempotencyHeader, key}
+				headers = []string{opkey.Header, key}
 			}
 			r := newRig(t, chart{})
 
@@ -192,7 +192,7 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 					Unvouched: unvouched}
 				key := statelog.NewOpID(time.Now(), "")
 				got := r.do(as(admin("ana")), c.method, c.target, c.body,
-					workapi.IdempotencyHeader, key)
+					opkey.Header, key)
 				if got.status != http.StatusServiceUnavailable || got.body["op_id"] != key {
 					t.Fatalf("answered %d %v, want 503 carrying the key", got.status,
 						got.body)
@@ -265,10 +265,10 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 			got.status, got.body)
 	}
 	if strings.Contains(stopped, "op_id") ||
-		!strings.Contains(stopped, workapi.IdempotencyHeader) ||
+		!strings.Contains(stopped, opkey.Header) ||
 		!strings.Contains(stopped, "2 of the 5") {
 		t.Errorf("the instruction is %q, want it to name a new %s and the "+
-			"counts", stopped, workapi.IdempotencyHeader)
+			"counts", stopped, opkey.Header)
 	}
 }
 
@@ -427,11 +427,11 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 				Detail: "that operation names another record"}
 			key := statelog.NewOpID(time.Now(), "")
 			got := r.do(as(admin("ana")), c.method, c.target, c.body,
-				workapi.IdempotencyHeader, key)
+				opkey.Header, key)
 			if got.status != http.StatusConflict ||
-				got.body["field"] != workapi.IdempotencyHeader || got.body["op_id"] != key {
+				got.body["field"] != opkey.Header || got.body["op_id"] != key {
 				t.Errorf("answered %d %v, want 409 naming %s", got.status, got.body,
-					workapi.IdempotencyHeader)
+					opkey.Header)
 			}
 		})
 	}
@@ -518,7 +518,7 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 				if reason, isReason := body.(string); isReason {
 					target, body = target+strings.ReplaceAll(reason, " ", "+"), nil
 				}
-				headers := append([]string{workapi.IdempotencyHeader, key},
+				headers := append([]string{opkey.Header, key},
 					c.headers...)
 				if got := r.do(as(admin("ana")), c.method, target, body,
 					headers...); got.status != http.StatusOK {

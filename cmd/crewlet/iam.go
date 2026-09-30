@@ -15,7 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -558,7 +558,7 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.key != "" && method != http.MethodGet {
-		req.Header.Set(iamapi.IdempotencyHeader, c.key)
+		req.Header.Set(opkey.Header, c.key)
 	}
 	// NO ORIGIN, deliberately. The node's cross-site check admits a
 	// BEARER with none — a browser cannot make one travel — and refuses a

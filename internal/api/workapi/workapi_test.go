@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -239,7 +240,7 @@ func TestARetryUnderTheSameKeyIsTheSameOperation(t *testing.T) {
 	}
 	retry := r.do(as(admin("ana")), http.MethodPost, "/work/items",
 		map[string]any{"title": "rotate the key", "project": "ENG"},
-		workapi.IdempotencyHeader, key)
+		opkey.Header, key)
 	if got, _ := retry.body["op_id"].(string); got != key {
 		t.Errorf("the retry answered op_id %q, want the key it was sent %q", got, key)
 	}
@@ -525,7 +526,7 @@ func TestAPurgeIsConfirmedAgainstTheItemItNames(t *testing.T) {
 	key := statelog.NewOpID(time.Now(), "")
 	got := r.do(as(operator), http.MethodPost,
 		"/work/items/t-1/purge?confirm=eng-1&reason=an+erasure+request", nil,
-		workapi.IdempotencyHeader, key)
+		opkey.Header, key)
 	if got.status != http.StatusOK {
 		t.Fatalf("the purge answered %d: %v", got.status, got.body)
 	}
@@ -536,7 +537,7 @@ func TestAPurgeIsConfirmedAgainstTheItemItNames(t *testing.T) {
 	// operation, which carries the key's own instant.
 	again := r.do(as(operator), http.MethodPost,
 		"/work/items/t-1/purge?confirm=eng-1&reason=an+erasure+request", nil,
-		workapi.IdempotencyHeader, key)
+		opkey.Header, key)
 	if again.status != http.StatusOK || r.writes.opIDs[1] != r.writes.opIDs[0] {
 		t.Errorf("the retry under the same key was published as %q after %q",
 			r.writes.opIDs[1], r.writes.opIDs[0])

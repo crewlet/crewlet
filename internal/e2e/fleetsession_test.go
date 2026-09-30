@@ -16,8 +16,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/stream"
-	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -457,7 +457,7 @@ func (b *browser) sendKeyed(n *node, method, path, key string, body any) (int, m
 		req.Header.Set("Origin", deploymentURL)
 	}
 	if key != "" {
-		req.Header.Set(workapi.IdempotencyHeader, key)
+		req.Header.Set(opkey.Header, key)
 	}
 	for _, c := range b.jar() {
 		req.AddCookie(c)

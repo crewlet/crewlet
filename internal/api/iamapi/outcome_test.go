@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -124,7 +125,7 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 
 			r.writer.outcomes = nil
 			retry := r.asWith(administrator(), http.MethodPost, tc.target,
-				tc.body, http.Header{iamapi.IdempotencyHeader: {key}})
+				tc.body, http.Header{opkey.Header: {key}})
 			if retry.status/100 != 2 {
 				t.Fatalf("the retry answered %d: %v", retry.status, retry.body)
 			}
@@ -137,7 +138,7 @@ func TestACreateRetriedUnderItsKeyNamesWhatItsFirstAttemptCreated(t *testing.T) 
 				// retry hands back the invitation the first attempt may
 				// have issued.
 				again := r.asWith(administrator(), http.MethodPost, tc.target,
-					tc.body, http.Header{iamapi.IdempotencyHeader: {key}})
+					tc.body, http.Header{opkey.Header: {key}})
 				if tc.created(r, retry) == "" ||
 					tc.created(r, again) != tc.created(r, retry) {
 					t.Errorf("two retries under one key answered invitations "+
@@ -160,7 +161,7 @@ func TestACreatesKeyThatIsNoUUID7IsRefused(t *testing.T) {
 	for _, target := range []string{"/iam/people", "/iam/invitations"} {
 		got := r.asWith(administrator(), http.MethodPost, target,
 			map[string]any{"login": "dana.sre", "email": "dana@example.com"},
-			http.Header{iamapi.IdempotencyHeader: {"retry-1"}})
+			http.Header{opkey.Header: {"retry-1"}})
 		if got.status != http.StatusBadRequest {
 			t.Errorf("%s under the key retry-1 answered %d, want 400", target,
 				got.status)

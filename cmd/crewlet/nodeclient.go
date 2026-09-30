@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -142,14 +143,10 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 func (c *nodeClient) postKeyed(ctx context.Context, path, key string, into any) error {
 	header := http.Header{}
 	if key = strings.TrimSpace(key); key != "" {
-		header.Set(idempotencyHeader, key)
+		header.Set(opkey.Header, key)
 	}
 	return c.send(ctx, http.MethodPost, path, header, into)
 }
-
-// idempotencyHeader is the header every write surface on a node reads an
-// operation key from.
-const idempotencyHeader = "Idempotency-Key"
 
 // maxNodeResponseBytes bounds one answer read back from a node.
 //

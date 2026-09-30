@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -45,7 +46,7 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 	mux.HandleFunc("POST /work/items/{key}/purge", func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.item, n.query = r.PathValue("key"), r.URL.Query()
-		n.key = r.Header.Get(idempotencyHeader)
+		n.key = r.Header.Get(opkey.Header)
 		status, outcome, unvouched, hangUp := n.status, n.outcome, n.unvouched, n.hangUp
 		n.mu.Unlock()
 		if hangUp {
@@ -61,7 +62,7 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 		body := map[string]any{
 			"task": "t-1", "key": r.URL.Query().Get("confirm"),
 			"project": "ENG", "outcome": outcome,
-			"op_id": r.Header.Get(idempotencyHeader),
+			"op_id": r.Header.Get(opkey.Header),
 		}
 		switch {
 		case status == http.StatusServiceUnavailable && outcome == "unknown":
@@ -73,7 +74,7 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 		case status == http.StatusServiceUnavailable:
 			// A REFUSAL, which carries the key and no receipt.
 			body = map[string]any{"error": "unavailable",
-				"op_id":  r.Header.Get(idempotencyHeader),
+				"op_id":  r.Header.Get(opkey.Header),
 				"detail": "the log is full"}
 		default:
 			body["position"] = "CREWLET_TRACKER_LOG:1:918280009"
@@ -147,7 +148,7 @@ func TestWorkPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	// instant a retry is judged by, or the node refuses it.
 	if err := statelog.CheckCallerOpID(key); err != nil {
 		t.Errorf("the %s is %q, want an id the command minted as a node "+
-			"would: %v", idempotencyHeader, key, err)
+			"would: %v", opkey.Header, key, err)
 	}
 	if !strings.Contains(stdout, "(operation "+key+")") {
 		t.Errorf("the purge never names the operation it ran under:\n%s", stdout)

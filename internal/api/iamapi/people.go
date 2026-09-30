@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -241,7 +242,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 					"id": person, "landed": []string{"person"},
 					"detail": "the person was created and nothing can say " +
 						"whether the seat binding landed; retry with the same " +
-						IdempotencyHeader + ", or bind them with PATCH " +
+						opkey.Header + ", or bind them with PATCH " +
 						"/iam/people/" + person,
 				})
 			return
@@ -616,7 +617,7 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 				"id": id,
 				"detail": "the second factor was cleared and nothing says the " +
 					"sessions were ended; retry with the same " +
-					IdempotencyHeader + ", or end them with DELETE " +
+					opkey.Header + ", or end them with DELETE " +
 					"/iam/people/" + id + "/sessions",
 			})
 		return

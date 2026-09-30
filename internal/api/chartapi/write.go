@@ -2,15 +2,13 @@ package chartapi
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -287,7 +285,7 @@ func (s *Service) answerWrite(w http.ResponseWriter, op operation,
 		// names its object ([Service.operation]), so this is the ledger's
 		// guard rather than an answer a request can be expected to meet.
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput,
-			httpjson.Detail{"field": IdempotencyHeader, "op_id": opID,
+			httpjson.Detail{"field": opkey.Header, "op_id": opID,
 				"detail": err.Error()})
 		return
 	case errors.Is(err, statelog.ErrUnavailable):
@@ -315,7 +313,7 @@ func (s *Service) answerWrite(w http.ResponseWriter, op operation,
 		detail := httpjson.Detail{
 			"detail": "this node cannot establish what happened to this " +
 				"change. Retry it with the SAME operation id — send it back " +
-				"as the " + IdempotencyHeader + " header — because a fresh " +
+				"as the " + opkey.Header + " header — because a fresh " +
 				"one would defeat the ledger that makes the retry safe.",
 			"op_id": opID,
 		}
@@ -325,7 +323,7 @@ func (s *Service) answerWrite(w http.ResponseWriter, op operation,
 			detail["detail"] = "this node's operation ledger cannot vouch for " +
 				"this change, so the same request asked here answers the same " +
 				"way until the change reaches this node. Read whether it " +
-				"landed, or send it with the SAME " + IdempotencyHeader +
+				"landed, or send it with the SAME " + opkey.Header +
 				" to another node; never under a fresh one, which is a second " +
 				"change if the first one landed."
 			detail["unvouched"] = true
@@ -422,12 +420,8 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return out, true
 }
 
-// IdempotencyHeader is how a caller retries a write whose outcome this node
-// could not establish.
-const IdempotencyHeader = "Idempotency-Key"
-
 // operation is one write's two operation ids: the KEY a caller holds — the
-// one an answer hands back and a retry sends as the Idempotency-Key — and the
+// one an answer hands back and a retry sends as the [opkey.Header] — and the
 // id the write is PUBLISHED under, derived from the key and the request
 // ([Service.operation]).
 type operation struct {
@@ -446,40 +440,21 @@ type operation struct {
 // key BACK. An `unknown` outcome says nothing can be established from this
 // node, and the only safe retry is under the same key — a fresh one would
 // write the change twice if the first had in fact landed. So every answer
-// carries the key and this reads it back.
-//
-// # An operation id the engine's grammar minted, both ways
-//
-// The publisher vouches for a retry by the INSTANT its operation id carries
-// ([statelog.OpMintedAt]), against the point this node's operation ledger may
-// have lost rows from. This surface minted a v4 uuid and took any caller's
-// value up to a length as it stood — "the ledger keys on the string" — and
-// neither carries an instant: read as minted at the epoch, every such write was
-// answered `unknown` without being published once the ledger had swept
-// anything, on the first attempt and on every retry. So a fresh key is minted
-// through [statelog.NewOpID], and a caller's is held to
-// [statelog.CheckCallerOpID] — the one rule every surface holds a caller's id
-// to — and refused naming it rather than ignored: ignoring it published under
-// a fresh id, which is the double write the key was sent to prevent.
+// carries the key and this reads it back, held to the engine's grammar
+// ([opkey.Key]).
 //
 // # The published id is bound to the request
 //
-// The ledger answers an operation it already holds BEFORE the write is
-// decided ([statelog.Result.Collapsed]), so a write published under the key
-// itself made the same key sent with ANOTHER body — a seat's goal edited again,
-// a unit renamed to something else — the first request's operation: answered
-// `applied`, with nothing of the second written. That is a change reported as
-// made and silently dropped, and nothing in the request could have told the
-// caller: the dashboard mints its own keys, and a script retrying with the key
-// an answer handed back need only have changed a flag. So the write is
-// published under a STEP of the key ([statelog.StepOpID]) named for the verb
-// and a digest of the request — the object its path names, its query and its
-// decoded body — which makes the same request the same operation however often
-// it is sent, and any other request under the key an operation of its own that
-// lands as asked. A step, rather than an id derived afresh, because it keeps
-// the key as its prefix: the trail finds every write a key made by the key the
-// caller holds. It inherits the key's instant, which is what the ledger
-// vouches for.
+// The write is published under a STEP of the key ([statelog.StepOpID]) named
+// for the verb and the request's digest ([opkey.Digest]), so the same request
+// is the same operation however often it is sent and any other request under
+// the key — a seat's goal edited again, a unit renamed to something else —
+// lands as asked rather than being answered from the first one's ledger row.
+// The dashboard mints its own keys, and a script retrying with the key an
+// answer handed back need only have changed a flag. A step, rather than an id
+// derived afresh, because it keeps the key as its prefix: the trail finds
+// every write a key made by the key the caller holds. It inherits the key's
+// instant, which is what the ledger vouches for.
 //
 // name is the write's verb, which a reader of the ledger finds it by; it never
 // holds a dot, which in the grammar begins a step. asks is the request's
@@ -487,20 +462,11 @@ type operation struct {
 func (s *Service) operation(w http.ResponseWriter, r *http.Request, name string,
 	asks any) (operation, bool) {
 
-	key := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
-	switch {
-	case key == "":
-		key = statelog.NewOpID(s.now(), "")
-	default:
-		if err := statelog.CheckCallerOpID(key); err != nil {
-			// `op_id_invalid`, the one code every surface refuses a
-			// caller's operation id with, whichever route it reached.
-			httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
-				httpjson.Detail{"field": IdempotencyHeader, "detail": err.Error()})
-			return operation{}, false
-		}
+	key, ok := opkey.Key(w, r, s.now())
+	if !ok {
+		return operation{}, false
 	}
-	digest, err := requestDigest(r, asks)
+	digest, err := opkey.Digest(r, asks)
 	if err != nil {
 		// A BODY THAT DECODED AND WILL NOT ENCODE is a type this surface
 		// declared wrongly, not the caller's to fix.
@@ -509,33 +475,6 @@ func (s *Service) operation(w http.ResponseWriter, r *http.Request, name string,
 	}
 	return operation{key: key, id: statelog.StepOpID(key, name, digest)}, true
 }
-
-// requestDigest is what binds a write's operation to its request: the path
-// (the object), the query and the decoded body, in a form one request always
-// produces — the body re-encoded from its decoded value, so the same fields
-// in another order or spacing are the same request.
-//
-// SIXTEEN HEX DIGITS, 64 bits of SHA-256: it tells an accidental change of
-// request apart with certainty, which is all it is for — a caller can mint any
-// key it likes, so this is not a credential — in an id that is published in
-// every record and ledger row the write makes.
-func requestDigest(r *http.Request, asks any) (string, error) {
-	body, err := json.Marshal(asks)
-	if err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	for _, part := range [][]byte{[]byte(r.URL.Path),
-		[]byte(r.URL.Query().Encode()), body} {
-		_, _ = h.Write(part)
-		_, _ = h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))[:requestDigestLen], nil
-}
-
-// requestDigestLen is how many hex digits of a request's digest its
-// operation carries — see [requestDigest].
-const requestDigestLen = 16
 
 // writerFor is the chart writer stamped with this request's own author.
 //

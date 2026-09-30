@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -37,7 +38,7 @@ func operator() iam.Principal {
 func send(r rig, method, path, body, key string) (int, map[string]any, http.Header) {
 	headers := map[string]string{}
 	if key != "" {
-		headers[chartapi.IdempotencyHeader] = key
+		headers[opkey.Header] = key
 	}
 	var rec *httptest.ResponseRecorder
 	switch method {
@@ -170,9 +171,9 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 				if status != http.StatusBadRequest ||
 					body["error"] != string(httpjson.CodeOpIDInvalid) ||
 					body["message"] != httpjson.CodeOpIDInvalid.Message() ||
-					body["field"] != chartapi.IdempotencyHeader {
+					body["field"] != opkey.Header {
 					t.Fatalf("answered %d %v, want 400 op_id_invalid naming %s",
-						status, body, chartapi.IdempotencyHeader)
+						status, body, opkey.Header)
 				}
 				if len(r.writer.calls) != 0 {
 					t.Errorf("a refused key still wrote %v", r.writer.calls)
@@ -296,10 +297,10 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 	key := statelog.NewOpID(time.Now(), "chart-unit")
 	status, body, _ := send(r, http.MethodPatch, "/chart/units/engineering",
 		`{"name":"E"}`, key)
-	if status != http.StatusConflict || body["field"] != chartapi.IdempotencyHeader ||
+	if status != http.StatusConflict || body["field"] != opkey.Header ||
 		body["op_id"] != key {
 		t.Errorf("answered %d %v, want 409 naming %s", status, body,
-			chartapi.IdempotencyHeader)
+			opkey.Header)
 	}
 }
 

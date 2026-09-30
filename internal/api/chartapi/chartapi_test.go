@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/chartapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -1062,7 +1063,7 @@ func TestAnUnknownOutcomeHandsBackTheIdThatMakesARetrySafe(t *testing.T) {
 	// one anyway would carry the id for decoration.
 	r.writer.outcome = statelog.OutcomeApplied
 	rec = patchWith(r.mux, "/chart/units/engineering", `{"name":"E"}`,
-		map[string]string{chartapi.IdempotencyHeader: got})
+		map[string]string{opkey.Header: got})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the retry answered %d: %s", rec.Code, rec.Body)
 	}

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -129,13 +129,13 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
 			got := r.asWith(everything(), c.method, c.target, c.body,
-				http.Header{iamapi.IdempotencyHeader: {c.key}})
+				http.Header{opkey.Header: {c.key}})
 			if got.status != http.StatusBadRequest ||
 				got.body["error"] != string(httpjson.CodeOpIDInvalid) ||
 				got.body["message"] != httpjson.CodeOpIDInvalid.Message() ||
-				got.body["field"] != iamapi.IdempotencyHeader {
+				got.body["field"] != opkey.Header {
 				t.Fatalf("answered %d %v, want 400 op_id_invalid naming %s",
-					got.status, got.body, iamapi.IdempotencyHeader)
+					got.status, got.body, opkey.Header)
 			}
 			if len(r.writer.calls) != 0 {
 				t.Errorf("a refused key still published %v", r.writer.calls)
@@ -323,7 +323,7 @@ func TestAStepsRefusalIsAnsweredUnderItsGesture(t *testing.T) {
 		Reason: statelog.ReasonEvicted, OpID: statelog.StepOpID(key, "bind"),
 		Detail: "this node has been removed from the fleet"}}
 	got := r.asWith(everything(), http.MethodPatch, "/iam/people/"+bob.String(),
-		map[string]any{"seat": "sre"}, http.Header{iamapi.IdempotencyHeader: {key}})
+		map[string]any{"seat": "sre"}, http.Header{opkey.Header: {key}})
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("answered %d %v, want the refusal's 503", got.status, got.body)
 	}

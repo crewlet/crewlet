@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -1356,7 +1357,7 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPatch, "/iam/people/"+bob.String(),
 			strings.NewReader(string(body)))
 		if key != "" {
-			req.Header.Set(iamapi.IdempotencyHeader, key)
+			req.Header.Set(opkey.Header, key)
 		}
 		req = req.WithContext(iam.WithPrincipal(req.Context(), administrator()))
 		rec := httptest.NewRecorder()
