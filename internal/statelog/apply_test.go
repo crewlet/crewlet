@@ -34,23 +34,37 @@ type probeApplier struct {
 	rows     int
 	gate     statelog.Reason
 	gated    map[uint64]bool
+	asked    map[uint64]int
 	failAt   uint64
 	rowsPer  int
 	slowFrom uint64
 	slowFor  time.Duration
 	now      func() time.Time
+
+	// lockedAt is a sequence whose FIRST apply fails the way a write that
+	// lost the file's lock does, which the store answers by running the
+	// transaction's whole body again; zero fails nothing.
+	lockedAt uint64
 }
 
 func newProbeApplier() *probeApplier {
-	return &probeApplier{gated: map[uint64]bool{}, rowsPer: 1}
+	return &probeApplier{gated: map[uint64]bool{}, asked: map[uint64]int{}, rowsPer: 1}
 }
 
 func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
 	a.mu.Lock()
 	fail, per, slowFrom, slowFor := a.failAt, a.rowsPer, a.slowFrom, a.slowFor
+	locked := a.lockedAt != 0 && rec.Position.Seq == a.lockedAt
+	if locked {
+		a.lockedAt = 0
+	}
 	a.mu.Unlock()
 	if fail != 0 && rec.Position.Seq == fail {
 		return 0, fmt.Errorf("the probe applier refuses sequence %d", fail)
+	}
+	if locked {
+		return 0, fmt.Errorf("the probe applier at sequence %d: database is locked",
+			rec.Position.Seq)
 	}
 	if slowFrom != 0 && rec.Position.Seq >= slowFrom && a.now != nil {
 		// The clock is injected, so "slow" is deterministic rather than
@@ -75,6 +89,7 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 func (a *probeApplier) Gated(_ context.Context, _ *sql.Tx, rec statelog.Record) (statelog.Reason, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.asked[rec.Position.Seq]++
 	return a.gate, a.gated[rec.Position.Seq], nil
 }
 
@@ -1453,6 +1468,51 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 	if got := h.counter(metrics.StatelogApplyRecords); got == 0 {
 		t.Error("the applier recorded no records at all, so this recorder is " +
 			"not connected and the assertion above proves nothing")
+	}
+}
+
+// A RECORD A GATE DROPPED IS COUNTED ONCE, WHEN ITS DROP COMMITS — however
+// many times the store runs the transaction that drops it.
+//
+// The store runs a transaction's body again when an attempt fails transiently,
+// and the gate is asked again with it. Reported where the gate is asked, one
+// dropped record was counted and logged once per attempt, on the counter the
+// records_gated alarm reads: the alarm said two records were lost where one
+// was.
+func TestAGatedRecordIsCountedOnceHoweverOftenItsTransactionRuns(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
+	// THE SAME TRANSACTION, which fails at the record after the dropped one
+	// and is run again from its start.
+	h.applier.lockedAt = 2
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// THE CONTROL: the body did run twice over the dropped record. Without
+	// it, a batch that happened to split between the two records passes the
+	// assertion below having re-run nothing.
+	h.applier.mu.Lock()
+	asked := h.applier.asked[1]
+	h.applier.mu.Unlock()
+	if asked != 2 {
+		t.Fatalf("the gate was asked about the record at 1 %d time(s), want 2 — "+
+			"the transaction that dropped it was not run again, so this proves "+
+			"nothing", asked)
+	}
+	if got := h.counter(metrics.StatelogApplyTxAborts); got != 1 {
+		t.Fatalf("the applier counted %d aborted transaction(s), want the one the "+
+			"lock timeout at 2 cost", got)
+	}
+	if n := gatedUnder(h, statelog.ReasonEvicted); n != 1 {
+		t.Errorf("one record dropped by the eviction gate was counted %d time(s) "+
+			"under %q — once per attempt at the transaction rather than once for "+
+			"the drop it committed", n, statelog.ReasonEvicted)
+	}
+	if n := appliedAs(h, "gated"); n != 1 {
+		t.Errorf("the batch counted %d record(s) consumed as gated, want 1", n)
 	}
 }
 

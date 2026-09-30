@@ -334,9 +334,11 @@ func Catalogue() []Instrument {
 				"each — the domain's own (`evicted`, `released`, `deleted`, " +
 				"`retired`) or " +
 				"the framework's (`abandoned`, `overtaken`, `wrong_partition`). " +
-				"Each node counts a record once, where its own applier drops it: " +
-				"a write refused because its record — or another node's copy it " +
-				"was collapsed onto — was dropped is a refusal, counted under " +
+				"Each node counts a record once, where its own applier drops it, " +
+				"when the transaction that drops it commits — never once per " +
+				"attempt at that transaction. A write refused because its " +
+				"record — or another node's copy it was collapsed onto — was " +
+				"dropped is a refusal, counted under " +
 				"`crewlet.statelog.publish.refusals`, and not a second drop. " +
 				"A dropped commit is recoverable by nothing, and this is the " +
 				"only place anyone would see that it happened.",

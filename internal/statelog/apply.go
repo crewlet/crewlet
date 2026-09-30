@@ -2321,7 +2321,7 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Payload:  row.payload,
 				StoredAt: row.storedAt,
 			}
-			landed, dropped, err := r.reprocessOne(ctx, w, rec)
+			landed, reason, dropped, err := r.reprocessOne(ctx, w, rec)
 			switch {
 			case err != nil:
 				return err
@@ -2333,7 +2333,9 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				// could not ask — and that is not a reprocess: it
 				// wrote no row, so it is counted as the live loop
 				// counts one, under `gated`, beside the gate's own
-				// counter.
+				// counter, which is reported here because the
+				// transaction that dropped it has committed.
+				r.gatedRecord(ctx, rec, reason)
 				gated++
 			default:
 				applied++
@@ -2363,11 +2365,12 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 
 // reprocessOne applies one retained record unless an earlier retained record
 // still covers it, reporting whether it landed — released from the retained
-// table — and whether a gate dropped it rather than applied it.
-func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, bool, error) {
+// table — and whether a gate dropped it rather than applied it, and which.
+func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, Reason, bool, error) {
 	var landed, gated bool
+	var reason Reason
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		landed, gated = false, false
+		landed, reason, gated = false, "", false
 		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
 			return err
 		} else if covered {
@@ -2376,7 +2379,7 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		opts := r.opts
 		opts.Now = r.now()
 		opts.MaxVariables = r.db.Caps().MaxVariables
-		_, dropped, err := r.applyOne(ctx, tx, rec, opts)
+		_, why, dropped, err := r.applyOne(ctx, tx, rec, opts)
 		if err != nil {
 			return err
 		}
@@ -2391,14 +2394,14 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
 			return err
 		}
-		landed, gated = true, dropped
+		landed, reason, gated = true, why, dropped
 		return nil
 	})
 	if err != nil {
-		return false, false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
+		return false, "", false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
 			rec.Position, err)
 	}
-	return landed, gated, nil
+	return landed, reason, gated, nil
 }
 
 // nextRun fills a run toward the transaction budget, starting from whatever
@@ -2679,8 +2682,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				// never does — the one deferral clause (i) of the floor
 				// theorem cannot see. The partition is read from the
 				// envelope, which every build decodes.
-				r.gatedRecord(ctx, rec, ReasonWrongPartition)
-				tally.gated++
+				tally.drop(rec, ReasonWrongPartition)
 
 			case rec.V > r.domain.RecordVersion():
 				if r.domain.InstallsGate(rec.Envelope) {
@@ -2727,13 +2729,13 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					}
 				}
 				if !blocked {
-					n, gated, err := r.applyOne(ctx, tx, rec, opts)
+					n, reason, gated, err := r.applyOne(ctx, tx, rec, opts)
 					if err != nil {
 						return err
 					}
 					rows += n
 					if gated {
-						tally.gated++
+						tally.drop(rec, reason)
 					} else {
 						tally.applied++
 						tally.version = max(tally.version, rec.V)
@@ -2802,6 +2804,13 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 
 	// AFTER THE OUTER TRANSACTION RETURNS, IN THIS ORDER.
 	//
+	// WHAT A GATE DROPPED, first: a drop is reported once it has committed,
+	// and before the checkpoint moves, so a caller that sees this node past
+	// a dropped record sees its count too ([Runner.gatedRecord]).
+	for _, d := range tally.dropped {
+		r.gatedRecord(ctx, d.rec, d.reason)
+	}
+
 	// THE POSITION THE TRANSACTION COMMITTED, so what this node reports,
 	// releases waiters through and resumes from is the same value the
 	// checkpoint row holds — see the comment at the setCursor above.
@@ -2885,8 +2894,9 @@ func (r *Runner) Commits() float64 {
 }
 
 // applyOne runs the domain's state machine for one record, unless a gate says
-// it must produce no rows.
-func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, bool, error) {
+// it must produce no rows — reporting which gate, and whether one did, for the
+// caller to report once its transaction commits ([Runner.gatedRecord]).
+func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (int, Reason, bool, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
 	// THE FRAMEWORK'S OWN GATES FIRST, and the partition's before the rest:
@@ -2915,20 +2925,19 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		var err error
 		reason, gated, err = r.applier.Gated(ctx, tx, rec)
 		if err != nil {
-			return 0, false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
+			return 0, "", false, fmt.Errorf("statelog: read the apply gates at %s: %w", rec.Position, err)
 		}
 	}
 	if gated {
-		r.gatedRecord(ctx, rec, reason)
-		return 0, true, nil
+		return 0, reason, true, nil
 	}
 	n, err := r.applier.Apply(ctx, tx, rec, opts)
 	if err != nil {
-		return 0, false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
+		return 0, "", false, fmt.Errorf("statelog: apply %s at %s: %w", rec.Kind, rec.Position, err)
 	}
 	if err := r.tables.writeOp(ctx, tx, rec.OpID, r.tables.subjectOf(rec.Subject), rec.Position,
 		rec.StoredAt, opts.Now); err != nil {
-		return 0, false, err
+		return 0, "", false, err
 	}
 	if r.metrics != nil {
 		// ONE RECORD'S APPLY, which is the real ceiling on how long a
@@ -2938,7 +2947,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		r.metrics.Observe(metrics.StatelogApplyRecordDuration, r.now().Sub(started),
 			metrics.Attrs{"domain": r.domain.Name(), "kind": rec.Kind})
 	}
-	return n, false, nil
+	return n, "", false, nil
 }
 
 // Voided reports whether this applier drops a record stamped with generation gen
@@ -2980,6 +2989,18 @@ func (r *Runner) misplaced(env Envelope) bool {
 // advances the checkpoint: the log consumed it, and a checkpoint that skipped
 // it would replay it for ever. What it does not do is leave a trace in the
 // rows, so the log line and the counter are the only witnesses there are.
+//
+// # Once the drop has committed, and never from inside the transaction
+//
+// The store RE-RUNS a transaction's body when an attempt fails transiently
+// ([store.Writer.Tx]), and a batch whose transaction fails outright is
+// applied again from the same checkpoint. A report made where the gate is
+// asked was therefore made once per attempt: one record dropped, counted and
+// logged as two — the counter the records_gated alarm reads, on a record
+// nothing recovers. So the transaction only notes the drop ([results.drop],
+// or the reprocess's own answer) and this runs after it commits, exactly once
+// per record this node's rows skip for good; a drop an attempt rolled back is
+// reported by the attempt that commits it.
 func (r *Runner) gatedRecord(ctx context.Context, rec Record, reason Reason) {
 	attrs := []any{
 		"domain", r.domain.Name(), "position", rec.Position.String(),
@@ -3112,8 +3133,12 @@ func (r *Runner) stop(ctx context.Context, err error) error {
 type results struct {
 	applied  int
 	retained int
-	gated    int
 	skipped  int
+
+	// dropped is every record a gate dropped in this attempt, in order,
+	// reported once the transaction commits ([Runner.gatedRecord]) — its
+	// length is how many were `gated`.
+	dropped []droppedRecord
 
 	// version is the highest record version of a record this transaction
 	// APPLIED — what the checkpoint row's applied record version is raised
@@ -3125,6 +3150,18 @@ type results struct {
 	// on the log, which is what the census counts — BY THE HOUR THE BROKER
 	// STORED EACH, as the start of that hour. Nil until the first.
 	barriers map[time.Time]uint64
+}
+
+// droppedRecord is one record a gate dropped, and the gate that dropped it.
+type droppedRecord struct {
+	rec    Record
+	reason Reason
+}
+
+// drop notes that a gate dropped rec, for [Runner.gatedRecord] to report once
+// the transaction that dropped it commits.
+func (t *results) drop(rec Record, reason Reason) {
+	t.dropped = append(t.dropped, droppedRecord{rec: rec, reason: reason})
 }
 
 // barrier counts one barrier the broker stored at storedAt, or at applied — the
@@ -3176,7 +3213,7 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 		metrics.Attrs{"domain": domain})
 	for result, n := range map[string]int{
 		"applied": tally.applied, "retained": tally.retained,
-		"gated": tally.gated, "skipped": tally.skipped,
+		"gated": len(tally.dropped), "skipped": tally.skipped,
 	} {
 		if n > 0 {
 			r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),
