@@ -516,8 +516,8 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"no change can be made to it")
 			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
@@ -1131,6 +1131,16 @@ var domainScope = statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.
 // [statelog.ErrUnavailable] otherwise: this node may not have applied its
 // create, which a node that has will not refuse. Whether it ever will is a
 // question for the log's end ([Writer.projectAtTheLogsEnd]).
+//
+// EVERY WRITE THAT MEETS A MISSING TASK ANSWERS THROUGH HERE, not the purge
+// and the turn alone. "Not on this node" is a refusal the CALLER retries — the
+// estate's router hands it back as the answering holder gave it rather than
+// asking another, since a holder that has not applied the create yet is one
+// that will, and what a seat must see of its OWN writes is what its floors
+// already hold every holder to — and every node holding the task's deletion
+// marker says it again. So a seat editing, moving, merging, removing,
+// restoring or promoting out of a task somebody purged was told to try again
+// for ever about a task no node will hold again.
 func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
 	var purged int
 	err := tx.QueryRowContext(ctx,

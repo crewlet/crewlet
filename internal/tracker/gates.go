@@ -506,11 +506,12 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				return statelog.Decision{}, err
 			case !held:
 				// A TASK ALREADY PURGED IS FINAL, never "not on this
-				// node": that refusal is the one a caller retries and a
-				// router takes to another node, and every node that holds
-				// the marker would send it on again. A retry of the SAME
-				// purge never reaches here — its ledger row answers it
-				// with the first outcome before anything is decided.
+				// node": that refusal is the one the CALLER retries — the
+				// estate's router hands it back as the holder gave it —
+				// and every node that holds the marker would say it
+				// again. A retry of the SAME purge never reaches here —
+				// its ledger row answers it with the first outcome
+				// before anything is decided.
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"there is nothing left to purge: its deletion marker is "+
 						"the account of it that survives")

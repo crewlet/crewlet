@@ -446,8 +446,7 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			return err
 		}
 		if !held {
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				change.Task, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, change.Task, "no dependency can be changed on it")
 		}
 		out.self = self
 		for _, id := range wanted {

@@ -73,46 +73,96 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 	}
 }
 
-// A WRITE ON A PURGED TASK IS REFUSED WITH THE GATE THAT DROPPED IT.
+// EVERY WRITE ON A PURGED TASK IS REFUSED AS PURGED, which is final — never as
+// "not on this node".
 //
 // It is a refusal rather than an outcome and never a re-decide: republishing
 // produces another durable record nothing applies, and the caller burns its
-// whole round budget to a conflict a model reads as a colleague editing.
-func TestAWriteOnAPurgedTaskIsRefusedAsDeleted(t *testing.T) {
+// whole round budget to a conflict a model reads as a colleague editing. And
+// it is the FINAL refusal, [tracker.ErrNoTask] naming the purge, because the
+// other one — [statelog.ErrUnavailable], "not on this node" — is what the
+// CALLER retries (the estate's router hands it back as the holder gave it),
+// and every node holding the task's deletion marker would say it again: a seat
+// editing a task somebody purged was told to try again for ever. The purge and
+// a turn's spend had the final answer; every other gesture on a task answered
+// the retryable one until each was held here.
+func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	r.drain()
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
 	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", "t-1", "ENG", ""); err != nil {
 		t.Fatalf("PurgeTask: %v", err)
 	}
 	r.drain()
 
-	_, err := r.writer.UpdateTask(t.Context(), "op-late", "t-1", "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Title: ptr("back from the dead")}, tracker.ChangeFields, nil)
-	if err == nil {
-		t.Fatal("a write on a purged task was accepted")
+	for _, c := range []struct {
+		gesture string
+		write   func() error
+	}{
+		{"an edit", func() error {
+			_, err := r.writer.UpdateTask(t.Context(), "op-edit", "t-1", "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Title: ptr("back from the dead")},
+				tracker.ChangeFields, nil)
+			return err
+		}},
+		{"a removal", func() error {
+			_, err := r.writer.RemoveTask(t.Context(), "op-remove", "t-1", "ENG", false, nil)
+			return err
+		}},
+		{"a restore", func() error {
+			_, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-1", "ENG", nil)
+			return err
+		}},
+		{"a move to another project", func() error {
+			_, err := r.writer.MoveTaskToProject(t.Context(), "op-move", "t-1", "OPS", nil)
+			return err
+		}},
+		{"a merge of it", func() error {
+			_, err := r.writer.MergeDuplicates(t.Context(), "op-merge-it", "t-1", "t-2", false, nil)
+			return err
+		}},
+		{"a merge into it", func() error {
+			_, err := r.writer.MergeDuplicates(t.Context(), "op-merge-into", "t-2", "t-1", true, nil)
+			return err
+		}},
+		{"a dependency on it", func() error {
+			_, err := r.writer.Depend(t.Context(), "op-depend", tracker.DependencyChange{
+				Task: "t-1", Project: "ENG", WaitingOnAdd: []string{"t-2"},
+			}, nil)
+			return err
+		}},
+		{"a promotion out of it", func() error {
+			_, err := r.writer.PromoteItem(t.Context(), "op-promote", "t-1", "item-1",
+				newTask("t-3"), nil)
+			return err
+		}},
+	} {
+		err := c.write()
+		switch {
+		case err == nil:
+			t.Errorf("%s of a purged task was accepted", c.gesture)
+		case !errors.Is(err, tracker.ErrNoTask) || errors.Is(err, statelog.ErrUnavailable):
+			t.Errorf("%s of a purged task answered %v, want the final ErrNoTask "+
+				"and never a refusal a caller would retry elsewhere", c.gesture, err)
+		case !strings.Contains(err.Error(), "was purged"):
+			t.Errorf("%s: the refusal %q does not say the task was purged", c.gesture, err)
+		}
 	}
-	if !strings.Contains(err.Error(), "not on this node") &&
-		!errors.Is(err, statelog.ErrUnavailable) {
-		t.Fatalf("the refusal is %v, which does not tell the caller its task "+
-			"is gone rather than contended", err)
-	}
-	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 0 {
-		t.Fatalf("a purged task came back: %+v", answer.Rows)
+	if answer := r.ask(map[string]any{"container": "project:ENG"}); len(answer.Rows) != 1 {
+		t.Fatalf("the board after the refused writes is %+v, want t-2 alone", answer.Rows)
 	}
 }
 
 // A SECOND PURGE OF A PURGED TASK IS REFUSED AS PURGED, which is final — never
 // as "not on this node".
 //
-// That refusal is the one a caller retries and a router takes to another node,
-// and every node holding the task's deletion marker would say it again: an
-// operator re-running a purge to be sure was told the node was behind, of a
-// task every node had destroyed. The purge's own retry, under its own id, is
-// answered by the first purge's outcome instead, and nothing is appended.
+// That refusal is the one the CALLER retries — the estate's router hands it
+// back as the holder gave it — and every node holding the task's deletion
+// marker would say it again: an operator re-running a purge to be sure was
+// told the node was behind, of a task every node had destroyed. The purge's
+// own retry, under its own id, is answered by the first purge's outcome
+// instead, and nothing is appended.
 func TestASecondPurgeOfAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

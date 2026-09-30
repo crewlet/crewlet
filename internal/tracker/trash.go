@@ -240,8 +240,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"there is nothing left to remove")
 			case current.Removed != nil:
 				// ALREADY IN THE TRASH IS NOTHING TO DO, and it is a
 				// SUCCESS rather than a conflict: a re-run of a removal
@@ -289,8 +289,8 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case err != nil:
 				return statelog.Decision{}, err
 			case !held:
-				return statelog.Decision{}, fmt.Errorf("tracker: task %s is not "+
-					"on this node: %w", id, statelog.ErrUnavailable)
+				return statelog.Decision{}, missingTask(ctx, tx, id,
+					"nothing can restore it")
 			case current.Removed == nil:
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
 				// own rule: a re-run must be able to finish.

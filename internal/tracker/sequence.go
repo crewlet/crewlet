@@ -1018,7 +1018,8 @@ func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
 		// THE MINT WAS ANSWERED, NOT DECIDED, so its snapshot never ran
 		// and the parent's project is read here: it is what the parent
 		// step's scope names.
-		if parentProject, err = w.taskProject(ctx, parentID); err != nil {
+		if parentProject, err = w.taskProject(ctx, parentID,
+			"nothing can be promoted out of it"); err != nil {
 			return created, err
 		}
 	}
@@ -1048,8 +1049,7 @@ func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
 	case err != nil:
 		return "", err
 	case !held:
-		return "", fmt.Errorf("tracker: parent task %s is not on this node: %w",
-			parentID, statelog.ErrUnavailable)
+		return "", missingTask(ctx, tx, parentID, "nothing can be promoted out of it")
 	case current.Removed != nil:
 		return "", fmt.Errorf("tracker: task %s was removed by %s at %s; "+
 			"restore it before promoting anything out of it",
@@ -1064,8 +1064,9 @@ func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
 
 // taskProject is the project a task is in, read outside any decision — for a
 // sequence's later step, whose scope names the container and whose own decide
-// re-reads everything it acts on.
-func (w *Writer) taskProject(ctx context.Context, id string) (string, error) {
+// re-reads everything it acts on. refused completes the final refusal of a
+// purged task ([missingTask]): what the step cannot do to it.
+func (w *Writer) taskProject(ctx context.Context, id, refused string) (string, error) {
 	if w.db.IsZero() {
 		return "", fmt.Errorf("tracker: this writer has no store to read task "+
 			"%s's project from", id)
@@ -1077,8 +1078,7 @@ func (w *Writer) taskProject(ctx context.Context, id string) (string, error) {
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				id, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, id, refused)
 		}
 		project = task.Project
 		return nil
@@ -1348,8 +1348,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				taskID, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, taskID, "it cannot be moved")
 		case current.Parent != nil && *current.Parent != "":
 			return fmt.Errorf("tracker: task %s has a parent, and only a ROOT "+
 				"task moves between projects — moving a subtask alone would "+
@@ -1557,8 +1556,7 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is marked mid-move and not on "+
-				"this node: %w", id, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, id, "there is no move of it left to finish")
 		case !current.Moving || current.Removed != nil:
 			return nil
 		}
@@ -1837,8 +1835,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				duplicate, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, duplicate, "it cannot be merged")
 		case current.Removed != nil:
 			return fmt.Errorf("tracker: task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
@@ -1850,8 +1847,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case err != nil:
 			return err
 		case !held:
-			return fmt.Errorf("tracker: task %s is not on this node: %w",
-				into, statelog.ErrUnavailable)
+			return missingTask(ctx, tx, into, "nothing can be merged into it")
 		case !reparent || survivor.Project == current.Project:
 			return nil
 		}
@@ -1943,7 +1939,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // is not selected stays under the duplicate, where the trash's frozen children
 // stay too.
 func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string) (int, error) {
-	project, err := w.taskProject(ctx, into)
+	project, err := w.taskProject(ctx, into, "nothing can be merged into it")
 	if err != nil {
 		return 0, err
 	}
