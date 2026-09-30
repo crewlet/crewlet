@@ -1618,11 +1618,20 @@ func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
 			"broker will not deliver until the run commits waits for ever",
 			got, 4*statelog.ApplyLinger)
 	}
-	if h.fetch.ackCount(1) != 1 || h.fetch.ackCount(2) != 1 {
+	// THE ACKNOWLEDGEMENTS FOLLOW THE COMMIT, never precede it — the
+	// checkpoint is the authority and an acknowledgement the weaker number
+	// — so the run's position moves first and they land a moment after:
+	// read at the instant the checkpoint moved, they were sometimes not
+	// there yet. So they are waited for, and then counted exactly.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && (h.fetch.ackCount(1) == 0 || h.fetch.ackCount(2) == 0) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if one, two := h.fetch.ackCount(1), h.fetch.ackCount(2); one != 1 || two != 1 {
 		cancel()
 		<-errs
 		t.Fatalf("the committed records were acknowledged %d and %d time(s), "+
-			"want once each", h.fetch.ackCount(1), h.fetch.ackCount(2))
+			"want once each", one, two)
 	}
 
 	// Acknowledged, the broker releases the third and the loop takes it.
