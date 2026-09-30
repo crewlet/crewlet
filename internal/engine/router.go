@@ -56,15 +56,18 @@ var (
 
 // servingRecheck is how long a copy's verdict — whether it is wrong, and
 // whether it answers requests — is trusted by the request gate
-// ([localEstate.For]).
+// ([localEstate.For]) before it is read again.
 //
 // ONE SECOND. The verdict reads every log's bounds from the broker — a
 // JetStream API request per log — and a gate that asked per request would put
 // three round trips in front of every tool call a data node answers. Refreshed
-// at most once a second, a node pays at most three reads a second however many
-// requests it answers; and a verdict a second old errs only about a copy that
-// crossed the snapshot slack (a thousand records) inside that second, which the
-// floors still hold to every write the node's own seats made.
+// at most once a second PER PARTITION, and never on a request's own path once
+// it has been read — see [localEstate.verdict] — a node pays at most one
+// verdict's reads a second per partition however many requests it answers; and
+// a verdict a second old errs only about a copy that crossed the snapshot
+// slack (a thousand records) inside that second, which the floors still hold
+// to every write the node's own seats made. It is counted from when the read
+// LANDED, so a read slower than this is not already stale when it is stored.
 const servingRecheck = time.Second
 
 // servingRead bounds one verdict's reads of the broker, whatever the deadline
@@ -73,7 +76,9 @@ const servingRecheck = time.Second
 // become everybody's "not serving" for a second.
 //
 // statelog.ReadBudget, the budget a floor wait takes — the same "is this copy
-// fit to answer" question, bounded the same way.
+// fit to answer" question, bounded the same way. It may exceed
+// [servingRecheck]: nobody waits on a read but a request for a partition never
+// judged, and that request waits no longer than its own context.
 const servingRead = statelog.ReadBudget
 
 // newRouter builds this node's router over the fleet's queue, routing by the
@@ -106,7 +111,7 @@ func newLocalEstate(e *Engine, boot *config.Bootstrap) *localEstate {
 		read: func(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict {
 			return n.log.partitionVerdict(ctx, p)
 		},
-		verdicts: map[statelog.PartitionID]heldVerdict{}}
+		verdicts: map[statelog.PartitionID]*verdictSlot{}}
 }
 
 // localEstate is [estate.LocalBackends] over this node's own copy.
@@ -119,11 +124,26 @@ type localEstate struct {
 	// parameter for the tests.
 	read func(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict
 
+	// mu guards verdicts and every slot in it, and is NEVER held across a
+	// read of the broker — see [localEstate.verdict].
 	mu       sync.Mutex
-	verdicts map[statelog.PartitionID]heldVerdict
+	verdicts map[statelog.PartitionID]*verdictSlot
 }
 
-// heldVerdict is one partition's last verdict, and when it was read.
+// verdictSlot is one partition's verdict: the last one read, and the read in
+// flight to replace it.
+type verdictSlot struct {
+	// held is the last verdict read, valid once known is.
+	held  heldVerdict
+	known bool
+
+	// reading is closed when the read in flight lands, and nil while none
+	// is: ONE read per partition at a time, however many requests found the
+	// verdict stale.
+	reading chan struct{}
+}
+
+// heldVerdict is one partition's last verdict, and when its read landed.
 type heldVerdict struct {
 	at time.Time
 	copyVerdict
@@ -163,30 +183,90 @@ func (l *localEstate) For(ctx context.Context, p statelog.PartitionID) (estate.B
 	return b, true
 }
 
-// verdict is p's verdict, read again when it is older than [servingRecheck].
+// verdict is p's verdict, read again once it is older than [servingRecheck].
 //
-// A READING THAT COULD NOT REACH THE BROKER CHANGES NOTHING IT COULD NOT SEE: a
-// copy that was answering keeps answering, and one that was faulted stays so
+// # Never on a request's path, and never under the lock
+//
+// A read of the broker can take its whole [servingRead] — a leader election, a
+// quorum lost, a broker that does not answer — and every tool call this node's
+// seats make and every request another node sends it asks this first. Held
+// under one lock across that read, every one of them queued behind it, each
+// found the verdict it waited for already older than the recheck and read
+// again in turn, and none could leave when its own caller gave up: twenty
+// calls behind an unreachable broker waited forty seconds. So the read runs
+// OFF the request path, one per partition at a time (the [verdictSlot]'s
+// reading), and a request meanwhile answers from the verdict before it —
+// nobody waits on a read but a request for a partition never judged, and that
+// one waits no longer than its own context.
+//
+// # A reading that could not reach the broker changes nothing it could not see
+//
+// A copy that was answering keeps answering, and one that was faulted stays so
 // unless a log that was read says otherwise — a broker blip must not send every
 // request away from a sound copy, nor bring a wrong one back into service on no
 // information. A copy never judged answers nothing: nobody has measured it.
 func (l *localEstate) verdict(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	held, known := l.verdicts[p]
-	if known && now.Sub(held.at) < servingRecheck {
-		return held.copyVerdict
+	slot := l.verdicts[p]
+	if slot == nil {
+		slot = &verdictSlot{}
+		l.verdicts[p] = slot
 	}
-	read, cancel := context.WithTimeout(context.WithoutCancel(ctx), servingRead)
+	if slot.known && l.now().Sub(slot.held.at) < servingRecheck {
+		v := slot.held.copyVerdict
+		l.mu.Unlock()
+		return v
+	}
+	reading := slot.reading
+	if reading == nil {
+		reading = make(chan struct{})
+		slot.reading = reading
+		// DETACHED from the request that found the verdict stale, since
+		// every request after it shares what it reads, and BOUNDED by
+		// [servingRead], which is the goroutine's whole lifetime.
+		go l.refresh(context.WithoutCancel(ctx), n, p, slot, reading)
+	}
+	if slot.known {
+		v := slot.held.copyVerdict
+		l.mu.Unlock()
+		return v
+	}
+	l.mu.Unlock()
+	select {
+	case <-reading:
+	case <-ctx.Done():
+		// NEVER JUDGED, and the caller would not wait: a copy nobody
+		// has measured answers nothing — and is wrong about nothing.
+		return copyVerdict{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slot.held.copyVerdict
+}
+
+// refresh reads p's verdict once and stores it in slot, stamped with the
+// instant the read LANDED: stamped with the instant it began, a read slower
+// than [servingRecheck] would be stale the moment it was stored, and the next
+// request would read again at once.
+func (l *localEstate) refresh(ctx context.Context, n *native, p statelog.PartitionID,
+	slot *verdictSlot, done chan struct{}) {
+
+	defer close(done)
+	read, cancel := context.WithTimeout(ctx, servingRead)
 	defer cancel()
 	v := l.read(read, n, p)
+
+	l.mu.Lock()
+	known, held := slot.known, slot.held
 	if v.refusal == statelog.RefuseBrokerUnreachable {
 		v.answers = known && held.answers
 		if v.fault == "" && known {
 			v.fault = held.fault
 		}
 	}
+	slot.held, slot.known, slot.reading = heldVerdict{at: l.now(), copyVerdict: v}, true, nil
+	l.mu.Unlock()
+
 	if v.fault != "" && (!known || held.fault == "") {
 		log.WarnContext(ctx, "estate_partition_not_served", "partition", p.String(),
 			"log", v.fault,
@@ -194,8 +274,6 @@ func (l *localEstate) verdict(ctx context.Context, n *native, p statelog.Partiti
 				"so it stops serving it; its seats read the partition from its other "+
 				"holders until the copy recovers")
 	}
-	l.verdicts[p] = heldVerdict{at: now, copyVerdict: v}
-	return v
 }
 
 // partitionBackend is this data node's answer for partition p — under layout 0
