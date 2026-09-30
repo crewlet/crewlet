@@ -367,9 +367,28 @@ func testFilters(t *testing.T, db *store.DB) {
 	}
 }
 
-// testRelatedAgent covers both halves: the direct match, and the trace sibling
-// that carries the agent's name nowhere but caused its work.
+// seatsOf is the resolver a process holding the chart installs
+// ([store.DB.SetEventSeats]): which agent id each handle names.
+func seatsOf(ids map[string]string) store.SeatResolver {
+	return func(handle string) (string, bool) {
+		id, ok := ids[handle]
+		return id, ok
+	}
+}
+
+// testRelatedAgent covers what the related filter answers: every event that
+// involves an agent BY ITS AGENT ID — its own, and one naming it by a handle —
+// plus the trace sibling that carries it nowhere but caused its work.
+//
+// And what it does not: the parties used to be NAMES — the actor, the
+// `agent_role` tag and the participant tags as they came — so a namesake's
+// work was listed as the seat's own, and an external sender sharing a handle
+// was filed under that seat. The namesake here carries the same `agent_role`
+// under another agent id, and the stranger shares the seat's handle as a
+// vendor sender.
 func testRelatedAgent(t *testing.T, db *store.DB) {
+	db.SetEventSeats(seatsOf(map[string]string{"eng": "a-eng", "qa": "a-qa"}))
+	t.Cleanup(func() { db.SetEventSeats(nil) })
 	log := db.Events()
 	ctx := t.Context()
 	write(t, log, store.EventRecord{
@@ -379,36 +398,67 @@ func testRelatedAgent(t *testing.T, db *store.DB) {
 	})
 	write(t, log, store.EventRecord{
 		ID: "work", Type: "task_assigned", Source: "engine",
-		Time: base.Add(time.Minute), Category: "task", Actor: "engineer",
+		Time: base.Add(time.Minute), Category: "task", Actor: "Engineer",
+		Tags:    map[string]string{"agent_id": "a-eng", "agent_role": "Engineer"},
 		TraceID: "tr-1",
 	})
 	write(t, log, store.EventRecord{
-		ID: "tagged", Type: "external_notification", Source: "engine",
-		Time: base.Add(2 * time.Minute), Category: "notification",
-		Actor: "someone-else", Tags: map[string]string{"recipient": "engineer"},
+		ID: "delivered", Type: "webhook:push", Source: "github",
+		Time: base.Add(2 * time.Minute), Category: "webhook",
+		Actor: "github", Tags: map[string]string{"recipient": "eng"},
 		TraceID: "tr-2",
 	})
 	write(t, log, store.EventRecord{
+		ID: "asked", Type: "a2a_message_sent", Source: "qa",
+		Time: base.Add(3 * time.Minute), Category: "a2a", Actor: "qa",
+		Tags: map[string]string{"channel_id": "ch-1", "sender": "eng",
+			"recipient": "qa"},
+		TraceID: "tr-3",
+	})
+	write(t, log, store.EventRecord{
+		ID: "namesake", Type: "task_assigned", Source: "engine",
+		Time: base.Add(4 * time.Minute), Category: "task", Actor: "Engineer",
+		Tags:    map[string]string{"agent_id": "a-eng-2", "agent_role": "Engineer"},
+		TraceID: "tr-4",
+	})
+	write(t, log, store.EventRecord{
+		ID: "stranger", Type: "external_notification", Source: "slack",
+		Time: base.Add(5 * time.Minute), Category: "notification", Actor: "eng",
+		Tags:    map[string]string{"agent_id": "a-qa", "sender": "eng"},
+		TraceID: "tr-5",
+	})
+	write(t, log, store.EventRecord{
 		ID: "unrelated", Type: "task_assigned", Source: "pm",
-		Time: base.Add(3 * time.Minute), Category: "task", Actor: "other",
+		Time: base.Add(6 * time.Minute), Category: "task", Actor: "other",
 		TraceID: "tr-9",
 	})
 
-	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "engineer"})
+	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "a-eng"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	set := ids(got)
-	for _, want := range []string{"work", "tagged", "trigger"} {
+	for _, want := range []string{"work", "delivered", "asked", "trigger"} {
 		if !slices.Contains(set, want) {
 			t.Errorf("missing %q from %v", want, set)
 		}
 	}
-	if slices.Contains(set, "unrelated") {
-		t.Errorf("unrelated event leaked into %v", set)
+	for _, not := range []string{"namesake", "stranger", "unrelated"} {
+		if slices.Contains(set, not) {
+			t.Errorf("%q leaked into %v", not, set)
+		}
 	}
 	if len(set) != len(slices.Compact(slices.Clone(set))) {
 		t.Errorf("duplicate ids in %v", set)
+	}
+	// AND THE OTHER END OF THE CHANNEL IS A PARTY TOO.
+	other, err := log.List(ctx, store.ListQuery{RelatedAgent: "a-qa"})
+	if err != nil {
+		t.Fatalf("list the other end: %v", err)
+	}
+	if !slices.Contains(ids(other), "asked") {
+		t.Errorf("the A2A recipient's related events %v miss the message it was sent",
+			ids(other))
 	}
 }
 
@@ -759,6 +809,8 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 // the plan going unused. Timing is deliberately not asserted: on a fixture
 // this small a scan is fast enough to pass.
 func testRelatedIndexed(t *testing.T, db *store.DB) {
+	db.SetEventSeats(seatsOf(map[string]string{"lead": "a-lead"}))
+	t.Cleanup(func() { db.SetEventSeats(nil) })
 	log := db.Events()
 	ctx := t.Context()
 	for i := range 200 {
@@ -774,7 +826,7 @@ func testRelatedIndexed(t *testing.T, db *store.DB) {
 		Tags: map[string]string{"recipient": "lead"},
 	})
 
-	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "lead"})
+	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "a-lead"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -798,7 +850,7 @@ func testRelatedIndexed(t *testing.T, db *store.DB) {
 		  ON crewlet_event_parties.event_time = crewlet_events.event_time
 		 AND crewlet_event_parties.event_id = crewlet_events.event_id
 		WHERE crewlet_event_parties.party = ?
-		ORDER BY crewlet_events.event_time DESC LIMIT 50`, "lead")
+		ORDER BY crewlet_events.event_time DESC LIMIT 50`, "a-lead")
 	if err != nil {
 		t.Fatalf("explain: %v", err)
 	}
@@ -837,11 +889,12 @@ func testRelatedSwept(t *testing.T, db *store.DB) {
 	write(t, log, store.EventRecord{
 		ID: "old", Type: "task_assigned", Source: "pm",
 		Time:     time.Now().UTC().Add(-store.EventRetention - time.Hour),
-		Category: "task", Actor: "lead",
+		Category: "task", Actor: "lead", Tags: map[string]string{"agent_id": "a-lead"},
 	})
 	write(t, log, store.EventRecord{
 		ID: "new", Type: "task_assigned", Source: "pm",
 		Time: time.Now().UTC().Add(-time.Hour), Category: "task", Actor: "lead",
+		Tags: map[string]string{"agent_id": "a-lead"},
 	})
 
 	if _, err := log.Purge(ctx); err != nil {
@@ -859,7 +912,7 @@ func testRelatedSwept(t *testing.T, db *store.DB) {
 		t.Errorf("%d party rows outlived their events", orphans)
 	}
 	// And the live one still resolves.
-	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "lead"})
+	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "a-lead"})
 	if err != nil {
 		t.Fatalf("list after purge: %v", err)
 	}

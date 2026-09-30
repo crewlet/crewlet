@@ -401,6 +401,12 @@ type DB struct {
 	// a data race on every join.
 	replicated atomic.Pointer[DB]
 
+	// eventSeats resolves a handle an event names to the AGENT id the party
+	// index is keyed on — see [DB.SetEventSeats]. ATOMIC for dim's reason:
+	// the engine installs it while a publish listener may already be
+	// appending on another goroutine.
+	eventSeats atomic.Pointer[SeatResolver]
+
 	// dim is [Options.EmbeddingDim], re-stated by every config apply. ATOMIC
 	// because the applying goroutine writes it while turns are reading it to
 	// validate their vectors — a plain int here is a data race the detector

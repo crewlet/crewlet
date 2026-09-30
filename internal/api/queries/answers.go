@@ -843,6 +843,23 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE RELATED FILTER IS KEYED ON AGENT IDS, and `agent` is the seat's
+	// HANDLE — any handle it answers to — resolved through the chart this
+	// node holds, exactly as the event log resolved the handles each event
+	// named when it was written (see store.DB.SetEventSeats). A handle no
+	// agent seat answers to is refused rather than compared: there is no
+	// id it could match, and an empty page reads as an agent that has done
+	// nothing.
+	if q.RelatedAgent != "" {
+		id, ok := s.agentSeatID(q.RelatedAgent)
+		if !ok {
+			return nil, fmt.Errorf("%w: agent %q names no agent seat in this "+
+				"company — the related filter is about an agent; a person's "+
+				"events are the ones they acted in, under `actor`",
+				ErrBadParams, q.RelatedAgent)
+		}
+		q.RelatedAgent = id
+	}
 	q.Limit = Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage)
 	if before := p.String("before_id"); before != "" {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -866,8 +883,9 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		"next": cursorOf(rows),
 		// A page shorter than the limit does NOT mean history is
 		// exhausted when a related-agent filter is set: that filter
-		// over-fetches and post-filters, so only a zero-row page ends
-		// the walk. Saying so beats a client inferring it wrongly.
+		// folds each page's trace siblings into it, so only a zero-row
+		// page ends the walk. Saying so beats a client inferring it
+		// wrongly.
 		"exhausted": len(rows) == 0,
 	}, nil
 }

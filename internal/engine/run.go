@@ -776,6 +776,17 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// And the identity applier's, for the same reason.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	// THE EVENT LOG FILES AN EVENT UNDER EVERY AGENT IT INVOLVES, by the
+	// agent id the org chart derives for each seat a participant tag names
+	// — which only a process holding the chart can say, so it is this
+	// engine's, off the LIVE epoch at the moment each event is written.
+	// Installed before anything below can publish; an event written with
+	// no company active is filed under its own agent alone. See
+	// [store.DB.SetEventSeats].
+	backends.Store.SetEventSeats(func(handle string) (string, bool) {
+		return seatAgentID(e.Company(), handle)
+	})
+
 	// ONE RUNNER PER ENGINE, because its in-process guard is half of what
 	// keeps two writers off one third-party app — see [setup.Runner.Hold].
 	// A runner per caller would give the loop, the API and a disconnect a

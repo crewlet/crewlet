@@ -2703,9 +2703,25 @@ skips or repeats whatever collided with it.
 
 **A page shorter than `limit` is the end of the history.** That rule
 holds for every filter the store pushes into SQL. It does *not* hold for
-the `agent` filter, which over-fetches and post-filters (it also pulls in
-every event sharing a trace with a direct match, so a caller must dedupe
-by id); that surface only knows it is done when a page returns zero rows.
+the `agent` filter, which folds into each page every event sharing a trace
+with a direct match (so a caller must dedupe by id); that surface only knows
+it is done when a page returns zero rows.
+
+`agent` is the **related** filter: every event that involves one agent seat,
+named by any **handle** it answers to — the events that are its own, and every
+one naming it as a party: an A2A channel it asked or was asked on, a message it
+sent or was sent there, and a vendor delivery addressed to it — plus the
+trigger that caused its work, by trace. Both sides are keyed on the seat's
+**agent id**, never a name: the handle is resolved to one through the org chart
+the answering node holds, as each event's participants were resolved when it
+was written, so a seat's namesake is never listed as the seat, and a handle the
+seat has given up still finds it rather than whoever took the handle next. A
+handle no agent seat answers to — a human seat's, or nobody's — is refused
+`bad_params`, because there is no id it could match and an empty page would
+read as an agent that has done nothing; a person's events are the ones they
+acted in, under `actor`. The index was keyed on names before node migration
+`0036`, and a counterpart or a delivery's recipient named before it is not in
+the related view for the rest of the retention window.
 
 The persistent store retains 30 days, and
 [`event_history_seconds`](#the-health-envelope) on the health envelope is
@@ -2757,8 +2773,8 @@ which are whole buckets.
 
 Two refusals, both **400** rather than a smaller answer:
 
-- **`related_agent`** is not accepted. That filter over-fetches and
-  post-filters (see above), so a count over the predicate alone is a
+- **`related_agent`** is not accepted. That filter folds each page's trace
+  siblings into it (see above), so a count over the predicate alone is a
   smaller set than the listing shows — and a bar that disagrees with its
   own rows is the one thing this axis exists not to be.
 - **A window of more than 1,500 buckets** is refused naming the bucket and
@@ -4927,7 +4943,7 @@ reading a payload:
 | `type` | `webhook:<event>`, or `forge:<event>` for an Atlassian Cloud relay |
 | `source` | The integration the **payload** belongs to — the route for six of the seven, and the relayed product for Forge |
 | `summary` | The delivery in one sentence |
-| `tags.recipient` | The seat a per-seat delivery was addressed to, absent for a company-wide one. It is one of the four keys the log indexes as a **party**, so `GET /events?agent=<handle>` also returns what reached that seat from outside |
+| `tags.recipient` | The seat a per-seat delivery was addressed to, absent for a company-wide one. The log resolves it to that seat's agent id and indexes the delivery under it as a **party**, so `GET /events?agent=<handle>` also returns what reached an agent seat from outside |
 | `tags.delivery_key` | The provider's own delivery id, absent for the providers that send none — what an operator has in front of them in the provider's console |
 | `payload` | The **raw body the provider sent**, on `GET /events/{event_id}` only. A listing never carries a payload, so a deliveries screen is one request rather than one per row |
 

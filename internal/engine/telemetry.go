@@ -539,6 +539,25 @@ func seatIdentity(company *Company, handle string) (role, agentID string) {
 	return seat.Name, agentID
 }
 
+// seatAgentID is the agent id of the AGENT seat a handle names — any handle it
+// answers to, through [org.Organization.AgentSeatByHandle] — and false for a
+// human seat, a handle nobody answers to, and a node with no active company.
+// It is what the event log's party index is keyed on ([store.DB.SetEventSeats]).
+func seatAgentID(company *Company, handle string) (string, bool) {
+	if company == nil || company.Org == nil {
+		return "", false
+	}
+	seat := company.Org.AgentSeatByHandle(handle)
+	if seat == nil {
+		return "", false
+	}
+	id, ok := company.Org.AgentIDFor(seat)
+	if !ok {
+		return "", false
+	}
+	return id.String(), true
+}
+
 // seatOrigin names the handle the seat answering to handle was CREATED under
 // — the one every memory table keys it on (see internal/learning's package
 // doc) — or "" for a handle no seat in the company answers to, and for a node

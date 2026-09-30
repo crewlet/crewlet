@@ -562,11 +562,11 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 // addressed to, and answering that for a page of rows meant fetching a payload
 // per row.
 //
-// `recipient` rather than a name of this package's own: it is one of the four
-// keys the event store indexes as a PARTY, so tagging it here is also what
-// makes `events?agent=<handle>` return what reached that seat from outside —
-// the one question the party index exists for, and the one class of event it
-// was blind to.
+// `recipient` rather than a name of this package's own: it is one of the tags
+// the event store resolves to a seat's agent id and indexes as a PARTY, so
+// tagging it here is also what makes `events?agent=<handle>` return what
+// reached that seat from outside — the one question the party index exists
+// for, and the one class of event it was blind to.
 //
 // A nil map for a delivery that is neither addressed nor keyed, because an
 // empty tag is not the same as an absent one: a row carrying `recipient: ""`

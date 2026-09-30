@@ -241,13 +241,15 @@ type ListQuery struct {
 	// history answers this filter too. See ADR-0017.
 	WorkKey string
 
-	// RelatedAgent is a broad filter: events whose actor is the agent, or
-	// whose tags name it as agent_role / target / recipient / sender, plus
-	// every event sharing a trace with one of those — so the inbound
-	// webhook that caused the agent's work shows up beside it.
+	// RelatedAgent is a broad filter, by an AGENT ID: the events that
+	// involve that agent — its own, and every one naming it as a party
+	// (see [DB.SetEventSeats]) — plus every event sharing a trace with one
+	// of those, so the inbound webhook that caused the agent's work shows up
+	// beside it.
 	//
-	// It over-fetches and post-filters, so a page shorter than Limit does
-	// NOT mean history is exhausted here; only a zero-row page does.
+	// The trace siblings ride on the page they were found from, so a page
+	// shorter than Limit does NOT mean history is exhausted here; only a
+	// zero-row page does.
 	RelatedAgent string
 
 	// Since and Until bound the window a caller is asking about, as a
@@ -411,7 +413,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 		); err != nil {
 			return err
 		}
-		for _, party := range partiesOf(rec.Actor, tags) {
+		for _, party := range partiesOf(tags, l.db.eventSeatsNow()) {
 			if _, err := tx.ExecContext(ctx, partyInsertSQL,
 				party, EncodeTime(rec.Time), rec.ID); err != nil {
 				return err
@@ -430,28 +432,99 @@ const partyInsertSQL = `
 INSERT INTO crewlet_event_parties (party, event_time, event_id) VALUES (?, ?, ?)
 ON CONFLICT (party, event_time, event_id) DO NOTHING`
 
-// partiesOf names every agent an event involves, deduplicated.
+// SeatResolver answers the AGENT id of the seat a handle names — any handle it
+// answers to: its current one, the one it was created under, or one it has
+// given up — and false for a handle no agent seat answers to, which is a human
+// seat, a stranger or nobody.
+type SeatResolver func(handle string) (agentID string, ok bool)
+
+// SetEventSeats installs what the event log resolves a handle an event names
+// through, to file that event under the agent it involves. Nil files every
+// event under its own agent alone.
 //
-// THE ACTOR AND THE FOUR TAGS, and the set is exactly what the RelatedAgent
-// filter used to test in Go — moved to write time so the read can be an index
-// seek. Deduplicated here rather than left to the conflict clause, because an
-// event whose actor is also its sender is the common case, not the rare one.
-func partiesOf(actor string, tags map[string]string) []string {
-	seen := make(map[string]struct{}, len(agentTagKeys)+1)
-	var out []string
-	add := func(name string) {
-		if name == "" {
-			return
-		}
-		if _, dup := seen[name]; dup {
-			return
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
+// # Why the store is handed it
+//
+// Because it cannot compute the answer. An agent id is a UUIDv5 over the
+// company's name and the handle the seat was created under (ADR-0019), and
+// which seat a handle names — after a rename, after a retired handle was
+// taken — is the org chart's to say. Only a process holding the chart can say
+// it, and the engine installs one reading its live epoch, so the row is keyed
+// on what the chart said when the event was written.
+//
+// A handle that is not open takes it as nothing, like every other setter here:
+// there is no log on it to file anything under.
+func (d *DB) SetEventSeats(seats SeatResolver) {
+	if d == nil {
+		return
 	}
-	add(actor)
-	for _, key := range agentTagKeys {
-		add(tags[key])
+	if seats == nil {
+		d.eventSeats.Store(nil)
+		return
+	}
+	d.eventSeats.Store(&seats)
+}
+
+// eventSeatsNow is the installed resolver, or nil.
+func (d *DB) eventSeatsNow() SeatResolver {
+	if d == nil {
+		return nil
+	}
+	if held := d.eventSeats.Load(); held != nil {
+		return *held
+	}
+	return nil
+}
+
+// partiesOf names every agent an event involves, by AGENT ID, deduplicated.
+//
+// # Why ids, never names
+//
+// The index was keyed on NAMES — the actor, the `agent_role` tag and the
+// participant tags as they came — and a seat's name is prose two seats may
+// share: a seat's related events listed every namesake's work as its own,
+// and a retired handle kept answering for whichever seat took it next. An
+// agent id is one seat's for the life of the company, so it is what the index
+// holds: the event's own `agent_id`, and each seat a participant tag names,
+// resolved through seats.
+//
+// # Which tags name a seat
+//
+// [seatTagKeys] on every event, and `sender` only on an A2A channel's own
+// records (those carrying `channel_id`): there it is the seat that spoke, and
+// on an external notification it is the name somebody has at a vendor, which
+// resolved as a handle filed a stranger's message under whichever seat
+// shared it. Deduplicated here rather than left to the conflict clause,
+// because an event naming its own agent as a participant is the common case.
+func partiesOf(tags map[string]string, seats SeatResolver) []string {
+	seen := make(map[string]struct{}, len(seatTagKeys)+2)
+	var out []string
+	add := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	add(tags["agent_id"])
+	if seats == nil {
+		return out
+	}
+	resolve := func(handle string) {
+		if handle == "" {
+			return
+		}
+		if id, ok := seats(handle); ok {
+			add(id)
+		}
+	}
+	for _, key := range seatTagKeys {
+		resolve(tags[key])
+	}
+	if tags["channel_id"] != "" {
+		resolve(tags["sender"])
 	}
 	return out
 }
@@ -968,8 +1041,12 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 	rec.Failed = types.Failed(rec.Type, false, tags["failed"] == "true")
 }
 
-// agentTagKeys are the tag keys that mean "this event involves that agent".
-var agentTagKeys = []string{"agent_role", "target", "recipient", "sender"}
+// seatTagKeys are the tag keys that name a SEAT of this company by a handle
+// wherever they appear — an A2A channel's two ends and the one that closed it,
+// and the seat a vendor delivery was addressed to — so each resolves to a party
+// of the event. See [partiesOf] for `sender`, which names one only on an A2A
+// channel's records, and for why `agent_role`, a name, is not here at all.
+var seatTagKeys = []string{"requester", "target", "recipient", "closed_by"}
 
 func truncate(recs []EventRecord, limit int) []EventRecord {
 	if limit > 0 && len(recs) > limit {

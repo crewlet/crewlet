@@ -138,6 +138,10 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 			}
 		},
 		"LearnEmbeddingDim": func(t *testing.T) { d.LearnEmbeddingDim(768) },
+		"SetEventSeats": func(t *testing.T) {
+			d.SetEventSeats(func(string) (string, bool) { return "", false })
+			d.SetEventSeats(nil)
+		},
 
 		// ---- the sub-handles: BUILDING one must not panic -----------------
 		//

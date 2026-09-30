@@ -739,6 +739,23 @@ func (s Sources) agentIDOf(handle string) string {
 	return handle
 }
 
+// agentSeatID is the agent id of the AGENT seat a handle names — any handle it
+// answers to — and false for a human seat, a handle nobody answers to, and a
+// node with no active company. Unlike [Sources.agentIDOf] it never hands the
+// handle back: a caller comparing the answer against ids must not be given a
+// name to compare.
+func (s Sources) agentSeatID(handle string) (string, bool) {
+	roster := s.roster()
+	if roster == nil {
+		return "", false
+	}
+	id, ok := roster.AgentIDFor(roster.AgentSeatByHandle(handle))
+	if !ok {
+		return "", false
+	}
+	return id.String(), true
+}
+
 // memoryNames resolves a seat, by any handle it answers to, into the two names
 // its memory takes: the ORIGIN its episodes, skills and counterparty profiles
 // are filed under — the handle it was created under — and the handle it
