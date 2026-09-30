@@ -1199,3 +1199,67 @@ func TestAViewWatchEndsWithItsContext(t *testing.T) {
 		t.Fatal("the watch did not close when its context ended")
 	}
 }
+
+// A ROUTER TOLD IT ROUTED BY AN OLD MAP READS THE MAP AGAIN NOW ([View.Refresh]),
+// never waiting for the watch to deliver it — and a store that holds no map is
+// an answer, the one layout 0 routes by, never a failed refresh. A node the
+// view named that answered nothing makes it list again at once
+// ([View.Unanswered]): its estate leases and the presence roster alike, so a
+// node that left on a clean stop drops out of the next answer rather than one a
+// heartbeat later.
+func TestARouterRefreshesTheViewAndReportsASilentNode(t *testing.T) {
+	t.Parallel()
+	empty := viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
+	if _, err := empty.Layout(); err == nil {
+		t.Fatal("a view that has read nothing answers a layout")
+	}
+	if err := empty.Refresh(t.Context()); err != nil {
+		t.Fatalf("refreshing against a store that holds no map = %v, want an answer", err)
+	}
+	if layout, err := empty.Layout(); err != nil || layout.Number != 0 {
+		t.Fatalf("after the refresh Layout = (%d, %v), want layout 0: the store said it "+
+			"holds no map", layout.Number, err)
+	}
+
+	// A NEWER MAP, taken in by the refresh with no watch delivering it.
+	store, state, version := storeWithMap(t)
+	v := viewOver(t, quietWatch{store}, coordmemory.New(), layoutZero, nil)
+	if err := v.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if _, held, found, err := v.Map(); err != nil || !found || held != version {
+		t.Fatalf("after a refresh the view holds (%d, %v, %v), want version %d", held, found,
+			err, version)
+	}
+	rec, ok, err := store.UpdateEstateMap(t.Context(), encoded(t, state), version)
+	if err != nil || !ok {
+		t.Fatalf("update: %v %v", ok, err)
+	}
+	if err := v.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if _, held, _, _ := v.Map(); held != rec.Version {
+		t.Fatalf("after a refresh the view holds version %d, want the newer %d", held, rec.Version)
+	}
+
+	// A SILENT NODE, reported. The heartbeat is an hour, so nothing but the
+	// report lists the leases again inside the test.
+	lister := &countingLister{Lister: coordmemory.New()}
+	presence := &roster{nodes: []string{"a"}}
+	silent, err := NewView(ViewOptions{Maps: coordmemory.NewFleet(), Leases: lister,
+		Running: layoutZero, Roster: presence, Heartbeat: time.Hour, TTL: 2 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, silent)
+	eventually(t, "the first listing", func() bool { return lister.count() >= 1 })
+	before := lister.count()
+	silent.Unanswered("a")
+	eventually(t, "a listing on the node's silence", func() bool { return lister.count() > before })
+	presence.mu.Lock()
+	told := presence.invalidated
+	presence.mu.Unlock()
+	if told == 0 {
+		t.Fatal("the presence roster was not told a node it named went silent")
+	}
+}

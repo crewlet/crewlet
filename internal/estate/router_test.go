@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -940,6 +941,76 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 	if trackerServed, _, err := r.Serves(t.Context(), statelog.EstatePartition); err != nil ||
 		trackerServed {
 		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	}
+}
+
+// THE HOLDER THAT ANSWERED LAST FOR A PARTITION IS ASKED FIRST NEXT TIME, ahead
+// of the rendezvous winner — its applier is the one most likely to hold this
+// node's writes — and loses that place the moment it goes silent, not only for
+// as long as it stays suspect.
+func TestTheHolderThatAnsweredLastIsAskedFirstUntilItGoesSilent(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	r := f.router(t, "agent-2", nil)
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	r.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	winnerName, winner := f.first(t, r)
+	runnerUp := f.other(winner)
+	read := func() error {
+		_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+		return err
+	}
+
+	// THE RUNNER-UP ANSWERS ONCE, because the winner ran nothing...
+	winner.set(func(n *fakeNode) { n.notHolder = true })
+	if err := read(); err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	winner.set(func(n *fakeNode) { n.notHolder = false })
+	// ...AND IS ASKED FIRST FROM THEN ON.
+	for range 3 {
+		if err := read(); err != nil {
+			t.Fatalf("tasks: %v", err)
+		}
+	}
+	if winner.askedFor("tasks") {
+		t.Fatal("the rendezvous winner was asked ahead of the holder that answered last")
+	}
+
+	// A HOLDER THAT GOES SILENT LOSES ITS PLACE for good: once its
+	// suspicion lapses it is back in the rendezvous order, not first.
+	runnerUp.set(func(n *fakeNode) { n.silent = true })
+	winner.set(func(n *fakeNode) { n.notHolder = true })
+	if err := read(); err == nil {
+		t.Fatal("a read nobody could answer was answered")
+	}
+	runnerUp.set(func(n *fakeNode) { n.silent = false })
+	winner.set(func(n *fakeNode) { n.notHolder = false })
+	clock.Add(int64(2 * suspectFor))
+	if got, _ := f.first(t, r); got != winnerName {
+		t.Fatalf("%s is asked first after the holder that answered last went silent, want "+
+			"the rendezvous winner %s", got, winnerName)
+	}
+}
+
+// A WRITE THIS NODE'S OWN WRITE AUTHORITY REFUSED AT GATE 3 is taken to a peer
+// under the same operation id, exactly as a remote holder's refusal is: it
+// appended nothing, and a node that serves the partition can take it.
+func TestALocalGateThreeRefusalMovesOnUnderTheSameOperation(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []statelog.Reason{statelog.ReasonNotHolder, statelog.ReasonHoldingUnknown} {
+		f := newFleet(t, "data-a")
+		local := &fakeNode{name: "data-self", units: chartOf("self"),
+			refusal: &statelog.Unavailable{Reason: reason, OpID: "op-l", Cause: statelog.ErrNotHolder}}
+		r := f.router(t, "data-self", local)
+		written, err := r.WriterAs(swe).CreateTask(t.Context(), "op-l", tracker.Task{Project: "ENG"}, nil)
+		if err != nil || written.Key != "ENG-1" {
+			t.Fatalf("%s: create = (%+v, %v), want the peer's answer", reason, written, err)
+		}
+		if got := f.nodes["data-a"].ops(); !slices.Equal(got, []string{"op-l"}) {
+			t.Fatalf("%s: the peer ran %v, want [op-l]", reason, got)
+		}
 	}
 }
 
