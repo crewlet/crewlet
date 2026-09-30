@@ -573,6 +573,35 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	return true, ""
 }
 
+// Answers reports whether this copy of a log may answer a REQUEST now — a
+// read, or a write decided from its rows: it is [Health.Serving], or it is
+// established at a lag of zero this instant ([Health.Established] strict).
+//
+// # Neither half alone
+//
+// Serving alone refuses a copy that is level but has not yet LEARNED it is:
+// the drained latch is set on the fetch after the last record commits, up to a
+// fetch wait later, and a seat admitted at lag zero in that window would find
+// every call it made refused by the node that admitted it. Strict alone is
+// seat admission's question, and a request gate that asked it refused a busy
+// company's copy on most instants — a record in flight — so every request
+// went to whichever holder happened to be level at that moment, or to none.
+// What a request must see of its own node's writes is what the session floors
+// carry, and neither half is asked to supply it.
+//
+// Refused, it answers Serving's refusal: the one that says what the copy is
+// waiting for.
+func (h Health) Answers() (bool, ReadRefusal) {
+	ok, refusal := h.Serving()
+	if ok {
+		return true, ""
+	}
+	if level, _ := h.Established(true); level {
+		return true, ""
+	}
+	return false, refusal
+}
+
 // Serving reports whether this copy of a log may answer for its partition: the
 // state a node's estate lease names `serving`, which a joiner is promoted on
 // and a leaver's retirement waits for. It is ESTABLISHED on the log's own

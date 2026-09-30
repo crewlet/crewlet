@@ -199,6 +199,43 @@ func TestAServingCopyIsDrainedAndWithinTheSlack(t *testing.T) {
 	}
 }
 
+// A COPY ANSWERS A REQUEST WHEN IT IS SERVING OR LEVEL THIS INSTANT: a drained
+// copy with a record in flight answers — a busy company has one on most
+// instants — and so does a copy at a lag of zero that has not yet learned it
+// drained, which is the window a seat admitted at lag zero would otherwise
+// spend refused. A copy that is neither — replaying far behind, or never
+// drained and behind — does not, and every refusal Established makes on the
+// log's own terms is its refusal too.
+func TestACopyAnswersWhenServingOrLevel(t *testing.T) {
+	t.Parallel()
+	ptr := func(v uint64) *uint64 { return &v }
+	copyAt := func(lag uint64, drained bool) statelog.Health {
+		end := uint64(10_000)
+		return statelog.Health{
+			Position:  statelog.Position{Stream: "S", Generation: 1, Seq: end - lag},
+			TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(lag), LastSeq: ptr(end),
+			Drained: drained,
+		}
+	}
+	for name, tc := range map[string]struct {
+		health statelog.Health
+		ok     bool
+		want   statelog.ReadRefusal
+	}{
+		"drained, a record in flight":    {health: copyAt(1, true), ok: true},
+		"level before the drained latch": {health: copyAt(0, false), ok: true},
+		"never drained and behind":       {health: copyAt(3, false), want: statelog.RefuseBehind},
+		"past the slack":                 {health: copyAt(statelog.SnapshotLagSlack+1, true), want: statelog.RefuseBehind},
+		"a stream rebuilt":               {health: func() statelog.Health { h := copyAt(0, false); h.StreamRecreated = true; return h }(), want: statelog.RefuseWrongStream},
+		"a floor nobody read":            {health: func() statelog.Health { h := copyAt(0, false); h.TrimFloor = nil; return h }(), want: statelog.RefuseFloorUnknown},
+	} {
+		ok, refusal := tc.health.Answers()
+		if ok != tc.ok || refusal != tc.want {
+			t.Errorf("%s: Answers = (%v, %q), want (%v, %q)", name, ok, refusal, tc.ok, tc.want)
+		}
+	}
+}
+
 // ESTABLISHED IS A TWO-SIDED INEQUALITY, and each side fails for its own
 // reason.
 //
