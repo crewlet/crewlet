@@ -68,7 +68,12 @@ import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { describeChange, type LabelContext } from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
-import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
+import {
+  queryFailure,
+  type QueryFailure,
+  type WorkActivityAnswer,
+  type WorkActivityRecord,
+} from "~/protocol/index.ts";
 
 /**
  * The window this screen offers.
@@ -176,7 +181,8 @@ export function HistoryView({
   const [olderKeys, setOlderKeys] = useState<Record<string, string>>({});
   const [cursor, setCursor] = useState("");
   const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
+  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
 
   // A FILTER CHANGE IS A NEW QUERY, so the pages fetched under the old one go
   // with it — the rule the event log states at length (`routes/activity`). Kept
@@ -194,7 +200,7 @@ export function HistoryView({
     setOlder([]);
     setOlderKeys({});
     setCursor("");
-    setPageError(null);
+    setPageFailure(null);
   }, [container, kind, actor, windowKey]);
 
   const live = useMemo(() => state.data?.records ?? [], [state.data]);
@@ -223,7 +229,7 @@ export function HistoryView({
   const loadOlder = useCallback(async () => {
     if (!next) return;
     setPaging(true);
-    setPageError(null);
+    setPageFailure(null);
     // THE FIRST PAGE IS FROZEN THE MOMENT A SECOND ONE IS ASKED FOR, and that
     // is not caching: the cursor this page resumes at was minted from the last
     // row of the first page at the instant it was read, so a poll that then
@@ -243,7 +249,7 @@ export function HistoryView({
       setOlderKeys((prev) => ({ ...prev, ...(page.keys ?? {}) }));
       setCursor(page.next_cursor ?? "");
     } catch (err) {
-      setPageError(err instanceof Error ? err.message : "query_failed");
+      setPageFailure(queryFailure(err));
     } finally {
       setPaging(false);
     }
@@ -438,10 +444,10 @@ export function HistoryView({
           this replaces told a reader to narrow the window to see what came
           before this page — which moves the window's newest edge and reaches
           fewer, newer rows. */}
-      {(more || paging || pageError || head) && (
+      {(more || paging || pageFailure || head) && (
         <footer className="panel-foot">
-          {pageError ? (
-            <QueryState error={pageError} loading={false} />
+          {pageFailure ? (
+            <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
           ) : (
             <>
               {more ? (

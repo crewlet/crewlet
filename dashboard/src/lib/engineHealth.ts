@@ -29,7 +29,7 @@ import { useClient } from "./store-hooks.ts";
 import {
   isLogRefusal,
   queryErrorCode,
-  QueryRefusedError,
+  queryFailure,
   UNAVAILABLE_RETRY_MS,
   type LiveSocket,
   type LogRefusal,
@@ -141,7 +141,7 @@ class SharedHealth {
         (err: unknown) => {
           if (this.generation !== mine) return;
           const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
-          const refusal = err instanceof QueryRefusedError ? err.refusal : null;
+          const { refusal } = queryFailure(err);
           retrySoon =
             code === "unavailable" &&
             !(refusal !== null && isLogRefusal(refusal) && refusal.retryAfter === 0);

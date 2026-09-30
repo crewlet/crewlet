@@ -269,6 +269,39 @@ test("no stat tile builds its caption by joining a list", () => {
   ).toBeGreaterThan(30);
 });
 
+/**
+ * A QUERYSTATE HANDED A FAILURE IS HANDED WHY.
+ *
+ * `QueryState` turns an `unauthorized` into the grant that would admit the
+ * reader, and an `unavailable` the state log will not lift into that fact —
+ * but only from the `refusal` beside the code, which `useQuery` answers and a
+ * screen has to pass on. Five did not (a container's pages, a tool's holders,
+ * a schedule's runs twice, the fleet's table), so each drew the generic banner
+ * where the engine had said exactly what would change the answer. Nothing else
+ * catches it: `refusal` is optional because a surface with no query behind it
+ * has none, so an omission type-checks and renders.
+ *
+ * `error={null}` is exempt, being no failure at all.
+ */
+test("every QueryState handed an error is handed its refusal", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "QueryState")) {
+      const error = /\berror=\{([^}]*)\}/.exec(el.text);
+      if (!error || error[1]!.trim() === "null") continue;
+      seen++;
+      if (/\brefusal=\{/.test(el.text)) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line} — error={${error[1]!.trim()}}`);
+    }
+  }
+  expect(offenders, "pass the read's `refusal` beside its `error`").toEqual([]);
+  // THE OTHER SIDE: a renamed component or a broken scan makes the rule
+  // vacuous and still green. Seventy-odd of them today.
+  expect(seen, "nothing here reads as a QueryState any more").toBeGreaterThan(40);
+});
+
 /*
  * AND THE SCANNER ACTUALLY READS THE SHAPE THE RULE IS FOR. A gate that only
  * ever saw single-line props would pass a reverted multi-line ternary — which is

@@ -152,7 +152,7 @@ function eventStatus(event: EventRecord) {
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
-  const { data, loading, error } = useQuery("event", { id: eventId });
+  const { data, loading, error, refusal } = useQuery("event", { id: eventId });
   const { data: engine } = useEngineHealth();
 
   // A phase event has a first-class rendering; everything else gets its
@@ -230,6 +230,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
       <QueryState
         error={error === "not_found" ? null : error}
+        refusal={refusal}
         loading={loading}
         empty={
           !loading && !data
@@ -349,7 +350,11 @@ export function EventScreen({ eventId }: { eventId: string }) {
  */
 export function EventPeek({ eventId }: { eventId: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
+  const { data, loading, error, refusal } = useQuery(
+    "event",
+    { id: eventId },
+    { enabled: eventId !== "" },
+  );
   const { data: engine } = useEngineHealth();
 
   // NOT AN EMPTY RAIL. `peek=event:` is reached from a pasted id as often as
@@ -378,6 +383,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           // reached and has no such row, which the empty state below states
           // precisely. Every other code is the engine failing to answer.
           error={error === "not_found" ? null : error}
+          refusal={refusal}
           loading={loading}
           empty={
             missing

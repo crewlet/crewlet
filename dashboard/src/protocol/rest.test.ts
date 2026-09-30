@@ -377,3 +377,30 @@ describe("whether an answer is the engine's own", () => {
     expect((err as RestError).unanswered).toBe(true);
   });
 });
+
+// A REST REFUSAL IN THE SHAPE `QueryState` RENDERS FROM, so a screen reading
+// over REST says what a socket screen says about the same refusal: the grants a
+// 403 named, and whether waiting changes a 503 — no `Retry-After` being the
+// engine saying it will not. A 401 names no rule: nobody was signed in.
+describe("the refusal behind an answer", () => {
+  test("a 403 carries its rule and the grants that would admit the caller", () => {
+    const err = new RestError(403, {
+      error: "unauthorized",
+      reason: "operator",
+      grants: ["config:read"],
+    });
+    expect(err.refusal).toEqual({ reason: "operator", grants: ["config:read"] });
+  });
+
+  test("a 503 says whether waiting changes it", () => {
+    const final = new RestError(503, { error: "unavailable", refusal: "log_full", detail: "full" });
+    expect(final.refusal).toEqual({ code: "log_full", detail: "full", retryAfter: 0 });
+    const soon = new RestError(503, { error: "unavailable", detail: "behind" }, 2);
+    expect(soon.refusal).toEqual({ code: null, detail: "behind", retryAfter: 2 });
+  });
+
+  test("a 401, and an answer the engine did not write, name no rule", () => {
+    expect(new RestError(401, { error: "invalid_token" }).refusal).toBeNull();
+    expect(new RestError(503, { message: "upstream closed" }).refusal).toBeNull();
+  });
+});

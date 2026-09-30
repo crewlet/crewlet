@@ -29,7 +29,7 @@ import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { useAgents, useClient, useEvents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { eventHistoryLabel, fmtDate, newestFirst, plural, tsKey } from "~/lib/format.ts";
-import type { FeedRow } from "~/protocol/index.ts";
+import { queryFailure, type FeedRow, type QueryFailure } from "~/protocol/index.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
@@ -174,7 +174,8 @@ export function Activity() {
   const [cursor, setCursor] = useState<{ before_time: string; before_id: string } | null>(null);
   const [exhausted, setExhausted] = useState(false);
   const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
+  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
 
   // A FILTER CHANGE IS A NEW QUERY, so the pages fetched under the old one go
   // with it. They used to survive, and it broke three ways at once: rows
@@ -195,7 +196,7 @@ export function Activity() {
     setOlder([]);
     setCursor(null);
     setExhausted(false);
-    setPageError(null);
+    setPageFailure(null);
     setFetched(false);
   }, [category, actor, agentId, windowKey]);
 
@@ -268,7 +269,7 @@ export function Activity() {
     // would be every seat's history listed under one seat.
     if (unplaced) return;
     setPaging(true);
-    setPageError(null);
+    setPageFailure(null);
     try {
       // The cursor names BOTH halves. The engine reads `before_time` and
       // `before_id`; a client sending one bare `before` gets every page
@@ -295,7 +296,7 @@ export function Activity() {
       setCursor(page.next ?? null);
       setExhausted(page.exhausted || !page.next);
     } catch (err) {
-      setPageError(err instanceof Error ? err.message : "query_failed");
+      setPageFailure(queryFailure(err));
     } finally {
       setPaging(false);
     }
@@ -495,7 +496,7 @@ export function Activity() {
           // tells a reader their log is gone when nobody managed to read it.
           // Both are absences of an answer; only the third is an answer.
           !paging &&
-          !pageError && (
+          !pageFailure && (
             <QueryState
               error={null}
               loading={false}
@@ -511,8 +512,8 @@ export function Activity() {
           )
         )}
         <footer className="panel-foot">
-          {pageError ? (
-            <QueryState error={pageError} loading={false} />
+          {pageFailure ? (
+            <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
           ) : exhausted ? (
             <span>That is the beginning of the retained history.</span>
           ) : (

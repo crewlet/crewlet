@@ -2971,6 +2971,7 @@ export function Integrations({ kind }: { kind?: string }) {
     data,
     loading,
     error,
+    refusal,
     refetch: reread,
   } = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
@@ -3179,7 +3180,7 @@ export function Integrations({ kind }: { kind?: string }) {
       {((loading && !data) || setup.loading) && (
         <Skeleton variant="text" rows={6} label="Loading" />
       )}
-      <QueryState error={error} loading={loading} empty={undefined}>
+      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
         {/* WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each half
             alphabetical. One flat list rather than panels: a capability
             heading over a group of one is chrome around a single row.

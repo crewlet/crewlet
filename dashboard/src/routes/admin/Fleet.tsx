@@ -141,7 +141,12 @@ function FleetScreen() {
         serving stale work.
       </PageNote>
 
-      {error && (
+      {/* A FAILED POLL OVER A READING IT KEPT says the reading is not now. A
+          failure with NOTHING kept is the answer itself, and it goes to the
+          QueryState below with its refusal — which names the grant that
+          would admit the reader — rather than here as a code under an empty
+          table that says no nodes are reporting. */}
+      {error && data && (
         <Callout variant="danger" role="alert">
           <span>
             This poll failed ({error}). What is below is the last reading that succeeded — on this
@@ -189,7 +194,8 @@ function FleetScreen() {
 
       {loading && !data && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
-        error={null}
+        error={data ? null : error}
+        refusal={data ? null : refusal}
         loading={loading}
         empty={
           nodes.length

@@ -39,7 +39,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
@@ -298,7 +298,12 @@ function useTool(name: string): {
 function useServerSharing(server: string): {
   /** Null until the configuration answers, which is not the same as false. */
   shared: boolean | null;
-  entity: { loading: boolean; error: string | null };
+  /**
+   * The read's whole failure, its `refusal` included: a reader refused the
+   * configuration is told which grant would admit them rather than only that
+   * something was refused.
+   */
+  entity: Pick<QueryResult<unknown>, "loading" | "error" | "refusal">;
 } {
   const entity = useQuery(
     "config_entities",
@@ -307,7 +312,7 @@ function useServerSharing(server: string): {
   );
   return {
     shared: entity.data?.entity ? sharedFlag(entity.data.entity) : null,
-    entity: { loading: entity.loading, error: entity.error },
+    entity: { loading: entity.loading, error: entity.error, refusal: entity.refusal },
   };
 }
 
@@ -502,7 +507,7 @@ function ToolBody({ name }: { name: string }) {
         {/* THE REFUSAL GOES WHERE THE ANSWER WOULD HAVE BEEN, and nowhere
             else: the tool's own facts came off a push and are still true, so
             a configuration read that failed must not blank them. */}
-        <QueryState error={entity.error} loading={entity.loading}>
+        <QueryState error={entity.error} refusal={entity.refusal} loading={entity.loading}>
           {holders === null ? (
             // WHICH READ WENT UNANSWERED, named: whether the server is shared
             // is the configuration's answer, and which seats declare its

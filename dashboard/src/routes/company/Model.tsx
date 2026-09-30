@@ -55,7 +55,7 @@ import {
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
-import type { EventRecord } from "~/protocol/index.ts";
+import { queryFailure, type EventRecord, type QueryFailure } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
@@ -99,7 +99,8 @@ export function ModelActivity() {
   const [cursor, setCursor] = useState<{ before_time?: string; before_id?: string } | null>(null);
   const [exhausted, setExhausted] = useState(false);
   const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // THE WHOLE FAILURE, its refusal included — see [queryFailure].
+  const [pageFailure, setPageFailure] = useState<QueryFailure | null>(null);
 
   // `phases`, not `events?type=…`. The event listing deliberately never
   // selects the payload — a page of ordinary events with every payload
@@ -166,7 +167,7 @@ export function ModelActivity() {
   // `phases` answer carries the payload and pages by the cursor it hands out.
   const loadOlder = useCallback(async () => {
     setPaging(true);
-    setPageError(null);
+    setPageFailure(null);
     try {
       const params: Record<string, unknown> = { limit: PAGE };
       if (filter.agentId) params.agent_id = filter.agentId;
@@ -184,7 +185,7 @@ export function ModelActivity() {
       setCursor(page.next?.before_id ? page.next : null);
       setExhausted(page.exhausted || !page.next?.before_id);
     } catch (err) {
-      setPageError(err instanceof Error ? err.message : "query_failed");
+      setPageFailure(queryFailure(err));
     } finally {
       setPaging(false);
     }
@@ -581,8 +582,8 @@ export function ModelActivity() {
           another sixty cards down a single scroller, so nobody ever reached
           it. A link goes where the screen does. */}
       <div className="row gap-2">
-        {pageError ? (
-          <QueryState error={pageError} loading={false} />
+        {pageFailure ? (
+          <QueryState error={pageFailure.error} refusal={pageFailure.refusal} loading={false} />
         ) : exhausted ? (
           <span className="t-caption">That is the beginning of the retained record.</span>
         ) : (

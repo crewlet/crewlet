@@ -4,7 +4,7 @@
 
 import { expect, test } from "vitest";
 
-import { queryErrorCode } from "./index.ts";
+import { queryErrorCode, queryFailure, QueryRefusedError } from "./index.ts";
 
 test.each(["unknown_query", "unauthorized", "unavailable", "not_found", "timeout", "closed"])(
   "%s is a query error code",
@@ -28,4 +28,16 @@ test.each(["no_event_store", "The engine refused the read", "", null, undefined]
 test("a name the code table only inherits is not a code", () => {
   expect(queryErrorCode("toString")).toBeNull();
   expect(queryErrorCode("constructor")).toBeNull();
+});
+
+// A REJECTION READ ONCE, its refusal included: a page of older rows asked
+// outside `useQuery` kept the code and dropped the grants the engine named.
+test("a failed query is its code and the refusal behind it", () => {
+  const refusal = { reason: "operator", grants: ["audit:read"] };
+  expect(queryFailure(new QueryRefusedError("unauthorized", refusal))).toEqual({
+    error: "unauthorized",
+    refusal,
+  });
+  expect(queryFailure(new Error("timeout"))).toEqual({ error: "timeout", refusal: null });
+  expect(queryFailure("not an error")).toEqual({ error: "query_failed", refusal: null });
 });

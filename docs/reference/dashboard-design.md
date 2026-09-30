@@ -3112,7 +3112,14 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and a second one pins those codes to the engine's own
   [refusal vocabulary](api-endpoints.md#every-refusal-is-one-envelope), so a
   query error and the HTTP refusal of the same question can never be two
-  different words.
+  different words. Every screen hands `QueryState` the read's REFUSAL beside
+  its code — `useQuery`'s own `refusal`, a page of older rows' through
+  `queryFailure`, a REST read's through `RestError.refusal` — because the
+  refusal is what names the grant that would admit the reader, or that the
+  state log will not lift it; a screen that passed the code alone drew the
+  generic banner where the engine had said exactly what would change the
+  answer. A source gate (`app/source.test.ts`) refuses a `QueryState` handed
+  an error and not its refusal.
 - **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
   are three-valued, and a count this node could not read comes back `null`,
   never `0`; `inbound` is a plain count whose unknown-ness rides on the

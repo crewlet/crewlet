@@ -544,7 +544,7 @@ export function CommandPalette({
               code means — `components/common.tsx`. A second wording here is
               how "the engine does not serve this answer" and "the socket went
               away" ended up both reading as "nothing matched". */}
-          {refusal && <QueryState error={refusal} loading={false} />}
+          {refusal && <QueryState error={refusal} refusal={work.refusal} loading={false} />}
           {!hits.length && !(sigil === "#" && (term.length < 2 || searching || !!refusal)) && (
             <div className="palette-item" style={{ color: "var(--text-muted)" }}>
               Nothing matches “{term || q}”.

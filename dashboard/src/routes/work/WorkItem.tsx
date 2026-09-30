@@ -103,6 +103,8 @@ import type {
   WorkSummary,
   WorkTombstone,
   WorkUnitRef,
+  LogRefusal,
+  QueryRefusal,
 } from "~/protocol/index.ts";
 
 /**
@@ -545,12 +547,15 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
 export function Subtasks({
   rows,
   error,
+  refusal,
   now,
   chrome,
   peek,
 }: {
   rows: WorkSummary[];
   error?: string | null;
+  /** Why the subtree read was refused, beside `error` — see `QueryState`. */
+  refusal?: QueryRefusal | LogRefusal | null;
   now: number;
   chrome: RowChrome;
   /**
@@ -572,7 +577,7 @@ export function Subtasks({
         <Card.Header>
           <Card.Title>Subtasks</Card.Title>
         </Card.Header>
-        <QueryState error={error} loading={false} />
+        <QueryState error={error} refusal={refusal} loading={false} />
       </Card>
     );
   }
@@ -731,6 +736,7 @@ export function ItemBody({
       <Subtasks
         rows={subtasks}
         error={children.error}
+        refusal={children.refusal}
         now={now}
         chrome={chrome}
         peek={flush ? undefined : (row) => openPeek({ kind: "item", id: row.key })}

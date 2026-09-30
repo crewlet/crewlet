@@ -61,7 +61,13 @@ import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import { rest, RestError } from "~/protocol/index.ts";
-import type { ConfigReference, QueryErrorCode, SecretRow } from "~/protocol/index.ts";
+import type {
+  ConfigReference,
+  LogRefusal,
+  QueryErrorCode,
+  QueryRefusal,
+  SecretRow,
+} from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -99,7 +105,7 @@ function refusalCode(err: unknown): QueryErrorCode {
  * The list's refusal goes through [refusalCode] instead — see there for why a
  * sentence must never reach the banner.
  */
-function refusal(err: unknown): string {
+function refusalSentence(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
     // THE GRANT THE ENGINE NAMED, where it named one: a refusal on
@@ -122,6 +128,12 @@ interface Credentials {
   loading: boolean;
   /** The refusal as a machine code, which is what [QueryState] renders from. */
   error: QueryErrorCode | null;
+  /**
+   * What the refusal named beside its code — the grants a 403 said would have
+   * admitted the reader ([RestError.refusal]) — which [QueryState] turns into
+   * the sentence that says what would change the answer.
+   */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Why the reference index is unknown, when it is. */
   unknown: string | null;
   /** The config fields naming one credential, or null where the check did not answer. */
@@ -152,6 +164,7 @@ function useCredentials(enabled = true): Credentials {
   // not one of them.
   const [rows, setRows] = useState<SecretRow[] | null>(null);
   const [error, setError] = useState<QueryErrorCode | null>(null);
+  const [refusal, setRefusal] = useState<QueryRefusal | LogRefusal | null>(null);
   const [loading, setLoading] = useState(enabled);
 
   // THE REFERENCE INDEX IS THREE-VALUED, and collapsing it to two is the one
@@ -194,11 +207,13 @@ function useCredentials(enabled = true): Credentials {
       if (generation.current !== mine) return;
       setRows(body?.secrets ?? []);
       setError(null);
+      setRefusal(null);
     } catch (err) {
       if (generation.current !== mine) return;
       // The last good list stays on screen. A refusal to refresh is not a
       // reason to tell an operator the company holds no credentials.
       setError(refusalCode(err));
+      setRefusal(err instanceof RestError ? err.refusal : null);
     } finally {
       // ANSWERED, not answered WELL: a refusal is a state this screen
       // renders honestly, and waiting is not. Guarded like the rest — a
@@ -227,7 +242,7 @@ function useCredentials(enabled = true): Credentials {
         return;
       }
       setReferences(null);
-      setUnknown(refusal(err));
+      setUnknown(refusalSentence(err));
     }
   }, []);
 
@@ -263,7 +278,7 @@ function useCredentials(enabled = true): Credentials {
     [readers],
   );
 
-  return { rows, loading, error, unknown, readersOf, reload };
+  return { rows, loading, error, refusal, unknown, readersOf, reload };
 }
 
 /**
@@ -410,13 +425,13 @@ function CredentialBody({
  */
 export function CredentialPeek({ name }: { name: string }) {
   const now = useNow();
-  const { rows, loading, error, unknown, readersOf } = useCredentials(name !== "");
+  const { rows, loading, error, refusal, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
   return (
     <>
       {loading && rows === null && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A name that matches no row is a hand-edited URL
             or a credential removed since the link was made, and naming the one
             that resolved to nothing is more use than a header over no row. */}
@@ -451,7 +466,7 @@ export function CredentialPeek({ name }: { name: string }) {
 export function Secrets({ name }: { name?: string }) {
   const now = useNow();
   const toast = useToast();
-  const { rows, loading, error, unknown, readersOf, reload } = useCredentials();
+  const { rows, loading, error, refusal, unknown, readersOf, reload } = useCredentials();
 
   const [writing, setWriting] = useState<{ editing: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -573,6 +588,7 @@ export function Secrets({ name }: { name?: string }) {
       {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           list.length

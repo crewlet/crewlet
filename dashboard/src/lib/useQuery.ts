@@ -19,7 +19,7 @@ import { useClient, useConnection } from "./store-hooks.ts";
 import {
   queryErrorCode,
   isLogRefusal,
-  QueryRefusedError,
+  queryFailure,
   UNAVAILABLE_RETRY_MS,
   type LogRefusal,
   type QueryErrorCode,
@@ -173,7 +173,7 @@ export function useQuery<K extends QueryName>(
         // A socket rejection always carries a code; anything else that
         // threw is a failure nobody explained, which is `query_failed`.
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
-        const refusal = err instanceof QueryRefusedError ? err.refusal : null;
+        const { refusal } = queryFailure(err);
         // NOT SOON when the engine said waiting changes nothing — a full
         // log, a record this node cannot decode, a barrier its broker
         // refused. Asked every five seconds, each of those is refused the

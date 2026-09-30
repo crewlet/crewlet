@@ -36,7 +36,7 @@ import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
@@ -451,6 +451,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         truncated={Boolean(one.data?.truncated)}
         loading={one.loading}
         error={one.error}
+        refusal={one.refusal}
         now={now}
       />
     );
@@ -791,6 +792,7 @@ function OneSchedule({
   truncated,
   loading,
   error,
+  refusal,
   now,
 }: {
   scopeType: string;
@@ -803,6 +805,12 @@ function OneSchedule({
   truncated: boolean;
   loading: boolean;
   error: string | null;
+  /**
+   * Why the runs were refused, beside `error` — what lets the banner say
+   * which grant would admit the reader, or that the state log refused and
+   * asking again will not change it.
+   */
+  refusal: QueryResult<unknown>["refusal"];
   now: number;
 }) {
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
@@ -847,6 +855,7 @@ function OneSchedule({
 
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           runs.length
@@ -992,6 +1001,10 @@ export function SchedulePeek({ scope }: { scope: string }) {
         {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}
         <QueryState
           error={defined.error || history.error}
+          // THE REFUSAL OF THE READ WHOSE ERROR IS SHOWN, never the other's:
+          // two reads failing for two reasons must not pair one's code with
+          // the other's grants.
+          refusal={defined.error ? defined.refusal : history.refusal}
           loading={loading}
           empty={
             answered && !row && runs.length === 0

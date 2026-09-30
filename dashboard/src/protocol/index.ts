@@ -16,8 +16,10 @@ export {
   QueryRefusedError,
   isLogRefusal,
   queryErrorCode,
+  queryFailure,
   UNAVAILABLE_RETRY_MS,
 } from "./socket.ts";
+export type { QueryFailure } from "./socket.ts";
 export { api } from "./api.ts";
 export { rest, RestError, REQUEST_TIMEOUT_MS, isAbort, refusedGrants } from "./rest.ts";
 export type { RequestOptions, RestResponse, QueryValue } from "./rest.ts";

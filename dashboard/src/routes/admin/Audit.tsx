@@ -250,6 +250,9 @@ export function Audit() {
   );
   const config = useQuery("config_audit", { limit: PAGE.config }, { pollMs: POLL_MS });
   const secrets = useSecrets();
+  // The first of the three reads that failed, whose code and refusal the
+  // banner shows together.
+  const failed = [work, knowledge, config].find((read) => read.error !== null);
 
   const rows = useMemo<AuditEntry[]>(() => {
     const out: AuditEntry[] = [];
@@ -481,7 +484,14 @@ export function Audit() {
       {loading && shown.length === 0 && (
         <Skeleton variant="text" rows={6} label="Loading what was done" />
       )}
-      <QueryState error={work.error ?? knowledge.error ?? config.error} loading={loading}>
+      <QueryState
+        error={failed?.error ?? null}
+        // THE REFUSAL OF THE READ WHOSE CODE IS SHOWN, never another's: three
+        // reads failing for three reasons must not pair one's code with a
+        // second's grants.
+        refusal={failed?.refusal ?? null}
+        loading={loading}
+      >
         <Card padding="none">
           <Card.Header
             icon={<DescriptionGlyph size="sm" />}

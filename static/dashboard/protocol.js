@@ -377,6 +377,21 @@ var QueryRefusedError = class extends Error {
 	}
 };
 /**
+* A failed `query` as the pair `QueryState` renders from.
+*
+* ONE READING of a rejection, for every surface that asks outside `useQuery` —
+* a page of older rows, the shared health read. Read inline at each, the
+* refusal was the half a surface forgot: its screen said a read was refused
+* and not which grant would have admitted the reader, although the answer had
+* named it.
+*/
+function queryFailure(err) {
+	return {
+		error: err instanceof Error ? err.message : "query_failed",
+		refusal: err instanceof QueryRefusedError ? err.refusal : null
+	};
+}
+/**
 * Whether a refusal is the state log's, carried by an `unavailable` answer,
 * rather than one on authority. The two ride the same field of an answer
 * because a screen hands both to `QueryState` the same way.
@@ -990,6 +1005,27 @@ var RestError = class extends Error {
 		return refusedGrants(this.body);
 	}
 	/**
+	* This refusal in the shape `QueryState` renders from — the one the
+	* socket's error frame carries, under the same keys: a 403's rule and the
+	* grants that would have admitted the caller, and a 503's state-log code,
+	* its own words and whether waiting changes it (no `Retry-After` is the
+	* engine saying it will not). Null for anything else, a 401 included:
+	* nobody being signed in is not a rule's refusal, and there are no grants
+	* to name to nobody.
+	*/
+	get refusal() {
+		if (this.status === 403) return {
+			reason: typeof this.body.reason === "string" ? this.body.reason : this.code,
+			grants: this.grants
+		};
+		if (this.status === 503 && !this.unanswered) return {
+			code: typeof this.body.refusal === "string" ? this.body.refusal : null,
+			detail: this.detail || null,
+			retryAfter: this.retryAfter ?? 0
+		};
+		return null;
+	}
+	/**
 	* Whether this is NOT the engine's own answer: nothing came back (status
 	* 0), a body that could not be read (`unreadable_body` — a gateway's HTML
 	* page, a 200 cut off part way through), or a status with no engine error
@@ -1516,4 +1552,4 @@ var auth = {
 	}
 };
 //#endregion
-export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, refusedGrants, rest, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer };
+export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer };

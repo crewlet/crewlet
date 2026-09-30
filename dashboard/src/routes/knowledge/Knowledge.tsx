@@ -32,7 +32,7 @@ import {
   TargetGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { indexOrg, seatLookup, unitPath, type OrgIndex } from "~/lib/seats.ts";
 import { useChartRead } from "~/lib/chartReads.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
@@ -620,7 +620,13 @@ function ContainerPages({
 }: {
   container: PageContainer;
   recent: PageSummary[];
-  list: { error: string | null; loading: boolean };
+  /**
+   * The read's whole failure — its `refusal` included, which is what lets
+   * the banner say which grant would have admitted the reader, or that the
+   * state log refused and asking again will not change it, rather than only
+   * that there was a refusal.
+   */
+  list: Pick<QueryResult<unknown>, "error" | "loading" | "refusal">;
   now: number;
 }) {
   return (
@@ -630,6 +636,7 @@ function ContainerPages({
       </Card.Header>
       <QueryState
         error={list.error}
+        refusal={list.refusal}
         loading={list.loading}
         empty={
           recent.length

@@ -50,6 +50,28 @@ export class QueryRefusedError extends Error {
   }
 }
 
+/** What a failed `query` said: its code, and the refusal behind it, if any. */
+export interface QueryFailure {
+  error: string;
+  refusal: QueryRefusal | LogRefusal | null;
+}
+
+/**
+ * A failed `query` as the pair `QueryState` renders from.
+ *
+ * ONE READING of a rejection, for every surface that asks outside `useQuery` —
+ * a page of older rows, the shared health read. Read inline at each, the
+ * refusal was the half a surface forgot: its screen said a read was refused
+ * and not which grant would have admitted the reader, although the answer had
+ * named it.
+ */
+export function queryFailure(err: unknown): QueryFailure {
+  return {
+    error: err instanceof Error ? err.message : "query_failed",
+    refusal: err instanceof QueryRefusedError ? err.refusal : null,
+  };
+}
+
 /**
  * Whether a refusal is the state log's, carried by an `unavailable` answer,
  * rather than one on authority. The two ride the same field of an answer

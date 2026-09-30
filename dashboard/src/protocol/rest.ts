@@ -27,6 +27,7 @@
  */
 
 import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
+import type { LogRefusal, QueryRefusal } from "./types.ts";
 
 /**
  * What the engine said when it refused.
@@ -92,6 +93,32 @@ export class RestError extends Error {
   /** The grants a refusal on authority named — see [refusedGrants]. */
   get grants(): string[] {
     return refusedGrants(this.body);
+  }
+
+  /**
+   * This refusal in the shape `QueryState` renders from — the one the
+   * socket's error frame carries, under the same keys: a 403's rule and the
+   * grants that would have admitted the caller, and a 503's state-log code,
+   * its own words and whether waiting changes it (no `Retry-After` is the
+   * engine saying it will not). Null for anything else, a 401 included:
+   * nobody being signed in is not a rule's refusal, and there are no grants
+   * to name to nobody.
+   */
+  get refusal(): QueryRefusal | LogRefusal | null {
+    if (this.status === 403) {
+      return {
+        reason: typeof this.body.reason === "string" ? this.body.reason : this.code,
+        grants: this.grants,
+      };
+    }
+    if (this.status === 503 && !this.unanswered) {
+      return {
+        code: typeof this.body.refusal === "string" ? this.body.refusal : null,
+        detail: this.detail || null,
+        retryAfter: this.retryAfter ?? 0,
+      };
+    }
+    return null;
   }
 
   /**
