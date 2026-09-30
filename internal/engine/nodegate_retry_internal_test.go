@@ -512,6 +512,13 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			Err: &statelog.Unavailable{Reason: reason, Position: statelog.Position{
 				Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}}
 	}
+	// copied is a refusal of ANOTHER node's copy of the gesture's operation,
+	// which this node's append was collapsed onto and a gate dropped.
+	copied := func(reason statelog.Reason) DomainGate {
+		return DomainGate{Stream: "CREWLET_PAGES_LOG", Duplicates: 2 * time.Minute,
+			Err: &statelog.Unavailable{Reason: reason, CopyWriter: "node-x",
+				Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}}
+	}
 	retry, other := statelog.GateRetrySameOp, statelog.GateOtherNode
 	for name, tc := range map[string]struct {
 		gate    DomainGate
@@ -545,6 +552,24 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			detail: "run the gesture through a node on the log's current generation under the same operation id"},
 		"abandoned": {gate: landed(statelog.ReasonAbandoned), actions: []statelog.GateAction{other},
 			detail: "run the gesture through a node the fleet still counts under the same operation id"},
+		// ANOTHER NODE'S COPY, which this node's append was collapsed onto:
+		// the gate is about that node, and this one — counted, and serving
+		// the partition, or it would have been refused before appending —
+		// finishes the gesture itself once the window has passed. Sent to
+		// another node, the operator was told the node they ran it on was
+		// evicted when it was not.
+		"evicted, another node's copy": {gate: copied(statelog.ReasonEvicted),
+			actions: []statelog.GateAction{retry},
+			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
+		"released, another node's copy": {gate: copied(statelog.ReasonReleased),
+			actions: []statelog.GateAction{retry},
+			detail:  "because that node released CREWLET_PAGES_LOG when it left that log's partition — a fact about node node-x"},
+		"overtaken, another node's copy": {gate: copied(statelog.ReasonOvertaken),
+			actions: []statelog.GateAction{retry},
+			detail:  "because that node wrote it from rows a restored reanchor had overtaken"},
+		"abandoned, another node's copy": {gate: copied(statelog.ReasonAbandoned),
+			actions: []statelog.GateAction{retry},
+			detail:  "because that node wrote it in a generation a reanchor abandoned"},
 		// A NODE THAT DOES NOT SERVE THE LOG'S PARTITION never writes it,
 		// whichever id it retries under; one that cannot tell may again.
 		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{other},

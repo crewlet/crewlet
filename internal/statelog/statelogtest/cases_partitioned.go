@@ -310,6 +310,9 @@ func Partitioned(t *testing.T, new PartitionedFactory) error {
 		add("%s's write of %s, which landed after %s released %s's log, was "+
 			"answered %v, want a refusal %q — it is on the log and applies nowhere",
 			leaver.id, racing, leaver.id, p, err, statelog.ReasonReleased)
+	} else if refusal.CopyWriter != "" {
+		add("%s's refusal of its own write of %s names %q as the writer of a copy "+
+			"— the release is its own", leaver.id, racing, refusal.CopyWriter)
 	}
 	w.drain()
 	for _, node := range w.nodes {
@@ -324,7 +327,10 @@ func Partitioned(t *testing.T, new PartitionedFactory) error {
 	// same id onto the record that applies nowhere — so the server handed
 	// that operation is told the record's own gate, and not a contract
 	// violation about a record that was only ever gated; under a fresh id
-	// it takes the write, which cannot apply twice.
+	// it takes the write, which cannot apply twice. And the refusal names
+	// the leaver as the copy's writer: the release is the leaver's, and read
+	// as the server's own it sends the write away from a node that serves
+	// the partition.
 	taking := stayer.parts[p]
 	_, err = c.WriteObject(ctx, taking.pub, taking.db.Reader(), racing, "parted-racing-"+racing)
 	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
@@ -332,6 +338,10 @@ func Partitioned(t *testing.T, new PartitionedFactory) error {
 			"write was answered %v, want a refusal %q — its append is collapsed "+
 			"onto that write's record, which applies nowhere", stayer.id, p, racing,
 			leaver.id, err, statelog.ReasonReleased)
+	} else if refusal.CopyWriter != leaver.id {
+		add("%s's refusal of the write collapsed onto %s's copy names %q as that "+
+			"copy's writer, want %s — the release it states is not %s's own",
+			stayer.id, leaver.id, refusal.CopyWriter, leaver.id, stayer.id)
 	}
 	if _, err := c.WriteObject(ctx, taking.pub, taking.db.Reader(), racing,
 		"parted-retaken-"+racing); err != nil {

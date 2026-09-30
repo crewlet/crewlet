@@ -1624,7 +1624,9 @@ const (
 // has its append collapsed onto it. Asked about ITS OWN standing, that node
 // found no gate, no ledger row and a ledger that vouched, and reported a
 // contract violation for a record that was only ever gated; the answer is the
-// gate of the record's own writer, which is what holds the operation.
+// gate of the record's own writer, which is what holds the operation — and
+// the refusal NAMES that writer ([Unavailable.CopyWriter]), since the reason is
+// then its standing and not this node's.
 //
 // A record the read shows is ANOTHER operation's — the ambiguous path found it
 // newest on the subject — is not this operation's landing, and the gates are
@@ -1771,11 +1773,21 @@ func (p *Publisher) resolve(ctx context.Context, req Request, at Position, lande
 			detail = fmt.Sprintf("the record at %s was durable and applied "+
 				"nowhere — %s", at, spent)
 		}
+		// AND WHOSE STANDING THE REASON STATES, when it is not this
+		// node's: the gate held the writer of a copy this node's append
+		// was collapsed onto, and a caller reading `evicted` or
+		// `released` as this node's own would send the write away from
+		// the one node that has just shown it can make it.
+		var copyWriter string
+		if writer != p.nodeID {
+			copyWriter = writer
+		}
 		return Result{}, &Unavailable{
-			Reason:   reason,
-			Detail:   detail,
-			Position: at,
-			OpID:     req.OpID,
+			Reason:     reason,
+			Detail:     detail,
+			Position:   at,
+			OpID:       req.OpID,
+			CopyWriter: copyWriter,
 		}
 	}
 

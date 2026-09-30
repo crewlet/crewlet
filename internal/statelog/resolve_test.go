@@ -38,7 +38,7 @@ func peerCopyIn(t *testing.T, h *harness, writer, opID string, gen uint32) state
 }
 
 // A WRITE COLLAPSED ONTO ANOTHER NODE'S GATED COPY OF ITS OPERATION IS TOLD
-// THAT COPY'S GATE.
+// THAT COPY'S GATE — AND WHOSE IT IS.
 //
 // A node that left a partition while one of its writes was in flight has that
 // write on the log above its release, applying nowhere — and holding the
@@ -48,29 +48,49 @@ func peerCopyIn(t *testing.T, h *harness, writer, opID string, gen uint32) state
 // a gate dropped the record is a question about the record's WRITER: asked
 // about itself, the serving node found nothing, trusted a ledger that vouched,
 // and reported a contract violation for a record that was only ever gated.
+//
+// And the refusal names that writer, because the reason is then its standing
+// and not the refusing node's: read as this node's own `released`, an operator
+// was sent away from the one node that can finish the write. A copy this node
+// wrote itself, on an earlier attempt, is its own standing, and names nobody.
 func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	at := peerCopy(t, h, "node-b", "op-left")
-	h.gates.holdWriter("node-b", statelog.ReasonReleased)
+	for _, tc := range []struct {
+		name, writer, named string
+	}{
+		{name: "another node's copy", writer: "node-b", named: "node-b"},
+		{name: "this node's own earlier copy", writer: "node-a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			at := peerCopy(t, h, tc.writer, "op-left")
+			h.gates.holdWriter(tc.writer, statelog.ReasonReleased)
 
-	res, err := h.write(probeSubject("a"), "op-left", "mine")
-	var refusal *statelog.Unavailable
-	if !errors.As(err, &refusal) {
-		t.Fatalf("a write collapsed onto node-b's released copy = (%+v, %v), want "+
-			"a refusal %q", res, err, statelog.ReasonReleased)
-	}
-	if refusal.Reason != statelog.ReasonReleased || refusal.Position != at ||
-		refusal.OpID != "op-left" {
-		t.Fatalf("refusal = %+v, want %q at %s under op-left", refusal,
-			statelog.ReasonReleased, at)
-	}
-	if !strings.Contains(refusal.Detail, "node-b") || !strings.Contains(refusal.Detail, "2m0s") {
-		t.Errorf("the refusal's detail %q names neither the copy's writer nor how "+
-			"long the operation id stays spent", refusal.Detail)
-	}
-	if asked := h.gates.askedAbout(); !slices.Equal(asked, []string{"node-b"}) {
-		t.Errorf("the gates were asked about %v, want the copy's writer alone", asked)
+			res, err := h.write(probeSubject("a"), "op-left", "mine")
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) {
+				t.Fatalf("a write collapsed onto %s's released copy = (%+v, %v), "+
+					"want a refusal %q", tc.writer, res, err, statelog.ReasonReleased)
+			}
+			if refusal.Reason != statelog.ReasonReleased || refusal.Position != at ||
+				refusal.OpID != "op-left" {
+				t.Fatalf("refusal = %+v, want %q at %s under op-left", refusal,
+					statelog.ReasonReleased, at)
+			}
+			if refusal.CopyWriter != tc.named {
+				t.Errorf("the refusal names %q as the copy's writer, want %q",
+					refusal.CopyWriter, tc.named)
+			}
+			if !strings.Contains(refusal.Detail, "2m0s") ||
+				(tc.named != "" && !strings.Contains(refusal.Detail, tc.named)) {
+				t.Errorf("the refusal's detail %q names neither the copy's writer "+
+					"nor how long the operation id stays spent", refusal.Detail)
+			}
+			if asked := h.gates.askedAbout(); !slices.Equal(asked, []string{tc.writer}) {
+				t.Errorf("the gates were asked about %v, want the copy's writer alone", asked)
+			}
+		})
 	}
 }
 
@@ -289,6 +309,16 @@ func TestAWriteAReanchorVoidedIsRefusedUnderItsRule(t *testing.T) {
 			if refusal.Position.Seq != tc.asked.Seq || refusal.OpID != "op-voided" {
 				t.Errorf("the refusal %+v does not name the landing at %d — the "+
 					"record is on the log and holds its operation id", refusal, tc.asked.Seq)
+			}
+			// ANOTHER NODE'S COPY IS NAMED, and this node's own record is
+			// not: the reason is the copy's writer's standing only there.
+			var named string
+			if tc.copyGen != 0 {
+				named = "node-b"
+			}
+			if refusal.CopyWriter != named {
+				t.Errorf("the refusal names %q as the copy's writer, want %q",
+					refusal.CopyWriter, named)
 			}
 			if asked := h.applier.voidedQuestions(); !slices.Equal(asked,
 				[]voidedQuestion{tc.asked}) {

@@ -237,9 +237,9 @@ func TestACopyItsDomainPlacesInAnotherPartitionIsRefusedWrongPartition(t *testin
 				t.Fatalf("a write meeting node-b's copy in %s = (%+v, %v), want a "+
 					"refusal %q", elsewhere, res, err, statelog.ReasonWrongPartition)
 			}
-			if refusal.Position != at || refusal.OpID != op {
-				t.Errorf("refusal = %+v, want %q at %s under %s", refusal,
-					statelog.ReasonWrongPartition, at, op)
+			if refusal.Position != at || refusal.OpID != op || refusal.CopyWriter != "node-b" {
+				t.Errorf("refusal = %+v, want %q at %s under %s, naming node-b's copy",
+					refusal, statelog.ReasonWrongPartition, at, op)
 			}
 		})
 	}

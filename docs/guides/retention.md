@@ -594,6 +594,16 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   (two minutes) from when it landed: once that has passed, run the gesture,
   under the same `-op-id`, through a node on the log's current generation
   (`-url`).
+- **Another node's copy** — any of the four above, with a hint naming another
+  node as the writer of the record at that position. The `-op-id` you sent had
+  already been written under by that node — you ran the gesture through it
+  first, and by the time its record landed it had been evicted, had left the
+  log's partition or had been overtaken — and the node you ran it on this time
+  had its append collapsed onto that node's record, which applies nowhere. The
+  refusal is about that node, not this one, which was counted and served the
+  partition when it tried: once the duplicate window (two minutes from when the
+  record landed) has passed, run the gesture again with the same `-op-id`
+  through the same node.
 - `not_holder` — the node you ran it on does not serve that log's partition,
   and only a node that serves a partition writes its logs: run the gesture,
   under the same `-op-id`, through one that does (`-url`).

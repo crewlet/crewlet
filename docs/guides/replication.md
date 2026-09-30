@@ -312,6 +312,14 @@ position: that record landed too. An `evicted` refusal with no position was
 made before anything was appended, and another node takes the write under the
 same id at once.
 
+When the record in the way is **another node's** — the asking node's append
+was collapsed onto a copy that node wrote — the refusal names that node as the
+copy's writer, because the reason is then *its* standing and not the asking
+node's. The asking node passed its own checks before it appended, so it is the
+one that takes the write, once the window has passed; a node gesture refused
+this way says so in its `hint` and offers the same operation id again rather
+than another node.
+
 ### A record whose scope meets a deferred scope is deferred too
 
 A record this build cannot decode is **retained**, not dropped: the bytes are

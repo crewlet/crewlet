@@ -129,18 +129,25 @@ type Result struct {
 type Reason string
 
 const (
-	// ReasonEvicted — this node has been removed from the fleet. Nothing
-	// it publishes will be applied anywhere, so there is no retry HERE:
-	// another node the fleet still counts takes the write. A refusal that
-	// names no position was made before anything was appended, and that
-	// node takes the write under the same operation id. One that names a
-	// position is a record of this node's that landed and applies nowhere,
-	// and it holds the operation id for the log's duplicate window
-	// ([StreamSpec.Duplicates]): the same id sent inside it — by any node —
-	// is collapsed onto that record and refused the same way, so the other
-	// node takes the write under a fresh id, or under this one once the
-	// window has passed. Neither can apply twice, because the record in
-	// the way applies nowhere.
+	// ReasonEvicted — the record's writer has been removed from the fleet:
+	// this node, or — when [Unavailable.CopyWriter] names one — the other
+	// node whose copy of this operation this node's append was collapsed
+	// onto. Nothing an evicted node publishes is applied anywhere.
+	//
+	// THIS NODE'S OWN, there is no retry HERE: another node the fleet still
+	// counts takes the write. A refusal that names no position was made
+	// before anything was appended, and that node takes the write under the
+	// same operation id. One that names a position is a record of this
+	// node's that landed and applies nowhere, and it holds the operation id
+	// for the log's duplicate window ([StreamSpec.Duplicates]): the same id
+	// sent inside it — by any node — is collapsed onto that record and
+	// refused the same way, so the other node takes the write under a fresh
+	// id, or under this one once the window has passed. Neither can apply
+	// twice, because the record in the way applies nowhere.
+	//
+	// ANOTHER NODE'S COPY says nothing about this node, which passed its own
+	// fences before it appended: it takes the write itself, under the same
+	// operation id once the window has passed, or under a fresh one sooner.
 	ReasonEvicted Reason = "evicted"
 
 	// ReasonReleased — the record's writer RELEASED this log before the
@@ -157,7 +164,9 @@ const (
 	// record and refused `released` again. A node that serves the
 	// partition takes the write under a fresh id, or under this one once
 	// the window has passed; neither can apply twice, because the record
-	// in the way applies nowhere.
+	// in the way applies nowhere. The node that refused is one of those
+	// when [Unavailable.CopyWriter] names the record's writer: the release
+	// was that node's, and this one's append was collapsed onto its copy.
 	ReasonReleased Reason = "released"
 
 	// ReasonNotHolder — this node does not serve the partition of the log the
@@ -364,6 +373,28 @@ type Unavailable struct {
 	Detail   string
 	Position Position
 	OpID     string
+
+	// CopyWriter names ANOTHER node when the record at Position is that
+	// node's copy of this operation rather than this node's own, and the
+	// gate that dropped it — an eviction, a release, a reanchor's rule, the
+	// partition — is about that node's record: the broker collapsed this
+	// node's append onto the copy inside the log's duplicate window, or a
+	// write whose answer was lost found it newest on its subject. The
+	// reason then states THE COPY'S WRITER's standing, and not the standing
+	// of the node that refused — which passed its own fences and serves the
+	// log's partition, and takes the write itself under the same operation
+	// id once the window has let go of it.
+	//
+	// A FIELD rather than a sentence in Detail, because the remedy turns on
+	// it: read as this node's own `evicted`, the operator was told the node
+	// they ran the gesture on was evicted and sent elsewhere, although that
+	// node is counted and could finish it a minute later.
+	//
+	// EMPTY WHEN THE REFUSAL IS ABOUT THE NODE THAT MADE IT — its own
+	// record, a copy it wrote itself on an earlier attempt, or no record at
+	// all — which is every refusal but that one, and what a refusal from a
+	// build before this field reads as.
+	CopyWriter string
 
 	// Cause is the error a refusal was concluded from, when there is one
 	// a caller may want to recognise without switching on the reason —

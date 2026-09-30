@@ -79,13 +79,16 @@ func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
 // A REFUSAL CROSSES WITH ITS REASON AND ITS CAUSE. A tool branches on the
 // reason (`op_reused` has a remedy of its own), and the cause is what still
 // answers errors.Is — a stream recreated behind `wrong_stream` — so a
-// refusal rebuilt as its message alone would lose both.
+// refusal rebuilt as its message alone would lose both. And the writer of a
+// copy it names crosses too: whether the reason is the serving node's standing
+// or another node's is what its remedy turns on.
 func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 	t.Parallel()
 	original := fmt.Errorf("write: %w", &statelog.Unavailable{
 		Reason: statelog.ReasonOpReused, Detail: "the op wrote elsewhere",
 		Position: statelog.Position{Stream: trackerStream, Generation: 2, Seq: 41},
-		OpID:     "op-1", Cause: fmt.Errorf("because: %w", statelog.ErrStreamRecreated),
+		OpID:     "op-1", CopyWriter: "node-b",
+		Cause: fmt.Errorf("because: %w", statelog.ErrStreamRecreated),
 	})
 	got := throughWire(t, original)
 	var refusal *statelog.Unavailable
@@ -93,7 +96,8 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 		t.Fatalf("errors.As(*statelog.Unavailable) is false after the wire: %v", got)
 	}
 	if refusal.Reason != statelog.ReasonOpReused || refusal.OpID != "op-1" ||
-		refusal.Position.Seq != 41 || refusal.Detail != "the op wrote elsewhere" {
+		refusal.Position.Seq != 41 || refusal.Detail != "the op wrote elsewhere" ||
+		refusal.CopyWriter != "node-b" {
 		t.Errorf("the refusal's fields did not survive: %+v", refusal)
 	}
 	if !errors.Is(refusal.Cause, statelog.ErrStreamRecreated) {

@@ -302,6 +302,11 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 	}
 	var refusal *statelog.Unavailable
 	if errors.As(d.Err, &refusal) {
+		if refusal.CopyWriter != "" {
+			// ANOTHER NODE'S COPY, whatever the gate: the reason is that
+			// node's standing, and every case below is about this one's.
+			return retry(d.anotherNodesCopy(refusal))
+		}
 		switch refusal.Reason {
 		case statelog.ReasonEvicted:
 			if refusal.Position.Stream != "" {
@@ -398,6 +403,56 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		"the same operation id finishes it")
 }
 
+// anotherNodesCopy is the remedy for a record of this gesture that ANOTHER node
+// wrote, which this node's append was collapsed onto
+// ([statelog.Unavailable.CopyWriter]) and a gate dropped: an operation id
+// carried to this node inside the log's duplicate window from a node that had
+// already written under it, and has since been evicted, left the partition or
+// been overtaken.
+//
+// # Why here, and not another node
+//
+// The gate is about the copy's writer. This node passed its own fences — it is
+// counted, and it serves the partition — before it appended, so it is exactly
+// the node that finishes the gesture: once the broker has let go of the id,
+// the same gesture under it here writes afresh, and cannot apply twice because
+// the copy in the way applies nowhere. Read as this node's own `evicted`, the
+// operator was told the node they ran it on was evicted and sent to another,
+// with the node that could finish it a minute later in front of them.
+func (d DomainGate) anotherNodesCopy(refusal *statelog.Unavailable) string {
+	why := fmt.Sprintf("a gate dropped it (%s)", refusal.Reason)
+	switch refusal.Reason {
+	case statelog.ReasonEvicted:
+		why = "that node is evicted"
+	case statelog.ReasonReleased:
+		why = fmt.Sprintf("that node released %s when it left that log's partition", d.Stream)
+	case statelog.ReasonOvertaken:
+		why = "that node wrote it from rows a restored reanchor had overtaken"
+	case statelog.ReasonAbandoned:
+		why = "that node wrote it in a generation a reanchor abandoned"
+	case statelog.ReasonWrongPartition:
+		why = "its domain places it in another partition than the log it is on"
+	}
+	return fmt.Sprintf("the record of this gesture at %s on %s is node %s's copy, "+
+		"which this node's own write was collapsed onto, and it applies nowhere "+
+		"because %s — a fact about node %s and not about this one. The broker holds "+
+		"its operation id for %s from when it landed. Once that has passed, the same "+
+		"gesture under the same operation id finishes it here: before then the id "+
+		"is collapsed onto that record and refused the same way, and a fresh id "+
+		"would write every log that already holds the gesture's record again",
+		refusal.Position, d.Stream, refusal.CopyWriter, why, refusal.CopyWriter,
+		d.window())
+}
+
+// window names the log's duplicate window for a remedy — its length where the
+// gate knows it.
+func (d DomainGate) window() string {
+	if d.Duplicates > 0 {
+		return fmt.Sprintf("the log's duplicate window, %s,", d.Duplicates)
+	}
+	return "the log's duplicate window"
+}
+
 // landedNowhere is the remedy for a record of this gesture that landed at on
 // this log and applies nowhere: the gesture is finished through another node,
 // named by who, under the SAME operation id — but only once the broker has let
@@ -413,16 +468,12 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 // id would answer `superseded` to anyone finishing it. The record in the way
 // applies nowhere, so the same id after the window cannot apply twice.
 func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
-	window := "the log's duplicate window"
-	if d.Duplicates > 0 {
-		window = fmt.Sprintf("the log's duplicate window, %s,", d.Duplicates)
-	}
 	return fmt.Sprintf("the record this gesture put on %s at %s applies nowhere — "+
 		"the broker holds its operation id for %s from when it landed. Once that "+
 		"has passed, run the gesture through %s under the same operation id: "+
 		"before then the id is collapsed onto that record and refused the same "+
 		"way, and a fresh id would write every log that already holds the "+
-		"gesture's record again", d.Stream, at, window, who)
+		"gesture's record again", d.Stream, at, d.window(), who)
 }
 
 // NodeGate is the gesture, over every identity-claiming log this node runs.
