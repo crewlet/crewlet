@@ -356,6 +356,14 @@ or one that would have left it — nor reliably the right identifiers, and it
 would truncate. `direction` is always `"unknown"`, and it is a field rather
 than an omission so a reader meets the fact instead of inferring it.
 
+What a read is ABOUT is the object it names, however it was named. A listing
+or a feed of one knowledge-base space is scoped to that space's canonical key,
+so `eng` and `ENG` are one question. A read of one page is judged on the page
+it resolved to — by id or by `SPACE/Title` — in the snapshot that read it, and
+refused `deferred` when a retained record covers that page; a page no row holds
+is refused the same way while a retained record may be the one that creates it,
+rather than answered "not found" from rows that record never wrote.
+
 ## What no level can strengthen
 
 Three things are outside this vocabulary entirely, and asking for a stronger

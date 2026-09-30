@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/seatnames"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -404,15 +406,32 @@ func (r *Reader) detail(ctx context.Context, ref string, fresh statelog.Freshnes
 			"it reads")
 	}
 	var detail Detail
-	container, _, _ := strings.Cut(ref, "/")
-	served, err := r.log.Read(ctx, fresh.Query(ReadScope(container, ref), false), func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Query(refScope(ref), false), func(tx *sql.Tx) error {
 		document, revision, id, err := r.locate(ctx, tx, ref)
+		if errors.Is(err, ErrNotFound) {
+			// AN ABSENT PAGE IS AN ANSWER ONLY WHERE NOTHING RETAINED
+			// COULD CREATE IT: a record this node cannot decode may be the
+			// one that made it, and "no such page" decided from rows that
+			// record never wrote is the stale answer a point read refuses.
+			if refused := absentRefusal(ctx, tx, fresh.Level, ref); refused != nil {
+				return refused
+			}
+		}
 		if err != nil {
 			return err
 		}
 		page, err := DecodePage([]byte(document))
 		if err != nil {
 			return err
+		}
+		// THE PAGE'S OWN SCOPE, IN THE SNAPSHOT THAT READ IT. It cannot be
+		// formed before the reference is resolved — an id says nothing of
+		// the container its object path sits under, and an address says
+		// nothing of the id — so the framework is given the reference's
+		// own term and this is what decides.
+		if refused := deferredRefusal(ctx, tx, fresh.Level,
+			ReadScope(page.Container, id), "this page"); refused != nil {
+			return refused
 		}
 		detail = Detail{Page: page, Revision: revision}
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
@@ -436,6 +455,100 @@ func (r *Reader) detail(ctx context.Context, ref string, fresh statelog.Freshnes
 	detail.Position = served.Position
 	detail.LogLag = served.Lag
 	return detail, nil
+}
+
+// refScope is what a reference to one page lets a read name before the page is
+// resolved: an ADDRESS is its container's hold on that title — the term a
+// create or a rename into it is filed under — and an ID is the object in the
+// containerless space, the only place an id alone places it.
+//
+// THE REFERENCE WAS ONCE PASSED AS BOTH HALVES OF A PAGE TERM — the text
+// before a slash as the container, the whole reference as the id — so an id
+// named a container that was the id itself and an address an object whose id
+// was the address, and neither matched any record's scope: a page with a
+// record this node cannot decode was served as though its rows were current.
+// This is the framework's early answer only; [Reader.Get] decides on the
+// resolved page's own scope in the snapshot that reads it.
+func refScope(ref string) statelog.ScopeSet {
+	if container, title, byAddress := strings.Cut(ref, "/"); byAddress {
+		return statelog.ScopeSet{Paths: []string{ScopeTerm{
+			Kind: TermTitle, Container: ContainerKey(container), ID: TitleToken(title),
+		}.Path()}}
+	}
+	return ReadScope("", ref)
+}
+
+// deferredRefusal is a point read's refusal when a record this node retained
+// covers scope, read in tx — the transaction the answer's rows come from — or
+// nil when none does. A probe that could not be made refuses too: a point read
+// that cannot tell whether its object is stale has nothing honest to return.
+func deferredRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	scope statelog.ScopeSet, about string) error {
+
+	d, hit, err := statelog.DeferredIn(ctx, tx, Domain{}, scope)
+	switch {
+	case err != nil:
+		return fmt.Errorf("pages: ask whether a retained record covers %s: %w",
+			about, err)
+	case hit:
+		return &statelog.Refused{
+			Code: statelog.RefuseDeferred, Level: level,
+			Detail: fmt.Sprintf("this node holds a record at version %d it "+
+				"cannot decode, at %s, covering %s", d.Version, d.Position, about),
+		}
+	}
+	return nil
+}
+
+// absentRefusal is [deferredRefusal] for a page NO ROW holds, by the reference
+// that found none.
+//
+// An address is already covered by [refScope]'s title term, which a create or
+// a rename into it is filed under. An id is not: the object path a create
+// files it under names a container the absent row cannot supply, so it is
+// matched against every container's object path for that id — an id this
+// engine mints is a uuid, so the pattern holds no wildcard of its own, and
+// anything else names no page any record could create.
+func absentRefusal(ctx context.Context, tx *sql.Tx, level statelog.ReadLevel,
+	ref string) error {
+
+	id, minted := mintedID(ref)
+	if !minted {
+		return nil
+	}
+	var (
+		position sql.NullInt64
+		version  sql.NullInt64
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT MIN(d.position), MIN(d.version)
+		  FROM pages_log_deferred_scope s
+		  JOIN pages_log_deferred d ON d.position = s.position
+		 WHERE s.path LIKE ?`,
+		ScopeTerm{Kind: TermObject, Container: "%", ID: id.String()}.Path()).
+		Scan(&position, &version); err != nil {
+		return fmt.Errorf("pages: ask whether a retained record creates page %s: %w",
+			id, err)
+	}
+	if !position.Valid {
+		return nil
+	}
+	return &statelog.Refused{
+		Code: statelog.RefuseDeferred, Level: level,
+		Detail: fmt.Sprintf("this node holds no page %s, and a record at version "+
+			"%d it cannot decode, at %s, is about it", id, version.Int64,
+			statelog.Unpack(Domain{}.Stream().Name, position.Int64)),
+	}
+}
+
+// mintedID is ref as the uuid an id this engine mints is, and whether it is
+// one — an address, or any other text, names no page a record could create.
+func mintedID(ref string) (uuid.UUID, bool) {
+	if strings.Contains(ref, "/") {
+		return uuid.UUID{}, false
+	}
+	id, err := uuid.Parse(ref)
+	return id, err == nil
 }
 
 // locate resolves a reference to a page row.

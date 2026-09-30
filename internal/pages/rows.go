@@ -77,7 +77,15 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 // touches everything, but because a read that cannot say what it is about is
 // one every deferred record concerns, and the honest answer to "is this
 // complete" is then "no".
+//
+// THE CONTAINER IS CANONICALISED HERE ([ContainerKey]), because a record's
+// scope is written under the canonical key and every read's SQL compares
+// against it too: handed `eng` as a caller typed it, the rows were ENG's while
+// the scope named a container no record is ever filed under, so a listing of
+// a space holding a record this node cannot decode claimed to be complete.
+// Canonical at the one place the scope is formed, no caller can pass it raw.
 func ReadScope(container, pageID string) statelog.ScopeSet {
+	container = ContainerKey(container)
 	switch {
 	case pageID != "":
 		return statelog.ScopeSet{Paths: []string{
