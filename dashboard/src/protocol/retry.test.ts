@@ -1,10 +1,11 @@
 /**
  * The one reading of the engine's retry hint, which every retry path in the
- * dashboard takes — the socket's queries and watch, the shared health read and
- * the org builder's check.
+ * dashboard takes — the socket's queries and watch, the shared health read,
+ * the org builder's check and the REST reads a screen asks again on its own.
  */
 
 import { describe, expect, test } from "vitest";
+import { RestError, restRetryMs } from "./rest.ts";
 import { RETRY_AFTER_MAX_MS, retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
 import { unavailableRetryMs } from "./socket.ts";
 
@@ -43,5 +44,35 @@ describe("an unavailable answer's wait", () => {
   // not a statement that waiting changes nothing.
   test("is the engine's own default when the answer carried none", () => {
     expect(unavailableRetryMs(null)).toBe(UNAVAILABLE_RETRY_MS);
+  });
+});
+
+describe("a failed REST read's wait", () => {
+  const engine = (retryAfter: number | null) =>
+    new RestError(503, { error: "identity_unavailable" }, retryAfter);
+
+  test("is the hint on a 503 the engine wrote, bounded like every hint", () => {
+    expect(restRetryMs(engine(12), 60_000)).toBe(12_000);
+    expect(restRetryMs(engine(600), 60_000)).toBe(RETRY_AFTER_MAX_MS);
+  });
+
+  // NO `Retry-After` ON A 503 THE ENGINE WROTE is its zero: never on a timer,
+  // whatever the screen's own cadence would have been.
+  test("is never on a timer for a 503 the engine wrote with no Retry-After", () => {
+    expect(restRetryMs(engine(null), 60_000)).toBeNull();
+  });
+
+  // EVERY OTHER FAILURE carries no hint, because nobody at the engine decided
+  // one: a 503 a proxy wrote (no engine code), a fault, a refusal on
+  // authority, a request that never arrived. Each waits the screen's own.
+  test.each([
+    ["a proxy's 503", new RestError(503, {}, 5)],
+    ["a fault", new RestError(500, { error: "internal_error" })],
+    ["a refusal on authority", new RestError(403, { error: "unauthorized" })],
+    ["no answer", new RestError(0, { error: "unreachable" })],
+    ["something that is not a refusal at all", new TypeError("boom")],
+  ])("is the screen's own after %s", (_, err) => {
+    expect(restRetryMs(err, 60_000)).toBe(60_000);
+    expect(restRetryMs(err, null)).toBeNull();
   });
 });

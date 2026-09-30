@@ -172,6 +172,75 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
+/**
+ * A `503` THE ENGINE WROTE IS A NODE THAT CANNOT ANSWER HERE, NOT A FAULT —
+ * and nothing polls this screen, so it is read again when the engine says.
+ *
+ * It was drawn as "the engine tried to answer and failed — its log says what
+ * went wrong", which sent an operator watching a node catch up to read a log
+ * that held no fault, and the screen never asked again until somebody
+ * reloaded. The `503`'s `Retry-After` is when; with none, the engine is saying
+ * waiting will not change it, so the screen says so and asks nothing.
+ */
+function unavailableOnce(headers: Record<string, string>) {
+  let refused = false;
+  return stubFetch((path) => {
+    if (path === "/secrets" && !refused) {
+      refused = true;
+      return new Response(
+        JSON.stringify({
+          error: "identity_unavailable",
+          detail: "this node could not read the identity estate",
+        }),
+        { status: 503, headers: { "Content-Type": "application/json", ...headers } },
+      );
+    }
+    if (path === "/secrets") return ok(body);
+    return ok(references);
+  });
+}
+
+const listReads = (spy: ReturnType<typeof stubFetch>) =>
+  spy.mock.calls.filter(
+    ([input]) => new URL(String(input), "http://e.test").pathname === "/secrets",
+  ).length;
+
+test("a 503 is a node that cannot answer yet, read again when its Retry-After says", async () => {
+  vi.useFakeTimers();
+  try {
+    const spy = unavailableOnce({ "Retry-After": "12" });
+    render(<Secrets />);
+    await vi.waitFor(() => expect(screen.getByText(/cannot answer yet/)).toBeDefined());
+    expect(screen.queryByText(/tried to answer and failed/)).toBeNull();
+    expect(listReads(spy)).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    expect(listReads(spy)).toBe(2);
+    await vi.waitFor(() => expect(screen.getByText("GITHUB_TOKEN")).toBeDefined());
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a 503 with no Retry-After says the node refused, and is not read again", async () => {
+  vi.useFakeTimers();
+  try {
+    const spy = unavailableOnce({});
+    render(<Secrets />);
+    await vi.waitFor(() =>
+      expect(screen.getByText(/asking it again will not change that/)).toBeDefined(),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listReads(spy)).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 // THE VALUE IS THE BODY, not a field of a document. `PUT /secrets/{name}`
 // takes the credential as raw bytes because a credential is arbitrary text,
 // and sending it through the JSON writer would seal the quotes into it — a

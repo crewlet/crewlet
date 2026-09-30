@@ -3130,7 +3130,15 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   builder's check — which waits out a `503`'s `Retry-After` in place of its
   own backoff and stops retrying a `503` the engine wrote with none — and the
   disconnect dialog, whose wait on a `surface_busy` surface is that refusal's
-  `Retry-After` and nothing of its own. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  `Retry-After` and nothing of its own. So does every screen that reads over
+  REST and asks again by itself (`restRetryMs`, armed by the answer through
+  `lib/reread.ts`): the Integrations screen's setup listing, its pass history
+  — whose four-second tick while a pass runs and one-minute tick otherwise
+  give way to the hint — and one pass while it runs, and the credential
+  listing. There a `503` the engine wrote is drawn as `unavailable` (the
+  credential listing drew it as a fault on the node, and the pass history as
+  "No pass has run on this node") and asked again when it says, and a
+  failure with no hint keeps whatever cadence the screen already had. The table is keyed on the protocol's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends —
   and a second one pins those codes to the engine's own

@@ -59,8 +59,9 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { useReread } from "~/lib/reread.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { rest, RestError, restRetryMs } from "~/protocol/index.ts";
 import type {
   ConfigReference,
   LogRefusal,
@@ -81,18 +82,26 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
  * banner instead of the auth-gated one. The sentence even promised a button
  * that only exists inside the entry that was being skipped.
  *
- * The other two REST statuses this surface can answer with are mapped rather
- * than folded into the generic failure, because each means something
- * different to whoever is reading: status 0 is `offline()` — the request never
- * reached the engine — and a 404 on the LIST route is the whole surface being
- * unregistered, which `secretsapi.Routes` does on a process that cannot reach
- * the fleet's coordination store. Everything else is a fault on the node.
+ * The other REST statuses this surface can answer with are mapped rather than
+ * folded into the generic failure, because each means something different to
+ * whoever is reading: status 0 is `offline()` — the request never reached the
+ * engine — a 404 on the LIST route is the whole surface being unregistered,
+ * which `secretsapi.Routes` does on a process that cannot reach the fleet's
+ * coordination store, and a `503` THE ENGINE WROTE ([RestError.retryHint]) is
+ * `unavailable`: the node understood the read and cannot answer it here — yet,
+ * or (no `Retry-After`) until somebody acts, which the banner then says. It
+ * was folded into the fault, "its log says what went wrong", which sent an
+ * operator watching a node catch up to read a log holding no fault, and the
+ * read was never asked again; [useCredentials] asks it again when the engine
+ * says, which is what the `unavailable` banner promises. Everything else is a
+ * fault on the node.
  */
 function refusalCode(err: unknown): QueryErrorCode {
   if (!(err instanceof RestError)) return "query_failed";
   if (err.unauthorized) return "unauthorized";
   if (err.status === 0) return "closed";
   if (err.status === 404) return "unknown_query";
+  if (err.retryHint !== null) return "unavailable";
   return "query_failed";
 }
 
@@ -200,20 +209,24 @@ function useCredentials(enabled = true): Credentials {
     [],
   );
 
-  const load = useCallback(async (mine: number) => {
+  // Each loader answers what it failed with, or null where it answered (or
+  // was superseded, which [reload] reads off the generation itself).
+  const load = useCallback(async (mine: number): Promise<unknown> => {
     setLoading(true);
     try {
       const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
-      if (generation.current !== mine) return;
+      if (generation.current !== mine) return null;
       setRows(body?.secrets ?? []);
       setError(null);
       setRefusal(null);
+      return null;
     } catch (err) {
-      if (generation.current !== mine) return;
+      if (generation.current !== mine) return null;
       // The last good list stays on screen. A refusal to refresh is not a
       // reason to tell an operator the company holds no credentials.
       setError(refusalCode(err));
       setRefusal(err instanceof RestError ? err.refusal : null);
+      return err;
     } finally {
       // ANSWERED, not answered WELL: a refusal is a state this screen
       // renders honestly, and waiting is not. Guarded like the rest — a
@@ -222,16 +235,17 @@ function useCredentials(enabled = true): Credentials {
     }
   }, []);
 
-  const loadReferences = useCallback(async (mine: number) => {
+  const loadReferences = useCallback(async (mine: number): Promise<unknown> => {
     try {
       const body = (await rest.get("/config/references")) as {
         references?: ConfigReference[];
       } | null;
-      if (generation.current !== mine) return;
+      if (generation.current !== mine) return null;
       setReferences(body?.references ?? []);
       setUnknown(null);
+      return null;
     } catch (err) {
-      if (generation.current !== mine) return;
+      if (generation.current !== mine) return null;
       // A 404 IS AN ANSWER. A deployment before its first config import has
       // no active document, so nothing can be pointing at anything, and
       // treating that as a failed check would put a warning in front of
@@ -239,21 +253,46 @@ function useCredentials(enabled = true): Credentials {
       if (err instanceof RestError && err.status === 404) {
         setReferences([]);
         setUnknown(null);
-        return;
+        return null;
       }
       setReferences(null);
       setUnknown(refusalSentence(err));
+      return err;
     }
   }, []);
+
+  const reread = useReread();
 
   // ONE GENERATION FOR THE PAIR, taken here rather than inside each loader:
   // the two reads are one refresh, and giving them a generation each would
   // let the second supersede the first half of the same gesture.
+  //
+  // AND ASKED AGAIN WHEN THE ENGINE SAYS. Nothing polls this surface, so a
+  // `503` the engine wrote — a node whose identity estate or chart is behind,
+  // one draining — was drawn as a fault and never read again until somebody
+  // reloaded; it is `unavailable` now ([refusalCode]), whose banner says the
+  // screen asks again on its own, and this is what makes that true: the pair
+  // is read again after the SOONER of the two reads' hints ([restRetryMs]),
+  // since either may be the one that clears. A hint of zero is never on a
+  // timer and a failure with no hint (a fault, a refusal on authority, a
+  // request that never arrived) waits for a person, as it always did.
   const reload = useCallback(async () => {
     generation.current++;
     const mine = generation.current;
-    await Promise.all([load(mine), loadReferences(mine)]);
-  }, [load, loadReferences]);
+    reread.cancel();
+    const failed = await Promise.all([load(mine), loadReferences(mine)]);
+    if (generation.current !== mine) return;
+    const waits = failed
+      .filter((err) => err !== null)
+      .map((err) => restRetryMs(err, null))
+      .filter((ms): ms is number => ms !== null);
+    reread.after(waits.length > 0 ? Math.min(...waits) : null, () => void reload());
+  }, [load, loadReferences, reread]);
+
+  // A PEEK CLOSED asks nothing more, whatever an answer armed while it was open.
+  useEffect(() => {
+    if (!enabled) reread.cancel();
+  }, [enabled, reread]);
 
   // A SIGN-IN FROM THIS SCREEN'S REFUSAL is a screen of its own that comes
   // back here, so this mount is what reads again as the new reader.

@@ -26,6 +26,7 @@
  * that one request, and nothing keeps it.
  */
 
+import { retryAfterMs } from "./retry.ts";
 import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
 
@@ -201,6 +202,24 @@ function noteSession(refusal: RestError): void {
   if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") {
     needSession("second_factor");
   }
+}
+
+/**
+ * When a REST read that failed with `err` is asked again, in milliseconds, or
+ * `null` for "not on a timer" — the REST twin of the socket's
+ * `unavailableRetryMs`, for a screen that reads over REST and asks again on
+ * its own.
+ *
+ * A `503` the engine wrote says when ([RestError.retryHint]), read through
+ * `retryAfterMs`: waited out exactly, bounded, and its ZERO — a `503` with no
+ * `Retry-After` — never on a timer, because the engine is saying waiting will
+ * not change the answer. Every other failure carries no hint, since nobody at
+ * the engine decided one, and waits `otherwise`: the screen's own cadence, or
+ * `null` where it has none.
+ */
+export function restRetryMs(err: unknown, otherwise: number | null): number | null {
+  const hint = err instanceof RestError ? err.retryHint : null;
+  return hint === null ? otherwise : retryAfterMs(hint);
 }
 
 /**
