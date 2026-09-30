@@ -28,14 +28,14 @@ class InertWebSocket {
 }
 
 /** The palette, mounted over a store and a socket the case has arranged. */
-function open(arrange?: (store: Store, socket: LiveSocket) => void) {
+function open(arrange?: (store: Store, socket: LiveSocket) => void, locked = false) {
   const store = new Store();
   const socket = new LiveSocket(store);
   arrange?.(store, socket);
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <CommandPalette onClose={() => {}} />
+        <CommandPalette onClose={() => {}} locked={locked} />
       </Router>
     </ClientContext.Provider>,
   );
@@ -85,6 +85,28 @@ describe("an id pasted out of a log", () => {
     type(id);
     fireEvent.click(row("as an event")!);
     expect(location.hash).toBe(`#/activity/events/${id}`);
+  });
+});
+
+describe("a destination somebody has to be signed in for", () => {
+  // THE RAIL'S OWN WORDS, AND ONLY WHILE NOBODY IS SIGNED IN. The palette
+  // said "needs a token" beside every guarded destination for every reader —
+  // a credential a person signing in has no use for, told to a reader who was
+  // signed in and could already open it.
+  test("says it needs sign-in while nobody is signed in", () => {
+    const { type } = open(undefined, true);
+    type("Infrastructure");
+    expect(
+      screen.getByText("Nodes, seat leases, domains and config rollout · needs sign-in"),
+    ).toBeDefined();
+    expect(screen.queryByText(/needs a token/)).toBeNull();
+  });
+
+  test("and says nothing of it to a reader who is", () => {
+    const { type } = open(undefined, false);
+    type("Infrastructure");
+    expect(screen.getByText("Nodes, seat leases, domains and config rollout")).toBeDefined();
+    expect(screen.queryByText(/needs sign-in/)).toBeNull();
   });
 });
 

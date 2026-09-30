@@ -458,7 +458,9 @@ export function Shell({ children }: { children: ReactNode }) {
           that remembered to render a rail — see `frame/PeekHost.tsx`. */}
         <PeekHost />
 
-        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+        {paletteOpen && (
+          <CommandPalette onClose={() => setPaletteOpen(false)} locked={viewer.anonymous} />
+        )}
       </div>
     </PeekNeighbours>
   );

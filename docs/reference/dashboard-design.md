@@ -420,7 +420,9 @@ what they did, what it cost, the machine.
 
 **Admin's row is never hidden.** A section that vanishes without a credential is
 indistinguishable from one that does not exist, so an operator on a fresh
-browser would conclude the product has no configuration screen.
+browser would conclude the product has no configuration screen. The command
+palette says the same of a guarded destination in the same words — "needs
+sign-in" beside its hint — and only while nobody is signed in.
 
 **A number beside a workspace row says what it counts.** `SidebarRow.count` is
 one field holding a value AND the sentence naming its question, because the two

@@ -115,7 +115,17 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
   return out;
 }
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
+export function CommandPalette({
+  onClose,
+  locked = false,
+}: {
+  onClose: () => void;
+  /**
+   * Whether NOBODY is signed in — the rail's own `locked`, handed in by the
+   * shell rather than read again, which already holds the answer.
+   */
+  locked?: boolean;
+}) {
   const nav = useNavigator();
   const agents = useAgents();
   const org = useOrg();
@@ -345,7 +355,11 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           group: "Go to",
           icon: item.icon,
           label: item.label,
-          hint: item.guarded ? `${item.hint} · needs a token` : item.hint,
+          // SAID ONLY WHILE NOBODY IS SIGNED IN, and in the rail lock's own
+          // words: "needs a token" named a credential a person signing in
+          // has no use for, and was drawn beside every guarded row for a
+          // reader who was signed in and already had it.
+          hint: item.guarded && locked ? `${item.hint} · needs sign-in` : item.hint,
           go: () => nav.to(item.path),
         },
         s,
