@@ -64,6 +64,13 @@ type Admission struct {
 	PlacedAfterTicks int
 }
 
+// PlacedOn reports whether the admitted member is placed on now: a member
+// trusted after its probation is not while it is out — taken out, or barred
+// ([State.Barred]), neither of which a probation ending lifts — and a log that
+// said "the map places on it again" of such a member told an operator the one
+// thing about it that was false.
+func (a Admission) PlacedOn() bool { return a.Member.Placeable() }
+
 // Departure is one member removed.
 type Departure struct {
 	// Node is the member removed.

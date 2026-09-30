@@ -82,3 +82,34 @@ func TestDiffNamesEveryTransition(t *testing.T) {
 		t.Error("an unknown admission is valid")
 	}
 }
+
+// A MEMBER TRUSTED AFTER ITS PROBATION IS PLACED ON ONLY IF NOTHING ELSE KEEPS
+// IT OUT: a barred node back for its probation is trusted and still placed on
+// nothing, and the account says so rather than letting a log claim the map
+// places on it again.
+func TestATrustedMemberStillBarredIsNotPlacedOn(t *testing.T) {
+	t.Parallel()
+	c := company(1, 2, "")
+	live := roster(3)
+	gone := without(live, "data-02")
+	start := first(t, live, c)
+	s, d, err := Bar(start.s, start.d, "data-02", "ops", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := ticks(t, record{s, d}, gone, c, OutTicks)
+	nearly := ticks(t, tick(t, removed, live, c), live, c, StableTicks-2)
+	trusted := tick(t, nearly, live, c)
+	got := Diff(nearly.s, nearly.d.Members, trusted.s, trusted.d.Members)
+	if len(got.Admitted) != 1 || got.Admitted[0].How != Trusted {
+		t.Fatalf("the probation ending is accounted as %+v", got)
+	}
+	if got.Admitted[0].PlacedOn() {
+		t.Error("a barred member trusted after its probation is accounted as placed on")
+	}
+	m := got.Admitted[0].Member
+	m.Out = false
+	if !(Admission{Member: m, How: Trusted}).PlacedOn() {
+		t.Error("a member trusted with nothing keeping it out is accounted as not placed on")
+	}
+}

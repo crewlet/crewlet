@@ -531,8 +531,15 @@ func logChanges(ctx context.Context, before, after objstore.MapState) {
 			log.InfoContext(ctx, "object_member_added", "node", m.Node, "weight", m.Weight,
 				"domain", m.Domain)
 		case membership.Trusted:
-			log.InfoContext(ctx, "object_member_trusted", "node", m.Node,
-				"detail", "back from removal and present long enough: the map places on it again")
+			// AN OUT MEMBER IS STILL PLACED ON NOTHING: its probation
+			// ended, and the operator's out did not.
+			detail := "back from removal and present long enough: the map places on it again"
+			if !a.PlacedOn() {
+				detail = "back from removal and present long enough, and still taken out, so " +
+					"the map places nothing on it until an operator puts it back"
+			}
+			log.InfoContext(ctx, "object_member_trusted", "node", m.Node, "out", m.Out,
+				"detail", detail)
 		}
 	}
 	for _, d := range changes.Removed {

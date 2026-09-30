@@ -346,8 +346,16 @@ func logChanges(ctx context.Context, before, after MapState) {
 			log.InfoContext(ctx, "estate_member_added", "node", m.Node, "weight", m.Weight,
 				"domain", m.Domain)
 		case membership.Trusted:
-			log.InfoContext(ctx, "estate_member_trusted", "node", m.Node,
-				"detail", "back from removal and present long enough: the map places on it again")
+			// OUT OR BARRED IS STILL PLACED ON NOTHING: its probation
+			// ended, and an operator's out or an eviction's bar did not.
+			detail := "back from removal and present long enough: the map places on it again"
+			if !a.PlacedOn() {
+				detail = "back from removal and present long enough, and still out — taken " +
+					"out or barred by an eviction — so the map places nothing on it until an " +
+					"operator puts it back"
+			}
+			log.InfoContext(ctx, "estate_member_trusted", "node", m.Node, "out", m.Out,
+				"detail", detail)
 		}
 	}
 	for _, d := range changes.Removed {
