@@ -251,6 +251,13 @@ The chart import is **keyed on the chart's own content hash**, the same key
 the [boot seed](#crewlet-run) computes, so re-importing an unchanged file is a
 no-op every node reaches the same way rather than a rewrite of every row.
 
+**A chart write the node could not account for is not reported as refused.**
+It answers `503` with `outcome: "unknown"` beside the operation it ran under,
+and the command fails saying the write may or may not have landed, naming that
+operation. Running the same import again is the retry: the structure's key is
+its content, and each object's content is written whole, so a second run
+restates whatever the first may have written rather than adding to it.
+
 It is **refused while a rolling upgrade is in progress** — `409
 fleet_mixed_version`, naming the node still running the older protocol. An
 import rewrites every placement in the chart and every node applies it,

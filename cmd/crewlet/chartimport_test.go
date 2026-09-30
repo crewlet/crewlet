@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 )
@@ -295,6 +297,53 @@ func answeringChart(t *testing.T, status int, raw []byte) *chartClient {
 	}))
 	t.Cleanup(server.Close)
 	return &chartClient{base: server.URL, http: httpx.Client(apiTimeout)}
+}
+
+// AN UNKNOWN OUTCOME IS NOT A REFUSAL.
+//
+// A chart write the node could not account for answers 503 with `outcome:
+// "unknown"` beside the operation it ran under, written by the engine's one
+// writer of that answer (httpjson.UnknownOutcome) — and this client printed it
+// as "was refused", telling an operator nothing had happened to a write that
+// may have landed, under the node's advice to resend an operation id this
+// client never sends. It says the write may have landed, names the operation,
+// and says what the operator CAN do: run the import again. The control is a
+// refusal that wrote nothing, which still reads as one.
+//
+// Mutation: drop the outcome branch from chartRefusal and the unknown reads
+// "was refused" again.
+func TestAnUnknownChartWriteIsNotReportedAsRefused(t *testing.T) {
+	t.Parallel()
+	const op = "0192d7e4-51a0-7abc-8def-0123456789ab"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
+			"detail": "this node cannot establish what happened to this change",
+		})
+	}))
+	t.Cleanup(server.Close)
+	unknown := &chartClient{base: server.URL, http: httpx.Client(apiTimeout)}
+	err := unknown.WriteSeat(context.Background(), chart.AuthoredSeat{Handle: "cto"})
+	if err == nil {
+		t.Fatal("a write whose outcome is unknown was reported as a success")
+	}
+	for _, want := range []string{"may or may not have landed", op,
+		"running the import again is safe"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("an unknown outcome reads %q, want it to carry %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "was refused") {
+		t.Errorf("a write that may have landed reads as refused: %v", err)
+	}
+
+	// THE CONTROL: a refusal that wrote nothing is still a refusal.
+	refused := answeringChart(t, http.StatusServiceUnavailable, []byte(
+		`{"error":"unavailable","detail":"the log is full","op_id":"`+op+`"}`))
+	err = refused.WriteSeat(context.Background(), chart.AuthoredSeat{Handle: "cto"})
+	if err == nil || !strings.Contains(err.Error(), "was refused") ||
+		strings.Contains(err.Error(), "may or may not have landed") {
+		t.Errorf("a refusal that wrote nothing reads %v, want it refused", err)
+	}
 }
 
 // A REFUSAL IS RENDERED AS WHAT THE NODE SAID.

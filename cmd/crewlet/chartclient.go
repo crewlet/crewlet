@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The CLI's client for /chart, and why `config import` needs one.
@@ -208,17 +209,41 @@ func (c *chartClient) write(ctx context.Context, method, path string, body []byt
 // broke — a seat that moved, an address somebody holds, a grant the caller
 // does not carry — and a client that printed "400" would throw away the one
 // sentence that says what to do.
+//
+// # An unknown outcome is not a refusal
+//
+// A write the node could not account for answers 503 too, and says so as a
+// field (`outcome: "unknown"`) beside the operation it ran under. Printed as
+// "was refused", it told an operator nothing had happened to a write that may
+// have landed — and the node's own sentence, to resend the same operation id
+// as a header, names a retry this client never makes: every write here is
+// sent without a key. What an operator CAN do is run the import again, which
+// is safe for exactly the two reasons the import is built on — the structure
+// is keyed on the chart's own content ([chart.ImportKey]), so a second landing
+// of an unchanged chart applies as nothing, and each object's content is
+// written whole, so a second write restates what the first may have written
+// rather than adding to it.
 func chartRefusal(what string, status int, raw []byte) error {
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return fmt.Errorf("%s was refused (%d): %s", what, status, msg)
 	}
 	var body struct {
-		Error  string `json:"error"`
-		Detail string `json:"detail"`
-		Reason string `json:"reason"`
-		Hint   string `json:"hint"`
+		Error   string `json:"error"`
+		Detail  string `json:"detail"`
+		Reason  string `json:"reason"`
+		Hint    string `json:"hint"`
+		Outcome string `json:"outcome"`
+		OpID    string `json:"op_id"`
 	}
 	_ = json.Unmarshal(raw, &body)
+	if body.Outcome == string(statelog.OutcomeUnknown) {
+		return fmt.Errorf("%s may or may not have landed (%d): the node could not "+
+			"establish its outcome (operation %s)\n\nrunning the import again is "+
+			"safe: the structure is keyed on the chart's own content, and each "+
+			"object's content is written whole, so a second run restates what "+
+			"this one may have written rather than adding to it", what, status,
+			body.OpID)
+	}
 	msg := body.Detail
 	if msg == "" {
 		msg = body.Reason

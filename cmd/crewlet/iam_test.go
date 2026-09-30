@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -385,12 +386,15 @@ func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 
 // AN UNKNOWN WRITE NAMES ITS RETRY, AND THE RETRY CAN BE MADE.
 //
-// The node answers an unknown outcome 503 with the op id and says the only
-// safe retry is the same operation, sent back as the Idempotency-Key. The CLI
-// dropped the op id from the refusal and had no way to send a key, so the
-// retry an operator could actually run was a fresh operation — for a create,
-// a second person. Mutation: drop the op id from the refusal, or the header
-// from the request, and each half goes red.
+// The node answers an unknown outcome 503 with `outcome: "unknown"` and the
+// op id, written by the engine's one writer of that answer
+// (httpjson.UnknownOutcome), and says the only safe retry is the same
+// operation, sent back as the Idempotency-Key. The CLI dropped the op id from
+// the refusal and had no way to send a key, so the retry an operator could
+// actually run was a fresh operation — for a create, a second person. And it
+// read the answer as `unavailable: …`, a node that did nothing, of a write
+// that may have landed. Mutation: drop the op id from the refusal, the header
+// from the request, or the outcome branch, and each half goes red.
 func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	// AN ID IN THE ENGINE'S GRAMMAR, as the node answers with: the command
 	// holds the one sent back to that rule before anything is sent.
@@ -398,12 +402,9 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	var keys []string
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys = append(keys, r.Header.Get("Idempotency-Key"))
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Retry-After", "2")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unavailable",
+		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 			"detail": "this node cannot establish what happened to this change",
-			"op_id":  op, "landed": []string{"seat"}})
+			"landed": []string{"seat"}})
 	}))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
@@ -416,7 +417,8 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		t.Fatal("an unknown write was reported as a success")
 	}
 	for _, want := range []string{"-idempotency-key " + op,
-		"these changes DID land before it: seat"} {
+		"these changes DID land before it: seat",
+		"could not establish whether this landed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
@@ -448,6 +450,19 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	}
 	if len(keys) != 2 {
 		t.Errorf("a refused key still reached the node: %q", keys)
+	}
+
+	// THE CONTROL: a 503 that wrote nothing carries the op id too, and is
+	// not said to have maybe landed.
+	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
+			"detail": "the log is full", "op_id": op})
+	}))
+	defer refused.Close()
+	err = run([]string{"iam", "bind", "p-1", "sre", "-config", cfg, "-api",
+		refused.URL}, &out, &errs)
+	if err == nil || strings.Contains(err.Error(), "could not establish") {
+		t.Errorf("a refusal that wrote nothing reads %v, want no unknown outcome", err)
 	}
 }
 

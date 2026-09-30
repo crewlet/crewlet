@@ -605,6 +605,13 @@ const iamMaxAnswer = 8 << 20
 // one nobody at the terminal could make. And where the answer says this node
 // cannot vouch for the operation (`unvouched`), the retry goes through another
 // node: asked here again it answers the same way until the change reaches it.
+//
+// # An unknown outcome is not a refusal
+//
+// A write the node could not account for is a 503 too, and the answer says so
+// as a field (`outcome: "unknown"`), which is what this reads — never the
+// sentence beside it. Rendered as `unavailable: …` it read as a node that did
+// nothing, of a write that may have landed.
 func iamRefusal(status int, answer map[string]any, raw []byte) error {
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return errors.New(msg)
@@ -625,6 +632,9 @@ func iamRefusal(status int, answer map[string]any, raw []byte) error {
 			strings.TrimSpace(string(raw)))
 	default:
 		said = fmt.Sprintf("the node answered %d", status)
+	}
+	if outcome, _ := answer["outcome"].(string); outcome == string(statelog.OutcomeUnknown) {
+		said = "the node could not establish whether this landed: " + said
 	}
 	if landed := joinAny(answer["landed"]); landed != "" {
 		said += "\nthese changes DID land before it: " + landed
