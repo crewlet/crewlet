@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
@@ -183,13 +184,77 @@ func TestAPartitionedLayoutCountsTheMapsHoldersNotTheDataNodes(t *testing.T) {
 		t.Errorf("the tick's inputs say %q about who holds the partitions, want the "+
 			"stale view named", shared.holdersUnknown)
 	}
-	in := statelog.TrimInputs{Now: time.Now(), CountedReadable: shared.holdersUnknown == "",
-		CountedUnknown: shared.holdersUnknown, HoldsReadable: true,
-		Counted: shared.counted(running, nil)}
-	d := statelog.Trim(in.Terms())
-	if d.BlockedBy != statelog.TermApplied || !strings.Contains(d.Detail, "freshness") {
-		t.Errorf("the trim over a stale view is blocked by %q (%s), want the applied "+
-			"term naming the stale view", d.BlockedBy, d.Detail)
+}
+
+// A STALE ESTATE VIEW BLOCKS THE TRIM — through the tick itself, on a running
+// log: the floor the tick publishes is blocked on the applied term, naming the
+// stale view, and nothing is purged. A stale map may name last hour's holders
+// and miss the joiner that arrived since, which is the one node the trim must
+// not pass, so its counted set is unknown rather than the register's rows
+// alone.
+func TestAStaleEstateViewBlocksTheTrimItself(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	_, s, js := aPartitionedStateLog(t)
+	running := s.Log("tracker@tracker.000")
+	for range 3 {
+		linearizableRead(t, running)
+	}
+	st, err := js.Stream(ctx, running.spec.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := st.CachedInfo().State.FirstSeq
+
+	backend := coordmem.New()
+	claimLeases(t, backend, s.layout.Number, "node-p")
+	source := &breakableMaps{MapSource: placedMap(t, s.layout, map[statelog.PartitionID][]partmap.Holder{
+		running.id.Partition: {{Node: "node-p", State: partmap.Serving, Since: 1}},
+	})}
+	clock := &viewClock{now: time.Now()}
+	w := runningWatch(t, source, backend, nil, s.layout, clock)
+	source.set(true)
+	clock.advance(statelog.FloorCacheStale + time.Minute)
+
+	r := &retention{fleet: s.fleet, state: s, nodeID: "node-p",
+		holders: mapHolders{layout: s.layout, view: func() estateHolderView { return w.view }},
+		cfg:     config.TrackerRetention{MinAgeRaw: "1ns"}}
+	shared, err := r.read(ctx)
+	if err != nil {
+		t.Fatalf("a stale view failed the whole tick: %v", err)
+	}
+	if err := r.domain(ctx, running, shared); err != nil {
+		t.Fatalf("the tick: %v", err)
+	}
+	floors, err := layoutFloors(ctx, s.fleet, s.layout.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published *coord.TrimFloor
+	for i := range floors {
+		if floors[i].Domain == running.key {
+			published = &floors[i]
+		}
+	}
+	if published == nil {
+		t.Fatalf("the tick published no floor for %s", running.key)
+	}
+	var applied string
+	for _, term := range published.Terms {
+		if term.Name == string(statelog.TermApplied) {
+			applied = term.Detail
+		}
+	}
+	if published.BlockedBy != string(statelog.TermApplied) || !strings.Contains(applied, "freshness") {
+		t.Errorf("the floor published over a stale view is blocked by %q (applied: %q), want "+
+			"the applied term naming the stale view", published.BlockedBy, applied)
+	}
+	st, err = js.Stream(ctx, running.spec.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if now := st.CachedInfo().State.FirstSeq; now != first {
+		t.Errorf("the tick purged the log from %d to %d over a stale view", first, now)
 	}
 }
 
