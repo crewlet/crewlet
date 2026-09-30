@@ -635,23 +635,10 @@ func (v *View) Serves(node string, p statelog.PartitionID) (bool, error) {
 }
 
 // wholeServers is p's servers where there is no map: under layout 0, every
-// live data node — see the file's doc for why presence and not the estate
-// leases.
+// live data node — [Whole], the rule a router under layout 0 reads directly.
 func (v *View) wholeServers(p statelog.PartitionID) ([]string, error) {
-	if v.running.Number != 0 {
-		return nil, fmt.Errorf("%w: this node runs layout %d and the fleet has no estate "+
-			"map yet, so no partition has been placed", ErrNoMap, v.running.Number)
-	}
-	if parts := v.running.Partitions(); len(parts) != 1 || parts[0] != p {
-		return nil, fmt.Errorf("%w: %q in layout 0", ErrUnknownPartition, p.String())
-	}
-	nodes, err := v.roster.LiveDataNodes()
-	if err != nil {
-		return nil, fmt.Errorf("estate/partmap: who serves %s under layout 0: %w", p.String(), err)
-	}
-	out := slices.Clone(nodes)
-	slices.Sort(out)
-	return out, nil
+	nodes, _, err := Whole{Running: v.running, Roster: v.roster}.Serving(p)
+	return nodes, err
 }
 
 // Read reads the map from the store NOW, takes it into the view, and answers
@@ -766,6 +753,20 @@ func (v *View) Invalidate() {
 	if v.roster != nil {
 		v.roster.Invalidate()
 	}
+}
+
+// Unanswered is [View.Invalidate] in the shape a router reports a silent node
+// in: the node it named does not change what is listed again.
+func (v *View) Unanswered(string) { v.Invalidate() }
+
+// Refresh reads the map from the store now ([View.Read]) for a router a server
+// told that it routed by an old map. A store that holds no map is an answer,
+// not a failure: the view takes it in, and layout 0 routes by presence.
+func (v *View) Refresh(ctx context.Context) error {
+	if _, _, err := v.Read(ctx); err != nil && !errors.Is(err, ErrNoMap) {
+		return err
+	}
+	return nil
 }
 
 // Watch delivers every map this view takes in from now until ctx ends — the one
