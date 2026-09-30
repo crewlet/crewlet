@@ -753,6 +753,15 @@ type served struct {
 }
 
 // pingArgs names the partition admission asks about.
+//
+// EMPTY FROM AN OLDER BUILD, whose admission asked this question of the whole
+// estate with no arguments at all — and a rolling upgrade puts that build's
+// stateless nodes in front of this build's data nodes. So a ping naming no
+// partition is that older question and is answered as it was: of the one
+// partition of a layout that has one, which is every layout an older build
+// can share a fleet with (a layout that divides the estate is fenced by the
+// protocol version such a build cannot pass), and [ErrUnaddressed] under any
+// other — the answer every whole-estate operation gives there.
 type pingArgs struct {
 	Partition string
 }
@@ -767,6 +776,14 @@ type pingArgs struct {
 // reached this node's writes.
 var opPing = define("estate.ping", opRead,
 	func(_ context.Context, l statelog.Layout, _ Resolver, a pingArgs) ([]statelog.PartitionID, error) {
+		if a.Partition == "" {
+			if parts := l.Partitions(); len(parts) == 1 {
+				return parts, nil
+			}
+			return nil, fmt.Errorf("%w: an admission question that names no partition "+
+				"asks about the whole estate, and layout %d divides it into %d partitions",
+				ErrUnaddressed, l.Number, len(l.Partitions()))
+		}
 		p, err := statelog.ParsePartitionID(a.Partition)
 		if err != nil {
 			return nil, fmt.Errorf("admission names %q: %w", a.Partition, err)

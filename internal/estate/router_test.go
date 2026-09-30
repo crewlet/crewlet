@@ -2,6 +2,7 @@ package estate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -1011,19 +1012,66 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	}
 }
 
+// AN OLDER BUILD'S ADMISSION IS ANSWERED. A stateless node from before
+// partitions asks its ping with no arguments and names no partition; a data
+// node of this build answers it as the question it always was — whether its
+// copy of the estate admits a seat — rather than refusing it as malformed,
+// which that node would take as final and withhold every seat claim until it
+// was upgraded too.
+func TestAnOlderBuildsAdmissionIsAnswered(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	raw, err := json.Marshal(map[string]any{"op": "estate.ping", "args": struct{}{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
+	}
+	var rep reply
+	if err := json.Unmarshal(replies[0], &rep); err != nil {
+		t.Fatal(err)
+	}
+	var answer served
+	if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
+		!answer.Tracker {
+		t.Fatalf("an older build's ping was answered %+v, want the admission answer", rep)
+	}
+	if !f.nodes["data-a"].askedFor("admits") {
+		t.Fatal("the older question was answered without asking the copy")
+	}
+
+	// UNDER A LAYOUT THAT DIVIDES THE ESTATE the older question has no
+	// partition to be about — and no older build shares such a fleet.
+	f.servers.set(func(p *fakePlacement) { p.layout = dividedLayout })
+	replies, err = f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("ask = (%d replies, %v)", len(replies), err)
+	}
+	rep = reply{}
+	if err := json.Unmarshal(replies[0], &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Err == nil || !errors.Is(decodeError(rep.Err), ErrUnaddressed) {
+		t.Fatalf("a whole-estate ping under a divided layout answered %+v, want ErrUnaddressed", rep)
+	}
+}
+
+// dividedLayout is a layout that divides every domain.
+var dividedLayout = statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+	{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{"tracker", "vectors"}},
+	{Space: statelog.SpacePages, Partitions: 2, Domains: []string{"pages", "vectors"}},
+	{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
+}}
+
 // AN OPERATION THAT ADDRESSES ITS DOMAIN AS ONE PARTITION HAS NONE under a
 // layout that divides the domain, and says so rather than guessing one — the
 // same answer the domain's own partition function gives.
 func TestAWholeDomainOperationUnderADividedLayoutIsUnaddressed(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a")
-	f.placement.set(func(p *fakePlacement) {
-		p.layout = statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
-			{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{"tracker", "vectors"}},
-			{Space: statelog.SpacePages, Partitions: 2, Domains: []string{"pages", "vectors"}},
-			{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
-		}}
-	})
+	f.placement.set(func(p *fakePlacement) { p.layout = dividedLayout })
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
 	if !errors.Is(err, ErrUnaddressed) {
 		t.Fatalf("err = %v, want ErrUnaddressed", err)

@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // carriedByServer is every field an operation's types hold that the wire does
@@ -133,6 +135,34 @@ func TestEveryOperationsTypesDecode(t *testing.T) {
 		}
 		if !strings.Contains(name, ".") {
 			t.Errorf("%s: an operation is named <half>.<verb>", name)
+		}
+	}
+}
+
+// AN OLDER ASKER'S REQUEST IS RESOLVED, NEVER REFUSED AS MALFORMED.
+//
+// A rolling upgrade puts a build from before partitions in front of this one,
+// on the one layout the two can share — layout 0; the protocol version fences
+// a divided one — and such a build names no partition and sends its own
+// arguments, which lack every field this build added. The server resolves that
+// request by the operation's arguments under its own layout, so each operation
+// must resolve arguments that carry NOTHING, the least an older build's can
+// carry, to the one partition: an operation whose partition function requires
+// a field of its own refuses every older asker, and an older asker takes the
+// refusal as final. Admission's ping did exactly that, and withheld every seat
+// claim on every stateless node not yet upgraded.
+func TestEveryOperationResolvesAnOlderAskersRequest(t *testing.T) {
+	t.Parallel()
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		if spec.partitions == nil {
+			continue
+		}
+		parts, err := spec.partitions(t.Context(), layoutZero, layoutResolver{layout: layoutZero},
+			json.RawMessage(`{}`))
+		if err != nil || !slices.Equal(parts, []statelog.PartitionID{statelog.EstatePartition}) {
+			t.Errorf("%s: a request with none of this build's fields resolves to (%v, %v), "+
+				"want %s", name, parts, err, statelog.EstatePartition)
 		}
 	}
 }
