@@ -144,4 +144,28 @@ func TestAKeySentWithOtherContentIsAnotherOperation(t *testing.T) {
 			t.Errorf("the first page reads %q, want one", got)
 		}
 	})
+
+	// A PURGE SAYS WHY, and the reason is what it records: another reason
+	// under the key is another purge — of a page already gone, which is
+	// refused — rather than the first one answered back as though the
+	// second reason had been written.
+	t.Run("a purge", func(t *testing.T) {
+		doomed := r.write(author("jane"), pages.NewPage{Title: "Scratch"}).Page.ID
+		first, err := r.store.Purge(t.Context(), keyed, doomed, "a duplicate")
+		if err != nil {
+			t.Fatalf("first purge: %v", err)
+		}
+		r.drain()
+		again, err := r.store.Purge(t.Context(), keyed, doomed, "a duplicate")
+		if err != nil || again.ChangeID != first.ChangeID {
+			t.Errorf("the same purge under the same key answered %q (%v), want "+
+				"the first one's %q", again.ChangeID, err, first.ChangeID)
+		}
+		if other, err := r.store.Purge(t.Context(), keyed, doomed,
+			"out of date"); err == nil {
+			t.Errorf("another purge reason under the key was answered as made "+
+				"(%q, the first was %q) — the ledger answered it as the first",
+				other.ChangeID, first.ChangeID)
+		}
+	})
 }
