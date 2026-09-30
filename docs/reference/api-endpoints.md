@@ -3063,6 +3063,14 @@ person's row names the seat they hold, and a Tier A token acts as a seat when
 the directory binds its login to one — and what binding changes is where the
 record is kept, not whether there is one.
 
+**A seat's record survives its rename.** The tracker keeps every person it
+names — an assignee, a watcher, whose inbox, queue and pins a record is — under
+the handle the seat was **created** under, and answers each of these questions
+for any handle the seat answers to: `chief`, renamed from `cto`, reads the
+queue, the notices and the pins it had as `cto`. Every handle in an answer, and
+in an `inbox_changed` frame, is the one the seat answers to now. See
+[a renamed seat keeps its work](../guides/work-tracker.md#a-renamed-seat-keeps-its-work).
+
 `conversations` is the exception, because a seat's trail belongs to the seat:
 a caller bound to no seat who names none is refused `bad_params`, not
 `unauthorized`. Nobody was denied anything: there is no seat to answer about,

@@ -70,7 +70,7 @@ import (
 // RoutingRecipient is one person a change reached, and why.
 type RoutingRecipient struct {
 	// Handle is whose inbox the row landed in.
-	Handle string `json:"handle"`
+	Handle string `json:"handle" person:"seat"`
 
 	// Reason is the ONE reason this handle heard under — the first in
 	// [Reasons] that named them. See [Candidates]: the resolution is
@@ -113,7 +113,7 @@ type RoutingAnswer struct {
 
 	// Actor is who made the change, and At the AUTHORED instant — the
 	// same instant the inbox renders, so a card and this page agree.
-	Actor     string     `json:"actor,omitempty"`
+	Actor     string     `json:"actor,omitempty" person:"seat"`
 	ActorKind AuthorKind `json:"actor_kind,omitempty"`
 	At        time.Time  `json:"at,omitzero"`
 
@@ -251,6 +251,14 @@ type RoutingQuery struct {
 // primary-key prefix, so the whole of it is one page. A cursor would be a
 // second thing to keep correct for a list that cannot have a second page.
 func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
+	RoutingAnswer, error) {
+	got, err := r.routing(ctx, identified(r.Identities, q), now)
+	return shown(r.Identities, got), err
+}
+
+// routing is [Reader.Routing] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	RoutingAnswer, error) {
 
 	record := q.RecordID

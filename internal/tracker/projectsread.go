@@ -77,7 +77,7 @@ type LastChange struct {
 	// Either may be empty: a record can carry no actor at all, and a
 	// change that happened with nobody named is still a change. The
 	// instant is what says the answer exists.
-	Actor     string     `json:"actor,omitempty"`
+	Actor     string     `json:"actor,omitempty" person:"seat"`
 	ActorKind AuthorKind `json:"actor_kind,omitempty"`
 }
 
@@ -90,7 +90,7 @@ type ProjectRow struct {
 	Unit UnitRef `json:"unit"`
 	Lead LeadRef `json:"lead"`
 
-	DefaultAssignee string     `json:"default_assignee,omitempty"`
+	DefaultAssignee string     `json:"default_assignee,omitempty" person:"seat"`
 	Counts          TaskCounts `json:"task_counts"`
 
 	// LastChange is nil for a project no work has ever been filed into —
@@ -397,6 +397,14 @@ func ParseProjectQuery(p Params) (ProjectQuery, error) {
 
 // Projects answers the company's projects with their maintained counts.
 func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
+	ProjectListing, error) {
+	got, err := r.projects(ctx, identified(r.Identities, q))
+	return shown(r.Identities, got), err
+}
+
+// projects is [Reader.Projects] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) projects(ctx context.Context, q ProjectQuery) (
 	ProjectListing, error) {
 
 	if q.Level == "" {
@@ -761,6 +769,14 @@ type ProjectDetailQuery struct {
 // fields a form draws and the policy stamp it validates against come from one
 // apply.
 func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery) (
+	ProjectDetail, error) {
+	got, err := r.project(ctx, identified(r.Identities, q))
+	return shown(r.Identities, got), err
+}
+
+// project is [Reader.Project] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) project(ctx context.Context, q ProjectDetailQuery) (
 	ProjectDetail, error) {
 
 	if q.Level == "" {

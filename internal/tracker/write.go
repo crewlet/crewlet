@@ -147,6 +147,15 @@ type Writer struct {
 	// filters against nobody.
 	World FieldWorld
 
+	// Identities is what every person this writer records is written as:
+	// the seat's IDENTITY, whichever handle the caller had for it — see
+	// people.go. The actor included, which is what makes "is this their
+	// own comment, their own record" a comparison that survives a rename.
+	//
+	// ON THE WRITER for [Writer.Leads]'s reason, and nil for a build with
+	// no chart, which records every value as it was given.
+	Identities Identities
+
 	// Now is the clock the AUTHORED instants are stamped from. An
 	// argument rather than a package call, so a test can pin it and so
 	// nothing on the write path reads a clock the applier is forbidden.
@@ -176,6 +185,10 @@ type WriterDeps struct {
 	// World is the chart seam the custom-field coercion needs for the one
 	// field type whose value is a colleague — see [Writer.World].
 	World FieldWorld
+
+	// Identities is the chart seam every person is recorded through — see
+	// [Writer.Identities].
+	Identities Identities
 
 	Metrics   *metrics.Recorder
 	Drain     func() float64
@@ -220,7 +233,11 @@ func (w *Writer) As(actor string, kind AuthorKind, provenance Provenance) *Write
 		clone.refusal = fmt.Errorf("tracker: a writer cannot act as %q of "+
 			"kind %q — every record carries who wrote it", actor, kind)
 	}
-	clone.Actor = actor
+	// THE SEAT'S IDENTITY, whichever handle the surface had for it: every
+	// row this writer stamps with its actor — an author, a reporter, a
+	// tombstone — and every comparison of a stored author with the caller
+	// is in the one spelling a rename does not move. See people.go.
+	clone.Actor = identityOf(w.Identities, actor)
 	clone.ActorKind = kind
 	clone.OperatorID = provenance.OperatorID
 	clone.TurnID = provenance.TurnID
@@ -331,8 +348,9 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
-		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
+		metrics: d.Metrics, Actor: identityOf(d.Identities, d.Actor),
+		ActorKind: d.ActorKind, Drain: d.Drain, Leads: d.Leads, World: d.World,
+		Identities: d.Identities, Now: now,
 	}, nil
 }
 
@@ -432,7 +450,7 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 			case stored.Author != w.Actor:
 				return TaskPatch{}, fmt.Errorf("%w: comment %s was written by "+
 					"%s — reply to it instead of rewriting it", ErrNotAuthor,
-					commentID, stored.Author)
+					commentID, currentOf(w.Identities, stored.Author))
 			}
 			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
 			// the apply is an upsert of the row the record carries: a
@@ -459,6 +477,11 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
+	// EVERY PERSON THE PATCH NAMES, BY THEIR IDENTITY, before the decide
+	// compares any of them with the rows — "is this person already
+	// watching" asked across two spellings of one seat is answered no.
+	// A copy: the caller's patch is untouched. See people.go.
+	patch = identified(w.Identities, patch)
 	// THE COMMENT'S BODY IS CHECKED HERE TOO, because a comment rides a
 	// task write rather than having a write of its own — so this is the
 	// one place every comment in the engine passes through.
@@ -631,7 +654,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// the next create of the same shape would refuse.
 				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				coerced, warned, err := settleFields(ctx, tx, current.Project,
-					current.Type, *charged.Fields, w.World)
+					current.Type, *charged.Fields, w.fieldWorld())
 				if err != nil {
 					return statelog.Decision{}, err
 				}
@@ -886,6 +909,10 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	if _, _, err := documentTable(subject); err != nil {
 		return WriteResult{}, err
 	}
+	// WHOEVER THE DOCUMENT NAMES, BY THEIR IDENTITY — a view's owner, a
+	// person record's handle — as every other write path records them.
+	// See people.go.
+	document = identified(w.Identities, document)
 	// THE CONTAINER IS TAKEN AND CHECKED RATHER THAN ASSUMED. Most kinds
 	// carry their own home in their subject and must not be given a second
 	// one; a view chooses its own. Accepting one where it means nothing
@@ -1007,6 +1034,12 @@ func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
 		return statelog.Decision{}, err
 	}
+	// EVERY WAKE NAMES SEATS BY THEIR IDENTITY, here and not where each
+	// path builds one: a notification is built by a caller from tasks it
+	// read, which a reader shows under current handles, and from leads a
+	// chart resolves the same way — and this is the one place every record
+	// passes through. See people.go.
+	notify = identified(w.Identities, notify)
 	if err := notify.Validate(); err != nil {
 		return statelog.Decision{}, err
 	}

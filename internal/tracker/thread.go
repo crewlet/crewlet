@@ -33,7 +33,7 @@ type ThreadQuery struct {
 	ReplyTo string
 
 	// Ask is the handle this comment asks, as the caller stated it.
-	Ask string
+	Ask string `person:"seat"`
 
 	// Answers is the comment this one answers, as the caller stated it —
 	// or empty, in which case [Reader.Thread] INFERS it when exactly one
@@ -42,7 +42,7 @@ type ThreadQuery struct {
 
 	// Author is who is writing, which the inference needs: an ask is
 	// answered by the person it was addressed to.
-	Author string
+	Author string `person:"seat"`
 }
 
 // ResolvedThread is the answer, ready to travel on a wake.
@@ -63,13 +63,13 @@ type ResolvedThread struct {
 type ErrAmbiguousAnswer struct {
 	Task  string
 	Asks  []AskCandidate
-	Actor string
+	Actor string `person:"seat"`
 }
 
 // AskCandidate is one open ask, as a refusal names it.
 type AskCandidate struct {
 	Comment string
-	Author  string
+	Author  string `person:"seat"`
 	Excerpt string
 }
 
@@ -87,6 +87,21 @@ func (e *ErrAmbiguousAnswer) Error() string {
 // resolved to the wrong comment closes somebody else's question. So a read
 // failure empties the first and refuses the second.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
+	fresh statelog.Freshness) (ResolvedThread, error) {
+	got, err := r.thread(ctx, identified(r.Identities, q), fresh)
+	// THE REFUSAL NAMES PEOPLE TOO, and the caller reads it to choose which
+	// question it is answering — so it names them as they are called now.
+	var ambiguous *ErrAmbiguousAnswer
+	if errors.As(err, &ambiguous) {
+		named := shown(r.Identities, *ambiguous)
+		err = &named
+	}
+	return shown(r.Identities, got), err
+}
+
+// thread is [Reader.Thread] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) thread(ctx context.Context, q ThreadQuery,
 	fresh statelog.Freshness) (ResolvedThread, error) {
 
 	if q.Task == "" {

@@ -1244,6 +1244,30 @@ misspelling is indistinguishable from a colleague who is simply quiet.
 A name is **resolved**, not merely checked — so a caller that typed a role's
 name rather than its handle gets the handle back rather than a refusal.
 
+### A renamed seat keeps its work
+
+What the tracker **stores** for a seat is the handle the seat was **created
+under** — its identity, which a rename never moves (see
+[ADR-0019](https://github.com/crewlet/crewlet/blob/main/adr/0019-a-seats-identity-is-derived-from-the-handle-it-was-created-under.md)).
+That holds for every value that names somebody: an item's assignee, reporter,
+collaborators and watchers, a checklist line's owner, a comment's author and
+the people it asks and mentions, whose inbox, priority list and pins a
+person's record is, a view's owner, a project's default assignee, and a
+`people` custom field. What every answer **shows** is the handle the seat
+answers to now.
+
+So a seat renamed from `cto` to `chief` keeps its day: `my_work` and
+`work_inbox` for `chief` list the work, the questions and the notices it had
+as `cto`, its priority list and pins are still its own, a filter or a board
+column for `chief` finds its work, and it may still edit the comments it wrote
+before. Any handle the seat answers to — the current one, the one it was
+created under, or one a rename retired — names the same seat on the way in.
+Nothing already written is migrated, and nothing needs to be: for every seat
+that was never renamed, its identity **is** its handle.
+
+A name no seat answers to — a person's login, a Tier A token, a seat since
+removed — is stored and shown exactly as written.
+
 ### Dependencies, and the set-valued arguments
 
 A **dependency** is the one relation with two ends. `waiting_on` is authored on

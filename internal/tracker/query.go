@@ -229,11 +229,11 @@ type Query struct {
 	StatusNot    []Status
 	StatusGroups []StatusGroup
 
-	Assignee          []string
-	Collaborator      []string
-	Reporter          []string
-	Watcher           []string
-	ChecklistAssignee []string
+	Assignee          []string `person:"seat"`
+	Collaborator      []string `person:"seat"`
+	Reporter          []string `person:"seat"`
+	Watcher           []string `person:"seat"`
+	ChecklistAssignee []string `person:"seat"`
 
 	Unit        []string
 	RoutingUnit []string
@@ -261,7 +261,7 @@ type Query struct {
 	// `Person.Priorities` and `update_priorities` are what a person calls
 	// their list, and renaming it here would leave one word meaning two
 	// things across the API.
-	PriorityListOf string
+	PriorityListOf string `person:"seat"`
 
 	// PriorityList is that list, RESOLVED — filled inside the read's own
 	// transaction, because it lives on another object and a parser that
@@ -304,8 +304,8 @@ type Query struct {
 	HasChildren     *bool
 	HasParent       *bool
 	HasOpenAsks     *bool
-	AskedOf         string
-	AskedBy         string
+	AskedOf         string `person:"seat"`
+	AskedBy         string `person:"seat"`
 
 	LinkedPage string
 	References string

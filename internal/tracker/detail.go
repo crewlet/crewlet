@@ -235,7 +235,7 @@ type DetailLink struct {
 type HistoryEntry struct {
 	ID         string     `json:"id"`
 	Kind       string     `json:"kind"`
-	Actor      string     `json:"actor,omitempty"`
+	Actor      string     `json:"actor,omitempty" person:"seat"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 	CommentID  string     `json:"comment_id,omitempty"`
@@ -273,6 +273,14 @@ type HistoryEntry struct {
 // it yet, and stops a completeness claim being made against state the rows
 // were not read from.
 func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
+	fresh statelog.Freshness) (TaskDetail, error) {
+	got, err := r.task(ctx, idOrKey, want, fresh)
+	return shown(r.Identities, got), err
+}
+
+// task is [Reader.Task] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) task(ctx context.Context, idOrKey string, want DetailWants,
 	fresh statelog.Freshness) (TaskDetail, error) {
 
 	idOrKey = strings.TrimSpace(idOrKey)

@@ -282,6 +282,10 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
 	}
+	// EVERY PERSON THE TASK NAMES, BY THEIR IDENTITY — its reporter, its
+	// assignee, whoever watches it — so the rows are keyed where a rename
+	// cannot move them. See people.go.
+	task = identified(w.Identities, task)
 	// BEFORE ANY READ, because a cap is a property of the value rather
 	// than of the database: a title past its cap is refused identically
 	// whichever node is asked and whatever the project holds, so paying
@@ -794,7 +798,7 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, err
 	}
 	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
-		task.Fields, w.World)
+		task.Fields, w.fieldWorld())
 	if err != nil {
 		return settledCreate{}, err
 	}

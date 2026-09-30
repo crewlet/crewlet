@@ -52,7 +52,7 @@ type Unblock struct {
 	Task     string
 	Key      string
 	Project  string
-	Assignee string
+	Assignee string `person:"seat"`
 
 	// ClearedAt is the effective instant its last blocker finished,
 	// which is what the dependent's own `unblocked_told_at` is compared

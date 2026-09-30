@@ -48,7 +48,7 @@ type ProjectEdit struct {
 
 	// DefaultAssignee is who unassigned work in this project lands on. The
 	// empty string is a real setting: it means triage.
-	DefaultAssignee *string
+	DefaultAssignee *string `person:"seat"`
 
 	// Archived stops the project taking new work. An OPERATOR's, not a
 	// lead's — a project holds the company's tasks, and taking one out of
@@ -97,6 +97,8 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	edit ProjectEdit, authority ProjectAuthority) (WriteResult, error) {
 
 	key = ProjectKey(key)
+	// THE DEFAULT ASSIGNEE BY THEIR IDENTITY — see people.go.
+	edit = identified(w.Identities, edit)
 	switch {
 	case key == "":
 		return WriteResult{}, fmt.Errorf("tracker: a project edit names no project")

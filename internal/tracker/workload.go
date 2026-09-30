@@ -55,7 +55,7 @@ const MaxWorkloadHandles = 256
 
 // WorkloadRow is one person's load.
 type WorkloadRow struct {
-	Handle string `json:"handle"`
+	Handle string `json:"handle" person:"seat"`
 
 	// Open is how many open tasks they hold.
 	Open int `json:"open"`
@@ -93,6 +93,14 @@ type WorkloadAnswer struct {
 
 // Workload answers who is carrying how much, against what they can take.
 func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time) (
+	WorkloadAnswer, error) {
+	got, err := r.workload(ctx, identified(r.Identities, q), now)
+	return shown(r.Identities, got), err
+}
+
+// workload is [Reader.Workload] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) workload(ctx context.Context, q WorkloadQuery, now time.Time) (
 	WorkloadAnswer, error) {
 
 	if q.Level == "" {

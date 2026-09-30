@@ -94,7 +94,7 @@ type ChartUnit struct {
 
 // LeadRef is who leads a unit.
 type LeadRef struct {
-	Handle string     `json:"handle,omitempty"`
+	Handle string     `json:"handle,omitempty" person:"seat"`
 	Kind   AuthorKind `json:"kind,omitempty"`
 }
 

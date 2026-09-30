@@ -53,7 +53,16 @@ with a sharper cost: a trigger worked under the old handle is redelivered
 after a rename under the new one, and keyed on the address it found nothing
 and ran the turn again. So are its chat thread follows: keyed on the address,
 a rename left the seat deaf to every thread it had been following until
-somebody named it again.
+somebody named it again. And so is every person column of the work tracker —
+an item's assignee, reporter, collaborators and watchers, a checklist line's
+owner, a comment's author and whom it asks, whose inbox, priority list and
+pins a person's record is, a view's owner, a project's default assignee:
+keyed on the address, a renamed seat opened an empty queue, inbox and pin
+strip, and its own comments were no longer its own to edit. There the origin
+rides the RECORD, resolved once by the writer, because an applier may not
+read a chart; `internal/tracker`'s people.go states the rule (a
+`person:"seat"` tag on every such field, which its tests hold every name to)
+and `TestARenamedSeatKeepsItsWorkInboxQueueAndPins` holds it end to end.
 
 ## Why the obvious alternative is wrong
 

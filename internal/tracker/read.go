@@ -50,7 +50,7 @@ type TaskRow struct {
 	Status      Status      `json:"status"`
 	StatusGroup StatusGroup `json:"status_group"`
 	Priority    Priority    `json:"priority"`
-	Assignee    string      `json:"assignee,omitempty"`
+	Assignee    string      `json:"assignee,omitempty" person:"seat"`
 	Project     string      `json:"project"`
 	Parent      string      `json:"parent,omitempty"`
 	Depth       int         `json:"depth,omitempty"`
@@ -264,6 +264,15 @@ const (
 type Reader struct {
 	db  *store.DB
 	log *statelog.Reader
+
+	// Identities is what every person a question names is read as, and
+	// what every person an answer names is shown as — the seat's identity
+	// on the way in, the handle it answers to now on the way out. See
+	// people.go. Nil reads and shows every value as it was given, which
+	// is a build holding no chart.
+	//
+	// SET ONCE, before the reader is shared: it is read by every call.
+	Identities Identities
 }
 
 // NewReader builds the read surface over a node's replicated estate.
@@ -291,6 +300,13 @@ func NewReader(db *store.DB, log *statelog.Reader) (*Reader, error) {
 // counts, and stops a completeness claim being made against state the rows
 // were not read from.
 func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, error) {
+	got, err := r.tasks(ctx, identified(r.Identities, q), now)
+	return shown(r.Identities, got), err
+}
+
+// tasks is [Reader.Tasks] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) tasks(ctx context.Context, q Query, now time.Time) (Answer, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = PageDefault
@@ -334,6 +350,10 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		if err != nil {
 			return err
 		}
+		// THE TWO PERSON VALUES ONLY THE CATALOGUE CAN NAME: a people
+		// field's filter values, and the column a board pages when it
+		// is grouped by one — see people.go.
+		q = identifiedByType(r.Identities, q, fields)
 		// AND THE PRIORITY LIST, inside the same transaction and for the
 		// same reason: it lives on another object, so a parser that read
 		// it would be a parser that could fail on a store — and a list
@@ -373,7 +393,8 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			if err != nil {
 				return err
 			}
-			answer.Groups = groups.Groups
+			answer.Groups = shownGroups(r.Identities, groups.Groups,
+				personAxis(q.GroupBy, fields), personAxis(q.GroupBy2, fields))
 			answer.GroupsDropped = groups.Dropped
 			answer.GroupsOverlap = groups.Overlap
 		} else {

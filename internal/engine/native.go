@@ -276,6 +276,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// than to a row — so the write resolves it and the record
 			// carries the handle, and no applier ever reads an org.
 			World: liveSeats{engine: e},
+			// AND ONCE MORE for every person a record names: the seat's
+			// IDENTITY, whichever handle the caller had for it, so a
+			// rename moves nobody's work, inbox or queue — see
+			// internal/tracker's people.go.
+			Identities: livePeople{engine: e},
 			// THE NODE'S OWN WRITER ACTS AS THE SYSTEM, and every
 			// surface derives its own from it with Writer.As: a seat's
 			// tools act as that seat, an operator's session as that
@@ -302,6 +307,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			e.backends.Store, running.reader); err != nil {
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
+		// THE WRITER'S SEAM, read the other way: a question is asked by
+		// identity and every answer names people as they are called now.
+		n.trackerReader.Identities = livePeople{engine: e}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
 	// backend rather than under the wiki's.
@@ -332,6 +340,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Enter:  e.enterSearch,
 		},
 	})
+	// A HIT'S ASSIGNEE is shown as the reader shows one — see livePeople.
+	n.itemSearch.Identities = livePeople{engine: e}
 	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
 	// beside the coordinator because they are different jobs on one node:
 	// every node with an index answers, whether or not anybody on it ever
@@ -1722,6 +1732,50 @@ func (l liveSeats) ResolveSeat(ref string) (string, bool) {
 		return "", false
 	}
 	return found[0].Seat.Handle, true
+}
+
+// livePeople is the tracker's person seam against the CURRENT epoch: the
+// handle a seat was created under for any handle it answers to, and the handle
+// it answers to now for that identity (ADR-0019).
+//
+// THROUGH [org.Organization.Role], which resolves a current handle, a creation
+// handle and a retired alias alike — live handles first, so a retired alias
+// another seat has since taken names that seat. An identity is never issued
+// twice, so Current's lookup by one can only find the seat created under it.
+// Anything no seat answers to — a person's login, a Tier A token, a node id, a
+// seat since removed — is answered as given, both ways.
+//
+// Per call for the reason every other live seam here is: the writer and the
+// reader outlive a revision, and a rename is one.
+type livePeople struct{ engine *Engine }
+
+// Identity implements [tracker.Identities].
+func (l livePeople) Identity(handle string) string {
+	if role := l.role(handle); role != nil {
+		return role.Origin()
+	}
+	return handle
+}
+
+// Current implements [tracker.Identities].
+func (l livePeople) Current(identity string) string {
+	if role := l.role(identity); role != nil {
+		return role.Handle()
+	}
+	return identity
+}
+
+// role is the seat answering to a handle in the live epoch, or nil.
+//
+// TRIMMED, because a question may arrive with the handle as somebody typed it
+// and the reader trims it only after it has been asked by identity — a padded
+// `chief` would otherwise be asked for as itself and find none of its work.
+func (l livePeople) role(handle string) *org.Role {
+	company := l.engine.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	return company.Org.Role(strings.TrimSpace(handle))
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.

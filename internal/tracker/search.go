@@ -41,7 +41,7 @@ type Ranked struct {
 	Project  string `json:"project"`
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
-	Assignee string `json:"assignee,omitempty"`
+	Assignee string `json:"assignee,omitempty" person:"seat"`
 	// Rank is this hit's 1-based place in the answer.
 	//
 	// A PLACE AND NOT A SCORE, because a place is what the fan-out
@@ -98,6 +98,11 @@ const MaxSearchLimit = 50
 type Searcher struct {
 	db   *store.DB
 	rank Ranker
+
+	// Identities is how a hit's assignee is shown — the handle the seat
+	// answers to now, like every reader's answer. See people.go. Set once,
+	// before the searcher is shared.
+	Identities Identities
 }
 
 // NewSearcher builds one over this node's store and its index.
@@ -159,7 +164,7 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 		row.Snippet, row.Rank = doc.Snippet, len(out)+1
 		out = append(out, row)
 	}
-	return out, nil
+	return shown(s.Identities, out), nil
 }
 
 // itemsByID reads what a ranked hit has to carry, for one batch of ids.

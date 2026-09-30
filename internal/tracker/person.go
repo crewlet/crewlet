@@ -97,7 +97,8 @@ func (w *Writer) WriteInbox(ctx context.Context, opID, handle string,
 	read, unread, snoozed []InboxEntry, reasons []Reason,
 	seenThrough Position, authority PersonAuthority) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "inbox", authority); err != nil {
+	handle = identityOf(w.Identities, handle)
+	if err := w.ownRecord(handle, "inbox", authority); err != nil {
 		return WriteResult{}, err
 	}
 	if err := checkInbox(read, unread, snoozed, reasons, w.Now()); err != nil {
@@ -125,7 +126,8 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	pinnedViews []string, favorites []Favorite,
 	authority PersonAuthority) (WriteResult, error) {
 
-	if err := ownRecord(w.Actor, handle, "pins", authority); err != nil {
+	handle = identityOf(w.Identities, handle)
+	if err := w.ownRecord(handle, "pins", authority); err != nil {
 		return WriteResult{}, err
 	}
 	pinnedViews = cleanHandles(pinnedViews)
@@ -133,16 +135,17 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 	case len(pinnedViews) > MaxPinnedViews:
 		return WriteResult{}, fmt.Errorf("tracker: %s pins %d views and the "+
 			"maximum is %d — a strip where everything is first has no first",
-			handle, len(pinnedViews), MaxPinnedViews)
+			currentOf(w.Identities, handle), len(pinnedViews), MaxPinnedViews)
 	case len(favorites) > MaxFavorites:
 		return WriteResult{}, fmt.Errorf("tracker: %s stars %d things and the "+
-			"maximum is %d", handle, len(favorites), MaxFavorites)
+			"maximum is %d", currentOf(w.Identities, handle), len(favorites),
+			MaxFavorites)
 	}
 	for _, favorite := range favorites {
 		if favorite.Kind == "" || favorite.ID == "" {
 			return WriteResult{}, fmt.Errorf("tracker: a favourite of %s names "+
 				"kind %q and id %q, and a star with neither points at nothing",
-				handle, favorite.Kind, favorite.ID)
+				currentOf(w.Identities, handle), favorite.Kind, favorite.ID)
 		}
 	}
 	return w.writePerson(ctx, opID, handle, func(post *Person, _ time.Time) error {
@@ -184,7 +187,11 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 	priorities []string, authority PersonAuthority) (WriteResult, error) {
 
 	priorities = cleanHandles(priorities)
+	// THE PERSON BY THEIR IDENTITY, and so is the actor ([Writer.As]): a
+	// renamed seat setting its own list is its own list.
+	handle = identityOf(w.Identities, handle)
 	own := w.Actor == handle
+	actor, named := currentOf(w.Identities, w.Actor), currentOf(w.Identities, handle)
 	switch {
 	case !own && (!authority.Authorized || authority.Agent):
 		return WriteResult{}, fmt.Errorf("tracker: %s is a seat, is not %s and "+
@@ -192,11 +199,11 @@ func (w *Writer) WritePriorities(ctx context.Context, opID, handle string,
 			"re-ordering a colleague's list is a hand-off in disguise, and it "+
 			"bypasses the guarded take and the reassignment budget. A lead, a "+
 			"human or an operator may: %w",
-			w.Actor, handle, handle, statelog.ErrConflict)
+			actor, named, named, statelog.ErrConflict)
 	case len(priorities) > MaxPriorities:
 		return WriteResult{}, fmt.Errorf("tracker: %s's priority list carries "+
 			"%d items and the maximum is %d — a list longer than that is not "+
-			"an order, it is the backlog again", handle, len(priorities),
+			"an order, it is the backlog again", named, len(priorities),
 			MaxPriorities)
 	}
 	return w.writePersonNotifying(ctx, opID, handle, ChangePrioritised,
@@ -276,7 +283,7 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 			Position:      1,
 		},
 		Excerpt: fmt.Sprintf("%s put %s at position 1 of your priorities",
-			w.Actor, top.Key),
+			currentOf(w.Identities, w.Actor), top.Key),
 	}, nil
 }
 
@@ -289,9 +296,13 @@ func (w *Writer) prioritisedWake(ctx context.Context, tx *sql.Tx, handle string,
 // what their report works on ([WritePriorities]) and marking somebody's mail
 // read is a gesture nobody asked a lead to make, which is exactly the line
 // [authz.ClassOwnRecord] draws.
-func ownRecord(actor, handle, what string, authority PersonAuthority) error {
+//
+// BOTH SIDES ARE IDENTITIES — the writer's actor ([Writer.As]) and the
+// record's handle as each verb resolved it — so a renamed seat's own record is
+// its own, and the refusal names both as they are called now.
+func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error {
 	switch {
-	case actor == handle:
+	case w.Actor == handle:
 		return nil
 	case authority.Authorized && !authority.Agent:
 		return nil
@@ -299,7 +310,8 @@ func ownRecord(actor, handle, what string, authority PersonAuthority) error {
 	return fmt.Errorf("tracker: %s cannot write %s's %s — it is written on "+
 		"behalf of the person whose it is, and somebody else's hand in it is "+
 		"the one thing it must never allow: %w",
-		actor, handle, what, statelog.ErrConflict)
+		currentOf(w.Identities, w.Actor), currentOf(w.Identities, handle), what,
+		statelog.ErrConflict)
 }
 
 // checkInbox refuses an inbox nothing could render.

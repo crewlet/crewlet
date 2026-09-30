@@ -45,7 +45,7 @@ type ViewRow struct {
 
 	// Owner empty is a SHARED view; a handle makes it personal. Protected
 	// says only its owner may change it.
-	Owner     string `json:"owner,omitempty"`
+	Owner     string `json:"owner,omitempty" person:"seat"`
 	Protected bool   `json:"protected,omitempty"`
 
 	// Default is the container's landing tab, and at most one row carries
@@ -69,7 +69,7 @@ type ViewQuery struct {
 	// Viewer is whose pins order the saved half, and whose personal views
 	// join it. Empty asks for the shared strip: no pins, and no personal
 	// views but the shared ones.
-	Viewer string
+	Viewer string `person:"seat"`
 
 	// Units resolves a UNIT container's two spellings, so a strip asked
 	// for by a team's id carries the views saved against its name and the
@@ -124,6 +124,13 @@ const (
 // ONE READ TRANSACTION for the saved rows and the viewer's pins — so the strip
 // describes one instant rather than two reads' worth of them.
 func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
+	got, err := r.views(ctx, identified(r.Identities, q))
+	return shown(r.Identities, got), err
+}
+
+// views is [Reader.Views] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	if q.Level == "" {
 		return ViewListing{}, fmt.Errorf("tracker: this view read names no " +
 			"level — a surface resolves an absent read_level to its own " +

@@ -74,7 +74,7 @@ type ViewPrior struct {
 	Held bool
 
 	// Owner and Container are that view's, and empty when none was held.
-	Owner     string
+	Owner     string `person:"seat"`
 	Container Container
 }
 
@@ -156,6 +156,9 @@ func ownerOrShared(owner string) string {
 func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	prior ViewPrior) (WriteResult, error) {
 
+	// WHOSE IT IS, BY THEIR IDENTITY, and the prior's owner too, so the
+	// decide compares one spelling of a seat with the row's. See people.go.
+	view, prior = identified(w.Identities, view), identified(w.Identities, prior)
 	if err := checkView(&view); err != nil {
 		return WriteResult{}, err
 	}
@@ -243,8 +246,8 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 					current.Owner != w.Actor {
 					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
 						"is protected and belongs to %s — ask them to change "+
-						"it, or save your own copy: %w",
-						view.ID, current.Owner, statelog.ErrConflict)
+						"it, or save your own copy: %w", view.ID,
+						currentOf(w.Identities, current.Owner), statelog.ErrConflict)
 				}
 				// THE CREATION FACTS ARE THE STORED ROW'S, never the
 				// caller's. A save that carried them would let a

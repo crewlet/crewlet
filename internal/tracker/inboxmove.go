@@ -42,7 +42,7 @@ import (
 // question's own authority never decided.
 type InboxMovement struct {
 	// Handle is whose inbox moved.
-	Handle string `json:"handle"`
+	Handle string `json:"handle" person:"seat"`
 
 	// UnreadDelta is how many notices the batch added for them. Never
 	// negative: a notice arrives unread, and a person marking their own

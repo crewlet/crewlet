@@ -65,7 +65,7 @@ type AskRow struct {
 	// Comment is the ask itself — the id an answer replies to, and the
 	// body, so a model can decide without a second read.
 	Comment string    `json:"comment"`
-	AskedBy string    `json:"asked_by"`
+	AskedBy string    `json:"asked_by" person:"seat"`
 	AskedAt time.Time `json:"asked_at"`
 	Body    string    `json:"body"`
 
@@ -92,7 +92,7 @@ type ChecklistRow struct {
 
 // MyWork is the compound answer.
 type MyWork struct {
-	Handle string `json:"handle"`
+	Handle string `json:"handle" person:"seat"`
 
 	// Priorities is in the STORED ORDER, not re-sorted: the order is the
 	// content — it is what somebody decided — and sorting it by anything
@@ -119,7 +119,7 @@ type MyWorkQuery struct {
 	// Handle is whose. Required — "mine" is resolved by the surface from
 	// its own credential, never by this reader, because a reader that
 	// defaulted it would answer about whoever it happened to pick.
-	Handle string
+	Handle string `person:"seat"`
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -135,6 +135,14 @@ type MyWorkQuery struct {
 
 // MyWork answers everything one person is expected to look at.
 func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
+	MyWork, error) {
+	got, err := r.myWork(ctx, identified(r.Identities, q), now)
+	return shown(r.Identities, got), err
+}
+
+// myWork is [Reader.MyWork] once every person the question names is their seat's
+// identity — see people.go.
+func (r *Reader) myWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 	MyWork, error) {
 
 	if q.Level == "" {

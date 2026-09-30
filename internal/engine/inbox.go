@@ -30,8 +30,23 @@ func (e *Engine) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
 
 // inboxMoved is what the tracker applier calls after a committed batch that
 // wrote somebody a notice.
+//
+// EACH MOVEMENT NAMES ITS SEAT AS IT IS CALLED NOW. The applier writes a
+// notice under the recipient's IDENTITY — the handle the seat was created
+// under, which is what a record carries (internal/tracker's people.go) — and a
+// socket watches a seat by the handle it answers to, so a renamed seat's
+// screen heard nothing of its own inbox. The applier may not read a chart;
+// this is the first frame after it that can.
 func (e *Engine) inboxMoved(moved []tracker.InboxMovement) {
-	if fn := e.onInbox.Load(); fn != nil && *fn != nil {
-		(*fn)(moved)
+	fn := e.onInbox.Load()
+	if fn == nil || *fn == nil {
+		return
 	}
+	named := make([]tracker.InboxMovement, len(moved))
+	people := livePeople{engine: e}
+	for i, movement := range moved {
+		movement.Handle = people.Current(movement.Handle)
+		named[i] = movement
+	}
+	(*fn)(named)
 }
