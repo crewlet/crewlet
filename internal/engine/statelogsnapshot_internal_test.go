@@ -553,7 +553,8 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 // interval — a day — behind a snapshot it has just taken, and returns what that
 // tick published. From then on nothing but a nudge runs the loop again.
 //
-// A PEER IS COUNTED so the tick can take one: a node alone declines as
+// A PEER IS COUNTED so the tick can take one — a row naming the partition's
+// tracker log, which is what the trim counts it on: a node alone declines as
 // `sole_node` and retries every thirty seconds, which would put a tick of its
 // own inside any window a test watched. And the loop is NOT nudged here: a
 // nudge that arrived while a tick was taking would run it again at once, and
@@ -562,8 +563,13 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	t.Helper()
 	s := e.native.Load().log
 	counted := time.Now().UTC()
+	// AT THIS NODE'S OWN GENERATION: a peer's row a generation ahead reads as
+	// a peer that re-anchored the log, which strands this node's rows.
+	generation := s.Domain(tracker.Domain{}.Name()).runner.Committed().Generation
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "a-counted-peer", At: counted,
+		Domains: map[string]coord.DomainPosition{
+			tracker.Domain{}.Name(): {Generation: generation}},
 	}); err != nil {
 		t.Fatalf("publish a counted peer: %v", err)
 	}

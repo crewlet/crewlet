@@ -3426,8 +3426,10 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		Dir:           dir,
 		NodeID:        s.nodeID,
 		EngineVersion: version.String(),
-		Counted:       e.countedNodes,
-		Interval:      boot.Stream.TrackerRetention.SnapshotInterval(),
+		Counted: func(ctx context.Context) (int, error) {
+			return e.countedOn(ctx, s, time.Now())
+		},
+		Interval: boot.Stream.TrackerRetention.SnapshotInterval(),
 	})
 	if err != nil {
 		log.ErrorContext(ctx, "statelog_snapshots_unavailable", "error", err.Error(),
@@ -3779,22 +3781,72 @@ func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 // window a rolling upgrade lives in.
 const snapshotSkipRetry = 30 * time.Second
 
-// countedNodes is how many members the fleet counts, which is what decides
-// whether there is anybody to donate to at all.
+// countedOn is how many nodes the fleet counts on this node's logs at now, which
+// is what decides whether there is anybody to donate an artefact to at all:
+// THE TRIM'S OWN COUNTED SET, log by log ([statelog.CountedSet]) — every node
+// whose positions row names the log, UNION every live data node, LESS the
+// tombstones past their window — so the loop and the trim's snapshot term ask
+// one question of one set.
 //
-// FROM THE POSITIONS REGISTER rather than from the lease view, because that is
-// the register the trim reads: a node counted there is one whose position
-// holds the log back, and one holding the log back is exactly a node that
-// might one day need a snapshot.
-func (e *Engine) countedNodes(ctx context.Context) (int, error) {
-	if e.backends == nil || e.backends.Fleet == nil {
+// # The live data nodes, and not the register alone
+//
+// A node joining the fleet has no row until it has adopted a copy — and that
+// copy is exactly what this count decides whether anybody takes. Counted from
+// the register alone, a fleet's lone data node saw a fleet of one and declined
+// every artefact as `sole_node`, while a joiner below a trimmed log's floor
+// waited on a donor that could not exist — and the trim, counting that joiner
+// at zero from its presence, waited for two donors that never came.
+//
+// # Less the tombstones
+//
+// A row never expires, so an evicted node's row outlives the machine: counted
+// from rows alone, a fleet of one server and one evicted node took a full copy
+// every interval for a peer the trim no longer waits for.
+//
+// # From the watched presence view, and unknown is the register's half
+//
+// It is asked every thirty seconds for as long as a node declines, and it
+// decides nothing about what may be removed — so it reads the presence view
+// the per-request questions read ([Engine.dataRoster]) rather than listing the
+// store each time. A view that cannot answer leaves the presence half out, and
+// the count is the register's alone: a lower bound, which errs toward
+// declining a copy for a tick rather than toward failing one — a failed take
+// is stamped on the node's row and warned about on every retry, for a
+// coordination blip that says nothing about this node's disk.
+//
+// A log whose eviction rows cannot be read subtracts none, which counts more
+// rather than less — the direction that takes a copy nobody needed rather than
+// one that declines a copy a joiner is waiting for.
+func (e *Engine) countedOn(ctx context.Context, s *stateLog, now time.Time) (int, error) {
+	if s.fleet == nil {
 		return 0, fmt.Errorf("engine: no coordination to count the fleet with")
 	}
-	rows, err := e.backends.Fleet.Positions(ctx)
+	rows, err := s.positions(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return len(rows), nil
+	var live []statelog.Presence
+	if nodes, err := e.dataRoster(ctx); err == nil {
+		for _, id := range nodes {
+			live = append(live, statelog.Presence{NodeID: id})
+		}
+	}
+	var db *store.DB
+	if e.backends != nil {
+		db = e.backends.Store
+	}
+	counted := map[string]bool{}
+	for _, id := range s.layout.AllLogs() {
+		domain, err := registeredDomain(id.Domain)
+		if err != nil {
+			return 0, err
+		}
+		tombs, _ := logTombstones(ctx, db, domain, id.Partition, 0)
+		for _, n := range statelog.CountedSet(now, reportedPositions(rows, id.String()), live, tombs) {
+			counted[n.NodeID] = true
+		}
+	}
+	return len(counted), nil
 }
 
 // newestSnapshot reads the newest complete manifest in a directory.

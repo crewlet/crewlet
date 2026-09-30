@@ -307,7 +307,7 @@ answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
-| `sole_node` | fewer than two counted nodes; nothing to donate to |
+| `sole_node` | fewer than two counted nodes; nothing to donate to. Counted as the trim counts: every node whose row names a log, every live data node — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted longer ago than the fence window |
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
