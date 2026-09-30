@@ -365,17 +365,31 @@ func deltaText(text string, list bool, f func(string) string) string {
 	return strings.Join(members, ", ")
 }
 
-// withPeople is a custom field's value with its person rewritten, when its
-// declared type says the value is one.
+// withPeople is a custom field's value with its people rewritten, when its
+// declared type says the value names them.
+//
+// ONE PERSON OR A LIST OF THEM, because a people field is [MultiValued]: the
+// write stores a single member as itself and several as a JSON list
+// ([coerceMany]), so reading only the first shape left every task naming two
+// colleagues in one field showing a renamed seat by its identity. A list is a
+// set, and two spellings of one seat in it are one member — [mapNames]' rule.
+// A value in neither shape is this build's to leave alone rather than guess at.
 func (v FieldValue) withPeople(f func(string) string) FieldValue {
 	if v.Type != FieldPeople || len(v.Value) == 0 {
 		return v
 	}
+	var rewritten any
 	var handle string
-	if err := json.Unmarshal(v.Value, &handle); err != nil {
+	var handles []string
+	switch {
+	case json.Unmarshal(v.Value, &handle) == nil:
+		rewritten = f(handle)
+	case json.Unmarshal(v.Value, &handles) == nil && handles != nil:
+		rewritten = mapNames(handles, f)
+	default:
 		return v
 	}
-	encoded, err := json.Marshal(f(handle))
+	encoded, err := json.Marshal(rewritten)
 	if err != nil {
 		return v
 	}

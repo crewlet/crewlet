@@ -70,8 +70,8 @@ func TestAPersonIsRewrittenInACopyNeverInTheValueItCameIn(t *testing.T) {
 // THE THREE SHAPES A TAG CANNOT STATE ARE THE WALKER'S OWN: a delta's text,
 // a people field's value, and the column a board is grouped by.
 //
-// Mutation: drop the delta arm, the field arm, or the person-axis test, and
-// its case shows `cto`.
+// Mutation: drop the delta arm, the field arm (or only its list half), or the
+// person-axis test, and its case shows `cto`.
 func TestTheShapesATagCannotStateAreRewrittenByTheirOwnRule(t *testing.T) {
 	t.Parallel()
 	shownBy := fixedChart{}
@@ -93,10 +93,27 @@ func TestTheShapesATagCannotStateAreRewrittenByTheirOwnRule(t *testing.T) {
 	fields := shown[[]FieldValue](shownBy, []FieldValue{
 		{ID: "f1", Type: FieldPeople, Value: json.RawMessage(`"cto"`)},
 		{ID: "f2", Type: FieldText, Value: json.RawMessage(`"cto"`)},
+		// A PEOPLE FIELD IS MULTI-VALUED, so two colleagues in one field
+		// are stored as a list — and read as one, a renamed seat in it was
+		// shown by its identity.
+		{ID: "f3", Type: FieldPeople, Value: json.RawMessage(`["bob","cto"]`)},
 	})
 	if string(fields[0].Value) != `"chief"` || string(fields[1].Value) != `"cto"` {
 		t.Errorf("the field values read %s and %s, want the people field "+
 			"rewritten and the text one as it was", fields[0].Value, fields[1].Value)
+	}
+	if string(fields[2].Value) != `["bob","chief"]` {
+		t.Errorf("a people field naming two colleagues reads %s, want the "+
+			"renamed one shown as chief", fields[2].Value)
+	}
+	// AND THE OTHER WAY: a list naming one seat by both of its handles is
+	// one member, as every other person set here is.
+	written := identified[[]FieldValue](fixedChart{}, []FieldValue{
+		{ID: "f3", Type: FieldPeople, Value: json.RawMessage(`["chief","bob","cto"]`)},
+	})
+	if string(written[0].Value) != `["cto","bob"]` {
+		t.Errorf("a people list written as %s, want each seat once by its "+
+			"identity", written[0].Value)
 	}
 
 	declared := map[string]resolvedField{"owner": {Slug: "owner", Type: FieldPeople}}
