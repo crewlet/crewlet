@@ -2043,8 +2043,9 @@ func (s *stateLog) Serving(ctx context.Context) (bool, statelog.ReadRefusal) {
 // partition: whether it is WRONG — [stateLog.Healthy]'s question, over the
 // partition's logs alone — and, if not, whether it answers requests now.
 type copyVerdict struct {
-	// fault names the first of the partition's logs whose copy is wrong,
-	// empty for a copy that is not.
+	// fault names the first of the partition's logs whose copy is wrong —
+	// or the partition itself, where its file is not open at all — empty
+	// for a copy that is not.
 	fault string
 
 	// answers is [statelog.Health.Answers] over every log of the
@@ -2066,6 +2067,19 @@ func (s *stateLog) partitionVerdict(ctx context.Context, p statelog.PartitionID)
 	out := copyVerdict{answers: true}
 	if s == nil {
 		return out
+	}
+	// A FILE THAT IS NOT OPEN IS A COPY THAT CANNOT ANSWER AT ALL — lost to
+	// a join that could not reopen it, or closed between an adoption's
+	// rename and its reopen — rather than one that is behind: every read of
+	// it fails with no estate, and its appliers are halted, which on a
+	// company writing nothing owes no progress, so nothing below would ever
+	// call it wrong. Served, it answered its own seats' every call with that
+	// failure for as long as the file stayed shut, where a peer's copy could
+	// have answered them.
+	if s.db != nil {
+		if _, err := s.db.PartitionDB(p.String()); err != nil {
+			return copyVerdict{fault: p.String()}
+		}
 	}
 	now := time.Now()
 	for _, running := range s.running() {
@@ -2874,8 +2888,9 @@ func (s *stateLog) requestRejoin(now time.Time) {
 				"node", s.nodeID, "partitions", s.closedPartitions(), "error", err.Error(),
 				"asks_fleet_again_in", max(0, time.Until(s.rejoinAfter)).Round(time.Second),
 				"detail", "this node has no replicated database open, so it "+
-					"serves no tracker, page or search read, applies no record "+
-					"and cannot keep its seats; it reopens the file on its next "+
+					"answers no tracker, page or search read from its own copy "+
+					"and applies no record — its seats read the estate from the "+
+					"other data nodes meanwhile; it reopens the file on its next "+
 					"heartbeat, and if that keeps failing the error names the "+
 					"cause (the disk, the file's permissions, a file the store "+
 					"refuses to open) for an operator to fix")

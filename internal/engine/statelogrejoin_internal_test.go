@@ -439,6 +439,15 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if err := closeEstateZero(back.Store); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
+			// WHILE IT IS SHUT THE COPY IS NOT SERVED: every read of it
+			// fails, and with the appliers halted on a log nobody writes
+			// nothing else would ever call it wrong — so this node's own
+			// seats would be answered that failure rather than asked of
+			// a peer.
+			p := statelog.EstatePartition
+			if v := s.partitionVerdict(t.Context(), p); v.fault != p.String() || v.answers {
+				t.Fatalf("a copy whose file is shut is judged %+v, want wrong, naming %s", v, p)
+			}
 
 			if err := s.restoreEstate(s.run); err != nil {
 				t.Fatalf("restore: %v", err)
@@ -446,6 +455,9 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if !estateZeroOpen(back.Store) {
 				t.Fatal("the restore left the replicated estate closed — nothing " +
 					"else in a running node reopens it")
+			}
+			if v := s.partitionVerdict(t.Context(), p); v.fault == p.String() {
+				t.Fatalf("a copy whose file the restore reopened is still judged shut: %+v", v)
 			}
 			if !c.below {
 				return

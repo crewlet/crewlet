@@ -351,8 +351,9 @@ below the published floor whose missing records the log still holds reports
    opened. (A failed install deletes the artefact it fetched before it reopens
    the live file, so the reopen never competes with it for room.) At boot the
    node stops, naming both failures. While running it logs
-   `statelog_estate_lost` at error level, naming the file: the node serves no
-   tracker, page or search read and gives up its seats until the file opens.
+   `statelog_estate_lost` at error level, naming the file: the node answers no
+   tracker, page or search read from its own copy until the file opens — its
+   seats stay, and read the estate from the other data nodes.
    It reopens the file on its next heartbeat rather than on the doubling
    interval, because reopening its own file asks nobody — but it asks the
    fleet again only on that interval, and a join that fetched an artefact
