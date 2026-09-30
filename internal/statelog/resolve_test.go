@@ -17,11 +17,18 @@ import (
 // record a gate dropped looks like. It answers where the copy landed.
 func peerCopy(t *testing.T, h *harness, writer, opID string) statelog.Position {
 	t.Helper()
+	return peerCopyIn(t, h, writer, opID, h.gen.Load())
+}
+
+// peerCopyIn is [peerCopy] for a copy its writer stamped with generation gen —
+// which need not be the generation this node stamps its own records with.
+func peerCopyIn(t *testing.T, h *harness, writer, opID string, gen uint32) statelog.Position {
+	t.Helper()
 	h.applier.mu.Lock()
 	h.applier.auto = false
 	h.applier.mu.Unlock()
 	seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", opID, nil,
-		probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: writer}, opID, "the peer's"))
+		probeRecord(statelog.Stamp{Gen: gen, Writer: writer}, opID, "the peer's"))
 	if err != nil {
 		t.Fatalf("land %s's copy: %v", writer, err)
 	}
@@ -149,8 +156,48 @@ func TestAPublisherIsNotBuiltWithoutAReaderOfItsLog(t *testing.T) {
 	}
 }
 
+// reanchorRules is a REAL runner whose checkpoint carries the rules a reanchor
+// placed on it: it opened generation, abandoned every generation strictly
+// between voidAfter and voidBefore, and — for a restored reanchor, a non-zero
+// staleAfter — overtook every record after staleAfter in a generation below
+// voidBefore. Real rather than a formula typed out again here, so what a
+// resolution is told is what the applier's own drop decides.
+func reanchorRules(t *testing.T, generation, voidAfter, voidBefore uint32,
+	staleAfter uint64) *statelog.Runner {
+	t.Helper()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			UPDATE statelog_cursor SET generation = ?, void_after = ?, void_before = ?,
+				stale_after = ?`, generation, voidAfter, voidBefore, staleAfter)
+		return err
+	}); err != nil {
+		t.Fatalf("place the reanchor's rules: %v", err)
+	}
+	h.upgrade(probeDomain{})
+	if err := h.boot(0); err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	return h.runner
+}
+
+// land puts a record of another operation on another subject straight on the
+// log, so the next append lands past it.
+func land(t *testing.T, h *harness, opID string) {
+	t.Helper()
+	if _, _, err := h.log.Append(t.Context(), probePrefix+".object.filler", opID, nil,
+		probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-c"}, opID, "filler")); err != nil {
+		t.Fatalf("land %s: %v", opID, err)
+	}
+}
+
 // A WRITE A REANCHOR'S RULE VOIDED IS REFUSED UNDER THAT RULE, not reported as
-// a ledger contract violation.
+// a ledger contract violation — and the rule is asked about THE RECORD'S OWN
+// STAMP AND POSITION.
 //
 // A node whose rows were a restored copy's age goes on writing in the old
 // generation until it learns of the move; its record lands after the
@@ -158,29 +205,95 @@ func TestAPublisherIsNotBuiltWithoutAReaderOfItsLog(t *testing.T) {
 // domain's gates know nothing of that rule — it is the framework's, on the
 // checkpoint — so a resolution that asked only them found no gate and a ledger
 // that vouched, and called the write a record applied without its row.
+//
+// WHICH generation and sequence it asks is the whole of the rule, and each is
+// the record's: the generation this call stamped its own append with, and the
+// one a copy it was collapsed onto carries — another node's, written before
+// this node's rows moved on. Asked about generation zero at sequence zero, the
+// rules void nothing and the contract violation is back; asked about this
+// call's stamp for a copy stamped otherwise, the copy's rule is missed.
 func TestAWriteAReanchorVoidedIsRefusedUnderItsRule(t *testing.T) {
 	t.Parallel()
-	for _, reason := range []statelog.Reason{statelog.ReasonOvertaken, statelog.ReasonAbandoned} {
-		t.Run(string(reason), func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// rules is the reanchor's: the generation it opened, the ones it
+		// abandoned (strictly between after and before) and, when non-zero,
+		// the generation record after which it overtook older ones.
+		generation, after, before uint32
+		staleAfter                uint64
+		// nodeGen is the generation this node's rows — and so its own
+		// stamp — are in, and copyGen, when non-zero, the generation a copy
+		// of the operation already on the log was stamped with by another
+		// node, onto which this node's append is collapsed.
+		nodeGen, copyGen uint32
+		filler           bool
+		reason           statelog.Reason
+		asked            voidedQuestion
+	}{{
+		// THIS NODE'S OWN APPEND, stamped in the generation a restored
+		// reanchor overtook and landing after its generation record at 1.
+		name: "own append overtaken", generation: 2, after: 1, before: 2, staleAfter: 1,
+		nodeGen: 1, filler: true,
+		reason: statelog.ReasonOvertaken, asked: voidedQuestion{Gen: 1, Seq: 2},
+	}, {
+		// THIS NODE'S OWN APPEND, stamped in a generation a reanchor
+		// abandoned.
+		name: "own append abandoned", generation: 2, after: 0, before: 2,
+		nodeGen: 1,
+		reason:  statelog.ReasonAbandoned, asked: voidedQuestion{Gen: 1, Seq: 1},
+	}, {
+		// ANOTHER NODE'S COPY, stamped in a generation the reanchor
+		// abandoned — while this node's own stamp is in the generation it
+		// opened, which the rule voids nothing in.
+		name: "copy abandoned", generation: 2, after: 0, before: 2,
+		nodeGen: 2, copyGen: 1,
+		reason: statelog.ReasonAbandoned, asked: voidedQuestion{Gen: 1, Seq: 1},
+	}, {
+		// ANOTHER NODE'S COPY, stamped in the generation a restored
+		// reanchor overtook and landing after its generation record at 1.
+		name: "copy overtaken", generation: 2, after: 1, before: 2, staleAfter: 1,
+		nodeGen: 2, copyGen: 1, filler: true,
+		reason: statelog.ReasonOvertaken, asked: voidedQuestion{Gen: 1, Seq: 2},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
-			// THE RECORD LANDS AND THIS NODE'S APPLIER PASSES IT, dropping
-			// it under the rule — so no ledger row is written for it.
+			h.gen.Store(tc.nodeGen)
 			h.applier.mu.Lock()
-			h.applier.auto, h.applier.voids = false, reason
+			h.applier.committed.Generation = tc.nodeGen
+			h.applier.rules = reanchorRules(t, tc.generation, tc.after, tc.before, tc.staleAfter)
 			h.applier.mu.Unlock()
-			h.applier.advance(statelog.Position{Stream: probeStream,
-				Generation: h.gen.Load(), Seq: 1_000})
+			if tc.filler {
+				land(t, h, "op-filler")
+			}
+			if tc.copyGen != 0 {
+				// ANOTHER NODE'S COPY OF THE OPERATION, which this node's
+				// applier passes and drops under the rule.
+				peerCopyIn(t, h, "node-b", "op-voided", tc.copyGen)
+			} else {
+				// THIS NODE'S OWN RECORD LANDS AND ITS APPLIER PASSES IT,
+				// dropping it under the rule — so no ledger row is written.
+				h.applier.mu.Lock()
+				h.applier.auto = false
+				h.applier.mu.Unlock()
+				h.applier.advance(statelog.Position{Stream: probeStream,
+					Generation: tc.nodeGen, Seq: 1_000})
+			}
 
 			res, err := h.write(probeSubject("a"), "op-voided", "mine")
 			var refusal *statelog.Unavailable
-			if !errors.As(err, &refusal) || refusal.Reason != reason {
+			if !errors.As(err, &refusal) || refusal.Reason != tc.reason {
 				t.Fatalf("a write the reanchor's rule voided = (%+v, %v), want a "+
-					"refusal %q", res, err, reason)
+					"refusal %q", res, err, tc.reason)
 			}
-			if refusal.Position.Seq == 0 || refusal.OpID != "op-voided" {
-				t.Errorf("the refusal %+v names no landing — the record is on the "+
-					"log and holds its operation id", refusal)
+			if refusal.Position.Seq != tc.asked.Seq || refusal.OpID != "op-voided" {
+				t.Errorf("the refusal %+v does not name the landing at %d — the "+
+					"record is on the log and holds its operation id", refusal, tc.asked.Seq)
+			}
+			if asked := h.applier.voidedQuestions(); !slices.Equal(asked,
+				[]voidedQuestion{tc.asked}) {
+				t.Errorf("the rules were asked about %+v, want the record's own "+
+					"stamp and position %+v", asked, tc.asked)
 			}
 		})
 	}
@@ -190,25 +303,9 @@ func TestAWriteAReanchorVoidedIsRefusedUnderItsRule(t *testing.T) {
 // asks it exactly what the applier asked.
 func TestTheRunnerAnswersTheRulesItsCheckpointCarries(t *testing.T) {
 	t.Parallel()
-	h := newApplyHarness(t, probeDomain{})
-	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
-	if err := h.run(1); err != nil {
-		t.Fatalf("run: %v", err)
-	}
 	// A RESTORED REANCHOR'S CHECKPOINT: generations 3 and 4 abandoned, and
 	// every lower generation's record after sequence 100 overtaken.
-	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			UPDATE statelog_cursor SET generation = 5, void_after = 2, void_before = 5,
-				stale_after = 100`)
-		return err
-	}); err != nil {
-		t.Fatalf("place the reanchor's rules: %v", err)
-	}
-	h.upgrade(probeDomain{})
-	if err := h.boot(0); err != nil {
-		t.Fatalf("boot: %v", err)
-	}
+	runner := reanchorRules(t, 5, 2, 5, 100)
 	for _, tc := range []struct {
 		gen    uint32
 		seq    uint64
@@ -220,7 +317,7 @@ func TestTheRunnerAnswersTheRulesItsCheckpointCarries(t *testing.T) {
 		{gen: 1, seq: 50},
 		{gen: 5, seq: 150},
 	} {
-		reason, voided := h.runner.Voided(tc.gen, tc.seq)
+		reason, voided := runner.Voided(tc.gen, tc.seq)
 		if voided != (tc.reason != "") || reason != tc.reason {
 			t.Errorf("a record of generation %d at %d is voided %v (%q), want %q",
 				tc.gen, tc.seq, voided, reason, tc.reason)

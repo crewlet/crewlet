@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -170,6 +171,77 @@ func TestTheWriteAuthorityRefusesARecordThatBelongsToAnotherPartition(t *testing
 	}
 	if n := h.appends.appends.Load(); n != 0 {
 		t.Fatalf("the refused record reached the broker %d time(s)", n)
+	}
+}
+
+// GATE 2 IN A RESOLUTION: A COPY OF THE OPERATION THAT ITS DOMAIN PLACES IN
+// ANOTHER PARTITION IS REFUSED `wrong_partition` — whichever way the write met
+// it.
+//
+// This node's own append is placed before it reaches the broker, so a misplaced
+// record carrying its operation is one somebody else put on the log — another
+// build, or a writer that routed it here — and every holder drops it. The
+// broker holds its operation id for the log's duplicate window, so the same
+// operation sent inside it is COLLAPSED onto that record; and a write whose
+// answer was lost FINDS it newest on the subject. Either way this node's
+// applier passed it and wrote no ledger row, and a resolution that asked only
+// the domain's gates and the reanchor's rules found neither, trusted a ledger
+// that vouched, and reported a contract violation for a record that was only
+// ever gated.
+func TestACopyItsDomainPlacesInAnotherPartitionIsRefusedWrongPartition(t *testing.T) {
+	t.Parallel()
+	const op = "op-misplaced"
+	// stray lands node-b's copy of the operation, of the kind the placing
+	// domain files elsewhere, on the subject — and has this node's applier
+	// pass it, writing no ledger row, as the partition gate does.
+	stray := func(t *testing.T, h *harness) statelog.Position {
+		h.applier.mu.Lock()
+		h.applier.auto = false
+		h.applier.mu.Unlock()
+		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", op, nil,
+			strayRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, op, nil))
+		if err != nil {
+			t.Errorf("land node-b's misplaced copy: %v", err)
+			return statelog.Position{}
+		}
+		at := statelog.Position{Stream: probeStream, Generation: h.gen.Load(), Seq: seq}
+		h.applier.advance(at)
+		return at
+	}
+	for _, tc := range []struct {
+		name  string
+		found bool
+	}{
+		{name: "collapsed onto it"},
+		{name: "found newest on the subject", found: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarnessFor(t, placingDomain{})
+			var at statelog.Position
+			if tc.found {
+				// THE COPY LANDS AFTER THIS WRITE'S SNAPSHOT, and this
+				// write's own append never does, its answer lost.
+				var once sync.Once
+				h.rows.mu.Lock()
+				h.rows.afterSnapshot = func() { once.Do(func() { at = stray(t, h) }) }
+				h.rows.mu.Unlock()
+				h.appends.fail(errors.New("no response from stream"), true)
+			} else {
+				at = stray(t, h)
+			}
+
+			res, err := h.write(probeSubject("a"), op, "mine")
+			var refusal *statelog.Unavailable
+			if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonWrongPartition {
+				t.Fatalf("a write meeting node-b's copy in %s = (%+v, %v), want a "+
+					"refusal %q", elsewhere, res, err, statelog.ReasonWrongPartition)
+			}
+			if refusal.Position != at || refusal.OpID != op {
+				t.Errorf("refusal = %+v, want %q at %s under %s", refusal,
+					statelog.ReasonWrongPartition, at, op)
+			}
+		})
 	}
 }
 

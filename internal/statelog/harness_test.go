@@ -170,17 +170,43 @@ type applier struct {
 	// records the log lost.
 	truncated error
 
-	// voids, when set, is the reanchor rule Voided answers for every
-	// record — what this node's applier drops a record under when a
-	// reanchor's checkpoint says so.
-	voids statelog.Reason
+	// rules, when set, is what answers Voided: a REAL runner whose
+	// checkpoint carries a reanchor's rules ([reanchorRules]), so what a
+	// resolution is told depends on the generation and the sequence it
+	// asks about exactly as the applier's own drop does. A fake answering
+	// one reason for every record certified that the rules were asked and
+	// nothing about what they were asked — a resolution asking about
+	// generation zero at sequence zero, which the rules void nothing at,
+	// passed it. voidedAsked is every question, in order.
+	rules       statelog.Voids
+	voidedAsked []voidedQuestion
 }
 
-// Voided answers the reanchor rule a case staged, for every record.
-func (a *applier) Voided(uint32, uint64) (statelog.Reason, bool) {
+// voidedQuestion is one question a resolution asked the reanchor rules: a
+// record stamped with generation Gen, at sequence Seq.
+type voidedQuestion struct {
+	Gen uint32
+	Seq uint64
+}
+
+// Voided answers what the staged rules answer, recording the question; with
+// none staged, no record is void.
+func (a *applier) Voided(gen uint32, seq uint64) (statelog.Reason, bool) {
+	a.mu.Lock()
+	rules := a.rules
+	a.voidedAsked = append(a.voidedAsked, voidedQuestion{Gen: gen, Seq: seq})
+	a.mu.Unlock()
+	if rules == nil {
+		return "", false
+	}
+	return rules.Voided(gen, seq)
+}
+
+// voidedQuestions is every question the reanchor rules were asked.
+func (a *applier) voidedQuestions() []voidedQuestion {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.voids, a.voids != ""
+	return append([]voidedQuestion(nil), a.voidedAsked...)
 }
 
 func (a *applier) StreamIdentity() error {
