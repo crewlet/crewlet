@@ -567,7 +567,11 @@ project whose board somebody dragged, until it is upgraded — and nothing else.
 A task purge is the exception to holding back: it installs a gate, and a gate a
 node cannot apply stops that node's tracker (its seats move to a node that can)
 rather than being deferred, so **purge nothing while a rolling upgrade across
-version 4 is in progress**. A drag or a purge written before version 4 keeps
+version 4 is in progress**. A node's **release** of a log as it leaves a
+partition ([above](#a-node-that-leaves-a-partition-releases-its-logs)) is such
+a gate too, written at version 5 on the work tracker's log and version 3 on the
+knowledge base's, so an older node stops at one rather than recording it as an
+eviction; nothing in today's single-partition estate writes one. A drag or a purge written before version 4 keeps
 the rule every node applied it by when it is replayed — a purge from an older
 build leaves that history, those notices, turn records and mirror rows where
 they are, because its peers kept them — so a node catching up from a snapshot
