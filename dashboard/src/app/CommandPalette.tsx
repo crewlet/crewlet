@@ -117,14 +117,18 @@ function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
 
 export function CommandPalette({
   onClose,
-  locked = false,
+  locked,
 }: {
   onClose: () => void;
   /**
    * Whether NOBODY is signed in — the rail's own `locked`, handed in by the
    * shell rather than read again, which already holds the answer.
+   *
+   * REQUIRED, because its zero is an answer: defaulted to `false`, a host
+   * that forgot to hand it in drew every guarded destination without "needs
+   * sign-in" for a reader nobody had signed in.
    */
-  locked?: boolean;
+  locked: boolean;
 }) {
   const nav = useNavigator();
   const agents = useAgents();
