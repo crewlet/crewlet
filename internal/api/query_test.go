@@ -325,6 +325,79 @@ func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.
 	}
 }
 
+// A NATIVE QUESTION ON A NODE WITH NO COMPANY IS ONE ANSWER ON BOTH TRANSPORTS.
+//
+// The company's own tracker and knowledge base come up with its first
+// revision, and until then every question over them is answered for what it
+// is: no company yet, come back at the reconcile poll, and why. REST answered
+// that — `503 no_active_revision`, the poll's fifteen seconds and the halves'
+// sentence — while the socket read the same error through the reading it
+// shares with REST, found no state-log refusal behind it and sent a bare
+// `unavailable` at the health tick's five: one question, two hints, and the
+// reason on one channel only. And a half the company keeps with a vendor is
+// the question this node does not have, on both.
+//
+// Mutation: drop the no-company arm from [stream.UnavailableOf] and the socket
+// answers five seconds and no refusal.
+func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testing.T) {
+	t.Parallel()
+	poll := httpjson.RetrySeconds(httpjson.NoActiveRevisionRetry)
+
+	t.Run("no company yet", func(t *testing.T) {
+		t.Parallel()
+		a := seededApp(t, nil)
+		a.Queries().Register("board", iam.GrantStateRead,
+			func(context.Context, queries.Params) (any, error) {
+				return nil, api.NativeAbsent(false, "tracker")
+			})
+
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/board", nil)))
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("REST body: %v", err)
+		}
+		if rec.Code != http.StatusServiceUnavailable ||
+			body["error"] != string(httpjson.CodeNoActiveRevision) ||
+			body["detail"] != httpjson.NativeHalvesNotUp {
+			t.Errorf("REST = %d %v, want 503 %s with the halves' sentence",
+				rec.Code, body, httpjson.CodeNoActiveRevision)
+		}
+		if got := rec.Header().Get("Retry-After"); got != fmt.Sprint(poll) {
+			t.Errorf("REST Retry-After = %q, want the reconcile poll's %d", got, poll)
+		}
+
+		socket := overSocket(t, a, "board", nil)
+		if socket["error"] != "unavailable" ||
+			socket["refusal"] != string(httpjson.CodeNoActiveRevision) ||
+			socket["detail"] != httpjson.NativeHalvesNotUp {
+			t.Errorf("socket answer = %v, want unavailable naming %s in the "+
+				"halves' words", socket, httpjson.CodeNoActiveRevision)
+		}
+		if got := socket["retry_after"]; got != float64(poll) {
+			t.Errorf("socket retry_after = %v, want the reconcile poll's %d — "+
+				"what REST told the same caller", got, poll)
+		}
+	})
+
+	t.Run("a half the company keeps elsewhere", func(t *testing.T) {
+		t.Parallel()
+		a := seededApp(t, nil)
+		a.Queries().Register("board", iam.GrantStateRead,
+			func(context.Context, queries.Params) (any, error) {
+				return nil, api.NativeAbsent(true, "tracker")
+			})
+		status, answered := overREST(t, a, "board", nil)
+		body, _ := answered.(map[string]any)
+		if status != http.StatusNotFound || body["error"] != "unknown_query" {
+			t.Errorf("REST = %d %v, want 404 unknown_query", status, body)
+		}
+		if socket := overSocket(t, a, "board", nil); socket["error"] != "unknown_query" {
+			t.Errorf("socket answer = %v, want unknown_query", socket)
+		}
+	})
+}
+
 // A STATE-LOG REFUSAL IS UNAVAILABLE ON BOTH TRANSPORTS, CARRYING ITS CODE,
 // ITS WORDS AND ITS OWN HINT.
 //

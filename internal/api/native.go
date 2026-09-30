@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -48,11 +49,12 @@ import (
 
 // errNoCompanyYet is a native question asked of a node that has not been handed
 // a company yet. It is [queries.ErrUnavailable] — a question this node
-// understood and cannot answer HERE, yet — and the REST surface answers it with
-// the engine's `503 no_active_revision` ([httpjson.NoActiveRevision]).
-var errNoCompanyYet = fmt.Errorf("%w: this node has not been handed a company "+
-	"yet, so the company's own tracker and knowledge base are not running here; "+
-	"they come up with its first revision, with no restart", queries.ErrUnavailable)
+// understood and cannot answer HERE, yet — and [stream.ErrNoCompany], the one
+// reading both transports take of it ([stream.UnavailableOf]): the REST surface
+// answers `503 no_active_revision` and the socket an `unavailable` frame whose
+// refusal is that code, each with the reconcile poll as its wait and
+// [httpjson.NativeHalvesNotUp] as its words.
+var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoCompany)
 
 // NativeSources are the read surface's three native sources — the board, the
 // knowledge base and ranked item search — each resolved per question.

@@ -3419,7 +3419,9 @@ export interface Frame {
    *  admitted the caller. An EMPTY list is an answer — no grant would. */
   grants?: string[];
   /** On an `unavailable` error frame: the state log's own refusal code, when
-   *  one is behind the answer — see {@link LogRefusal}. */
+   *  one is behind the answer, or `no_active_revision` for a work, page or
+   *  search question on a node that has no company yet — see
+   *  {@link LogRefusal}. */
   refusal?: string;
   /** On an `unavailable` error frame: that refusal's own words. */
   detail?: string;
@@ -3457,8 +3459,10 @@ export interface QueryRefusal {
  * says what would.
  */
 export interface LogRefusal {
-  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or null
-   *  where no state-log refusal is behind the answer. */
+  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or
+   *  `no_active_revision` where the node has not been handed a company yet
+   *  and the question is over its tracker or knowledge base — the code a REST
+   *  503 carries for it — or null where neither is behind the answer. */
   code: string | null;
   /** The refusal's own words: what it is about and what changes it. */
   detail: string | null;

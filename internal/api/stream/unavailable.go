@@ -28,9 +28,10 @@ import (
 // neither decides the hint for itself.
 type Unavailable struct {
 	// Refusal is the state log's own code — a read's refusal (`behind`,
-	// `log_full`, `deferred`, …) or a write's reason — and empty where no
-	// state-log refusal is behind the answer, such as an unreachable
-	// coordination store.
+	// `log_full`, `deferred`, …) or a write's reason — or
+	// `no_active_revision` for a node that has not been handed a company
+	// ([ErrNoCompany]), and empty where neither is behind the answer, such
+	// as an unreachable coordination store.
 	Refusal string `json:"refusal,omitempty"`
 
 	// Detail is that refusal's own words: what it is about and what
@@ -51,6 +52,21 @@ type Unavailable struct {
 	RetryAfter int `json:"retry_after"`
 }
 
+// ErrNoCompany is a question only the company's own tracker and knowledge base
+// answer, asked of a node that has not been handed a company yet — so neither
+// half is running there. It is an `unavailable` answer whose refusal is
+// `no_active_revision` and whose hint is the reconcile poll that brings the
+// company ([httpjson.NoActiveRevisionRetry]), on the socket as over REST.
+//
+// READ HERE, by [UnavailableOf], rather than by the REST route alone: the REST
+// route answered it `503 no_active_revision` with the poll as its wait and the
+// halves' words, while the socket read the same answer through this function,
+// found no state-log refusal and sent a bare `unavailable` at the health
+// tick's five seconds — one question, two answers about when to come back and
+// only one about why, which is the disagreement this one reading exists to
+// make impossible.
+var ErrNoCompany = errors.New("stream: this node has not been handed a company yet")
+
 // UnavailableOf reads an `unavailable` answer's cause.
 func UnavailableOf(err error) Unavailable {
 	u := Unavailable{
@@ -59,6 +75,10 @@ func UnavailableOf(err error) Unavailable {
 	var read *statelog.Refused
 	var write *statelog.Unavailable
 	switch {
+	case errors.Is(err, ErrNoCompany):
+		u.Refusal = string(httpjson.CodeNoActiveRevision)
+		u.Detail = httpjson.NativeHalvesNotUp
+		u.RetryAfter = httpjson.RetrySeconds(httpjson.NoActiveRevisionRetry)
 	case errors.As(err, &read):
 		u.Refusal, u.Detail = string(read.Code), read.Detail
 	case errors.As(err, &write):

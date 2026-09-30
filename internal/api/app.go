@@ -1241,17 +1241,20 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeBadParams)
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-	case errors.Is(err, errNoCompanyYet):
+	case errors.Is(err, stream.ErrNoCompany):
 		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
 		// every surface answers that node — the webhook edge, the human
 		// write surface, the operator's assistant — with the reconcile
 		// poll as the wait, rather than as the state log's `unavailable`,
 		// whose hint is the scale of a node catching up. See native.go.
-		httpjson.NoActiveRevision(w, httpjson.Detail{
-			"detail": "this node has not been handed a company yet, so the " +
-				"company's own tracker and knowledge base are not running " +
-				"here; they come up with its first revision, with no restart",
-		})
+		//
+		// THE HINT AND THE WORDS ARE [stream.UnavailableOf]'s, the one
+		// reading the socket's frame is built from too: decided here
+		// alone, the REST route said fifteen seconds and why while the
+		// socket said five and nothing.
+		u := stream.UnavailableOf(err)
+		httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision, u.RetryAfter,
+			httpjson.Detail{"detail": u.Detail})
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503, because this node could not serve the question and nothing
 		// about the request was wrong: it is behind the log and draining,

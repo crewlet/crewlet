@@ -106,10 +106,7 @@ func (a *App) mountOperator(mux *http.ServeMux, source OperatorSource) {
 		switch {
 		case !up:
 			httpjson.NoActiveRevision(w, httpjson.Detail{
-				"detail": "this node has not been handed a company yet, so the " +
-					"company's own tracker and knowledge base are not running " +
-					"here; they come up with its first revision, with no restart",
-			})
+				"detail": httpjson.NativeHalvesNotUp})
 		case server == nil:
 			httpjson.NoRoute(w, r)
 		default:

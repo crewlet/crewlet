@@ -326,10 +326,7 @@ func (s *Service) on(serves func(Halves) bool, h servedHandler) http.HandlerFunc
 		halves, up := s.halves()
 		if !up {
 			httpjson.NoActiveRevision(w, httpjson.Detail{
-				"detail": "this node has not been handed a company yet, so the " +
-					"company's own tracker and knowledge base are not running " +
-					"here; they come up with its first revision, with no restart",
-			})
+				"detail": httpjson.NativeHalvesNotUp})
 			return
 		}
 		if !serves(halves) {
