@@ -86,13 +86,21 @@ const MaxBody = 64 << 10
 // of codes the table already held (`bad_body`, and `no_public_url`, named for
 // the retired Tier B field).
 
-// retryBusySeconds is the Retry-After on [httpjson.CodeSurfaceBusy].
+// RetryBusySeconds is the Retry-After on [httpjson.CodeSurfaceBusy].
 //
-// THREE, the disconnect dialog's own cadence for the same refusal
-// (`BUSY_RETRY_EVERY_MS`): what holds a surface is a reconcile tick — seconds
-// — or an operator's pass, and a client that follows the header asks again as
-// often as the one screen that retries this already does.
-const retryBusySeconds = 3
+// THREE, the same span the request itself already waited before answering
+// busy ([disconnectRetryFor]): what holds a surface is a reconcile tick —
+// seconds — or an operator's pass, so a tick that outlived one such wait is
+// most likely a moment from ending, and asking again after another is the
+// soonest a second attempt could find it released without the waiting client
+// becoming load on the surface it waits for.
+//
+// THE DASHBOARD'S DISCONNECT DIALOG WAITS EXACTLY THIS, read off the header,
+// and has no cadence of its own: it used to, and this constant was justified
+// as matching it — two copies of one number, each citing the other. Exported
+// for internal/api's gate that holds every fixed hint the dashboard waits out
+// under the bound it waits at most.
+const RetryBusySeconds = 3
 
 // Options wire the service.
 //
@@ -2179,7 +2187,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 			// caller cannot tell them apart from the status alone.
 			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
 			if errors.Is(err, errSurfaceBusy) {
-				code, after = httpjson.CodeSurfaceBusy, retryBusySeconds
+				code, after = httpjson.CodeSurfaceBusy, RetryBusySeconds
 			}
 			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
 			return

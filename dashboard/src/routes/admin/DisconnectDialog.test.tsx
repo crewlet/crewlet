@@ -451,3 +451,95 @@ test("a refusal that is not a race stops and offers the force", async () => {
   expect(screen.queryByText(/has to wait its turn/)).toBeNull();
   expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
 });
+
+/**
+ * A BUSY SURFACE IS ASKED AGAIN WHEN THE ENGINE SAYS, and a busy answer that
+ * says nothing about when is not waited out at all.
+ *
+ * The dialog re-asked every three seconds of its own, and the engine's
+ * `Retry-After` on the refusal was justified as matching that cadence — two
+ * copies of one number with the engine's the one nobody read. So the header
+ * is the wait: a surface the engine says is busy for seven seconds is not
+ * asked at three, and a busy answer with no `Retry-After` is the engine's
+ * statement that waiting will not clear it, which ends the wait with the
+ * refusal on screen and nothing asked again.
+ */
+function busyThen(headers: Record<string, string>, refusals: number, asked: number[]) {
+  let left = refusals;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      // WHEN each DELETE went out, on the fake clock: `vi.waitFor` moves that
+      // clock as it polls, so the gaps between asks are what can be held,
+      // never a count at an absolute instant.
+      if ((init?.method ?? "GET") === "DELETE") asked.push(Date.now());
+      if (left > 0) {
+        left--;
+        return new Response(
+          JSON.stringify({
+            error: "surface_busy",
+            message:
+              "Something else is writing to this integration right now. " +
+              "Try again in a moment; nothing was changed.",
+            detail: "setupapi: this surface is being written at",
+          }),
+          { status: 503, headers: { "Content-Type": "application/json", ...headers } },
+        );
+      }
+      return new Response(JSON.stringify({ key: "jira", disconnecting: true }), { status: 202 });
+    }),
+  );
+}
+
+/**
+ * The gaps between consecutive asks, in whole seconds, rounded DOWN: `vi.waitFor`
+ * moves the fake clock in 50 ms steps while it polls for the refusal to land,
+ * which the first wait can start behind. A wait of the dialog's old three
+ * seconds against a hint of seven reads as 3, never 7.
+ */
+const gaps = (asked: number[]) =>
+  asked.slice(1).map((at, i) => Math.floor((at - asked[i]!) / 1_000));
+
+test("a busy surface is asked again when its Retry-After says", async () => {
+  vi.useFakeTimers();
+  const asked: number[] = [];
+  busyThen({ "Retry-After": "7" }, 1, asked);
+  const done = vi.fn();
+  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={done} />);
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await vi.advanceTimersByTimeAsync(10_000);
+  await vi.waitFor(() => expect(done).toHaveBeenCalled());
+  expect(gaps(asked)).toEqual([7]);
+});
+
+test("a busy answer with no Retry-After is not waited out", async () => {
+  vi.useFakeTimers();
+  const asked: number[] = [];
+  busyThen({}, 1, asked);
+  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  await vi.waitFor(() => expect(screen.getByText(/being written at/)).toBeTruthy());
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(screen.queryByText(/has to wait its turn/)).toBeNull();
+  expect(asked).toHaveLength(1);
+});
+
+// THE WINDOW BOUNDS THE WHOLE WAIT: a surface still busy when the next wait
+// would end past it is given up on then, rather than one hint late.
+test("a busy surface is given up on once the next wait would end past the window", async () => {
+  vi.useFakeTimers();
+  const asked: number[] = [];
+  busyThen({ "Retry-After": "20" }, 10, asked);
+  render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await vi.advanceTimersByTimeAsync(120_000);
+  // Asked at 0, 20 and 40 seconds; a fourth wait would end at 60, past the
+  // 45-second window, so the third refusal is the answer.
+  expect(gaps(asked)).toEqual([20, 20]);
+  await vi.waitFor(() => expect(screen.getByText(/being written at/)).toBeTruthy());
+});

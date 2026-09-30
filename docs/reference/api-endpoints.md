@@ -2095,7 +2095,9 @@ which a caller can only treat as terminal — the dashboard stopped at the first
 refusal, so a collision on the second of Atlassian's three surfaces left the
 tool half disconnected. A busy surface is now waited out rather than skipped,
 because the order matters: the organization's credential is what removes the
-accounts.
+accounts. The `Retry-After` it carries (three seconds) is the whole of how long
+the dashboard waits between attempts, for at most 45 seconds in all; a
+`surface_busy` with no `Retry-After` is not waited out.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the third-party app and must not run against a

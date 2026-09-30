@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/clientsource"
@@ -52,6 +53,7 @@ func TestTheDashboardRetriesOnTheEnginesOwnHints(t *testing.T) {
 		{"a draining node", api.DrainRetryAfter},
 		{"an identity estate this node cannot read", time.Duration(auth.RetryIdentitySeconds) * time.Second},
 		{"an authority this node cannot decide", time.Duration(authz.RetryUndecidedSeconds) * time.Second},
+		{"a surface another writer holds", time.Duration(setupapi.RetryBusySeconds) * time.Second},
 	} {
 		if hint.after > bound {
 			t.Errorf("the engine tells a client to wait %s for %s, and the dashboard "+

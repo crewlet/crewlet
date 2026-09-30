@@ -3126,9 +3126,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and to reload once somebody has acted, rather than that it is catching up;
   re-asks of a read an operator has to unblock are a loop, not a retry. The
   same reading governs the shared health read, the snapshot the page polls
-  while its socket is down, a seat watch the engine could not decide, and the
-  org builder's check, which waits out a `503`'s `Retry-After` in place of its
-  own backoff and stops retrying a `503` the engine wrote with none. The table is keyed on the protocol's `QueryErrorCode` union, so a
+  while its socket is down, a seat watch the engine could not decide, the org
+  builder's check — which waits out a `503`'s `Retry-After` in place of its
+  own backoff and stops retrying a `503` the engine wrote with none — and the
+  disconnect dialog, whose wait on a `surface_busy` surface is that refusal's
+  `Retry-After` and nothing of its own. The table is keyed on the protocol's `QueryErrorCode` union, so a
   code added to the union without a sentence here is a compile error, and a Go
   test in `internal/api/stream` pins that union to the codes the engine sends —
   and a second one pins those codes to the engine's own
