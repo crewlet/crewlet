@@ -143,7 +143,7 @@ func Next(state MapState, in Input) (next MapState, changed bool) {
 		next.Balance = rebalance(&next.Map)
 	}
 	at := before.Epoch + 1
-	if converge(&next.Map, live, able, at, true) || first {
+	if converge(&next.Map, live, able, ms.Barred, at, true) || first {
 		next.Map.Epoch = at
 	}
 	return next, !sameState(state, next)
@@ -186,7 +186,7 @@ func Converge(state MapState, live []Presence) (next MapState, changed bool) {
 	})
 	next = state.Clone()
 	at := state.Map.Epoch + 1
-	if !converge(&next.Map, byNode, Able(live, state.Map.Layout.Number), at, false) {
+	if !converge(&next.Map, byNode, Able(live, state.Map.Layout.Number), state.Barred, at, false) {
 		return state, false
 	}
 	next.Map.Epoch = at
@@ -305,16 +305,37 @@ type converging struct {
 	// store nobody may trust costs nothing: it moves a copy out of what
 	// routers route to, never into it.
 	able map[string]bool
+
+	// barred is every node an operator has barred from the map
+	// ([membership.State.Barred]) — an eviction's part in it. NOTHING A
+	// BARRED NODE SAYS MAKES IT A SERVER: every log of every partition
+	// gates it as evicted until it is readmitted, so a server of it is one
+	// routers send writes that every holder drops, and a holder applying
+	// the log that the trim counts from a tombstone rather than its row. A
+	// copy it reports is adopted LEAVING, a join of its is withdrawn,
+	// whatever its lease says, and a leave of its is never taken back —
+	// see [converging.settle]. What the bar does not do is let a serving
+	// copy go at once: see the package doc.
+	barred map[string]membership.Gesture
+}
+
+// bars reports whether node is barred from the map.
+func (c *converging) bars(node string) bool {
+	_, barred := c.barred[node]
+	return barred
 }
 
 // converge brings every partition's holders one make-before-break step toward
 // its target, stamping every holder it changes with the epoch at, and reports
 // whether it changed any. able is the live nodes the tick counts present and
-// healthy, and joins whether it names new joiners — a tick's work, never a
-// convergence between ticks ([Converge]).
-func converge(m *Map, live map[string]Presence, able map[string]bool, at uint64, joins bool) bool {
+// healthy, barred the nodes an operator has barred, and joins whether it
+// names new joiners — a tick's work, never a convergence between ticks
+// ([Converge]).
+func converge(m *Map, live map[string]Presence, able map[string]bool,
+	barred map[string]membership.Gesture, at uint64, joins bool) bool {
+
 	c := &converging{m: m, draw: m.Draw(), at: at, reports: map[string]report{},
-		targets: m.targets(), able: able}
+		targets: m.targets(), able: able, barred: barred}
 	for node, p := range live {
 		var r report
 		if p.Meta.Layout != nil && *p.Meta.Layout == m.Layout.Number {
@@ -429,10 +450,11 @@ func (c *converging) settle(g int) {
 			c.changed = true
 			continue
 		case h.State == Joining && said == PartServing && c.acted(h.Node, h.Since) &&
-			c.able[h.Node]:
+			c.able[h.Node] && !c.bars(h.Node):
 			// Serving, at its own word, having acted on the map that
 			// named it — the word of a node the tick counts able
-			// ([converging.able]).
+			// ([converging.able]) and that nobody has barred
+			// ([converging.barred]).
 			c.set(&h, Serving)
 		}
 		kept = append(kept, h)
@@ -456,6 +478,15 @@ func (c *converging) settle(g int) {
 	// said it failed is no account of what it holds, and a copy adopted on
 	// its word would be routed to, or be a joiner the trim counts from
 	// nothing; it is adopted the first tick the node is able again.
+	//
+	// AND A BARRED NODE'S COPY IS ADOPTED LEAVING, whatever it says: an
+	// evicted machine back with its files, whose every write each log of
+	// the partition drops ([converging.barred]). Leaving, it releases
+	// through the leave like any copy the map does not want — and the
+	// leave's own check keeps the copy on its disk while the target does
+	// not serve the partition — rather than being routed to while the
+	// target is still joining, which on a fleet taking its copies one
+	// transfer at a time is for hours.
 	for _, node := range c.reporting {
 		if !c.draw.Holds(node) || !c.able[node] || holderOf(p, node) != nil {
 			continue
@@ -466,6 +497,8 @@ func (c *converging) settle(g int) {
 		}
 		var state HolderState
 		switch {
+		case c.bars(node) && (said == PartServing || said == PartAdopting || said == PartCatchingUp):
+			state = Leaving
 		case said == PartServing:
 			state = Serving
 		case (said == PartAdopting || said == PartCatchingUp) && inTarget(node):
@@ -484,6 +517,15 @@ func (c *converging) settle(g int) {
 		h := &p.Holders[i]
 		said, _ := c.says(h.Node, g)
 		switch {
+		case c.bars(h.Node):
+			// NEVER SERVING AGAIN, and a joiner withdrawn whatever it
+			// says — the bar's, see [converging.barred]. A barred node
+			// is never in a target, so step 6 could not take it back
+			// anyway; 6' would, and so would the promotion step 7
+			// leaves a serving joiner to.
+			if h.State == Joining {
+				c.set(h, Leaving)
+			}
 		case h.State == Leaving && inTarget(h.Node) && said == PartServing && c.able[h.Node]:
 			// 6. Wanted again, and it has not started to leave: the
 			// cheapest copy there is, the one already serving — on

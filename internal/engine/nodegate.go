@@ -75,7 +75,9 @@ import (
 // Under a divided layout an eviction also BARS the node from the estate map
 // ([EstateControl.Bar]) — takes it out, and keeps it out through its removal
 // for absence and its return — so the maintainer never places a partition on
-// an evicted node that comes back, and a readmission puts it back IN. An
+// an evicted node that comes back, nor makes it a server of a copy it comes
+// back with (partmap's "a barred node is never made a server"), and a
+// readmission puts it back IN. An
 // operator's plain out would not do: it ends when membership removes the
 // member, which for a machine an operator evicts is usually already the case,
 // and a repaired machine restarted under its old id was then placed on after

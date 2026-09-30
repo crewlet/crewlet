@@ -120,7 +120,8 @@
 //   - A joining holder whose lease says serving, at an epoch at least its
 //     Since, is promoted: the node has itself established its copy, and has
 //     read the map that named it. This and the two rules after it take the
-//     word of a node the tick counts present and healthy, and no other.
+//     word of a node the tick counts present and healthy and nobody has
+//     barred, and no other.
 //   - A node whose lease reports the partition and which the map does not list
 //     is ADOPTED — after the cutover, a restore, or a node that came back
 //     with its files. An established copy is added serving, wanted or not:
@@ -129,6 +130,7 @@
 //     never at once. A copy still being built is added joining where the
 //     target wants it and leaving where it does not, so it releases through
 //     the leave and the release fences anything it might still publish. A
+//     barred node's copy is added leaving whatever it says (below). A
 //     node never deletes a partition file on its own, so the maintainer and
 //     a node cannot reach opposite conclusions about one.
 //   - A leaving holder the target wants again, and whose lease still says it
@@ -139,10 +141,12 @@
 //     own check of the leave refusing it. It is the partition's only copy,
 //     and left leaving it would be one routers have nowhere to send the
 //     partition to and a joiner no donor to fetch from; serving, it is let
-//     go like any server, once the target serves.
+//     go like any server, once the target serves. Neither is ever a barred
+//     node.
 //   - A joiner the target moved away from before it served is withdrawn at
 //     once: it served nothing, and left to finish, one stuck with no donor
-//     would hold its node's one join for ever.
+//     would hold its node's one join for ever. A barred joiner is withdrawn
+//     whatever it says.
 //   - A serving holder the target no longer names is retired — marked
 //     leaving — only under BOTH of ADR-0019's conditions, adapted to a map
 //     with one writer: (a) every node of the partition's target is serving
@@ -160,6 +164,32 @@
 //     transfer, and a node takes at most [MaxJoinsPerNode] of those at once
 //     across the whole map; a join into one nobody serves — every partition
 //     of a new deployment — has no donor to wait for and is not rationed.
+//
+// # A barred node is never made a server
+//
+// A bar ([Bar], internal/membership's) is an eviction's part in the map, and
+// until the node is readmitted every log of every partition gates it as
+// evicted: each write it decides is dropped on every holder, and the trim
+// counts it from its tombstone rather than its row. The target leaves it out,
+// as it leaves out any member taken out — but an out's copies go on SERVING
+// wherever the target does not serve yet (adopted serving, a join promoted, a
+// leave taken back), and that is the one thing a barred node's must never do:
+// routers would send it writes every holder drops, for as long as the
+// partition's joins take — hours, on a fleet taking one transfer per node at a
+// time. So nothing a barred node says makes it a server, by any rule above: a
+// copy it reports is adopted LEAVING, whatever it says of it, and releases
+// through the leave like any copy the map does not want; a join of its is
+// withdrawn, whatever it says; and a leave of its is never taken back — not
+// even while nobody else serves the partition, whose only copy then waits on
+// its disk — the leave protocol has a node re-check that the target serves
+// before it drains — until the target is served or [In] lifts the bar.
+//
+// What a bar does NOT do is let a serving copy go at once. A node barred while
+// it serves — an eviction an operator forced past a live lease — is retired
+// like any server the target no longer names, under the two conditions: its
+// copy is a faithful one, since the eviction gates the records it decides and
+// never those it applies, and dropping it before the target serves could leave
+// a partition with no copy anywhere to rebuild from.
 //
 // Every step but the last also runs BETWEEN ticks ([Converge]): a node's word
 // reaches the map on its lease's next renewal, and the maintainer's duty

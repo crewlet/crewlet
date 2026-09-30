@@ -601,7 +601,9 @@ same rule reads per partition, and three things follow from it:
   evicted machine is usually one the map has already removed for its absence),
   and neither that removal nor the node's return lifts it. A repaired machine
   restarted under its old id joins the map out and is placed on nothing until
-  it is readmitted, so no partition lands on a node its logs still gate. A
+  it is readmitted, so no partition lands on a node its logs still gate — and
+  the copies it comes back with are never routed to: the map lists them
+  `leaving`, and the node releases them. A
   readmission puts it back **in**, and only once **every** log has taken it
   back: until then its line says it waits for the logs, and the same `-op-id`
   — once the logs a node here does not serve are finished through one that

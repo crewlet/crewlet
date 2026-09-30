@@ -1001,6 +1001,182 @@ func TestNothingAnUnhealthyNodeSaysMakesItAServer(t *testing.T) {
 	}
 }
 
+// NOTHING A BARRED NODE SAYS MAKES IT A SERVER, until [In] lifts the bar.
+//
+// A bar is an eviction's part in the map, and every log of every partition
+// still gates the node as evicted: every write it decides there is dropped,
+// and the trim counts it from its tombstone rather than its row. So a copy
+// it reports is never adopted serving, a join of its is never promoted, and a
+// leave of its is never taken back — even where the target does not serve
+// yet, which is exactly when an out's copy would serve. Each transition is
+// shown happening for a node TAKEN OUT first, which the target leaves out
+// exactly as it leaves out a barred one, so a case that does not happen is the
+// bar's doing and not the target's. Both passes answer alike: the tick's, and
+// the convergence between ticks.
+func TestNothingABarredNodeSaysMakesItAServer(t *testing.T) {
+	t.Parallel()
+	// Each stage has the partition's target, data-00, still joining it —
+	// adopting its copy, serving nothing — and data-01 saying it serves.
+	transitions := map[string]func(s *sim, g int){
+		// Adopted: a copy the map does not list.
+		"adopted": func(s *sim, g int) {
+			m := &s.state.Map
+			m.Partitions[g].Holders = []Holder{{Node: "data-00", State: Joining, Since: m.Epoch}}
+		},
+		// Promoted: a joiner that says it serves, having read the map
+		// that named it.
+		"promoted": func(s *sim, g int) {
+			m := &s.state.Map
+			m.Partitions[g].Holders = []Holder{
+				{Node: "data-00", State: Joining, Since: m.Epoch},
+				{Node: "data-01", State: Joining, Since: m.Epoch},
+			}
+		},
+		// Serving again: a leaver that still serves what nobody else
+		// serves, having read the map that made it a leaver.
+		"serving again": func(s *sim, g int) {
+			m := &s.state.Map
+			m.Partitions[g].Holders = []Holder{
+				{Node: "data-00", State: Joining, Since: m.Epoch},
+				{Node: "data-01", State: Leaving, Since: m.Epoch},
+			}
+		},
+	}
+	gestures := map[string]struct {
+		apply func(MapState) (MapState, error)
+		want  HolderState
+	}{
+		"taken out": {want: Serving, apply: func(st MapState) (MapState, error) {
+			return Out(st, "data-01", "ops", "maintenance", base)
+		}},
+		"barred": {want: Leaving, apply: func(st MapState) (MapState, error) {
+			return Bar(st, "data-01", "ops", "evicted", base)
+		}},
+	}
+	passes := map[string]func(s *sim) MapState{
+		"tick": func(s *sim) MapState {
+			next, _ := Next(s.state, Input{Layout: s.layout, Live: s.live(), Company: s.company, Now: s.now})
+			return next
+		},
+		"between ticks": func(s *sim) MapState {
+			next, _ := Converge(s.state, s.live())
+			return next
+		},
+	}
+	for name, stage := range transitions {
+		for how, gesture := range gestures {
+			for pass, run := range passes {
+				t.Run(name+"/"+how+"/"+pass, func(t *testing.T) {
+					t.Parallel()
+					s := settled(t, smallLayout, 1, "data-00", "data-01")
+					next, err := gesture.apply(s.state)
+					if err != nil {
+						t.Fatal(err)
+					}
+					s.state = next
+					g, _ := s.targetedAt("data-00")
+					stage(s, g)
+					id := s.state.Map.Partitions[g].ID
+					s.nodes["data-00"].meta.Partitions[id] = PartAdopting
+					s.nodes["data-01"].meta.Partitions[id] = PartServing
+					n := s.nodes["data-01"]
+					n.meta.MapGeneration, n.meta.MapEpoch = s.state.Map.Generation, s.state.Map.Epoch
+					after := run(s)
+					var got HolderState
+					if h := holderOf(&after.Map.Partitions[g], "data-01"); h != nil {
+						got = h.State
+					}
+					if got != gesture.want {
+						t.Fatalf("%s's holder data-01, %s, is %q after the %s, want %q (table %+v)",
+							after.Map.Partitions[g].ID, how, got, pass, gesture.want,
+							after.Map.Partitions[g].Holders)
+					}
+				})
+			}
+		}
+	}
+}
+
+// A BARRED NODE THAT COMES BACK WITH ITS FILES IS NEVER A SERVER, however long
+// the partitions it held go unserved by their whole target.
+//
+// The machine is evicted, the map removes it for its absence, and a new node
+// joins while it is away — one join at a time, each waiting on its transfer,
+// so for hours a partition's target does not serve it all. The machine then
+// returns under its old id, its lease saying it serves everything it held.
+// Adopted serving, it would be routed to for as long as the new node's joins
+// took, while every log of those partitions dropped each write it decided and
+// the trim passed the holder applying them. It is adopted leaving instead, and
+// releases; the new node's joins finish; and only [In] places on it again.
+func TestABarredNodeThatComesBackIsNeverAServer(t *testing.T) {
+	t.Parallel()
+	s := settled(t, smallLayout, 2, "data-00", "data-01", "data-02")
+	next, err := Bar(s.state, "data-02", "ops", "evicted", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = next
+	s.nodes["data-02"].down = true
+	for range 3 * membership.OutTicks {
+		s.tick()
+		s.check()
+		s.act()
+	}
+	if s.state.Map.Draw().Holds("data-02") {
+		t.Fatal("the premise: a node gone for three graces is still a member")
+	}
+
+	// A node joining while it is away, and not serving yet.
+	s.add("data-03", 1, nil).frozen = true
+	s.tick()
+	if s.holding("data-03")[Joining] == 0 {
+		t.Fatal("the premise: the new node was named no join")
+	}
+	s.nodes["data-02"].down = false
+	neverServes := func(round int) {
+		t.Helper()
+		for _, table := range s.state.Map.Partitions {
+			if h := holderOf(&table, "data-02"); h != nil && h.State == Serving {
+				p, _ := statelog.ParsePartitionID(table.ID)
+				t.Fatalf("round %d: the barred node is a serving holder of %s, and routers "+
+					"route to %v", round, table.ID, s.state.Map.Serving(p))
+			}
+		}
+	}
+	adopted := false
+	for round := range 4 * membership.StableTicks {
+		s.tick()
+		neverServes(round)
+		adopted = adopted || s.holding("data-02")[Leaving] > 0
+		s.check()
+		s.act()
+	}
+	if !adopted {
+		t.Fatal("the barred node's copies were never adopted to be let go")
+	}
+	if held := s.holding("data-02"); len(held) != 0 {
+		t.Fatalf("the barred node still holds %v once it has released", held)
+	}
+
+	s.nodes["data-03"].frozen = false
+	s.settle(400)
+	s.converged()
+	if held := s.holding("data-02"); len(held) != 0 {
+		t.Fatalf("a barred node holds %v once the map has settled", held)
+	}
+
+	back, err := In(s.state, "data-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = back
+	s.settle(400)
+	s.converged()
+	if s.holding("data-02")[Serving] == 0 {
+		t.Fatal("the node put back holds nothing")
+	}
+}
+
 // ONLY THE NEWEST COMPANY SETS THE COPIES: the duty moves between nodes, and a
 // node a revision behind must not set the replica count back (ADR-0020).
 func TestOnlyTheNewestCompanySetsTheEstatesCopies(t *testing.T) {

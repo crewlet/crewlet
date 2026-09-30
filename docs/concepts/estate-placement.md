@@ -242,10 +242,11 @@ The `estate-map` duty runs one step per partition per tick:
    leaving holder that says released, having read the map that told it to go,
    is removed.
 3. A joiner that says it serves, having read the map that named it, is
-   promoted.
+   promoted — unless the node is barred (below), whose join is withdrawn.
 4. A node whose lease reports a partition the map does not list is
    **adopted** — after a restore, or a node that came back with its files: an
-   established copy serving, one still being built joining or leaving.
+   established copy serving, one still being built joining or leaving, and
+   any copy of a barred node leaving.
 5. A serving holder the target no longer names is retired only under **both**
    of ADR-0019's conditions: every target node serves the partition by the map
    *and* by its own lease, and has acted on the map that made it a server. The
@@ -411,7 +412,14 @@ it is recorded whether or not the map still holds the node — an evicted
 machine is usually one the map has already let go — and neither its removal nor
 its being forgotten lifts it, so a repaired machine restarted under the old id
 joins as a member out and the maintainer places nothing on it while its logs
-still gate it. `crewlet retention readmit` lifts the bar, and only once every
+still gate it. Nor is it ever **served from**: a copy it comes back with is
+listed `leaving`, whatever its lease says, and released — where an out's copy
+would serve until the partition's target does, which on a fleet taking one
+transfer per node at a time is hours of routers sending writes that every
+holder drops. A node barred while it still serves (an eviction forced past a
+live lease) is retired like any other server, once the target serves without
+it, because its copy is faithful and may be the only one to rebuild from.
+`crewlet retention readmit` lifts the bar, and only once every
 log has taken the node back: until then the map's part answers that it waits
 for the logs, and the same operation id finishes both. `crewlet estate map`
 names every bar. The map's answer is a line of the gesture's own: a map that

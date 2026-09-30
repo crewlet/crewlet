@@ -58,6 +58,10 @@ type simNode struct {
 	// stale, when set, is the map the node acts on instead of the current
 	// one: a node that has not read the latest version yet.
 	stale *Map
+
+	// frozen is a node up and making no progress — a joiner waiting on a
+	// donor — whose lease goes on saying what it said.
+	frozen bool
 }
 
 // sim is a fleet of data nodes and the map's maintainer, ticked by hand: the
@@ -142,7 +146,7 @@ func (s *sim) act() bool {
 	changed := false
 	for _, node := range slices.Sorted(maps.Keys(s.nodes)) {
 		n := s.nodes[node]
-		if n.down {
+		if n.down || n.frozen {
 			continue
 		}
 		m := s.state.Map
