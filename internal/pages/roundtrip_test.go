@@ -224,14 +224,6 @@ func (r *roundTrip) appendSigned(subject, msgID string, body []byte) {
 	}
 }
 
-// standingLog is this harness's log as a standing read is handed it: the
-// broker's per-subject probe, and each record's BODY through
-// [statelog.StandingOf], because what the broker holds is the signed frame and
-// a standing decoded off the frame is no standing at all.
-func (r *roundTrip) standingLog() statelog.StandingLog {
-	return statelog.StandingOf(r.log, r.verifier)
-}
-
 // drain consumes every record the broker holds beyond what this node has
 // applied, exactly as the framework's own loop does — one transaction per
 // record, carrying the rows, the operation id, the anchor and the checkpoint

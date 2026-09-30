@@ -1,7 +1,6 @@
 package iamdomain_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -119,25 +118,11 @@ func standingOf(t *testing.T, rig *writeRig, node string) statelog.EvictionRow {
 func evictedOnLog(t *testing.T, rig *writeRig, node string) (bool, bool) {
 	t.Helper()
 	evicted, found, err := statelog.EvictedOnLog(t.Context(), iamdomain.Domain{},
-		standingLog{VerifiedLog: statelog.VerifiedLog{Log: rig.log, Verifier: rig.verifier},
-			last: rig.log}, node)
+		statelog.StandingOf(rig.log, rig.verifier), node)
 	if err != nil {
 		t.Fatalf("read %s's standing off the log: %v", node, err)
 	}
 	return evicted, found
-}
-
-// standingLog is the rig's log as a standing read takes it: the per-subject
-// probe, and every record read back opened out of its signed frame.
-type standingLog struct {
-	statelog.VerifiedLog
-	last interface {
-		LastSeq(ctx context.Context, subject string) (uint64, bool, error)
-	}
-}
-
-func (l standingLog) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
-	return l.last.LastSeq(ctx, subject)
 }
 
 // A GENERATION RECORD NAMES WHO MOVED THIS LOG AS THE PRINCIPAL THEY ARE, AND
