@@ -103,6 +103,7 @@ var sentinels = []sentinel{
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 	{"estate.ErrNoDataNode", ErrNoDataNode},
 	{"estate.ErrUnaddressed", ErrUnaddressed},
+	{"estate.ErrGateArgs", ErrGateArgs},
 }
 
 // typedKind is one error type whose value crosses the wire.
