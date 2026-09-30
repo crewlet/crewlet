@@ -35,11 +35,11 @@ import (
 // # What it deliberately does not carry
 //
 // Content. A chart of five hundred seats at this domain's prose bound is
-// megabytes, and an external NATS cluster's default max_payload is one
-// mebibyte — so an import that carried content would be refused by the broker
-// on exactly the companies large enough to need it. Content travels as one
-// content write per object, on that object's own subject, which is also what
-// lets two of them be written concurrently. `crewlet config import` is what
+// megabytes, past the chart log's declared largest record
+// (chart.ChartMaxRecordBytes) — so an import that carried content would be
+// refused on exactly the companies large enough to need it. Content travels as
+// one content write per object, on that object's own subject, which is also
+// what lets two of them be written concurrently. `crewlet config import` is what
 // sequences the two halves.
 
 // importBody is one revision's complete authored placement.

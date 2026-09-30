@@ -537,14 +537,43 @@ limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See
 [Replication](replication.md#how-the-byte-ceilings-are-sized).
 
-**And a `max_payload` of at least 8 MiB.** That is the largest single message
-the engine promises to carry — an event, a webhook delivery, a state-log record
-— and the embedded broker is configured at exactly that; nats-server's own
-default is 1 MiB. A server below it refuses a message between its limit and
-8 MiB that the default topology would have carried, permanently, and the
-refusal names the message's size and the server's `max_payload` — a
-state-log write answers `record_too_large`. Set `max_payload: 8MB` in the
-server's configuration.
+**And a `max_payload` of at least 8 MiB, on every server.** That is the largest
+single message the engine sends — an event, a webhook delivery, a state-log
+record at the largest its log declares (the tracker's, the knowledge base's
+and the vector changelog's are 8 MiB less 4 KiB, which is 8 MiB on the wire
+once the record is signed) — and the embedded broker is configured at exactly
+that; nats-server's own default is 1 MiB. Set `max_payload: 8MB` in the
+configuration of every server in the cluster (nats-server reads `MB` as
+mebibytes, so that is exactly the 8388608 bytes the engine needs). A server
+holds a connection to the **lowest** of its own `max_payload` and the payload
+limits of the account the engine signs in to and of its user — an account's
+`limits { max_payload }` in the server's file, or the `payload` limit in an
+account's or a user's JWT on an operator-mode deployment — so where either
+states one, raise it to 8 MiB or leave it unlimited too.
+
+**A node refuses to start against a server that holds it to less.** A server
+below it would take every small write and refuse the first large one — a node
+that booted, reported itself healthy, served, and then refused a webhook
+delivery, a long phase's telemetry or a state-log record (`record_too_large`)
+past the server's limit — so the check is made when the node connects, before
+anything is provisioned, and the refusal names the setting, the value the
+server announced and the value this build needs:
+
+```text
+engine: stream: connect nats: jetstream: the NATS server at nats://nats-1.internal:4222 announces a max_payload of 1048576 bytes for this node's connection, below the 8388608 bytes this build needs: that is the largest message it sends — an event, a webhook delivery, a state-log record at the largest its log declares — and a server that carries less takes every smaller write and refuses the first large one. Set max_payload: 8MB in the configuration of every server stream.url reaches, and wherever the account this node signs in to, or its user, states a payload limit of its own, raise that too: a server holds a connection to the lowest of them
+```
+
+What it reads is the limit the server **announces** for this connection once
+it has signed in — the account's and the user's included, which the server
+states only after authenticating it — on the member the client reached at
+boot. That is why the setting is needed on every server rather than the first
+one a node happens to dial: a member configured apart from the others is met
+later, when the client reconnects to it, and so is a server whose limit is
+lowered under a running node. The node logs
+`jetstream_max_payload_below_contract` at `ERROR` on the reconnect, naming
+that server and its value, and a message past that server's limit is refused
+when it is written — a state-log write answers `record_too_large`, naming the
+server's `max_payload`.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it

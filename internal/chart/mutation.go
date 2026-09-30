@@ -159,9 +159,10 @@ type PlacementPayload struct {
 // # Why it carries no CONTENT and no REMOVALS
 //
 // Neither would fit, and neither should. A chart of five hundred seats at
-// [MaxProse] of backstory each is megabytes, and an external NATS cluster's
-// default max_payload is one mebibyte — so an import that carried content would
-// be refused by the broker on exactly the companies large enough to need it.
+// [MaxProse] of backstory each is nearly eight mebibytes before any other
+// field, nearly four times this log's declared largest record
+// ([ChartMaxRecordBytes]) — so an import that carried content would be refused
+// on exactly the companies large enough to need it.
 // The content travels as one [OpUpsert] per object, on that object's own
 // subject, which is also what lets two of them be written concurrently.
 //

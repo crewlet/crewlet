@@ -10,11 +10,14 @@ import (
 // TestTheEmbeddedServerCarriesWhatTheContractPromises pins the two options
 // whose absence is invisible until the day they are needed.
 //
-// Neither can be caught by an ordinary suite. An unset MaxPayload leaves the
-// broker at nats-server's 1 MiB default, which every test payload fits inside
-// — the failure is one oversized delivery in production, refused forever. An
-// unset SyncAlways leaves the file store on a 2-minute background flush, and
-// nothing short of cutting power to the host tells the difference.
+// Neither can be caught by an ordinary behavioural case. An unset MaxPayload
+// leaves the broker at nats-server's 1 MiB default, which every test payload
+// fits inside — its cost used to be one oversized delivery in production,
+// refused forever, and is now every boot refused by the queue's own check
+// (TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild), which
+// this pins at its source. An unset SyncAlways leaves the file store on a
+// 2-minute background flush, and nothing short of cutting power to the host
+// tells the difference.
 //
 // So they are asserted where they are decided, on the options a Config
 // produces, rather than through behaviour that cannot be provoked.

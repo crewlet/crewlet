@@ -851,9 +851,10 @@ func publishChart(ctx context.Context, boot *config.Bootstrap, t importTarget,
 
 	// EACH OBJECT'S CONTENT, on its own subject. The import record
 	// deliberately carries none: a chart of five hundred seats at this
-	// domain's prose bound is megabytes, and a broker's default max_payload
-	// is one mebibyte — so an import that carried content would be refused
-	// on exactly the companies large enough to need it.
+	// domain's prose bound is megabytes, past the chart log's declared
+	// largest record (chart.ChartMaxRecordBytes) — so an import that carried
+	// content would be refused on exactly the companies large enough to need
+	// it.
 	writes := make([]contentWrite, 0, len(authored.Units)+len(authored.Seats))
 	for _, unit := range authored.Units {
 		writes = append(writes, contentWrite{what: "the unit " + unit.Key,

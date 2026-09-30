@@ -237,9 +237,11 @@ func (s *Server) Shutdown() {
 //
 // SEPARATED FROM THE START for the same reason dialOptions is, and it earns it
 // twice over here: two of these options have no observable effect until the
-// day they matter. A wrong MaxPayload surfaces as one oversized publish
-// failing in production, and a wrong SyncAlways surfaces only as acked data
-// missing after a host loses power — which no test can stage.
+// day they matter. A wrong MaxPayload surfaced as one oversized publish
+// failing in production — every connection is now held to the contract when
+// it is opened ([carriesTheContract]), so it fails the boot instead, and only
+// through that check — and a wrong SyncAlways surfaces only as acked data
+// missing after a host loses power, which no test can stage.
 func embeddedOptions(cfg Config) (*server.Options, string, error) {
 	// THE NAME, and only the name: the cluster block below is installed on
 	// it alone, so a port or a peer list without one configures nothing and
@@ -276,7 +278,10 @@ func embeddedOptions(cfg Config) (*server.Options, string, error) {
 		// one, deliberately: the client reads it off the server's INFO and
 		// refuses an oversized publish locally, which is what turns "this
 		// delivery is too big" into an error the publisher can report
-		// instead of a connection the broker closes underneath it.
+		// instead of a connection the broker closes underneath it. And
+		// every connection is held to it when it is opened
+		// (carriesTheContract), so an edit that dropped this line fails
+		// every boot, blaming the build, rather than the first large write.
 		MaxPayload: queue.MaxPayloadBytes,
 
 		// WHAT "PERSISTED" MEANS, and the one place it is decided.
@@ -621,12 +626,28 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 // already accepting shares it. One option list for the two branches, so the
 // loopback dial a clustered member takes cannot lose a budget the in-process
 // one keeps.
+//
+// AND EVERY CONNECTION IS HELD TO THE CONTRACT ([carriesTheContract]), with
+// the reconnect watch installed beside it — this and [dial] are the only two
+// places this package opens one, so the queue's own, the coordination
+// store's and a donor's second connection cannot differ about it.
 func (e *embeddedServer) connect() (*nats.Conn, error) {
-	opts := []nats.Option{nats.Timeout(acceptBudget(e.clustered))}
-	if e.inProcess {
-		return nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
+	opts := []nats.Option{
+		nats.Timeout(acceptBudget(e.clustered)),
+		nats.ReconnectHandler(reconnectWatch{
+			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
 	}
-	return nats.Connect(e.ns.ClientURL(), opts...)
+	var nc *nats.Conn
+	var err error
+	if e.inProcess {
+		nc, err = nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
+	} else {
+		nc, err = nats.Connect(e.ns.ClientURL(), opts...)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return heldToTheContract(nc, true)
 }
 
 func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
@@ -694,7 +715,9 @@ func dial(cfg Config) (*nats.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", cfg.URL, err)
 	}
-	return nc, nil
+	// The other place a connection is opened, and held to the same
+	// contract — see [embeddedServer.connect].
+	return heldToTheContract(nc, false)
 }
 
 // externalHandshake bounds each attempt to reach an EXTERNAL server: the dial,
@@ -736,6 +759,11 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
 		nats.Timeout(externalHandshake),
+		// And say so when a reconnect lands on a member that holds this
+		// connection to less than the contract — the half of the dial's
+		// own check a boot cannot reach. See [reconnectWatch].
+		nats.ReconnectHandler(reconnectWatch{
+			log: logging.Get("queue.jetstream")}.reconnected),
 	}
 	if cfg.Credentials != "" {
 		opts = append(opts, nats.UserCredentials(cfg.Credentials))

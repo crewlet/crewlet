@@ -92,10 +92,9 @@ func (c *chartClient) ImportStructure(ctx context.Context, revision string,
 //
 // ONE RECORD PER OBJECT, on that object's own subject, which is what the
 // import record deliberately does not carry: a chart of five hundred seats at
-// this domain's prose bound is megabytes, and an external NATS cluster's
-// default max_payload is one mebibyte — so an import that carried content
-// would be refused by the broker on exactly the companies large enough to
-// need it.
+// this domain's prose bound is megabytes, past the chart log's declared
+// largest record (chart.ChartMaxRecordBytes) — so an import that carried
+// content would be refused on exactly the companies large enough to need it.
 //
 // THE RUNTIME HALF IS STATED OR CLEARED, never sent empty. The node keeps an
 // object's runtime half when a write leaves it out, because a lead editing a

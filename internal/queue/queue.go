@@ -79,8 +79,10 @@ var ErrTooLarge = errors.New("queue: event too large for the transport")
 //
 // It is a CONTRACT number rather than a backend's own, because every backend
 // has to agree on it: the embedded broker is configured to accept exactly this
-// (see internal/queue/jetstream) and the in-memory twin enforces the same
-// ceiling, so a payload that a test accepts is one production accepts.
+// (see internal/queue/jetstream), an external NATS server announcing less is
+// refused when the backend opens rather than at the first message past it,
+// and the in-memory twin enforces the same ceiling, so a payload that a test
+// accepts is one production accepts.
 //
 // Written down because there was no number at all, and the failure had no
 // floor: the webhook edge accepted a 25 MiB delivery, verified its signature,

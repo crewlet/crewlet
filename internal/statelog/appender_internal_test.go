@@ -84,6 +84,8 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 			fmt.Errorf("append: 9000000 bytes exceeds the 8388608-byte limit "+
 				"(the server's max_payload): %w", nats.ErrMaxPayload), faultTooLarge,
 			[]string{"max_payload refused it", "raise max_payload",
+				"every server of the cluster", "refused at boot",
+				"the account it signs in to",
 				"split the change", "8388608-byte limit"},
 			[]string{"max_msg_size", "file store"}},
 		{"a message too large for the file store",

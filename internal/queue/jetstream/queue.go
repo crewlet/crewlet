@@ -338,6 +338,11 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		streams:     map[string]struct{}{},
 	}
 
+	// HELD TO THE CONTRACT BEFORE ANYTHING IS PROVISIONED: both dials
+	// refuse a server that holds the connection to less than the largest
+	// message this build sends, so that is a boot refused by name rather
+	// than a node that serves and fails its first large write. See
+	// carriesTheContract.
 	var err error
 	if embedded != nil {
 		q.nc, err = embedded.connect()
@@ -887,11 +892,14 @@ func (q *Queue) ackWait() time.Duration {
 // takes, and the limit it came from.
 //
 // THE CONNECTION'S OWN max_payload, read off the server's INFO, and never the
-// contract's [queue.MaxPayloadBytes]: the embedded broker is configured at
-// exactly that number, but an external server states its own — nats-server's
-// default is 1 MiB — and the client refuses against what the server said. A
-// refusal naming the contract there names a limit the payload is inside of,
-// and sends whoever reads it looking for the wrong knob.
+// contract's [queue.MaxPayloadBytes]. The two agree on every connection this
+// backend OPENS — the embedded broker is configured at exactly the contract's
+// number and a connection held to less is refused ([carriesTheContract]) — but
+// not after a reconnect to a server that says less, a cluster member
+// configured apart or a server restarted with a smaller limit, and the client
+// refuses against what the server it reached said. A refusal naming the
+// contract there names a limit the payload is inside of, and sends whoever
+// reads it looking for the wrong knob.
 func tooLarge(nc *nats.Conn, verb, subject string, size int) string {
 	return fmt.Sprintf("%s %s: %d bytes exceeds the %d-byte limit (the server's "+
 		"max_payload)", verb, subject, size, nc.MaxPayload())

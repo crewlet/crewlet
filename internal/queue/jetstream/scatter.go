@@ -150,10 +150,13 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	}
 	defer func() { _ = replies.Unsubscribe() }()
 	if err := q.nc.PublishRequest(subject, inbox, request); err != nil {
-		// TOO LARGE FOR THIS SERVER, inside the contract's ceiling: an
-		// external server's max_payload is its own, and a request the
-		// check above admitted can still be one it refuses. It is the
-		// same permanent refusal, so it answers the contract's error.
+		// TOO LARGE FOR THIS SERVER, inside the contract's ceiling: a
+		// server announcing less is refused when the queue opens, but
+		// the connection may since have reached one that does — a
+		// cluster member configured apart, a server restarted with less
+		// — and a request the check above admitted can be one it
+		// refuses. It is the same permanent refusal, so it answers the
+		// contract's error.
 		if errors.Is(err, nats.ErrMaxPayload) {
 			return nil, fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "ask", subject,
 				len(request)), queue.ErrTooLarge, err)

@@ -803,10 +803,14 @@ is the largest the embedded broker's 8 MiB messages carry once a record is
 signed, 2 MiB on the org chart's, 128 KiB on the identity estate's — and a
 record past it is refused before it is sent; the stream's own `max_msg_size`
 is that declaration plus 4 KiB for what a stored record carries beside it, so
-the broker holds a peer on another build to it too. Past the declaration, an
-external NATS server's `max_payload` set below 8 MiB and the file store's
-per-record limit can refuse a record as well, and the detail says which limit
-it was. See [Read consistency](consistency.md#a-writes-refusals).
+the broker holds a peer on another build to it too. Two more limits can refuse
+a record, and the detail says which it was: the file store's per-record limit,
+and a NATS server's `max_payload` — never that of the server a node started
+against, since a node refuses to start against one that holds it to less than
+8 MiB, but that of one that has since: a cluster member configured apart from
+the others, or a server whose limit was lowered under it (see
+[Deployment](deployment.md#an-external-nats-server)). See
+[Read consistency](consistency.md#a-writes-refusals).
 
 A full log costs `linearizable` reads, because those append a barrier — which
 is every seat tool read. `stale` keeps answering, so the dashboard and the read

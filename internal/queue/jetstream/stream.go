@@ -7,6 +7,17 @@
 // the whole company with no services and a fleet run the same binary against
 // a cluster.
 //
+// The one thing an external server must promise that the embedded one is
+// built with is the contract's message size
+// ([github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes]): the
+// client refuses a message past what its server announces, so a server left
+// at nats-server's 1 MiB default takes every small write and refuses the
+// first large one. Every connection a queue opens is held to the contract on
+// the limit its server announces once it has authenticated — its own
+// max_payload, or its account's where that is lower — and one that falls
+// short is a refused boot naming the setting rather than a node that serves
+// and then cannot write — see carriesTheContract.
+//
 // # Why JetStream fits
 //
 // Crewlet's subject grammar IS NATS grammar: dot-separated segments with `*`

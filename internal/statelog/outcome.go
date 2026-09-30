@@ -244,7 +244,10 @@ const (
 	// one message, and nothing about the log's size is involved. No node
 	// can place it and no wait changes it. The detail names which limit
 	// refused it, because each has its own remedy: the server's
-	// max_payload (an operator raises it on an external server), the
+	// max_payload (an operator raises it on every server of an external
+	// cluster — a node refuses at boot a connection held to less than the
+	// transport's contract, so this is a server that holds it to less
+	// since), the
 	// stream's own max_msg_size (somebody reconfigured the stream; it is
 	// restored), or the file store's per-record limit (nothing raises it)
 	// — and splitting the change answers all three.

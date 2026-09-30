@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -20,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -739,6 +742,103 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 		t.Errorf("err = %v, want the configured tls.ca to have reached the "+
 			"dial and been refused by name", err)
 	}
+}
+
+// A NODE WILL NOT BOOT AGAINST A NATS SERVER THAT CANNOT CARRY WHAT IT WRITES.
+//
+// deployment.md told an operator to set max_payload to 8 MiB on an external
+// cluster and nothing checked it, and nats-server's own default is 1 MiB. So a
+// node pointed at a server nobody had configured for this engine booted,
+// reported itself healthy and served — and refused its first state-log record
+// or event past the server's limit, `record_too_large`, at the moment nobody
+// is looking at the broker's configuration. It is refused at boot now, by a
+// sentence that names the setting, the value the server announced and the
+// value this build needs; and a server that carries the contract boots, which
+// is the control that keeps the refusal from being a refusal of every
+// external server. The refusal is also the sentence deployment.md prints, so
+// the example an operator greps for cannot drift from what a boot writes.
+//
+// Mutation: drop the check from the jetstream backend's dial and the refusal
+// row goes red; compare with `>` and the control does; edit the guide's
+// example and the refusal row does.
+func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		maxPayload int32
+		announced  int
+		refused    bool
+	}{
+		{"nats-server's own default", 0, natsserver.MAX_PAYLOAD_SIZE, true},
+		{"the contract's own number", queue.MaxPayloadBytes, queue.MaxPayloadBytes, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			url := operatorNATS(t, tc.maxPayload)
+			b := bootstrap(t, func(b *config.Bootstrap) {
+				b.Stream.Type = config.StreamNATS
+				b.Stream.URL = url
+				b.Coordination.Type = config.CoordinationEmbeddedKV
+			})
+			back, err := openBackends(t, b)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("a node refused a server announcing a max_payload of "+
+						"%d: %v", tc.announced, err)
+				}
+				back.Close(t.Context())
+				return
+			}
+			if err == nil {
+				back.Close(t.Context())
+				t.Fatalf("a node booted against a server announcing a max_payload "+
+					"of %d, and would refuse its first record past it only when it "+
+					"was written", tc.announced)
+			}
+			for _, want := range []string{"max_payload", strconv.Itoa(tc.announced),
+				strconv.Itoa(queue.MaxPayloadBytes), "max_payload: 8MB", "stream.url"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal %q does not say %q", err, want)
+				}
+			}
+			// AND IT IS THE SENTENCE THE DEPLOYMENT GUIDE PRINTS, which is
+			// what an operator greps for: the guide's example is a boot
+			// against nats-server's own default, at its own address.
+			guide, rerr := os.ReadFile(filepath.Join(sourcetree.Root(t),
+				"docs", "guides", "deployment.md"))
+			if rerr != nil {
+				t.Fatalf("read the deployment guide: %v", rerr)
+			}
+			printed := strings.ReplaceAll(err.Error(), url, "nats://nats-1.internal:4222")
+			if !strings.Contains(string(guide), "\n"+printed+"\n") {
+				t.Errorf("docs/guides/deployment.md does not print the refusal a "+
+					"boot writes; it should carry, on a line of its own:\n%s", printed)
+			}
+		})
+	}
+}
+
+// operatorNATS starts a NATS server with JetStream outside the engine's own
+// configuration — an operator's, announcing maxPayload or nats-server's own
+// default where it is zero — and answers its client URL.
+func operatorNATS(t *testing.T, maxPayload int32) string {
+	t.Helper()
+	ns, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
+		JetStream: true, StoreDir: t.TempDir(), MaxPayload: maxPayload,
+	})
+	if err != nil {
+		t.Fatalf("configure an operator's server: %v", err)
+	}
+	go ns.Start()
+	t.Cleanup(func() {
+		ns.Shutdown()
+		ns.WaitForShutdown()
+	})
+	if !ns.ReadyForConnections(30 * time.Second) {
+		t.Fatal("the operator's server never became ready")
+	}
+	return ns.ClientURL()
 }
 
 // THE WIDTH IS LEARNED ONCE AND THEN HELD.

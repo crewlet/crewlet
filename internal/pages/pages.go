@@ -111,11 +111,13 @@ const (
 	// MaxBody bounds a page.
 	//
 	// Five hundred and twelve kibibytes, eight times a work item's, because
-	// a runbook or a design document genuinely is that long. It is also
-	// the number the broker's max_payload has to clear: the embedded
-	// server allows 8 MiB, but an external NATS cluster defaults to 1 MiB,
-	// so a native knowledge base refuses to start against a broker that
-	// could not carry a full page.
+	// a runbook or a design document genuinely is that long. It is well
+	// inside this log's declared largest record ([PagesMaxRecordBytes])
+	// however its JSON escapes — six bytes a character at worst, three
+	// mebibytes — and so inside what every broker a node runs against
+	// carries: a node refuses to start against a NATS server that holds it
+	// to a max_payload below the transport's 8 MiB contract
+	// (internal/queue/jetstream).
 	MaxBody = 512 << 10
 
 	// MaxComment bounds one comment on a page.
