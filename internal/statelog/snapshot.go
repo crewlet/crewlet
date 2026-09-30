@@ -178,16 +178,25 @@ func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 
 // ManifestVersion is the artefact format this build writes.
 //
-// THREE SINCE THE MANIFEST NAMES ITS PARTITION AND LAYOUT. An artefact is a copy
-// of ONE partition's file, and a recipient installs it as that partition's:
-// a manifest that did not say which one would leave the recipient to infer it
-// from the logs it happens to name, and an inference is a guess. Version two
-// named neither, so this build refuses one as a version it does not read.
+// TWO SINCE THE MANIFEST NAMES ITS OWN FILE. Before that the name was DERIVED
+// from the positions, in three places independently, and an artefact whose
+// manifest does not name its file is one this build cannot find — so it is
+// refused as a version it does not read rather than resolved to an empty path.
 //
-// TWO WAS WHEN THE MANIFEST BEGAN NAMING ITS OWN FILE. Before that the name was
-// DERIVED from the positions, in three places independently, and an artefact
-// whose manifest does not name its file is one this build cannot find.
-const ManifestVersion = 3
+// # And still two, although the manifest now names its partition
+//
+// [Manifest.Layout] and [Manifest.Partition] are ADDITIVE, and a version is
+// what a reader must refuse, which neither half of a rolling upgrade has to.
+// The artefact is a peer's payload — a build that does not know the fields
+// still offers and adopts layout 0's one file beside one that does — and a
+// bumped version made the two refuse each other's every artefact both ways, so
+// a node below a trimmed log's floor found no donor of the other build while
+// the trim went on counting both builds' artefacts toward its two donors. An
+// older reader ignores the fields, and is still refused a partitioned layout's
+// artefact, which names no log under its domains' bare names. A manifest
+// without them is read as the only file a build before them could copy:
+// layout 0's `estate.000` ([Manifest.UnmarshalJSON]).
+const ManifestVersion = 2
 
 // DomainPosition is what a manifest says about one registered domain.
 //
@@ -249,6 +258,11 @@ type Manifest struct {
 	// Partition its name: WHICH file this is a copy of. A recipient installs
 	// an artefact only as the partition it names, of the layout it names —
 	// and refuses one whose logs are not exactly that partition's.
+	//
+	// ABSENT FROM AN ARTEFACT A BUILD BEFORE THEM TOOK, which is read as
+	// layout 0's `estate.000` ([Manifest.UnmarshalJSON]) — a fact about
+	// that build rather than a guess, since the one file it ever held was
+	// the whole estate.
 	Layout    int    `json:"layout"`
 	Partition string `json:"partition"`
 
@@ -956,6 +970,27 @@ func ReadManifest(path string) (Manifest, error) {
 			path, m.Partition, m.Layout)
 	}
 	return m, nil
+}
+
+// UnmarshalJSON reads a manifest, and one that names no partition — every
+// manifest a build from before partitions wrote — as layout 0's `estate.000`,
+// the only file such a build could copy. One naming no partition of any other
+// layout is left naming none, and [ReadManifest] and [Offer.Usable] refuse
+// it: no build ever wrote one.
+//
+// IN THE DECODER, so every path an artefact's claim arrives by — a manifest on
+// this node's disk, a donor's offer — reads it one way.
+func (m *Manifest) UnmarshalJSON(raw []byte) error {
+	type plain Manifest
+	var decoded plain
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*m = Manifest(decoded)
+	if m.Partition == "" && m.Layout == 0 {
+		m.Partition = EstatePartition.String()
+	}
+	return nil
 }
 
 // SnapshotDir is where a node whose snapshot directory is root keeps its

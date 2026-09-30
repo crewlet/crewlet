@@ -609,13 +609,16 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	}
 }
 
-// AN OFFER REQUEST NAMES A PARTITION OF THE DONOR'S LAYOUT, OR IT IS REFUSED.
+// AN OFFER REQUEST NAMES A PARTITION OF THE DONOR'S LAYOUT, OR IT IS REFUSED —
+// UNLESS THE DONOR RUNS LAYOUT 0.
 //
-// A snapshot is a copy of ONE partition's file, so a request naming none is a
-// question no file answers — and it is exactly what a build from before
+// A snapshot is a copy of ONE partition's file, so a donor answers for the
+// partition named. A request naming none is what a build from before
 // partitions asks, whose join installs whatever it is handed as its whole
-// estate. A request for another layout's partition is not answered either:
-// that layout's files are not the copy the joiner needs, whatever their name.
+// estate: a donor running layout 0 answers it for `estate.000`, the whole
+// estate, and one running a divided layout refuses it. A request for another
+// layout's partition is not answered either: that layout's files are not the
+// copy the joiner needs, whatever their name.
 func TestAnOfferRequestMustNameAPartitionOfTheDonorsLayout(t *testing.T) {
 	t.Parallel()
 	one := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
@@ -628,10 +631,14 @@ func TestAnOfferRequestMustNameAPartitionOfTheDonorsLayout(t *testing.T) {
 	}{
 		"layout 0's one partition": {layout: statelog.EstateLayout("probe"),
 			req: statelog.OfferRequest{Partition: "estate.000"}},
+		"no partition, at a donor running layout 0": {layout: statelog.EstateLayout("probe"),
+			req: statelog.OfferRequest{}},
 		"a partition of layout 1": {layout: one,
 			req: statelog.OfferRequest{Layout: 1, Partition: "tracker.001"}},
 		"no partition, as a build before partitions asks": {refused: true,
-			layout: statelog.EstateLayout("probe"), req: statelog.OfferRequest{}},
+			layout: one, req: statelog.OfferRequest{}},
+		"no partition, of layout 1": {refused: true,
+			layout: one, req: statelog.OfferRequest{Layout: 1}},
 		"another layout's partition": {refused: true, layout: one,
 			req: statelog.OfferRequest{Layout: 2, Partition: "tracker.001"}},
 		"a partition the layout does not have": {refused: true, layout: one,
@@ -649,9 +656,15 @@ func TestAnOfferRequestMustNameAPartitionOfTheDonorsLayout(t *testing.T) {
 	}
 	// AND A REQUEST NAMING NONE IS SAID TO BE WHAT IT IS, which is what an
 	// operator reading a donor's log needs to know about the asker.
-	err := statelog.OfferRequest{}.Validate(statelog.EstateLayout("probe"))
+	err := statelog.OfferRequest{}.Validate(one)
 	if err == nil || !strings.Contains(err.Error(), "predates partitions") {
 		t.Errorf("a request naming no partition is refused as %v", err)
+	}
+	// AND AT LAYOUT 0 IT IS FOR THE WHOLE ESTATE.
+	if p, err := (statelog.OfferRequest{}).Target(statelog.EstateLayout("probe")); err != nil ||
+		p != statelog.EstatePartition {
+		t.Errorf("a request naming no partition at layout 0 is for %v (%v), want %s", p, err,
+			statelog.EstatePartition)
 	}
 }
 

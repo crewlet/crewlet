@@ -287,8 +287,12 @@ file's size for free space. Its manifest names the partition and the layout it
 is a copy of, and every log of that partition: a joiner refuses an artefact of
 another partition, or one naming a log its partition does not carry, before a
 byte moves, and a donor answers only for a partition it serves. A request that
-names no partition — a build from before partitions — is answered by no donor
-of this one. Each partition's artefacts live in a directory of their own under
+names no partition — a build from before partitions — is answered, under layout
+0, as a request for the whole estate, which is the only thing that build can
+mean, so the two builds donate to each other through a rolling upgrade; a donor
+running a partitioned layout answers it with nothing, since that build would
+install one partition's file as its whole estate. An artefact that build took,
+whose manifest names no partition, is layout 0's. Each partition's artefacts live in a directory of their own under
 `store.snapshot_dir`, named as its file is (`l1-tracker.007`); layout 0's stay
 in `store.snapshot_dir` itself.
 

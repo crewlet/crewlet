@@ -24,9 +24,23 @@ const (
 	// SubjectFetchPrefix plus a donor's node id is where that donor
 	// streams its artefact from. Per donor rather than shared, because a
 	// joiner picks ONE offer and fetching from a shared subject would
-	// race every other donor into the same reply inbox. The partition and
-	// the artefact travel in the request ([FetchRequest]), not the subject.
+	// race every other donor into the same reply inbox. The body is the
+	// subject to deliver to, and the partition and the artefact travel in
+	// its headers ([HeaderFetchPartition], [HeaderFetchArtifact]).
 	SubjectFetchPrefix = "crewlet.statelog.snapshot.fetch."
+
+	// HeaderFetchPartition and HeaderFetchArtifact name, on a fetch, the
+	// partition and the artefact the joiner chose from the offer — so the
+	// donor streams that copy or refuses, rather than whatever it holds by
+	// the time the fetch arrives.
+	//
+	// HEADERS, NOT THE BODY, because the body has always been the deliver
+	// subject alone, and a build from before them — a peer on the same
+	// fleet through a rolling upgrade — reads it as exactly that: a body
+	// of another shape was a subject no joiner listens on to that build's
+	// donor, and a fetch this build's donor could not read at all.
+	HeaderFetchPartition = "Crewlet-Snapshot-Partition"
+	HeaderFetchArtifact  = "Crewlet-Snapshot-Artifact"
 )
 
 // TransferChunkWait bounds the wait for the NEXT chunk, not the transfer.
@@ -50,13 +64,17 @@ type OfferRequest struct {
 	NodeID string `json:"node_id"`
 
 	// Layout is the number of the layout the joiner runs, and Partition the
-	// partition of it the joiner needs a copy of — BOTH REQUIRED
-	// ([OfferRequest.Validate]). A snapshot is a copy of one partition's
-	// file, so a request that named none would be a question nobody can
-	// answer with a file. And a request naming none is exactly what a build
-	// from before partitions asks, whose join installs whatever it is
-	// handed as its whole estate: answered with a partition's file, it
-	// would install one partition as everything.
+	// partition of it the joiner needs a copy of ([OfferRequest.Target]).
+	// A snapshot is a copy of one partition's file, so a donor answers only
+	// for the partition named.
+	//
+	// ABSENT FROM THE REQUEST OF A BUILD BEFORE THEM, whose join installs
+	// whatever it is handed as its whole estate. A donor running layout 0
+	// answers it as a request for `estate.000`, which is the whole estate
+	// and the only thing such an asker can mean — so the two builds donate
+	// to each other through a rolling upgrade. A donor running any other
+	// layout refuses it: answered with one partition's file, that asker
+	// would install a partition as everything (the cutover's third fence).
 	Layout    int    `json:"layout"`
 	Partition string `json:"partition"`
 
@@ -91,30 +109,45 @@ type OfferRequest struct {
 }
 
 // ErrOfferRequest reports a request no donor answers: one that names no
-// partition, or one this donor's layout does not have.
+// partition of this donor's layout.
 var ErrOfferRequest = errors.New("statelog: the offer request names no partition this donor runs")
 
-// Validate refuses a request that does not name a partition of layout: the
-// request of a build from before partitions, and one asking a donor that runs
-// another layout — whose files are not the copy the joiner needs, whatever
-// they are called.
-func (r OfferRequest) Validate(layout Layout) error {
+// Target is the partition of layout a donor running layout answers the request
+// for, or why it answers none: a request for another layout's partition —
+// whose files are not the copy the joiner needs, whatever they are called — or
+// one naming no partition at a donor that runs a divided layout.
+//
+// A REQUEST NAMING NONE, at a donor running layout 0, is for `estate.000`:
+// it is what a build from before partitions asks, and the whole estate is
+// both what it means and the one file this donor holds (see
+// [OfferRequest.Partition]).
+func (r OfferRequest) Target(layout Layout) (PartitionID, error) {
+	if r.Partition == "" {
+		if layout.Number == 0 && r.Layout == 0 {
+			return EstatePartition, nil
+		}
+		return PartitionID{}, fmt.Errorf("%w: it names none — a request from a build "+
+			"that predates partitions, whose join would install one partition's file of "+
+			"layout %d as its whole estate", ErrOfferRequest, layout.Number)
+	}
 	p, err := ParsePartitionID(r.Partition)
 	switch {
-	case r.Partition == "":
-		return fmt.Errorf("%w: it names none — a request from a build that predates "+
-			"partitions, whose join would install one partition's file as its whole "+
-			"estate", ErrOfferRequest)
 	case err != nil:
-		return fmt.Errorf("%w: %w", ErrOfferRequest, err)
+		return PartitionID{}, fmt.Errorf("%w: %w", ErrOfferRequest, err)
 	case r.Layout != layout.Number:
-		return fmt.Errorf("%w: it asks for %s of layout %d, and this donor runs layout %d",
-			ErrOfferRequest, r.Partition, r.Layout, layout.Number)
+		return PartitionID{}, fmt.Errorf("%w: it asks for %s of layout %d, and this "+
+			"donor runs layout %d", ErrOfferRequest, r.Partition, r.Layout, layout.Number)
 	case len(layout.Logs(p)) == 0:
-		return fmt.Errorf("%w: layout %d has no partition %s", ErrOfferRequest,
-			layout.Number, r.Partition)
+		return PartitionID{}, fmt.Errorf("%w: layout %d has no partition %s",
+			ErrOfferRequest, layout.Number, r.Partition)
 	}
-	return nil
+	return p, nil
+}
+
+// Validate refuses a request [OfferRequest.Target] answers no partition for.
+func (r OfferRequest) Validate(layout Layout) error {
+	_, err := r.Target(layout)
+	return err
 }
 
 // Offer is what a node answers with.
@@ -331,7 +364,7 @@ func (d *Donor) Serve(ctx context.Context) error {
 // SILENT RATHER THAN A REFUSAL, because a joiner collects for a window and
 // takes the best answer: a node with nothing to donate has nothing to say, and
 // an explicit "no" would only make the joiner wait for it. It says nothing
-// for a request naming no partition of its layout ([OfferRequest.Validate]), a
+// for a request naming no partition of its layout ([OfferRequest.Target]), a
 // partition it does not serve, or one it holds no artefact of.
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 	m, ok := d.offer(ctx, msg.Data)
@@ -358,45 +391,46 @@ func (d *Donor) offer(ctx context.Context, body []byte) (Manifest, bool) {
 	if err := json.Unmarshal(body, &req); err != nil {
 		return Manifest{}, false
 	}
-	if err := req.Validate(d.deps.Layout); err != nil {
+	p, err := req.Target(d.deps.Layout)
+	if err != nil {
 		// SAID AT DEBUG: a build from before partitions asks on every
-		// join, and every donor of a newer one would otherwise log each.
+		// join, and every donor of a divided layout would otherwise log
+		// each.
 		d.log.DebugContext(ctx, "statelog_snapshot_offer_refused",
 			"node", d.deps.NodeID, "asker", req.NodeID, "error", err.Error())
 		return Manifest{}, false
 	}
-	p, _ := ParsePartitionID(req.Partition)
 	if serves, err := d.deps.Serves(p); err != nil || !serves {
 		return Manifest{}, false
 	}
 	return d.deps.Newest(p)
 }
 
-// FetchRequest is what a joiner fetches an offer's artefact with: where to
-// deliver it, and WHICH artefact — the partition and the file the offer named —
-// so the donor streams the copy the joiner chose from its manifest, or refuses,
-// rather than whatever it holds by the time the fetch arrives.
-type FetchRequest struct {
-	Deliver   string `json:"deliver"`
-	Partition string `json:"partition"`
-	Artifact  string `json:"artifact"`
-}
-
-// stream sends the artefact the request names to the deliver subject it names.
+// stream sends the artefact the fetch names to the deliver subject its body
+// names.
 //
 // THE ARTEFACT THE JOINER CHOSE, OR NONE: the joiner accepted an offer from its
 // manifest, so a copy taken since — or one of another partition — is refused
 // with 410 rather than streamed and refused only after the transfer, by a
 // checksum it could never match.
+//
+// A FETCH NAMING NEITHER is a build from before the headers
+// ([HeaderFetchPartition]): at a donor running layout 0 it is for
+// `estate.000`'s newest artefact, which is what that build has always been
+// streamed; at any other it is refused, as its offer request was.
 func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
-	var req FetchRequest
-	if err := json.Unmarshal(msg.Data, &req); err != nil || req.Deliver == "" {
+	deliver := string(msg.Data)
+	if deliver == "" {
 		return
 	}
-	deliver := req.Deliver
-	p, err := ParsePartitionID(req.Partition)
+	var partition, artifact string
+	if msg.Header != nil {
+		partition, artifact = msg.Header.Get(HeaderFetchPartition), msg.Header.Get(HeaderFetchArtifact)
+	}
+	p, err := OfferRequest{Layout: d.deps.Layout.Number, Partition: partition}.Target(d.deps.Layout)
 	if err != nil {
-		d.terminate(nc, deliver, 400, fmt.Sprintf("the fetch names no partition: %v", err))
+		d.terminate(nc, deliver, 400, fmt.Sprintf("the fetch names no partition this "+
+			"donor answers for: %v", err))
 		return
 	}
 	serves, err := d.deps.Serves(p)
@@ -409,9 +443,9 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	case !ok:
 		d.terminate(nc, deliver, 404, fmt.Sprintf("this node holds no snapshot of %s", p))
 		return
-	case m.Artifact != req.Artifact:
+	case artifact != "" && m.Artifact != artifact:
 		d.terminate(nc, deliver, 410, fmt.Sprintf("the artefact %s of %s was replaced by "+
-			"%s since it was offered; ask for offers again", req.Artifact, p, m.Artifact))
+			"%s since it was offered; ask for offers again", artifact, p, m.Artifact))
 		return
 	}
 	path := d.deps.Path(m)
@@ -644,13 +678,15 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		return 0, fmt.Errorf("statelog: size the transfer buffer: %w", err)
 	}
 
-	fetch, err := json.Marshal(FetchRequest{Deliver: deliver,
-		Partition: offer.Manifest.Partition, Artifact: offer.Manifest.Artifact})
-	if err != nil {
-		return 0, fmt.Errorf("statelog: encode the fetch: %w", err)
-	}
+	// THE BODY IS THE DELIVER SUBJECT, as every build reads it, and the
+	// artefact chosen rides in the headers ([HeaderFetchPartition]).
+	fetch := nats.NewMsg(offer.Fetch)
+	fetch.Reply = nats.NewInbox()
+	fetch.Data = []byte(deliver)
+	fetch.Header.Set(HeaderFetchPartition, offer.Manifest.Partition)
+	fetch.Header.Set(HeaderFetchArtifact, offer.Manifest.Artifact)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := nc.PublishRequest(offer.Fetch, nats.NewInbox(), fetch); err != nil {
+	if err := nc.PublishMsg(fetch); err != nil {
 		return 0, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
 	// THE FLUSH TAKES THE CALLER'S CONTEXT, and the patience every other

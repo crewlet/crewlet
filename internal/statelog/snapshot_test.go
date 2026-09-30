@@ -845,19 +845,22 @@ func TestASnapshotIsACopyOfOnePartitionAndSaysWhich(t *testing.T) {
 	}
 }
 
-// A MANIFEST THAT NAMES NO PARTITION IS NOBODY'S ARTEFACT.
+// A MANIFEST THAT NAMES NO PARTITION OF A DIVIDED LAYOUT IS NOBODY'S ARTEFACT.
 //
-// Version 2 named none, and a manifest that does not say which file it is a
-// copy of cannot be installed as any: it is refused on read, so no donor
-// offers it and no loop counts it as the partition's current artefact.
+// One naming no partition at all is what every build before partitions wrote,
+// and it is layout 0's `estate.000` — the one file such a build held. But one
+// naming a divided layout and no partition, a version this build does not
+// write, or a partition that is no partition's name cannot be installed as any
+// file: it is refused on read, so no donor offers it and no loop counts it as a
+// partition's current artefact.
 func TestAManifestNamingNoPartitionIsRefused(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	for name, body := range map[string]string{
-		"version 2":       `{"v":2,"artifact":"snapshot-1-1.db","domains":{}}`,
-		"no partition":    `{"v":3,"layout":0,"artifact":"snapshot-1-1.db","domains":{}}`,
-		"a negative one":  `{"v":3,"layout":-1,"partition":"estate.000","domains":{}}`,
-		"not a partition": `{"v":3,"layout":0,"partition":"estate","domains":{}}`,
+		"a divided layout":  `{"v":2,"layout":1,"artifact":"snapshot-1-1.db","domains":{}}`,
+		"version 3":         `{"v":3,"layout":0,"partition":"estate.000","domains":{}}`,
+		"a negative layout": `{"v":2,"layout":-1,"partition":"estate.000","domains":{}}`,
+		"not a partition":   `{"v":2,"layout":0,"partition":"estate","domains":{}}`,
 	} {
 		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".json")
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
