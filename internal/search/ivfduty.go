@@ -45,7 +45,10 @@ import (
 // while any node the log counts advertises reading below [IndexRecordVersion]
 // — a node that advertises nothing being one that cannot — and the fleet
 // searches with the full scan until the upgrade has reached every one of them
-// ([LogStanding.Readers]).
+// ([LogStanding.Readers]). The readers are read at the tick's start, which
+// decides the step, and AGAIN beside every record the step publishes
+// ([Embedder.stillReadable]), since a training can run for minutes and a node
+// that begins counting in them is one the first reading never saw.
 //
 // # What a tick does, and why the steps are separate ticks
 //
@@ -496,6 +499,9 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 		return e.trainFrom(ctx, dim, set, head.Generation)
 	}
 	subject := MeasureSubject(head.Generation)
+	if readable, err := e.stillReadable(ctx); err != nil || !readable {
+		return 0, err
+	}
 	if err := e.append(ctx, subject, VectorRecord{
 		RecordEnvelope: RecordEnvelope{
 			Subject:   subject,
@@ -509,6 +515,44 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 		return 0, err
 	}
 	return 1, nil
+}
+
+// stillReadable reads the vector log's readers again IMMEDIATELY BEFORE a
+// record about the index is published, and reports whether every node the
+// log counts still reads it — logging `search_index_held` where one does not.
+//
+// # Why the tick's own reading is not enough
+//
+// [Embedder.maintainIndex] decides the step from the standing it reads at the
+// tick's start, and a training or a measurement then runs for minutes before it
+// publishes — on a slow node many, since its arithmetic is exempt from the
+// tick's bound and its reading only has to keep advancing ([Budget]). A node
+// that begins counting on the log in that window — an old binary booted as a
+// new data node, a node rolled back mid-upgrade — is one whose applier STOPS
+// on the first index record rather than deferring it, which is exactly what
+// the gate exists to rule out. Nothing below this check enforces it: the
+// framework publishes whatever it is given, and [statelog.Readers] is only
+// this caller's input. So the readers are read again beside every append, and
+// the window left is one publish long rather than one training long; the step
+// held is taken again from the start on a later tick, once every reader is
+// upgraded.
+func (e *Embedder) stillReadable(ctx context.Context) (bool, error) {
+	standing, err := e.deps.Standing(ctx)
+	if err != nil {
+		return false, fmt.Errorf("search: read the vector log's standing before "+
+			"publishing about the index: %w", err)
+	}
+	held := heldBy(standing.Readers)
+	if len(held) == 0 {
+		return true, nil
+	}
+	e.deps.Logger.WarnContext(ctx, "search_index_held", "nodes", held,
+		"reads_below", IndexRecordVersion(),
+		"detail", "a node that cannot read the index's records began counting on "+
+			"the vector log while this step ran, and one that cannot read them "+
+			"stops its applier on the first; nothing is published, and the step "+
+			"is taken again once every counted node is upgraded")
+	return false, nil
 }
 
 // arithmetic runs the index's CPU-bound steps EXEMPT from the tick's bound
@@ -635,6 +679,9 @@ func sourcesIn(ids map[Source][]string) []Source {
 
 // publishIndex writes one centroids record and reports how many it published.
 func (e *Embedder) publishIndex(ctx context.Context, dim int, index IndexRecord) (int, error) {
+	if readable, err := e.stillReadable(ctx); err != nil || !readable {
+		return 0, err
+	}
 	if err := e.append(ctx, IndexCentroids, VectorRecord{
 		RecordEnvelope: RecordEnvelope{
 			Subject:   IndexCentroids,
@@ -695,6 +742,9 @@ func (e *Embedder) rollout(ctx context.Context, head IndexHead) (int, error) {
 	slices.Sort(batches)
 	published := 0
 	for _, n := range batches {
+		if readable, err := e.stillReadable(ctx); err != nil || !readable {
+			return published, err
+		}
 		subject := ReassignSubject(head.Generation, n)
 		if err := e.append(ctx, subject, VectorRecord{
 			RecordEnvelope: RecordEnvelope{

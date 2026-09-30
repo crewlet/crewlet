@@ -223,6 +223,132 @@ func TestTheIndexWaitsForEveryReaderAndForTheLog(t *testing.T) {
 	}
 }
 
+// A NODE COUNTED WHILE A STEP RAN HOLDS WHAT THE STEP WOULD PUBLISH.
+//
+// The step is decided from the readers read at the tick's start, and a
+// training publishes minutes later — on a slow node many, its arithmetic
+// exempt from the tick's bound. A node that begins counting on the log in
+// between — an old binary booted as a new data node, a node rolled back
+// mid-upgrade — stops its applier on the first index record rather than
+// deferring it. So the readers are read again beside every index append: a
+// node counted during the training's arithmetic holds the centroids record,
+// one counted after the first batch of a rollout holds the rest, one counted
+// during a measurement holds its record, and once it is upgraded the duty
+// takes each step again and finishes.
+func TestAReaderCountedWhileAStepRunsHoldsWhatItWouldPublish(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	embedder := topicalEmbedder{width: 128, topics: 8}
+	standing := h.standing(map[string]int{"node-a": search.RecordVersion})
+	var (
+		mu     sync.Mutex
+		joined bool
+		// joinOn is the step whose progress counts an old node in.
+		joinOn string
+		now    = time.Unix(1_700_000_000, 0).UTC()
+	)
+	join := func(on string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if joinOn == on {
+			joined = true
+		}
+	}
+	duty := boundedDuty(t, h, embedder, func(ctx context.Context) (search.LogStanding, error) {
+		s, err := standing(ctx)
+		mu.Lock()
+		defer mu.Unlock()
+		if joined {
+			s.Readers = maps.Clone(s.Readers)
+			s.Readers["node-old"] = 0
+		}
+		return s, err
+	}, func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}, hookedBudget{advanced: func() { join("rollout") }, exempt: func() { join("arithmetic") }})
+	h.seedTasks(taskBodies(2_000))
+	arm := func(on string, counted bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		joinOn, joined = on, counted
+	}
+
+	// THE TRAINING: its arithmetic counts the old node in, after the tick
+	// decided to train with every reader upgraded.
+	arm("arithmetic", false)
+	state, _ := runToRest(t, h, duty, embedder.width)
+	if state.Sources != 2_000 || state.Indexed {
+		t.Fatalf("a node counted while the index trained did not hold it: the duty "+
+			"came to rest over %d sources with %+v", state.Sources, state.Head)
+	}
+	if kinds := publishedKinds(t, h); kinds[search.IndexSource] != 0 {
+		t.Fatalf("the log carries %d record(s) about the index, published past a "+
+			"node counted while the training ran", kinds[search.IndexSource])
+	}
+
+	// UPGRADED: the next tick trains again and publishes its centroids.
+	arm("", false)
+	if published, err := duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the training tick published %d record(s) (%v), want its centroids", published, err)
+	}
+	h.drain()
+	if state, _ = search.IndexStateOf(t.Context(), duty, embedder.width); !state.Indexed ||
+		state.Stale() == 0 {
+		t.Fatalf("after the training the index reads %+v with %d rows unfiled, want "+
+			"an installed index whose rollout is still to come", state.Head, state.Stale())
+	}
+
+	// THE ROLLOUT: its first batch counts the old node in, and the rest wait.
+	arm("rollout", false)
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != 1 {
+		t.Fatalf("a rollout that counted a node after its first batch published %d "+
+			"batch(es) (%v), want that first one alone", published, err)
+	}
+	h.drain()
+	if state, _ = search.IndexStateOf(t.Context(), duty, embedder.width); state.Stale() == 0 {
+		t.Fatal("the whole rollout landed past a node counted after its first batch")
+	}
+	arm("", false)
+	if state, _ = runToRest(t, h, duty, embedder.width); !state.Indexed || state.Stale() != 0 {
+		t.Fatalf("once every reader was upgraded the duty came to rest with %d rows "+
+			"unfiled (%+v)", state.Stale(), state.Head)
+	}
+
+	// A DAY ON, THE MEASUREMENT: its arithmetic counts the old node in, and
+	// its record waits for the upgrade too.
+	mu.Lock()
+	now = now.Add(search.IVFMeasureInterval)
+	mu.Unlock()
+	arm("arithmetic", false)
+	if published, err := duty.Tick(t.Context()); err != nil || published != 0 {
+		t.Fatalf("a measurement that counted a node while it ran published %d "+
+			"record(s) (%v), want none", published, err)
+	}
+	arm("", false)
+	if published, err := duty.Tick(t.Context()); err != nil || published != 1 {
+		t.Fatalf("the upgraded fleet's measurement published %d record(s) (%v), "+
+			"want its one", published, err)
+	}
+	h.drain()
+	if measured, _ := search.IndexStateOf(t.Context(), duty, embedder.width); !measured.Head.MeasuredAt.Equal(now) {
+		t.Fatalf("the measurement is dated %v, want %v", measured.Head.MeasuredAt, now)
+	}
+}
+
+// hookedBudget is a budget that runs a hook on each report — the progress a
+// step shows, and the arithmetic it exempts — and bounds nothing.
+type hookedBudget struct{ advanced, exempt func() }
+
+func (b hookedBudget) Advanced() { b.advanced() }
+
+func (b hookedBudget) Exempt() func() {
+	b.exempt()
+	return func() {}
+}
+
 // indexDuty is a duty over the harness's tasks, embedding with embedder and
 // reading the log's standing from standing.
 func indexDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing func(context.Context) (search.LogStanding, error), now func() time.Time) *search.Embedder {
