@@ -366,7 +366,13 @@ export function LiveNow() {
           <Card.Header
             icon={<TimelineGlyph size="sm" />}
             actions={
-              <Button size="small" variant="tertiary" onClick={() => nav.to(["activity"])}>
+              // THE LOG'S OWN ADDRESS: `#/activity` is this screen, so the
+              // button that named the event log reloaded Live now.
+              <Button
+                size="small"
+                variant="tertiary"
+                onClick={() => nav.to(["activity", "events"])}
+              >
                 Event log
               </Button>
             }

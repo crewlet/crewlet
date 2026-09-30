@@ -131,7 +131,9 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             size="small"
             variant="secondary"
             leadingIcon={<TimelineGlyph size="xs" />}
-            onClick={() => nav.to(["activity"], { q: traceId })}
+            // The event log, which is `#/activity/events`: the bare
+            // `#/activity` is Live now, which has no search to hand the id.
+            onClick={() => nav.to(["activity", "events"], { q: traceId })}
           >
             In the log
           </Button>

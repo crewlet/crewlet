@@ -842,11 +842,18 @@ export function SeatScreen({ handle }: { handle: string }) {
             // agent id it pairs with — never by the name, which a namesake
             // shares and which listed its events as this seat's. A PERSON has
             // no agent id: what the log records about them is what names them
-            // as the actor, so their seat keeps the actor match.
+            // as the actor, and the name it records for a person bound to a
+            // seat is the seat's HANDLE (`iam.ActorFor`, and the identity
+            // trail's `by`). The actor filter is an equality, so the display
+            // name this asked for matched no event at all.
+            //
+            // THE EVENT LOG IS `#/activity/events`. The bare `#/activity` is
+            // Live now, which reads neither filter, so this button opened the
+            // whole company's live view under a seat's page.
             onClick={() =>
               nav.to(
-                ["activity"],
-                seat.kind === "human" ? { actor: seat.name } : { seat: seat.handle },
+                ["activity", "events"],
+                seat.kind === "human" ? { actor: seat.handle } : { seat: seat.handle },
               )
             }
           >

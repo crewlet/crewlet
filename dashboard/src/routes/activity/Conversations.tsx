@@ -173,7 +173,7 @@ function Exchange({
         and are published as events.{" "}
         <a
           className="t-link prose-link"
-          href={href(["activity"], { category: "a2a", q: channel.id })}
+          href={href(["activity", "events"], { category: "a2a", q: channel.id })}
         >
           Read this channel's events ↗
         </a>

@@ -516,7 +516,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/schedules` | **Schedules** | |
 | `#/activity/a2a` | **Agent-to-agent** | |
 | `#/activity/traces/{id}` | **Trace** — one distributed trace, every span of it. NO LIST: nothing enumerates traces, so a bare `#/activity/traces` is the turns list, which is the nearest thing to "the traces" this product has | |
-| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
+| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows. A seat's *Its events* opens it: an agent seat by `seat=`, a person's by `actor=` carrying the seat's handle, the name every write they make is recorded under | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` (the recorded actor, matched exactly) · `seat=` (an agent seat's handle, asked by its agent id) · `q=` · `failed=` |
 | `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` · `#/admin/fleet/domains/{domain}` | **Infrastructure** — nodes, leases, duties, replication, and one state-log domain with every node's position in it *(operator)*. ONE tail segment is a node and two are a domain, discriminated on the tail's LENGTH rather than on the word, because a node id is operator-chosen and `domains` is a legal one | |
