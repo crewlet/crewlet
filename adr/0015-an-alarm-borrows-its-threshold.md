@@ -12,8 +12,8 @@ An alarm never invents a number. It fires at the threshold some OTHER decision
 already made and named, and where that constant belongs to another package it
 is taken from there rather than copied.
 
-A stall grace is what sheds a node. A deferral grace is what moves its seats. A
-read budget is what a caller was promised. A backup age is what the retention
+A stall grace is what takes a node's copy out of service, and so is a deferral
+grace. A read budget is what a caller was promised. A backup age is what the retention
 policy states. Each of those is a decision with consequences of its own, and
 the alarm's job is to say that the system has reached it — not to hold a second
 opinion about when reaching it matters.

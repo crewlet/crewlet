@@ -537,9 +537,11 @@ var table = []rule{
 		},
 		remedy: "Check this node's applier: `crewlet retention status` names the " +
 			"domain and its position. A node that is behind keeps the seats it " +
-			"holds and claims no new ones; it gives them up only if its position " +
-			"stops moving for the stall grace, or it holds a record it cannot " +
-			"decode past the deferral grace.",
+			"holds and claims no new ones. Only if its position stops moving for " +
+			"the stall grace, or it holds a record it cannot decode past the " +
+			"deferral grace, is its copy wrong rather than behind: it then stops " +
+			"serving that partition, and its seats stay and read it from the " +
+			"partition's other holders until the copy recovers.",
 	},
 	{
 		kind: KindReadRefusals,

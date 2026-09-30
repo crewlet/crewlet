@@ -420,7 +420,8 @@ adopts a snapshot from a node in the new generation, **on its own**:
   which stops its applier before anything of the new generation is applied.
 - From then until the adoption lands it refuses that domain's reads and writes
   as `wrong_stream`, logs `statelog_generation_passed` naming both generations,
-  and gives up its seats — whether or not its own readings of the log look
+  and stops serving the partition — its seats stay, and read it from the
+  partition's other holders — whether or not its own readings of the log look
   wrong. On a broker restored from an older copy, a node whose checkpoint was
   below the restored end sees nothing wrong at all, which is why the fleet's
   generation is what decides it rather than the log.
@@ -522,8 +523,8 @@ company uses: a company on an external tracker still runs both logs.
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
 almost certainly running — an eviction would drop everything it writes and
-move its seats. Stop it and wait for its `LIVE` column in `crewlet retention
-status` to read `no`; `-force` overrides the refusal for a node wedged in a way
+take its copy out of service. Stop it and wait for its `LIVE` column in
+`crewlet retention status` to read `no`; `-force` overrides the refusal for a node wedged in a way
 that still renews its lease. A refusal writes nothing to either log. If this
 node cannot read the presence leases at all — a coordination fault — the
 eviction is refused as one nobody could judge, and says so; `-force` takes it
@@ -1169,7 +1170,8 @@ creation instant arrives in both answers. Nothing else can see it — a rebuilt
 stream comes back at generation 0 counting from 1, so once it has published
 past the node's checkpoint every sequence term reads healthy while the node
 applies a different history into rows keyed by the old one. The node logs
-`statelog_stream_recreated` with both instants, gives up its seats, and refuses
+`statelog_stream_recreated` with both instants, stops serving the partition —
+its seats stay, and read it from the partition's other holders — and refuses
 every read and every write of that domain with `wrong_stream` until that stream
 is re-anchored, and it applies nothing from the rebuilt stream into rows keyed
 to the old one.

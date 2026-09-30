@@ -1098,9 +1098,10 @@ one is certain to have read its own tombstone before the trim passes it.
 The gesture is **judged once, before either log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
-drop everything it writes and move its seats. Stop it and wait for its `LIVE`
-column in `crewlet retention status` to read `no`, or pass `-force` for a node
-wedged in a way that still renews its lease — the refusal prints both. A node
+drop everything it writes and take its copy out of service. Stop it and wait
+for its `LIVE` column in `crewlet retention status` to read `no`, or pass
+`-force` for a node wedged in a way that still renews its lease — the refusal
+prints both. A node
 that cannot read the presence leases at all answers `503 eviction_unjudged`;
 `-force` takes the eviction past that as well, since the leases are all the
 judgement reads, and the refusal says so. A run that already passed `-force`
