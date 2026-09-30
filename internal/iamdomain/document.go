@@ -3,6 +3,7 @@ package iamdomain
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -367,37 +368,94 @@ const (
 	MaxAddress = 320
 
 	// MaxHeldCredentials is the most credentials one person's document
-	// holds, lapsed ones included until the retention sweep collects them
-	// ([SessionRowGrace] after they lapse).
+	// holds, lapsed ones included — they stay until the retention sweep
+	// collects them ([SessionRowGrace] after they lapse), or until a write
+	// needs their room ([fitHeld]).
 	//
 	// SIXTY-FOUR. A person proves themselves with a password, an
 	// authenticator and a recovery set — three — and everything else is a
 	// machine token, which only that person mints, by hand, for an
-	// assistant or a pipeline. Sixty-one of those at once, counting the
-	// week's revoked and expired ones, is far past any person's working
-	// set, and at the widest a token can be it keeps the document inside
-	// the record the log declares.
+	// assistant or a pipeline. Sixty-one of those live at once is far past
+	// any person's working set, and at the widest a token can be it keeps
+	// the document inside the record the log declares.
 	MaxHeldCredentials = 64
 )
 
-// heldWithin refuses a credential set past [MaxHeldCredentials] as cause,
-// saying how many of them have lapsed — revoked or expired, which the sweep
-// collects — so the person can tell revoking one from waiting.
-func heldWithin(set []Credential, now time.Time, cause error) error {
-	if len(set) <= MaxHeldCredentials {
-		return nil
+// fitHeld is a credential set as a write lands it: set itself where it is
+// within [MaxHeldCredentials], and otherwise set without the credentials that
+// LAPSED EARLIEST — revoked, or past their expiry — until it is. Refused as
+// cause only when the credentials still LIVE are past the cap on their own.
+//
+// # Why a lapsed credential gives up its place rather than holding it
+//
+// The cap bounds the RECORD, and a lapsed credential verifies nothing: it is
+// kept only so the listing can say what was revoked or expired, and why, for
+// the week before the retention sweep collects it. Counted like a live one
+// until then, a person at the cap could be told to revoke a token nothing uses
+// — which frees nothing, since the revocation keeps it on the document — and
+// then to wait up to a week, while a pipeline minting short-lived tokens could
+// not mint at all and a person enrolling a second factor, or regenerating
+// their recovery codes, was refused over tokens that had stopped working. The
+// sweep drops the same credentials, from the same document, a few days later;
+// this drops them sooner, and only as many as the write needs.
+//
+// EARLIEST FIRST, by the instant each stopped verifying — its revocation or
+// its expiry, whichever came first — with the set's own order breaking a tie,
+// so the credential dropped is the one the sweep would have collected first,
+// and the rest keep their account for their full week.
+func fitHeld(set []Credential, now time.Time, cause error) ([]Credential, error) {
+	over := len(set) - MaxHeldCredentials
+	if over <= 0 {
+		return set, nil
 	}
-	lapsed := 0
-	for _, c := range set {
-		if !c.RevokedAt.IsZero() || (!c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now)) {
-			lapsed++
+	type lapse struct {
+		index int
+		at    time.Time
+	}
+	var lapsed []lapse
+	for i, c := range set {
+		at, gone := lapsedAt(c, now)
+		if gone {
+			lapsed = append(lapsed, lapse{index: i, at: at})
 		}
 	}
-	return fmt.Errorf("%w: this would leave %d credentials on one person and "+
-		"the cap is %d. %d of them are revoked or expired, and the retention "+
-		"sweep collects one %d days after it lapses: revoke a token nothing "+
-		"uses, or wait for the sweep", cause, len(set), MaxHeldCredentials,
-		lapsed, int(SessionRowGrace/(24*time.Hour)))
+	if len(lapsed) < over {
+		return nil, fmt.Errorf("%w: this would leave %d live credentials on one "+
+			"person and the cap is %d — a revoked or expired one makes room when "+
+			"a change needs it, so revoke a token nothing uses and ask again",
+			cause, len(set)-len(lapsed), MaxHeldCredentials)
+	}
+	slices.SortStableFunc(lapsed, func(a, b lapse) int { return a.at.Compare(b.at) })
+	drop := make(map[int]bool, over)
+	for _, l := range lapsed[:over] {
+		drop[l.index] = true
+	}
+	kept := make([]Credential, 0, MaxHeldCredentials)
+	for i, c := range set {
+		if !drop[i] {
+			kept = append(kept, c)
+		}
+	}
+	return kept, nil
+}
+
+// lapsedAt is when c stopped verifying — its revocation or its expiry,
+// whichever came first — and false for a credential that still verifies at
+// now.
+func lapsedAt(c Credential, now time.Time) (time.Time, bool) {
+	expired := !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(now)
+	switch revoked := !c.RevokedAt.IsZero(); {
+	case revoked && expired:
+		if c.ExpiresAt.Before(c.RevokedAt) {
+			return c.ExpiresAt, true
+		}
+		return c.RevokedAt, true
+	case revoked:
+		return c.RevokedAt, true
+	case expired:
+		return c.ExpiresAt, true
+	}
+	return time.Time{}, false
 }
 
 // CredentialMethod is how somebody proves themselves.

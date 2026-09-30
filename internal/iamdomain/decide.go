@@ -1962,7 +1962,8 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 		if person.Credentials, err = in.Apply(person.Credentials); err != nil {
 			return err
 		}
-		if err = heldWithin(person.Credentials, w.Now(), ErrInvalid); err != nil {
+		if person.Credentials, err = fitHeld(person.Credentials, w.Now(),
+			ErrInvalid); err != nil {
 			return err
 		}
 		mutation, err = EncodePerson(person)
@@ -2172,10 +2173,11 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 			kept = append(kept, c)
 		}
 		kept = append(kept, token)
-		if err = heldWithin(kept, now, ErrInvalidToken); err != nil {
+		// THE NEW TOKEN IS LIVE, so making room never drops it: only a
+		// credential that has already stopped verifying gives up its place.
+		if owner.Credentials, err = fitHeld(kept, now, ErrInvalidToken); err != nil {
 			return err
 		}
-		owner.Credentials = kept
 		minted = TokenMinted{Grants: grants, Colleague: colleague,
 			ExpiresAt: in.ExpiresAt, Epoch: epoch, Generation: generation}
 		rec.Mutation, err = EncodePerson(owner)
@@ -2887,7 +2889,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err = w.MayConfer(person.Grants, updated.Grants); err != nil {
 			return err
 		}
-		if err = heldWithin(updated.Credentials, w.Now(), ErrInvalid); err != nil {
+		if updated.Credentials, err = fitHeld(updated.Credentials, w.Now(),
+			ErrInvalid); err != nil {
 			return err
 		}
 		before, after = slices.Clone(person.Grants), slices.Clone(updated.Grants)

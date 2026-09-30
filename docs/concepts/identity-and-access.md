@@ -1109,14 +1109,18 @@ node's own rows; the secret is 32 random bytes, and what the estate stores is a
 SHA-256 over the prefix, the id and the secret.
 
 **Somebody holds at most 64 credentials.** A password, an authenticator and a
-recovery set are three; the rest are machine tokens — and revoked and expired
-ones count until the retention sweep collects them, seven days after they
-lapse. A mint past it is refused `400 invalid_body`, saying how many of the
-64 have lapsed, so you can tell revoking a token nothing uses from waiting for
-the sweep. The bound is what keeps a person's record — every credential change
-republishes all of them — inside the identity log's 128 KiB largest record,
-which its [gate reserve](../guides/retention.md#the-gate-reserve) is sized by;
-a person's name and address are bounded for the same reason, at 256 and 320
+recovery set are three; the rest are machine tokens. A revoked or expired one
+stays on the person's record — listed with when and why it stopped — until
+the retention sweep collects it, seven days after it lapsed, or until a change
+needs its place: a mint, a second factor or new recovery codes that would
+leave more than 64 drops the credentials that lapsed **earliest**, as many as
+it needs and never a live one. Only a change that would leave more than 64
+**live** credentials is refused, `400 invalid_body`, and revoking a token
+nothing uses makes room at once. The bound is what keeps a person's record —
+every credential change republishes all of them — inside the identity log's
+128 KiB largest record, which its
+[gate reserve](../guides/retention.md#the-gate-reserve) is sized by; a
+person's name and address are bounded for the same reason, at 256 and 320
 bytes.
 
 **It acts as its owner.** A person's token is that person — their seat when the

@@ -29,8 +29,9 @@ import (
 // the credential they acted through and a reason — at theirs. A cap raised
 // without revisiting [iamdomain.IamMaxRecordBytes] fails here.
 //
-// AND THE CAP IS WHAT THIS RESTS ON, so it is held too: a mint or a credential
-// change that would leave one more is refused, before anything is published.
+// AND THE CAP IS WHAT THIS RESTS ON, so it is held too: a write that would
+// leave one more drops a credential that has stopped verifying, or is refused
+// before anything is published when every one still does.
 func TestTheLargestRecordHoldsTheLargestPerson(t *testing.T) {
 	t.Parallel()
 	limit := iamdomain.Domain{}.Stream().MaxRecordBytes
@@ -133,32 +134,20 @@ func widestCredentials(t *testing.T, sealer *iamdomain.Sealer, person string) []
 //
 // The declared largest record rests on the cap, so the cap is checked where
 // the set is formed — the enrolment, a credential change, an edit of the
-// person and a mint — and a write that would cross it publishes nothing. The
-// mint is the one a person meets, so its refusal is the token's own
-// ([iamdomain.ErrInvalidToken]) and says how many of the held credentials are
-// lapsed, which is whether revoking one or waiting for the sweep is the
-// remedy. Mutation: drop any one of the four checks and its row goes green
-// past the cap.
+// person and a mint — and a write that would leave more LIVE credentials than
+// it publishes nothing. The mint is the one a person meets, so its refusal is
+// the token's own ([iamdomain.ErrInvalidToken]) and counts the live ones.
+// Mutation: drop any one of the four checks and its row goes green past the
+// cap.
 func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
-	full := func(n int) []iamdomain.Credential {
-		out := make([]iamdomain.Credential, n)
-		for i := range out {
-			out[i] = iamdomain.Credential{V: iamdomain.DocumentVersion,
-				ID: fmt.Sprintf("018f3a9c-0000-7000-8000-%012d", i), Method: iamdomain.MethodToken,
-				Verifier:  credential.TokenVerifier("id", "secret"),
-				ExpiresAt: brokerAt.Add(time.Hour)}
-		}
-		out[0].RevokedAt = brokerAt
-		return out
-	}
 	if err := rig.draining(func() error {
 		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 			PersonID: owner, OpID: statelog.NewOpID(time.Now(), "fill"),
 			Apply: func([]iamdomain.Credential) ([]iamdomain.Credential, error) {
-				return full(iamdomain.MaxHeldCredentials), nil
+				return liveTokens(iamdomain.MaxHeldCredentials), nil
 			},
 		})
 		return err
@@ -172,17 +161,17 @@ func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 
 	_, _, err = mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
 		PersonID: owner, Label: "one more", Reason: "a PAT"})
-	if !errors.Is(err, iamdomain.ErrInvalidToken) ||
-		!strings.Contains(err.Error(), "1 of them are revoked or expired") {
-		t.Errorf("a mint past the cap answered %v, want ErrInvalidToken naming "+
-			"the lapsed one", err)
+	if want := fmt.Sprintf("leave %d live credentials", iamdomain.MaxHeldCredentials+1); !errors.Is(err, iamdomain.ErrInvalidToken) ||
+		!strings.Contains(err.Error(), want) {
+		t.Errorf("a mint past the cap answered %v, want ErrInvalidToken saying "+
+			"it would %s", err, want)
 	}
 	for name, write := range map[string]func() error{
 		"a credential change": func() error {
 			_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
 				PersonID: owner, OpID: statelog.NewOpID(time.Now(), "grow"),
 				Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
-					return full(len(held) + 1), nil
+					return liveTokens(len(held) + 1), nil
 				},
 			})
 			return err
@@ -191,7 +180,7 @@ func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 			_, err := rig.writer.UpdatePerson(t.Context(), iamdomain.PersonUpdate{
 				PersonID: owner, OpID: statelog.NewOpID(time.Now(), "edit"),
 				Apply: func(p iamdomain.Person) (iamdomain.Person, error) {
-					p.Credentials = full(len(p.Credentials) + 1)
+					p.Credentials = liveTokens(len(p.Credentials) + 1)
 					return p, nil
 				},
 			})
@@ -201,7 +190,7 @@ func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 			return rig.enrol(iamdomain.Enrolment{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindPerson,
 				Stage: iam.StageActive, Name: "John Doe", Email: "john@example.com",
-				Login: "john.doe", Credentials: full(iamdomain.MaxHeldCredentials + 1),
+				Login: "john.doe", Credentials: liveTokens(iamdomain.MaxHeldCredentials + 1),
 				OpID: statelog.NewOpID(time.Now(), "enrol"), Reason: "a hire",
 			})
 		},
@@ -214,4 +203,89 @@ func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 		t.Errorf("a refused write moved the log from %d to %d (%v) — the cap is "+
 			"decided before anything is published", end, after, err)
 	}
+}
+
+// A CREDENTIAL THAT HAS STOPPED VERIFYING GIVES UP ITS PLACE, EARLIEST FIRST.
+//
+// A person at the cap was refused a mint, a second factor or new recovery
+// codes and told to revoke a token nothing uses — which frees nothing, since a
+// revocation keeps the credential on the document until the retention sweep
+// collects it a week later. Now a write past the cap drops the credentials
+// that lapsed earliest, as many as it needs and no live one: revoking a token
+// makes room at once, an expired token makes room without anybody revoking
+// it, and the one kept is the one that lapsed last, whose week of account is
+// the longest still to run.
+//
+// Mutation: count lapsed credentials against the cap again and the mint is
+// refused; drop the latest lapse first and the wrong token goes.
+func TestALapsedCredentialGivesUpItsPlaceEarliestFirst(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	set := liveTokens(iamdomain.MaxHeldCredentials)
+	// TWO LAPSED, the later one first in the set so its order breaks no tie:
+	// a revocation an hour ago, and an expiry two hours ago.
+	set[5].RevokedAt = brokerAt.Add(-time.Hour)
+	set[9].ExpiresAt = brokerAt.Add(-2 * time.Hour)
+	if err := rig.draining(func() error {
+		_, err := rig.writer.SetCredentials(t.Context(), iamdomain.CredentialSet{
+			PersonID: owner, OpID: statelog.NewOpID(time.Now(), "fill"),
+			Apply: func([]iamdomain.Credential) ([]iamdomain.Credential, error) {
+				return set, nil
+			},
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("a set at the cap was refused: %v", err)
+	}
+
+	minted := uuid.Must(uuid.NewV7()).String()
+	if _, _, err := mintFor(t, rig, asOwner(rig, owner), iamdomain.TokenMint{
+		ID: minted, PersonID: owner, Label: "one more", Reason: "a PAT"}); err != nil {
+		t.Fatalf("a mint on a person at the cap with two lapsed credentials "+
+			"was refused: %v", err)
+	}
+	documents := rig.column(
+		`SELECT CAST(document AS TEXT) FROM iam_people WHERE id = ?`, owner)
+	if len(documents) != 1 {
+		t.Fatalf("read the document: %v", documents)
+	}
+	doc, err := iamdomain.DecodePerson([]byte(documents[0]))
+	if err != nil {
+		t.Fatalf("decode the stored document: %v", err)
+	}
+	held := map[string]bool{}
+	for _, c := range doc.Credentials {
+		held[c.ID] = true
+	}
+	switch {
+	case len(doc.Credentials) != iamdomain.MaxHeldCredentials:
+		t.Errorf("the person holds %d credentials, want the cap of %d",
+			len(doc.Credentials), iamdomain.MaxHeldCredentials)
+	case !held[minted]:
+		t.Error("the new token is not on the document")
+	case held[set[9].ID]:
+		t.Errorf("the credential that lapsed earliest (%s, expired two hours "+
+			"ago) is still held", set[9].ID)
+	case !held[set[5].ID]:
+		t.Errorf("the credential that lapsed last (%s, revoked an hour ago) "+
+			"was dropped while an earlier one was the one to give way", set[5].ID)
+	}
+	for _, c := range set {
+		if c.ID != set[9].ID && !held[c.ID] {
+			t.Errorf("%s was dropped, and only one place was needed", c.ID)
+		}
+	}
+}
+
+// liveTokens is n machine tokens that verify at the writer's clock.
+func liveTokens(n int) []iamdomain.Credential {
+	out := make([]iamdomain.Credential, n)
+	for i := range out {
+		out[i] = iamdomain.Credential{V: iamdomain.DocumentVersion,
+			ID: fmt.Sprintf("018f3a9c-0000-7000-8000-%012d", i), Method: iamdomain.MethodToken,
+			Verifier:  credential.TokenVerifier("id", "secret"),
+			ExpiresAt: brokerAt.Add(time.Hour)}
+	}
+	return out
 }

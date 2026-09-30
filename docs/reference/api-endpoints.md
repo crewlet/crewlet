@@ -1091,7 +1091,7 @@ may carry, at the owner's own reach, for 90 days. The answer is `201` with
 | Answer | When |
 |---|---|
 | `400 bad_params` | No owner: a Tier A token owns no machine tokens, so it names the service account with `?person=` |
-| `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, a reach that is no level, an owner already holding 64 credentials — revoked and expired ones count until the retention sweep collects them, seven days after they lapse |
+| `400 invalid_body` | An expiry in the past or more than 365 days away, a label past 128 bytes, a reach that is no level, an owner already holding 64 live credentials — a revoked or expired one gives up its place to the new token, the earliest to lapse first, so revoking a token nothing uses makes room at once |
 | `403` | The request presented a machine token; a **person's** token asked for by anybody but that person; a service account's asked for without `people:manage`; a grant the owner does not hold, or `secrets:read` / `people:manage`; a grant the caller does not hold; a reach wider than the owner's; an owner who may not act |
 | `404` | Nobody by that id |
 
