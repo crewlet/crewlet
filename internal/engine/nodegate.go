@@ -487,16 +487,23 @@ func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
 		"gesture's record again", d.Stream, at, d.window(), who)
 }
 
-// NodeGate is the gesture, over every identity-claiming log this node runs.
+// NodeGate is the gesture, over every identity-claiming log of this node's
+// layout.
 type NodeGate struct {
-	// logs is every identity-claiming log this node runs AT THE GESTURE,
-	// each with its writer: looked up at every call rather than captured
+	// logs is every identity-claiming log of the layout AT THE GESTURE,
+	// each with this node's writer where it runs the log and otherwise the
+	// reason it has none: looked up at every call rather than captured
 	// when the gate was built, because the logs a node runs change while
 	// it runs ([stateLog.startLogs], [stateLog.stopLogs]). A captured set
 	// wrote through the publisher of a log that had stopped — waiting, for
 	// the whole [GateBudget], on a runner that no longer applies — and never
 	// reached a log started after the gate was built, which the trim then
 	// went on counting the evicted node on.
+	//
+	// EVERY LOG OF THE LAYOUT, never only the ones running at that moment:
+	// a log stopped for a restart is still a log the trim counts the node
+	// on, and a gesture that left it out of its answer reported itself
+	// complete while the node went on pinning that log.
 	logs func() ([]gateLog, error)
 
 	// live lists the nodes holding a presence lease, which an eviction is
@@ -515,6 +522,10 @@ type NodeGate struct {
 type gateLog struct {
 	domain string
 	stream string
+
+	// unwritten is why this node writes no record on the log — one it does
+	// not run right now. Nil where write is set.
+	unwritten error
 
 	// duplicates is the log's duplicate window, which a remedy for a record
 	// that landed and applies nowhere names ([DomainGate.Duplicates]).
@@ -621,13 +632,55 @@ func newNodeGate(s *stateLog, leases liveLeases, db *store.DB, nodeID string,
 		readmissible: s.Readmissible,
 		publishing:   s.appends,
 		logs: func() ([]gateLog, error) {
-			return gateLogsOf(s, db, nodeID, rec)
+			return layoutGateLogs(s, db, nodeID, rec)
 		},
 	}
-	if _, err := g.logs(); err != nil {
+	if _, err := gateLogsOf(s, db, nodeID, rec); err != nil {
 		return nil, err
 	}
 	return g, nil
+}
+
+// layoutGateLogs is a gate log for every identity-claiming log of s's layout,
+// in the register's order of domains and each domain's logs in the layout's
+// order of partitions — with this node's own writer where it runs the log, and
+// otherwise the reason it writes none there.
+//
+// A LOG THE NODE DOES NOT RUN RIGHT NOW is still in the answer, UNWRITTEN: it
+// is a log the trim counts the evicted node on, stopped for a restart and about
+// to run again, so leaving it out reported a gesture complete that had not
+// reached it — and the operator had no line telling them to run it again.
+func layoutGateLogs(s *stateLog, db *store.DB, nodeID string,
+	rec *metrics.Recorder) ([]gateLog, error) {
+
+	var out []gateLog
+	for _, domain := range registeredDomains() {
+		if !domain.ClaimsIdentity() {
+			continue
+		}
+		for _, id := range s.layout.LogsOf(domain.Name()) {
+			running := s.Log(id.String())
+			if running == nil {
+				spec := s.layout.StreamSpec(domain, id)
+				out = append(out, gateLog{domain: id.String(), stream: spec.Name,
+					duplicates: spec.Duplicates,
+					unwritten: fmt.Errorf("engine: this node does not run its log %s "+
+						"right now, so it has no writer there", id)})
+				continue
+			}
+			gl, err := gateLogFor(running, running.publisher,
+				db.PartitionHandle(id.Partition.String()).Reader(), nodeID, rec)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, gl)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("engine: this node's layout has no log that claims " +
+			"identity, so there is no log an eviction could be written to")
+	}
+	return out, nil
 }
 
 // gateLogsOf is a writer for every identity-claiming log s runs now, in its
@@ -812,6 +865,11 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (Ga
 	for _, l := range logs {
 		d := DomainGate{Domain: l.domain, Stream: l.stream, Duplicates: l.duplicates,
 			OpID: domainOpID(req.OpID, readmit, l.domain, req.Node)}
+		if l.unwritten != nil {
+			d.Err = l.unwritten
+			out.Domains = append(out.Domains, d)
+			continue
+		}
 		res, err := l.write(ctx, req.By, d.OpID, req.Node, readmit)
 		if err != nil {
 			d.Err = err

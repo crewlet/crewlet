@@ -572,7 +572,8 @@ func (c *consumerCounter) count(stream string) int {
 // budget on a runner that no longer applies, and never reached the log started
 // again after it. So both are asked while the log is away and after it is
 // back: away, the registration vouches for nothing and the gate writes to the
-// logs still running; back, both answer through the new runtime.
+// logs still running and reports the one it does not run as unwritten, rather
+// than leaving it out; back, both answer through the new runtime.
 func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	t.Parallel()
 	e, s, js := aPartitionedStateLog(t)
@@ -602,13 +603,30 @@ func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("evict while %s is stopped: %v", leaving, err)
 	}
-	var wrote []string
+	var wrote, unwritten []string
 	for _, d := range away.Domains {
-		wrote = append(wrote, d.Domain)
+		switch {
+		case d.Err == nil && d.Outcome == statelog.OutcomeApplied:
+			wrote = append(wrote, d.Domain)
+		case d.Err != nil && strings.Contains(d.Err.Error(), "does not run its log"):
+			unwritten = append(unwritten, d.Domain)
+		default:
+			t.Errorf("with %s stopped the gate's write to %s answered %s (%v)",
+				leaving, d.Domain, d.Outcome, d.Err)
+		}
 	}
+	slices.Sort(wrote)
 	if want := []string{"pages@pages.000", "tracker@tracker.000"}; !slices.Equal(wrote, want) {
 		t.Errorf("with %s stopped the gate wrote %v, want the logs still running %v",
 			leaving, wrote, want)
+	}
+	if want := []string{leaving.String()}; !slices.Equal(unwritten, want) {
+		t.Errorf("with %s stopped the gate reported %v unwritten, want %v: a log the "+
+			"node is counted on and this node cannot write right now is the gesture's "+
+			"unfinished part, never one it leaves out", leaving, unwritten, want)
+	}
+	if away.Complete() {
+		t.Error("a gesture that could not write a log the node is counted on reports itself complete")
 	}
 
 	if err := s.startLogs(t.Context(), []statelog.LogID{leaving}); err != nil {
