@@ -26,6 +26,11 @@ func TestALayoutZeroRowAndFloorAreByteForByteTheEarlierRecords(t *testing.T) {
 		},
 	}
 	floor := coord.TrimFloor{Domain: "tracker", Generation: 1, TrimTo: 5, Floor: 5, At: at, By: "node-a"}
+	// AND ITS SNAPSHOT ON THE ROW, where every earlier build reported layout
+	// 0's one artefact: a partition's report, a map epoch and a log's state
+	// are all absent from a layout-0 row.
+	snapshotted := row
+	snapshotted.SnapshotBytes, snapshotted.SnapshotSkip = 4096, "lagging"
 
 	for name, tc := range map[string]struct {
 		value any
@@ -34,6 +39,10 @@ func TestALayoutZeroRowAndFloorAreByteForByteTheEarlierRecords(t *testing.T) {
 		"a positions row": {row, `{"node_id":"node-a","at":"2026-09-28T12:00:00Z",` +
 			`"engine_version":"v0.0.0-test","domains":{"tracker":{"seq":7,"generation":1,` +
 			`"applied_through":7,"record_version":4}}}`},
+		"a positions row with its snapshot": {snapshotted, `{"node_id":"node-a",` +
+			`"at":"2026-09-28T12:00:00Z","engine_version":"v0.0.0-test","domains":{"tracker":` +
+			`{"seq":7,"generation":1,"applied_through":7,"record_version":4}},` +
+			`"snapshot_bytes":4096,"snapshot_skip":"lagging"}`},
 		"a trim floor": {floor, `{"domain":"tracker","generation":1,"trim_to":5,"floor":5,` +
 			`"at":"2026-09-28T12:00:00Z","by":"node-a"}`},
 	} {
@@ -128,5 +137,65 @@ func TestARecordNamingANegativeLayoutIsRefused(t *testing.T) {
 	}
 	if err := floor.Validate(); err != nil {
 		t.Errorf("the control floor was refused: %v", err)
+	}
+}
+
+// A PARTITION'S REPORT HAS ONE PLACE PER LAYOUT.
+//
+// Layout 0's one partition reports its snapshot on the row itself — where every
+// earlier build wrote it, which is what keeps a layout-0 row the bytes they
+// wrote — and every partitioned layout reports each partition in its own entry.
+// A row carrying both would give a reader two answers for one partition, so the
+// writer is refused either mixture, and [coord.NodePositions.Report] reads each
+// layout's from its one place.
+func TestAPartitionsReportHasOnePlacePerLayout(t *testing.T) {
+	t.Parallel()
+	domains := map[string]coord.DomainPosition{"tracker": {Seq: 3, AppliedThrough: 3}}
+	for name, tc := range map[string]struct {
+		row     coord.NodePositions
+		refused bool
+	}{
+		"layout 0 on the row": {row: coord.NodePositions{NodeID: "n", Domains: domains,
+			SnapshotBytes: 10, SnapshotSkip: "lagging"}},
+		"layout 0 per partition": {refused: true, row: coord.NodePositions{NodeID: "n",
+			Domains:    domains,
+			Partitions: map[string]coord.PartitionReport{"estate.000": {State: "serving"}}}},
+		"layout 0 at a map epoch": {refused: true, row: coord.NodePositions{NodeID: "n",
+			Domains: domains, MapEpoch: 3}},
+		"layout 1 per partition": {row: coord.NodePositions{NodeID: "n", Layout: 1, MapEpoch: 3,
+			Domains: map[string]coord.DomainPosition{"tracker@tracker.001": {Seq: 3, AppliedThrough: 3}},
+			Partitions: map[string]coord.PartitionReport{"tracker.001": {State: "serving",
+				SnapshotBytes: 10, SnapshotSkip: "recent"}}}},
+		"layout 1 on the row": {refused: true, row: coord.NodePositions{NodeID: "n", Layout: 1,
+			Domains: domains, SnapshotBytes: 10}},
+		"layout 1 skipping on the row": {refused: true, row: coord.NodePositions{NodeID: "n",
+			Layout: 1, Domains: domains, SnapshotSkip: "lagging"}},
+		"an unnamed partition": {refused: true, row: coord.NodePositions{NodeID: "n", Layout: 1,
+			Domains: domains, Partitions: map[string]coord.PartitionReport{"": {State: "serving"}}}},
+		"a released log": {row: coord.NodePositions{NodeID: "n", Layout: 1,
+			Domains: map[string]coord.DomainPosition{"tracker@tracker.001": {
+				Seq: 3, AppliedThrough: 3, State: coord.LogReleased}}}},
+		"a log in a state nobody knows": {refused: true, row: coord.NodePositions{NodeID: "n",
+			Layout: 1, Domains: map[string]coord.DomainPosition{"tracker@tracker.001": {
+				Seq: 3, AppliedThrough: 3, State: "leaving"}}}},
+	} {
+		err := tc.row.Validate()
+		if refused := err != nil; refused != tc.refused {
+			t.Errorf("%s: refused %v (%v), want %v", name, refused, err, tc.refused)
+		}
+	}
+
+	zero := coord.NodePositions{NodeID: "n", Domains: domains, SnapshotBytes: 10, SnapshotSkip: "lagging"}
+	if r, ok := zero.Report("estate.000"); !ok || r.SnapshotBytes != 10 || r.SnapshotSkip != "lagging" {
+		t.Errorf("layout 0's one partition reads %+v (%v) off a row whose snapshot is 10 "+
+			"bytes and skipping `lagging`", r, ok)
+	}
+	one := coord.NodePositions{NodeID: "n", Layout: 1, SnapshotBytes: 99,
+		Partitions: map[string]coord.PartitionReport{"tracker.001": {State: "serving", SnapshotBytes: 10}}}
+	if r, ok := one.Report("tracker.001"); !ok || r.SnapshotBytes != 10 || r.State != "serving" {
+		t.Errorf("layout 1's tracker.001 reads %+v (%v), want its own entry", r, ok)
+	}
+	if r, ok := one.Report("tracker.002"); ok {
+		t.Errorf("a partition the row does not report reads %+v", r)
 	}
 }

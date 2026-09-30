@@ -113,6 +113,66 @@ type DomainPosition struct {
 	// it while this says so, as it does for a peer whose position is past the
 	// log's end, until the operator decides which history the fleet keeps.
 	LogDiverged bool `json:"log_diverged,omitempty"`
+
+	// State is what this node is doing with the log, EMPTY while it runs it
+	// — which is every log of every row a build before the field wrote, and
+	// every log of a layout-0 row, byte for byte.
+	//
+	// [LogReleased] is a log this node has LEFT: its release is on the log
+	// and applied, and the node is about to stop naming it. The trim stops
+	// counting the node on the log the moment the row says so, rather than
+	// once the row forgets the log, because between the two the position is
+	// one the node will never move again — and a counted position that never
+	// moves pins the log it names for as long as the row keeps it.
+	State LogState `json:"state,omitempty"`
+}
+
+// LogState is what a node says it is doing with one log on its positions row.
+//
+// THE ZERO VALUE IS A STATE — running the log, which is what naming it has
+// always meant — so a row that says nothing about a log's state says the one
+// thing every earlier row meant.
+type LogState string
+
+// LogReleased is a log the node has left: see [DomainPosition.State].
+const LogReleased LogState = "released"
+
+// Valid reports whether a node may WRITE this state: running (the zero value)
+// or released. A reader meeting a state it does not know — a newer build's —
+// counts the node as running the log, the direction that keeps a tail rather
+// than trims past one.
+func (s LogState) Valid() bool { return s == "" || s == LogReleased }
+
+// PartitionReport is what a node says about one PARTITION it holds, beside its
+// logs' positions: how far its copy is, and its snapshot of the partition.
+//
+// # Why the snapshot is reported per partition
+//
+// A snapshot is a copy of ONE FILE, and every partition is a file of its own,
+// so a node holding many partitions holds one artefact per partition, each
+// taken — or skipped, for a reason of its own — on its own schedule. One byte
+// count and one skip reason per row would describe whichever partition's
+// snapshot the loop took last and say nothing about the rest.
+//
+// UNDER LAYOUT 0 A ROW CARRIES NONE: layout 0's one partition is the whole
+// estate, and its report is the row's own [NodePositions.SnapshotBytes] and
+// [NodePositions.SnapshotSkip], which is where every row a build before the
+// partition wrote carries it.
+type PartitionReport struct {
+	// State is the node's own account of its copy of the partition — the
+	// state its estate lease names for it (estate/partmap's
+	// PartitionState, whose wire value this is).
+	State string `json:"state"`
+
+	// SnapshotBytes is the size of the node's newest verified artefact of
+	// the partition, and zero when it holds none.
+	SnapshotBytes int64 `json:"snapshot_bytes,omitempty"`
+
+	// SnapshotSkip is why the node holds no CURRENT artefact of the
+	// partition, in its snapshot loop's own words, and empty when it holds
+	// one — the operator's answer to "why can this node not donate this
+	// partition" ([NodePositions.SnapshotSkip] says why).
+	SnapshotSkip string `json:"snapshot_skip,omitempty"`
 }
 
 // NodePositions is one node's row in the register: every domain it runs, and
@@ -141,22 +201,35 @@ type NodePositions struct {
 	// every build before the field wrote, byte for byte.
 	Layout int `json:"layout,omitempty"`
 
+	// MapEpoch is the estate map epoch this row ACTED on: the map whose
+	// holder table the partitions below are this node's answer to. OMITTED
+	// AT ZERO, which is every layout-0 row — that layout has no map.
+	MapEpoch uint64 `json:"map_epoch,omitempty"`
+
 	// Domains is this node's position on each log it runs, keyed by the
 	// log's key — under layout 0 the domain's own name, which is the key
 	// this map has always had.
 	Domains map[string]DomainPosition `json:"domains"`
 
+	// Partitions is this node's report on each partition it holds, keyed by
+	// the partition's name — at every layout but 0, whose one partition's
+	// report is the two fields below ([PartitionReport]).
+	Partitions map[string]PartitionReport `json:"partitions,omitempty"`
+
 	// SnapshotBytes is the size of the artefact those per-domain snapshot
-	// positions came from.
+	// positions came from — LAYOUT 0's ONE PARTITION'S, the whole estate;
+	// a row of any other layout reports each partition's artefact in
+	// [NodePositions.Partitions] and leaves this empty.
 	//
 	// ON THE ROW RATHER THAN ON EACH DOMAIN, because a snapshot is ONE
-	// file covering every domain: a byte count per domain would be the
-	// same number written N times, and the first time they disagreed a
-	// reader would have to decide which was the file.
+	// file covering every domain of its partition: a byte count per
+	// domain would be the same number written N times, and the first time
+	// they disagreed a reader would have to decide which was the file.
 	SnapshotBytes int64 `json:"snapshot_bytes,omitempty"`
 
 	// SnapshotSkip is why this node holds no current snapshot, in its own
-	// loop's words, and empty when it holds one.
+	// loop's words, and empty when it holds one — layout 0's, as
+	// SnapshotBytes is.
 	//
 	// THE OPERATOR'S ANSWER TO "why can this node not donate", which is
 	// the question a failed join raises and the one nothing else on this
@@ -164,6 +237,19 @@ type NodePositions struct {
 	// is silent about whether that is a disk that filled, a node that is
 	// lagging, or a loop that has simply not run yet.
 	SnapshotSkip string `json:"snapshot_skip,omitempty"`
+}
+
+// Report is what this row says about partition — its [PartitionReport] — and
+// false when it says nothing: layout 0's one partition's report is the row's
+// own snapshot fields, which are named for any partition a layout-0 row is
+// asked about (that layout has one), and every other layout's is its entry in
+// [NodePositions.Partitions]. The state of layout 0's is not on the row.
+func (p NodePositions) Report(partition string) (PartitionReport, bool) {
+	if p.Layout == 0 {
+		return PartitionReport{SnapshotBytes: p.SnapshotBytes, SnapshotSkip: p.SnapshotSkip}, true
+	}
+	r, ok := p.Partitions[partition]
+	return r, ok
 }
 
 // PositionsIn is the register as a reader running layout reads it: every row,
@@ -276,6 +362,30 @@ func (p NodePositions) Validate() error {
 			return fmt.Errorf("coord: node %s reports domain %q applied through "+
 				"%d with a checkpoint of %d: a node cannot have applied past "+
 				"what it has consumed", p.NodeID, name, d.AppliedThrough, d.Seq)
+		}
+		if !d.State.Valid() {
+			return fmt.Errorf("coord: node %s reports the log %q in the state %q; "+
+				"a log is running (no state) or %q", p.NodeID, name, d.State, LogReleased)
+		}
+	}
+	// ONE PLACE PER LAYOUT FOR A PARTITION'S REPORT. Layout 0's is the row's
+	// own snapshot fields — where every earlier build wrote it, so a layout-0
+	// row stays the bytes they wrote — and every other layout's is its entry
+	// in Partitions. A row with both would carry two answers for one
+	// partition, and a reader would take whichever it happened to look at.
+	switch {
+	case p.Layout == 0 && (len(p.Partitions) > 0 || p.MapEpoch != 0):
+		return fmt.Errorf("coord: node %s reports layout 0 with a map epoch or a "+
+			"per-partition report; layout 0 has no map, and its one partition's "+
+			"report is the row's own snapshot fields", p.NodeID)
+	case p.Layout != 0 && (p.SnapshotBytes != 0 || p.SnapshotSkip != ""):
+		return fmt.Errorf("coord: node %s reports layout %d with a snapshot on the "+
+			"row; a partitioned layout's snapshots are reported per partition",
+			p.NodeID, p.Layout)
+	}
+	for name := range p.Partitions {
+		if name == "" {
+			return fmt.Errorf("coord: node %s reports an unnamed partition", p.NodeID)
 		}
 	}
 	return nil
