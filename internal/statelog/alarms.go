@@ -732,8 +732,16 @@ var table = []rule{
 			return fmt.Sprintf("%d record(s) were dropped by an apply gate in the "+
 				"last day", r.RecordsGated), r.RecordsGated > 0
 		},
-		remedy: "A gated record is recoverable by nothing. The log line names the " +
-			"gate, the operator and the position; this is worth reading today.",
+		// THE FIELDS BY THEIR KEYS ON THE LINE, because the one fact an
+		// operator needs from it — which node wrote what nothing will apply
+		// — is under `writer`, and a remedy that called it "the operator"
+		// sent the reader looking for a field no line carries.
+		// TestTheRecordsGatedRemedyNamesWhatItsLineCarries holds every field
+		// named here to the line the applier writes.
+		remedy: "A gated record is recoverable by nothing. Each drop's " +
+			"`statelog_record_gated` log line names the `gate` that dropped it, " +
+			"the record's `position` and `kind`, and the `writer` — the node " +
+			"that wrote it; this is worth reading today.",
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES

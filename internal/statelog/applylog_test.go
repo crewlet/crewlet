@@ -119,3 +119,73 @@ func logRecords(t *testing.T, written []byte, msg string) []map[string]any {
 	}
 	return out
 }
+
+// THE RECORDS-GATED ALARM POINTS AT FIELDS ITS LOG LINE CARRIES.
+//
+// A dropped record is recoverable by nothing, and the alarm's remedy is what
+// sends an operator to the one witness there is: the applier's
+// `statelog_record_gated` line. It told them the line named "the operator",
+// which no line carries — the node that wrote the record is its `writer` —
+// so the fact the remedy exists to hand over was the one it misnamed. So every
+// name the remedy puts in backticks is held to the line itself: the first is
+// the line's own message, and every other is a key on it.
+func TestTheRecordsGatedRemedyNamesWhatItsLineCarries(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	logs := &lockedBuffer{}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}),
+		LogID:      logOf(probeDomain{}),
+		Applier:    h.applier,
+		Fetch:      h.fetch,
+		Log:        h.fetch,
+		Node:       h.db,
+		DB:         h.estate,
+		Checkpoint: statelog.Position{Generation: 1},
+		Metrics:    h.metrics,
+		Logger:     slog.New(slog.NewJSONHandler(logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	h.runner = runner
+	h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	lines := logRecords(t, logs.Bytes(), "statelog_record_gated")
+	if len(lines) != 1 {
+		t.Fatalf("%d statelog_record_gated lines for one dropped record, want one",
+			len(lines))
+	}
+	line := lines[0]
+
+	alarm, found := find(statelog.Evaluate(statelog.Reading{RecordsGated: 1}),
+		statelog.KindRecordsGated)
+	if !found {
+		t.Fatalf("%s did not fire on one dropped record", statelog.KindRecordsGated)
+	}
+	// EVERY OTHER SPAN between two backticks is a name.
+	parts := strings.Split(alarm.Remedy, "`")
+	var named []string
+	for i := 1; i < len(parts); i += 2 {
+		named = append(named, parts[i])
+	}
+	if len(named) < 2 || named[0] != "statelog_record_gated" {
+		t.Fatalf("the %s remedy %q does not name the statelog_record_gated line "+
+			"and a field on it — the line is the only witness a dropped record has",
+			statelog.KindRecordsGated, alarm.Remedy)
+	}
+	for _, key := range named[1:] {
+		if _, carried := line[key]; !carried {
+			t.Errorf("the %s remedy sends an operator to the line's %q, which the "+
+				"line does not carry: %v", statelog.KindRecordsGated, key, line)
+		}
+	}
+	if !strings.Contains(alarm.Remedy, "`writer`") {
+		t.Errorf("the %s remedy %q does not name the `writer` — which node wrote "+
+			"the record is what an operator reads the line for",
+			statelog.KindRecordsGated, alarm.Remedy)
+	}
+}
