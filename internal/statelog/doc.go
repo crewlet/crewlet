@@ -152,6 +152,13 @@
 // carries no instant is read as minted before every loss. opid.go states the
 // grammar, the clock it is read off and what that assumes of the fleet.
 //
+// A DERIVED id's instant is the start of the work it belongs to, and that can
+// be further back than any ledger remembers — a trigger dispatched a month
+// late, a turn resumed a month after it parked — where every new write under it
+// would be answered `unknown` on every node for good. [MintAt] is the rule an
+// attempt applies to the instant it inherits, against its own clock, and
+// mint.go says why the line is [MintHorizon] rather than the retention.
+//
 // # A record this build cannot decode is RETAINED, with one exception
 //
 // It is kept at its position, never skipped and never stopped on, and
