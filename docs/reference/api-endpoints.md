@@ -1114,7 +1114,10 @@ may carry, at the owner's own reach, for 90 days. The answer is `201` with
 would hand back the first attempt's record — whose secret was shown to nobody
 — beside this attempt's value, a token that verifies against nothing. A mint
 answered `unknown` is retried as a new mint, and the one that may have landed
-is a token nobody holds, which expires.
+is a token nobody holds, which expires — so its `503` carries
+`"outcome": "unknown"` and the `op_id` (which finds the attempt in the trail),
+and its `detail` says to mint again rather than, as every other unknown on
+this surface does, to send the `op_id` back.
 
 Presented as `Authorization: Bearer cwl_pat_…`, the token acts as its owner —
 their seat if they are bound to one — carrying the grants it was minted with

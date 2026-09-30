@@ -248,6 +248,18 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		// anything refuses. The secret is dropped with this answer; the
 		// record that may have landed is a token nobody holds, and it
 		// expires.
+		if err == nil && minted.Result.Outcome == statelog.OutcomeUnknown {
+			// AND ITS RETRY IS A NEW MINT, which is the opposite of what
+			// every other unknown here says: this route reads no key, so
+			// "the SAME operation id, as the Idempotency-Key" named a
+			// retry the route ignores — and an operator told it by
+			// `crewlet iam token` was sent to a flag that command refuses.
+			log.WarnContext(r.Context(), "api_iam_write_unresolved", "op_id", opID,
+				"unvouched", minted.Result.Unvouched)
+			httpjson.UnknownOutcome(w, auth.RetryIdentity(nil), opID,
+				minted.Result.Unvouched, httpjson.Detail{"detail": mintUnknown})
+			return
+		}
 		s.answerWrite(w, r, opID, minted.Result, err, nil)
 		return
 	}
@@ -285,6 +297,13 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 				"what the estate holds is a hash of it",
 		})
 }
+
+// mintUnknown is what an unknown mint's 503 says to do: mint again. The
+// operation it names finds the attempt in the trail, and is no retry.
+const mintUnknown = "no token was issued: this node cannot establish whether " +
+	"the mint landed, and if it did, its value was never shown — a token " +
+	"nobody holds, which expires. Mint again for one you hold; this route " +
+	"reads no key, so a retry is a new mint."
 
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
 //

@@ -13,6 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -135,6 +137,37 @@ func TestAMintIgnoresTheCallersIdempotencyKey(t *testing.T) {
 	if r.writer.minted.OpID == "the-callers-key" {
 		t.Error("the mint published under the caller's key, so a retry after " +
 			"an unknown answer hands back a token nobody holds the secret of")
+	}
+}
+
+// AN UNKNOWN MINT IS RETRIED AS A NEW MINT, AND SAYS SO.
+//
+// Every other unknown here says to send the same operation back as the
+// Idempotency-Key, which a mint cannot take — it reads no key, since a replay
+// would answer the first attempt's record beside a value that verifies against
+// nothing. Answered with that sentence, a client was told a retry the route
+// ignores and `crewlet iam token` a flag it refuses. It still says the outcome
+// is unknown, since a token may have landed, and hands out no value.
+//
+// Mutation: answer it through the ordinary unknown and the header comes back.
+func TestAnUnknownMintSaysToMintAgain(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.writer.outcomes = map[string]statelog.Outcome{"mint": statelog.OutcomeUnknown}
+	got := r.as(administrator(), http.MethodPost,
+		"/iam/credentials?person="+alice.String(), map[string]any{})
+	if got.status != http.StatusServiceUnavailable ||
+		got.body["outcome"] != httpjson.OutcomeUnknown || got.body["op_id"] == nil {
+		t.Fatalf("answered %d %v, want 503 with an unknown outcome and its operation",
+			got.status, got.body)
+	}
+	if _, shown := got.body["token"]; shown {
+		t.Error("a token value was handed out on a mint nobody can confirm")
+	}
+	detail, _ := got.body["detail"].(string)
+	if !strings.Contains(detail, "Mint again") || strings.Contains(detail, opkey.Header) {
+		t.Errorf("an unknown mint says %q, want it to say mint again and name "+
+			"no key this route would ignore", detail)
 	}
 }
 
