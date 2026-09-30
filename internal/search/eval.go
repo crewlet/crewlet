@@ -281,7 +281,7 @@ func Eval(ctx context.Context, tx *sql.Tx, opts EvalOptions) (EvalReport, error)
 	for i, doc := range docs {
 		shapes[i] = shapesFor(doc, Sources)
 	}
-	tops, err := exactTops(ctx, tx, docs, shapes, rep.Model, rep.Dim, rep.Limit)
+	tops, err := exactTops(ctx, tx, docs, shapes, rep.Model, rep.Dim, rep.Limit, unwatched)
 	if err != nil {
 		return EvalReport{}, err
 	}
@@ -567,8 +567,10 @@ type ExactTop struct {
 //
 // It is the one ground truth in the package: the evaluation and the index's
 // own training both measure against it, so an index a training installs is
-// judged by the reference an operator's evaluation uses.
-func exactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][]ShapeQuery, model string, dim, limit int) ([][]ExactTop, error) {
+// judged by the reference an operator's evaluation uses. It tells advanced
+// every [progressStride] rows it reads, which a training's bound measures it
+// by ([Budget]).
+func exactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][]ShapeQuery, model string, dim, limit int, advanced func()) ([][]ExactTop, error) {
 	if len(queries) == 0 {
 		return nil, nil
 	}
@@ -599,9 +601,12 @@ func exactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][
 	for i := range distances {
 		dest[3+i] = &distances[i]
 	}
-	for rows.Next() {
+	for scanned := 1; rows.Next(); scanned++ {
 		if err := rows.Scan(dest...); err != nil {
 			return nil, err
+		}
+		if scanned%progressStride == 0 {
+			advanced()
 		}
 		for i, d := range distances {
 			if queries[i].Source == Source(source) && queries[i].ID == id {

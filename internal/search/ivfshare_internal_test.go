@@ -244,8 +244,9 @@ func goroutineOf(t *testing.T) string {
 // A TRAINING CUT OFF HANDS ITS CORES BACK WITHIN A STRIDE of its tick ending,
 // in every CPU-bound step it takes.
 //
-// The duty's tick is bounded — by its budget, and by the lease it renews as it
-// runs — and a step that overran it publishes nothing. The k-means looked at
+// The duty's tick is bounded — by the lease it renews as it runs, and by a
+// budget of progress its arithmetic is exempt from — and a step cut off
+// publishes nothing. The k-means looked at
 // its context only between rounds and the filing not at all, so a tick cut off
 // as the filing began went on filing every code on its share of the cores for
 // the better part of a minute, for a result it then threw away, on a node that

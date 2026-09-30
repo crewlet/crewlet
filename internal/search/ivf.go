@@ -117,20 +117,25 @@ const (
 	// is not worth a column on every row.
 	IVFMinLists = 16
 
-	// IVFMaxLists is the most: 2 048, the most whose TRAINING fits a duty
-	// tick at the partition sizes an index serves.
+	// IVFMaxLists is the most: 2 048, the most whose TRAINING costs the
+	// node holding the duty minutes of its cores rather than a quarter of an
+	// hour at the partition sizes an index serves.
 	//
 	// The k-means costs sample × lists × rounds Hamming distances and its
 	// sample is [IVFTrainPointsPerList] a list, so it grows with the SQUARE
 	// of the list count. Measured at 500 000 topical sources on four shared
 	// cores: 33 s of k-means and 19 s filing every code at 2 048 lists,
 	// against 126 s and 39 s at 4 096 — which FAISS's rule ([IVFLists])
-	// would have chosen from about 524 000 sources, and which beside the
-	// minute reading the training set takes there is nearly four of the
-	// five minutes a tick may run (the engine's embedTickBudget) on an idle
-	// node, and nothing to spare under load. At 2 048 the same training is
-	// about two minutes on every core, and a little over three on the half
-	// of them a training runs on ([ivfCoreShare]).
+	// would have chosen from about 524 000 sources. At 2 048 the same
+	// training is about two minutes on every core, a little over three on
+	// the half of them a training runs on ([ivfCoreShare]), and on a node
+	// allowed one core, shared with two searchers, already 237–282 s of
+	// k-means and 139–172 s of filing (BenchmarkIVFTrainingShare -cpu 1); at
+	// 4 096 that k-means alone would be four times as long. NOTHING ELSE BOUNDS IT: the
+	// tick's budget measures progress, and arithmetic that cannot wedge runs
+	// exempt from it ([Budget]), so the training's own size is what decides
+	// how long the duty's node gives its cores to it — and this cap is that
+	// size.
 	// The rule reaches 2 048 at about 131 000 sources, and at ≈ 545 000 — the
 	// most one node searches inside [SemanticScanBudget] through an index at
 	// its probe ceiling — the mean list still holds ≈ 266 rows, four times
@@ -359,9 +364,9 @@ func (x IVF) ProbeOrder(code []uint64) []int {
 // It stops within a stride ([ivfStride]) of ctx ending and answers ctx's
 // error, never a partial filing: at the largest partition an index serves the
 // filing is the longest step a training takes without returning — tens of
-// seconds on its share of the cores — and a duty tick cut off, at its budget
-// or by a lease it could not renew, must not go on spending those cores on a
-// result it will discard.
+// seconds on its share of the cores — and a duty tick cut off, by a lease it
+// could not renew or an engine stopping, must not go on spending those cores
+// on a result it will discard.
 func (x IVF) Assign(ctx context.Context, codes Codes) ([]int32, error) {
 	return x.assign(ctx, codes, ivfWorkers())
 }
@@ -688,15 +693,16 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // the cores costs the training about 1.45 times as long and halves what it
 // adds to every search's latency meanwhile.
 //
-// # Why it still fits the tick
+// # How long it holds the node
 //
-// The training is bounded by the duty's tick ([Embedder.Tick]; the engine's
-// embedTickBudget, five minutes, with the lease renewed every
-// [EmbedInterval] by a goroutine the training does not starve — it leaves the
-// other half of the cores). At the ≈ 545 000 sources a node searches through
-// an index, the reading at about 120 µs a source is ≈ 65 s, and the k-means
-// and filing on half of four busy cores ≈ 125 s: a little over three minutes
-// in the worst case measured, against the five. That holds on every node the
+// The training runs inside the duty's tick ([Embedder.Tick]), with the lease
+// renewed every [EmbedInterval] by a goroutine the training does not starve —
+// it leaves the other half of the cores — and exempt from the tick's budget,
+// which measures progress and which arithmetic that cannot wedge would only
+// ever have cut off unfinished ([Budget]). At the ≈ 545 000 sources a node
+// searches through an index, the reading at about 120 µs a source is ≈ 65 s,
+// and the k-means and filing on half of four busy cores ≈ 125 s: a little
+// over three minutes in the worst case measured. That holds on every node the
 // share gives two workers or more, which is every node with two cores or more
 // ([ivfMinWorkers] says why a two- or three-core node is not halved), and the
 // k-means stops growing once the list count reaches [IVFMaxLists] — its sample
@@ -706,9 +712,13 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // A node allowed ONE core trains on it, as every build has, and no share can
 // leave its searches anything. With the same two searchers on that one core
 // the training measured 237 s of k-means and 139 s of filing at 500 000
-// sources (BenchmarkIVFTrainingShare -cpu 1) — over the tick at the largest
-// partition however it is divided, because a single core with two searches
-// always in flight is already past the load its corpus table is measured at.
+// sources (BenchmarkIVFTrainingShare -cpu 1), and 282 s and 172 s again
+// pinned to one CPU of a host whose other three were busy; its reading
+// measured 394 µs a source (BenchmarkIndexTraining -cpu 1, pinned the same
+// way), ≈ 215 s at the largest partition. That is about eleven minutes in all,
+// which a single core with two searches always in flight — already past the
+// load its corpus table is measured at — spends ONCE, because the tick is
+// bounded by its progress rather than by its length.
 //
 // # Why a constant
 //
@@ -731,11 +741,9 @@ const ivfCoreShare = 2
 // p95 was 23.0 ms against 24.8 ms (22.9 against 24.7), from 4.4 ms with no
 // training. Two searches always in flight on two cores already queue for each
 // other's time slices, so one training worker more or less moves their tail
-// by a scheduler quantum rather than by a core. And one worker does not fit
-// the tick: at the ≈ 545 000 sources an index serves it projects to 290–310 s
-// with the reading, against the engine's five-minute embedTickBudget, so every
-// tick on such a node would be cut off and its partition never indexed; on two
-// it is about 195 s. A three-core node takes two workers for the same reason,
+// by a scheduler quantum rather than by a core — while one worker makes the
+// training half as long again: at the ≈ 545 000 sources an index serves it
+// projects to 290–310 s with the reading, against about 195 s on two. A three-core node takes two workers for the same reason,
 // where half would have been one.
 const ivfMinWorkers = 2
 

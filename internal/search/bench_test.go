@@ -613,76 +613,128 @@ func BenchmarkIndexHeadRead(b *testing.B) {
 //
 // # What it is for
 //
-// A tick is bounded by the duty's lease, and a training cut off by that bound
-// publishes nothing — so the index a large partition needs is one it only gets
-// if its training fits. The reading and the filing grow with the corpus and
-// are measured here per source, which is what they are projected from; the
-// k-means grows with the LIST COUNT and is measured at scale in memory by
-// BenchmarkIVFRecallAtScale's train-s. The projection is in the package doc of
-// ivfduty.go and beside [search.IVFMaxLists].
+// A training is as long as its two halves, and the tick bounds each its own
+// way ([search.Budget]): the READING — every code, the sampled documents, the
+// exact pass — streams rows and shows the tick's budget its progress every
+// [search.ProgressStride] of them, and the ARITHMETIC — the k-means, the
+// filing, the probe choice — cannot wedge and runs exempt. So the two are
+// reported apart: reading-us/source is what the reading and the gap between
+// two of its reports are projected from, and arithmetic-s is what the node's
+// cores spend on the rest. The k-means grows with the LIST COUNT rather than
+// the corpus and is measured at scale in memory by BenchmarkIVFTrainingShare
+// and BenchmarkIVFRecallAtScale's train-s. The projections are in the engine's
+// embedTickBudget and beside [search.IVFMaxLists].
+//
+// # The reading is timed ONCE, whole
+//
+// reading-us/source is [search.ReadTrainingSet] exactly as the duty calls it,
+// and that already runs the sample and the exact pass after the codes. Its
+// parts are measured by running the sample and the exact pass AGAIN, alone,
+// after it — exact-us/source and sample-us/source — and the codes are what is
+// left (codes-us/source). An earlier version added the re-run to the whole and
+// reported the exact pass twice, which put the one-core reading at twice what
+// it is. The re-run is the only way to see the parts without instrumenting the
+// read, and it runs on a warm cache the whole reading has also had by then.
+//
+// # Idle, and searched
+//
+// A node holding the duty is also answering searches, whose first stage is the
+// same kind of CPU-bound scan, so each size runs twice: on an otherwise idle
+// node, and with two searchers scanning the corpus's codes for the whole
+// training ([search.SearchWhile], the load BenchmarkIVFTrainingShare runs
+// beside the k-means). The searched arm at -cpu 1 is the slowest node a
+// training runs on: ONE core, shared. Pin the process to one CPU as well
+// (`taskset -c 0`), because the store's engine is a native library whose calls
+// run on threads GOMAXPROCS does not count — at -cpu 1 alone the reading still
+// has the other cores.
 func BenchmarkIndexTraining(b *testing.B) {
 	for _, n := range []int{20_000, 40_000} {
-		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			const model = "bench-embed"
-			db, _ := seedCorpus(b, n, model)
-			for b.Loop() {
-				started := time.Now()
-				reading := readingOf(b, db, model, search.FixtureWidth)
-				read := time.Since(started)
-
-				docs := make([]search.SampledDoc, 0, search.EvalQueries)
-				var shapes [][]search.ShapeQuery
-				var sample time.Duration
-				if err := storetest.EstateOf(db).Read(b.Context(), func(tx *sql.Tx) error {
-					var err error
-					started = time.Now()
-					docs, err = search.SampleDocuments(b.Context(), tx, model,
-						search.FixtureWidth, search.EvalQueries)
-					if err != nil {
-						return err
-					}
-					sample = time.Since(started)
-					for _, doc := range docs {
-						shapes = append(shapes, search.ShapesFor(doc, search.Sources))
-					}
-					started = time.Now()
-					_, err = search.ExactTops(b.Context(), tx, docs, shapes, model,
-						search.FixtureWidth, search.ReturnDepth)
-					return err
-				}); err != nil {
-					b.Fatal(err)
-				}
-				exact := time.Since(started)
-
-				codes := reading.Corpus.Codes
-				lists := search.IVFLists(n)
-				started = time.Now()
-				index, err := search.TrainIVF(b.Context(), codes, lists,
-					search.IVFSeed("S", 0), reading.HeldOut)
-				if err != nil {
-					b.Fatal(err)
-				}
-				kmeans := time.Since(started)
-				started = time.Now()
-				byList := search.GroupByList(filedIn(b, index, codes), lists)
-				filing := time.Since(started)
-				started = time.Now()
-				if _, err := search.ChooseProbes(b.Context(), &reading.Corpus, byList,
-					index, reading.Trials); err != nil {
-					b.Fatal(err)
-				}
-				choose := time.Since(started)
-				perSource := func(d time.Duration) float64 {
-					return float64(d.Microseconds()) / float64(n)
-				}
-				b.ReportMetric(read.Seconds(), "read-s")
-				b.ReportMetric(perSource(read), "read-us/source")
-				b.ReportMetric(perSource(exact), "exact-us/source")
-				b.ReportMetric(perSource(sample), "sample-us/source")
-				b.ReportMetric(kmeans.Seconds(), "kmeans-s")
-				b.ReportMetric(perSource(filing), "filing-us/source")
-				b.ReportMetric(choose.Seconds(), "choose-s")
+		for _, searched := range []bool{false, true} {
+			arm := "idle"
+			if searched {
+				arm = "searched"
 			}
-		})
+			b.Run(fmt.Sprintf("n=%d/%s", n, arm), func(b *testing.B) {
+				const model = "bench-embed"
+				db, f := seedCorpus(b, n, model)
+				scanned := search.NewCodes(len(f.Codes[0]), f.Len())
+				for _, code := range f.Codes {
+					scanned.Append(code)
+				}
+				for b.Loop() {
+					stop := make(chan struct{})
+					latencies := func() []time.Duration { return nil }
+					if searched {
+						latencies = search.SearchWhile(scanned, stop)
+					}
+					started := time.Now()
+					reading := readingOf(b, db, model, search.FixtureWidth)
+					whole := time.Since(started)
+
+					docs := make([]search.SampledDoc, 0, search.EvalQueries)
+					var shapes [][]search.ShapeQuery
+					var sample time.Duration
+					if err := storetest.EstateOf(db).Read(b.Context(), func(tx *sql.Tx) error {
+						var err error
+						started = time.Now()
+						docs, err = search.SampleDocuments(b.Context(), tx, model,
+							search.FixtureWidth, search.EvalQueries)
+						if err != nil {
+							return err
+						}
+						sample = time.Since(started)
+						for _, doc := range docs {
+							shapes = append(shapes, search.ShapesFor(doc, search.Sources))
+						}
+						started = time.Now()
+						_, err = search.ExactTops(b.Context(), tx, docs, shapes, model,
+							search.FixtureWidth, search.ReturnDepth)
+						return err
+					}); err != nil {
+						b.Fatal(err)
+					}
+					exact := time.Since(started)
+
+					codes := reading.Corpus.Codes
+					lists := search.IVFLists(n)
+					started = time.Now()
+					index, err := search.TrainIVF(b.Context(), codes, lists,
+						search.IVFSeed("S", 0), reading.HeldOut)
+					if err != nil {
+						b.Fatal(err)
+					}
+					kmeans := time.Since(started)
+					started = time.Now()
+					byList := search.GroupByList(filedIn(b, index, codes), lists)
+					filing := time.Since(started)
+					started = time.Now()
+					if _, err := search.ChooseProbes(b.Context(), &reading.Corpus, byList,
+						index, reading.Trials); err != nil {
+						b.Fatal(err)
+					}
+					choose := time.Since(started)
+					close(stop)
+					perSource := func(d time.Duration) float64 {
+						return float64(d.Microseconds()) / float64(n)
+					}
+					// THE STREAMING HALF — once, whole — and its parts, and
+					// the exempt half.
+					codesRead := max(whole-sample-exact, 0)
+					arithmetic := kmeans + filing + choose
+					b.ReportMetric(whole.Seconds(), "reading-s")
+					b.ReportMetric(perSource(whole), "reading-us/source")
+					b.ReportMetric(perSource(codesRead), "codes-us/source")
+					b.ReportMetric(perSource(exact), "exact-us/source")
+					b.ReportMetric(perSource(sample), "sample-us/source")
+					b.ReportMetric(kmeans.Seconds(), "kmeans-s")
+					b.ReportMetric(perSource(filing), "filing-us/source")
+					b.ReportMetric(choose.Seconds(), "choose-s")
+					b.ReportMetric(arithmetic.Seconds(), "arithmetic-s")
+					if searched {
+						b.ReportMetric(search.P95ms(latencies()), "scan-p95-ms")
+					}
+				}
+			})
+		}
 	}
 }

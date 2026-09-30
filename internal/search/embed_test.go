@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,6 +122,66 @@ func TestARemovedTaskLosesItsVector(t *testing.T) {
 			"is gone, so nothing else will ever select it", got)
 	}
 }
+
+// EVERY VECTOR WITHDRAWN SHOWS THE TICK'S BOUND ITS PROGRESS.
+//
+// A withdrawal costs no provider call, so it is outside the batches a tick
+// reports as it embeds — and there can be a selection's worth of them a
+// corpus, 1 024 after a bulk purge, each a publish. Unreported, that was the
+// longest stretch a live tick went without showing progress: on a slow broker
+// a tick withdrawing steadily was cut off as wedged, which is the
+// slow-but-advancing tick the bound exists NOT to cut off. So each one
+// reports as it is published.
+func TestEveryWithdrawalShowsTheTicksBoundItsProgress(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	const removed = 40
+	bodies := make(map[string]string, removed)
+	for i := range removed {
+		bodies[fmt.Sprintf("t-%02d", i)] = fmt.Sprintf("something to forget, number %d", i)
+	}
+	h.seedTasks(bodies)
+	if _, err := h.duty.Tick(t.Context()); err != nil {
+		t.Fatalf("setup: tick: %v", err)
+	}
+	h.drain()
+	if got := h.vectors(); got != removed {
+		t.Fatalf("setup: %d vector(s) after the first tick, want %d", got, removed)
+	}
+	for id := range bodies {
+		h.removeTask(id)
+	}
+
+	budget := &countedBudget{}
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(),
+		Log:      statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
+		Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
+		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:  budget,
+	})
+	if err != nil {
+		t.Fatalf("build the duty: %v", err)
+	}
+	published, err := duty.Tick(t.Context())
+	if err != nil || published != removed {
+		t.Fatalf("setup: the tick published %d record(s), want the %d withdrawals: %v",
+			published, removed, err)
+	}
+	if got := budget.advanced.Load(); got < removed {
+		t.Fatalf("a tick that withdrew %d vectors and embedded nothing reported progress "+
+			"%d time(s), want once a withdrawal", removed, got)
+	}
+}
+
+// countedBudget counts the reports of progress a tick makes, and grants every
+// exemption.
+type countedBudget struct{ advanced atomic.Int64 }
+
+func (b *countedBudget) Advanced()      { b.advanced.Add(1) }
+func (b *countedBudget) Exempt() func() { return func() {} }
 
 // A PROVIDER FAILURE COSTS THE BATCH AND NOT THE CORPUS.
 //
@@ -280,6 +341,23 @@ func TestAnUnreadableCorpusDoesNotStopTheOnesAfterIt(t *testing.T) {
 	}
 }
 
+// A DUTY WITH NO BUDGET IS A REFUSED WIRING: its caller bounds every tick, and
+// one that did not say which bound would measure a training by its length
+// rather than its progress — which on a one-core node cut off every training
+// at the largest partition.
+func TestTheDutyRefusesAWiringWithNoBudget(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	_, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
+		Standing: h.standing(nil), Embedder: h.embedder, Model: embedModel,
+		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "EmbedDeps.Budget") {
+		t.Fatalf("a duty with no budget built as %v, want a refusal naming EmbedDeps.Budget", err)
+	}
+}
+
 // MORE CORPORA THAN THERE ARE CALLS IS A REFUSED WIRING.
 //
 // Below one call apiece there is no share left to guarantee: every tick starts
@@ -297,6 +375,8 @@ func TestTheDutyRefusesMoreCorporaThanATickCanServe(t *testing.T) {
 		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
 		Standing: h.standing(nil),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
+		// EVERY OTHER FIELD WIRED, so the refusal is the corpora's.
+		Budget: unbounded{},
 	})
 	if err == nil {
 		t.Fatalf("a duty with %d corpora and %d calls a tick was accepted — "+
@@ -462,7 +542,8 @@ func (h *embedHarness) dutyOver(corpora ...search.Corpus) *search.Embedder {
 		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
 		Standing: h.standing(map[string]int{"node-a": search.RecordVersion}),
 		Embedder: h.embedder, Model: embedModel, Corpora: corpora,
-		Now: func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Now:    func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget: unbounded{},
 	})
 	if err != nil {
 		h.t.Fatalf("build the duty: %v", err)
@@ -739,3 +820,11 @@ func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
 func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
 }
+
+// unbounded is a tick nothing bounds: every report of progress is taken and
+// every exemption granted and none kept, for the tests whose ticks the
+// engine's bound is not the subject of.
+type unbounded struct{}
+
+func (unbounded) Advanced()      {}
+func (unbounded) Exempt() func() { return func() {} }

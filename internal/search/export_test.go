@@ -20,17 +20,32 @@ type TrainingReading struct {
 
 // ReadTrainingSet is [readTrainingSet].
 func ReadTrainingSet(ctx context.Context, tx *sql.Tx, model string, dim int) (TrainingReading, error) {
-	set, err := readTrainingSet(ctx, tx, model, dim)
+	set, err := readTrainingSet(ctx, tx, model, dim, unwatched)
 	return TrainingReading{Corpus: set.corpus, Trials: set.trials,
 		HeldOut: set.heldOut, IDs: set.ids}, err
 }
+
+// SearchWhile is [searchWhile] and P95ms [p95ms]: the searchers
+// BenchmarkIVFTrainingShare runs beside a training, for the benchmarks that
+// measure the rest of a training under the same load.
+var (
+	SearchWhile = searchWhile
+	P95ms       = p95ms
+)
 
 // CodeFromBits is [codeFromBits], for the gate that holds it to [Quantize].
 var CodeFromBits = codeFromBits
 
 // ExactTops is [exactTops], the one ground truth, for the gate that holds it
-// to the per-query statement it replaced.
-var ExactTops = exactTops
+// to the per-query statement it replaced — read the way the evaluation reads
+// it, with no bound watching.
+func ExactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][]ShapeQuery,
+	model string, dim, limit int) ([][]ExactTop, error) {
+	return exactTops(ctx, tx, queries, shapes, model, dim, limit, unwatched)
+}
+
+// ProgressStride is [progressStride].
+const ProgressStride = progressStride
 
 // SampleDocuments is [sampleDocuments], and ShapesFor [shapesFor].
 var (

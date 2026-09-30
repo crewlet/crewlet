@@ -32,6 +32,7 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 		Embedder: widthOnly{},
 		Model:    "probe-model",
 		Corpora:  []Corpus{struct{ Corpus }{}},
+		Budget:   noBound{},
 	}
 	duty, err := NewEmbedder(valid)
 	if err != nil {
@@ -58,3 +59,9 @@ func TestAnEmbedDutyGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) {
 type widthOnly struct{ embeddings.BatchEmbedder }
 
 func (widthOnly) Width() int { return 4 }
+
+// noBound is a tick nothing bounds.
+type noBound struct{}
+
+func (noBound) Advanced()      {}
+func (noBound) Exempt() func() { return func() {} }

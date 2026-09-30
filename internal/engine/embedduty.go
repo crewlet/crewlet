@@ -58,14 +58,21 @@ import (
 // cores (≈ 130 s on both of two), which projects to a little over three
 // minutes at the ≈ 545 000 sources a node searches inside its budget through
 // an index (BenchmarkIndexTraining, BenchmarkIVFTrainingShare,
-// [search.IVFMaxLists]); on ONE worker it projected to 290–310 s, which is why
-// a training is never halved below two where a node has them. A training tick
-// is longer than the interval and within reach of the lease's TTL, so the tick
-// RENEWS the lease on the interval while it runs ([embedDuty.keepClaimed]) and
-// is cut off the moment a renewal does not confirm it: a step cut off publishes
-// nothing, so the singleton never has two writers. And every tick is bounded
-// outright by [embedTickBudget], because a renewal is also what would keep a
-// WEDGED tick holding the duty for ever.
+// [search.IVFMaxLists]). A training tick is longer than the interval and
+// within reach of the lease's TTL, so the tick RENEWS the lease on the
+// interval while it runs ([embedDuty.keepClaimed]) and is cut off the moment a
+// renewal does not confirm it: a step cut off publishes nothing, so the
+// singleton never has two writers.
+//
+// And every tick is bounded by [embedTickBudget], because a renewal is also
+// what would keep a WEDGED tick holding the duty for ever — a budget of
+// PROGRESS rather than of time ([tickBound]). On a node allowed one core,
+// shared with the searches it answers, the same training is about three and a
+// half minutes of reading and seven and a half of arithmetic, every moment of
+// it advancing: a budget of five minutes of time cut every one of them off and
+// began it again the next tick, so that node spent five minutes of its only
+// core a tick for ever on an index it never got. Bounded by its progress, it
+// finishes once.
 
 // embedDutyName is the fleet singleton the embedding duty claims.
 const embedDutyName = "embeddings"
@@ -78,19 +85,26 @@ const embedDutyName = "embeddings"
 // avoid.
 const embedDutyTTL = 3 * search.EmbedInterval
 
-// embedTickBudget bounds one tick outright, the lease renewed or not.
+// embedTickBudget is how long one tick may go without showing progress
+// before it is cut off, the lease renewed or not ([tickBound]).
 //
-// FIVE MINUTES: the longest legitimate tick is a training at the largest
-// partition an index serves, projected at a little over three minutes from the
-// measured per-source reading and the k-means and filing at
-// [search.IVFMaxLists] lists on the two workers a training runs on at four busy
-// cores or two (BenchmarkIndexTraining, BenchmarkIVFTrainingShare) — so this
-// leaves more than a third of it spare. A node allowed a single core, whose
-// one worker competes with its searches for it, is the exception the search
-// package's core share states. A tick past it
-// is a wedged one, which the lease renewal would otherwise let hold the duty
-// for ever while no node embedded anything; cut off, it publishes nothing and
-// the next tick starts over.
+// FIVE MINUTES, several times the longest stretch a LIVE tick goes without
+// showing any. A tick shows progress at every step that has a natural end: a
+// batch it embeds — one provider call, bounded by the provider's own timeout
+// (15 s by default, with no retries) and the publishes after it — a vector it
+// withdraws, which is one publish (up to 1 024 of them a corpus after a bulk
+// purge, so reported one by one rather than as a stretch), a batch of the
+// index's rollout published, every 1 024 rows the training's reading and
+// its exact pass stream, which on the slowest node measured, one core shared
+// with two searchers, are a third of a second apart (BenchmarkIndexTraining
+// -cpu 1 pinned to one CPU: 331 µs a row for the exact pass, the slowest part
+// of the reading), and the end of the index's arithmetic, which runs exempt
+// ([search.Budget]) because it cannot wedge. What is left between two of them
+// is one of the tick's reads that do not stream — the index's state, a
+// corpus's stale selection, the evaluation's sample (12 µs a source there) —
+// seconds at the largest partition. A tick that shows nothing for five minutes
+// was waiting on something that did not answer. Cut off, it publishes nothing
+// more and the next tick starts over.
 const embedTickBudget = 5 * time.Minute
 
 // embedDuty is the loop.
@@ -121,8 +135,24 @@ type embedDuty struct {
 	// which leaves two renewals inside every TTL.
 	renewEvery time.Duration
 
+	// budget is how long a tick may go without progress: [embedTickBudget],
+	// and a test's shorter one.
+	budget time.Duration
+
 	stop context.CancelFunc
 	done chan struct{}
+}
+
+// tickReport is what one tick did, for the tests that hold the duty's wiring:
+// the loop reads nothing of it, and every fact in it is also a log line.
+type tickReport struct {
+	// published is how many records the tick published.
+	published int
+	// unwired says the embedder refused the tick's wiring and nothing ran.
+	unwired bool
+	// overran says the tick went its budget without progress and was cut
+	// off ([errTickOverran]).
+	overran bool
 }
 
 // startEmbedding arms the duty, or does nothing on a node that cannot run it.
@@ -132,18 +162,35 @@ type embedDuty struct {
 // TICK rather than here — an epoch that adds the block must start embedding
 // without a restart, and one that removes it must stop.
 func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
-	if s == nil || e.backends == nil {
+	d := e.newEmbedDuty(s)
+	if d == nil {
 		return
+	}
+	// DETACHED from the caller's context, for the reason every other
+	// long-running loop here is: a loop bound to a signal context stops at
+	// SIGTERM, which would make its lifetime differ from the appliers it
+	// publishes into for no reason a reader could find.
+	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
+	d.stop = stop
+	e.embedding = d
+	go d.run(loop)
+}
+
+// newEmbedDuty is the duty over s's vector log, or nil on a node that cannot
+// run it — see [Engine.startEmbedding].
+func (e *Engine) newEmbedDuty(s *stateLog) *embedDuty {
+	if s == nil || e.backends == nil {
+		return nil
 	}
 	running := s.Domain(search.Domain{}.Name())
 	if running == nil || running.publisher == nil {
-		return
+		return nil
 	}
 	corpora := e.corpora(s.estate(running.id.Partition).Reader())
 	if len(corpora) == 0 {
-		return
+		return nil
 	}
-	d := &embedDuty{
+	return &embedDuty{
 		engine:     e,
 		publisher:  running.publisher,
 		corpora:    corpora,
@@ -155,16 +202,9 @@ func (e *Engine) startEmbedding(ctx context.Context, s *stateLog) {
 		identity:   s.identityDomains(),
 		db:         e.backends.Store,
 		renewEvery: search.EmbedInterval,
+		budget:     embedTickBudget,
 		done:       make(chan struct{}),
 	}
-	// DETACHED from the caller's context, for the reason every other
-	// long-running loop here is: a loop bound to a signal context stops at
-	// SIGTERM, which would make its lifetime differ from the appliers it
-	// publishes into for no reason a reader could find.
-	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
-	d.stop = stop
-	e.embedding = d
-	go d.run(loop)
 }
 
 // stopEmbedding ends the duty, waiting for an in-flight tick.
@@ -248,22 +288,26 @@ func (d *embedDuty) run(ctx context.Context) {
 	}
 }
 
-// tick embeds one tick's worth of sources, if this node holds the duty.
-func (d *embedDuty) tick(ctx context.Context) {
+// tick embeds one tick's worth of sources, if this node holds the duty, and
+// reports what it did.
+func (d *embedDuty) tick(ctx context.Context) tickReport {
+	var report tickReport
 	if d.claim != nil {
 		mine, err := d.claim(ctx)
 		if err != nil {
 			log.WarnContext(ctx, "embed_duty_unclaimed", "err", err)
-			return
+			return report
 		}
 		if !mine {
-			return
+			return report
 		}
 	}
 	provider, model, configured := d.engine.embedModel()
 	if !configured {
-		return
+		return report
 	}
+	tick, bound, release := boundTick(ctx, d.budget)
+	defer release()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: d.publisher,
 		// THE PARTITION'S OWN FILE AND LOG, for the semantic index the
@@ -275,6 +319,9 @@ func (d *embedDuty) tick(ctx context.Context) {
 		Embedder: provider,
 		Model:    model,
 		Corpora:  d.corpora,
+		// THE TICK'S OWN BOUND, which the duty's steps show their
+		// progress to: see [tickBound].
+		Budget: bound,
 		// No Logger: an absent one is the search package's own, so the
 		// duty's batch failures say `component=search` like every other
 		// line that package writes.
@@ -286,28 +333,33 @@ func (d *embedDuty) tick(ctx context.Context) {
 		// silent return here is indistinguishable from a corpus that is
 		// already complete.
 		log.WarnContext(ctx, "embed_duty_unwired", "err", err)
-		return
+		report.unwired = true
+		return report
 	}
-	tick, cancel := context.WithTimeout(ctx, embedTickBudget)
-	defer cancel()
 	if d.claim != nil {
-		defer d.keepClaimed(tick, cancel)()
+		defer d.keepClaimed(tick, release)()
 	}
 	published, err := duty.Tick(tick)
+	report.published = published
 	if err != nil {
 		log.WarnContext(ctx, "embed_tick_failed", "err", err,
 			"published", published)
 	}
-	if errors.Is(tick.Err(), context.DeadlineExceeded) {
-		log.WarnContext(ctx, "embed_tick_overran", "budget", embedTickBudget,
-			"detail", "the tick was cut off at its budget and published nothing "+
-				"after it; a training that cannot finish inside it leaves the "+
-				"partition on its current first stage")
+	if errors.Is(context.Cause(tick), errTickOverran) {
+		report.overran = true
+		charged, exempt := bound.spent()
+		log.WarnContext(ctx, "embed_tick_overran", "budget", d.budget,
+			"charged", charged, "exempt", exempt,
+			"detail", "the tick went its whole budget without progress — no "+
+				"batch answered, no stretch of rows read — so something it "+
+				"waited on did not answer; it was cut off and published nothing "+
+				"after it, and the next tick starts over")
 	}
 	if published > 0 {
 		log.InfoContext(ctx, "embed_tick", "records", published,
 			"model", model, "width", provider.Width())
 	}
+	return report
 }
 
 // keepClaimed renews the duty's lease on the interval while a tick runs, and

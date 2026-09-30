@@ -269,12 +269,17 @@ and make one exact pass, plus a k-means and a filing of every code that run on
 searches on a node of four cores or more keep the other half — which comes to
 a little over three minutes at the largest partition an index serves. Two is
 the floor because on a two- or three-core node one worker bought the searches
-nothing measurable and made that training longer than the tick. A node with a
-**single core** trains on it, as it always did, and with searches always in
-flight on that core it cannot finish a training of the largest partition inside
-the tick. The training renews the duty's lease as it runs, stops publishing —
-and hands its cores back within a fraction of a second — the moment it cannot,
-and is cut off at five minutes, so a wedged tick never holds the duty.
+nothing measurable and nearly doubled the training. A node with a **single
+core** trains on it, as it always did, and with searches always in flight on
+that core the same training is about three and a half minutes of reading and
+seven and a half of arithmetic. The training renews the duty's lease as it
+runs, and stops publishing — handing its cores back within a fraction of a
+second — the moment it cannot. And a tick is cut off once it has gone **five
+minutes without progress**, never after five minutes of running: every batch
+embedded, every vector withdrawn, every 1 024 rows a training reads and the end
+of its k-means and filing are progress, so a wedged tick never holds the duty
+while a slow node still finishes its training once rather than starting it
+again every tick.
 Both source kinds are covered: the tracker's work items and the knowledge
 base's published pages. A **rename does not re-embed a page** — the vector is
 stored against the page's own edit number rather than the log version a rename

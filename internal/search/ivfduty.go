@@ -71,8 +71,10 @@ import (
 // Training and its rollout are deliberately TWO ticks. Each is bounded by the
 // partition — the training by the k-means and the one exact pass, the rollout
 // by one Hamming search per row against every centroid on every holder — and a
-// tick is bounded by the duty's lease (the engine cuts it off before the lease
-// can lapse, and a step cut off publishes nothing). The minute between them
+// tick is bounded by the duty's lease (the engine cuts it off when a renewal
+// does not confirm it, and a step cut off publishes nothing) and by a budget
+// of PROGRESS rather than of time ([Budget]): the budget cuts off a tick that
+// wedged, and a training on a slow node is not one. The minute between them
 // costs nothing: until the rollout has applied, a search reads the
 // not-yet-filed rows in full ([Stage1]).
 //
@@ -103,12 +105,13 @@ import (
 // half with new subjects — where the probe count measured at training may no
 // longer meet the floor and nothing else would notice until an operator's
 // scheduled `crewlet search eval` failed. A measurement is a training without
-// the k-means — every code read once and one exact pass — so a day bounds how
-// long a drifted index can serve below the floor at one pass a day per
-// partition, which the tick budget measured for a training
-// ([BenchmarkIndexTraining]) comfortably covers; the evaluation the operator
-// guide asks for is monthly, so the duty has re-measured thirty times before
-// an operator would look.
+// the k-means — every code read once, one exact pass and the probe choice, at
+// the largest partition two to five minutes of one core
+// ([BenchmarkIndexTraining]: 212 µs a source to read idle and 394 µs beside
+// two searchers, and the probe choice) — so a
+// day bounds how long a drifted index can serve below the floor at one pass a
+// day per partition; the evaluation the operator guide asks for is monthly, so
+// the duty has re-measured thirty times before an operator would look.
 const IVFMeasureInterval = 24 * time.Hour
 
 // IndexRecordVersion is the record version every node applying the vector log
@@ -380,7 +383,7 @@ func (e *Embedder) train(ctx context.Context, dim int, state IndexState) (int, e
 	var set trainingSet
 	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		set, err = readTrainingSet(ctx, tx, e.deps.Model, dim)
+		set, err = readTrainingSet(ctx, tx, e.deps.Model, dim, e.deps.Budget.Advanced)
 		return err
 	})
 	if err != nil {
@@ -400,18 +403,25 @@ func (e *Embedder) trainFrom(ctx context.Context, dim int, set trainingSet, basi
 	}
 	seed := IVFSeed(e.deps.Log, basis)
 	lists := IVFLists(n)
-	index, err := TrainIVF(ctx, codes, lists, seed, set.heldOut)
-	if err != nil {
-		return 0, err
-	}
-	filed, err := index.Assign(ctx, codes)
-	if err != nil {
-		return 0, fmt.Errorf("search: the index's training stopped filing the "+
-			"corpus: %w", err)
-	}
-	byList := GroupByList(filed, lists)
-	choice, err := ChooseProbes(ctx, &set.corpus, byList, index, set.trials)
-	if err != nil {
+	var (
+		index  IVF
+		byList [][]int32
+		choice ProbeChoice
+	)
+	if err := e.arithmetic(func() error {
+		var err error
+		if index, err = TrainIVF(ctx, codes, lists, seed, set.heldOut); err != nil {
+			return err
+		}
+		filed, err := index.Assign(ctx, codes)
+		if err != nil {
+			return fmt.Errorf("search: the index's training stopped filing the "+
+				"corpus: %w", err)
+		}
+		byList = GroupByList(filed, lists)
+		choice, err = ChooseProbes(ctx, &set.corpus, byList, index, set.trials)
+		return err
+	}); err != nil {
 		return 0, err
 	}
 	measurement := choice.Measurement
@@ -448,7 +458,8 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 	var index IVF
 	err := e.deps.Estate.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		if set, err = readTrainingSet(ctx, tx, e.deps.Model, dim); err != nil {
+		if set, err = readTrainingSet(ctx, tx, e.deps.Model, dim,
+			e.deps.Budget.Advanced); err != nil {
 			return err
 		}
 		index, err = (*ivfMemo)(nil).load(ctx, tx, head)
@@ -466,8 +477,12 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 		}
 		byList[f.list] = append(byList[f.list], int32(row))
 	}
-	choice, err := ChooseProbes(ctx, &set.corpus, byList, index, set.trials)
-	if err != nil {
+	var choice ProbeChoice
+	if err := e.arithmetic(func() error {
+		var err error
+		choice, err = ChooseProbes(ctx, &set.corpus, byList, index, set.trials)
+		return err
+	}); err != nil {
 		return 0, err
 	}
 	e.deps.Logger.InfoContext(ctx, "search_index_measured",
@@ -496,14 +511,27 @@ func (e *Embedder) measure(ctx context.Context, dim int, head IndexHead) (int, e
 	return 1, nil
 }
 
+// arithmetic runs the index's CPU-bound steps EXEMPT from the tick's bound
+// ([Budget]), whose end is their progress: they cannot wedge, and a stride of
+// them reports nothing. Nothing that reads a database, calls a provider or
+// publishes may run in here — an exempt wedge is one nothing cuts off but a
+// lost lease.
+func (e *Embedder) arithmetic(steps func() error) error {
+	defer e.deps.Budget.Exempt()()
+	return steps()
+}
+
 // readTrainingSet reads the space's codes in key order, what each row's
-// shapes filter on, and the held-out trials a training measures recall on.
+// shapes filter on, and the held-out trials a training measures recall on —
+// telling advanced every [progressStride] rows it reads, here and in the exact
+// pass, since at the largest partition on one busy core the two take longer
+// than a wedged step is given ([Budget]).
 //
 // KEY ORDER — source, then source id — because it is the tie break the SQL
 // probe declares, and [IVFCandidates] breaks ties on the row number: loaded in
 // any other order, a training would measure a candidate pool the installed
 // index never produces.
-func readTrainingSet(ctx context.Context, tx *sql.Tx, model string, dim int) (trainingSet, error) {
+func readTrainingSet(ctx context.Context, tx *sql.Tx, model string, dim int, advanced func()) (trainingSet, error) {
 	set := trainingSet{
 		corpus: TrainingCorpus{Codes: NewCodes(CodeWords(dim), 0)},
 		ids:    map[Source][]string{},
@@ -538,6 +566,9 @@ func readTrainingSet(ctx context.Context, tx *sql.Tx, model string, dim int) (tr
 		set.corpus.Containers = append(set.corpus.Containers, c)
 		set.ids[Source(source)] = append(set.ids[Source(source)], id)
 		set.filed = append(set.filed, f)
+		if len(set.filed)%progressStride == 0 {
+			advanced()
+		}
 	}
 	if err = rows.Err(); err != nil {
 		_ = rows.Close()
@@ -555,7 +586,7 @@ func readTrainingSet(ctx context.Context, tx *sql.Tx, model string, dim int) (tr
 	for i, q := range queries {
 		shapes[i] = shapesFor(q, sourcesIn(set.ids))
 	}
-	tops, err := exactTops(ctx, tx, queries, shapes, model, dim, ReturnDepth)
+	tops, err := exactTops(ctx, tx, queries, shapes, model, dim, ReturnDepth, advanced)
 	if err != nil {
 		return trainingSet{}, err
 	}
@@ -678,6 +709,7 @@ func (e *Embedder) rollout(ctx context.Context, head IndexHead) (int, error) {
 			return published, err
 		}
 		published++
+		e.deps.Budget.Advanced()
 	}
 	e.deps.Logger.InfoContext(ctx, "search_index_rollout",
 		"generation", head.Generation, "batches", published, "of", len(ranges))

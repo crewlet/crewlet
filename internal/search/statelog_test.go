@@ -66,6 +66,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Partition
 		Embedder: embeddings.NewFake(8), Model: "suite-embed",
 		Corpora: []search.Corpus{oneStaleDocument{}},
 		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		Budget:  unbounded{},
 	})
 	if err != nil {
 		return err

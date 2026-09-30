@@ -282,7 +282,85 @@ type EmbedDeps struct {
 
 	// Now is the clock, injected so a test can hold it.
 	Now func() time.Time
+
+	// Budget is the bound the caller holds the tick to, which the index's
+	// steps show their progress to ([Budget]).
+	//
+	// REQUIRED, never defaulted to a bound nobody is told about: the duty's
+	// caller bounds every tick, and one that forgot to say which bound
+	// would measure a training by its length again — which on a one-core
+	// node cut off every training at the largest partition, so its index
+	// was never built and the node spent five minutes of its only core on
+	// it every tick, for ever.
+	Budget Budget
 }
+
+// Budget is a tick's bound, as the tick's steps show it their progress.
+//
+// # A tick is bounded by its progress, never by its length
+//
+// The caller bounds a tick because a tick can WEDGE — a read that never
+// returns, a provider that never answers — and a wedged tick holding the
+// duty's lease embeds nothing for anybody. A wedge is the ABSENCE of progress,
+// so that is what the bound measures, and every step of a tick shows it in the
+// way it can. A step with a natural end reports as it ends ([Budget.Advanced]):
+// a batch embedded (one provider call and its publishes), a vector withdrawn
+// (one publish) and a batch of the index's rollout published. The index's
+// reading of every code and its exact pass stream rows, and say so every
+// [progressStride] of them. The arithmetic — the
+// k-means, filing every code, choosing the probe count — cannot wedge at all:
+// it is pure computation over values in memory, each a bounded number of
+// steps reading its context at least once a stride ([ivfStride]) or a probe
+// count, so cancellation and a lost lease still stop it promptly; it runs
+// EXEMPT ([Budget.Exempt]), whole, rather than reporting from inside functions
+// that know nothing of a tick.
+//
+// Measured by its LENGTH instead, a training at the largest partition an
+// index serves never finished on a node allowed one core and sharing it with
+// two searchers: its reading projects to three and a half minutes there
+// (394 µs a source at ≈ 545 000) and its arithmetic to seven and a half more
+// (BenchmarkIndexTraining and BenchmarkIVFTrainingShare at -cpu 1, pinned to
+// one CPU), eleven in all against five, so every training such a node began
+// was cut off and began again the next tick.
+//
+// # Why not exempt the arithmetic and keep a budget of time for the rest
+//
+// At that load the reading alone would have fitted five minutes, 1.4 times
+// over. But a budget of time is a cliff that moves: the reading nearly doubled
+// between an idle core and two searchers, it grows with the partition, and
+// the tick that trains also makes this tick's embedding batches, each a
+// provider call with a fifteen-second timeout of its own — eight of them and
+// the reading pass five minutes at the load measured. Progress has no such
+// cliff: it measures the one thing the bound is for, and needs the exemption
+// anyway.
+type Budget interface {
+	// Advanced says a bounded stretch of the tick's work is done.
+	Advanced()
+
+	// Exempt stops the bound's clock until the returned function is
+	// called, which it must be exactly once, and whose call is progress.
+	// Exemptions nest: the clock runs again when the last one open is
+	// resumed.
+	Exempt() (resume func())
+}
+
+// progressStride is how many rows one of the index's streaming reads covers
+// between two reports of its progress ([Budget.Advanced]): ONE THOUSAND AND
+// TWENTY-FOUR, the stride the arithmetic reads its context at ([ivfStride]).
+//
+// A report costs a lock and a clock read, under a millionth of the stride's
+// rows at the fastest they have been read (about 190 µs a row for the exact
+// pass, the costliest of the reading's parts, on an idle core); at the
+// slowest — 331 µs, one core shared with two searchers (BenchmarkIndexTraining
+// -cpu 1, pinned to one CPU) — a stride is a third of a second, so a read goes
+// hundreds of strides inside the engine's budget before its silence could be
+// taken for a wedge.
+const progressStride = ivfStride
+
+// unwatched is the progress report of a read no bound is watching — the
+// evaluation an operator runs, and the tests and benchmarks that read the way
+// the duty does.
+func unwatched() {}
 
 // Embedder is the duty.
 type Embedder struct {
@@ -305,6 +383,10 @@ func NewEmbedder(d EmbedDeps) (*Embedder, error) {
 		return nil, fmt.Errorf("search: the embed duty cannot read the vector " +
 			"log's standing — it publishes nothing about the index without " +
 			"knowing this node has applied the log and every node reads the records")
+	case d.Budget == nil:
+		return nil, fmt.Errorf("search: the embed duty has no tick budget — " +
+			"EmbedDeps.Budget is the bound its caller holds the tick to, which " +
+			"the duty's steps show their progress to")
 	case d.Embedder == nil:
 		return nil, fmt.Errorf("search: the embed duty has no embedder")
 	case d.Model == "":
@@ -497,6 +579,14 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 				return published, errors.Join(failed...)
 			}
 			published++
+			// A WITHDRAWAL PUBLISHED is progress ([Budget]): one
+			// publish, bounded as every publish is. There can be a
+			// selection's worth of them a corpus — 1 024 after a bulk
+			// purge — and unreported they were the longest stretch a
+			// live tick went silent, eight batches' publishes with no
+			// provider call between them to show for it, which a
+			// slow broker could stretch past the bound.
+			e.deps.Budget.Advanced()
 		}
 	}
 
@@ -519,6 +609,10 @@ func (e *Embedder) Tick(ctx context.Context) (int, error) {
 			spent = true
 			n, err := e.embed(ctx, corpus.Source(), dim, batch)
 			published += n
+			// A BATCH ANSWERED, WHATEVER IT ANSWERED, is progress
+			// ([Budget]): a provider call bounded by its own timeout
+			// and the publishes after it.
+			e.deps.Budget.Advanced()
 			if err != nil {
 				// LOGGED AND CARRIED. The next batch and the next
 				// tick are the retry, and nothing here is lost:

@@ -5,7 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"math/rand/v2"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,11 +227,18 @@ func TestTheIndexWaitsForEveryReaderAndForTheLog(t *testing.T) {
 // reading the log's standing from standing.
 func indexDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing func(context.Context) (search.LogStanding, error), now func() time.Time) *search.Embedder {
 	t.Helper()
+	return boundedDuty(t, h, embedder, standing, now, unbounded{})
+}
+
+// boundedDuty is [indexDuty] with its ticks held to budget.
+func boundedDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing func(context.Context) (search.LogStanding, error), now func() time.Time, budget search.Budget) *search.Embedder {
+	t.Helper()
 	duty, err := search.NewEmbedder(search.EmbedDeps{
 		Publisher: h.publisher, Estate: storetest.EstateOf(h.db).Reader(), Log: statelog.EstateStream(search.Domain{}).Name,
 		Standing: standing, Embedder: embedder, Model: embedModel,
 		Corpora: []search.Corpus{search.TaskCorpus{DB: storetest.EstateOf(h.db).Reader()}},
 		Now:     now,
+		Budget:  budget,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -238,13 +251,19 @@ func indexDuty(t *testing.T, h *embedHarness, embedder topicalEmbedder, standing
 // many ticks rolled an index out.
 func runToRest(t *testing.T, h *embedHarness, duty *search.Embedder, dim int) (search.IndexState, int) {
 	t.Helper()
+	return runToRestBy(t, h, duty, dim, func() (int, error) { return duty.Tick(t.Context()) })
+}
+
+// runToRestBy is [runToRest] with every tick taken by tick.
+func runToRestBy(t *testing.T, h *embedHarness, duty *search.Embedder, dim int, tick func() (int, error)) (search.IndexState, int) {
+	t.Helper()
 	var state search.IndexState
 	quiet, rollouts := 0, 0
 	for ticks := 0; quiet < 2; ticks++ {
 		if ticks == 20 {
 			t.Fatalf("the duty was still publishing after %d ticks: %+v", ticks, state)
 		}
-		published, err := duty.Tick(t.Context())
+		published, err := tick()
 		if err != nil {
 			t.Fatalf("tick %d: %v", ticks, err)
 		}
@@ -359,4 +378,167 @@ func (e topicalEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 		out[i] = v
 	}
 	return out, nil
+}
+
+// A TRAINING SHOWS THE TICK'S BOUND ITS PROGRESS, in a training and in the
+// day's measurement alike, and no exemption outlives the tick — and so does
+// every batch the tick embeds.
+//
+// The bound exists to cut off a tick that WEDGED, and a wedge is the absence
+// of progress — so every long step of a training must show it, or on a node
+// allowed one core, where a training at the largest partition is over six
+// minutes of reading and six more of arithmetic, the bound cut off every
+// training such a node began, for ever. The reading of every code and the
+// exact pass stream rows: each reports every [search.ProgressStride] of them,
+// and the tick reports every batch it embeds.
+// The k-means, the filing and the choice of a probe count cannot wedge — they
+// are arithmetic over values in memory, reading their context every stride —
+// so every context reading they make happens with the bound's clock stopped.
+// And an exemption must be over by the end of the tick: one left open would
+// stop the clock on the reads and publishes after it, which are what the
+// bound is for.
+func TestATrainingShowsTheTicksBoundItsProgress(t *testing.T) {
+	t.Parallel()
+	h := newEmbedHarness(t)
+	embedder := topicalEmbedder{width: 384, topics: 16}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	budget := &watchedBudget{advanced: map[string]int{}}
+	duty := boundedDuty(t, h, embedder, h.standing(map[string]int{"node-a": search.RecordVersion}),
+		func() time.Time { return now }, budget)
+	h.seedTasks(taskBodies(2_200))
+	ctx := &arithmeticWatch{Context: t.Context(), budget: budget}
+
+	state, _ := runToRestBy(t, h, duty, embedder.width,
+		func() (int, error) { return duty.Tick(ctx) })
+	if !state.Indexed || state.Head.Lists == 0 {
+		t.Fatalf("setup: the duty came to rest with no index: %+v", state.Head)
+	}
+	// EVERY STRIDE OF BOTH READS, in the one training that installed it.
+	strides := state.Sources / search.ProgressStride
+	if strides < 2 {
+		t.Fatalf("setup: %d sources is under two strides of rows", state.Sources)
+	}
+	trainedReads := budget.reported()
+	if batches := (2_200 + search.EmbedBatch - 1) / search.EmbedBatch; trainedReads[tickFrame] < batches {
+		t.Fatalf("the ticks that embedded 2200 sources reported progress %d time(s), "+
+			"want once a batch (%d)", trainedReads[tickFrame], batches)
+	}
+	for _, reader := range streamingReads {
+		if got := trainedReads[reader]; got < strides {
+			t.Fatalf("%s reported progress %d time(s) over %d rows, want every %d "+
+				"rows (%d): a read that shows none is cut off as wedged on a slow node",
+				reader, got, state.Sources, search.ProgressStride, strides)
+		}
+	}
+	trained := ctx.exempt.Load()
+	now = now.Add(search.IVFMeasureInterval)
+	if published, err := duty.Tick(ctx); err != nil || published != 1 {
+		t.Fatalf("setup: a day on, the tick published %d record(s): %v", published, err)
+	}
+	measuredReads := budget.reported()
+	for _, reader := range streamingReads {
+		if got := measuredReads[reader] - trainedReads[reader]; got < strides {
+			t.Fatalf("the day's measurement's %s reported progress %d time(s), want %d",
+				reader, got, strides)
+		}
+	}
+	switch {
+	case ctx.charged.Load() != 0:
+		t.Fatalf("%d of the index's context readings ran with the bound's clock "+
+			"running (%d exempt): its arithmetic is charged to the tick", ctx.charged.Load(),
+			ctx.exempt.Load())
+	case trained == 0:
+		t.Fatal("no stride of the training was seen at all — the watch reads nothing")
+	case ctx.exempt.Load() == trained:
+		t.Fatal("no probe count of the day's measurement was seen exempt")
+	case budget.open.Load() != 0:
+		t.Fatalf("%d exemption(s) outlived the tick: the bound's clock stays stopped "+
+			"on everything after it", budget.open.Load())
+	}
+}
+
+// streamingReads are the reads of a training that stream rows, and so report
+// their progress as they go.
+var streamingReads = []string{"search.readTrainingSet", "search.exactTops"}
+
+// tickFrame is the tick itself, which reports every batch it embeds and every
+// vector it withdraws.
+const tickFrame = "search.(*Embedder).Tick"
+
+// reporters is every frame a report of progress is counted against, a read
+// before the tick that called it: the nearest on the stack is the reporter.
+var reporters = append(slices.Clone(streamingReads), tickFrame)
+
+// watchedBudget counts the exemptions open, and the reports of progress by
+// the read that made them.
+type watchedBudget struct {
+	open atomic.Int64
+
+	mu       sync.Mutex
+	advanced map[string]int
+}
+
+func (b *watchedBudget) Exempt() func() {
+	b.open.Add(1)
+	return sync.OnceFunc(func() { b.open.Add(-1) })
+}
+
+func (b *watchedBudget) Advanced() {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		frame, more := frames.Next()
+		if i := slices.IndexFunc(reporters, func(name string) bool {
+			return strings.HasSuffix(frame.Function, "/"+name)
+		}); i >= 0 {
+			b.mu.Lock()
+			b.advanced[reporters[i]]++
+			b.mu.Unlock()
+			return
+		}
+		if !more {
+			return
+		}
+	}
+}
+
+// reported is how many times each read has reported progress so far.
+func (b *watchedBudget) reported() map[string]int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return maps.Clone(b.advanced)
+}
+
+// arithmeticWatch is a tick's context that notes, at every reading the
+// index's arithmetic makes of it — a training or filing stride, a probe count
+// measured — whether the budget's clock was stopped.
+type arithmeticWatch struct {
+	context.Context
+	budget          *watchedBudget
+	exempt, charged atomic.Int64
+}
+
+// arithmetic is where the index's CPU-bound steps read their context.
+var arithmetic = []string{"search.walkStrides", "search.ChooseProbes"}
+
+func (c *arithmeticWatch) Err() error {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		frame, more := frames.Next()
+		if slices.ContainsFunc(arithmetic, func(name string) bool {
+			return strings.HasSuffix(frame.Function, "/"+name)
+		}) {
+			if c.budget.open.Load() > 0 {
+				c.exempt.Add(1)
+			} else {
+				c.charged.Add(1)
+			}
+			break
+		}
+		if !more {
+			break
+		}
+	}
+	return c.Context.Err()
 }
