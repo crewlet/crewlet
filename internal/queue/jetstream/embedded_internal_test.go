@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 // A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, and telling the two apart is
@@ -128,5 +130,32 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 	}
 	if !strings.Contains(solo.Error(), "clustered: false") {
 		t.Errorf("the failure does not say this member had no peers to wait for: %v", solo)
+	}
+}
+
+// A CONNECTION TO THIS PROCESS'S OWN BROKER HANDSHAKES WITHIN THE ACCEPT
+// BUDGET, never nats's two-second default for a remote dial.
+//
+// The server a connection is opened to has already answered
+// ReadyForConnections, so a slow handshake measures only host load — and on a
+// loaded host the default failed the queue's own connection with `read pipe:
+// i/o timeout` against a broker that was up. The budget has to be the one the
+// server was given to start, solo and clustered alike, or the two drift.
+func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) {
+	t.Parallel()
+	for _, clustered := range []bool{false, true} {
+		e := &embeddedServer{clustered: clustered}
+		applied := nats.GetDefaultOptions()
+		for _, opt := range e.connectOptions() {
+			if err := opt(&applied); err != nil {
+				t.Fatalf("applying an option: %v", err)
+			}
+		}
+		if want := acceptBudget(clustered); applied.Timeout != want {
+			t.Errorf("clustered=%v: the handshake budget is %v, want the "+
+				"accept budget %v — nats's own default is %v, a figure for "+
+				"a remote server rather than one in this process",
+				clustered, applied.Timeout, want, nats.DefaultTimeout)
+		}
 	}
 }

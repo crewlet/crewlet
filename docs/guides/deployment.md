@@ -270,7 +270,7 @@ reasons:
 
 | Wait | Budget | What is happening |
 |---|---|---|
-| **Accepting connections** | 30s solo, **2 min clustered** | The member recovers its file store and, in a cluster, stands up its route listener while its peers are booting too |
+| **Accepting connections** | 30s solo, **2 min clustered** | The member recovers its file store and, in a cluster, stands up its route listener while its peers are booting too. The same budget then bounds the handshake of every connection the engine opens to its own member — the queue's, the coordination store's, a snapshot donor's — which used the NATS client's two-second default and failed a loaded host's boot against a server that was already up |
 | **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
 
 Then placement retries for as long as the cluster answers "no suitable

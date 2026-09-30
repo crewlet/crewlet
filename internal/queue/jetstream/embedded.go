@@ -52,6 +52,22 @@ import (
 // The clustered case shared the solo 30 seconds and flaked under the full
 // race suite with several clusters forming at once — which is a smaller
 // version of exactly the production case it has to survive.
+//
+// # And the handshake of every connection after it
+//
+// The same budget bounds the CLIENT HANDSHAKE a connection to this server
+// makes ([embeddedServer.connect]) — INFO, CONNECT, PING, PONG with a broker
+// in this very process, or on its loopback. That used nats's own default,
+// two seconds, which is a figure for dialling a REMOTE server whose silence
+// means it is not there. This one has already answered ReadyForConnections,
+// so the only thing a slow handshake here measures is the same scheduler
+// and disk contention the accept budget exists to ride out: a loaded host
+// failed a boot with `connect nats: read pipe: i/o timeout` against a
+// server that was up. The asymmetry above holds unchanged — a handshake cut
+// short fails the queue, the coordination store or a donor's connection,
+// while a long one only reports a wedged broker later — so it is the same
+// number rather than a third one to keep in step: 2 s became 30 s solo and
+// two minutes clustered.
 const (
 	// acceptTimeout bounds a solo server: its own file store, and nothing
 	// else.
@@ -596,11 +612,25 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 		e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers)
 }
 
+// connect opens a client connection to this server: through an in-memory
+// pipe when it listens on no socket, over its loopback client port when it
+// does.
 func (e *embeddedServer) connect() (*nats.Conn, error) {
+	opts := e.connectOptions()
 	if e.inProcess {
-		return nats.Connect("", nats.InProcessServer(e.ns))
+		return nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
 	}
-	return nats.Connect(e.ns.ClientURL())
+	return nats.Connect(e.ns.ClientURL(), opts...)
+}
+
+// connectOptions is what every connection to this server is opened with,
+// separated from the dial for [dialOptions]'s reason: a test can hold the
+// handshake budget without contriving a host slow enough to exceed nats's
+// default.
+func (e *embeddedServer) connectOptions() []nats.Option {
+	// THE ACCEPT BUDGET, not nats's two-second default — see the budgets'
+	// doc for why a handshake with a server already accepting shares it.
+	return []nats.Option{nats.Timeout(acceptBudget(e.clustered))}
 }
 
 func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
