@@ -129,7 +129,7 @@ type Accountant interface {
 // be lost to a record saying the CHARGE landed.
 //
 // It answers whether the record's fate is SETTLED: nil when the task's spend
-// counts the run — or never can, the task having been destroyed, or no retry
+// counts the run — or never can, the task being gone for good, or no retry
 // could learn whether it does — and an error when whether it counts is not
 // known YET. The error never decides the run's fate; it HOLDS the collect for
 // its retry ([Coordinator.recordSpend]), which offers the same record again

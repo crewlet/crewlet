@@ -158,6 +158,13 @@ type Writer struct {
 	// nothing on the write path reads a clock the applier is forbidden.
 	Now func() time.Time
 
+	// log is the domain's read authority, which a turn's spend asks for the
+	// log's END before it calls a task this node holds no row for gone for
+	// good ([Writer.RecordTurn]). Nil on a writer that records no turn — the
+	// node gate's — where such a task stays [statelog.ErrUnavailable]:
+	// without the log's end, "not here" cannot be told from "not here yet".
+	log *statelog.Reader
+
 	// after is one of this writer's OWN earlier writes, carried so the
 	// framework waits for this node's applier to reach it before it opens
 	// the next snapshot. Zero means there is nothing the next write has to
@@ -182,6 +189,10 @@ type WriterDeps struct {
 	// World is the chart seam the custom-field coercion needs for the one
 	// field type whose value is a colleague — see [Writer.World].
 	World FieldWorld
+
+	// Log is the domain's read authority — see [Writer]'s field of the
+	// same name for what it is asked, and what its absence costs.
+	Log *statelog.Reader
 
 	Metrics   *metrics.Recorder
 	Drain     func() float64
@@ -395,7 +406,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
+		log: d.Log, metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
 		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil
 }
@@ -973,6 +984,21 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 // is a malformed record that stops the log. A REMOVED task takes its spend —
 // a turn that ends by removing its task still cost what it cost, and a
 // restore brings the task back with it.
+//
+// # And which of those refusals is FINAL
+//
+// A purge is, and so is a task no record on the log ever created: both are
+// [ErrNoTask], which no retry changes. A task this node merely has not
+// applied yet is [statelog.ErrUnavailable], which a retry does — and "no row
+// here" alone cannot tell the two apart. So a missing task with no deletion
+// marker is read again at the log's END, a linearizable read
+// ([Writer.projectAtTheLogsEnd]): a create committed before the read is one
+// this node has then applied, and task ids are never minted twice, so a task
+// still absent there — with no record this node could not decode that might
+// be its create — never will be anywhere the log is applied. That is the
+// shape of a create an abandoned generation voided (replicated 0019), which
+// no marker records: read as "not yet", a caller holding its work until the
+// spend landed held it for ever.
 func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
 	switch {
 	case opID == "":
@@ -1016,29 +1042,95 @@ const turnProjectAttempts = 3
 var errTaskMoved = errors.New("tracker: the task moved project under this write")
 
 // projectForTurn reads a task's project for [Writer.RecordTurn], refusing a
-// task this node does not hold and saying whether it was purged — which, unlike
-// [Writer.taskProject]'s "not on this node", no retry will ever change.
+// task this node does not hold and saying whether that is final — a purge, or
+// no create anywhere on the log — which, unlike [Writer.taskProject]'s "not on
+// this node", no retry will ever change.
 func (w *Writer) projectForTurn(ctx context.Context, id string) (string, error) {
-	var project string
+	var found turnTask
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		task, held, err := readTask(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if !held {
-			return missingTask(ctx, tx, id, turnOnAPurgedTask)
-		}
-		project = task.Project
-		return nil
+		var err error
+		found, err = readTurnTask(ctx, tx, id)
+		return err
 	})
-	return project, err
+	switch {
+	case err != nil:
+		return "", err
+	case found.absent == nil:
+		return found.project, nil
+	case !errors.Is(found.absent, statelog.ErrUnavailable) || w.log == nil:
+		return "", found.absent
+	}
+	return w.projectAtTheLogsEnd(ctx, id)
 }
+
+// turnTask is what one read found of the task a turn names: its project, or
+// the refusal [missingTask] makes where there is no row — a purge's final one,
+// or "not on this node".
+type turnTask struct {
+	project string
+	absent  error
+}
+
+// readTurnTask reads the task a turn names inside tx, answering a failed read
+// — the marker's included — as its error rather than as an absence.
+func readTurnTask(ctx context.Context, tx *sql.Tx, id string) (turnTask, error) {
+	task, held, err := readTask(ctx, tx, id)
+	switch {
+	case err != nil:
+		return turnTask{}, err
+	case held:
+		return turnTask{project: task.Project}, nil
+	}
+	absent := missingTask(ctx, tx, id, turnOnNoTask)
+	if !errors.Is(absent, ErrNoTask) && !errors.Is(absent, statelog.ErrUnavailable) {
+		return turnTask{}, absent
+	}
+	return turnTask{absent: absent}, nil
+}
+
+// projectAtTheLogsEnd reads a task this node holds no row and no deletion
+// marker for again, at the log's END — see [Writer.RecordTurn] for why its
+// absence there is final.
+//
+// OVER THE WHOLE DOMAIN'S SCOPE, because an id names nothing narrower
+// (taskReadScope): a record this node could not decode anywhere on the log may
+// be the task's create, and while one is held the absence is "not yet" rather
+// than "never".
+func (w *Writer) projectAtTheLogsEnd(ctx context.Context, id string) (string, error) {
+	var found turnTask
+	served, err := w.log.Read(ctx, statelog.Query{
+		Level: statelog.ReadLinearizable, Scope: domainScope, Set: true,
+	}, func(tx *sql.Tx) error {
+		var err error
+		found, err = readTurnTask(ctx, tx, id)
+		return err
+	})
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("tracker: task %s is not on this node, and the log's end "+
+			"could not be read to say whether it ever will be: %w", id, err)
+	case found.absent == nil:
+		return found.project, nil
+	case !errors.Is(found.absent, statelog.ErrUnavailable):
+		return "", found.absent
+	case !served.Complete:
+		return "", fmt.Errorf("tracker: task %s is not on this node, and a record this "+
+			"node cannot decode may be the one that creates it: %w", id, statelog.ErrUnavailable)
+	}
+	return "", fmt.Errorf("%w: no record on the log creates task %s, so %s",
+		ErrNoTask, id, turnOnNoTask)
+}
+
+// domainScope is every object on this domain's log: the scope a read about an
+// id with no row behind it covers.
+var domainScope = statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}
 
 // missingTask is the refusal of a task this node holds no row for: [ErrNoTask]
 // when a purge destroyed it, which is final — so the refusal says what the
 // gesture cannot do (refused, completing "task X was purged, and …") — and
-// [statelog.ErrUnavailable] when this node has not applied its create, which a
-// node that has will not refuse.
+// [statelog.ErrUnavailable] otherwise: this node may not have applied its
+// create, which a node that has will not refuse. Whether it ever will is a
+// question for the log's end ([Writer.projectAtTheLogsEnd]).
 func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
 	var purged int
 	err := tx.QueryRowContext(ctx,
@@ -1053,8 +1145,9 @@ func missingTask(ctx context.Context, tx *sql.Tx, id, refused string) error {
 		statelog.ErrUnavailable)
 }
 
-// turnOnAPurgedTask is what [Writer.RecordTurn] cannot do on a purged task.
-const turnOnAPurgedTask = "nothing it cost can be recorded against it"
+// turnOnNoTask is what [Writer.RecordTurn] cannot do on a task that is gone
+// for good.
+const turnOnNoTask = "nothing it cost can be recorded against it"
 
 // recordTurnIn is one attempt of [Writer.RecordTurn], scoped to project.
 func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
@@ -1077,7 +1170,7 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 				return statelog.Decision{}, err
 			}
 			if !held {
-				return statelog.Decision{}, missingTask(ctx, tx, turn.Task, turnOnAPurgedTask)
+				return statelog.Decision{}, missingTask(ctx, tx, turn.Task, turnOnNoTask)
 			}
 			if current.Project != project {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is in "+

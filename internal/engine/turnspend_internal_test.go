@@ -188,6 +188,10 @@ func TestACollectedRunsSpendSaysWhetherItsFateIsSettled(t *testing.T) {
 			return tracker.WriteResult{}, fmt.Errorf("%w: task task-9 was purged, and "+
 				"nothing it cost can be recorded against it", tracker.ErrNoTask)
 		}, true},
+		{"a task no record on its log creates", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{}, fmt.Errorf("%w: no record on the log creates "+
+				"task task-9, so nothing it cost can be recorded against it", tracker.ErrNoTask)
+		}, true},
 		{"an outcome nobody knows", func() (tracker.WriteResult, error) {
 			return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}, nil
 		}, false},
@@ -230,9 +234,9 @@ func TestACollectedRunsSpendSaysWhetherItsFateIsSettled(t *testing.T) {
 //
 // AND THE COLLECT HOLDS ONLY ON AN ANSWER A RETRY CAN CHANGE. A lost
 // acknowledgement holds it, since the retry settles it under the same
-// operation; an unknown the answering node's ledger cannot vouch for is
-// answered the same way on every retry, and holding on it held the seat for
-// ever.
+// operation; a task no record on its log creates, and an unknown the answering
+// node's ledger cannot vouch for, are answered the same way on every retry,
+// and holding on them held the seat for ever.
 func TestTheEnginesCoordinatorRecordsWhatARunSpent(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -244,6 +248,10 @@ func TestTheEnginesCoordinatorRecordsWhatARunSpent(t *testing.T) {
 		{"an acknowledgement lost", func() (tracker.WriteResult, error) {
 			return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}, nil
 		}, true},
+		{"a task no record on its log creates", func() (tracker.WriteResult, error) {
+			return tracker.WriteResult{}, fmt.Errorf("%w: no record on the log creates "+
+				"task task-9, so nothing it cost can be recorded against it", tracker.ErrNoTask)
+		}, false},
 		{"an unknown no ledger here can vouch for", func() (tracker.WriteResult, error) {
 			return tracker.WriteResult{Result: statelog.Result{
 				Outcome: statelog.OutcomeUnknown, Unvouched: true}}, nil

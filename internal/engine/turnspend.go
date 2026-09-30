@@ -139,8 +139,9 @@ var errSpendUnknown = errors.New("engine: whether the task's spend counts this "
 
 // writeSpend writes one spend record as the seat it belongs to, bounded — see
 // the file's doc — and answers whether its fate is SETTLED: nil when the
-// task's spend counts it, or never can because the task was purged
-// ([tracker.ErrNoTask], which no retry changes), or when no repeat here can
+// task's spend counts it, or never can because the task is gone for good —
+// purged, or created by no record on its log ([tracker.ErrNoTask], which no
+// retry changes) — or when no repeat here can
 // learn whether it does (an unknown the answering node's ledger cannot vouch
 // for); and an error when whether it counts is not known YET — the write
 // refused for now, unanswered, or answered with an outcome a repeat resolves —
@@ -174,9 +175,11 @@ func writeSpend(ctx context.Context, halves trackerSeams, opID string,
 				"other spend surface still counts it")
 		return nil
 	case errors.Is(err, tracker.ErrNoTask):
-		log.InfoContext(ctx, "turn_spend_task_purged", "handle", record.Seat,
+		log.InfoContext(ctx, "turn_spend_task_gone", "handle", record.Seat,
 			"turn_id", record.TurnID, "task", record.Task, "operation", opID,
-			"detail", "the task was purged, so nothing it cost can be recorded "+
+			"error", err.Error(),
+			"detail", "the task is gone for good — purged, or created by no record "+
+				"on its log, as the error says — so nothing it cost can be recorded "+
 				"against it; every other spend surface still counts it")
 		return nil
 	case err != nil:

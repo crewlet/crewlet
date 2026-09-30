@@ -241,8 +241,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// actually applies rather than from the one-record-a-second
 			// floor a nil reader falls back to — which reported a node
 			// two thousand records behind as half an hour behind.
-			Drain:  running.runner.Drain,
-			DB:     sl.estate(running.id.Partition).Reader(),
+			Drain: running.runner.Drain,
+			DB:    sl.estate(running.id.Partition).Reader(),
+			// THE DOMAIN'S READ AUTHORITY, which a turn's spend asks for
+			// the log's end before it calls a task this node has no row
+			// for gone for good: without it, a create no node will ever
+			// apply reads as one this node has not applied yet.
+			Log:    running.reader,
 			Claims: e.backends.Coord,
 			NodeID: nodeID,
 			// THE CHART, read PER CALL. A project's lead is the one

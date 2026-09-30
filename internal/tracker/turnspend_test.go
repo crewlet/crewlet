@@ -2,9 +2,14 @@ package tracker_test
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -155,5 +160,59 @@ func TestATurnLandingAfterItsTasksPurgeIsRefusedDeleted(t *testing.T) {
 	}
 	if got := r.strings(`SELECT id FROM tracker_turns WHERE task_id = ?`, task.ID); len(got) != 0 {
 		t.Fatalf("a turn that landed after its task's purge wrote %v", got)
+	}
+}
+
+// A TURN ON A TASK NO RECORD EVER CREATED IS REFUSED AS FINAL; ONE ON A TASK
+// THIS NODE HAS NOT APPLIED YET IS NOT.
+//
+// "No row here" is two facts, and a caller holding its work until a spend is
+// settled acts on them oppositely: a create this node has not applied yet is
+// one a retry — or a moment's wait — finds, and a create that no node will ever
+// apply (an abandoned generation voids one and writes no marker, and a task id
+// is never minted twice) is a retry for ever. Both answered "not on this node",
+// so a coding run on such a task held its seat indefinitely. The log's END is
+// what tells them apart: read there, a task still absent — with no record this
+// node could not decode that might be its create — is gone for good.
+func TestATurnOnATaskTheLogNeverCreatedIsFinal(t *testing.T) {
+	t.Parallel()
+	a := newRoundTrip(t)
+	a.applyWhileWriting()
+	turn := func(task string) tracker.TurnRecord {
+		return tracker.TurnRecord{Task: task, Seat: "swe", TurnID: "run-" + task,
+			Spend: tracker.TurnSpend{Input: 40, Output: 2}}
+	}
+
+	// NEVER CREATED: the log's end holds no create for it.
+	_, err := a.writer.RecordTurn(t.Context(), "op-nowhere", turn(uuid.NewString()))
+	if !errors.Is(err, tracker.ErrNoTask) || errors.Is(err, statelog.ErrUnavailable) {
+		t.Fatalf("a turn on a task no record creates answered %v, want the final "+
+			"ErrNoTask", err)
+	}
+
+	// NOT APPLIED YET: a second node over the same log, behind a create the
+	// first filed. Its turn waits for the log's end, finds the task there and
+	// lands.
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node-b.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = dbNode.Close() })
+	b := newRoundTripOn(t, a.broker, a.log, dbNode, db, "node-b")
+	filed := a.createTask("Filed on node a")
+	b.applyWhileWriting()
+	if _, err := b.writer.RecordTurn(t.Context(), "op-behind", turn(filed.ID)); err != nil {
+		t.Fatalf("a turn on a task the log creates, on a node that had not applied "+
+			"it yet, was refused: %v", err)
+	}
+	b.drain()
+	if got := b.task(t, filed.ID).Task.Spend.Tokens; got != 42 {
+		t.Fatalf("the turn landed on node b as %d tokens, want 42", got)
+	}
+
+	// A RECORD THIS NODE CANNOT DECODE may be the create it is missing, so
+	// the absence is "not yet", which a retry after an upgrade answers.
+	a.deferRecordOn(uuid.NewString(), "ENG")
+	_, err = a.writer.RecordTurn(t.Context(), "op-undecoded", turn(uuid.NewString()))
+	if !errors.Is(err, statelog.ErrUnavailable) || errors.Is(err, tracker.ErrNoTask) {
+		t.Fatalf("a turn on a missing task beside a record this node cannot decode "+
+			"answered %v, want the retryable ErrUnavailable", err)
 	}
 }

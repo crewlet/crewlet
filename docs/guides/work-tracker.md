@@ -278,7 +278,10 @@ confirmed, and collects it again, because the collect is the only moment that
 spend is ever written (see [budgets](../concepts/code-sandbox.md#budgets)). It
 waits only on an answer a retry can change. A turn or a run that ends after its
 task was purged records nothing: the purge destroyed the counters it would have
-added to. And a write the answering node's operation ledger cannot vouch for —
+added to. Nor does one whose task no record on the log ever created — a create
+voided with the generation it was written in — which the write finds out by
+reading the log's end, since a task a node has merely not applied yet is one it
+will. And a write the answering node's operation ledger cannot vouch for —
 the operation predates what that ledger may have lost — is logged as
 `turn_spend_unvouched` and not repeated, since that node answers every repeat
 the same way.
