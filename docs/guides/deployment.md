@@ -398,7 +398,11 @@ secrets:                                     # required on every node, and the
 cluster's members is one value as far as this config is concerned and the
 client fails over between them. `store_dir` is refused here by name: it is
 where an *embedded* server persists, and an external cluster keeps its own
-storage.
+storage. A URL may carry a credential as its userinfo — `user:password@`, or
+a bare `token@`, which the client reads as a bearer token — and nothing the
+engine writes repeats it: a failed dial, a refusal at boot and a log line each
+name a server by its scheme, host and port alone, and an address that does
+not parse is named as one rather than quoted.
 
 **Authentication is `credentials` or `token`.** `credentials` is a path to a
 NATS credentials file, the NKey/JWT pair a NATS account setup issues per

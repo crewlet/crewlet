@@ -713,7 +713,10 @@ func dial(cfg Config) (*nats.Conn, error) {
 	}
 	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", cfg.URL, err)
+		// NAMED BY HOST AND PORT, never by cfg.URL itself: stream.url may
+		// carry a password or a token as its userinfo, and this sentence
+		// is a boot's stderr. See [serverAddresses].
+		return nil, fmt.Errorf("dial %s: %w", serverAddresses(cfg.URL), unquoted(err))
 	}
 	// The other place a connection is opened, and held to the same
 	// contract — see [embeddedServer.connect].

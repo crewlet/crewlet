@@ -59,11 +59,27 @@ import (
 // past their limit when it is written, naming the limit — see
 // [reconnectWatch], which says so on the reconnect itself.
 func carriesTheContract(nc *nats.Conn, embedded bool) error {
+	// NAMED BEFORE THE ROUND TRIP: a connection that drops during it no
+	// longer says which member it was talking to, and that member is the
+	// one the failure is about.
+	server := serverOf(nc, embedded)
 	announced, err := announcedMaxPayload(nc)
 	if err != nil {
-		return err
+		return fmt.Errorf("jetstream: read the max_payload %s holds this "+
+			"connection to: %w", server, err)
 	}
-	return belowTheContract(nc, announced, embedded)
+	return belowTheContract(server, announced, embedded)
+}
+
+// serverOf is how a sentence about nc names its server: the embedded broker as
+// this node's own — an in-process connection's URL is the client's default
+// address, which names nothing — and an operator's by [connectedServer], which
+// carries no credential its URL holds.
+func serverOf(nc *nats.Conn, embedded bool) string {
+	if embedded {
+		return "this node's embedded NATS server"
+	}
+	return "the NATS server at " + connectedServer(nc)
 }
 
 // announcedMaxPayload is the max_payload the server holds this connection to,
@@ -88,8 +104,7 @@ func carriesTheContract(nc *nats.Conn, embedded bool) error {
 // an operator's server.
 func announcedMaxPayload(nc *nats.Conn) (int64, error) {
 	if err := nc.FlushTimeout(nc.Opts.Timeout); err != nil {
-		return 0, fmt.Errorf("jetstream: read the max_payload %s holds this "+
-			"connection to: %w", nc.ConnectedUrlRedacted(), err)
+		return 0, err
 	}
 	return nc.MaxPayload(), nil
 }
@@ -102,18 +117,20 @@ func announcedMaxPayload(nc *nats.Conn) (int64, error) {
 // account's, where the account states a limit of its own — while nothing an
 // operator sets reaches the embedded broker, so a refusal there sending them to
 // stream.url would send them after a knob that does not exist.
-func belowTheContract(nc *nats.Conn, announced int64, embedded bool) error {
+//
+// server is [serverOf]'s name for the connection's server.
+func belowTheContract(server string, announced int64, embedded bool) error {
 	if announced >= queue.MaxPayloadBytes {
 		return nil
 	}
 	if embedded {
-		return fmt.Errorf("jetstream: this node's embedded NATS server announces a "+
-			"max_payload of %d bytes, below the %d bytes this build sends at most "+
-			"(queue.MaxPayloadBytes): the engine configures that server itself and "+
-			"no setting reaches it, so this build is broken rather than misconfigured",
-			announced, queue.MaxPayloadBytes)
+		return fmt.Errorf("jetstream: %s announces a max_payload of %d bytes, "+
+			"below the %d bytes this build sends at most (queue.MaxPayloadBytes): "+
+			"the engine configures that server itself and no setting reaches it, so "+
+			"this build is broken rather than misconfigured",
+			server, announced, queue.MaxPayloadBytes)
 	}
-	return fmt.Errorf("jetstream: the NATS server at %s announces a max_payload of "+
+	return fmt.Errorf("jetstream: %s announces a max_payload of "+
 		"%d bytes for this node's connection, below the %d bytes this build needs: "+
 		"that is the largest message it sends — an event, a webhook delivery, a "+
 		"state-log record at the largest its log declares — and a server that "+
@@ -122,8 +139,7 @@ func belowTheContract(nc *nats.Conn, announced int64, embedded bool) error {
 		"reaches, and wherever the account this node signs in to, or its user, "+
 		"states a payload limit of its own, raise that too: a server holds a "+
 		"connection to the lowest of them",
-		nc.ConnectedUrlRedacted(), announced, queue.MaxPayloadBytes,
-		natsSize(queue.MaxPayloadBytes))
+		server, announced, queue.MaxPayloadBytes, natsSize(queue.MaxPayloadBytes))
 }
 
 // heldToTheContract hands nc back where it carries the contract, and closes
@@ -167,13 +183,21 @@ type reconnectWatch struct {
 // reaches — a line about a member it has already left would name the wrong
 // one.
 func (w reconnectWatch) reconnected(nc *nats.Conn) {
+	// The attribute is the address a reader filters on, and the sentence
+	// names it the way the boot's does; both before the round trip, as
+	// [carriesTheContract] reads them.
+	address := "embedded"
+	if !w.embedded {
+		address = connectedServer(nc)
+	}
+	server := serverOf(nc, w.embedded)
 	announced, err := announcedMaxPayload(nc)
 	if err != nil {
 		return
 	}
-	if err := belowTheContract(nc, announced, w.embedded); err != nil {
+	if err := belowTheContract(server, announced, w.embedded); err != nil {
 		w.log.Error("jetstream_max_payload_below_contract",
-			"server", nc.ConnectedUrlRedacted(), "max_payload", announced,
+			"server", address, "max_payload", announced,
 			"needed", queue.MaxPayloadBytes, "error", err)
 	}
 }
