@@ -494,7 +494,7 @@ export function GateDialog({
                 Evict <InlineCode>{node}</InlineCode> past the presence-lease judgement — for a node
                 wedged in a way that still renews its lease, or one this node cannot see because
                 coordination is unreachable. Only when you know it is gone: its records stop
-                applying everywhere and its seats move.
+                applying everywhere and its copy of the estate stops serving.
               </>
             }
           />
