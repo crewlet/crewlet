@@ -1254,7 +1254,9 @@ collaborators and watchers, a checklist line's owner, a comment's author and
 the people it asks and mentions, whose inbox, priority list and pins a
 person's record is, a view's owner, a project's default assignee, and a
 `people` custom field, whether it names one colleague or several. What every
-answer **shows** is the handle the seat answers to now.
+answer **shows** is the handle the seat answers to now — and so does a
+purge's notice to the project lead, which names whoever purged the item as
+they are called at the time.
 
 So a seat renamed from `cto` to `chief` keeps its day: `my_work` and
 `work_inbox` for `chief` list the work, the questions and the notices it had

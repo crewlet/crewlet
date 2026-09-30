@@ -425,10 +425,17 @@ func (w *Writer) PurgeTask(ctx context.Context, opID, id, project, reason string
 				// than to come back to it — see [absentTask].
 				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
+			// THE PURGER AS THEY ARE CALLED NOW, because the excerpt is
+			// prose the lead reads and nothing rewrites afterwards: the
+			// writer's actor is the seat's IDENTITY (people.go), and "purged
+			// by cto" about a seat that answers to chief names somebody the
+			// lead cannot find — the rule [Writer.prioritisedWake]'s own
+			// excerpt follows.
 			decision, err := w.decide(stamp, subject, OpPurge, ChangePurged, scope, opID, struct {
 				V      int    `json:"v"`
 				Reason string `json:"reason,omitempty"`
-			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason, w.Actor, w.Leads), at)
+			}{V: GateRecordVersion, Reason: reason}, purgeWake(current, reason,
+				currentOf(w.Identities, w.Actor), w.Leads), at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}

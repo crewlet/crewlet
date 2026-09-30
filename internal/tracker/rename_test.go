@@ -3,6 +3,7 @@ package tracker_test
 import (
 	"database/sql"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -195,6 +196,38 @@ func TestARenamedSeatKeepsItsWorkInboxQueueAndPins(t *testing.T) {
 			t.Errorf("%s is stored as held by %q, want cto — the handle the "+
 				"seat was created under", id, stored[id])
 		}
+	}
+}
+
+// A PURGE BY A RENAMED PERSON NAMES THEM AS THEY ARE CALLED NOW.
+//
+// The purge's excerpt is prose the project lead reads and nothing rewrites
+// afterwards, and the writer's actor is the seat's IDENTITY — so built from it
+// the lead was told the task was "purged by cto" by a colleague who answers to
+// `chief`, a name the lead cannot find on the chart. The priorities wake's own
+// excerpt already named the current handle; this is the same rule.
+//
+// Mutation: hand purgeWake the writer's actor as it is and the excerpt names
+// cto.
+func TestAPurgeByARenamedPersonNamesThemAsTheyAreCalledNow(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	chart := renamed{"chief": "cto"}
+	r.writer.Identities, r.reader.Identities = chart, chart
+	r.writer.Leads = fixedLeads{project: "eng-lead"}
+
+	chief := r.writer.As("chief", tracker.AuthorHuman, tracker.Provenance{})
+	if _, err := chief.PurgeTask(t.Context(), "op-purge", "t-1", "ENG",
+		"asked for by legal"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.drain()
+
+	excerpt := historyExcerpt(t, r, "task", "t-1")
+	if !strings.Contains(excerpt, "purged by chief") || strings.Contains(excerpt, "cto") {
+		t.Errorf("the purge excerpt reads %q, want the purger named chief — the "+
+			"handle the lead knows them by", excerpt)
 	}
 }
 
