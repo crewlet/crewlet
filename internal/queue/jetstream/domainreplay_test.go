@@ -92,13 +92,14 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	}
 }
 
-// AN EXISTING CONSUMER'S IN-FLIGHT CEILING IS BROUGHT UP TO THIS BUILD'S.
+// A KEPT CONSUMER'S IN-FLIGHT CEILING IS BROUGHT UP TO THIS BUILD'S.
 //
 // A consumer created by an earlier build carries the broker's default, and
 // the ceiling is the count bound on every pull — so a node that kept the old
 // one would replay a backlog a thousand records at a time behind a thirty
-// second wait each. The start sequence is deliberately left alone, which is
-// the one thing the broker refuses to move anyway.
+// second wait each. The consumer is otherwise one that AGREES with the
+// checkpoint, so it is updated in place rather than rebuilt, and its start
+// sequence is left alone: the broker refuses to move it, and it was right.
 func TestAnExistingDomainConsumerHasItsCeilingRealigned(t *testing.T) {
 	t.Parallel()
 	q, _ := openDomain(t, "CREWLET_ALIGN_LOG", "crewlet.align.log")
@@ -107,7 +108,7 @@ func TestAnExistingDomainConsumerHasItsCeilingRealigned(t *testing.T) {
 		Durable:       name,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
-		OptStartSeq:   7,
+		OptStartSeq:   4,
 		MaxAckPending: 1000,
 		MaxDeliver:    -1,
 	})
@@ -134,10 +135,15 @@ func TestAnExistingDomainConsumerHasItsCeilingRealigned(t *testing.T) {
 		t.Fatalf("the reopened consumer's ack wait is %s, want %s",
 			info.Config.AckWait, domainConsumerAckWait)
 	}
-	if info.Config.OptStartSeq != 7 {
+	if info.Config.OptStartSeq != 4 {
 		t.Fatalf("the realignment moved the start sequence to %d — the position "+
 			"is the checkpoint's to decide and the broker's to keep",
 			info.Config.OptStartSeq)
+	}
+	if !info.Created.Equal(stale.CachedInfo().Created) {
+		t.Fatalf("a consumer that agreed with the checkpoint was rebuilt to raise "+
+			"its ceiling (created %s, now %s) — the ceiling is updatable in place",
+			stale.CachedInfo().Created, info.Created)
 	}
 }
 

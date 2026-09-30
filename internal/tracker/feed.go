@@ -21,10 +21,17 @@ const Source = "work"
 // FeedGroup is the durable consumer's name, and it is STABLE for the
 // deployment's life.
 //
-// The name is where the fleet's position IS: a rename starts a second consumer
-// at the head of the log and abandons everything the first had not handled —
-// which is a company that silently stops being told about its own work, with
-// no error anywhere.
+// The name is where the fleet's position IS. A rename is a fresh consumer,
+// and a fresh one starts from the log's first retained record rather than its
+// head, so it loses nothing and REPLAYS instead: every change the log still
+// holds comes back as a wake, which only the change feed's claim and wake-id
+// dedupe collapse, and only within their own windows — a company re-woken
+// for work it already handled — and until the new consumer catches up, its
+// acknowledgement floor holds back the log's trim.
+//
+// This is the GROUP, not the broker's consumer name: the durable name is
+// derived from the group and the stream together, so `nats consumer ls
+// CREWLET_TRACKER_LOG` lists it and this string alone finds nothing.
 const FeedGroup = "crewlet-tracker-feed"
 
 // Translator turns one mutation record into the delivery a parser reads.

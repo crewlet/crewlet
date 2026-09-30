@@ -12,9 +12,13 @@ import (
 // them so.
 //
 // The group name IS the fleet's position. A rename does not fail, log, or
-// error: it creates a second consumer at the current head, so every change
-// the first had not yet handled is abandoned silently, and the only symptom
-// is notifications nobody ever received.
+// error: it creates a fresh durable consumer, and every group starts from the
+// log's first retained record, so the fleet REPLAYS every change the log still
+// holds as a wake — collapsed only by the change feed's claim and wake-id
+// dedupe, and only within their own windows — and the log's trim stalls
+// behind the new consumer's acknowledgement floor until it catches up. The
+// only symptoms are notifications people already had and a log that stopped
+// shrinking.
 //
 // The tracker's group changed ONCE, when its estate did — a bucket feed and a
 // log feed are two different consumers over two different things, and the old
@@ -34,8 +38,9 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			if tc.got.Group != tc.wantGroupExact {
-				t.Errorf("group = %q, want %q — renaming it abandons every change "+
-					"the fleet had not yet handled, silently", tc.got.Group, tc.wantGroupExact)
+				t.Errorf("group = %q, want %q — renaming it replays every record "+
+					"the log still holds as a wake and holds back the log's trim "+
+					"until the new consumer catches up", tc.got.Group, tc.wantGroupExact)
 			}
 			// The source name scopes the claim keys and is the source
 			// column on every published event, so it is a stored value too.

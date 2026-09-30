@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -111,6 +112,13 @@ func (h Horizons) validate() error {
 // SweepPlan is one tick's resolution: the three values every due bucket's
 // record carries, and which buckets are due.
 type SweepPlan struct {
+	// At is the instant this plan read the clock at — the tick — and the
+	// instant every record it publishes carries in its operation id
+	// ([statelog.DeriveOpID]): the unit of work began then, so a retry of
+	// the same plan reproduces the same ids and the ledger judges them by
+	// when the plan was made, never by when the retry ran.
+	At time.Time
+
 	// Changes and Sessions are the exclusive POSITIONS below which a trail
 	// row of that class is past its horizon. Zero is "nothing old enough",
 	// which is the ordinary state of a company younger than its horizon.
@@ -159,7 +167,7 @@ func (w *Writer) PlanSweep(ctx context.Context, horizons Horizons) (SweepPlan, e
 	// so an instant carried at finer grain would round differently in the
 	// comparison than it reads in the record.
 	now := w.Now().UTC().Truncate(time.Millisecond)
-	plan := SweepPlan{Expired: now.Add(-SessionRowGrace)}
+	plan := SweepPlan{At: now, Expired: now.Add(-SessionRowGrace)}
 	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		if plan.Changes, err = trailBound(ctx, tx, ClassChange,
@@ -342,9 +350,15 @@ func (w *Writer) Sweep(ctx context.Context, horizons Horizons) (SweepReport, err
 
 // sweepBucket publishes one bucket's record.
 //
-// ITS OPERATION ID IS ITS CONTENT — the bucket and the three values — so a
-// retry of the same plan collapses at the broker and in the ledger, and a later
-// tick's record, which says something different, is a different operation.
+// ITS OPERATION ID IS DERIVED FROM ITS CONTENT — the bucket and the three
+// values — at the instant the plan was made ([statelog.DeriveOpID]), so a retry
+// of the same plan collapses at the broker and in the ledger, a later tick's
+// record, which says something different, is a different operation, and the id
+// carries the instant the ledger vouches for it by. It used to be a string of
+// its own shape, which carries no instant: read as minted at the epoch, every
+// sweep was answered `unknown` without being published once the ledger had
+// lost a row — which its monthly sweep does on every deployment older than
+// the month — so the trail stopped being collected with nothing saying why.
 func (w *Writer) sweepBucket(ctx context.Context, plan SweepPlan, b Bucket) (
 	statelog.Result, error) {
 
@@ -360,9 +374,12 @@ func (w *Writer) sweepBucket(ctx context.Context, plan SweepPlan, b Bucket) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	opID := fmt.Sprintf("sweep:%s:%d:%d:%d", b, plan.Changes, plan.Sessions,
-		plan.Expired.UnixMilli())
-	return w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, nil))
+	opID := statelog.DeriveOpID(plan.At, "sweep-"+b.String(),
+		"crewlet.iam.sweep", b.String(),
+		strconv.FormatUint(plan.Changes, 10),
+		strconv.FormatUint(plan.Sessions, 10),
+		strconv.FormatInt(plan.Expired.UnixMilli(), 10))
+	return w.publish(ctx, w.request(ctx, &rec, opID, statelog.PatternArbitrated, nil))
 }
 
 // mayOperate refuses a record only the deployment may publish.

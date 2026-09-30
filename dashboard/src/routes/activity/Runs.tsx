@@ -178,7 +178,14 @@ function runFacts(run: SandboxRun): Fact[] {
   return [
     {
       label: "Seat",
-      value: <SeatChip name={run.role || run.agent_handle} handle={run.agent_handle} />,
+      // `agent` WITHOUT ASKING THE CHART, and it is a fact rather than a
+      // default: a coding run is a suspended Execute phase, and the engine
+      // never RUNS a human seat — so the seat on a sandbox run is an agent
+      // seat by construction. Stated so the solid disc reads as the answer
+      // rather than as a kind nobody threaded.
+      value: (
+        <SeatChip name={run.role || run.agent_handle} handle={run.agent_handle} kind="agent" />
+      ),
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },

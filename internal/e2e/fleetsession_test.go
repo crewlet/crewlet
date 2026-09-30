@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -259,8 +258,10 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 	t.Helper()
 	// ONE KEY FOR EVERY ATTEMPT, because a 503 from a member still catching
 	// up with the session may be retried and a retry must be the same
-	// operation rather than a second item.
-	key := uuid.NewString()
+	// operation rather than a second item — minted in the engine's grammar,
+	// as every client that keys a write mints one, since the surface refuses
+	// a key that carries no instant.
+	key := statelog.NewOpID(time.Now(), "")
 	var filed map[string]any
 	settle(t, "member "+n.id+" to take a write through the cookie", func() (bool, string) {
 		status, body := b.sendKeyed(n, http.MethodPost, "/work/items", key, map[string]any{

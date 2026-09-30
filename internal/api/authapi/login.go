@@ -2,8 +2,6 @@ package authapi
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -14,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -281,26 +278,30 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 // a rewrite nobody waits on must not queue ahead of the sign-ins behind it —
 // and the write has [rehashBudget]. One rewrite per person runs at a time,
 // because a person signing in twice while the first is in flight would pay a
-// second derivation the operation id would then discard. Anything short of a
-// confirmed write is LOGGED and changes nothing: the old verifier still
-// verifies at its own cost, and the next sign-in asks again.
+// second derivation whose write then finds the verifier already replaced and
+// publishes nothing. Anything short of a confirmed write is LOGGED and changes
+// nothing: the old verifier still verifies at its own cost, and the next
+// sign-in asks again.
 //
-// # Idempotent, and never over somebody else's change
+// # Once per verifier, and never over somebody else's change
 //
-// The operation id is derived from the person and the verifier being REPLACED,
-// so every attempt to retire one verifier is one operation, whichever node
-// makes it. And the swap is decided inside the write's own snapshot: only the
-// credential that was verified, still holding the verifier that was verified,
-// is rewritten — a password changed in between keeps its change — and it keeps
-// its id, because a re-hash is the same credential at a different cost.
+// Each rewrite is an operation of its own, minted when it writes
+// ([errVerifierMoved] says why it is not derived from the verifier), and the
+// swap is decided inside the write's own snapshot: only the credential that
+// was verified, still holding the verifier that was verified, is rewritten — a
+// password changed in between keeps its change, and a second rewrite of a
+// verifier the first already replaced finds it gone and publishes nothing —
+// and it keeps its id, because a re-hash is the same credential at a
+// different cost.
 func (s *Service) rehashPassword(r *http.Request, person string,
 	stale iamdomain.Credential, password string) {
 
 	// WITHOUT CANCEL, because the request is answered and its context about
 	// to end — a rewrite that inherited it would do nothing at all — and
-	// bounded, because what it waits on is a broker that may not answer.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()),
-		rehashBudget)
+	// cancellable by the surface's stop. The WRITE is bounded, by
+	// [rehashBudget], once the derivation before it has run: see
+	// [Service.rewriteVerifier].
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	if !s.rehashes.start(person, cancel) {
 		cancel()
 		log.DebugContext(ctx, "api_password_rehash_skipped", "person", person,
@@ -313,6 +314,23 @@ func (s *Service) rehashPassword(r *http.Request, person string,
 		s.rewriteVerifier(ctx, person, stale, password)
 	}()
 }
+
+// errVerifierMoved refuses a rewrite whose credential no longer holds the
+// verifier this sign-in verified, in the write's own snapshot — so nothing is
+// published.
+//
+// # One operation per rewrite, and a moved verifier writes nothing
+//
+// A rewrite's operation is minted NOW ([statelog.NewOpID]), in the grammar the
+// ledger vouches for a retry by. It was derived from the person and the stale
+// verifier, so that every node rewriting one verifier made one operation — and
+// carried no instant, which read as minted at the epoch and was answered
+// `unknown` without being published once the ledger had swept anything. So two
+// sign-ins that both present a stale verifier are two operations now, and the
+// second must not publish a set that changes nothing: its decide meets the
+// verifier the first one wrote and refuses, which publishes nothing at all.
+var errVerifierMoved = errors.New("authapi: the verifier to rewrite is no " +
+	"longer the credential's")
 
 // rehashBudget bounds a background rewrite's write.
 //
@@ -335,22 +353,40 @@ func (s *Service) rewriteVerifier(ctx context.Context, person string,
 			"person", person, "error", err)
 		return
 	}
-	digest := sha256.Sum256([]byte(stale.Verifier))
+	// THE BUDGET STARTS AT THE WRITE, never before the derivation: it is the
+	// publisher's own resolve budget, sized for what the write waits on, and
+	// an argon2id derivation at the shipped cost ahead of it is a quarter of
+	// a second on an idle host and seconds on a loaded one — spent out of the
+	// write's budget, the write began on a context already expired and no
+	// verifier was rewritten on exactly the host that most needed the time.
+	ctx, done := context.WithTimeout(ctx, rehashBudget)
+	defer done()
 	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			out := slices.Clone(held)
+			swapped := false
 			for i, c := range out {
 				if c.ID == stale.ID && c.Method == iamdomain.MethodPassword &&
 					c.Verifier == stale.Verifier {
 					out[i].Verifier = fresh
+					swapped = true
 				}
+			}
+			if !swapped {
+				return nil, errVerifierMoved
 			}
 			return out, nil
 		},
-		OpID:   "rehash:" + person + ":" + hex.EncodeToString(digest[:8]),
+		OpID:   statelog.NewOpID(s.now(), "rehash"),
 		Reason: "re-hashed the password at the current cost",
 	})
+	if errors.Is(err, errVerifierMoved) {
+		log.DebugContext(ctx, "api_password_rehash_skipped", "person", person,
+			"reason", "the verifier this sign-in presented is no longer the "+
+				"one held: another rewrite, or a password change, landed first")
+		return
+	}
 	if err != nil || !landed(result) {
 		log.WarnContext(ctx, "api_password_rehash_unrecorded",
 			"person", person, "error", errText(err), "op_id", result.OpID,
@@ -629,25 +665,32 @@ var errFactorSpent = errors.New("authapi: this second factor was already spent")
 // if that already records this step, or no longer holds this recovery code,
 // the code was spent by somebody else between this node's check and this
 // write — the second of two concurrent uses — and the answer is
-// [errFactorSpent] rather than a sign-in. A decide may run again against a
-// fresh snapshot, so the verdict is the LAST run's.
+// [errFactorSpent] rather than a sign-in, REFUSED in that snapshot so that
+// nothing is published: it used to publish the unchanged set, a record of a
+// spend that spent nothing. A decide may run again against a fresh snapshot,
+// so the verdict is the LAST run's.
 //
 // A FRESH OPERATION ID PER USE, never one derived from the step: two uses of
 // one code under one id would collapse into one record in the operation
-// ledger, and the second would read the first's success as its own.
+// ledger, and the second would read the first's success as its own. Minted in
+// the grammar ([statelog.NewOpID]), whose instant the ledger vouches for a
+// retry by — `second-factor:<person>:<uuid>` carried none.
 //
 // THE WRITE'S OWN ANSWER comes back beside the use, because only a spend that
-// LANDED makes the code single-use: an unknown one may not be on the log, and
-// a session opened on it would be a session on a code that still works.
+// LANDED AS THIS CALL'S OWN makes the code single-use for this sign-in: an
+// unknown one may not be on the log, one that collapsed onto a copy has a
+// verdict this call cannot prove is its own, and a session opened on either
+// could be a session on a code that still works or on one somebody else
+// spent. The caller reads that off the result ([built]).
 func (s *Service) spendSecondFactor(ctx context.Context, person string,
 	use factorUse) (factorUse, statelog.Result, error) {
 
-	spent := false
 	remaining := use.remaining
+	opID := statelog.NewOpID(s.now(), "second-factor")
 	result, err := s.writer.SetCredentials(ctx, iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
-			spent = true
+			spent := true
 			out := make([]iamdomain.Credential, 0, len(held))
 			for _, c := range held {
 				if c.ID != use.credential || !c.RevokedAt.IsZero() {
@@ -671,20 +714,32 @@ func (s *Service) spendSecondFactor(ctx context.Context, person string,
 				}
 				out = append(out, c)
 			}
+			if spent {
+				// SPENT BY SOMEBODY ELSE between this node's check and
+				// this snapshot: refused here, so nothing is published
+				// — a record of a set that changed nothing, under an
+				// operation that was then answered as though the code
+				// were this sign-in's.
+				return nil, errFactorSpent
+			}
 			return out, nil
 		},
-		OpID:   "second-factor:" + person + ":" + uuid.NewString(),
+		OpID:   opID,
 		Reason: "spent a " + string(use.factor) + " second factor",
 	})
+	if result.OpID == "" {
+		// A REFUSAL CARRIES NO RESULT, and the answer still names the
+		// operation, which is how the trail finds it.
+		result.OpID = opID
+	}
 	if err != nil {
 		return factorUse{}, result, err
 	}
-	if !landed(result) {
-		return factorUse{}, result, nil
-	}
-	if spent {
-		return factorUse{}, result, errFactorSpent
-	}
+	// WHETHER A SESSION MAY BE OPENED ON THIS SPEND is the result's to say,
+	// and the caller reads it ([built]): an unknown one, or one that landed
+	// as a copy this call cannot prove is its own, has a verdict that may be
+	// another round's — and a session opened on it could be one opened on a
+	// code somebody else spent.
 	use.remaining = remaining
 	return use, result, nil
 }
@@ -759,20 +814,29 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		s.refuseSecondFactor(w, r, adm, attempt, held, curve,
 			"second factor already spent")
 		return factorUse{}, false
+	case removed(err):
+		// THE PERSON WAS REMOVED between the read this was decided on and
+		// the spend: nobody is left to sign in as, which is a failed
+		// sign-in like every other — THE ONE refusal, counted on the
+		// attempt's curve and in the trail's tally, at the deadline every
+		// refusal is padded to — and not the person's own curve, since no
+		// code was wrong. Rendered by hand it was the one arm a failure
+		// tally never saw.
+		s.refuseSignIn(w, r, adm, attempt, "person removed")
+		return factorUse{}, false
 	case err != nil:
 		// NOT A REFUSAL: the code was right, and this node could not
 		// record that it was used. Signing somebody in on a code that
 		// stays usable is the replay the spend exists to close, so the
 		// honest answer is that this node cannot finish the sign-in now.
-		log.ErrorContext(r.Context(), "api_second_factor_unspent",
-			"person", held.ID, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		writeFailed(w, r, "api_second_factor_unspent", spend.OpID, err)
 		return factorUse{}, false
-	case !landed(spend):
+	case !built(spend):
 		// AND NOT A SPEND EITHER: nothing can establish whether it is on
-		// the log, which for a code is the same as not having recorded
-		// it. A retry presents the code again and is decided afresh — a
-		// spend that did land refuses it as spent.
+		// the log — or it landed as a copy whose verdict this call cannot
+		// prove is its own — which for a code is the same as not having
+		// recorded it. A retry presents the code again and is decided
+		// afresh — a spend that did land refuses it as spent.
 		unresolved(w, r, "api_second_factor_unresolved", spend)
 		return factorUse{}, false
 	}
@@ -880,6 +944,38 @@ func (s *Service) proofOf(how signIn) time.Time {
 	return s.now()
 }
 
+// sessionOpID is the operation a session's START is published under: a step
+// of the lineage it opens.
+//
+// THE LINEAGE IS A UUID7 THIS REQUEST MINTED, so the id carries the instant
+// the session began, in the grammar the ledger vouches for a retry by
+// ([statelog.OpMintedAt]). It was `session:<lineage>`, which carries none and
+// reads as minted at the epoch — and a session subject's ledger rows go after
+// an hour ([iamdomain.SessionOpsRetention]), so within an hour of the first
+// sweep every sign-in was answered `unknown` without being published.
+func sessionOpID(lineage uuid.UUID) string {
+	return statelog.StepOpID(lineage.String(), "session")
+}
+
+// personRemoved answers a sign-in whose person was removed from the directory
+// between the read it was decided on and its record ([removed]) — which
+// nothing will ever write again, so it is not a 503 anybody retries.
+//
+// THE REFUSAL THE WAY IN ALREADY HAS: a session being replaced is one that
+// has ended, and a fresh sign-in is the generic refusal every failed one
+// answers, because a removed person cannot sign in and the caller holds
+// nothing that says otherwise.
+func (s *Service) personRemoved(w http.ResponseWriter, r *http.Request, how signIn) {
+	log.InfoContext(r.Context(), "api_sign_in_person_removed",
+		"replaces", how.replaces)
+	if how.replaces != "" {
+		s.clearSession(w)
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSessionRevoked)
+		return
+	}
+	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSignInRefused)
+}
+
 // completeSignIn opens the session, sets the cookie and answers.
 func (s *Service) completeSignIn(w http.ResponseWriter, r *http.Request,
 	held iamdomain.Sighting, how signIn) {
@@ -923,12 +1019,26 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		if because == "" {
 			because = "replaced by a step-up"
 		}
+		//
+		// A STEP OF THE GESTURE THE NEW LINEAGE NAMES, so it carries the
+		// instant this request minted that lineage at. It was derived from
+		// the REPLACED lineage, whose instant is when that session began —
+		// days ago for a week-long session, while a session subject's
+		// ledger rows go after an hour ([iamdomain.SessionOpsRetention]):
+		// such an id is one the ledger cannot vouch for, and its close was
+		// answered `unknown` without being published, so no step-up of a
+		// session older than an hour could land. Nothing needs the retry of
+		// a step-up to be the same close: closing a closed session changes
+		// nothing, and a step-up asked again is a new gesture.
+		closeOp := statelog.StepOpID(lineage.String(), "close-replaced")
 		closed, closeErr := s.writer.CloseSession(r.Context(), how.replaces,
-			held.ID, because, "step-up:"+how.replaces)
+			held.ID, because, closeOp)
 		if closeErr != nil {
-			log.WarnContext(r.Context(), "api_step_up_close_failed",
-				"error", closeErr, "lineage", how.replaces)
-			httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(closeErr))
+			if removed(closeErr) {
+				s.personRemoved(w, r, how)
+				return loginResponse{}, false
+			}
+			writeFailed(w, r, "api_step_up_close_failed", closeOp, closeErr)
 			return loginResponse{}, false
 		}
 		if !landed(closed) {
@@ -954,15 +1064,22 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// A PASSWORD ALONE WHERE A SECOND FACTOR IS REQUIRED opens a
 		// session that may only enrol one — see [Service.enrolmentOnly].
 		EnrolmentOnly: restricted,
-		OpID:          "session:" + lineage.String(),
+		OpID:          sessionOpID(lineage),
 		// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT, because
 		// nothing in this answer reads the row: the bearer carries the
 		// position and every node validates against its own applier.
 		NoWait: true,
 	})
 	if err != nil {
-		log.ErrorContext(r.Context(), "api_sign_in_session_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		if removed(err) {
+			s.personRemoved(w, r, how)
+			return loginResponse{}, false
+		}
+		// A COLLAPSED START ([iamdomain.ErrCollapsed]) arrives here too:
+		// the epoch and the generation a bearer carries are the decide's,
+		// and nothing can prove they are the landed record's — so no
+		// bearer, and signing in again opens a session of its own.
+		writeFailed(w, r, "api_sign_in_session_failed", sessionOpID(lineage), err)
 		return loginResponse{}, false
 	}
 	if !landed(opened.Result) {

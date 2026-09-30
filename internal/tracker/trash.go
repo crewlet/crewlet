@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -41,12 +42,73 @@ import (
 // first" — which is what makes a tombstone a freeze rather than a flag. The
 // restore therefore cannot go through it, and these are its own verbs for
 // exactly that reason rather than for want of a field.
+//
+// # A subtree gesture is a WALK, and it keeps the walks' contract
+//
+// One commit per task makes both verbs sequences, and they follow the rule
+// every other sequence here follows ([resolved]): a step whose outcome is
+// unknown ENDS the walk rather than being carried on over, and every step is
+// NAMED BY THE TASK IT WRITES rather than by its place in the list. The list
+// is read afresh on a re-run — a restore's is what is STILL in the trash with
+// the root, so positions shift as tasks come back — and a positional name
+// handed the re-run's third step the id the first run's third step landed
+// under, on a different task, which the ledger refuses as an operation id
+// reused. Where the root landed and the walk did not finish, the answer is a
+// [SubtreeStopped] naming how far it got, never a bare error that reads as
+// "nothing happened".
+//
+// EITHER VERB FINISHES WHAT IT STARTED WHEN MADE AGAIN, under the same
+// operation id or a new one: a task already where the gesture leaves it is
+// nothing to do, so a second removal takes what the first did not reach and a
+// second restore — its root already back — brings back whatever is still in
+// the trash with it.
+
+// ErrNothingToRestore reports a restore with nothing to bring back: the task
+// is not in the trash, nothing is in the trash with it, and no earlier copy of
+// this operation put it back. A restore answered from its own first copy is
+// NOT this — it is the success that copy was.
+var ErrNothingToRestore = errors.New("tracker: nothing to restore")
+
+// SubtreeStopped reports a subtree removal or restore whose ROOT landed and
+// whose walk over the rest stopped part of the way through.
+//
+// A TYPE RATHER THAN A SENTENCE, because the caller has to say two true things
+// at once — the task it named is in the trash (or back out of it), and some of
+// what goes with it is not — and a bare error made every caller say the
+// second as though it were the first: "the change was NOT made" about a root
+// that had moved.
+type SubtreeStopped struct {
+	// Verb is the gesture, as a caller would name it: "removal" or
+	// "restore".
+	Verb string
+	// Root is the task the gesture named, whose own step landed.
+	Root string
+	// Followed is how many of the rest landed before the stop, and Of how
+	// many the walk set out to carry.
+	Followed, Of int
+	// OpID is the gesture's operation.
+	OpID string
+	// Err is why the walk stopped — an [ErrStepUnresolved] where a step's
+	// outcome is unknown, or the refusal of the step it stopped at.
+	Err error
+}
+
+func (e *SubtreeStopped) Error() string {
+	return fmt.Sprintf("tracker: the %s of task %s landed and %d of the %d "+
+		"tasks that go with it followed before the walk stopped; making the "+
+		"gesture again finishes it — under operation %s or a new one, since a "+
+		"task already where it leaves it is nothing to do: %v",
+		e.Verb, e.Root, e.Followed, e.Of, e.OpID, e.Err)
+}
+
+func (e *SubtreeStopped) Unwrap() error { return e.Err }
 
 // RemoveTask puts a task, and optionally its whole subtree, in the trash.
 //
 // ONE COMMIT PER TASK, published in DEPTH ORDER so a reader that sees a child
-// removed has already seen its parent go: a partially applied gesture must
-// never leave a tree in a shape no single write could have made.
+// removed has already seen its parent go — the same order the move sequence
+// uses and for the same reason: a partially applied gesture must never leave a
+// tree in a shape no single write could have made.
 //
 // EACH DESCENDANT'S STEP IS NAMED FOR THE DESCENDANT, never for its place in
 // the walk, because a re-run's walk is not the first one's: a descendant
@@ -88,9 +150,11 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 
 	// THE ROOT FIRST. A descendant removed while its parent is still live
 	// is an ordinary state somebody can undo; a live child under a removed
-	// parent is the orphan this order exists to avoid.
+	// parent is the orphan this order exists to avoid — which is also why
+	// an UNKNOWN root ends the walk: nothing follows a root nobody can say
+	// went.
 	result, err := w.tombstone(ctx, opID, id, project, stamp, notify)
-	if err != nil {
+	if err = resolved(fmt.Sprintf("task %s's removal", id), result, err); err != nil {
 		return result, err
 	}
 	for i, descendant := range descendants {
@@ -101,12 +165,12 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 		// happened, and a subtree of forty would otherwise send forty
 		// notifications for it — the root's is the one that says what
 		// was done.
-		if _, err := w.tombstone(ctx, stepID(opID, "d/"+descendant.ID),
-			descendant.ID, descendant.Project, child, nil); err != nil {
-			return result, fmt.Errorf("tracker: the root of %s is in the trash "+
-				"and %d of %d descendants followed it; re-run the removal to "+
-				"finish, which is idempotent: %w",
-				id, i, len(descendants), err)
+		removal, err := w.tombstone(ctx, stepID(opID, "d/"+descendant.ID),
+			descendant.ID, descendant.Project, child, nil)
+		if err = resolved(fmt.Sprintf("task %s's removal with %s",
+			descendant.ID, id), removal, err); err != nil {
+			return result, &SubtreeStopped{Verb: "removal", Root: id,
+				Followed: i, Of: len(descendants), OpID: opID, Err: err}
 		}
 	}
 	return result, nil
@@ -144,17 +208,29 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	// THE ROOT FIRST AGAIN, and for the mirror of the removal's reason: a
 	// child restored under a still-removed parent is reachable from
 	// nothing until the parent follows.
-	result, err := w.clearTombstone(ctx, opID, id, project, notify)
-	if err != nil {
+	//
+	// A ROOT ALREADY BACK IS NOT A REFUSAL, because it is exactly the state
+	// a restore that stopped part of the way through leaves: the tasks
+	// still in the trash with it are what this call is for. Only a root
+	// with nothing to bring back — and no earlier copy of this operation
+	// that brought it back — is [ErrNothingToRestore].
+	var live bool
+	result, err := w.clearTombstone(ctx, opID, id, project, notify, &live)
+	if err = resolved(fmt.Sprintf("task %s's restore", id), result, err); err != nil {
 		return result, err
 	}
+	if live && len(removedWith) == 0 {
+		return result, fmt.Errorf("tracker: task %s is not in the trash and "+
+			"nothing is in the trash with it: %w", id, ErrNothingToRestore)
+	}
 	for i, descendant := range removedWith {
-		if _, err := w.clearTombstone(ctx, stepID(opID, "d/"+descendant.ID),
-			descendant.ID, descendant.Project, nil); err != nil {
-			return result, fmt.Errorf("tracker: %s is out of the trash and %d "+
-				"of %d tasks removed with it followed; re-run the restore to "+
-				"finish, which is idempotent: %w",
-				id, i, len(removedWith), err)
+		var already bool
+		restore, err := w.clearTombstone(ctx, stepID(opID, "d/"+descendant.ID),
+			descendant.ID, descendant.Project, nil, &already)
+		if err = resolved(fmt.Sprintf("task %s's restore with %s",
+			descendant.ID, id), restore, err); err != nil {
+			return result, &SubtreeStopped{Verb: "restore", Root: id,
+				Followed: i, Of: len(removedWith), OpID: opID, Err: err}
 		}
 	}
 	return result, nil
@@ -162,18 +238,17 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 
 // tombstone publishes one task's removal.
 func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
-	stamp Tombstone, notify *Notify) (WriteResult, error) {
+	removal Tombstone, notify *Notify) (WriteResult, error) {
 
 	subject := TaskSubject(id)
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
 			case err != nil:
@@ -183,10 +258,10 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			}
 			// THE PROJECT FIRST, before the no-op below: who may remove
 			// this task was decided on the project the caller read it
-			// in, and a write naming another one is refused — see
-			// [filedUnder].
-			if wrong := filedUnder(current, project); wrong != nil {
-				return statelog.Decision{}, wrong
+			// in, and a task that has moved since is another project's
+			// to remove — see [stillIn].
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
 			}
 			if current.Removed != nil {
 				// ALREADY IN THE TRASH IS NOTHING TO DO, and it is a
@@ -195,8 +270,8 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpTombstone, ChangeRemoved, scope,
-				opID, TaskPatch{Removed: &stamp}, notify, at)
+			decision, err := w.decide(stamp, subject, OpTombstone, ChangeRemoved, scope,
+				opID, TaskPatch{Removed: &removal}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -210,19 +285,24 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 //
 // A ZERO TOMBSTONE is how the patch spells "clear it" — see [applyPatch]: an
 // absent field means "leave it alone", so the clear has to be a value.
+//
+// live reports whether the LAST decision found the task already out of the
+// trash — captured rather than returned, like the mint's value, because the
+// decision may run several rounds and only the one the answer came from
+// counts. It stays false where the ledger answered the step, which is an
+// earlier copy of this operation having restored it.
 func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
-	notify *Notify) (WriteResult, error) {
+	notify *Notify, live *bool) (WriteResult, error) {
 
 	subject := TaskSubject(id)
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readTask(ctx, tx, id)
 			switch {
 			case err != nil:
@@ -230,15 +310,17 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case !held:
 				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
-			if wrong := filedUnder(current, project); wrong != nil {
-				return statelog.Decision{}, wrong
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
 			}
 			if current.Removed == nil {
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
 				// own rule: a re-run must be able to finish.
+				*live = true
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpRestore, ChangeRestored, scope,
+			*live = false
+			decision, err := w.decide(stamp, subject, OpRestore, ChangeRestored, scope,
 				opID, TaskPatch{Removed: &Tombstone{}}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -249,31 +331,39 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 	})
 }
 
-// filedUnder refuses a write whose authority was decided on a project the task
-// is not filed under.
+// stillIn refuses a write whose authority was decided on a project the task
+// is no longer filed under.
 //
 // # Why the project a caller passes is checked INSIDE the snapshot
 //
 // Every caller of a task write resolved a key to reach the task and read its
 // project OFF THE ROW, outside this transaction — and then decided on that
 // project who may do what: a removal and a restore are the project lead's, and
-// a re-route is the project's own. The write's SCOPE is formed from that
-// argument too, before the snapshot exists. A task's project never changes, so
-// an argument naming another one is a caller that read the wrong row — and
-// publishing anyway lands one project lead's authority on another project's
-// work, under a scope that does not cover the task it writes.
+// a re-route is the project's own. A task moved to another project between
+// that read and this snapshot ([Writer.MoveTaskToProject]) is somebody else's
+// decision, and publishing anyway lands one project lead's authority on
+// another project's work.
+//
+// And the write's SCOPE is formed from that argument too, before the snapshot
+// exists: a task in another project would be written under a container it is
+// not in, so a deferral on its real project would not hold this write back and
+// one on the named project would hold back a write that never touches it. A
+// bulk edit names one project for every task in it, which is where a task
+// from elsewhere arrives.
 //
 // So the project argument is a PRECONDITION, not a label, and it is checked
 // here — the one place the framework guarantees a single consistent read —
 // exactly as an if-match is. A CONFLICT rather than an ordinary refusal,
-// because the remedy is the same one: the caller reads the task again, decides
-// on the project it is in, and re-sends.
-func filedUnder(current Task, project string) error {
+// because nothing is wrong with the request: the caller reads the task again,
+// decides again on the project it is in now, and re-sends. It is also what
+// makes a second walk of one move harmless: a descendant the first walk
+// carried is refused here rather than re-keyed again.
+func stillIn(current Task, project string) error {
 	if current.Project == project {
 		return nil
 	}
-	return fmt.Errorf("tracker: task %s (%s) is filed under project %s, not "+
-		"%s as this write named it — what the write may do was decided on a "+
+	return fmt.Errorf("tracker: task %s (%s) is filed under project %s now, "+
+		"not %s where it was read — what this write may do was decided on a "+
 		"project the task is not in, so read it again and decide on %s: %w",
 		current.Key, current.ID, current.Project, project, current.Project,
 		statelog.ErrConflict)

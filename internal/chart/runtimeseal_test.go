@@ -504,15 +504,27 @@ func TestAWriteThatDoesNotLandChangesNoCredentialARowNames(t *testing.T) {
 		}
 	})
 
+	// A LANDED OPERATION ID IS ANSWERED BY THE LEDGER BEFORE ANY DECIDE RUNS
+	// (statelog.Snap.Held), so a retry carrying another value is the landed
+	// write, collapsed — never a second decision, and never a seal: the value
+	// it carries is not sealed under any name, and the row keeps what the
+	// operation wrote. Telling a reused KEY from a retry is the surface's
+	// job, which binds a key to its request (chartapi's request digest); the
+	// writer's is only that a held id writes nothing.
 	t.Run("an operation id reused for another value", func(t *testing.T) {
 		row := r.runtimeOf("sarah-chen")
-		if _, err := r.writer.WriteSeat(t.Context(), "op-one-sarah-chen", chart.SeatContent{
+		sealed := len(r.sealer.sealed)
+		result, err := r.writer.WriteSeat(t.Context(), "op-one-sarah-chen", chart.SeatContent{
 			Handle: "sarah-chen", Name: "sarah-chen", Email: redacted(),
 			Runtime: token("NEW-token"),
-		}); !errors.Is(err, chart.ErrRefused) || !strings.Contains(err.Error(),
-			"mcp_env.github.GITHUB_TOKEN") {
-			t.Fatalf("a reused operation id with another value: err = %v, want a "+
-				"refusal naming the field", err)
+		})
+		if err != nil || !result.Collapsed {
+			t.Fatalf("a landed operation id retried with another value = %+v, %v; "+
+				"want the landed write, collapsed", result, err)
+		}
+		if got := len(r.sealer.sealed); got != sealed {
+			t.Errorf("a collapsed retry sealed %d values, which nothing names",
+				got-sealed)
 		}
 		unchanged(t, "sarah-chen", row)
 	})

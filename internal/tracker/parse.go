@@ -28,6 +28,16 @@ const (
 	MetaExcerpt    = "excerpt"
 	MetaLate       = "late"
 
+	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
+	// line per delta the record carries, written by [changedText].
+	//
+	// RENDERED AT THE PARSE rather than carried typed, because the spine's
+	// envelope is a string map and this is the only side of the boundary
+	// where [Notify.Fields] still exists: a prompt is handed a
+	// [notify.Inbound] and has no route back to the record. Prose in
+	// metadata is what [MetaExcerpt] already is.
+	MetaDeltas = "deltas"
+
 	// MetaObject and MetaObjectID are WHAT the change was about, and they
 	// exist because one of the two routable kinds is not a task. The
 	// prompt keys its opener on the object rather than on the change kind:
@@ -64,6 +74,8 @@ type Parser struct {
 
 // ParserOptions configure a parser.
 type ParserOptions struct {
+	// Logger is where the parser reports. Nil is the package's own
+	// component logger, never silence.
 	Logger *slog.Logger
 }
 
@@ -71,7 +83,7 @@ type ParserOptions struct {
 func NewParser(opts ParserOptions) *Parser {
 	logger := opts.Logger
 	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
+		logger = log
 	}
 	return &Parser{logger: logger}
 }
@@ -97,7 +109,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	if !record.Subject.Kind.Routable() {
 		// A PROJECT, A CATALOGUE, A VIEW OR A TAG SET is read from its
 		// own surface rather than woken into somebody's inbox, and a
-		// counter or a rank order has no audience at all. See
+		// counter or an alias has no audience at all. See
 		// [ObjectKind.Routable] for why the set is closed rather than a
 		// negative test.
 		return nil, nil
@@ -109,6 +121,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// that nothing ever assigned, so the two surfaces agreed only by the
 	// accident that no writer sets a batch id yet.
 	candidates := Candidates(record.Notify, record.Batched())
+	// THE AUTHOR IS THE ONE NAME TO LEAVE OUT: a person bound to a seat
+	// writes AS that seat (iam.ActorFor), so the handle their own gestures
+	// land on — the watch a create leaves, the watch a comment leaves — is
+	// the author the record already carries.
 	routed := Route(candidates, registryHas(reg), record.Actor)
 	if len(routed) == 0 {
 		p.logger.DebugContext(ctx, "tracker_change_reaches_nobody",
@@ -129,6 +145,9 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			// stop notifications — so this is what catches what slips
 			// through, in the inbox and in the completion ledger.
 			WakeID: changefeed.WakeID(record.OpID, c.Handle),
+			// AND STAMPED WITH THE RECORD'S OWN INSTANT, which every copy
+			// of this wake carries — see [notify.Routed.WakeAt].
+			WakeAt: record.CreatedAt,
 		})
 	}
 	return out, nil
@@ -181,6 +200,15 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	}
 	if record.Notify.Excerpt != "" {
 		metadata[MetaExcerpt] = record.Notify.Excerpt
+	}
+	// WHAT MOVED, not only that something did. The record has carried
+	// these deltas since the first wake and nothing rendered them, so a
+	// seat woken by a status change was told "The status changed by ada."
+	// and had to spend a tool round to learn what it changed TO — and the
+	// side it moved FROM is not on the task at all, so that round could
+	// never recover it.
+	if text := changedText(record.Notify.Fields); text != "" {
+		metadata[MetaDeltas] = text
 	}
 	if record.Notify.Late {
 		// THE FLAG A READER NEEDS to understand why they are hearing

@@ -52,7 +52,6 @@
 
 import type { ChartRead, CompanyDocument, ConfigRevision } from "~/protocol/index.ts";
 import { isRecord } from "./json.ts";
-import type { KeySource } from "./keys.ts";
 import type { CompanyReading } from "./reducer.ts";
 import {
   revisionOfEtag,
@@ -61,23 +60,31 @@ import {
   type HttpAnswer,
 } from "./transport.ts";
 
-/** A write id: letters, digits, `_` and `-`, bounded like a minted key. */
-const WRITE_ID = /^[A-Za-z0-9_-]{8,64}$/;
+/**
+ * A write id: a bare operation id in the engine's grammar — a UUIDv7, the
+ * version nibble `7` and the RFC 9562 variant in their places — which the
+ * runtime mints (`runtime.ts`'s `newWriteId`), because every chart step of a
+ * save is sent under an id derived from it ([saveStepID]) and the chart
+ * surface holds a key to that grammar (`statelog.CheckCallerOpID`): the id
+ * carries the instant it was minted, which the engine reads to decide whether
+ * its ledger can vouch for a retry. A random token carried none, and every
+ * builder save was refused.
+ */
+const WRITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 /** Whether a value is shaped like a write id, as one read back from storage must be. */
 export function isWriteId(value: unknown): value is string {
   return typeof value === "string" && WRITE_ID.test(value);
 }
 
-/** A fresh write id. Call it in the event handler that saves. */
-export function newWriteId(source: KeySource): string {
-  const id = source.next();
-  if (!isWriteId(id)) {
-    throw new RangeError(
-      `newWriteId: the key source produced an unusable token: ${JSON.stringify(id)}`,
-    );
-  }
-  return id;
+/**
+ * The operation id step `n` of a save is sent under: a STEP of the save's own
+ * operation (`statelog.StepOpID`), named for what it is, so a stuck step reads
+ * in the chart's ledger as the builder's save it belongs to, and it inherits
+ * the instant the save was minted at.
+ */
+export function saveStepID(writeId: string, n: number): string {
+  return `${writeId}.builder-save.${n}`;
 }
 
 /**

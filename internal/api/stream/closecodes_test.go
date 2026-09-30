@@ -40,7 +40,7 @@ func TestTheDashboardClosesOnTheEnginesCloseCodes(t *testing.T) {
 	}
 	read := map[int]string{}
 	for name, engine := range dashboard {
-		body, err := clientsource.Declaration("../"+clientsource.Tree,
+		body, err := clientsource.Declaration(clientsource.Tree(t),
 			`(?m)^\s*(?:export\s+)?const\s+`+name+`\s*=\s*(\d+)\s*;`)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

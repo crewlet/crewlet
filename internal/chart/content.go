@@ -206,12 +206,11 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 	scope := ScopeSet{Subject: true}
 
 	result, err := w.publishContent(ctx, object, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE ROW THIS WRITE REPLACES, read in THIS transaction:
 			// what the record asks of its party is what it CHANGES,
 			// and an omitted runtime half is carried from here. See
@@ -277,7 +276,7 @@ func (w *Writer) WriteUnit(ctx context.Context, opID string, content UnitContent
 					return statelog.Decision{}, err
 				}
 			}
-			return w.record(subject, OpUpsert, opID, at, scope, payload, need)
+			return w.record(stamp, subject, OpUpsert, opID, at, scope, payload, need)
 		},
 	})
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err
@@ -316,12 +315,11 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 	scope := ScopeSet{Subject: true, Unit: unit}
 
 	result, err := w.publishContent(ctx, object, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE ROW THIS WRITE PATCHES, read in THIS transaction.
 			// See this file's header: a restore from a read taken
 			// before the snapshot pairs a value from one instant with
@@ -411,7 +409,7 @@ func (w *Writer) WriteSeat(ctx context.Context, opID string, content SeatContent
 					return statelog.Decision{}, err
 				}
 			}
-			return w.record(subject, OpUpsert, opID, at, scope, payload, need)
+			return w.record(stamp, subject, OpUpsert, opID, at, scope, payload, need)
 		},
 	})
 	return WriteResult{Result: result, Objects: []ObjectRef{object}}, err

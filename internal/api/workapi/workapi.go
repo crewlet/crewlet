@@ -51,18 +51,22 @@
 //
 // # The status codes, and why each is its own
 //
+//   - 400 — the request is the caller's to change: a body the verb does not
+//     take, or an `Idempotency-Key` that is not an operation id.
 //   - 401 — nobody presented a credential.
 //   - 403 — a credential this node knows, refused by the authority table.
 //   - 503 with Retry-After — this node could not decide (the identity estate
 //     or the chart could not be read), or could not establish the outcome.
-//   - 404 — the item, page or comment does not exist.
+//   - 404 — the item, page or comment does not exist, or a purge destroyed it.
 //   - 409 — somebody changed it since it was read: a stale version, a title
 //     taken, a race lost.
 //   - 422 — the domain refused the write on its own rules; the detail is its
 //     own sentence.
 //   - 200 / 202 / 503 — a write that was made answers the tool's own outcome:
 //     applied, pending with the position to read at, or unknown carrying the
-//     operation id a retry must reuse.
+//     operation key a retry must reuse — and, where this node's operation
+//     ledger cannot vouch for it, `unvouched` and no Retry-After, because the
+//     same request asked here answers the same way.
 //
 // # An argument the tool does not read is refused, never dropped
 //
@@ -81,7 +85,16 @@
 // request makes derives its id from — the tracker's through the actor's work
 // key, the knowledge base's through the actor's op key — so a request retried
 // after `unknown` under the same key lands once. Without one, a fresh key is
-// minted per request and handed back as `op_id`.
+// minted per request and handed back as `op_id`. Either way the key is an
+// operation id in the engine's grammar, because every id derived from it
+// carries its instant and the ledger vouches for a retry by that instant — see
+// [operationKey].
+//
+// EVERY ID IS ALSO BOUND TO WHAT THE REQUEST ASKS, so the same key is the same
+// operation only for the same request: sent with another one, it derives
+// operations of its own, which land as asked. Bound to the key alone, the
+// ledger answered the second request with the first one's outcome — `applied`,
+// with nothing of it written — see [keyedOp] and [pageKey].
 //
 // # What is NOT here
 //
@@ -102,8 +115,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -365,13 +376,129 @@ func unavailableFor(w http.ResponseWriter, cause error, detail string,
 
 // operationKey is the seed every write this request makes derives its
 // operation id from: the caller's own where they sent one, and fresh where
-// they did not — which is then handed back, so a retry can send it.
-func operationKey(r *http.Request) string {
-	if given := strings.TrimSpace(r.Header.Get(IdempotencyHeader)); given != "" {
-		return given
+// they did not — which is then handed back, so a retry can send it. It answers
+// false once it has refused a key that is not one.
+//
+// # An operation id the engine's grammar minted, or none
+//
+// Every id a write derives from the key carries the KEY'S instant
+// ([statelog.OpMintedAt]) — the tracker's through [builtin.Actor.WorkSince],
+// the knowledge base's inside [pages.Store] — and the publisher vouches for a
+// retry by that instant against the point its operation ledger may have lost
+// rows from. A key minted outside the grammar carries none and reads as minted
+// at the epoch, before every loss the ledger will ever have: once it had swept
+// anything, each such write was answered `unknown` without being published, on
+// the first attempt and on every retry. This surface minted one exactly like
+// that for every request that sent no key — a v4 uuid — and passed a caller's
+// through unread, so both halves of the rule are here: a fresh key is minted
+// through [statelog.NewOpID], and a key a caller sends is held to
+// [statelog.CheckCallerOpID], the one rule every surface that takes one holds
+// it to, and refused naming it rather than published into a write nothing
+// could ever settle. The knowledge base refuses such a key itself
+// ([pages.ErrInvalid] on `actor.op_key`), so without this every page write
+// through this surface was refused.
+//
+// BARE, with no name: the key is a SEED rather than the id of any one write —
+// each write derives its own, named for its verb and its object — so a name
+// here would label nothing in the ledger.
+func operationKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	given := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
+	if given == "" {
+		return statelog.NewOpID(time.Now(), ""), true
 	}
-	return uuid.NewString()
+	if err := statelog.CheckCallerOpID(given); err != nil {
+		refuseKey(w, err)
+		return "", false
+	}
+	return given, true
 }
+
+// refuseKey answers an `Idempotency-Key` outside the operation-id grammar:
+// `400 op_id_invalid`, naming the header and the rule, with nothing read or
+// written.
+//
+// [httpjson.CodeOpIDInvalid], THE ONE CODE EVERY SURFACE REFUSES A CALLER'S
+// OPERATION ID WITH — the node gate's `?op_id=`, the org chart's and the
+// identity directory's keys, this one — so a client branches on one spelling
+// for "the id you sent is not one this engine would have minted" whichever
+// route it sent it to. It was `invalid_input`, from before the table carried a
+// code of its own for it, which left the same mistake two codes apart. The
+// field still names the header, because a key is sent there rather than in the
+// body or the query.
+func refuseKey(w http.ResponseWriter, err error) {
+	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
+		httpjson.Detail{"field": IdempotencyHeader, "detail": err.Error()})
+}
+
+// keyedOp is the operation id of one write this surface makes ITSELF — a rank
+// move, a remark's edit, a purge — derived from the request's key, its verb,
+// the object it is about and WHAT THE REQUEST ASKS of it.
+//
+// The verb and the object are in the identity, so the one key covers every
+// record a request writes without two of them collapsing into one; the verb is
+// the id's name, so a reader of the ledger finds it by what it did; and the id
+// carries the KEY'S OWN INSTANT, so the ledger vouches for a retry of it
+// exactly as long as it vouches for the key. It was `rank-<task>-<key>` and the
+// like, which carried no instant at all — see [operationKey] for what that
+// answered once the ledger had swept.
+//
+// # The request's arguments are in the operation
+//
+// Because the ledger answers an operation it already holds BEFORE the write is
+// decided ([statelog.Result.Collapsed]), an id named by the verb and the object
+// alone made the same key sent with another request — a card dropped
+// somewhere else, a remark rewritten again — the FIRST request's operation:
+// answered `applied` from the ledger, with nothing of the second written. That
+// is a change reported as made and silently dropped, the one answer a retry
+// key must never produce. With the arguments in the identity the same request
+// is the same operation, which is what a retry is, and any other request under
+// the key is an operation of its own that lands as asked — the rule the tools
+// behind the other routes already derive by ([builtin] puts a digest of a
+// call's arguments in every id it derives from a key), so the two halves of
+// this surface cannot answer one key two ways.
+//
+// The verb is a NAME, so it never holds a dot, which in the grammar begins a
+// gesture's step ([statelog.StepOpID]).
+func keyedOp(key, verb, object string, args map[string]any) string {
+	at, _ := statelog.OpMintedAt(key)
+	return statelog.DeriveOpID(at, verb, keyedOpNamespace, key, verb, object,
+		turnctx.ArgsDigest(args))
+}
+
+// pageKey is the key the knowledge base derives every write of ONE REQUEST
+// from ([pages.Actor.OpKey]): the request's key, bound to what the request
+// asks.
+//
+// # Why the knowledge base is not handed the request's key itself
+//
+// It derives a write's operation from the key, the verb and the page
+// ([pages.Store]) — never from what the write says — so under the request's key
+// as sent, the same key with another request was the first request's
+// operation: a rename to another title, a save of another body, answered
+// `applied` from the ledger with nothing of it written. Bound here, the same
+// request derives the same key and is one operation however often it is
+// retried, and any other request under the key derives another — [keyedOp]'s
+// rule, for the writes this surface makes itself.
+//
+// A BARE OPERATION ID AT THE KEY'S OWN INSTANT, with no name: the knowledge
+// base holds its key to [statelog.CheckCallerOpID] and dates every id it
+// derives by the key's instant, and the request's key is what the ledger's
+// vouching is measured against.
+func pageKey(key string, args map[string]any) string {
+	at, _ := statelog.OpMintedAt(key)
+	return statelog.DeriveOpID(at, "", pageKeyNamespace, key,
+		turnctx.ArgsDigest(args))
+}
+
+// keyedOpNamespace and pageKeyNamespace keep [keyedOp]'s and [pageKey]'s ids
+// apart from each other and from every other derivation over the same key —
+// builtin's for the tool-backed routes, the knowledge base's own inside it.
+// FIXED for the life of the format: a new one would make a retry that
+// straddles the change a second write.
+const (
+	keyedOpNamespace = "crewlet.workapi"
+	pageKeyNamespace = "crewlet.workapi.pages"
+)
 
 // deps are this surface's deps for ONE request: the actor is the request's
 // principal carrying the request's operation key, and the decision is the
@@ -381,20 +508,64 @@ func operationKey(r *http.Request) string {
 // request with the first one's seed, and the ledger would collapse every
 // write after it as a redelivery — the defect callKey's own doc records the
 // operator surface having for a deployment's whole life.
-func (s *Service) deps(key string) (builtin.WorkDeps, builtin.PageDeps) {
+//
+// THE KEY'S INSTANT TRAVELS WITH IT as [builtin.Actor.WorkSince], which is the
+// instant every id the tools derive from the key carries
+// ([builtin.Actor.OperationSince]). Left zero, every write this surface made
+// was one the ledger read as minted at the epoch — see [operationKey].
+//
+// args are the tool call's own arguments: the tracker's tools bind every id
+// they derive to them themselves, and the knowledge base is handed the key
+// bound to them ([pageKey]), because it binds nothing.
+func (s *Service) deps(key string, args map[string]any) (builtin.WorkDeps,
+	builtin.PageDeps) {
+
 	work, kb := s.workDeps, s.pageDeps
 	work.Actor = func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
 		actor, err := builtin.PrincipalActor(ctx, turn)
-		actor.WorkKey = key
+		seed(&actor, key)
 		return actor, err
 	}
+	bound := pageKey(key, args)
 	kb.Actor = func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
 		actor, err := builtin.PrincipalPageActor(ctx, turn)
-		actor.OpKey = key
+		actor.OpKey = bound
 		return actor, err
 	}
 	work.Authorize, kb.Authorize = s.authorize, s.authorize
 	return work, kb
+}
+
+// operationArg is the argument the operator's tools take an operation id in —
+// builtin's own spelling, which that package does not export.
+const operationArg = "op_id"
+
+// noOperationArg refuses a body carrying an `op_id`, reporting whether the
+// request may go on.
+//
+// THIS SURFACE'S OPERATION IS THE REQUEST'S KEY, and a tool served here derives
+// every write from it — so the tool refuses an `op_id` beside it, in a sentence
+// written for the operator's assistant, and as a failure with no cause of its
+// own that answered `422 refused`: "the domain would not take it", said of a
+// request shaped for another surface. It is the caller's to change, so it is
+// `400`, naming where the operation goes here.
+func noOperationArg(w http.ResponseWriter, args map[string]any) bool {
+	if _, sent := args[operationArg]; !sent {
+		return true
+	}
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+		map[string]string{"detail": "this surface takes the operation from the " +
+			IdempotencyHeader + " header, which every write the request makes " +
+			"derives its id from; leave `" + operationArg + "` out of the body " +
+			"and send the op_id an earlier answer returned as the header"})
+	return false
+}
+
+// seed puts the request's operation key on a work actor, with the instant it
+// was minted at — see [Service.deps].
+func seed(actor *builtin.Actor, key string) {
+	actor.WorkKey = key
+	actor.WorkSince, _ = statelog.OpMintedAt(key)
 }
 
 // actor is the request's work actor, carrying its operation key.
@@ -410,20 +581,21 @@ func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
 		s.refuseDecision(w, r, "", authz.Decision{Err: err})
 		return builtin.Actor{}, false
 	}
-	actor.WorkKey = key
+	seed(&actor, key)
 	return actor, true
 }
 
-// pageActor is [Service.actor] for the knowledge base.
-func (s *Service) pageActor(w http.ResponseWriter, r *http.Request, key string) (
-	pages.Actor, bool) {
+// pageActor is [Service.actor] for the knowledge base, carrying the request's
+// key bound to what the request asks ([pageKey]).
+func (s *Service) pageActor(w http.ResponseWriter, r *http.Request, key string,
+	args map[string]any) (pages.Actor, bool) {
 
 	actor, err := builtin.PrincipalPageActor(r.Context(), nil)
 	if err != nil {
 		s.refuseDecision(w, r, "", authz.Decision{Err: err})
 		return pages.Actor{}, false
 	}
-	actor.OpKey = key
+	actor.OpKey = pageKey(key, args)
 	return actor, true
 }
 
@@ -431,8 +603,14 @@ func (s *Service) pageActor(w http.ResponseWriter, r *http.Request, key string) 
 func (s *Service) call(w http.ResponseWriter, r *http.Request, verb string,
 	args map[string]any) {
 
-	key := operationKey(r)
-	work, kb := s.deps(key)
+	if !noOperationArg(w, args) {
+		return
+	}
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
+	work, kb := s.deps(key, args)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Authorize: s.authorize,
 	}) {
@@ -473,7 +651,54 @@ func answerTool(w http.ResponseWriter, key string, result tools.Result) {
 			httpjson.CodeInternalError, map[string]string{"detail": result.Output})
 		return
 	}
-	answer(w, key, outcomeOf(receipt), receipt)
+	subtreeStoppedHere(receipt)
+	// A RECEIPT CARRIES NO LEDGER FACTS: a tool reports an outcome nobody
+	// can establish as a FAILED result carrying [builtin.UnknownOutcome],
+	// which [fail] answers, so an `unknown` still found here is a nested
+	// half of a two-record tool, whose own detail says what landed.
+	answer(w, key, outcomeOf(receipt), false, receipt)
+}
+
+// subtreeStoppedHere rewrites a stopped subtree's instruction for THIS
+// surface.
+//
+// # Why the sentence is replaced rather than passed on
+//
+// remove_work_item and restore_work_item answer a subtree walk that stopped
+// part of the way with the ROOT's receipt and a `subtree_stopped` sentence
+// saying how to finish — written for the operator's assistant, where a new
+// operation is made by leaving `op_id` out of the call. Here the operation is
+// the request's `Idempotency-Key`, and a client told to call a tool "WITHOUT
+// an op_id" is told about an argument this route refuses. What finishes the
+// walk on this surface is the same request under a NEW key, or none: a new
+// operation decides every task afresh — a task already where the gesture
+// leaves it is nothing to do — while the same key finishes it only where this
+// node's ledger can vouch for the step it stopped at, which nothing in the
+// receipt says. So the one instruction right in both cases is given, and the
+// counts it is formed from are the receipt's own fields, never words read out
+// of the tool's sentence.
+func subtreeStoppedHere(receipt map[string]any) {
+	said, stopped := receipt["subtree_stopped"]
+	if !stopped {
+		return
+	}
+	// WHY IT STOPPED is in the tool's own sentence, beside the instruction
+	// this replaces — kept for whoever reads this node's log, since the
+	// answer's is the instruction a client can act on.
+	log.Info("api_work_subtree_stopped", "item", receipt["key"], "tool_detail", said)
+	done := "removed"
+	if restored, _ := receipt["restored"].(bool); restored {
+		done = "restored"
+	}
+	key, _ := receipt["key"].(string)
+	followed, _ := receipt["subtree_followed"].(float64)
+	total, _ := receipt["subtree_total"].(float64)
+	receipt["subtree_stopped"] = fmt.Sprintf("%s is %s, but only %d of the %d "+
+		"tasks that go with it followed before the walk stopped. Do not report "+
+		"it as done. To finish it, send this request again under a NEW %s, or "+
+		"none: a new operation decides each task afresh, so whatever has not "+
+		"followed yet goes and what already has is left where it is.",
+		key, done, int(followed), int(total), IdempotencyHeader)
 }
 
 // outcomeOf is a receipt's outcome: its own, or — for a tool that made two
@@ -517,10 +742,9 @@ func weaker(a, b statelog.Outcome) statelog.Outcome {
 // THE THREE SUCCESSES ARE THREE ANSWERS, for chartapi's reason: only
 // `applied` means the next read on this node sees the write, so only it is a
 // 200. `pending` is durable and not yet here — 202 with the position to read
-// at. `unknown` is a write this node cannot account for — 503, carrying the
-// operation key, because the only safe retry is the same one.
+// at. `unknown` is a write this node cannot account for — [unknownOutcome].
 func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
-	body map[string]any) {
+	unvouched bool, body map[string]any) {
 
 	if body == nil {
 		body = map[string]any{}
@@ -532,13 +756,63 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 			"it; this one has not yet. Read at the position above to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		unavailable(w, "this node cannot establish what happened to this "+
-			"change. Retry it with the SAME key — send op_id back as the "+
-			IdempotencyHeader+" header — because a fresh one would defeat "+
-			"the ledger that makes the retry safe.", map[string]any{"op_id": key})
+		unknownOutcome(w, key, unvouched, "", body)
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}
+}
+
+// unknownOutcome is the 503 of a write this node cannot account for, carrying
+// the request's operation key and whether ANOTHER node could say more.
+//
+// # Two unknowns, and they send a client opposite ways
+//
+// A LOST ACKNOWLEDGEMENT is settled by the same request again under the same
+// key, HERE: the ledger answers what landed, and it lands once if it did not —
+// so the answer carries the Retry-After this node's own undecided hint gives.
+// An UNVOUCHED one ([statelog.Result.Unvouched]) was not published at all:
+// this node's operation ledger may have lost the row the operation needs, so
+// the same request asked here answers the same way until the write reaches
+// this node, whenever that is — and the answer says so by carrying NO
+// Retry-After and `unvouched`, and by sending the client to another node, or
+// to read whether it landed. Either way the key is the one to keep: a fresh
+// one is a second operation, and if the first landed it is a second write.
+//
+// what is the tool's own sentence about THIS write — what may have landed, and
+// what shows whether it did — carried as `tool_detail` beside this surface's
+// own, or empty where there is none. about is the write's own receipt — the
+// item, the comment or the page it was about, and for a tool that writes two
+// records the half that did land — carried beneath this answer's own fields,
+// because a 503 that dropped it left a client holding a key and nothing saying
+// which object to read to see whether it landed.
+func unknownOutcome(w http.ResponseWriter, key string, unvouched bool, what string,
+	about map[string]any) {
+
+	retry := authz.RetryUndecidedSeconds
+	next := "Retry it with the SAME key — send op_id back as the " +
+		IdempotencyHeader + " header — because a fresh one would defeat the " +
+		"ledger that makes the retry safe."
+	if unvouched {
+		retry = 0
+		next = "This node's operation ledger cannot vouch for this change, so " +
+			"the same request asked here answers the same way until the change " +
+			"reaches this node. Read whether it landed, or send it with the SAME " +
+			IdempotencyHeader + " to another node; never under a fresh key, " +
+			"which is a second change if the first one landed."
+	}
+	body := httpjson.Detail{}
+	for k, v := range about {
+		body[k] = v
+	}
+	body["detail"] = "this node cannot establish what happened to this change. " + next
+	body["op_id"] = key
+	if what != "" {
+		body["tool_detail"] = what
+	}
+	if unvouched {
+		body["unvouched"] = true
+	}
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry, body)
 }
 
 // fail renders a write that was NOT made.
@@ -550,7 +824,38 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 // what to do.
 func fail(w http.ResponseWriter, cause error, text, key string) {
 	detail := map[string]string{"detail": text}
+	var unknown *builtin.UnknownOutcome
 	switch {
+	case errors.As(cause, &unknown):
+		// NOT A REFUSAL AND NOT A FAILURE: a tool reports a write whose
+		// outcome nobody can establish as a failed result carrying
+		// [builtin.UnknownOutcome], and read by the cases below it fell to
+		// `422 refused` — "nothing was written" said of a change that may
+		// well have landed, so the client made it a second time. FIRST,
+		// because the cause it wraps may be anything the step answered.
+		//
+		// THE KEY IS THE REQUEST'S: every id the tool derived is a
+		// function of it, so sending it back is the same operation. The
+		// tool's own id is the step it was on, which no header can name.
+		unknownOutcome(w, key, unknown.Unvouched, text, nil)
+	case errors.Is(cause, builtin.ErrOutcomeUnknown):
+		// The sentinel without its facts: nothing says another node could
+		// do better, so it is the ordinary unknown.
+		unknownOutcome(w, key, false, text, nil)
+	case deleted(cause):
+		// A PERMANENT DELETION MARKER on what the write is about: it was
+		// purged, and nothing will ever write it again — a 404 for what no
+		// longer exists, rather than a 503 telling a client to find a node
+		// that will.
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, detail)
+	case refusedFor(cause, statelog.ReasonOpReused):
+		// AN OPERATION THIS REQUEST DERIVES ALREADY NAMES A WRITE TO
+		// ANOTHER OBJECT — what the request names moved since the key was
+		// first sent (a move's item moved again, so the key it aliases is
+		// another) — and nothing was written. A conflict the caller
+		// resolves with a new key, never by waiting, which is what the 503
+		// every other refusal is would have told it to do.
+		refuseReusedKey(w, text, key)
 	case errors.Is(cause, builtin.ErrUnauthenticated):
 		httpjson.FailWith(w, http.StatusUnauthorized, httpjson.CodeInvalidToken, detail)
 	case errors.Is(cause, builtin.ErrUndeclaredArgument):
@@ -561,7 +866,7 @@ func fail(w http.ResponseWriter, cause error, text, key string) {
 	case errors.Is(cause, builtin.ErrRefused), errors.Is(cause, tracker.ErrNotAuthor):
 		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden, detail)
 	case errors.Is(cause, builtin.ErrUndecidable):
-		unavailable(w, text, nil)
+		unavailable(w, text, map[string]any{"op_id": key})
 	case errors.Is(cause, builtin.ErrNoAuthorizer):
 		// A WIRING THAT DECIDED NOTHING, which no retry clears.
 		httpjson.FailWith(w, http.StatusInternalServerError,
@@ -583,6 +888,28 @@ func fail(w http.ResponseWriter, cause error, text, key string) {
 	default:
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeRefused, detail)
 	}
+}
+
+// deleted reports a write refused because what it is about carries a
+// permanent deletion marker ([statelog.ReasonDeleted]).
+func deleted(err error) bool { return refusedFor(err, statelog.ReasonDeleted) }
+
+// refusedFor reports a write the state log refused for one reason.
+func refusedFor(err error, reason statelog.Reason) bool {
+	var refused *statelog.Unavailable
+	return errors.As(err, &refused) && refused.Reason == reason
+}
+
+// refuseReusedKey answers a key whose operation already names a write to
+// another object ([statelog.ReasonOpReused]): `409`, naming the header,
+// carrying the key.
+func refuseReusedKey(w http.ResponseWriter, detail, key string) {
+	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput,
+		httpjson.Detail{"field": IdempotencyHeader, "op_id": key,
+			"detail": detail + " — under this " + IdempotencyHeader + " the " +
+				"write already landed on something else, since what this " +
+				"request names has changed; read it again and send this one " +
+				"under a new key"})
 }
 
 // failErr is [fail] for a writer this surface called itself, whose error is

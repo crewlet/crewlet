@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A BEARER WRITE PASSES THE NODE'S OWN CROSS-SITE CHECK.
@@ -390,6 +392,9 @@ func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 // a second person. Mutation: drop the op id from the refusal, or the header
 // from the request, and each half goes red.
 func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
+	// AN ID IN THE ENGINE'S GRAMMAR, as the node answers with: the command
+	// holds the one sent back to that rule before anything is sent.
+	op := statelog.NewOpID(time.Now(), "")
 	var keys []string
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys = append(keys, r.Header.Get("Idempotency-Key"))
@@ -398,7 +403,7 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unavailable",
 			"detail": "this node cannot establish what happened to this change",
-			"op_id":  "people:update:p-1:k7", "landed": []string{"seat"}})
+			"op_id":  op, "landed": []string{"seat"}})
 	}))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
@@ -410,15 +415,19 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown write was reported as a success")
 	}
-	for _, want := range []string{"-idempotency-key people:update:p-1:k7",
+	for _, want := range []string{"-idempotency-key " + op,
 		"these changes DID land before it: seat"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
 	}
+	// ON THIS NODE: nothing in the answer says another would do better.
+	if strings.Contains(err.Error(), "another node") {
+		t.Errorf("an unknown this node can settle was sent elsewhere: %v", err)
+	}
 	_ = run([]string{"iam", "bind", "p-1", "sre", "-idempotency-key",
-		"people:update:p-1:k7", "-config", cfg, "-api", node.URL}, &out, &errs)
-	if len(keys) != 2 || keys[0] != "" || keys[1] != "people:update:p-1:k7" {
+		op, "-config", cfg, "-api", node.URL}, &out, &errs)
+	if len(keys) != 2 || keys[0] != "" || keys[1] != op {
 		t.Errorf("the node saw keys %q, want none and then the retried op id",
 			keys)
 	}
@@ -439,6 +448,66 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	}
 	if len(keys) != 2 {
 		t.Errorf("a refused key still reached the node: %q", keys)
+	}
+}
+
+// AN UNKNOWN THIS NODE CANNOT VOUCH FOR IS RETRIED THROUGH ANOTHER NODE.
+//
+// The node says `unvouched` when its operation ledger may have lost the row
+// the operation needs: it published nothing, and asked again it answers the
+// same way until the change reaches it. The command prescribed the same retry
+// here for every 503, which for this one is a loop. Mutation: drop the case
+// and the advice names no other node.
+func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
+	op := statelog.NewOpID(time.Now(), "")
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unavailable",
+			"detail":    "this node's operation ledger cannot vouch for this change",
+			"op_id":     op,
+			"unvouched": true})
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	err := run([]string{"iam", "suspend", "p-1", "-config", cfg, "-api", node.URL},
+		&out, &errs)
+	if err == nil {
+		t.Fatal("an unvouched write was reported as a success")
+	}
+	for _, want := range []string{"another node with -api",
+		"-idempotency-key " + op, "never a fresh key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+}
+
+// A KEY THE ENGINE COULD NOT HAVE MINTED IS REFUSED BEFORE ANYTHING IS SENT,
+// naming the flag: the node refuses it `400 op_id_invalid` anyway, and an id
+// with no instant is one no ledger could vouch for. Mutation: drop the check
+// and the node is asked.
+func TestAnIamKeyTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
+	var asked bool
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	err := run([]string{"iam", "suspend", "p-1", "-idempotency-key",
+		"people:update:p-1:k7", "-config", cfg, "-api", node.URL}, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), "-idempotency-key") {
+		t.Fatalf("a hand-made key answered %v, want a refusal naming the flag", err)
+	}
+	if asked {
+		t.Error("a hand-made key still reached the node")
 	}
 }
 

@@ -6,10 +6,8 @@ import (
 	"log/slog"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The log as a CHANGE FEED, which is a second consumer over the same stream.
@@ -57,7 +55,7 @@ type domainFeed struct {
 	verify *statelog.Verifier
 }
 
-// Consume implements [tracker.DomainConsumer].
+// Consume implements [tracker.DomainConsumer] and [pages.DomainConsumer].
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
 	g, err := f.log.Group(ctx, group)
 	if err != nil {
@@ -167,38 +165,81 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 // Stop ends this process's consumption; the durable position survives.
 func (r *domainRecords) Stop() error { return r.group.Stop() }
 
-// trackerFeedSource is the tracker's own change feed over its log.
-func trackerFeedSource(running *runningDomain) (tracker.FeedSource, error) {
-	if running == nil {
-		return tracker.FeedSource{}, fmt.Errorf("engine: the tracker domain is " +
-			"not running on this node, so nothing derives a wake from a " +
-			"committed record")
+// feedFor is the wake feed one running domain declares: the translator that
+// reads its records and the opener over its own log, or a nil translator for a
+// domain that declares none.
+//
+// # Off the register, and held to the declaration
+//
+// THE REGISTER'S ENTRY BUILDS IT ([registration.Feed]), the one place a
+// domain is declared, rather than a switch here: a translator is not part of
+// the declaration — the knowledge base's reads Tier B on every change — and a
+// switch that did not know a domain answered "no feed" for it indistinguishably
+// from one that meant it. What the declaration DOES own is the group
+// ([statelog.Domain.FeedGroup]), which the trim waits on from a node that
+// builds no feed at all, so the feed is held to it ([checkFeed]) — here, where
+// it starts, and before that at boot ([checkFeedEntry]), so a domain whose feed
+// disagrees with its declaration fails naming itself rather than silently.
+func (e *Engine) feedFor(running *runningDomain) (changefeed.Translator, changefeed.Opener, error) {
+	var (
+		translator changefeed.Translator
+		opener     changefeed.Opener
+	)
+	if entry, found := registrationFor(running.domain.Name()); found && entry.Feed != nil {
+		// THE LOG IS THE SOURCE: the domain's own fleet-wide group over
+		// the same stream its applier reads, which is what derives a wake
+		// from a committed record rather than the writer's goroutine.
+		translator, opener = entry.Feed(e, domainFeed{
+			log:    running.log,
+			stream: running.domain.Stream().Name,
+			envel:  running.domain.Envelope,
+			// THROUGH THE DOMAIN'S OWN VERIFIER: the feed is the log's
+			// second reader, and a domain decoder handed the frame reads
+			// every record in the company as undecodable. See
+			// [domainFeed.verify].
+			verify: running.verifier,
+		})
 	}
-	return tracker.FeedSource{Log: domainFeed{
-		log:    running.log,
-		stream: running.domain.Stream().Name,
-		envel:  running.domain.Envelope,
-		verify: running.verifier,
-	}}, nil
+	if err := checkFeed(running.domain, translator); err != nil {
+		return nil, nil, err
+	}
+	if translator == nil {
+		return nil, nil, nil
+	}
+	return translator, opener, nil
 }
 
-// pagesFeedSource is the knowledge base's own consumer over its log.
+// checkFeed refuses a wake feed that disagrees with its domain's declaration,
+// naming the domain. Each disagreement is silent anywhere else:
 //
-// The same shape [trackerFeedSource] has, and separate rather than generic
-// because each domain declares its own group name — which IS the fleet's
-// position, so a helper that derived one would be a rename waiting to happen.
-func pagesFeedSource(running *runningDomain) (pages.FeedSource, error) {
-	if running == nil {
-		return pages.FeedSource{}, fmt.Errorf("engine: the pages domain is not " +
-			"running on this node, so nothing derives a wake from a committed " +
-			"record")
+//   - declared and never built: the trim waits on a consumer no node ever
+//     opens, and that log grows until its ceiling refuses appends;
+//   - built and not declared: the trim never waits for the feed, and purges
+//     records nobody has been woken for yet;
+//   - built under another group: the trim waits on a consumer the wakes never
+//     advance — which is where the knowledge base's log stood while the trim
+//     read the tracker's group on it.
+func checkFeed(domain statelog.Domain, translator changefeed.Translator) error {
+	declared := domain.FeedGroup()
+	switch {
+	case translator == nil && declared == "":
+		return nil
+	case translator == nil:
+		return fmt.Errorf("engine: domain %q declares the wake feed %q "+
+			"and this build runs none over its log, so its trim would wait for "+
+			"ever on a consumer nobody opens", domain.Name(), declared)
+	case declared == "":
+		return fmt.Errorf("engine: domain %q declares no wake feed and "+
+			"this build runs one as %q, so its trim would purge records that "+
+			"feed has not woken anybody for", domain.Name(),
+			translator.Source().Group)
+	case translator.Source().Group != declared:
+		return fmt.Errorf("engine: domain %q declares the wake feed %q "+
+			"and its feed runs as %q — the trim would wait on one consumer while "+
+			"the wakes advance the other", domain.Name(), declared,
+			translator.Source().Group)
 	}
-	return pages.FeedSource{Log: domainFeed{
-		log:    running.log,
-		stream: running.domain.Stream().Name,
-		envel:  running.domain.Envelope,
-		verify: running.verifier,
-	}}, nil
+	return nil
 }
 
 // openRecord is the feed's whole reading of one delivery's bytes: the

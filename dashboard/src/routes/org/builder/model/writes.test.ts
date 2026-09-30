@@ -18,11 +18,12 @@ import type { EngineTransport, HttpAnswer } from "./transport.ts";
 import {
   UPDATE_ANCESTRY_LIMIT,
   isRevisionOfWrite,
-  newWriteId,
+  isWriteId,
   readChart,
   readCompany,
   readUpdate,
   readyToUpdate,
+  saveStepID,
   settleUnknownWrite,
   signedSummary,
   summaryCarries,
@@ -74,12 +75,20 @@ const revision = (parent: string | undefined, summary: string): HttpAnswer => ({
 });
 
 describe("signing a save", () => {
-  test("a write id is a bounded token, and the summary carries it where no sentence does", () => {
-    expect(newWriteId({ next: () => "abcdefgh" })).toBe("abcdefgh");
-    expect(() => newWriteId({ next: () => "short" })).toThrow(RangeError);
-    const summary = signedSummary(" Moved Dev to Sales ", "abcdefgh");
-    expect(summary).toBe("Moved Dev to Sales (write abcdefgh)");
-    expect(summaryCarries(summary, "abcdefgh")).toBe(true);
+  test("a write id is an operation id, and the summary carries it where no sentence does", () => {
+    // THE ENGINE'S GRAMMAR (statelog.NewOpID): the chart surface refuses a
+    // key that is not one. A random token of the old shape is not a write id.
+    const id = "01a0f246-7d2d-7c92-b7f0-78dd8229b774";
+    expect(isWriteId(id)).toBe(true);
+    expect(isWriteId("abcdefgh")).toBe(false);
+    expect(isWriteId("0123456789abcdef0123456789abcdef")).toBe(false);
+    // A v4 uuid carries no instant, so it is not one either.
+    expect(isWriteId("3f2504e0-4f89-41d3-9a0c-0305e82c3301")).toBe(false);
+    // Every step is a step of the save's own operation, and inherits its instant.
+    expect(saveStepID(id, 2)).toBe(`${id}.builder-save.2`);
+    const summary = signedSummary(" Moved Dev to Sales ", id);
+    expect(summary).toBe(`Moved Dev to Sales (write ${id})`);
+    expect(summaryCarries(summary, id)).toBe(true);
     expect(summaryCarries("Mentioned (write abcdefgh) in passing", "abcdefgh")).toBe(false);
     expect(summaryCarries(summary, "abcdefgX")).toBe(false);
   });

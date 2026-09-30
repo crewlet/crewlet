@@ -495,7 +495,7 @@ func TestTheBindingWatchFeedsTheReadingTheTableEvaluates(t *testing.T) {
 	w.observe(ctx, t0.Add(2*time.Minute))
 
 	r := &retention{state: &stateLog{}, bindings: w}
-	reading := r.reading(ctx, t0.Add(2*time.Minute), coord.BackupPoint{}, false)
+	reading := r.reading(ctx, t0.Add(2*time.Minute), coord.BackupPoint{}, false, nil)
 	if reading.DanglingBindings != 2 {
 		t.Fatalf("the reading carries %d dangling binding(s), want 2",
 			reading.DanglingBindings)
@@ -516,7 +516,7 @@ func TestTheBindingWatchFeedsTheReadingTheTableEvaluates(t *testing.T) {
 	// AND A NODE RUNNING NO IDENTITY DOMAIN has no watch, and says nothing
 	// rather than reading an empty directory as a clean one.
 	none := &retention{state: &stateLog{}}
-	if got := none.reading(ctx, t0, coord.BackupPoint{}, false); got.DanglingBindings != 0 {
+	if got := none.reading(ctx, t0, coord.BackupPoint{}, false, nil); got.DanglingBindings != 0 {
 		t.Errorf("a node with no directory read %d dangling", got.DanglingBindings)
 	}
 }

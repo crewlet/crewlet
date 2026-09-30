@@ -226,11 +226,14 @@ func (s *Service) personRecord(w http.ResponseWriter, r *http.Request,
 		args map[string]any) tools.Result) {
 
 	args, ok := readArgs(w, r)
+	if !ok || !noOperationArg(w, args) {
+		return
+	}
+	key, ok := operationKey(w, r)
 	if !ok {
 		return
 	}
-	key := operationKey(r)
-	work, _ := s.deps(key)
+	work, _ := s.deps(key, args)
 	answerTool(w, key, write(r.Context(), work,
 		strings.TrimSpace(r.PathValue("handle")), args))
 }
@@ -289,19 +292,22 @@ func (s *Service) postRank(w http.ResponseWriter, r *http.Request) {
 				"the one it goes `before`, or both"})
 		return
 	}
-	key := operationKey(r)
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
 	actor, ok := s.actor(w, r, key)
 	if !ok {
 		return
 	}
 	result, err := s.tracker(actor).MoveTask(r.Context(),
-		"rank-"+item.Task.ID+"-"+key, item.Task.Project, item.Task.ID,
+		keyedOp(key, "rank", item.Task.ID, args), item.Task.Project, item.Task.ID,
 		bounds[0], bounds[1])
 	if err != nil {
 		failErr(w, err, key)
 		return
 	}
-	answer(w, key, result.Outcome, map[string]any{
+	answer(w, key, result.Outcome, result.Unvouched, map[string]any{
 		"item": item.Task.Key, "outcome": string(result.Outcome),
 		"position": positionOf(result.Position),
 	})
@@ -339,7 +345,10 @@ func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}); !ok {
 		return
 	}
-	key := operationKey(r)
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
 	actor, ok := s.actor(w, r, key)
 	if !ok {
 		return
@@ -351,13 +360,14 @@ func (s *Service) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		Comment: &edited, Mentions: edited.Mentions,
 	}.Notify(s.workDeps.Leads)
 	result, err := s.tracker(actor).EditComment(r.Context(),
-		"comment-edit-"+cid+"-"+key, detail.Task.ID, detail.Task.Project, cid,
+		keyedOp(key, "comment-edit", cid, args), detail.Task.ID, detail.Task.Project,
+		cid,
 		body, notify)
 	if err != nil {
 		failErr(w, err, key)
 		return
 	}
-	answer(w, key, result.Outcome, map[string]any{
+	answer(w, key, result.Outcome, result.Unvouched, map[string]any{
 		"item": detail.Task.Key, "comment_id": cid, "edited": true,
 		"outcome": string(result.Outcome), "position": positionOf(result.Position),
 		"version": result.Version,
@@ -420,13 +430,17 @@ func (s *Service) postPurge(w http.ResponseWriter, r *http.Request) {
 				"item is %s — nothing was destroyed", confirm, detail.Task.Key)})
 		return
 	}
-	key := operationKey(r)
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
 	actor, ok := s.actor(w, r, key)
 	if !ok {
 		return
 	}
 	result, err := s.tracker(actor).PurgeTask(r.Context(),
-		"purge-"+detail.Task.ID+"-"+key, detail.Task.ID, detail.Task.Project, reason)
+		keyedOp(key, "purge", detail.Task.ID, purgeArgs(confirm, reason)),
+		detail.Task.ID, detail.Task.Project, reason)
 	if err != nil {
 		log.Warn("api_purge_failed", "task", detail.Task.ID, "actor", actor.Handle,
 			"error", err)
@@ -438,11 +452,17 @@ func (s *Service) postPurge(w http.ResponseWriter, r *http.Request) {
 	log.Info("task_purged", "task", detail.Task.ID, "key", detail.Task.Key,
 		"project", detail.Task.Project, "actor", actor.Handle, "reason", reason,
 		"outcome", result.Outcome)
-	answer(w, key, result.Outcome, map[string]any{
+	answer(w, key, result.Outcome, result.Unvouched, map[string]any{
 		"task": detail.Task.ID, "key": detail.Task.Key,
 		"project": detail.Task.Project, "outcome": string(result.Outcome),
 		"position": positionOf(result.Position),
 	})
+}
+
+// purgeArgs is what a purge asks, as its operation is bound to it ([keyedOp]):
+// the two query parameters, since a purge takes no body.
+func purgeArgs(confirm, reason string) map[string]any {
+	return map[string]any{"confirm": confirm, "reason": reason}
 }
 
 // readTask is a work item read before a decision is taken on it.

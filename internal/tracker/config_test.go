@@ -239,6 +239,58 @@ func TestAnAutomaticProgressFieldIsRefusedWhileNothingFillsOne(t *testing.T) {
 	}
 }
 
+// AND A TRACKING LIST IS REFUSED ON ITS OWN TYPE, which is the half the type
+// check could not see.
+//
+// `tracking` names what an AUTOMATIC progress field counts, and the only mode
+// that would ever read it is refused above — so a list beside `progress:
+// manual` passed every check this file makes and counted nothing. An operator
+// who set the mode to `manual` to get past the refusal above was told their
+// field was declared, under a name that says the sources are being counted.
+func TestATrackingListIsRefusedWhileNothingCountsIt(t *testing.T) {
+	t.Parallel()
+	err := checkFields([]FieldDef{{
+		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
+		Config: FieldConfig{Progress: "manual", Tracking: []string{"subtasks"}},
+	}})
+	if err == nil {
+		t.Fatal("a tracking list was accepted beside a manual mode, so the " +
+			"sources are stored, replicated and counted by nothing")
+	}
+	for _, want := range []string{"done", "subtasks", "nothing counts them"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal is %q and does not name %q", err, want)
+		}
+	}
+	// A LIST WITH NO MODE AT ALL IS THE SAME FACT, and the default mode
+	// reads it no better than `manual` does.
+	if err := checkFields([]FieldDef{{
+		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
+		Config: FieldConfig{Tracking: []string{"checklists"}},
+	}}); err == nil {
+		t.Error("a tracking list with no mode was accepted")
+	}
+	// AND THE FIELD WITHOUT ONE STILL LANDS: what is refused is the
+	// setting that promises a count, never the progress field itself.
+	if err := checkFields([]FieldDef{{
+		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
+		Config: FieldConfig{Progress: "manual"},
+	}}); err != nil {
+		t.Errorf("a manual progress field carrying no tracking was refused: %v", err)
+	}
+	// THE SOURCE NAMES ARE STILL CHECKED FIRST, so an operator who names a
+	// source this build does not have is told about that mistake rather
+	// than about the list — the ordering checkRollup states for the same
+	// shape.
+	err = checkFields([]FieldDef{{
+		ID: "f1", Slug: "done", Name: "Done", Type: FieldProgress,
+		Config: FieldConfig{Progress: "manual", Tracking: []string{"vibes"}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "the sources are") {
+		t.Errorf("the refusal is %v and does not name the closed set first", err)
+	}
+}
+
 // THE APPLIER AND THE CHECK NORMALISE A NAME THE SAME WAY.
 //
 // The applier writes `name_norm` for types, for fields and for options — three

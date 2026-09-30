@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `GET /iam/check` NAMES A DANGLING BINDING THROUGH THE SEAM THIS NODE WIRES,
@@ -51,15 +52,20 @@ func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 	if writer == nil {
 		t.Fatal("the node runs no identity domain, so this case proves nothing")
 	}
+	// OPERATION IDS IN THE ENGINE'S GRAMMAR, as every surface mints them: an
+	// id carrying no instant is one no ledger can vouch for once it has
+	// swept, and every step of the enrolment is derived from this one.
 	if _, err := writer.Enrol(ctx, iamdomain.Enrolment{
 		PersonID: bot, Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: "ci:bot", OpID: "op-enrol-bot", Reason: "a pipeline",
+		Login: "ci:bot", OpID: statelog.NewOpID(time.Now(), "enrol-bot"),
+		Reason: "a pipeline",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
 	// THE CEO'S SEAT IS AN AGENT'S, which the request path refuses a
 	// person on every request for.
-	if _, err := writer.Claim(ctx, iamdomain.KindSeat, "ceo", bot, "op-bind-bot"); err != nil {
+	if _, err := writer.Claim(ctx, iamdomain.KindSeat, "ceo", bot,
+		statelog.NewOpID(time.Now(), "bind-bot")); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 

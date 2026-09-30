@@ -78,9 +78,13 @@ func (s *Service) DeleteSessions(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	reason := reasonOr(r.URL.Query().Get("reason"),
 		"every session was ended through /iam")
-	opID := s.opIDFor(r, "sessions:revoke:"+id)
-	revoked, err := writer.Revoke(r.Context(), id, opID, reason)
-	if err == nil && landed(revoked) {
+	op, ok := s.opIDFor(w, r, "sessions-revoke", nil)
+	if !ok {
+		return
+	}
+	opID := op.key
+	revoked, err := writer.Revoke(r.Context(), id, op.id, reason)
+	if err == nil && ownLanding(revoked) {
 		log.InfoContext(r.Context(), "iam_sessions_revoked",
 			"person", id, "position", revoked.Position.String())
 		// SOMEBODY ENDING THEIR OWN is a sign-out everywhere; anybody
@@ -127,9 +131,13 @@ func (s *Service) PostInvalidateAll(w http.ResponseWriter, r *http.Request) {
 	principal, _ := iam.From(r.Context())
 	reason := reasonOr(r.URL.Query().Get("reason"),
 		"every session in the company was invalidated")
-	opID := s.opIDFor(r, "sessions:invalidate")
-	bumped, err := writer.InvalidateAll(r.Context(), opID, reason)
-	if err == nil && landed(bumped) {
+	op, ok := s.opIDFor(w, r, "sessions-invalidate", nil)
+	if !ok {
+		return
+	}
+	opID := op.key
+	bumped, err := writer.InvalidateAll(r.Context(), op.id, reason)
+	if err == nil && ownLanding(bumped) {
 		log.WarnContext(r.Context(), "iam_generation_bumped",
 			"by", iam.ActorFor(principal).Name,
 			"position", bumped.Position.String(),

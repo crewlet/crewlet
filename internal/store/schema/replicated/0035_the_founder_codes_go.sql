@@ -1,0 +1,27 @@
+-- `iam_bootstrap_codes` goes, with the one-time founder code it recorded.
+--
+-- 0026 shipped it for the founding: a node on an empty estate wrote a code
+-- beside its store and published its hash here, and whoever read the file
+-- could create the company's first person carrying the whole ceiling — taken
+-- on the one `iam.bootstrap` subject so two founders could not both land, and
+-- swept once spent or aged out. That was a second way in beside the one every
+-- node serving the API already requires: a Tier A token IS the credential a
+-- company holds before it holds anybody, so the first person is now invited
+-- under it exactly as everybody after them is, and there is no founder route,
+-- no code, no `iam.bootstrap` record and nothing that writes or reads a row
+-- here.
+--
+-- THE TABLE GOES WHOLE, its partial index with it. Nothing else names it: the
+-- sweep's two arms over it went in the same change, so no statement is left
+-- that a missing table would fail.
+--
+-- A DEVELOPMENT ESTATE WHOSE IDENTITY LOG CARRIES AN `iam.bootstrap` RECORD
+-- MUST BE RESET. The identity log is the write-ahead log and these rows are
+-- derived from it: a log still holding a mint, a take or a withdrawal names a
+-- subject kind this build has no case for, and its applier refuses the record
+-- rather than guessing, which stalls the log. No tag ever shipped the
+-- founding, so no deployment an operator runs holds such a record; one made
+-- while developing this engine is reset — its identity log and its replicated
+-- estate — rather than carried by an apply arm that would exist for a version
+-- nobody ran.
+DROP TABLE iam_bootstrap_codes;

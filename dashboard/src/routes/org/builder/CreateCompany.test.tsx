@@ -162,7 +162,9 @@ test("the save creates the settings create-only, then the chart, and says what i
   expect(body.name).toBe("Nimbus");
   expect(body).not.toHaveProperty("roles");
   expect(body).not.toHaveProperty("units");
-  expect(body._summary).toMatch(/^Created Nimbus in the organization builder \(write [0-9a-f]+\)$/);
+  expect(body._summary).toMatch(
+    /^Created Nimbus in the organization builder \(write [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\)$/,
+  );
   // THE SETTINGS FIRST: the company exists before its chart is written.
   await waitFor(() =>
     expect(engine.units.map((u) => u.key).sort()).toEqual(["engineering", "marketing", "product"]),
@@ -172,9 +174,11 @@ test("the save creates the settings create-only, then the chart, and says what i
   );
   expect(engine.requests.indexOf(write)).toBeLessThan(firstChartWrite);
   // Every chart write carries the operation id a retry would resend.
-  expect(engine.chartWrites().every((r) => /-\d+$/.test(r.headers["Idempotency-Key"] ?? ""))).toBe(
-    true,
-  );
+  expect(
+    engine
+      .chartWrites()
+      .every((r) => /\.builder-save\.\d+$/.test(r.headers["Idempotency-Key"] ?? "")),
+  ).toBe(true);
 
   // The two steps the dashboard cannot take, with the command for the one
   // that has no screen at all.

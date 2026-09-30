@@ -146,37 +146,49 @@ func operatorRegistry(t *testing.T, trk *fakeTracker, person builtin.PersonWrite
 }
 
 type personSpy struct {
+	// handle is WHOSE record the last write named, and opID the operation
+	// it wrote under. Both on every verb, because the subject of a person
+	// write is the whole of what this file is about: a mark written under
+	// the wrong name is a mark nobody ever sees.
 	handle     string
+	opID       string
 	priorities []string
 	authority  tracker.PersonAuthority
 	reasons    []tracker.Reason
+
+	// actor is who the surface resolved the writer FOR, which is the other
+	// half: the record's subject is the person and its author is still
+	// the credential, and a case asserting one without the other would
+	// pass on a fix that let a caller write as anybody.
+	actor builtin.Actor
 }
 
-func (p *personSpy) WritePriorities(_ context.Context, _, handle string,
+func (p *personSpy) WritePriorities(_ context.Context, opID, handle string,
 	priorities []string, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
-	p.handle, p.priorities, p.authority = handle, priorities, authority
+	p.handle, p.opID = handle, opID
+	p.priorities, p.authority = priorities, authority
 	return tracker.WriteResult{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 20},
 	}, nil
 }
 
-func (p *personSpy) WritePins(_ context.Context, _, handle string, _ []string,
+func (p *personSpy) WritePins(_ context.Context, opID, handle string, _ []string,
 	_ []tracker.Favorite, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
-	p.handle, p.authority = handle, authority
+	p.handle, p.opID, p.authority = handle, opID, authority
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-func (p *personSpy) WriteInbox(_ context.Context, _, handle string,
+func (p *personSpy) WriteInbox(_ context.Context, opID, handle string,
 	_, _, _ []tracker.InboxEntry, reasons []tracker.Reason,
 	_ tracker.Position, authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
-	p.handle, p.authority, p.reasons = handle, authority, reasons
+	p.handle, p.opID, p.authority, p.reasons = handle, opID, authority, reasons
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
@@ -268,21 +280,41 @@ func callPlain(t *testing.T, reg *tools.Registry, name string,
 	return got
 }
 
-// personRegistry is the operator surface with the person seams wired.
+// personRegistry is the operator surface with the person seams wired, acting
+// as the human seat `alice` and with no chart behind it.
 func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
+	t.Helper()
+	return personSurface(t, newFakeTracker(), person, func(
+		context.Context, *turnctx.Turn) (builtin.Actor, error) {
+
+		return builtin.Actor{Handle: "alice", Kind: tracker.AuthorHuman}, nil
+	})
+}
+
+// personSurface is that surface over one fake tracker and one actor — so a case
+// can vary the CALLER, which is the only thing the subject of these writes
+// depends on. A nil actor takes the turn's seat, as a seat's registry does.
+func personSurface(t *testing.T, trk *fakeTracker, person *personSpy,
+	actor func(context.Context, *turnctx.Turn) (builtin.Actor, error)) *tools.Registry {
+
 	t.Helper()
 	reg := tools.NewRegistry()
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader:       newFakeTracker(),
-			Writer:       newFakeTracker().as,
-			Inbox:        newFakeTracker(),
-			PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
-			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{
-					Handle: "alice", Kind: tracker.AuthorHuman,
-				}, nil
+			Reader: trk,
+			Writer: trk.as,
+			Inbox:  trk,
+			PersonWriter: func(a builtin.Actor) builtin.PersonWriter {
+				// THE ACTOR THE WRITER WAS RESOLVED FOR, which is
+				// what carries the attribution: the record's
+				// subject is the person and its author is still
+				// the credential, and a case that asserted only
+				// the first would pass on a fix that let a caller
+				// write as anybody.
+				person.actor = a
+				return person
 			},
+			Actor: actor,
 		},
 		Authorize: builtin.Decide(chartLeads),
 	}) {

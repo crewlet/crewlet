@@ -51,11 +51,13 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	}
 }
 
-// THE CHART'S OPS LEDGER TAKES THE FRAMEWORK'S FOUR COLUMNS AND NOTHING ELSE.
+// THE CHART'S OPS LEDGER TAKES THE FRAMEWORK'S FIVE COLUMNS AND NOTHING ELSE.
 //
-// `0001_the_state_log_lands.sql` documents the shape and the framework writes
-// the statements, so a fifth column is not a compile error and not a migration
-// failure — it is a column nothing ever populates, and an index over it is an
+// `0001_the_state_log_lands.sql` documents the first four, `0021` added
+// `stored_at` (the applying record's broker instant) to every ledger the
+// framework carried then, and `0036` to this one and the identity estate's.
+// The framework writes the statements, so a sixth column is not a compile
+// error and not a migration failure — it is a column nothing ever populates, and an index over it is an
 // index nothing ever uses. The one that would be tempting is `kind`, with an
 // index on (kind, applied_at) so a structural record's op id could be swept on
 // a different schedule from a content record's. That is a SECOND OPS HORIZON,
@@ -67,12 +69,12 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 // over the age, and without the index a node returning from a month away scans
 // the whole table on every tick and deletes its whole month in one statement
 // holding this store's only writer.
-func TestTheChartOpsLedgerCarriesTheFrameworksFourColumns(t *testing.T) {
+func TestTheChartOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
 	t.Parallel()
 
 	db := openReplicated(t)
 	got := columnsOf(t, db, chart.Domain{}.OpsTable())
-	want := []string{"applied_at", "op_id", "position", "subject"}
+	want := []string{"applied_at", "op_id", "position", "stored_at", "subject"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%s has columns %v, want exactly %v — the framework writes the "+
 			"statements that fill this table, so a column it does not know is "+
@@ -211,19 +213,19 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 	}
 }
 
-// THE IAM OPS LEDGER TAKES THE FRAMEWORK'S FOUR COLUMNS TOO, and the fifth
-// column that would be tempting here is the same one the chart's case refuses
-// for the same reason: a `kind`, so a session's op id could be swept on a
-// different schedule from an enrolment's. This domain declares ONE ops horizon
-// and its authentication TRAIL declares two, which is not a contradiction —
-// they answer different questions and are measured against different things,
-// an audit obligation and the longest a client will retry.
-func TestTheIamOpsLedgerCarriesTheFrameworksFourColumns(t *testing.T) {
+// THE IAM OPS LEDGER TAKES THE FRAMEWORK'S FIVE COLUMNS TOO, and no `kind`.
+// This ledger DOES keep a second horizon — a session's operations go after an
+// hour, everything else after the framework's month — but it is keyed on the
+// SUBJECT the framework already stores (`0030`'s index over it), and the loss
+// each horizon leaves is recorded per kind by the framework (`0037`), so the
+// shorter sweep never moves the table-wide watermark. A `kind` column would be
+// a second copy of what the subject already says, and one nothing populates.
+func TestTheIamOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
 	t.Parallel()
 
 	db := openReplicated(t)
 	got := columnsOf(t, db, iamdomain.Domain{}.OpsTable())
-	want := []string{"applied_at", "op_id", "position", "subject"}
+	want := []string{"applied_at", "op_id", "position", "stored_at", "subject"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%s has columns %v, want exactly %v — the framework writes the "+
 			"statements that fill this table, so a column it does not know is "+
@@ -237,9 +239,9 @@ func TestTheIamOpsLedgerCarriesTheFrameworksFourColumns(t *testing.T) {
 			"is a range delete over the age, and a range delete ships its index")
 	}
 	if strings.Contains(ddl, "iam_ops (kind") || strings.Contains(ddl, "iam_ops(kind") {
-		t.Error("an index over iam_ops keyed on a kind is shipped — this domain " +
-			"declares ONE ops horizon, and an index implying a second is how the " +
-			"second gets written")
+		t.Error("an index over iam_ops keyed on a kind is shipped — this " +
+			"domain's second horizon is keyed on the subject the ledger already " +
+			"stores, and a kind column is one nothing populates")
 	}
 }
 

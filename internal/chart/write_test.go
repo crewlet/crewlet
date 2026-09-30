@@ -100,22 +100,40 @@ func newWriteRig(t *testing.T) *writeRig {
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
 	// an absent anchor really does mean an unclaimed address.
-	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	// The log's own first sequence is the fence's other bound and its last
+	// the check that this node is on this log at all, both read from the
+	// stream the way the engine reads them.
+	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
+	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
+		first, last, err := log.Bounds(ctx)
+		return statelog.LogEnds{First: first, Last: last}, err
+	}
 	// THE STREAM IS NAMED FROM THE START, as a runner's cursor is: a
 	// position with no stream cannot be compared with one the broker
 	// answered, and a caller's session mark is one of those.
 	waiter := &rigWaiter{at: statelog.Position{Stream: spec.Name}}
+	fence.Committed = waiter.Committed
+	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
+	// engine's does, so every write here is admitted as a production one is.
+	reserve, err := statelog.NewReserve(spec.Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("build the gate reserve: %v", err)
+	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: chart.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Signer: testSigner(t, chart.Domain{}),
-		Gates:  chart.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Gates:  chart.NewGates(db), Waiter: waiter, Identity: waiter,
+		Admission: reserve, NodeID: "node-a",
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	fence.Cursor = waiter.Committed
 	sealer := newSealer(t)
 	writer, err := chart.NewWriter(chart.WriterDeps{
 		Publisher: publisher, DB: db, Seal: sealer,
@@ -210,10 +228,18 @@ func (r *writeRig) drainTo() error {
 				statelog.ApplyOptions{Now: brokerAt, StoredAt: storedAt}); err != nil {
 				return err
 			}
+			// THE LEDGER ROW THE FRAMEWORK'S OWN RUNNER WRITES, column for
+			// column: the subject under the log's prefix — which is what the
+			// publisher compares a held operation's against before it
+			// answers a retry from it, so a bare subject read every retry
+			// as an operation reused on another subject — and the applying
+			// record's broker instant.
 			if _, err := tx.ExecContext(r.t.Context(), `
-				INSERT INTO chart_ops (op_id, subject, position, applied_at)
-				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
-				env.OpID, env.Subject.String(), record.Position.Packed(),
+				INSERT INTO chart_ops
+					(op_id, subject, position, applied_at, stored_at)
+				VALUES (?,?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
+				env.OpID, spec.SubjectPrefix+"."+env.Subject.String(),
+				record.Position.Packed(), store.EncodeTime(brokerAt),
 				store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
@@ -323,6 +349,11 @@ func (w *rigWaiter) Committed() statelog.Position {
 	defer w.mu.Unlock()
 	return w.at
 }
+
+// StreamIdentity and Truncated are the stream identity the publisher asks
+// before every append: the rig's log is the one its rows came from, always.
+func (w *rigWaiter) StreamIdentity() error { return nil }
+func (w *rigWaiter) Truncated() error      { return nil }
 
 func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {

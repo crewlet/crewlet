@@ -27,7 +27,7 @@ import (
 func TestCategoryChipsAreTheEngines(t *testing.T) {
 	engine := events.CategoryNames()
 
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`(?s)const CATEGORIES = \[(.*?)\] as const`)
 	if err != nil {
 		t.Fatal(err)

@@ -168,6 +168,16 @@ const (
 // know is [faultRefused] carrying the words verbatim, so a reworded server
 // costs a less specific remedy and never a wrong one — which is what reading
 // every 10077 as a full log was.
+//
+// # And why only the append's own error is ever handed to it
+//
+// Everything that is not an APIError reads as NO ANSWER here, which is true
+// only of what the append itself returned. A refusal this node makes before
+// the append — fence 0's — is a decision, not an absence of one, and it ends
+// the write where it is made ([Publisher.attempt]): classified, it would send
+// a write that never reached the broker down the ambiguous path, which finds
+// nothing landed, retakes, is refused again, and reports a conflict once the
+// round budget is spent.
 func classify(err error) (fault, string) {
 	if err == nil {
 		return faultNone, ""
@@ -220,7 +230,7 @@ func classify(err error) (fault, string) {
 	if errors.Is(err, nats.ErrMaxPayload) {
 		return faultTooLarge, tooLargeDetail(limitMaxPayload, err.Error())
 	}
-	// NO ANSWER IS THE THIRD VALUE. The client retries a no-responder
+	// NO ANSWER IS THE LAST VALUE. The client retries a no-responder
 	// twice on its own before giving up, so reaching here means the
 	// append may be on the stream and may not be, and only the ordered
 	// classification can say which.

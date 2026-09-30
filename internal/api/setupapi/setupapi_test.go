@@ -172,7 +172,10 @@ func newConfigSurface(t *testing.T) (*configapi.Service, *store.DB, secrets.Ciph
 	cipher := testCipher(t)
 	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
-		Now: func() time.Time { return pinned },
+		// A DEPLOYMENT THE COMPANY CAN RUN ON: an embedded stream that
+		// persists, so the cross-tier rule has nothing to refuse.
+		Bootstrap: &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}},
+		Now:       func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)

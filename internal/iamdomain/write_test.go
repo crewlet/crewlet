@@ -140,8 +140,15 @@ func newWriteRigWith(t *testing.T,
 	fence := iamdomain.NewFence(db, "node-a")
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an unclaimed address.
-	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	// an absent anchor really does mean an unclaimed address. The log's own
+	// first sequence is the fence's other bound and its last the check that
+	// this node is on this log at all, both read from the stream the way the
+	// engine reads them.
+	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
+	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
+		first, last, err := log.Bounds(ctx)
+		return statelog.LogEnds{First: first, Last: last}, err
+	}
 	// AT THE STREAM'S ORIGIN, as the framework's own applier starts: a
 	// waiter at the zero position names no stream, so a gesture's second
 	// step compared its own position against it and failed on the
@@ -150,21 +157,40 @@ func newWriteRigWith(t *testing.T,
 	// landing.
 	waiter := &rigWaiter{at: statelog.Position{
 		Stream: iamdomain.Domain{}.Stream().Name}}
+	fence.Committed = waiter.Committed
 	var appender statelog.Appender = log
 	if wrap != nil {
 		appender = wrap(log)
 	}
+	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
+	// engine's does, so every write here is admitted as a production one is:
+	// this log claims identity, and the framework refuses a publisher over
+	// one without it.
+	reserve, err := statelog.NewReserve(spec.Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("build the gate reserve: %v", err)
+	}
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: iamdomain.Domain{}, Log: appender, Rows: rows, Fence: fence,
 		Signer: testSigner(t), Gates: iamdomain.NewGates(db),
-		Waiter: waiter, NodeID: "node-a",
-		Generation:    func() uint32 { return 0 },
-		ResolveBudget: 2 * time.Second,
+		Waiter: waiter, Identity: waiter, Admission: reserve, NodeID: "node-a",
+		Generation: func() uint32 { return 0 },
+		// THE PRODUCTION BUDGET, and not a shorter one to save a case's
+		// seconds: this rig's applier is a polling loop that re-reads every
+		// bucketed row around each record, and under the race detector with
+		// the suite running in parallel it fell more than two seconds
+		// behind — a write then met its own previous record unapplied and
+		// was refused `behind`, which is the framework's honest answer to a
+		// node that slow and a failure of no case's subject.
+		ResolveBudget: statelog.DefaultResolveBudget,
 	})
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	fence.Cursor = waiter.Committed
 
 	blinder, err := iamdomain.NewBlinder(testBlindKey)
 	if err != nil {
@@ -310,10 +336,17 @@ func applyLog(t *testing.T, log *js.DomainLog, verifier *statelog.Verifier,
 			if err := withinScope(env, before, after); err != nil {
 				return fmt.Errorf("record %d: %w", seq, err)
 			}
+			// THE LEDGER ROW THE FRAMEWORK'S OWN RUNNER WRITES, column for
+			// column: the subject under the log's prefix — which is what the
+			// publisher compares a held operation's against before it
+			// answers a retry from it — and the applying record's broker
+			// instant beside this node's.
 			if _, err := tx.ExecContext(t.Context(), `
-				INSERT INTO iam_ops (op_id, subject, position, applied_at)
-				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
-				env.OpID, env.Subject.String(), record.Position.Packed(),
+				INSERT INTO iam_ops
+					(op_id, subject, position, applied_at, stored_at)
+				VALUES (?,?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
+				env.OpID, spec.SubjectPrefix+"."+env.Subject.String(),
+				record.Position.Packed(), store.EncodeTime(now),
 				store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
@@ -582,6 +615,11 @@ func (w *rigWaiter) Committed() statelog.Position {
 	defer w.mu.Unlock()
 	return w.at
 }
+
+// StreamIdentity and Truncated are the stream identity the publisher asks
+// before every append: the rig's log is the one its rows came from, always.
+func (w *rigWaiter) StreamIdentity() error { return nil }
+func (w *rigWaiter) Truncated() error      { return nil }
 
 func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {

@@ -1,15 +1,18 @@
 package search_test
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE VECTOR DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, and it is the
@@ -35,8 +38,53 @@ func TestTheVectorDomainIsACertifiedDomain(t *testing.T) {
 			// did not.
 			Encode: encodeSuiteRecord,
 			Kinds:  suiteKinds(),
+			Rows:   search.NewRows,
+			Write:  suiteWrite,
 		}
 	})
+}
+
+// suiteWrite is one tick of the domain's own [search.Embedder] — the only
+// writer this domain has — over one document that needs a vector.
+//
+// THE TICK LOGS A FAILED BATCH RATHER THAN RETURNING IT, by design, so the
+// count is what says whether anything was published: a record the publisher
+// refused is a batch that published nothing, and a tick that published
+// nothing certifies nothing.
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ *store.DB) error {
+	duty, err := search.NewEmbedder(search.EmbedDeps{
+		Publisher: pub, Embedder: embeddings.NewFake(8), Model: "suite-embed",
+		Corpora: []search.Corpus{oneStaleDocument{}},
+		Now:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+	})
+	if err != nil {
+		return err
+	}
+	published, err := duty.Tick(ctx)
+	if err != nil {
+		return err
+	}
+	if published == 0 {
+		return fmt.Errorf("the embed duty published nothing for a document that " +
+			"had no vector — its log says why")
+	}
+	return nil
+}
+
+// oneStaleDocument is a corpus of one task with no vector yet.
+type oneStaleDocument struct{}
+
+func (oneStaleDocument) Source() search.Source { return search.SourceTask }
+
+func (oneStaleDocument) Stale(context.Context, string, int, int) ([]search.Document, []string, error) {
+	return []search.Document{{
+		ID: "suite-task", Container: "SUITE", Version: 1,
+		Title: "The suite's task", Body: "Something to embed.",
+	}}, nil, nil
+}
+
+func (oneStaleDocument) Coverage(context.Context, string, int) (int, int, error) {
+	return 0, 1, nil
 }
 
 // suiteKinds is every source, derived from the enum rather than typed again.

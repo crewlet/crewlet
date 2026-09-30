@@ -1,0 +1,43 @@
+-- A root task whose cross-project move is still walking its subtree says so.
+--
+-- # What was missing
+--
+-- A cross-project move is a SEQUENCE: the root's append re-homes the root, and
+-- one append per descendant re-homes each task beneath it. A holder that died
+-- between the two left the subtree split across two projects — the root and
+-- some descendants in the target, the rest still keyed in the source — and
+-- nothing but a re-run of the same gesture under the same operation id could
+-- finish it. Nothing re-runs a gesture its caller never retried: a turn that
+-- crashed, a process that was killed, a descendant's append the broker refused
+-- because the stream was full. The subtree stayed split for good.
+--
+-- The merge sequence had the same shape and did not have the gap, because its
+-- first append writes `merging` and the tracker duty finishes whatever a task
+-- carrying it still owes. This is that marker for the move.
+--
+-- # What a row says
+--
+-- `moving` is 1 on a ROOT whose own move has landed and whose last append —
+-- the one that clears it, after every descendant followed — has not. It is set
+-- by the same append that moves the root, so there is no instant at which the
+-- subtree is split and the root does not say so. It rides the task's document
+-- like `merging` does; this column is what the duty's gate and selection read,
+-- and the partial index below is what makes that gate one probe that touches
+-- no row at all on a company where nothing is mid-move.
+--
+-- # Why every existing row is 0
+--
+-- No build before this one wrote the marker, so there is nothing to backfill
+-- it from: a subtree an older build left split carries no fact that says it
+-- was mid-move rather than deliberately spread across projects by a merge's
+-- re-parenting, which moves children and never their projects. Such a subtree
+-- is finished the way it always could be, by re-running the move under its own
+-- operation id.
+--
+-- 0002 IS NOT EDITED. `schema_migrations` keys on the filename, so a file that
+-- has already run never runs again: a fresh database and an upgraded one
+-- converge here, by the same route.
+
+ALTER TABLE tracker_tasks ADD COLUMN moving INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX tracker_tasks_moving_idx ON tracker_tasks (id) WHERE moving = 1;

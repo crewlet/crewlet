@@ -87,12 +87,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
-		// THE IDENTITY ESTATE'S TWO, which sort here and are the first
-		// pair on this list belonging to a domain a node might not RUN.
-		// They are swept on the nodes that do, by the same per-node
-		// jobs every other domain's are — a node declining the domain
-		// has no rows in them to sweep, which is the correct amount of
-		// work rather than a case to special-case.
+		// THE IDENTITY ESTATE'S TWO, which sort here, swept on every
+		// node by the same per-node jobs every other domain's are: every
+		// node runs every domain in the register, whatever its roles, so
+		// every node holds rows in them to sweep.
 		//
 		// The estate's OTHER retention — the authentication trail's two
 		// horizons — is deliberately NOT here: it is a record on the
@@ -150,6 +148,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// all, and a job nobody registered is a re-spread that never
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
+		"tracker_abandoned_moves",
 		"tracker_anchors",
 		"tracker_duplicate_ranks",
 		// AND A PERSON'S INBOX, which IS a range delete and is the one

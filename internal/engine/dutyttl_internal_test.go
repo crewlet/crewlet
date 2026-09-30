@@ -96,7 +96,7 @@ func TestEveryDutyTTLFitsTheDutyCeiling(t *testing.T) {
 // directly.
 func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("..", "..")
+	root := sourcetree.Root(t)
 	helpers := map[string]bool{
 		filepath.Join("internal", "engine", "duty.go"):   true,
 		filepath.Join("internal", "schedule", "duty.go"): true,

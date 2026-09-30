@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -32,14 +33,15 @@ func TestALeadWithAnExplicitHandleResolves(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	display, lead, found := ChartUnits(o).ResolveUnit("platform")
+	unit, found := ChartUnits(o).ResolveUnit("platform")
 	if !found {
 		t.Fatal("the unit did not resolve by its key")
 	}
-	if display != "Platform" {
+	if unit.Name != "Platform" {
 		t.Errorf("display = %q, want Platform — the key resolves, the NAME is "+
-			"what a person reads", display)
+			"what a person reads", unit.Name)
 	}
+	lead := unit.Lead
 	if lead.Handle != "ada" {
 		t.Errorf("lead.Handle = %q, want ada — the seat's own handle, not a "+
 			"slug of its display name", lead.Handle)
@@ -83,10 +85,10 @@ func TestAUnitWithNoExplicitIdResolvesItsLead(t *testing.T) {
 		t.Fatalf("Key() = %q, want the name to stand in for an absent id", unit.Key())
 	}
 
-	if _, lead, found := ChartUnits(o).ResolveUnit(unit.Key()); !found ||
-		lead.Handle != "ada" {
+	if resolved, found := ChartUnits(o).ResolveUnit(unit.Key()); !found ||
+		resolved.Lead.Handle != "ada" {
 		t.Errorf("ResolveUnit(%q) lead = %+v (found %v), want ada",
-			unit.Key(), lead, found)
+			unit.Key(), resolved.Lead, found)
 	}
 	if got := o.EffectiveLead(o.Unit(unit.Key())); got == nil || got.Handle() != "ada" {
 		t.Errorf("the unit lead resolved to %v, want ada — a wake routed to "+
@@ -105,9 +107,200 @@ func TestAnInheritedLeadKeepsItsOwnHandleToo(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	if _, lead, found := ChartUnits(o).ResolveUnit("navigation"); !found ||
-		lead.Handle != "ada" {
+	if unit, found := ChartUnits(o).ResolveUnit("navigation"); !found ||
+		unit.Lead.Handle != "ada" {
 		t.Errorf("Navigation's lead = %+v (found %v), want ada inherited from "+
-			"Platform", lead, found)
+			"Platform", unit.Lead, found)
+	}
+}
+
+// THE SEAM ANSWERS ANY SPELLING AND HANDS BACK THE KEY, which is the whole of
+// what the two halves of this need: a write stores the key, and a screen
+// renders the name.
+//
+// It resolved through an EXACT, case-sensitive match, so `unit: engineering`
+// on a company with a unit named "Engineering" was refused with "This company
+// has no team".
+func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		ID: "plat", Name: "Platform", Lead: "ada",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
+		},
+	}, {
+		// A UNIT WITH NO ID, whose key IS its name — a tree built in Go,
+		// or a revision stored before the chart minted ids.
+		Name: "Navigation", Lead: "ada",
+	}}}
+	o.Normalize()
+
+	for _, tc := range []struct {
+		ref  string
+		key  string
+		name string
+	}{
+		{"plat", "plat", "Platform"},
+		{"Platform", "plat", "Platform"},
+		{"PLATFORM", "plat", "Platform"},
+		{"  plat  ", "plat", "Platform"},
+		{"navigation", "Navigation", "Navigation"},
+	} {
+		unit, found := ChartUnits(o).ResolveUnit(tc.ref)
+		switch {
+		case !found:
+			t.Errorf("%q did not resolve", tc.ref)
+		case unit.Key != tc.key:
+			t.Errorf("%q resolved to key %q, want %q — the key is what a "+
+				"write stores", tc.ref, unit.Key, tc.key)
+		case unit.Name != tc.name:
+			t.Errorf("%q resolved to name %q, want %q", tc.ref, unit.Name, tc.name)
+		}
+	}
+	if _, found := ChartUnits(o).ResolveUnit("Design"); found {
+		t.Error("a unit nobody has resolved — a write refuses it by name")
+	}
+}
+
+// A RENAMED UNIT IS HANDED TO THE TRACKER WITH EVERY KEY IT HAS HELD.
+//
+// A unit's key is an ADDRESS in the org chart: a rename moves it, and the key
+// the unit was created under and each key it answered to since go on resolving
+// to it. The tracker holds no org, so the spellings a stored row may hold reach
+// its filters and its board only through this seam — and a seam that answered
+// the current key and the name alone left every task a renamed team filed
+// before its rename out of the team's own `unit=` filter, and drew it as a
+// second column. See [tracker.ChartUnit.FormerKeys].
+func TestARenamedUnitsEveryKeyReachesTheTracker(t *testing.T) {
+	t.Parallel()
+	unit := &org.Unit{
+		ID: "platform", Name: "Platform", Lead: "ada",
+		OriginKey: "plat", FormerKeys: []string{"infra", "plat"},
+		Roles: []*org.Role{{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman}},
+	}
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{unit}}
+	o.Normalize()
+
+	for _, ref := range []string{"platform", "plat", "infra", "INFRA", "Platform"} {
+		got, found := ChartUnits(o).ResolveUnit(ref)
+		switch {
+		case !found:
+			t.Errorf("%q did not resolve, and rows filed under it belong to nobody", ref)
+		case got.Key != "platform":
+			t.Errorf("%q resolved to key %q, want the key the unit holds now", ref, got.Key)
+		case got.OriginKey != "plat" || !slices.Equal(got.FormerKeys, []string{"infra", "plat"}):
+			t.Errorf("%q resolved without the keys the unit held before: origin %q, "+
+				"former %v", ref, got.OriginKey, got.FormerKeys)
+		}
+	}
+	// AND THE ENUMERATION THE BOARD FOLDS BY CARRIES THEM TOO.
+	all := ChartUnits(o).AllUnits()
+	if len(all) != 1 || !slices.Equal(all[0].FormerKeys, []string{"infra", "plat"}) {
+		t.Errorf("AllUnits = %+v, want the one unit with its former keys", all)
+	}
+	// A COPY, so a board folding them cannot reach into the chart's own slice.
+	all[0].FormerKeys[0] = "mutated"
+	if unit.FormerKeys[0] != "infra" {
+		t.Error("the tracker was handed the chart's own slice of former keys")
+	}
+}
+
+// THE UNIT-LEAD FALLBACK RESOLVES ON A UNIT THE CHART GAVE NO ID, whose key is
+// its name.
+//
+// `id` falls back to the name ([org.Unit.Key]), so the string a task's routing
+// unit holds is the NAME on such a unit. Matching the id alone compared it
+// against "" and found nothing: the fallback that reaches a unit's lead when a
+// change named nobody else reached NOBODY, and a wake that went to no one is
+// indistinguishable from a unit whose lead is unset.
+func TestAUnitsLeadResolvesByItsNameWhenItHasNoID(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		Name: "Platform", Lead: "ada",
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
+		},
+	}}}
+	o.Normalize()
+
+	if got := UnitLeadOf(o, "Platform"); got != "ada" {
+		t.Errorf("the lead of Platform is %q, want ada — a unit with no id is "+
+			"keyed by its name, and matching the id alone compares every "+
+			"routing unit against the empty string", got)
+	}
+	if got := UnitLeadOf(o, "Navigation"); got != "" {
+		t.Errorf("a unit nothing names resolved to %q", got)
+	}
+}
+
+// AND BY EVERY SPELLING A ROW MAY HOLD: its key, a key it answered to before a
+// rename, and its name. A task's routing unit is a record of what was true and
+// nothing rewrites it, so every one of them has to reach the lead — or renaming
+// a team silences the fallback for every task already routed to it.
+func TestAUnitsLeadResolvesByEverySpellingARowMayHold(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		ID: "platform", Name: "Platform", Lead: "ada",
+		OriginKey: "plat", FormerKeys: []string{"plat"},
+		Roles: []*org.Role{
+			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
+		},
+		// AN INHERITING CHILD, so the effective lead is exercised on the
+		// same walk rather than only the declared one.
+		Children: []*org.Unit{{ID: "nav", Name: "Navigation"}},
+	}}}
+	o.Normalize()
+
+	for _, unit := range []string{"platform", "Platform", "PLATFORM", "plat", "nav", "Navigation"} {
+		if got := UnitLeadOf(o, unit); got != "ada" {
+			t.Errorf("the lead of %q is %q, want ada", unit, got)
+		}
+	}
+}
+
+// A PROJECT'S CHART-OWNED UNIT IS THE UNIT'S KEY, and its name is the
+// project's own display name beside it.
+//
+// The project row is what every task filed into it takes its filed unit from,
+// and a filed unit is never rewritten. So writing the NAME here filed the
+// company's work under a spelling that moves the day somebody renames the
+// team, on the one path that writes most of it.
+func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
+		ID: "plat", Name: "Platform", Purpose: "the platform", Project: "PLAT",
+		// A SEAT'S OWN PROJECT still says where in the company it sits,
+		// and that home is the unit's key for the same reason.
+		Roles: []*org.Role{{Name: "Ada", DeclaredHandle: "ada", Project: "ADA"}},
+	}, {
+		// A UNIT WITH NO ID is keyed by its name, which is the same
+		// string this wrote before — the id is what makes the two differ.
+		Name: "Product", Project: "PROD",
+	}}}
+	o.Normalize()
+
+	filed := map[string]tracker.ChartProject{}
+	for _, project := range chartProjects(o) {
+		filed[project.Key] = project
+	}
+	for _, tc := range []struct {
+		project string
+		unit    string
+		name    string
+	}{
+		{"PLAT", "plat", "Platform"},
+		{"ADA", "plat", "Ada"},
+		{"PROD", "Product", "Product"},
+	} {
+		got, held := filed[tc.project]
+		switch {
+		case !held:
+			t.Errorf("the chart names no project %s", tc.project)
+		case got.Unit != tc.unit:
+			t.Errorf("%s files into unit %q, want %q — what a task's filed "+
+				"unit is taken from has to be the key", tc.project, got.Unit, tc.unit)
+		case got.Name != tc.name:
+			t.Errorf("%s is named %q, want %q", tc.project, got.Name, tc.name)
+		}
 	}
 }

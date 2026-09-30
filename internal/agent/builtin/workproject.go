@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -117,30 +117,10 @@ func (t *writeProject) Parameters() map[string]any {
 				"description": "REPLACES this project's own field " +
 					"declarations — send the whole set, read describe_project " +
 					"first. These sit beside the workspace's, they do not " +
-					"replace them. The project lead's.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":                   map[string]any{"type": "string", "description": "Omit for a new field."},
-						"slug":                 map[string]any{"type": "string"},
-						"name":                 map[string]any{"type": "string"},
-						"type":                 map[string]any{"type": "string", "enum": toAny(fieldTypeNames())},
-						"required":             map[string]any{"type": "boolean"},
-						"required_in_subtasks": map[string]any{"type": "boolean"},
-						"archived": map[string]any{
-							"type":        "boolean",
-							"description": "One-way; values stay on their tasks.",
-						},
-						"pinned":           map[string]any{"type": "boolean"},
-						"hide_from_agents": map[string]any{"type": "boolean"},
-						"description":      map[string]any{"type": "string"},
-						"options": map[string]any{
-							"type":  "array",
-							"items": map[string]any{"type": "object"},
-						},
-					},
-					"required": []any{"slug", "name", "type"},
-				},
+					"replace them. Each declaration is whole too: a key left " +
+					"out is cleared, `config` and its options included. The " +
+					"project lead's.",
+				"items": fieldDeclarationSchema(),
 			},
 			"default_assignee": map[string]any{
 				"type": "string",
@@ -149,8 +129,9 @@ func (t *writeProject) Parameters() map[string]any {
 			},
 			"archived": map[string]any{
 				"type": "boolean",
-				"description": "Stops the project taking new work. Takes a " +
-					"person's own credential, not a seat's.",
+				"description": "Stops the project taking new work. The " +
+					"project lead's, and a person's own gesture: an agent " +
+					"is refused it even where it leads the project.",
 			},
 		},
 	}
@@ -173,7 +154,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	key := strings.TrimSpace(argString(args, "project"))
 	if key == "" {
-		key = t.deps.defaultProject(actor.Handle)
+		key = t.deps.defaultProject(actor)
 	}
 	if key == "" {
 		return failed("Name the `project` to change — your seat's unit owns " +
@@ -243,10 +224,23 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// a tag declared into an archived project is the one order that reads
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
-		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
+		opID := statelog.NewOpID(time.Now(), "tags-"+key)
+		result, err := writer.WriteTags(ctx, opID, key,
 			tagEdit, tracker.TagAuthority{Policy: authority.Policy})
 		if err != nil {
-			return writeFailed(tracker.WriteProjectTool, err), nil
+			return writeFailed(actor, tracker.WriteProjectTool, err), nil
+		}
+		if result.Outcome == statelog.OutcomeUnknown {
+			// See [writeWorkCatalogue]: the second half waits for the
+			// first, and the whole call is harmless to repeat.
+			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			if !edit.Empty() {
+				next = "The policy change was NOT written: the call stopped " +
+					"here, before it. " + next
+			}
+			return unknownWrite(actor, tracker.WriteProjectTool,
+				fmt.Sprintf("%s's tag change landed", key), opID,
+				result.Unvouched, next), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		tags := map[string]any{
@@ -258,10 +252,20 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
+		opID := statelog.NewOpID(time.Now(), "policy-"+key)
+		result, err := writer.WriteProject(ctx, opID, key,
 			edit, authority)
 		if err != nil {
-			return writeFailed(tracker.WriteProjectTool, err), nil
+			return writeFailed(actor, tracker.WriteProjectTool, err), nil
+		}
+		if result.Outcome == statelog.OutcomeUnknown {
+			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			if !tagEdit.Empty() {
+				next = "The tag change WAS written. " + next
+			}
+			return unknownWrite(actor, tracker.WriteProjectTool,
+				fmt.Sprintf("%s's policy change landed", key), opID,
+				result.Unvouched, next), nil
 		}
 		t.deps.settle(ctx, result.Position)
 		out["policy"] = map[string]any{

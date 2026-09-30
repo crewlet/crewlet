@@ -432,16 +432,25 @@ beside it. `g` then a letter jumps between them.
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Activity** shows it: *Live now* has the seat working, and **Turns**
-shows the turn as it runs — Plan, then Execute, then Review, each phase listing
-the rounds it took, the tools each round called, and the prompts the model
-actually saw. A phase that finishes updates in place rather than moving, so you
-can read one while the next is running.
+shows the turn as it runs — Execute, then Review, each phase listing the rounds
+it took, the tools each round called, and the prompts the model actually saw.
+A turn has those two phases: Execute both decides and acts, because the frame
+that works out what to do is the frame that does it, and Review then judges
+what the round actually landed. On a seat's very first turn one more runs
+before them — Onboarding, where the agent reads its own team's pages once. A
+phase that finishes updates in place rather than moving, so you can read one
+while the next is running. [Turn Engine](../concepts/turn-engine.md) is what
+each one does.
 
 Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
 `tracker.backend` and `knowledge.backend` default to `native`, so your company
 has a tracker and a wiki from its first minute with nothing to set up. A seat
-files with `create_work_item` and writes with `write_page`; a board row opens
-the item beside the board, and ⌘-click opens its page.
+files with `create_work_item` and writes with `write_page`; a row opens the
+item beside the list, and ⌘-click opens its page. Work opens as a **list** —
+one line per item, which reads the same on your first task as on your five
+hundredth — and **Filter** and **Display** in the bar decide what is on it and
+how it is drawn: a board, a table, a calendar or a timeline over the same rows.
+**Projects** beside it is the directory of what your units have declared.
 
 **Bind your token to your seat** and the personal screens become yours. The
 binding lives in the engine's identity directory rather than in either config
@@ -455,11 +464,17 @@ crewlet iam create -kind machine -login token:founder   # prints the new row's i
 crewlet iam bind <that id> your-name
 ```
 
-**My work** and the **Inbox** then answer for that person, and every rule that
-asks "do you lead this" is asked about your seat. Until then the dashboard says
-so rather than guessing — an unbound token is an ordinary state, not a fault.
 Both commands take `people:manage`, which is why the token above carries it.
-See [Humans in the Org
+
+**My work** and the **Inbox** then answer for that person, and every rule that
+asks "do you lead this" is asked about your seat. My work is one tab per claim
+on somebody's attention — what they hold, the order somebody put it in, the
+questions waiting on them — with every count on the strip, and a band above it
+naming whose day is on screen. **Assigned** is the work list narrowed to that
+person: the same Filter, Display and scope controls, opening grouped by when
+each task is due. Until then the dashboard says so rather than guessing — an
+unbound token is an ordinary state, not a fault, and its day is the one kept
+under its own login. See [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
 ### When people sign in rather than share a token
@@ -544,12 +559,14 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the nineteen tracker and knowledge-base tools a seat holds — the same
-tools, not copies — plus ten no seat is given (saved views, writing the
-catalogue, a person's inbox, pins and priorities, and trashing and restoring an
-item), each decided by the same authority table a seat's calls are. Its writes
-are attributed to the token's own name rather than to a seat, so an audit can
-tell your edit from an agent's. See
+It gets the same tracker and knowledge-base tools a seat holds — fourteen over
+the tracker and five over the pages — and ten more that no seat is given: the
+saved views, the catalogue write, a person's own queue, inbox and pins, and the
+trash. Each is decided by the same authority table a seat's calls are, and
+knowledge search sits beside them. Its writes carry your
+seat's handle with author kind `human` once the token is bound to it, and the
+token's own login with author kind `operator` while it is not — never an
+agent's — so an audit can tell your edit from an agent's either way. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
@@ -581,7 +598,11 @@ the LLM transcripts on `/events`; see
 that posture and why it could not simply be defaulted the other way.
 
 If you skipped the import, `crewlet run` boots in the **unconfigured** state
-with the API still serving — you can then bootstrap live without restarting:
+with the API still serving — you can then bootstrap live without restarting.
+The first revision brings up everything the company needs, the engine's own
+tracker and knowledge base included, with their projects and spaces, and the
+[code sandbox](../concepts/code-sandbox.md) when it configures
+`providers.sandbox`:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"

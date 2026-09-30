@@ -2,13 +2,13 @@ package chartapi
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -81,14 +81,18 @@ func (s *Service) patchUnit(w http.ResponseWriter, r *http.Request) {
 		!s.mayWriteRuntime(w, r, len(body.Runtime) > 0 || body.ClearRuntime) {
 		return
 	}
-	result, err := s.writerFor(r).WriteUnit(r.Context(), s.opID(r), chart.UnitContent{
+	op, ok := s.operation(w, r, "chart-unit", body)
+	if !ok {
+		return
+	}
+	result, err := s.writerFor(r).WriteUnit(r.Context(), op.id, chart.UnitContent{
 		Key: r.PathValue("key"), Name: body.Name, Type: body.Type,
 		Purpose: body.Purpose, Goals: body.Goals, Channel: body.Channel,
 		Project: body.Project, Space: body.Space,
 		KnowledgeRefs: body.KnowledgeRefs, Runtime: body.Runtime,
 		ClearRuntime: body.ClearRuntime,
 	})
-	s.answerWrite(w, result, err)
+	s.answerWrite(w, op, result, err)
 }
 
 // patchSeat writes one seat's content.
@@ -101,7 +105,11 @@ func (s *Service) patchSeat(w http.ResponseWriter, r *http.Request) {
 		!s.mayWriteRuntime(w, r, len(body.Runtime) > 0 || body.ClearRuntime) {
 		return
 	}
-	result, err := s.writerFor(r).WriteSeat(r.Context(), s.opID(r), chart.SeatContent{
+	op, ok := s.operation(w, r, "chart-seat", body)
+	if !ok {
+		return
+	}
+	result, err := s.writerFor(r).WriteSeat(r.Context(), op.id, chart.SeatContent{
 		Handle: r.PathValue("handle"),
 		Unit:   body.Unit, Name: body.Name, Email: body.Email,
 		Backstory: body.Backstory, Goal: body.Goal,
@@ -110,7 +118,7 @@ func (s *Service) patchSeat(w http.ResponseWriter, r *http.Request) {
 		Project:              body.Project, Space: body.Space,
 		Runtime: body.Runtime, ClearRuntime: body.ClearRuntime,
 	})
-	s.answerWrite(w, result, err)
+	s.answerWrite(w, op, result, err)
 }
 
 // runtimeStated refuses a body whose `runtime` is JSON null, and reports
@@ -215,8 +223,34 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request,
 //     node, and the only safe retry is the SAME op id — a fresh one would
 //     defeat the ledger that exists for exactly this case. So the answer
 //     carries it, and the route accepts it back.
-func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, err error) {
-	var grant *chart.GrantRefusal
+//
+// # Every 503 carries the operation, and says whether another node could answer
+//
+// Every answer carries the operation's KEY as `op_id` — the one a retry sends
+// back, from which the id the write was published under is derived
+// ([Service.operation]) and which prefixes it, so the trail finds it by that
+// key — and a refusal carries it too, where it used to carry only the
+// sentence. Never the published id itself, which a caller sending it back as
+// a key would turn into a different operation. And an `unknown` this node's
+// operation ledger cannot VOUCH for ([statelog.Result.Unvouched]) was not
+// published at all: asked here again it answers the same way until the change
+// reaches this node, so it carries no Retry-After, says `unvouched`, and sends
+// the caller to another node.
+//
+// A write refused because what it is about was REMOVED ([statelog.ReasonDeleted],
+// a removal that landed between the caller's read and the record) is a 404:
+// nothing will ever write that object again, and a 503 sent a caller looking
+// for a node that would. And one refused because its operation already names a
+// write to another object ([statelog.ReasonOpReused]) is a 409 naming the
+// header: a new key settles it, and no wait does.
+func (s *Service) answerWrite(w http.ResponseWriter, op operation,
+	result chart.WriteResult, err error) {
+
+	opID := op.key
+	var (
+		grant   *chart.GrantRefusal
+		refused *statelog.Unavailable
+	)
 	switch {
 	case errors.As(err, &grant):
 		refuseGrant(w, grant)
@@ -242,9 +276,24 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeStale,
 			map[string]string{"detail": err.Error()})
 		return
+	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
+			httpjson.Detail{"detail": err.Error(), "op_id": opID})
+		return
+	case errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused:
+		// THE OPERATION ALREADY NAMES A WRITE TO ANOTHER OBJECT, and
+		// nothing was written: a conflict the caller resolves with a new
+		// key, never by waiting. Every id here is bound to the path that
+		// names its object ([Service.operation]), so this is the ledger's
+		// guard rather than an answer a request can be expected to meet.
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeInvalidInput,
+			httpjson.Detail{"field": IdempotencyHeader, "op_id": opID,
+				"detail": err.Error()})
+		return
 	case errors.Is(err, statelog.ErrUnavailable):
+		log.Warn("api_chart_write_unavailable", "op_id", op.id, "error", err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retryAfter(err),
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{"detail": err.Error(), "op_id": opID})
 		return
 	case err != nil:
 		internalError(w, "api_chart_write_failed", err)
@@ -253,7 +302,7 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 	body := map[string]any{
 		"outcome":  string(result.Result.Outcome),
 		"position": result.Result.Position.String(),
-		"op_id":    result.Result.OpID,
+		"op_id":    opID,
 		"objects":  result.Objects,
 	}
 	switch result.Result.Outcome {
@@ -263,14 +312,25 @@ func (s *Service) answerWrite(w http.ResponseWriter, result chart.WriteResult, e
 			"position to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
-			httpjson.Detail{
-				"detail": "this node cannot establish what happened to this " +
-					"change. Retry it with the SAME operation id — send it back " +
-					"as the " + IdempotencyHeader + " header — because a fresh " +
-					"one would defeat the ledger that makes the retry safe.",
-				"op_id": result.Result.OpID,
-			})
+		detail := httpjson.Detail{
+			"detail": "this node cannot establish what happened to this " +
+				"change. Retry it with the SAME operation id — send it back " +
+				"as the " + IdempotencyHeader + " header — because a fresh " +
+				"one would defeat the ledger that makes the retry safe.",
+			"op_id": opID,
+		}
+		retry := authz.RetryUndecidedSeconds
+		if result.Result.Unvouched {
+			retry = 0
+			detail["detail"] = "this node's operation ledger cannot vouch for " +
+				"this change, so the same request asked here answers the same " +
+				"way until the change reaches this node. Read whether it " +
+				"landed, or send it with the SAME " + IdempotencyHeader +
+				" to another node; never under a fresh one, which is a second " +
+				"change if the first one landed."
+			detail["unvouched"] = true
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry, detail)
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}
@@ -366,42 +426,116 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 // could not establish.
 const IdempotencyHeader = "Idempotency-Key"
 
-// opID is one write's operation id.
+// operation is one write's two operation ids: the KEY a caller holds — the
+// one an answer hands back and a retry sends as the Idempotency-Key — and the
+// id the write is PUBLISHED under, derived from the key and the request
+// ([Service.operation]).
+type operation struct {
+	key string
+	id  string
+}
+
+// operation is one write's [operation], answering false once it has refused
+// the caller's key.
 //
 // # Minted here, and accepted from the caller for exactly one reason
 //
 // The id is what makes a retry idempotent at the log: the domain's operation
 // ledger recognises a second arrival of the same id and reports the first
-// one's outcome instead of writing again. A caller that reused an id across
-// two DIFFERENT bodies would therefore have the second silently answered with
-// the first's result, which is why this is not a general-purpose request id
-// and is minted fresh by default.
+// one's outcome instead of writing again. What the caller may do is send the
+// key BACK. An `unknown` outcome says nothing can be established from this
+// node, and the only safe retry is under the same key — a fresh one would
+// write the change twice if the first had in fact landed. So every answer
+// carries the key and this reads it back.
 //
-// What the caller may do is send one BACK. An `unknown` outcome says nothing
-// can be established from this node, and the only safe retry is under the
-// same id — a fresh one would write the change twice if the first had in fact
-// landed. So the unknown answer carries the id and this reads it back.
+// # An operation id the engine's grammar minted, both ways
 //
-// A VALUE THAT IS NOT A UUID IS ACCEPTED AS IT STANDS. The ledger keys on the
-// string and nothing here parses it, so refusing a shape would be this
-// surface having an opinion about an identifier the domain does not.
-func (s *Service) opID(r *http.Request) string {
-	if got := strings.TrimSpace(r.Header.Get(IdempotencyHeader)); got != "" {
-		if len(got) <= MaxOpID {
-			return got
+// The publisher vouches for a retry by the INSTANT its operation id carries
+// ([statelog.OpMintedAt]), against the point this node's operation ledger may
+// have lost rows from. This surface minted a v4 uuid and took any caller's
+// value up to a length as it stood — "the ledger keys on the string" — and
+// neither carries an instant: read as minted at the epoch, every such write was
+// answered `unknown` without being published once the ledger had swept
+// anything, on the first attempt and on every retry. So a fresh key is minted
+// through [statelog.NewOpID], and a caller's is held to
+// [statelog.CheckCallerOpID] — the one rule every surface holds a caller's id
+// to — and refused naming it rather than ignored: ignoring it published under
+// a fresh id, which is the double write the key was sent to prevent.
+//
+// # The published id is bound to the request
+//
+// The ledger answers an operation it already holds BEFORE the write is
+// decided ([statelog.Result.Collapsed]), so a write published under the key
+// itself made the same key sent with ANOTHER body — a seat's goal edited again,
+// a unit renamed to something else — the first request's operation: answered
+// `applied`, with nothing of the second written. That is a change reported as
+// made and silently dropped, and nothing in the request could have told the
+// caller: the dashboard mints its own keys, and a script retrying with the key
+// an answer handed back need only have changed a flag. So the write is
+// published under a STEP of the key ([statelog.StepOpID]) named for the verb
+// and a digest of the request — the object its path names, its query and its
+// decoded body — which makes the same request the same operation however often
+// it is sent, and any other request under the key an operation of its own that
+// lands as asked. A step, rather than an id derived afresh, because it keeps
+// the key as its prefix: the trail finds every write a key made by the key the
+// caller holds. It inherits the key's instant, which is what the ledger
+// vouches for.
+//
+// name is the write's verb, which a reader of the ledger finds it by; it never
+// holds a dot, which in the grammar begins a step. asks is the request's
+// decoded body.
+func (s *Service) operation(w http.ResponseWriter, r *http.Request, name string,
+	asks any) (operation, bool) {
+
+	key := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
+	switch {
+	case key == "":
+		key = statelog.NewOpID(s.now(), "")
+	default:
+		if err := statelog.CheckCallerOpID(key); err != nil {
+			// `op_id_invalid`, the one code every surface refuses a
+			// caller's operation id with, whichever route it reached.
+			httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
+				httpjson.Detail{"field": IdempotencyHeader, "detail": err.Error()})
+			return operation{}, false
 		}
 	}
-	return uuid.NewString()
+	digest, err := requestDigest(r, asks)
+	if err != nil {
+		// A BODY THAT DECODED AND WILL NOT ENCODE is a type this surface
+		// declared wrongly, not the caller's to fix.
+		internalError(w, "api_chart_request_digest_failed", err)
+		return operation{}, false
+	}
+	return operation{key: key, id: statelog.StepOpID(key, name, digest)}, true
 }
 
-// MaxOpID bounds a caller-supplied operation id.
+// requestDigest is what binds a write's operation to its request: the path
+// (the object), the query and the decoded body, in a form one request always
+// produces — the body re-encoded from its decoded value, so the same fields
+// in another order or spacing are the same request.
 //
-// 128 bytes, which is four times a UUID's rendered length and leaves room for
-// a caller prefixing one with its own name — and far short of anything worth
-// storing in a ledger row that exists per write. An over-long value is
-// IGNORED rather than refused: it is a retry aid, and failing a write over
-// the shape of one would turn a recoverable outcome into a lost change.
-const MaxOpID = 128
+// SIXTEEN HEX DIGITS, 64 bits of SHA-256: it tells an accidental change of
+// request apart with certainty, which is all it is for — a caller can mint any
+// key it likes, so this is not a credential — in an id that is published in
+// every record and ledger row the write makes.
+func requestDigest(r *http.Request, asks any) (string, error) {
+	body, err := json.Marshal(asks)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	for _, part := range [][]byte{[]byte(r.URL.Path),
+		[]byte(r.URL.Query().Encode()), body} {
+		_, _ = h.Write(part)
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:requestDigestLen], nil
+}
+
+// requestDigestLen is how many hex digits of a request's digest its
+// operation carries — see [requestDigest].
+const requestDigestLen = 16
 
 // writerFor is the chart writer stamped with this request's own author.
 //

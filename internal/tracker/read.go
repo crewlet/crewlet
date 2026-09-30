@@ -543,12 +543,19 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Types) > 0 {
 		add("t.type IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
 	}
-	if len(q.Unit) > 0 {
-		add("t.filed_unit IN ("+placeholders(len(q.Unit))+")", anyOf(q.Unit)...)
+	// BOTH UNIT FILTERS MATCH EVERY SPELLING THEIR UNIT ANSWERS TO — see
+	// [unitSpellings]. `filed_unit` is a record of what was true and is
+	// never rewritten, so a company that gives a unit an id holds both
+	// spellings across its own history for ever: the filter resolves
+	// through the chart and matches the set rather than the one string
+	// somebody typed.
+	if spellings := unitSpellings(q.Units, q.Unit); len(spellings) > 0 {
+		add("t.filed_unit IN ("+placeholders(len(spellings))+")",
+			anyOf(spellings)...)
 	}
-	if len(q.RoutingUnit) > 0 {
-		add("t.routing_unit IN ("+placeholders(len(q.RoutingUnit))+")",
-			anyOf(q.RoutingUnit)...)
+	if spellings := unitSpellings(q.Units, q.RoutingUnit); len(spellings) > 0 {
+		add("t.routing_unit IN ("+placeholders(len(spellings))+")",
+			anyOf(spellings)...)
 	}
 	if handles := q.Assignee; len(handles) > 0 {
 		// `none` is a VALUE rather than a missing filter: "unassigned"
@@ -710,7 +717,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			// THE ALIAS CARRIES ITS OPEN CONDITION, which is what makes
 			// it the same predicate as the preset that means the same
 			// thing rather than a second one that drifts.
-			add("t.status_group IN ('not_started','active')")
+			add("t.status_group IN (" + openGroupsSQL + ")")
 		}
 	}
 	for column, filter := range map[string]*NumFilter{
@@ -770,11 +777,11 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		// cancelled inside it is in the answer exactly as one done
 		// inside it is — which is what the finish stamp being by GROUP
 		// buys, and why the board's Cancelled column is not empty.
-		add("(t.status_group IN ('not_started','active') OR "+
+		add("(t.status_group IN ("+openGroupsSQL+") OR "+
 			"(t.finished_at IS NOT NULL AND t.finished_at >= ?))",
 			store.EncodeTime(now.Add(-q.ShowClosed.Recent)))
 	default:
-		add("t.status_group IN ('not_started','active')")
+		add("t.status_group IN (" + openGroupsSQL + ")")
 	}
 
 	if len(q.Any) > 0 {
@@ -858,7 +865,8 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			// shares.
 			//
 			// It narrows no legitimate answer either. A subtree lives
-			// in one project, and a subtask whose project
+			// in one project — a cross-project move takes the
+			// descendants with it — and a subtask whose project
 			// differs from its root's is the `inconsistent_project`
 			// anomaly the attention set exists to surface, not a
 			// shape a board should quietly return rows from another
@@ -873,17 +881,17 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 		where = append(where, rooted)
 	}
 
-	if q.Group != "" && !branch {
+	if q.Group != nil && !branch {
 		// A COLUMN FILTER IS A PREDICATE OF THE WHOLE QUERY, in its
 		// JOIN-FREE form: the count hint and the totals share this
 		// predicate and carry no join, so an axis expressed only as one
 		// would leave a header adding up the whole board while the rows
 		// showed a single column of it.
-		axis, err := compileGroup(q.GroupBy, fields)
+		axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
 		if err != nil {
 			return "", nil, err
 		}
-		clause, values := axis.filter(q.Group)
+		clause, values := axis.filter(*q.Group)
 		add(clause, values...)
 	}
 

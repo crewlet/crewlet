@@ -8,11 +8,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -641,4 +643,69 @@ func openingFrame(t *testing.T, c *capture, ph string) *types.AgentTurnProgress 
 	}
 	t.Fatalf("no opening frame for %s", ph)
 	return nil
+}
+
+// A RESUMED RUN COUNTS THE CALLS IT MADE BEFORE IT PARKED.
+//
+// A resume is the same run in a fresh process with a fresh call log, and a
+// write it makes derives its operation id's repeat count from that log. Left
+// empty, a call made again after a different one before the suspend counted
+// nothing and took its first copy's id — answered as that copy's retry, with
+// the different write's value in place. So the resume seeds the log with the
+// rounds that closed, the parked round's own calls and, for an agent-mode run,
+// what it called over the bridge.
+func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
+	t.Parallel()
+	first := map[string]any{"summary": "first"}
+	closed := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{
+		{Name: "jira_create", Args: first},
+	}}}
+	parked := suspendedAfterTwoRounds()
+	parked.ToolExecutions = append(parked.ToolExecutions, types.ToolExecution{
+		"name": "jira_create", "arguments": `{"summary":"parked"}`, "success": true, "round": 2,
+	})
+
+	t.Run("a native run", func(t *testing.T) {
+		t.Parallel()
+		calls := turnctx.NewCallLog()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+			execute: []llm.Completion{thinkAndCall(t, runner.SubmitWorkTool,
+				`{"outcome":"delivered","summary":"done"}`, "finish"), text("done")},
+		}}}, buildOpts{
+			resume: &runner.Resume{State: parked, Answer: "the run succeeded"},
+			calls:  calls,
+		})
+		if _, _, err := r.Resume(context.Background(), closed); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if got := calls.Ordinal("jira_create", first); got != 1 {
+			t.Fatalf("after the resume the first create counts %d different "+
+				"creates before it, want the parked round's 1 — made again, it "+
+				"would take the first copy's id", got)
+		}
+		if got := calls.Ordinal("jira_create", map[string]any{"summary": "new"}); got != 2 {
+			t.Fatalf("a new create counts %d, want both the closed round's and "+
+				"the parked round's", got)
+		}
+	})
+
+	t.Run("an agent-mode run", func(t *testing.T) {
+		t.Parallel()
+		calls := turnctx.NewCallLog()
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+			buildOpts{agentRun: &recordingLauncher{}, calls: calls, resume: &runner.Resume{
+				State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+				Answer: "done",
+				Bridged: []ledger.Call{
+					{Name: "jira_create", Args: map[string]any{"summary": "bridged"}},
+				},
+			}})
+		if _, _, err := r.Resume(context.Background(), closed); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		if got := calls.Ordinal("jira_create", first); got != 1 {
+			t.Fatalf("after the resume the first create counts %d, want the "+
+				"bridged call's 1", got)
+		}
+	})
 }

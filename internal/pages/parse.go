@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -117,7 +118,10 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	for _, handle := range record.Notify.Recipients {
 		targets = append(targets, target{handle: handle, via: ViaWatcher})
 	}
-	if copies := p.directed(base, targets, actor, reg); len(copies) > 0 {
+	// THE RECORD'S OWN INSTANT stamps every wake it produces — see
+	// [notify.Routed.WakeAt].
+	at := record.CreatedAt
+	if copies := p.directed(base, targets, actor, at, reg); len(copies) > 0 {
 		return copies, nil
 	}
 	if !LeadWorthy(record.Notify.Kind) {
@@ -126,7 +130,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		// lead learns to ignore the knowledge base entirely.
 		return nil, nil
 	}
-	return p.leadCopy(base, record.Notify.Container, actor, reg), nil
+	return p.leadCopy(base, record.Notify.Container, actor, at, reg), nil
 }
 
 // LeadWorthy reports whether a change reaches the container's lead when
@@ -140,7 +144,8 @@ func LeadWorthy(kind ChangeKind) bool {
 
 type target struct{ handle, via string }
 
-func (p *Parser) directed(base notify.Inbound, targets []target, actor string, reg *notify.Registry) []notify.Routed {
+func (p *Parser) directed(base notify.Inbound, targets []target, actor string,
+	at time.Time, reg *notify.Registry) []notify.Routed {
 	var (
 		out     []notify.Routed
 		seen    = map[string]bool{}
@@ -166,6 +171,7 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor string, r
 			// must not stop notifications — so this is what catches
 			// what slips through. See [changefeed.WakeID].
 			WakeID: changefeed.WakeID(base.Metadata[MetaChangeID], t.handle),
+			WakeAt: at,
 		})
 	}
 	if dropped > 0 {
@@ -176,7 +182,8 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor string, r
 }
 
 // leadCopy is the fallback: the lead of the unit that owns the container.
-func (p *Parser) leadCopy(base notify.Inbound, container, actor string, reg *notify.Registry) []notify.Routed {
+func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
+	at time.Time, reg *notify.Registry) []notify.Routed {
 	if container == "" {
 		return nil
 	}
@@ -209,6 +216,7 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string, reg *not
 		Inbound: withVia(base, ViaLeadFallback),
 		To:      notify.Recipient{Handle: lead},
 		WakeID:  changefeed.WakeID(base.Metadata[MetaChangeID], lead),
+		WakeAt:  at,
 	}}
 }
 

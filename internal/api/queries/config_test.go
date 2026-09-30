@@ -61,7 +61,13 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		}
 		ids = append(ids, id)
 	}
-	svc, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher})
+	svc, err := configapi.New(configapi.Options{
+		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		// A DURABLE STREAM, which every running company's state log
+		// needs: an in-memory Tier A is refused at the write, which is
+		// not what any case here is about.
+		Bootstrap: &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}},
+	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}

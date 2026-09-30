@@ -55,6 +55,25 @@ type Domain interface {
 	// above it.
 	InstallsGate(env Envelope) bool
 
+	// NodeGate reports whether this record EVICTS OR READMITS A NODE — the
+	// one record a write flagged [Request.NodeGate] may carry.
+	//
+	// A NARROWER QUESTION THAN [Domain.InstallsGate], and the publisher
+	// holds the flag to this one. Every node gate installs an apply gate,
+	// but not every apply gate is a node's: a purge is a permanent deletion
+	// marker on an object, published like any other write. The flag excuses
+	// three fences — the passed generation, a peer's truncated rows and the
+	// gate reserve — so held to the wider answer, a purge flagged by mistake
+	// would spend the room kept for the eviction that unpins a full log and
+	// pass every fence that stops an ordinary write.
+	//
+	// ANSWERED FROM THE ENVELOPE ALONE, for InstallsGate's reason: it is the
+	// half every build reads. A domain that keeps no eviction gate answers
+	// false for every record. statelogtest certifies both halves: the
+	// domain's own eviction and readmission answer true and install a gate,
+	// and nothing else does.
+	NodeGate(env Envelope) bool
+
 	// Tables is every table this domain writes, with the class that says
 	// what a snapshot, an identity claim and a local sweep each do with
 	// it. The framework derives all three from this map, so a table added
@@ -77,6 +96,20 @@ type Domain interface {
 
 	// OpsTable is the idempotency ledger: the op ids this node's applier
 	// has written, at the positions it wrote them.
+	//
+	// CLASSED [Divergent], and the class is what makes a retry safe on a
+	// node that adopted a snapshot: the ledger TRAVELS with the rows it
+	// describes, so the adopter holds a row for every operation the donor
+	// applied and answers a retry of one from it, while an operation
+	// neither ledger holds is one that never applied and is decided
+	// afresh. Classed [Local] it was scrubbed out of every artefact, and
+	// the adopter could tell neither apart for anything minted before the
+	// adoption — so it answered a turn's FIRST attempt at a write
+	// `unknown` whenever the turn's trigger predated the join, which is
+	// the recovering node's whole backlog. Every node writes the same op
+	// id, subject and position from the same record; only `applied_at`,
+	// this node's own clock and read by nothing but this node's own sweep,
+	// differs, which is why the class is Divergent rather than Replicated.
 	//
 	// EMPTY only for a domain whose apply is a total function under a
 	// monotone version guard AND whose writer never reports a committed
@@ -101,6 +134,36 @@ type Domain interface {
 	// "the Replicated tables of a domain that claims identity" rather
 	// than "Replicated minus the tables somebody remembered".
 	ClaimsIdentity() bool
+
+	// FeedGroup is the fleet-wide consumer this domain's WAKE FEED runs as
+	// on its own stream, or empty for a domain that has no wake feed.
+	//
+	// DECLARED because two parties name one consumer and neither can ask
+	// the other: the feed that advances it, on whichever node wins a
+	// record, and the trim's `feed_ack_floor` term that waits for it, on
+	// whichever node holds the trim duty — which need not run the feed at
+	// all. When the trim named that consumer for itself it named ONE
+	// domain's for every domain with a feed; on the other log the
+	// consumer never exists, the term permits nothing, and that log's trim
+	// was blocked for the life of the deployment.
+	//
+	// EMPTY IS AN ANSWER rather than an omission, and it is the only one
+	// that makes the term ABSENT instead of zero. Each wrong answer costs
+	// something different and neither is loud: a domain with a feed that
+	// answers empty has its log trimmed past records nobody has been woken
+	// for yet, and one that answers another domain's group blocks its trim
+	// on a consumer nobody opens.
+	//
+	// The name is also the fleet's POSITION on its log, so it never
+	// changes. A new name is a fresh durable consumer, and every group
+	// starts from the log's first retained record rather than its head, so
+	// a rename loses nothing: it REPLAYS every record the log still holds
+	// as a wake, and only the change feed's claim and its wake-id dedupe
+	// hold those back, and only within their own retention windows. Until
+	// the new consumer catches up, its acknowledgement floor is what the
+	// trim's `feed_ack_floor` term reads, so the log's trim stalls behind
+	// the replay.
+	FeedGroup() string
 }
 
 // ReplayProtocol is how a domain's stream behaves under replay, and the
@@ -299,7 +362,8 @@ const (
 	// rather than "Replicated minus two tables somebody remembered". The
 	// alternative is worse than untidy: classing such a table Local would
 	// scrub it from every snapshot, and an adopting node would hold a
-	// tail where its peers hold a year.
+	// tail where its peers hold a year — which is exactly what the
+	// operation ledger did while it was Local (see [Domain.OpsTable]).
 	Divergent
 
 	// Local is this node's own rows. SCRUBBED from every snapshot,

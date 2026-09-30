@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -135,14 +134,15 @@ func embeddingCompany(t *testing.T, e *config.EmbeddingProvider) *config.Company
 // made.
 func TestNoDefaultWidthConstantSurvives(t *testing.T) {
 	t.Parallel()
-	root := moduleRootFor(t)
+	root := sourcetree.Root(t)
 	var found []string
+	files := 0
 	err := sourcetree.Walk(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist" {
+			if d.Name() == "dist" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -150,6 +150,7 @@ func TestNoDefaultWidthConstantSurvives(t *testing.T) {
 		if !strings.HasSuffix(p, ".go") {
 			return nil
 		}
+		files++
 		body, readErr := os.ReadFile(p)
 		if readErr != nil {
 			return readErr
@@ -168,21 +169,13 @@ func TestNoDefaultWidthConstantSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
+	// An absence is asserted by reading everything, and a walk that read
+	// nothing asserts it just as confidently.
+	if files == 0 {
+		t.Fatal("read no Go files — this guard was certifying nothing")
+	}
 	if len(found) > 0 {
 		t.Errorf("defaultEmbeddingDimensions survives in %v — a default width is "+
 			"a width nobody named, and it is what this change removed", found)
 	}
-}
-
-func moduleRootFor(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }

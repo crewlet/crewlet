@@ -59,7 +59,7 @@ func healthy() statelog.Health {
 	floor := uint64(1)
 	return statelog.Health{
 		Position:  statelog.Position{Stream: probeStream, Generation: 1, Seq: 100},
-		CaughtUp:  true,
+		Drained:   true,
 		Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
 		Lag:       &lag,
 		FirstSeq:  &first,
@@ -156,7 +156,8 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			t.Parallel()
 			var appends atomic.Int64
 			h := newHarness(t)
-			index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+			index, err := statelog.NewReadIndex(probeDomain{},
+				&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -189,6 +190,111 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 					"caller: %q", err)
 			}
 		})
+	}
+}
+
+// A NODE REPLAYING UP TO THE FLOOR TELLS A READER TO COME BACK, and when.
+//
+// The floor is published before the purge it licenses, so a node can sit
+// below it while the log still holds every record it lacks. That is a wait,
+// not a fault: the answer is `behind`, which a caller retries here, with a
+// hint from this node's own drain and a detail naming the floor — never
+// `below_floor`, which sends a caller elsewhere and an operator to a restore
+// the node does not need. And it is still decided locally, before a barrier.
+func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
+	t.Parallel()
+	var appends atomic.Int64
+	h := newHarness(t)
+	index, err := statelog.NewReadIndex(probeDomain{},
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	replaying := func() statelog.Health {
+		h := healthy()
+		floor, lag := uint64(500), uint64(800)
+		h.Floor.State = statelog.FloorReplaying
+		h.TrimFloor, h.Lag = &floor, &lag
+		return h
+	}
+	db := &stubStore{}
+	r := newReader(t, db, replaying, &stubWaiter{at: healthy().Position}, index)
+
+	for _, level := range []statelog.ReadLevel{
+		statelog.ReadLinearizable, statelog.ReadStale, statelog.ReadConsistentPrefix,
+	} {
+		_, err = r.Read(t.Context(), pointQuery(level), func(*sql.Tx) error { return nil })
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) {
+			t.Fatalf("%s: Read = %v, want a Refused", level, err)
+		}
+		if refusal.Code != statelog.RefuseBehind || !refusal.Code.Retryable() {
+			t.Fatalf("%s: code = %q, want %q, which a caller comes back for",
+				level, refusal.Code, statelog.RefuseBehind)
+		}
+		if refusal.RetryAfter <= 0 {
+			t.Errorf("%s: the refusal carries no retry hint", level)
+		}
+		if !strings.Contains(refusal.Detail, "published trim floor 500") {
+			t.Errorf("%s: the detail does not name the floor it is replaying to: %q",
+				level, refusal.Detail)
+		}
+	}
+	if got := appends.Load(); got != 0 {
+		t.Fatalf("a read below the floor appended %d barrier(s)", got)
+	}
+	if got := db.reads.Load(); got != 0 {
+		t.Fatalf("a read below the floor opened %d transaction(s)", got)
+	}
+}
+
+// A STALL BELOW THE FLOOR SERVES NOTHING, not even the one read a stall
+// otherwise survives.
+//
+// A consistent-prefix read asks only for a coherent point in the log's order,
+// so a frozen prefix still answers it — at or above the floor. Below it, a
+// stall outranks the replay ([statelog.Health.Refusal] reports `stalled`,
+// since a replay that is not moving is not one to wait on), and that order
+// alone let the stall exemption serve rows below the floor every node must
+// hold before it answers — while the same node with a first sequence one lower
+// reported `below_floor` and served nothing.
+func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	stalled := func(floor statelog.FloorState) func() statelog.Health {
+		return func() statelog.Health {
+			hp := healthy()
+			hp.Stalled = true
+			hp.Floor.State = floor
+			return hp
+		}
+	}
+
+	// THE CONTROL: at the floor the exemption holds, or the case below
+	// would pass on a reader that refuses every stalled read.
+	db := &stubStore{}
+	r := newReader(t, db, stalled(statelog.FloorOK), &stubWaiter{at: healthy().Position}, index)
+	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadConsistentPrefix),
+		func(*sql.Tx) error { return nil }); err != nil {
+		t.Fatalf("a stalled node at the floor refused a consistent-prefix read: %v", err)
+	}
+
+	db = &stubStore{}
+	r = newReader(t, db, stalled(statelog.FloorReplaying), &stubWaiter{at: healthy().Position}, index)
+	_, err = r.Read(t.Context(), pointQuery(statelog.ReadConsistentPrefix),
+		func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseStalled {
+		t.Fatalf("a stalled node below the floor answered a consistent-prefix read "+
+			"with %v, want a %q refusal — its rows are below the floor every node "+
+			"must hold before it answers", err, statelog.RefuseStalled)
+	}
+	if got := db.reads.Load(); got != 0 {
+		t.Fatalf("a stalled node below the floor opened %d read transaction(s)", got)
 	}
 }
 
@@ -229,7 +335,8 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		assertFullLogRead(t, h, refusingAppender{err: &jetstream.APIError{
-			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}})
+			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}},
+			noCeiling(t))
 	})
 
 	t.Run("a real log at its ceiling", func(t *testing.T) {
@@ -249,17 +356,23 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 				written++
 			}
 		}
-		assertFullLogRead(t, h, h.log)
+		// THROUGH THE LOG'S OWN RESERVE, as every append on it is in
+		// production: the publisher's writes stop at the ordinary ceiling,
+		// so a barrier admitted past the reserve would land in the room
+		// kept for gate records — and the read would be served from a log
+		// every ordinary write is refused on.
+		assertFullLogRead(t, h, h.log, h.reserve)
 	})
 }
 
 // assertFullLogRead reads at every level through a read index appending to
 // log, which is full: the levels that append are refused `log_full` with no
 // hint, and the ones that do not are served.
-func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender) {
+func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
+	admission statelog.Admission) {
 	t.Helper()
 	index, err := statelog.NewReadIndex(probeDomain{}, log, testSigner(t, probeDomain{}),
-		probeEncode, h.gen.Load, nil)
+		admission, probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -336,7 +449,7 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
 			index, err := statelog.NewReadIndex(probeDomain{}, refusingAppender{err: c.err},
-				testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+				testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -387,7 +500,7 @@ func TestACallerThatGaveUpIsNotARefusal(t *testing.T) {
 		release := make(chan struct{})
 		t.Cleanup(func() { close(release) })
 		index, err := statelog.NewReadIndex(probeDomain{}, blockingAppender{release: release},
-			testSigner(t, probeDomain{}), probeEncode, func() uint32 { return 1 }, nil)
+			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 		if err != nil {
 			t.Fatalf("NewReadIndex: %v", err)
 		}
@@ -462,7 +575,8 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var appends atomic.Int64
-	index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{},
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -501,7 +615,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -638,12 +752,17 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		{statelog.ReasonEvicted, false},
 		{statelog.ReasonDeferred, false},
 		{statelog.ReasonDeleted, false},
-		{statelog.ReasonGated, false},
 		{statelog.ReasonRetired, false},
+		{statelog.ReasonAbandoned, false},
+		{statelog.ReasonOvertaken, false},
 		{statelog.ReasonLogFull, false},
 		{statelog.ReasonRecordTooLarge, false},
 		{statelog.ReasonBrokerRefused, false},
 		{statelog.ReasonSkew, false},
+		{statelog.ReasonOpReused, false},
+		{statelog.ReasonLogTruncated, false},
+		{statelog.ReasonWrongStream, false},
+		{statelog.ReasonSuperseded, false},
 	} {
 		covered[c.reason] = true
 		want := time.Duration(0)
@@ -663,7 +782,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 	}
 	// EVERY REASON HAS A ROW, so a reason added without deciding whether
 	// waiting clears it fails here rather than defaulting to "no".
-	for _, reason := range statelog.Reasons {
+	for _, reason := range statelog.Reasons() {
 		if !reason.Valid() {
 			t.Errorf("%q is listed and does not report itself valid", reason)
 		}
@@ -713,7 +832,7 @@ func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
 	// renamed on one side stops being compared, and a new one is a sentence
 	// in that guide nobody has written yet.
 	want := []string{"behind", "deferred", "below_floor", "floor_unknown",
-		"evicted", "log_full", "broker_refused"}
+		"evicted", "log_full", "broker_refused", "wrong_stream"}
 	slices.Sort(twins)
 	slices.Sort(want)
 	if !slices.Equal(twins, want) {
@@ -802,7 +921,8 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	}
 	var appends atomic.Int64
 	broker := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: broker.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, broker.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{},
+		&countingAppends{inner: broker.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, broker.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1016,7 +1136,8 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var appends atomic.Int64
-	index, err := statelog.NewReadIndex(probeDomain{}, &countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{},
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1093,7 +1214,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}

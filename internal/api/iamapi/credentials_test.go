@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE MINT SURFACE: what `POST /iam/credentials` hands the domain, and what it
@@ -107,7 +108,11 @@ func TestAMintedTokenIsShownOnceAndVerifiesAgainstWhatWasStored(t *testing.T) {
 	// A FRESH OPERATION, never the caller's Idempotency-Key: a replayed
 	// mint would hand back the first attempt's record with this
 	// attempt's value — a token that verifies against nothing.
-	if !strings.HasPrefix(minted.OpID, "credentials:mint:"+minted.ID) {
+	//
+	// A STEP OF THE CREDENTIAL IT MINTS, so it carries that credential's
+	// instant in the grammar the ledger vouches for a retry by.
+	if minted.OpID != statelog.StepOpID(minted.ID, "mint") ||
+		statelog.CheckCallerOpID(minted.OpID) != nil {
 		t.Errorf("the mint published as operation %q", minted.OpID)
 	}
 }

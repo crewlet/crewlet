@@ -30,9 +30,14 @@ jobs:
           cache-dependency-path: go.sum
       - run: go build ./...
       - run: go vet ./...
+      # This tree's Go files by internal/sourcetree's rule, never `.`, which
+      # gofmt walks into every nested checkout — the Makefile's GOFILES says
+      # why. Listed first so a listing that failed stops the step (bash -e)
+      # instead of handing gofmt no paths, which it reads as stdin and passes.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l .)"
+          files="$(go run ./internal/sourcetree/gofiles)"
+          unformatted="$(gofmt -l $files)"
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
           fi

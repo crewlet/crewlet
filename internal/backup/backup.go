@@ -704,7 +704,9 @@ func copyOf(m Manifest, estate store.Estate) string {
 // the only moment anything can still be done: before the manifest is written.
 //
 // It needs NO NEW READ. The stream snapshot already captured the server's own
-// state verbatim, and its first sequence is the bound.
+// state verbatim, and its first sequence is the bound — asked through
+// [statelog.Replayable], the predicate every reader of that boundary shares,
+// so a backup and the node that restores it cannot disagree about it by one.
 func assertReplayable(m Manifest) error {
 	if len(m.Domains) == 0 {
 		return nil
@@ -729,7 +731,7 @@ func assertReplayable(m Manifest) error {
 			return fmt.Errorf("backup: read %s's captured stream state: %w",
 				artifact.Name, err)
 		}
-		if state.FirstSeq > at.Seq+1 {
+		if !statelog.Replayable(at.Seq, state.FirstSeq) {
 			return fmt.Errorf("backup: the store copy stands at %s sequence %d "+
 				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+

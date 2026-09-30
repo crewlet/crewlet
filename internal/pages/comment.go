@@ -7,9 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -43,11 +43,29 @@ type NewComment struct {
 	// TurnKey makes a comment made from a turn idempotent: a re-run turn
 	// posts once.
 	//
-	// IT DERIVES THE OPERATION ID rather than only the comment's own,
-	// which is the upgrade the log brings: the operation ledger collapses
-	// the whole record, so a retried turn does not even append — where the
-	// bucket could only make the second write land on the same key.
+	// IT DERIVES THE OPERATION ID rather than only the comment's own, so a
+	// re-run is the SAME operation: inside the log's duplicate window the
+	// broker collapses its append, past it the comment's own id makes the
+	// apply an upsert of the row the first run wrote, and once this node's
+	// ledger has lost the first run's row the state log answers it
+	// `unknown` rather than deciding it again — which is what TurnSince is
+	// for.
 	TurnKey string
+
+	// TurnSince is when the unit of work TurnKey names began, and it is the
+	// instant the derived operation id carries (see statelog.DeriveOpID).
+	// It must be the key's own — reproduced by every re-run — and never the
+	// instant of this call: the state log refuses to decide again an
+	// operation minted before its ledger's watermark whose row it no longer
+	// holds, and a call's own clock is always after it.
+	TurnSince time.Time
+
+	// Repeat is how many earlier calls in the turn's run asked the same
+	// tool for something else — see turnctx.CallLog. It is part of the
+	// derived id, so a remark made again after a different one is a second
+	// comment rather than the first one's retry, while a remark repeated
+	// with nothing between stays one. Zero adds nothing to the id.
+	Repeat int
 
 	Quiet bool
 }
@@ -80,12 +98,11 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	}
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -109,7 +126,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(in.Quiet, ChangeComment, head,
 				excerpt(body), mentions)
-			return s.decide(actor, subject, OpPatch, scope, opID, patch, notify, at)
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
 	if err != nil {
@@ -117,9 +134,20 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	}
 	// A COMMENT ALWAYS LANDS A RECORD — the decision is unconditional — so
 	// there is no read arm for [writtenRevision] to fall back on.
-	return comment, Written{
+	written := Written{
 		Revision: writtenRevision(result, 0), ChangeID: opID, Outcome: result,
-	}, nil
+	}
+	if result.Collapsed {
+		// THE REMARK AN EARLIER COPY POSTED, as the rows hold it: its
+		// author and its instant are that copy's, and only the id, the
+		// page and the body are pinned by the operation this call shares
+		// with it — see [Store.commentOpID].
+		comment, err = s.landedComment(ctx, Comment{
+			V: DocumentVersion, ID: opID, PageID: pageID, Body: body,
+		}, opID)
+		return comment, written, err
+	}
+	return comment, written, nil
 }
 
 // EditComment rewrites one remark's body.
@@ -139,7 +167,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	}
 
 	at := s.now()
-	opID := s.operation(actor, "comment.edit", commentID)
+	opID := s.operation(actor, "comment-edit", commentID)
 	subject := PageSubject(pageID)
 	var out Comment
 	// THE REVISION AN UNCHANGED EDIT ANSWERS WITH, taken in the decision's
@@ -148,12 +176,11 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -186,7 +213,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(false, ChangeCommentEdited, head,
 				excerpt(body), nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
 				V: DocumentVersion, Comment: &CommentPatch{
 					ID: commentID, Body: &body, Author: held.Author,
 					AuthorKind: held.AuthorKind, ReplyTo: held.ReplyTo,
@@ -198,9 +225,16 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	if err != nil {
 		return Comment{}, Written{}, err
 	}
-	return out, Written{
+	written := Written{
 		Revision: writtenRevision(result, read), ChangeID: opID, Outcome: result,
-	}, nil
+	}
+	if result.Collapsed {
+		out, err = s.landedComment(ctx, Comment{
+			V: DocumentVersion, ID: commentID, PageID: pageID,
+		}, opID)
+		return out, written, err
+	}
+	return out, written, nil
 }
 
 // CommentAuthority is what a caller may do to somebody else's remark.
@@ -237,16 +271,15 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 		return Written{}, err
 	}
 	at := s.now()
-	opID := s.operation(actor, "comment.remove", commentID)
+	opID := s.operation(actor, "comment-remove", commentID)
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -256,10 +289,11 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 			}
 			// THE AUTHOR IS READ IN THE DECIDE'S OWN SNAPSHOT, which
 			// is the only place it can be: a removal names a comment
-			// id and who wrote it is a row. A comment that is already
-			// gone reads as an empty author, which is neither this
-			// actor nor anybody — so a caller with no moderate answer
-			// is refused rather than writing the no-op record below.
+			// id and who wrote it is a row. A comment that is not
+			// there is [ErrNotFound], for a moderator as for its
+			// author — the refusal [Store.EditComment] gives the same
+			// absence: a remark that is gone has no author to ask the
+			// check about and nothing for a record to take down.
 			held, err := readCommentTx(ctx, tx, pageID, commentID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -272,7 +306,7 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(true, ChangeCommentEdited, head, "", nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, PagePatch{
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, PagePatch{
 				V:       DocumentVersion,
 				Comment: &CommentPatch{ID: commentID, Removed: true},
 			}, notify, at)
@@ -281,9 +315,10 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 	if err != nil {
 		return Written{}, err
 	}
-	// UNCONDITIONAL FOR WHOEVER MAY: removing a comment that is already
-	// gone still writes a record, because only the applier can see whether
-	// the row is there on every node.
+	// A REMOVAL THAT WAS DECIDED ALWAYS LANDS A RECORD, so there is no read
+	// arm for [writtenRevision] to fall back on; and a retry answered from
+	// the ledger ([statelog.Result.Collapsed]) carries nothing computed in a
+	// decision, so it is answered as it stands.
 	return Written{
 		Revision: writtenRevision(result, 0), ChangeID: opID, Outcome: result,
 	}, nil
@@ -341,27 +376,33 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 // the same value: one comment is one operation here, and two identifiers for
 // one thing is two places for a retry to disagree with itself.
 //
-// AND FROM THE CALLER'S OWN [Actor.OpKey] when there is no turn, for the same
-// reason every other write here takes it: a request retried after an
+// AND IT CARRIES THE INSTANT THE WORK BEGAN, never this call's, for the reason
+// [NewComment.TurnSince] gives — the turn's own, or, when there is no turn,
+// the one the caller's [Actor.OpKey] was minted at: a request retried after an
 // `unknown` must post once, and a comment is the gesture a person is most
 // likely to press twice.
 func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) string {
-	key := strings.TrimSpace(in.TurnKey)
+	key, at := strings.TrimSpace(in.TurnKey), in.TurnSince
 	if key == "" {
 		key = strings.TrimSpace(actor.OpKey)
+		at, _ = statelog.OpMintedAt(key)
 	}
 	if key == "" {
 		return s.newSeqID()
 	}
 	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	name := pageID + "\x00" + key + "\x00" +
-		hex.EncodeToString(sum[:])
-	return uuid.NewSHA1(commentNamespace, []byte(name)).String()
+	identity := []string{commentNamespace, pageID, key, hex.EncodeToString(sum[:])}
+	if in.Repeat > 0 {
+		identity = append(identity, "repeat:"+strconv.Itoa(in.Repeat))
+	}
+	// UNNAMED, because this is the comment's own id as well and a reader
+	// addresses it: the page and the turn it came from are on the row.
+	return statelog.DeriveOpID(at, "", identity...)
 }
 
 // commentNamespace scopes the derived operation ids. FIXED for the life of the
 // deployment: a new one would make every re-run turn post a duplicate.
-var commentNamespace = uuid.MustParse("9c1d2e3f-4a5b-5c6d-8e7f-0a1b2c3d4e5f")
+const commentNamespace = "crewlet.pages.comment"
 
 // Thread is one page's comments, oldest first.
 //

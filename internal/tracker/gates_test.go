@@ -44,7 +44,7 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 	gates := tracker.NewGates(r.db)
 	reason, gated, err := gates.GatedAt(t.Context(),
 		statelog.Subject{Kind: "task", ID: "t-1"}, "node-a", "op-purge",
-		purged.Position)
+		purged.Position, nil)
 	if err != nil {
 		t.Fatalf("GatedAt: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestAPurgeIsNotGatedByItsOwnMarker(t *testing.T) {
 	for _, opID := range []string{"op-comment", "op-purge-again"} {
 		reason, gated, err := gates.GatedAt(t.Context(),
 			statelog.Subject{Kind: "task", ID: "t-1"}, "node-a", opID,
-			purged.Position)
+			purged.Position, nil)
 		if err != nil {
 			t.Fatalf("GatedAt %s: %v", opID, err)
 		}
@@ -148,6 +148,97 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 			"the purge report sees zero for a task the fleet is still " +
 			"rejecting writes on")
 	}
+}
+
+// A READMISSION IS THE INVERSE COMMIT, AND THIS LOG'S OWN ROWS SAY SO.
+//
+// The eviction's whole history survives a replay because a readmission is a
+// second record rather than a delete — so a node that was evicted, readmitted
+// and evicted again reads as three facts rather than as one long absence. And
+// [tracker.Domain.Evictions] is what the trim reads to stop counting a node on
+// THIS log, so what it answers after each step is the contract: evicted and
+// not back, then back, then evicted again with the readmission cleared.
+//
+// Whether the readmission is PERMITTED is not this writer's to judge any more:
+// it is one fleet gesture over every identity-claiming log, judged once by the
+// engine's node gate before either log is written, and certified there.
+func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	standing := func(node string) (held, back bool) {
+		t.Helper()
+		rows, err := tracker.Domain{}.Evictions(t.Context(), r.db)
+		if err != nil {
+			t.Fatalf("read the evictions: %v", err)
+		}
+		for _, row := range rows {
+			if row.NodeID == node {
+				if row.From == 0 || row.At.IsZero() {
+					t.Fatalf("%s's eviction row carries no position (%d) or no "+
+						"instant (%s) — the gate and the fence window read both",
+						node, row.From, row.At)
+				}
+				if row.Back && row.Readmitted <= row.From {
+					t.Fatalf("%s is back at %d, which is not above its eviction "+
+						"at %d", node, row.Readmitted, row.From)
+				}
+				return true, row.Back
+			}
+		}
+		return false, false
+	}
+	// AND THE SAME STANDING READ OFF THE LOG ITSELF ([statelog.EvictedOnLog]),
+	// which is how a node a peer re-anchored past sees an eviction its
+	// stopped applier never reaches.
+	onLog := func(node string, want bool) {
+		t.Helper()
+		evicted, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{},
+			statelog.StandingOf(r.log, r.verifier), node)
+		if err != nil || !found || evicted != want {
+			t.Fatalf("%s's standing read off the log = evicted %v, found %v (%v), "+
+				"want evicted %v", node, evicted, found, err, want)
+		}
+	}
+	if _, found, err := statelog.EvictedOnLog(t.Context(), tracker.Domain{},
+		statelog.StandingOf(r.log, r.verifier), "node-b"); err != nil || found {
+		t.Fatalf("a node never gated has a standing on the log: found %v, %v", found, err)
+	}
+
+	for _, node := range []string{"node-b", "node-c"} {
+		if _, err := r.writer.EvictNode(t.Context(), "op-evict-"+node, node); err != nil {
+			t.Fatalf("EvictNode %s: %v", node, err)
+		}
+	}
+	r.drain()
+	if held, back := standing("node-b"); !held || back {
+		t.Fatalf("node-b after its eviction: held %v, back %v — want evicted", held, back)
+	}
+	onLog("node-b", true)
+
+	if _, err := r.writer.ReadmitNode(t.Context(), "op-back", "node-b"); err != nil {
+		t.Fatalf("ReadmitNode: %v", err)
+	}
+	r.drain()
+	if held, back := standing("node-b"); !held || !back {
+		t.Fatalf("node-b after its readmission: held %v, back %v — want its row "+
+			"kept and marked back, which is what an inverse commit is", held, back)
+	}
+	if held, back := standing("node-c"); !held || back {
+		t.Fatalf("node-c, never readmitted, reads held %v, back %v", held, back)
+	}
+	onLog("node-b", false)
+	onLog("node-c", true)
+
+	if _, err := r.writer.EvictNode(t.Context(), "op-evict-again", "node-b"); err != nil {
+		t.Fatalf("EvictNode again: %v", err)
+	}
+	r.drain()
+	if held, back := standing("node-b"); !held || back {
+		t.Fatalf("node-b evicted a second time reads held %v, back %v — a "+
+			"re-eviction must clear the readmission, or the row would still "+
+			"say the node is back", held, back)
+	}
+	onLog("node-b", true)
 }
 
 // EVERY GATE-INSTALLING RECORD IS DECLARED, AND PINNED.

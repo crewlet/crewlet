@@ -79,6 +79,7 @@ type Service struct {
 	plane   coord.Plane
 	queue   queue.Publisher
 	cipher  secrets.Cipher
+	boot    *config.Bootstrap
 	now     func() time.Time
 }
 
@@ -99,6 +100,15 @@ type Options struct {
 	// which the reconciler authenticates a peer's revision under.
 	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
+
+	// Bootstrap is this node's Tier A, which a company document is judged
+	// against as well as on its own ([config.CheckTiers]). Required: the
+	// apply refuses a document the deployment cannot run — any company on
+	// an in-memory stream, whose org chart the log would lose on a restart —
+	// so a write that skipped the check was
+	// accepted, activated, and then refused by every node, leaving the
+	// fleet on the old epoch and the operator with a 201.
+	Bootstrap *config.Bootstrap
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -135,6 +145,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Cipher is required: every " +
 			"revision is sealed under the keyring (secrets.keys) every node holds, " +
 			"and one written without it is a revision no node applies")
+	case opts.Bootstrap == nil:
+		return nil, errors.New("configapi: Options.Bootstrap is required: a " +
+			"company document is valid only against the deployment it runs on, " +
+			"and every node's apply judges it against its own")
 	}
 	now := opts.Now
 	if now == nil {
@@ -142,7 +156,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
-		cipher: opts.Cipher, queue: opts.Queue, now: now,
+		cipher: opts.Cipher, queue: opts.Queue, boot: opts.Bootstrap, now: now,
 	}, nil
 }
 
@@ -222,7 +236,9 @@ func (s *Service) Routes(mux authz.Mux) error {
 	for _, kind := range []string{EntityRoles, EntityUnits} {
 		write("PUT /config/"+kind+"/{id}", s.refuseChartWrite(kind))
 	}
-	surface := noStore(routes)
+	// AND THOSE TWO ARE JSON, like every other answer here: see
+	// [httpjson.Mux].
+	surface := noStore(httpjson.Mux(routes))
 	mux.Handle("/config", surface)
 	mux.Handle("/config/", surface)
 	return errors.Join(failures...)

@@ -21,7 +21,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -86,7 +85,7 @@ var publishedTrees = []string{"docs", "skills"}
 func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 	t.Parallel()
 
-	root := repoRoot(t)
+	root := sourcetree.Root(t)
 	var offences []string
 
 	for _, tree := range publishedTrees {
@@ -98,6 +97,7 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 			t.Fatalf("expected the published tree %s at %s: %v", tree, dir, err)
 		}
 
+		files := 0
 		err := sourcetree.Walk(dir, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -105,6 +105,7 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 			if entry.IsDir() {
 				return nil
 			}
+			files++
 
 			source, err := os.ReadFile(path) //nolint:gosec // a path this walk produced
 			if err != nil {
@@ -128,6 +129,12 @@ func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("walking %s: %v", dir, err)
+		}
+		// Present and empty is the same finding as missing: a tree that
+		// yielded no file is one this check read nothing of.
+		if files == 0 {
+			t.Fatalf("read no file under the published tree %s — this guard "+
+				"was certifying nothing", tree)
 		}
 	}
 
@@ -158,23 +165,6 @@ func pageMissingSlash(path string) (string, bool) {
 	}
 	// A dot means a file, which is served as itself.
 	return path, !strings.Contains(last, ".")
-}
-
-// repoRoot is the module root, found from this file rather than from the
-// working directory so the walk above covers the same trees however the
-// suite is invoked.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 // TestPageMissingSlashReadsPunctuationAsProse pins the cases that decide the

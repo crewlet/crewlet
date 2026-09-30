@@ -116,9 +116,13 @@ func (s *Service) postImport(w http.ResponseWriter, r *http.Request) {
 			Manages: e.Manages,
 		})
 	}
-	result, err := s.writerFor(r).WriteImport(r.Context(), s.opID(r),
+	op, ok := s.operation(w, r, "chart-import", body)
+	if !ok {
+		return
+	}
+	result, err := s.writerFor(r).WriteImport(r.Context(), op.id,
 		body.Revision, edges)
-	s.answerWrite(w, result, err)
+	s.answerWrite(w, op, result, err)
 }
 
 // getImport answers whether one revision's structure has landed, and where.

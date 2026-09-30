@@ -52,8 +52,16 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		},
 		"a backup past the policy": {
 			statelog.KindBackupAge,
-			statelog.Reading{BackupAge: 30 * time.Hour, BackupMaxAge: 24 * time.Hour},
+			statelog.Reading{
+				BackupAge:    statelog.Age(30 * time.Hour),
+				BackupMaxAge: 24 * time.Hour,
+			},
 			"30h0m0s old",
+		},
+		"no backup at all": {
+			statelog.KindBackupAge,
+			statelog.Reading{BackupMaxAge: 24 * time.Hour},
+			"no verified backup has been recorded",
 		},
 		"a trim blocked past its window, keeping what a working one removes": {
 			statelog.KindTrimBlocked,
@@ -393,6 +401,7 @@ func TestTheBackupAlarmFiresAtTheAgeThePolicyNames(t *testing.T) {
 		age  time.Duration
 		want bool
 	}{
+		"a backup taken this second":   {0, false},
 		"an hour before the threshold": {policy - time.Hour, false},
 		"exactly at it":                {policy, false},
 		"a minute past it":             {policy + time.Minute, true},
@@ -400,7 +409,7 @@ func TestTheBackupAlarmFiresAtTheAgeThePolicyNames(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := statelog.Evaluate(statelog.Reading{
-				BackupAge: tc.age, BackupMaxAge: policy,
+				BackupAge: statelog.Age(tc.age), BackupMaxAge: policy,
 			})
 			_, firing := find(got, statelog.KindBackupAge)
 			if firing != tc.want {
@@ -412,35 +421,51 @@ func TestTheBackupAlarmFiresAtTheAgeThePolicyNames(t *testing.T) {
 
 	// AND A DEPLOYMENT WITH NO POLICY IS NOT ALARMED AT. Zero is "we do
 	// not take backups", which is a decision rather than a fault.
-	if got := statelog.Evaluate(statelog.Reading{BackupAge: 100 * 24 * time.Hour}); len(got) != 0 {
+	stale := statelog.Age(100 * 24 * time.Hour)
+	if got := statelog.Evaluate(statelog.Reading{BackupAge: stale}); len(got) != 0 {
 		t.Errorf("a node with no backup policy raised %v", kindsOf(got))
 	}
 }
 
-// A FLEET WITH NO BACKUP AT ALL IS ALARMED AT ONCE, AND TOLD SO.
+// A COMPANY WITH NO BACKUP AT ALL IS ALARMED AT, AND IS NOT TOLD AN AGE.
 //
-// It used to be handed an age made up to exceed the policy — the policy plus
-// an hour — so the alarm fired and then printed that invented age: a fresh
-// fleet that had never taken a backup was told its newest one was 25 hours
-// old. The detail must say no backup exists and name no age; with no policy
-// the missing backup is a decision, not an alarm.
-func TestNoBackupAtAllIsSaidRatherThanGivenAnAge(t *testing.T) {
+// Both halves are the bug this closes. The alarm has to fire — the trim does
+// not advance one sequence until a backup exists, so an operator who never
+// hears about it watches the log grow to its ceiling — and the sentence has to
+// be true, which the form this replaces was not: the reading was filled with
+// `backup_max_age + 1h` to reach the threshold, so a company four seconds old
+// was told "the newest verified backup is 25h0m0s old" one line above the trim
+// term reporting that no backup had been recorded at all. Two sentences about
+// one state, and the louder of them invented a backup.
+func TestNoBackupAtAllFiresAndSaysSoRatherThanNamingAnAge(t *testing.T) {
 	t.Parallel()
 	const policy = 24 * time.Hour
-	alarm, firing := find(statelog.Evaluate(statelog.Reading{
-		NoBackup: true, BackupMaxAge: policy,
-	}), statelog.KindBackupAge)
+
+	got := statelog.Evaluate(statelog.Reading{BackupMaxAge: policy})
+	alarm, firing := find(got, statelog.KindBackupAge)
 	if !firing {
-		t.Fatal("a fleet with no backup under a 24h policy raised nothing")
+		t.Fatalf("a company with no backup raised %v — the trim will not "+
+			"advance until one exists", kindsOf(got))
 	}
-	if !strings.Contains(alarm.Detail, "no verified backup has been taken") ||
-		strings.Contains(alarm.Detail, " old,") {
-		t.Errorf("detail = %q, want it to say no backup has been taken and "+
-			"to name no age", alarm.Detail)
+	if want := "no verified backup has been recorded, and the policy asks for " +
+		"one every 24h0m0s"; alarm.Detail != want {
+		t.Errorf("detail = %q, want %q", alarm.Detail, want)
 	}
-	if got := statelog.Evaluate(statelog.Reading{NoBackup: true}); len(got) != 0 {
-		t.Errorf("a deployment with no backup policy and no backup raised %v",
-			kindsOf(got))
+	// AND IT NAMES NO AGE. The word the fabricated sentence turned on was
+	// "old", and any age at all here is a measurement nobody took.
+	if strings.Contains(alarm.Detail, " old") {
+		t.Errorf("detail = %q: it reports an age for a backup that does not "+
+			"exist", alarm.Detail)
+	}
+
+	// THE MEASURED CASE STILL NAMES ITS AGE, so the two states are told
+	// apart by what the operator reads rather than only by a nil.
+	got = statelog.Evaluate(statelog.Reading{
+		BackupAge: statelog.Age(30 * time.Hour), BackupMaxAge: policy,
+	})
+	measured, firing := find(got, statelog.KindBackupAge)
+	if !firing || !strings.Contains(measured.Detail, "30h0m0s old") {
+		t.Errorf("a 30h backup reported %q, want its own age", measured.Detail)
 	}
 }
 

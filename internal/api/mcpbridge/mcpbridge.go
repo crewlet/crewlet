@@ -55,6 +55,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -506,7 +507,7 @@ func (b *Bridge) Handler() http.Handler {
 				log.WarnContext(r.Context(), "mcp_bridge_unresolved",
 					"run_id", runID, "reason", reason)
 			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
 		streamable.ServeHTTP(w, r)

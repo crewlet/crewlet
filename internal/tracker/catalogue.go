@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -103,12 +104,11 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			post := TypeCatalogue{
 				V: DocumentVersion, Types: clean, UpdatedAt: at,
 			}
@@ -116,7 +116,7 @@ func (w *Writer) WriteTypes(ctx context.Context, opID string, types []TaskType) 
 			// wake per catalogue edit would page the whole company for a
 			// renamed dropdown, and the feed still has to be able to say
 			// a dropdown was renamed.
-			return w.decide(subject, OpPatch, ChangeCatalogue, scope, opID,
+			return w.decide(stamp, subject, OpPatch, ChangeCatalogue, scope, opID,
 				post, nil, at)
 		},
 	})
@@ -134,12 +134,11 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 	scope := ScopeSet{Subject: true}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readFieldCatalogue(ctx, tx)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -150,7 +149,8 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 				}
 			}
 			post := FieldCatalogue{
-				V: DocumentVersion, Fields: fields, UpdatedAt: at,
+				V: DocumentVersion, UpdatedAt: at,
+				Fields: stampFields(current.Fields, fields, w.Actor, at),
 				// THE POLICY VERSION MOVES ON EVERY FIELDS EDIT, and it
 				// is what a task's policy stamp records having validated
 				// against. Derived from the stored one inside this
@@ -162,7 +162,7 @@ func (w *Writer) WriteFields(ctx context.Context, opID string, fields []FieldDef
 			// wake per catalogue edit would page the whole company for a
 			// renamed dropdown, and the feed still has to be able to say
 			// a dropdown was renamed.
-			return w.decide(subject, OpPatch, ChangeCatalogue, scope, opID,
+			return w.decide(stamp, subject, OpPatch, ChangeCatalogue, scope, opID,
 				post, nil, at)
 		},
 	})
@@ -229,6 +229,41 @@ func checkTypes(types []TaskType) ([]TaskType, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// stampFields carries a declaration's creation facts.
+//
+// THE STORED ONES, never the caller's, which is the rule [Writer.SaveView]
+// states for the same two columns: these writes are WHOLE POST-STATES, so a
+// document that carried its own `created_by` would let the next edit
+// re-attribute a field somebody else declared, and nothing downstream could
+// tell. A field the snapshot does not hold is NEW, and takes this write's own
+// actor and clock.
+//
+// Nothing wrote them at all before this: the catalogue served `created_by` and
+// `created_at` on every field and both were always empty, while a TAG — the
+// one other vocabulary a company declares — has recorded who added it since it
+// existed.
+//
+// INSIDE THE DECIDE, because "was this field already declared" is a question
+// only the snapshot the record lands beside can answer. IT RETURNS A COPY for
+// [coerceFields]'s reason: the decide runs again on a retry, and a write
+// folded into the caller's own slice is one the next attempt starts from.
+func stampFields(current, post []FieldDef, actor string, at time.Time) []FieldDef {
+	held := make(map[string]FieldDef, len(current))
+	for _, field := range current {
+		held[field.ID] = field
+	}
+	out := make([]FieldDef, len(post))
+	copy(out, post)
+	for i := range out {
+		if was, declared := held[out[i].ID]; declared {
+			out[i].CreatedBy, out[i].CreatedAt = was.CreatedBy, was.CreatedAt
+			continue
+		}
+		out[i].CreatedBy, out[i].CreatedAt = actor, at
+	}
+	return out
 }
 
 // checkFields refuses a declaration a value could not be validated against.

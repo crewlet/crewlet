@@ -32,7 +32,7 @@ type Revision struct {
 	// to be, which held the credential and so named, for a revision written
 	// through a person's machine token, a token whose row the identity
 	// sweep collects a week after it lapses. See
-	// `0033_a_write_names_its_author_beside_its_credential.sql`.
+	// `0035_a_write_names_its_author_beside_its_credential.sql`.
 	CreatedBy     string
 	CreatedByKind string
 	OperatorID    string
@@ -56,7 +56,7 @@ type Revision struct {
 	// which is why it is a stamp rather than a silent rewrite: a diff
 	// across a scrub boundary shows a tombstone, and the next reader has
 	// to be able to tell that from corruption. See
-	// `0030_a_superseded_revision_can_be_scrubbed.sql`.
+	// `0032_a_superseded_revision_can_be_scrubbed.sql`.
 	ScrubbedAt time.Time
 
 	// ChartPosition is the org chart position THIS NODE composed its epoch
@@ -69,7 +69,7 @@ type Revision struct {
 	// recorded position at all. A plain int64 would report every historical
 	// activation as having run on an empty company.
 	//
-	// See `0031_an_activation_records_the_chart_it_ran.sql` for why the
+	// See `0033_an_activation_records_the_chart_it_ran.sql` for why the
 	// company needs both halves to be answerable.
 	ChartPosition *int64
 }
@@ -411,7 +411,7 @@ var ErrRevisionIsActive = errors.New(
 // rewrite underneath them would be a config change nothing activated. An
 // operator who wants the address out of the live company edits the company.
 //
-// `0030_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
+// `0032_a_superseded_revision_can_be_scrubbed.sql` is where the narrowed
 // immutability is written down.
 func (c *Configs) Scrub(ctx context.Context, revisionID string, payload json.RawMessage, at time.Time) error {
 	result, err := c.db.sql.ExecContext(ctx,

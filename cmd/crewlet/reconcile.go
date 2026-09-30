@@ -110,7 +110,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		if !found {
 			return nil
 		}
-		return publishLocalActive(ctx, plane, pub, active, cipher, log)
+		return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
 	}
 	// THE SETTINGS HALF, because that is what a revision holds. The file
 	// carries both and always will — an operator authors one document
@@ -137,7 +137,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 			// The file has not changed, so there is nothing to import.
 			// The node may still owe the fleet a POINTER — see
 			// publishLocalActive for the case that puts it there.
-			return publishLocalActive(ctx, plane, pub, active, cipher, log)
+			return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
 		}
 		if !seed.Override {
 			// THE COMPANY EXISTS AND THIS FILE IS ONLY A BOOTSTRAP, so
@@ -152,7 +152,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 					"-import-company "+seed.Path+"; to change the running "+
 					"fleet with no restart, run `crewlet config import "+
 					seed.Path+"`")
-			return publishLocalActive(ctx, plane, pub, active, cipher, log)
+			return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
 		}
 		parent = active.ID
 	}
@@ -178,6 +178,14 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	if seed.Override {
 		summary = "imported from " + seed.Path + " at boot"
 	}
+	// ONE INSTANT FOR THE ROW AND THE POINTER. The local row's
+	// `activated_at` is what this node's config history shows for the
+	// activation, what the reconciler holds against the pointer's instant
+	// on every tick, and what the next boot compares with the pointer to
+	// decide whether this node holds a newer revision to publish — so it
+	// is the instant the pointer carries, not a second reading of the
+	// clock. See [keepPointersInstant] for when the pointer moves it.
+	at := time.Now().UTC()
 	// STORED FIRST, then pointed at: a crash between the two leaves a
 	// revision nothing points at, which the next boot re-seeds over. The
 	// other order would point the fleet at a payload no node can read.
@@ -186,6 +194,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	seeded := store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: seedAuthor,
 		CreatedByKind: string(iam.ActorSystem), Summary: summary, Payload: payload,
+		CreatedAt: at,
 	}
 	id, err := configs.InsertActive(ctx, seeded)
 	if err != nil {
@@ -198,12 +207,13 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	// have raced with — and an expectation here would make a first boot
 	// fail against a fleet that had moved on for perfectly good reasons.
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
-		RevisionID: id, Summary: summary, Payload: payload, At: time.Now().UTC(),
+		RevisionID: id, Summary: summary, Payload: payload, At: at,
 		CreatedBy: seeded.CreatedBy, CreatedByKind: seeded.CreatedByKind,
 	})
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
+	keepPointersInstant(ctx, configs, id, at, published, log)
 	nudge(ctx, pub, seeded, log)
 	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed` flag
 	// said `true` on every line, since nothing is stored unsealed.
@@ -247,7 +257,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 // every node, this one included, each telling its operator to seal a revision
 // that was never theirs.
 func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publisher,
-	active store.Revision, cipher secrets.Cipher, log *slog.Logger,
+	configs localActivator, active store.Revision, cipher secrets.Cipher, log *slog.Logger,
 ) error {
 	target, found, err := plane.Target(ctx)
 	if err != nil {
@@ -289,9 +299,45 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
 	}
+	keepPointersInstant(ctx, configs, active.ID, active.ActivatedAt, published, log)
 	nudge(ctx, pub, active, log)
 	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
+}
+
+// keepPointersInstant makes this node's local copy of a revision it just
+// published carry the instant the pointer does.
+//
+// The pointer publishes an instant later than the one it replaces
+// ([coord.ActivationAt]), so it can differ from the one this node asked for —
+// and the local row's `activated_at` is the instant this node's config history
+// shows for the activation and the one the reconciler holds against the
+// pointer's. Left at the instant this node asked for, the row names an
+// activation the fleet never made: the history dates it wrongly, and the
+// reconciler's next tick reads the same revision at another instant — which
+// is the re-activation gesture — and re-activates it locally to realign it.
+//
+// BEST EFFORT, because the activation has landed and cannot be taken back:
+// the reconciler realigns the local copy with the pointer on every tick, so a
+// failure here costs one tick of a stale local instant.
+func keepPointersInstant(ctx context.Context, configs localActivator, id string,
+	asked time.Time, published coord.Activation, log *slog.Logger) {
+
+	if store.EncodeTime(asked) == store.EncodeTime(published.At) {
+		return
+	}
+	if _, err := configs.Activate(ctx, id, published.At); err != nil {
+		log.WarnContext(ctx, "local_revision_instant_not_aligned",
+			"revision", id, "asked", asked, "published", published.At, "error", err,
+			"detail", "the pointer carries a later instant than this node's copy; "+
+				"the reconciler aligns the copy on its next tick")
+	}
+}
+
+// localActivator is the one thing [keepPointersInstant] asks of the node's
+// config history.
+type localActivator interface {
+	Activate(ctx context.Context, revisionID string, at time.Time) (string, error)
 }
 
 // nudge announces an activation this node made, so peers converge in
@@ -326,6 +372,32 @@ func nudge(ctx context.Context, pub queue.Publisher, revision store.Revision,
 // at boot records as its author: the engine, of the system kind, with no
 // credential beside it — none made the write.
 const seedAuthor = "node"
+
+// bootOptions is what `crewlet run` builds its engine from: the Tier A it
+// loaded and the company this node starts on.
+//
+// With a Tier B file the company is that file's, which the reconcile converges
+// onto the fleet's before anything is claimed, and the store is not read at
+// all. Without one it is whatever this node's store has marked active
+// ([companyFromStore]).
+//
+// ONE VALUE, handed to the engine WHOLE, so no field of it can be decided here
+// and dropped at the call site. Read BEFORE the engine, in its own
+// open-and-close, so the engine still owns the backends it opens.
+func bootOptions(ctx context.Context, bootstrapPath string, boot *config.Bootstrap,
+	file *config.Company) (engine.Options, error) {
+
+	opts := engine.Options{Bootstrap: boot, Company: file}
+	if file != nil {
+		return opts, nil
+	}
+	company, err := companyFromStore(ctx, bootstrapPath)
+	if err != nil {
+		return engine.Options{}, err
+	}
+	opts.Company = company
+	return opts, nil
+}
 
 // companyFromStore is the epoch a node with no Tier B file boots on.
 //

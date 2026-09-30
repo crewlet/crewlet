@@ -57,42 +57,59 @@ crewlet run -config crewlet.yaml -company company.yaml
 That is the deployment. Point a reverse proxy at the API port for inbound
 webhooks and the dashboard, and there is nothing else to operate.
 
+Give that proxy a **read timeout above 75 seconds** on the API port. Nearly
+every request is answered in well under a second, but a node eviction or
+readmission ([Retention](retention.md#eviction)) may take up to a minute
+past its judgement to write every log, and `crewlet retention evict` and the
+dashboard's evict dialog both wait seventy-five seconds for its answer.
+nginx's `proxy_read_timeout` defaults to sixty, which cuts exactly those off
+with a 504. Nothing is lost when it does — the node finishes the gesture
+whatever happens to the connection, and both clients read an answer the engine
+did not write as one that never arrived, keeping the operation id to finish it
+with — but the operator then has to finish it to see what it did.
+
 ### The room the stream's volume needs
 
-The engine's own tracker, knowledge base, vector index and org chart each keep
-an ordered log on the stream, and each log's byte ceiling is **reserved** on the
-volume holding `stream.store_dir` when its stream is created: the embedded
-broker grants a ceiling in full, up front, or refuses to create the stream at
+The engine's own tracker, knowledge base, vector index, org chart and identity
+estate each keep an ordered log on the stream, and each log's byte ceiling is
+**reserved** on the volume holding `stream.store_dir` when its stream is
+created: the embedded broker grants a ceiling in full, up front, or refuses to create the stream at
 all. Its limit is three quarters of that volume's free space.
 
 The node sizes the ceilings together to fit half of that limit. A log that
 would be scaled below its own floor is **held at the floor** instead, and the
 floors are not all the same number — so:
 
-- **A first boot needs at least 4.1 GiB free on that volume** (measured).
-  Three quarters of it is the sum of the floors: 1 GiB each for the mutation
-  log, the vector changelog and the knowledge base's log, and 64 MiB for the
-  org chart's. Below that the node refuses to boot with an error naming the log
-  it could not reserve, the bytes it needed, the bytes the broker had left, and
+- **A first boot needs at least 4.75 GiB free on that volume.** Three
+  quarters of it — 3.56 GiB — is what the smallest ceilings reserve: 1 GiB
+  each for the mutation log, the vector changelog and the knowledge base's
+  log, 64 MiB for the org chart's and the identity estate's flat 512 MiB
+  default. Below that the node refuses to boot with an error naming the log it
+  could not reserve, the bytes it needed, the bytes the broker had left, and
   the Tier A field that sets the ceiling.
-- **A floor is per log, not universal.** The org chart's is far below the
-  others because a chart is a few hundred records a year, and a ceiling is
-  granted in full at create time — so a log at the corpus-sized floor costs
-  free space a node needs before it can start, for a log that will not fill it
-  this century.
+- **A floor is per log, not universal.** The org chart's and the identity
+  estate's (64 MiB each) are far below the others because a chart is a few
+  hundred records a year and the identity log grows with headcount and
+  sign-ins, and a ceiling is granted in full at create time — so a log at a
+  disk-sized floor costs free space a node needs before it can start, for a
+  log that will not fill it this century.
 - **More room buys longer logs, up to a point.** Unset, the mutation log asks
   for a quarter of the free space (4..64 GiB), the knowledge base's log for a
   quarter of that, and the vector changelog for 16 GiB capped by the same
   quarter. They are scaled down together whenever they ask for more than that
   half, which on a first boot is every volume with less than 256 GiB free;
   from there up each log gets what it asked for. The org chart's default is a
-  flat 64 MiB and is not derived from the disk at all.
+  flat 64 MiB and the identity estate's a flat 512 MiB, and neither is derived
+  from the disk at all.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
   `stream.chart_log_max_bytes` or `stream.iam_log_max_bytes` later, changes
   nothing about streams that already exist; `crewlet retention set-capacity` is
-  what changes a running log's ceiling.
+  what changes a running log's ceiling. A log derived from the disk that is
+  created later — one a new version adds — is sized from what the existing
+  logs' ceilings leave of that half, so logs that already hold all of it leave
+  it the 1 GiB floor.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.
@@ -437,9 +454,10 @@ scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
 **A coordination read costs one ordered pass, and an account needs the
-consumer API.** A node reads a whole coordination bucket constantly — several
-fifteen-second duty loops on every tick, and the state-log write fence on every
-first write to a subject — and each of those is one pass over a temporary
+consumer API.** A node lists coordination records constantly — several
+fifteen-second duty loops on every tick, and the state-log write fence, which
+lists the published trim floors on every write at an expectation of zero, a
+subject's first write among them — and each of those is one pass over a temporary
 consumer, which on a replicated bucket is two metadata-raft proposals. The
 engine deliberately does **not** use the batched direct get that would avoid
 the consumer: it is served by any replica, and this estate has reads whose

@@ -522,19 +522,26 @@ func TestAPurgeIsConfirmedAgainstTheItemItNames(t *testing.T) {
 	if len(r.writes.purged) != 0 {
 		t.Fatalf("a refused purge destroyed %v", r.writes.purged)
 	}
+	key := statelog.NewOpID(time.Now(), "")
 	got := r.do(as(operator), http.MethodPost,
 		"/work/items/t-1/purge?confirm=eng-1&reason=an+erasure+request", nil,
-		workapi.IdempotencyHeader, "k-1")
+		workapi.IdempotencyHeader, key)
 	if got.status != http.StatusOK {
 		t.Fatalf("the purge answered %d: %v", got.status, got.body)
 	}
 	if len(r.writes.purged) != 1 || r.writes.purged[0] != "t-1|ENG|an erasure request" {
 		t.Errorf("the writer was asked %v", r.writes.purged)
 	}
-	if r.writes.opIDs[0] != "purge-t-1-k-1" {
-		t.Errorf("the purge was published as %q — the caller's key is what a "+
-			"retry reuses", r.writes.opIDs[0])
+	// THE CALLER'S KEY IS WHAT A RETRY REUSES: the same key is the same
+	// operation, which carries the key's own instant.
+	again := r.do(as(operator), http.MethodPost,
+		"/work/items/t-1/purge?confirm=eng-1&reason=an+erasure+request", nil,
+		workapi.IdempotencyHeader, key)
+	if again.status != http.StatusOK || r.writes.opIDs[1] != r.writes.opIDs[0] {
+		t.Errorf("the retry under the same key was published as %q after %q",
+			r.writes.opIDs[1], r.writes.opIDs[0])
 	}
+	assertMintedWith(t, r.writes.opIDs[0], key)
 	// AND AN AGENT MAY NOT, whatever it holds.
 	agent := admin("sre")
 	agent.Kind = iam.KindSeat

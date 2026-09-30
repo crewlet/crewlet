@@ -35,7 +35,7 @@
 
 import type { ObjectKind, ObjectRef } from "./objects.ts";
 import { ItemPeek } from "~/routes/work/WorkItem.tsx";
-import { ProjectPeek } from "~/routes/work/Work.tsx";
+import { ProjectPeek } from "~/routes/work/Project.tsx";
 import { SeatPeek } from "~/routes/company/Seat.tsx";
 import { UnitPeek } from "~/routes/company/Company.tsx";
 import { TurnPeek } from "~/routes/activity/Turn.tsx";

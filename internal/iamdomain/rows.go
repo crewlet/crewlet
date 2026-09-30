@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -104,12 +103,20 @@ type Fence struct {
 	db     *store.DB
 	nodeID string
 
-	// Cursor is this node's committed position, and Floor the published
-	// trim floor. Both are set by the engine after the runner exists,
-	// because a fence built before its applier would compare against a
-	// position that does not move.
-	Cursor func() statelog.Position
-	Floor  func(ctx context.Context) (uint64, error)
+	// Floor is the fleet's published trim floor at a generation and Ends
+	// the log's two ends, read live, and Committed this node's applier's
+	// live checkpoint — the three reads [statelog.ZeroFence] takes beside
+	// the eviction. The cursor the floor is compared against is passed per
+	// call: the checkpoint the write's own snapshot read
+	// ([statelog.Snap.Checkpoint]), never the applier's live position,
+	// because the floor theorem concludes that a trimmed record is already
+	// in the rows the DECISION was made from, and a live position that has
+	// moved past it since clears a claim that never saw it. Set by the
+	// engine after the runner exists, because a fence built before its
+	// applier would compare against a position that does not move.
+	Floor     func(ctx context.Context, generation uint32) (uint64, error)
+	Ends      func(ctx context.Context) (statelog.LogEnds, error)
+	Committed func() statelog.Position
 }
 
 // NewFence builds it.
@@ -150,7 +157,17 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 	if !from.Valid {
 		return false, nil
 	}
-	return !readmitted.Valid || readmitted.Int64 < from.Int64, nil
+	// THE NEGATION OF [Domain.Evictions]' `Back`, spelled once for both, so
+	// the trim and this node's own fence can never disagree about whether
+	// it is back.
+	return !back(readmitted, from.Int64), nil
+}
+
+// back reports whether an eviction row's readmission has taken the node back:
+// a readmission ABOVE the eviction it answers. One comparison for the fence,
+// the trim's listing and a retry's standing, so the three never disagree.
+func back(readmitted sql.NullInt64, from int64) bool {
+	return readmitted.Valid && readmitted.Int64 > from
 }
 
 // ClearForZero verifies, freshly, that publishing at an expectation of ZERO is
@@ -161,147 +178,144 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // notification, which is recoverable, and failing open here costs a CLAIM that
 // overwrites one another node already made — which is not, and which in this
 // domain is a second person holding somebody's address.
+//
+// THE CHECK IS [statelog.ZeroFence], the one every sibling's fence runs: this
+// supplies the four reads. Written out here it refused an evicted node with
+// [statelog.ErrConflict], which a caller reads as a colleague editing and
+// retries into; compared the floor with the cursor alone, so it could not tell
+// a node replaying records the log still holds from one below the LOG, which no
+// replay brings back; and read a floor that named no generation, against a
+// cursor that may be in another. Every refusal is now an
+// [*statelog.Unavailable] naming its reason.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
-	if f == nil {
-		return nil
-	}
-	evicted, err := f.Evicted(ctx)
-	if err != nil {
-		return err
-	}
-	if evicted {
-		return fmt.Errorf("iamdomain: this node is evicted, so a write at an "+
-			"expectation of zero would be dropped by every peer: %w",
-			statelog.ErrConflict)
-	}
-	if f.Floor == nil {
-		// NO FLOOR SEAM IS A FENCE THAT CANNOT ANSWER, and a fence that
-		// cannot answer refuses. A publisher built without one would
-		// otherwise publish every claim at zero against a log whose
-		// beginning it has never seen.
-		return fmt.Errorf("iamdomain: no published trim floor is readable, so " +
-			"this node cannot establish that an absent anchor means an " +
-			"unclaimed address rather than a claim trimmed beneath it")
-	}
-	floor, err := f.Floor(ctx)
-	if err != nil {
-		return fmt.Errorf("iamdomain: read the published trim floor: %w — a "+
-			"floor that cannot be read is not a floor that is low, and "+
-			"publishing at zero on the guess is two people holding one "+
-			"address", err)
-	}
-	// THE FLOOR IS THE FIRST SEQUENCE THE TRIM HAS NOT LICENSED REMOVING,
-	// so a node that has consumed through the one before it has consumed
-	// everything that may be gone — the same comparison every sibling
-	// makes, for the same reason.
-	if floor > cursor.Seq+1 {
-		return fmt.Errorf("iamdomain: the trim may have removed everything "+
-			"below %d and this node has consumed through %d, so an absent "+
-			"anchor may be a claim trimmed beneath it rather than an address "+
-			"nobody has taken: %w", floor, cursor.Seq, statelog.ErrUnavailable)
-	}
-	return nil
+	return statelog.ZeroFence{
+		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
+	}.ClearForZero(ctx, cursor)
 }
 
-// Gates reads the same two gates [Applier.Gated] does, from OUTSIDE a record's
-// own transaction: it is what a writer asks before it publishes, where the
-// applier asks after the broker has committed.
+// Gates answers whether a durable record produced rows on NO node.
+//
+// THE SAME TWO GATES [Applier.Gated] INSTALLS, read from the publisher's side,
+// by the rule [statelog.Gates] states — which every sibling's reader keeps too,
+// and statelogtest.RunGates certifies for each. The two must agree: a
+// resolution that looked for a gate the applier never installs would read
+// every unapplied record as "somebody else won".
 type Gates struct{ db *store.DB }
 
 // NewGates builds it.
 func NewGates(db *store.DB) *Gates { return &Gates{db: db} }
 
-// AdoptedAt is when this node's replicated estate last came from a peer.
+// GatedAt reports whether a record at p applies nowhere, and the gate that
+// answers for it.
 //
-// THE PUBLISHER ASKS BECAUSE AN ADOPTION BREAKS THE RESOLUTION. Resolving an
-// ambiguous publish means looking for the record's own effect in this node's
-// rows, and rows that arrived in somebody else's snapshot carry effects this
-// node never applied — so a write that landed after the adoption's own instant
-// is the only one that can be resolved from them.
-func (g *Gates) AdoptedAt(ctx context.Context) (time.Time, bool, error) {
-	if g == nil || g.db == nil {
-		return time.Time{}, false, nil
-	}
-	return statelog.AdoptedAt(ctx, g.db)
-}
-
-// GatedAt reports the gate that dropped a record at p.
+// ONE TRANSACTION FOR BOTH GATES, on ONE load of the replicated peer, and
+// through the HANDLE rather than its pool — see [Fence.Evicted] for why a nil
+// pool is reachable here. It used to be two reads, eviction first: two
+// instants and possibly two FILES, since every `Replicated()` reloads the peer
+// an adoption swaps and the applier commits between any two reads, so a
+// removal committing between them made one half of the answer describe the
+// estate before it and the other the estate after it.
+//
+// THE BODY IS READ for the removal gate, as the applier's own gate reads it:
+// see [gatedPerson].
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
-	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
+	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 
 	if g == nil || g.db == nil {
 		return "", false, nil
 	}
-	// THE EVICTION GATE FIRST, and in a read of its own: the two gates
-	// would otherwise be read at two instants, and a record could be
-	// reported ungated by an eviction that had landed between them.
-	if writer != "" {
-		var from, readmitted sql.NullInt64
-		err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-			return tx.QueryRowContext(ctx, `
-				SELECT from_position, readmitted_position
-				FROM iam_evictions WHERE node_id = ?`, writer).
-				Scan(&from, &readmitted)
-		})
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return "", false, fmt.Errorf("iamdomain: read the eviction gate "+
-				"for node %s: %w", writer, err)
-		default:
-			at := p.Packed()
-			evicted := from.Valid && at > from.Int64
-			back := readmitted.Valid && at >= readmitted.Int64
-			if evicted && !back {
-				return statelog.ReasonEvicted, true, nil
+	var reason statelog.Reason
+	var gated bool
+	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		// THE REMOVAL GATE FIRST, by the rule [statelog.Gates] states: a
+		// tombstone holds the person for every writer for ever, where an
+		// eviction is one writer's and a readmission ends it, so `deleted`
+		// is the answer that stays true. A record both gates drop is
+		// dropped either way, so the order decides only which one is
+		// REPORTED — and it was the eviction, so a caller was told to wait
+		// for a readmission that could never make the write land.
+		if person, ok := gatedPerson(subj, body); ok {
+			var author sql.NullString
+			err := tx.QueryRowContext(ctx, `
+				SELECT record_id FROM iam_removed WHERE person_id = ?`,
+				person).Scan(&author)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
+				return fmt.Errorf("iamdomain: read the removal gate for "+
+					"person %s: %w", person, err)
+			case author.Valid && author.String == opID:
+				// THE RECORD THAT REMOVED THE PERSON IS NOT GATED BY ITS
+				// OWN TOMBSTONE, by its own id: without the exception a
+				// removal whose acknowledgement was lost resolves as
+				// "applied nowhere", and its caller is told the person
+				// was not removed when they were. It falls through to
+				// the eviction gate, because this says only that THIS
+				// gate did not drop the record.
+			default:
+				reason, gated = statelog.ReasonDeleted, true
+				return nil
 			}
 		}
-	}
-	// AND THE REMOVAL GATE, WHICH IS KEYED ON THE PERSON AND NOT ON THE
-	// SUBJECT. That is this domain's own shape: a record about a removed
-	// person routinely arbitrates on an address, a login or a session
-	// lineage rather than on the person, so a gate that read the subject
-	// would let every claim record through and drop only the ones that
-	// happened to be on the person's own subject.
-	person, ok := gatedPerson(subj)
-	if !ok {
-		return "", false, nil
-	}
-	var author sql.NullString
-	err := g.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT record_id FROM iam_removed WHERE person_id = ?`,
-			person).Scan(&author)
+		if writer == "" {
+			return nil
+		}
+		var from, readmitted sql.NullInt64
+		err := tx.QueryRowContext(ctx, `
+			SELECT from_position, readmitted_position
+			FROM iam_evictions WHERE node_id = ?`, writer).
+			Scan(&from, &readmitted)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return fmt.Errorf("iamdomain: read the eviction gate for node %s: %w",
+				writer, err)
+		}
+		// THE APPLIER'S WINDOW, spelled as [Applier.Gated] spells it: half
+		// open at both ends.
+		at := p.Packed()
+		evicted := from.Valid && at > from.Int64
+		readmittedBy := readmitted.Valid && at >= readmitted.Int64
+		if evicted && !readmittedBy {
+			reason, gated = statelog.ReasonEvicted, true
+		}
+		return nil
 	})
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("iamdomain: read the removal gate for "+
-			"person %s: %w", person, err)
+	if err != nil {
+		return "", false, err
 	}
-	if author.Valid && author.String == opID {
-		return "", false, nil
-	}
-	return statelog.ReasonDeleted, true, nil
+	return reason, gated, nil
 }
 
-// gatedPerson is the person a subject's removal gate is keyed on, from the
-// SUBJECT ALONE.
+// gatedPerson is the person a record's removal gate is keyed on, from the
+// subject or — where the subject does not name one — from the record's own
+// body, which is exactly how [Applier.gatedPerson] reads it.
 //
 // ONLY THE PERSON'S OWN SUBJECT NAMES ONE. A claim arbitrates on an address, a
-// login, a seat id or a session lineage, and which person each belongs to is a
-// fact about a ROW rather than about the subject — so the writer-side gate
-// answers "not gated" for them and the applier's own gate, which runs inside
-// the record's transaction and can read the payload, is what drops those.
+// login, a seat id or a session lineage, and which person each belongs to is
+// in the record's PAYLOAD. The publisher hands the body of the record it
+// appended ([statelog.Gates.GatedAt]), so a removal landing between a write's
+// decide and its apply is named here as the gate that dropped it — without it,
+// the publisher read its own acknowledged append as a ledger contract
+// violation.
 //
-// THAT ASYMMETRY IS SAFE IN THE DIRECTION IT FAILS: the writer-side gate is an
-// optimisation that saves a publish, and missing one costs a record the
-// applier then drops on every node identically. The applier's gate is the
-// correctness half, and it never has to guess.
-func gatedPerson(subj statelog.Subject) (string, bool) {
-	if ObjectKind(subj.Kind) != KindPerson || subj.ID == "" {
+// WITH NO BODY — a record the publisher merely found above its anchor, whose
+// it is being the open question — a claim is answered "not gated", and the
+// re-decide that answer leads to meets the tombstone in its own snapshot
+// ([Writer.request] refuses a write about a removed person before it
+// publishes). A body that does not decode is not gated either, which is the
+// applier's rule too: such a record is deferred rather than applied.
+func gatedPerson(subj statelog.Subject, body []byte) (string, bool) {
+	if ObjectKind(subj.Kind) == KindPerson && subj.ID != "" {
+		return subj.ID, true
+	}
+	if body == nil {
 		return "", false
 	}
-	return subj.ID, true
+	record, err := Decode(body)
+	if err != nil || record.Person == "" {
+		return "", false
+	}
+	return record.Person, true
 }

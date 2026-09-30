@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // Redaction is what stands between the config read surface and every
@@ -200,7 +201,7 @@ roles:
 // whichever type it lives on, including a type added after this test.
 func TestARedactedExampleRoundTripsExactly(t *testing.T) {
 	t.Parallel()
-	files, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.company.yaml"))
+	files, err := filepath.Glob(filepath.Join(sourcetree.Root(t), "examples", "*.company.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

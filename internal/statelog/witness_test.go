@@ -15,19 +15,19 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// refusals keeps what a runner witnessed.
-type refusals struct {
+// witnessed keeps what a runner witnessed.
+type witnessed struct {
 	mu   sync.Mutex
 	seen []statelog.Refusal
 }
 
-func (r *refusals) RecordRefused(_ context.Context, refusal statelog.Refusal) {
+func (r *witnessed) RecordRefused(_ context.Context, refusal statelog.Refusal) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seen = append(r.seen, refusal)
 }
 
-func (r *refusals) all() []statelog.Refusal {
+func (r *witnessed) all() []statelog.Refusal {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.seen)
@@ -42,8 +42,10 @@ func (h *applyHarness) witnessedRunner(w statelog.Witness) {
 		Verifier:   testVerifier(h.t, probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
+		Log:        h.fetch,
+		Node:       h.db,
 		DB:         h.db.Replicated(),
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 		Witness:    w,
 	})
@@ -102,7 +104,7 @@ func sealedUnder(t *testing.T, keyID string, e statelog.Envelope) []byte {
 func TestAnUnverifiableRecordIsWitnessedOncePerKey(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	first := &refusals{}
+	first := &witnessed{}
 	h.witnessedRunner(first)
 	h.fetch.offerFramed(1, sealedUnder(t, "k9", env(1, "edit", "a", "op-1", 1)))
 	h.fetch.offerFramed(2, sealedUnder(t, "k9", env(2, "edit", "b", "op-2", 1)))
@@ -128,7 +130,7 @@ func TestAnUnverifiableRecordIsWitnessedOncePerKey(t *testing.T) {
 	}
 
 	// THE NEXT PROCESS, which meets them only through the reprocess.
-	second := &refusals{}
+	second := &witnessed{}
 	h.witnessedRunner(second)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -175,7 +177,7 @@ func TestATamperedRecordIsWitnessedAsTheApplierStops(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newApplyHarness(t, probeDomain{})
-			seen := &refusals{}
+			seen := &witnessed{}
 			h.witnessedRunner(seen)
 			h.fetch.offerFramed(1, tc.framed())
 			if err := h.run(1); !errors.Is(err, statelog.ErrStopped) {
@@ -204,7 +206,7 @@ func TestATamperedRecordIsWitnessedAsTheApplierStops(t *testing.T) {
 func TestTheWitnessHearsAtMostTheCappedNumberOfKeys(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	seen := &refusals{}
+	seen := &witnessed{}
 	h.witnessedRunner(seen)
 	total := statelog.MaxWitnessedKeys + 4
 	for i := 1; i <= total; i++ {
@@ -230,7 +232,7 @@ func TestTheWitnessHearsAtMostTheCappedNumberOfKeys(t *testing.T) {
 func TestARefusalNamesNoKeyForATruncatedFrame(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
-	seen := &refusals{}
+	seen := &witnessed{}
 	h.witnessedRunner(seen)
 	framed := sealedUnder(t, "k9", env(1, "edit", "a", "op-1", 1))
 	h.fetch.offerFramed(1, bytes.Clone(framed[:5]))
@@ -256,8 +258,10 @@ func (h *applyHarness) keyedRunner(ring statelog.Keyring) {
 		Verifier:   verifier,
 		Applier:    h.applier,
 		Fetch:      h.fetch,
+		Log:        h.fetch,
+		Node:       h.db,
 		DB:         h.db.Replicated(),
-		Generation: 1,
+		Checkpoint: statelog.Position{Generation: 1},
 		Metrics:    h.metrics,
 	})
 	if err != nil {

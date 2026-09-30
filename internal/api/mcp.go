@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
@@ -77,7 +78,7 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	// its own path rather than anything a browser attaches — so there is
 	// no cross-site request for a check to refuse. A box running generated
 	// code is not a browser and has no origin to send.
-	return pagepolicy.Apply(auth.New(bootstrap).Middleware(mux),
+	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)),
 		servedOverHTTPS(bootstrap))
 }
 

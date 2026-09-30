@@ -32,6 +32,11 @@ import (
 // already refuses its own version of this — "options belong to the three types
 // that have them" — and the rest of the struct was unchecked, so every other
 // knob was accepted anywhere.
+//
+// The type is not the whole question, either. A `tracking` list on its OWN
+// type is still read by nothing, because the only mode that would count it is
+// `auto` and this build refuses that — so the pair is checked, not just each
+// half against the field.
 
 // NormName is the one normalisation a name is compared under.
 //
@@ -172,6 +177,30 @@ func checkProgress(f *FieldDef) error {
 			"build computes no automatic progress — the value would be "+
 			"whatever somebody last typed into it. Set `progress: manual` "+
 			"and write the number, or leave the field out", f.Slug)
+	}
+	if len(c.Tracking) > 0 {
+		// AND A TRACKING LIST WITHOUT IT COUNTS NOTHING EITHER. The list
+		// names what an AUTOMATIC progress field counts, the mode above
+		// is the only thing that would ever read it, and that mode is
+		// refused — so on a `manual` field it is a setting stored,
+		// replicated and read by nothing, which is the objection this
+		// file opens with.
+		//
+		// It was the one knob the type check let through on its OWN
+		// type: `progress` and `tracking` were checked together against
+		// the field type, and nothing then asked whether the pair made
+		// sense. An operator who declared the sources and set the mode
+		// to `manual` to get past the refusal above was told their
+		// field was declared, and it counted nothing.
+		//
+		// AFTER the automatic refusal, so a field that declares both is
+		// told about the mode — the setting it would have to change
+		// first — rather than about the list under it.
+		return fmt.Errorf("tracker: field %s tracks %s and nothing counts "+
+			"them — a tracking list is what an AUTOMATIC progress field "+
+			"counts, and this build computes no automatic progress. Drop "+
+			"`tracking` and write the number", f.Slug,
+			strings.Join(c.Tracking, ", "))
 	}
 	return nil
 }

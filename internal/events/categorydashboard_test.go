@@ -27,7 +27,7 @@ import (
 // and wrongly, reporting a drift between two lists neither of which changed.
 func TestTheDashboardOffersExactlyTheCategoriesTheEngineFiles(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Declaration(clientsource.Tree,
+	body, err := clientsource.Declaration(clientsource.Tree(t),
 		`(?s)const CATEGORIES = \[(.*?)\] as const;`)
 	if err != nil {
 		t.Fatal(err)

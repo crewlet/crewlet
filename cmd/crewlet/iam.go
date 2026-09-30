@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // `crewlet iam` — the company's identity directory from a terminal.
@@ -82,7 +83,9 @@ Every write prints its outcome: "applied" means this node has the change,
 "pending" that it is durable and this node has not applied it yet. A write
 nothing could establish fails naming its op id; run the same command again
 with -idempotency-key <op id> — a fresh attempt would be a second operation,
-and for create and invite a second person or invitation.
+and for create and invite a second person or invitation. Where the node says
+it cannot vouch for the operation, run it through another node with -api:
+asked again, that node answers the same way until the change reaches it.
 
 Export CREWLET_API_TOKEN to authenticate. Every /iam route is guarded, reads
 included: a map of who can reach a company is worth as much as the grants.
@@ -167,6 +170,16 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if strings.TrimSpace(*key) != "" && !iamKeyed[sub] {
 		return iamUnkeyed(sub)
 	}
+	// A KEY IS THE OP ID AN EARLIER ANSWER NAMED, held to the rule every
+	// surface holds a caller's operation id to ([statelog.CheckCallerOpID])
+	// before anything is read or sent, and sent as given: the node refuses
+	// any other `400 op_id_invalid`, and refused here the error names this
+	// command's flag rather than a header it composed.
+	if *key != "" {
+		if err := statelog.CheckCallerOpID(*key); err != nil {
+			return fmt.Errorf("-idempotency-key: %w", err)
+		}
+	}
 	// -seat IS invite's, and refused anywhere else rather than ignored:
 	// `iam create -seat lead` read as accepted would leave somebody
 	// created and bound to nothing, which is the one outcome the flag was
@@ -224,7 +237,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	client.key = strings.TrimSpace(*key)
+	client.key = *key
 
 	switch sub {
 	case "people":
@@ -589,7 +602,9 @@ const iamMaxAnswer = 8 << 20
 // sentence says to send the id back as a header, which is right for a client
 // holding the request and useless to an operator holding a terminal; the id
 // used to be dropped here altogether, so the retry the answer prescribed was
-// one nobody at the terminal could make.
+// one nobody at the terminal could make. And where the answer says this node
+// cannot vouch for the operation (`unvouched`), the retry goes through another
+// node: asked here again it answers the same way until the change reaches it.
 func iamRefusal(status int, answer map[string]any, raw []byte) error {
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return errors.New(msg)
@@ -618,11 +633,26 @@ func iamRefusal(status int, answer map[string]any, raw []byte) error {
 		said += "\n" + hint
 	}
 	if op := str(answer["op_id"]); op != "" {
-		if status == http.StatusServiceUnavailable {
-			said += "\nnothing can say whether it landed; retry it as the " +
-				"same operation with -idempotency-key " + op
-		} else {
+		switch unvouched, _ := answer["unvouched"].(bool); {
+		case status != http.StatusServiceUnavailable:
 			said += "\nop " + op
+		case unvouched:
+			// NOT THROUGH THIS NODE: its operation ledger cannot vouch
+			// for the operation, so it published nothing and answers the
+			// same way until the change reaches it — the retry this used
+			// to prescribe, here again, was a loop.
+			said += "\nthis node cannot tell whether it landed and answers the " +
+				"same way until it can: read whether it did, or retry it as the " +
+				"same operation through another node with -api <that node> " +
+				"-idempotency-key " + op + " — never a fresh key"
+		default:
+			// THE SAME OPERATION, whichever 503 this is: an outcome
+			// nobody could establish is answered from whatever of it
+			// landed, and a refusal that wrote nothing runs under the
+			// same key as it would have under a fresh one.
+			said += "\nretry it as the same operation with -idempotency-key " +
+				op + " — whatever of it landed is answered from what landed, " +
+				"where a fresh key would be a second operation"
 		}
 	}
 	return errors.New(said)

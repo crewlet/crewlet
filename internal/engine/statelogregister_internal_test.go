@@ -2,15 +2,18 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -144,6 +147,179 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	}
 }
 
+// A REGISTERED DOMAIN WITH NO GENERATION RECORD FAILS THE BOOT CHECK.
+//
+// A reanchor opens a generation with the domain's own record, and the engine
+// once refused every log but the tracker's for want of one — so the org chart's
+// and the identity estate's logs, which a restored broker can leave behind as
+// readily as the tracker's, could never be re-anchored, and nobody learned it
+// until an incident asked. A domain that keeps none says so through its own
+// encoder, as the vectors do.
+func TestADomainWithNoGenerationRecordFailsTheBootCheck(t *testing.T) {
+	for _, entry := range register() {
+		if entry.Generation == nil {
+			t.Errorf("%s declares no generation record, so its log could never "+
+				"be re-anchored", entry.Domain.Name())
+		}
+	}
+	entries := register()
+	last := len(entries) - 1
+	entries[last].Generation = nil
+	err := checkRegister(entries)
+	if err == nil {
+		t.Fatal("a register entry with no generation record passed the boot check")
+	}
+	if !strings.Contains(err.Error(), entries[last].Domain.Name()) ||
+		!strings.Contains(err.Error(), "re-anchored") {
+		t.Errorf("the refusal does not name the domain and what it costs: %v", err)
+	}
+}
+
+// EVERY IDENTITY-CLAIMING LOG CAN BE WRITTEN BY THE NODE GATE, AND NO OTHER.
+//
+// The trim counts nodes on a log that claims identity, so a log the gate could
+// not write kept an evicted node counted there for ever — which is what the
+// tracker-only gesture did to the pages log. The org chart and the identity
+// estate joined the register after the gate did, and a gate that walked a
+// switch of its own reached neither.
+func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
+	claims := 0
+	for _, entry := range register() {
+		identity := entry.Domain.ClaimsIdentity()
+		switch {
+		case identity && entry.NewGate == nil:
+			t.Errorf("%s claims identity and declares no node-gate writer", entry.Domain.Name())
+		case !identity && entry.NewGate != nil:
+			t.Errorf("%s claims no identity and declares a node-gate writer", entry.Domain.Name())
+		}
+		if identity {
+			claims++
+		}
+	}
+	if claims < 4 {
+		t.Fatalf("the register holds %d identity-claiming domain(s), want the "+
+			"tracker, the pages, the org chart and the identity estate", claims)
+	}
+
+	// CONTROL, both ways round.
+	missing := register()
+	for i := range missing {
+		if missing[i].Domain.Name() == (iamdomain.Domain{}).Name() {
+			missing[i].NewGate = nil
+		}
+	}
+	if err := checkRegister(missing); err == nil ||
+		!strings.Contains(err.Error(), iamdomain.Domain{}.Name()) {
+		t.Errorf("an identity log with no gate writer answered %v, want a refusal naming it", err)
+	}
+	extra := register()
+	for i := range extra {
+		if extra[i].Domain.Name() == (search.Domain{}).Name() {
+			extra[i].NewGate = register()[0].NewGate
+		}
+	}
+	if err := checkRegister(extra); err == nil ||
+		!strings.Contains(err.Error(), search.Domain{}.Name()) {
+		t.Errorf("a gate writer on a log that counts nobody answered %v, want a refusal", err)
+	}
+}
+
+// A WAKE FEED THAT DISAGREES WITH ITS DOMAIN'S DECLARATION FAILS THE BOOT CHECK
+// — on every node and before anything is provisioned, where it used to be
+// asked only as a feed started, which a node that publishes nothing never
+// does.
+//
+// The trim waits on the group a domain DECLARES, and the wakes advance the one
+// its feed RUNS AS; each way of making the two disagree is a trim that silently
+// waits for ever or silently waits for nothing. Every arm is a register this
+// build could ship if the feed were a switch beside the declaration, which is
+// what it was.
+func TestAFeedThatDisagreesWithItsDeclarationFailsTheBootCheck(t *testing.T) {
+	trackerFeed := func() func(*Engine, domainFeed) (changefeed.Translator, changefeed.Opener) {
+		for _, entry := range register() {
+			if entry.Domain.Name() == (tracker.Domain{}).Name() {
+				return entry.Feed
+			}
+		}
+		t.Fatal("the register holds no tracker entry")
+		return nil
+	}()
+	for _, c := range []struct {
+		name   string
+		domain string
+		edit   func(*registration)
+		names  string
+	}{
+		{"a declared feed nobody runs", pages.Domain{}.Name(),
+			func(r *registration) { r.Feed = nil }, "runs none"},
+		{"a feed nobody declared", search.Domain{}.Name(),
+			func(r *registration) { r.Feed = trackerFeed }, "declares no wake feed"},
+		{"a feed under another domain's group", pages.Domain{}.Name(),
+			func(r *registration) { r.Feed = trackerFeed }, "its feed runs as"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			entries := register()
+			for i := range entries {
+				if entries[i].Domain.Name() == c.domain {
+					c.edit(&entries[i])
+				}
+			}
+			err := checkRegister(entries)
+			if err == nil || !strings.Contains(err.Error(), c.names) ||
+				!strings.Contains(err.Error(), c.domain) {
+				t.Fatalf("%s answered %v, want a refusal naming %s and saying %q",
+					c.name, err, c.domain, c.names)
+			}
+		})
+	}
+}
+
+// AN IDENTITY-CLAIMING DOMAIN THAT CANNOT SAY WHO IS EVICTED ON IT FAILS THE
+// BOOT CHECK — before anything is provisioned, where it used to be asked only
+// once the logs were up.
+func TestAnIdentityDomainThatCannotSayWhoIsEvictedFailsTheBootCheck(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		domain statelog.Domain
+		names  string
+	}{
+		{"no eviction listing", identityWithoutListing{}, "list the evictions"},
+		{"no log probe", identityWithoutProbe{}, "without applying it"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			entries := register()
+			entries[0].Domain = c.domain
+			err := checkRegister(entries)
+			if err == nil || !strings.Contains(err.Error(), c.names) {
+				t.Fatalf("an identity domain with %s answered %v, want a refusal "+
+					"saying so (%q)", c.name, err, c.names)
+			}
+		})
+	}
+}
+
+// identityWithoutListing is the tracker's declaration with no eviction
+// listing: the method set of a domain that embeds nothing but the probe.
+type identityWithoutListing struct{ unregisteredDomain }
+
+func (identityWithoutListing) Name() string         { return "listless" }
+func (identityWithoutListing) ClaimsIdentity() bool { return true }
+func (identityWithoutListing) EvictionSubject(node string) statelog.Subject {
+	return tracker.Domain{}.EvictionSubject(node)
+}
+func (identityWithoutListing) Evicts(payload []byte) (bool, error) {
+	return tracker.Domain{}.Evicts(payload)
+}
+
+// identityWithoutProbe lists its evictions and cannot be asked of its log.
+type identityWithoutProbe struct{ unregisteredDomain }
+
+func (identityWithoutProbe) Name() string         { return "probeless" }
+func (identityWithoutProbe) ClaimsIdentity() bool { return true }
+func (identityWithoutProbe) Evictions(ctx context.Context, db *store.DB) ([]statelog.EvictionRow, error) {
+	return tracker.Domain{}.Evictions(ctx, db)
+}
+
 // TestEveryRegisteredDomainHasACeilingCase walks the ceiling the way the boot
 // sizes it, through the same seam, so a domain added to the register with no
 // Tier A ceiling cannot reach the broker.
@@ -241,6 +417,10 @@ func (unregisteredDomain) Envelope([]byte) (statelog.Envelope, error) {
 
 func (unregisteredDomain) InstallsGate(statelog.Envelope) bool { return false }
 
+func (unregisteredDomain) NodeGate(statelog.Envelope) bool { return false }
+
+func (unregisteredDomain) FeedGroup() string { return "" }
+
 func (unregisteredDomain) Tables() map[string]statelog.TableClass { return nil }
 
 func (unregisteredDomain) DeferredTable() string { return "" }
@@ -279,7 +459,7 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 	for _, entry := range register() {
 		name := entry.Domain.Name()
 		runner := seamsRunner(t, s, entry)
-		seams, err := entry.NewSeams(s, runner)
+		seams, err := entry.NewSeams(s, nil, runner)
 		if err != nil {
 			t.Errorf("%s's write authority could not be built over a migrated "+
 				"store: %v", name, err)
@@ -308,7 +488,8 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 				"readiness never asks whether this node was evicted and its "+
 				"reads go on serving rows the fleet has abandoned", name)
 		}
-		if _, _, err := s.publisherFrom(entry, nil, runner); err != nil {
+		if _, _, err := s.publisherFrom(entry, noLog, nil, runner,
+			seamsReserve(t, entry)); err != nil {
 			t.Errorf("%s's write authority is refused at boot: %v", name, err)
 		}
 	}
@@ -318,8 +499,8 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 //
 // The register's own entries are complete, so they cannot reach this arm; an
 // entry whose constructor drops one seam is handed to the same path a boot
-// takes. The log it is given is NIL, so a publisher that got far enough to
-// append would panic rather than pass — the refusal has to come first.
+// takes. The log it is given refuses every append, so a publisher that got far
+// enough to append would fail rather than pass — the refusal has to come first.
 func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
 	t.Parallel()
 	s := seamsStateLog(t)
@@ -338,12 +519,15 @@ func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
 	} {
 		short := entry
 		build := entry.NewSeams
-		short.NewSeams = func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
-			seams, err := build(s, runner)
+		short.NewSeams = func(s *stateLog, appendTo *jetstream.DomainLog,
+			runner *statelog.Runner) (writeSeams, error) {
+
+			seams, err := build(s, appendTo, runner)
 			c.drop(&seams)
 			return seams, err
 		}
-		_, _, err := s.publisherFrom(short, nil, seamsRunner(t, s, short))
+		_, _, err := s.publisherFrom(short, noLog, nil, seamsRunner(t, s, short),
+			seamsReserve(t, short))
 		if err == nil || !strings.Contains(err.Error(), c.names) {
 			t.Errorf("an entry whose seams have no %s starts as %v, want a refusal "+
 				"naming it (%q)", c.field, err, c.names)
@@ -351,7 +535,8 @@ func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
 	}
 	// THE CONTROL: the same entry, unmodified, starts — so the refusals
 	// above are about the dropped seam and not about the rig.
-	if _, _, err := s.publisherFrom(entry, nil, seamsRunner(t, s, entry)); err != nil {
+	if _, _, err := s.publisherFrom(entry, noLog, nil, seamsRunner(t, s, entry),
+		seamsReserve(t, entry)); err != nil {
 		t.Fatalf("the unmodified tracker entry is refused on this rig: %v", err)
 	}
 }
@@ -384,13 +569,53 @@ func seamsRunner(t *testing.T, s *stateLog, entry registration) *statelog.Runner
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: entry.Domain, Applier: applier, Fetch: nothingToFetch{},
-		DB: replicatedEstate{node: s.db}, Verifier: verifier, Generation: 1,
+		Log: nothingOnLog{}, Node: s.db,
+		DB: replicatedEstate{node: s.db}, Verifier: verifier,
+		Checkpoint: statelog.Position{Generation: 1},
 	})
 	if err != nil {
 		t.Fatalf("build %s's runner: %v", entry.Domain.Name(), err)
 	}
 	return runner
 }
+
+// seamsReserve is the gate reserve [stateLog.start] builds beside a domain's
+// write authority — nil for a log that keeps none — over a log it never reads:
+// the reserve asks the log for its usage only at an append, which these cases
+// never make.
+func seamsReserve(t *testing.T, entry registration) *statelog.Reserve {
+	t.Helper()
+	reserve, err := reserveFor(entry.Domain, nil)
+	if err != nil {
+		t.Fatalf("build %s's gate reserve: %v", entry.Domain.Name(), err)
+	}
+	return reserve
+}
+
+// noLog is the appender these cases hand a write authority: one no case
+// appends through, so a publisher that got far enough to append would fail
+// the case rather than pass it.
+var noLog statelog.Appender = refusingAppender{}
+
+type refusingAppender struct{}
+
+func (refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	return 0, false, errors.New("this case appends nothing")
+}
+
+func (refusingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
+	return 0, false, errors.New("this case reads nothing")
+}
+
+// nothingOnLog is the log read by position, holding nothing: the runner is
+// built, and never run.
+type nothingOnLog struct{}
+
+func (nothingOnLog) At(context.Context, uint64) (string, []byte, time.Time, bool, error) {
+	return "", nil, time.Time{}, false, nil
+}
+
+func (nothingOnLog) Bounds(context.Context) (uint64, uint64, error) { return 0, 0, nil }
 
 // nothingToFetch is a consumer with nothing waiting: the runner is built, and
 // never run.

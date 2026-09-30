@@ -14,7 +14,33 @@ import (
 // A record above it is RETAINED rather than skipped — see the deferral
 // contract in [statelog] — which is what makes a rolling upgrade a period of
 // reduced coverage rather than an outage.
-const RecordVersion = 1
+//
+// # What each version added
+//
+//   - 1: every shape this domain has.
+//   - 2: a container's settings carry the position on the org chart's log
+//     they were derived from ([ContainerPayload.ChartPosition]).
+//
+// A record is WRITTEN at the lowest version a reader can apply without
+// losing anything it says, never simply at this constant — see
+// [recordVersionOf] for why that matters to a node still on the older build.
+const RecordVersion = 2
+
+// baseRecordVersion is the version a record whose shape no later version
+// changed is written at: 1, which every build there has ever been reads.
+//
+// THE BARRIER AND A REANCHOR'S GENERATION ARE WRITTEN AT IT FOR EVER, never at
+// [RecordVersion], because of what an older node does with a record it cannot
+// read: it retains it. A retained barrier is one more deferral row on that
+// node for every linearizable read anybody makes, and a node holding a
+// deferral declines to snapshot until it upgrades; a retained generation is a
+// transition that node never makes. Neither has anything a later version
+// could add to it.
+const baseRecordVersion = 1
+
+// containerPositionVersion is the version a container's settings are written at
+// since they began carrying the chart position. See [recordVersionOf].
+const containerPositionVersion = 2
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER.
@@ -103,8 +129,10 @@ type RecordEnvelope struct {
 	// never for this struct.
 	V int `json:"v"`
 
-	// OpID is a uuid7: the idempotency key, the Nats-Msg-Id, and the ops
-	// table's key. EMPTY on a barrier, deliberately — an op id is what
+	// OpID is an operation id in the state log's grammar
+	// ([statelog.NewOpID]) — a uuid7 carrying the instant it was minted,
+	// and an optional name after it: the idempotency key, the Nats-Msg-Id,
+	// and the ops table's key. EMPTY on a barrier, deliberately — an op id is what
 	// invites a message id, and a duplicate ack is served out of the
 	// dedupe window with no quorum round trip at all, which is the one
 	// thing a read barrier must never be.
@@ -322,10 +350,10 @@ func Decode(payload []byte) (MutationRecord, error) {
 // node that read a record it only half understood and republished it — the
 // reanchor path does exactly that — must not strip the half it did not.
 //
-// It goes through the same [encode] every document shape here uses, rather
-// than a second merge of its own: a carried field LOSES to a known one, and
-// two implementations of that rule are one place where a stale carried copy
-// undoes the write that set it.
+// It goes through the same [jsoncarry.Encode] every document shape here uses,
+// rather than a second merge of its own: a carried field LOSES to a known one,
+// and two implementations of that rule are one place where a stale carried
+// copy undoes the write that set it.
 func Encode(rec MutationRecord) ([]byte, error) {
 	data, err := jsoncarry.Encode(rec, rec.Extra)
 	if err != nil {
@@ -337,9 +365,9 @@ func Encode(rec MutationRecord) ([]byte, error) {
 
 // recordFields is every top-level name this build writes.
 //
-// DERIVED from the struct rather than typed again, on [fieldSet]'s terms: the
-// omitempty names have to be listed because a zero value does not marshal
-// them, and a name missing here is decoded into the struct AND carried as
-// unknown — so the next encode writes the stale carried copy back over what
-// the caller set.
+// READ OFF THE STRUCT'S OWN TAGS ([jsoncarry.Names]) rather than typed again:
+// a name missing here is decoded into the struct AND carried as unknown — so
+// the next encode writes the stale carried copy back over what the caller set
+// — and a list kept by hand beside a zero value's marshalling is what missed
+// the omitempty ones, which a zero value does not marshal.
 var recordFields = jsoncarry.Names(MutationRecord{})

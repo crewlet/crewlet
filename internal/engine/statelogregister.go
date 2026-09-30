@@ -6,10 +6,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -36,6 +41,17 @@ import (
 // [checkRegister] refuses one that states neither or both. That is the whole
 // reason the table exists — the other four collapse into it because a domain
 // declared in one place is read in one place.
+//
+// THREE MORE WOULD HAVE BEEN SWITCHES, and are fields instead: the record a
+// REANCHOR opens a new generation with ([registration.Generation]), the writer
+// the NODE GATE publishes an eviction through ([registration.NewGate]) and the
+// WAKE FEED over the log ([registration.Feed]). Each fails the way the barrier
+// switch did — a switch that did not know a domain answered "no record", "no
+// gate" or "no feed" for it, and the log nobody could re-anchor or evict, or
+// the trim waiting for ever on a consumer nobody opens, was found by an
+// operator mid-incident — so each is a field [checkRegister] refuses to see
+// wrong: every entry states its generation encoder, every identity-claiming
+// entry its gate, and every entry a feed exactly when its domain declares one.
 //
 // # The order is still load-bearing
 //
@@ -76,10 +92,15 @@ import (
 
 // registration is one domain's complete entry in the register.
 //
-// Every field but [registration.Barrier] and [registration.NoBarrier] is
-// required, and [checkRegister] is what says so: an entry that omits one is a
-// boot failure naming the domain and the field, never a node that runs a
-// domain it cannot apply, cannot write to or cannot size a stream for.
+// Every field but [registration.Barrier], [registration.NoBarrier],
+// [registration.NewGate], [registration.Feed] and
+// [registration.OpsKindRetention] is required, and [checkRegister] is what
+// says so: an entry that omits one is a boot failure naming the domain and the
+// field, never a node that runs a domain it cannot apply, cannot write to,
+// cannot size a stream for or cannot re-anchor. NewGate is required exactly
+// when the domain claims identity, and refused when it does not; Feed exactly
+// when the domain declares a wake feed ([statelog.Domain.FeedGroup]), and
+// refused when it does not.
 type registration struct {
 	// Domain is the declaration itself.
 	Domain statelog.Domain
@@ -92,7 +113,56 @@ type registration struct {
 	// NewSeams builds the write authority's three seams and the domain's
 	// eviction reader. Required: a domain with no write authority is one
 	// nothing could ever append to.
-	NewSeams func(s *stateLog, runner *statelog.Runner) (writeSeams, error)
+	//
+	// THE LOG IS AN ARGUMENT because a strict domain's fence reads its two
+	// ends ([stateLog.logEndsOf]) beside the published floor
+	// ([stateLog.floorOf]) and the runner's committed position — the three
+	// terms [statelog.ZeroFence] clears an expectation of zero against.
+	NewSeams func(s *stateLog, appendTo *jetstream.DomainLog,
+		runner *statelog.Runner) (writeSeams, error)
+
+	// Generation is the domain's own record of a reanchor — what opens a
+	// new generation on its log, in its own record format — or its
+	// declaration that it keeps none, which the vectors make
+	// ([search.GenerationRecord]). Required, for the reason
+	// [statelog.GenerationEncoder] gives: "this domain keeps no record of
+	// it" is a claim the domain makes about itself, and a nil here would be
+	// a log nobody could re-anchor, found by an operator mid-incident.
+	Generation statelog.GenerationEncoder
+
+	// NewGate builds the writer the NODE GATE publishes this log's eviction
+	// and readmission through ([NodeGate]).
+	//
+	// REQUIRED OF EVERY DOMAIN THAT CLAIMS IDENTITY and refused of every
+	// other. The trim counts nodes on an identity-claiming log, so one the
+	// gate cannot write keeps an evicted node counted there — the log grows
+	// behind a machine that is not coming back, which is what the tracker
+	// alone being written did to the pages log. A compacted log counts
+	// nobody and has no gate record to write.
+	//
+	// The publisher is handed in rather than read off the running domain,
+	// so a case can put the log behind a recorder and see exactly what the
+	// gate appended.
+	NewGate func(s *stateLog, running *runningDomain,
+		publisher *statelog.Publisher) (gateWrite, error)
+
+	// Feed builds the WAKE FEED over this domain's log: the translator that
+	// decides whether a committed record wakes anybody, and the opener over
+	// the log's own fleet-wide group ([domainFeed]). Nil for a domain whose
+	// records wake nobody — the vectors, the org chart and the identity
+	// estate.
+	//
+	// HELD TO THE DOMAIN'S OWN DECLARATION ([statelog.Domain.FeedGroup]),
+	// by [checkRegister] at boot and by [Engine.feedFor] where a feed
+	// starts, because two parties name a log's wake consumer: the feed that
+	// advances it and the trim that waits on it ([retention.feedTerm]),
+	// from a node that may build no feed at all. [checkFeed] says what each
+	// way of disagreeing costs.
+	//
+	// THE ENGINE IS AN ARGUMENT because a translator is not part of the
+	// declaration: the knowledge base's reads Tier B — the reserved skills
+	// container — off the epoch current at each change it translates.
+	Feed func(e *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener)
 
 	// Barrier encodes the framework's barrier append as one of this
 	// domain's own records. A domain that declares one gets a read index
@@ -157,6 +227,19 @@ type writeSeams struct {
 	Evicted func(context.Context) (bool, error)
 }
 
+// gateWrite publishes one identity-claiming log's gate record — an eviction,
+// or with readmit its inverse — AS the principal who ran the gesture, under
+// the operation id the gate derived for this log ([domainOpID]).
+//
+// THE PRINCIPAL WHOLE, not a name: each log's record carries the author, the
+// kind of party and the credential ([iam.ActorFor]), and the org chart's and
+// the identity estate's writers judge the gesture's authority —
+// `fleet:operate` — on the party's own grants, at the record rather than only
+// at the route, because a gate record can be published by a CLI, a test and a
+// duty as well as through one.
+type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
+	readmit bool) (statelog.Result, error)
+
 // register is every domain this build runs, in a FIXED order.
 func register() []registration {
 	return []registration{
@@ -169,19 +252,56 @@ func register() []registration {
 				// sockets. See internal/tracker/inboxmove.go.
 				return tracker.NewApplier(s.nodeID, s.inboxMoved), nil
 			},
-			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+				runner *statelog.Runner) (writeSeams, error) {
+
 				rows, err := tracker.NewRows(s.db)
 				if err != nil {
 					return writeSeams{}, err
 				}
 				fence := tracker.NewFence(s.db, s.nodeID)
-				fence.Cursor = runner.Committed
-				fence.Floor = s.trimFloor(tracker.Domain{}.Name(),
-					func() uint32 { return runner.Committed().Generation })
+				name := tracker.Domain{}.Name()
+				fence.Floor = s.floorOf(name)
+				fence.Ends = s.logEndsOf(name, appendTo, runner)
+				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: tracker.NewGates(s.db), Evicted: fence.Evicted}, nil
 			},
-			Barrier:      tracker.EncodeBarrier,
+			Barrier:    tracker.EncodeBarrier,
+			Generation: tracker.GenerationRecord{},
+			NewGate: func(s *stateLog, running *runningDomain,
+				publisher *statelog.Publisher) (gateWrite, error) {
+
+				w, err := tracker.NewWriter(tracker.WriterDeps{
+					Publisher: publisher, DB: s.db, NodeID: s.nodeID,
+					Drain: running.runner.Drain, Metrics: s.metrics,
+					// THE NODE'S OWN IDENTITY, replaced per gesture with
+					// the operator who ran it — see [tracker.Writer.As].
+					Actor: s.nodeID, ActorKind: tracker.AuthorSystem,
+				})
+				if err != nil {
+					return nil, err
+				}
+				return func(ctx context.Context, by iam.Principal, opID, node string,
+					readmit bool) (statelog.Result, error) {
+
+					a := iam.ActorFor(by)
+					as := w.As(a.Name, tracker.AuthorKind(a.Kind),
+						tracker.Provenance{OperatorID: a.OperatorID})
+					gate := as.EvictNode
+					if readmit {
+						gate = as.ReadmitNode
+					}
+					res, err := gate(ctx, opID, node)
+					return res.Result, err
+				}, nil
+			},
+			// THE WAKE A COMMITTED RECORD SENDS: an assignment, a mention,
+			// a question — derived from the log rather than published by
+			// the writer's goroutine. See domainfeed.go.
+			Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
+				return tracker.NewTranslator(), tracker.FeedSource{Log: records}
+			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.LogMaxBytes(free)
@@ -195,11 +315,18 @@ func register() []registration {
 			NewApplier: func(*stateLog) (statelog.Applier, error) {
 				return search.NewApplier(), nil
 			},
-			NewSeams: func(s *stateLog, _ *statelog.Runner) (writeSeams, error) {
+			NewSeams: func(s *stateLog, _ *jetstream.DomainLog,
+				_ *statelog.Runner) (writeSeams, error) {
+
 				rows, err := search.NewRows(s.db)
 				if err != nil {
 					return writeSeams{}, err
 				}
+				// NO EVICTION READER, and that is the domain rather than
+				// an omission: the vectors are DERIVED and compacted, so
+				// there is no tombstone table to read and nothing an
+				// evicted node could serve that a re-embed would not
+				// replace.
 				return writeSeams{Rows: rows, Fence: search.NewFence(),
 					Gates: search.NewGates()}, nil
 			},
@@ -207,7 +334,12 @@ func register() []registration {
 			// another domain owns and compacted to one message per
 			// source, so a read of them makes no claim about a position
 			// and there is nothing a barrier could prove.
-			NoBarrier:    true,
+			NoBarrier: true,
+			// AND NO GENERATION RECORD, declared by the domain's own
+			// encoder rather than by a nil here: every node re-anchors its
+			// own copy of a compacted log, so there is no fleet question a
+			// record on it could answer.
+			Generation:   search.GenerationRecord{},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, _ := stream.VectorsMaxBytes(free)
@@ -228,19 +360,52 @@ func register() []registration {
 				// returns when there is nothing to send to.
 				return pages.NewApplier(s.nodeID, s.skills, s.nudgeSkills), nil
 			},
-			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+				runner *statelog.Runner) (writeSeams, error) {
+
 				rows, err := pages.NewRows(s.db)
 				if err != nil {
 					return writeSeams{}, err
 				}
 				fence := pages.NewFence(s.db, s.nodeID)
-				fence.Cursor = runner.Committed
-				fence.Floor = s.trimFloor(pages.Domain{}.Name(),
-					func() uint32 { return runner.Committed().Generation })
+				name := pages.Domain{}.Name()
+				fence.Floor = s.floorOf(name)
+				fence.Ends = s.logEndsOf(name, appendTo, runner)
+				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: pages.NewGates(s.db), Evicted: fence.Evicted}, nil
 			},
-			Barrier:      pages.EncodeBarrier,
+			Barrier:    pages.EncodeBarrier,
+			Generation: pages.GenerationRecord{},
+			NewGate: func(s *stateLog, _ *runningDomain,
+				publisher *statelog.Publisher) (gateWrite, error) {
+
+				kb, err := pages.NewStore(pages.Options{Publisher: publisher, DB: s.db})
+				if err != nil {
+					return nil, err
+				}
+				return func(ctx context.Context, by iam.Principal, opID, node string,
+					readmit bool) (statelog.Result, error) {
+
+					// THE OPERATOR AS THE PAGE STORE NAMES ONE — the same
+					// author, kind and credential the tracker's record
+					// carries, so both logs name the same person.
+					actor, err := builtin.PageActorOf(by)
+					if err != nil {
+						return statelog.Result{}, err
+					}
+					if readmit {
+						return kb.ReadmitNode(ctx, actor, opID, node)
+					}
+					return kb.EvictNode(ctx, actor, opID, node)
+				}, nil
+			},
+			// AND THE KNOWLEDGE BASE'S, which reads the reserved skills
+			// container LIVE off the epoch: `knowledge.skills_container`
+			// is Tier B, and the feed outlives every revision.
+			Feed: func(e *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
+				return pages.NewTranslator(e.skillsContainer), pages.FeedSource{Log: records}
+			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.PagesMaxBytes(free)
@@ -272,19 +437,52 @@ func register() []registration {
 					}
 				}).WithMetrics(s.metrics), nil
 			},
-			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+				runner *statelog.Runner) (writeSeams, error) {
+
 				rows, err := chart.NewRows(s.db)
 				if err != nil {
 					return writeSeams{}, err
 				}
 				fence := chart.NewFence(s.db, s.nodeID)
-				fence.Cursor = runner.Committed
-				fence.Floor = s.trimFloor(chart.Domain{}.Name(),
-					func() uint32 { return runner.Committed().Generation })
+				name := chart.Domain{}.Name()
+				fence.Floor = s.floorOf(name)
+				fence.Ends = s.logEndsOf(name, appendTo, runner)
+				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: chart.NewGates(s.db), Evicted: fence.Evicted}, nil
 			},
-			Barrier:      chart.EncodeBarrier,
+			Barrier:    chart.EncodeBarrier,
+			Generation: chart.GenerationRecord{},
+			NewGate: func(s *stateLog, _ *runningDomain,
+				publisher *statelog.Publisher) (gateWrite, error) {
+
+				w, err := chart.NewWriter(chart.WriterDeps{
+					Publisher: publisher, DB: s.db,
+					// NOTHING A GATE WRITES IS SEALED, but the writer
+					// refuses to exist without the shape it would seal by.
+					Runtime: org.RuntimeShape{},
+					Actor:   s.nodeID, ActorKind: chart.AuthorOperator,
+				})
+				if err != nil {
+					return nil, err
+				}
+				return func(ctx context.Context, by iam.Principal, opID, node string,
+					readmit bool) (statelog.Result, error) {
+
+					// THE OPERATOR'S OWN GRANTS, which the chart asks
+					// `fleet:operate` of ([chart.ClassNodeGate]) — never
+					// the node's, which would admit any party the route
+					// had let through.
+					a := iam.ActorFor(by)
+					as := w.As(a.Name, chart.AuthorKindOf(a.Kind), by.Grants,
+						chart.Provenance{OperatorID: a.OperatorID})
+					if readmit {
+						return as.ReadmitNode(ctx, opID, node)
+					}
+					return as.EvictNode(ctx, opID, node)
+				}, nil
+			},
 			OpsRetention: statelog.OpsRetention,
 			// THE ONE CEILING THAT IGNORES THE FREE BYTES, and the
 			// signature keeps the parameter so the table stays one
@@ -307,19 +505,45 @@ func register() []registration {
 				// it. See directory.go.
 				return iamdomain.NewApplier(s.nodeID, s.nudgeDirectory), nil
 			},
-			NewSeams: func(s *stateLog, runner *statelog.Runner) (writeSeams, error) {
+			NewSeams: func(s *stateLog, appendTo *jetstream.DomainLog,
+				runner *statelog.Runner) (writeSeams, error) {
+
 				rows, err := iamdomain.NewRows(s.db)
 				if err != nil {
 					return writeSeams{}, err
 				}
 				fence := iamdomain.NewFence(s.db, s.nodeID)
-				fence.Cursor = runner.Committed
-				fence.Floor = s.trimFloor(iamdomain.Domain{}.Name(),
-					func() uint32 { return runner.Committed().Generation })
+				name := iamdomain.Domain{}.Name()
+				fence.Floor = s.floorOf(name)
+				fence.Ends = s.logEndsOf(name, appendTo, runner)
+				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: iamdomain.NewGates(s.db), Evicted: fence.Evicted}, nil
 			},
-			Barrier:      iamdomain.EncodeBarrier,
+			Barrier:    iamdomain.EncodeBarrier,
+			Generation: iamdomain.GenerationRecord{},
+			NewGate: func(s *stateLog, _ *runningDomain,
+				publisher *statelog.Publisher) (gateWrite, error) {
+
+				w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
+					Publisher: publisher, DB: s.db,
+					Actor: s.nodeID, ActorKind: iam.KindMachine,
+				})
+				if err != nil {
+					return nil, err
+				}
+				return func(ctx context.Context, by iam.Principal, opID, node string,
+					readmit bool) (statelog.Result, error) {
+
+					// AS THE PRINCIPAL, whose grants the domain asks
+					// `fleet:operate` of at the record.
+					as := w.As(by)
+					if readmit {
+						return as.ReadmitNode(ctx, opID, node)
+					}
+					return as.EvictNode(ctx, opID, node)
+				}, nil
+			},
 			OpsRetention: statelog.OpsRetention,
 			// SESSIONS GO IN AN HOUR: a row per sign-in and per
 			// sign-out, whose op ids nobody re-asks after the
@@ -399,6 +623,18 @@ func checkRegister(entries []registration) error {
 					name, horizon, kind, entry.OpsRetention)
 			}
 		}
+		if entry.Generation == nil {
+			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
+				"no generation record, so a recreated log of it could never be "+
+				"re-anchored — a domain that keeps none says so through its own "+
+				"encoder, as the vectors do", name)
+		}
+		if err := checkIdentityEntry(entry); err != nil {
+			return err
+		}
+		if err := checkFeedEntry(entry); err != nil {
+			return err
+		}
 		if (entry.Barrier == nil) == !entry.NoBarrier {
 			return fmt.Errorf("engine: the state-log register's entry for %q must state "+
 				"either a barrier encoder or NoBarrier, and states %s — a domain "+
@@ -412,6 +648,76 @@ func checkRegister(entries []registration) error {
 			"provision no log, apply no record and serve no domain's rows")
 	}
 	return nil
+}
+
+// checkIdentityEntry is what [checkRegister] asks of an entry about the
+// fleet's counted set — which only an identity-claiming log keeps.
+//
+// THREE ANSWERS A DOMAIN THAT CLAIMS IDENTITY MUST GIVE, each about a node the
+// fleet has evicted:
+//
+//   - it lists the evictions on its own rows, or the trim can never stop
+//     counting an evicted node there, and the log grows behind a machine that
+//     is not coming back until its ceiling refuses writes — silently, since a
+//     log with nobody evicted and one that cannot say look the same;
+//   - it lets its LOG be asked directly ([statelog.EvictionProbe]), because a
+//     node a peer re-anchored past never applies an eviction written after its
+//     applier stopped, and the eviction of that peer is what releases it —
+//     see [statelog.EvictedOnLog] and [stateLog.evictedOn];
+//   - and the node gate can WRITE its eviction ([registration.NewGate]), or an
+//     eviction lifts every other log's pin and leaves the node counted here.
+//
+// And a domain that claims none declares no gate writer: nobody is counted on
+// its log, so a gate record there would be a record nothing reads.
+func checkIdentityEntry(entry registration) error {
+	domain := entry.Domain
+	name := domain.Name()
+	if !domain.ClaimsIdentity() {
+		if entry.NewGate != nil {
+			return fmt.Errorf("engine: the state-log register's entry for %q "+
+				"declares a node-gate writer, and the domain claims no identity — "+
+				"the trim counts nobody on its log, so an eviction written there "+
+				"would be a record nothing reads", name)
+		}
+		return nil
+	}
+	if _, lists := domain.(evictionLister); !lists {
+		return fmt.Errorf("engine: domain %q claims identity and cannot list the "+
+			"evictions on its own log, so the trim could never stop counting an "+
+			"evicted node there", name)
+	}
+	if _, probes := domain.(statelog.EvictionProbe); !probes {
+		return fmt.Errorf("engine: domain %q claims identity and cannot say who "+
+			"is evicted on its log without applying it, so a node a decommissioned "+
+			"peer re-anchored past could never see that peer's eviction", name)
+	}
+	if entry.NewGate == nil {
+		return fmt.Errorf("engine: domain %q claims identity and the state-log "+
+			"register declares no node-gate writer for its log — an eviction "+
+			"would lift every other log's pin and leave the node counted on "+
+			"this one", name)
+	}
+	return nil
+}
+
+// checkFeedEntry is what [checkRegister] asks of an entry's wake feed: that it
+// runs one exactly when its domain declares one, under the group the domain
+// declares ([checkFeed]).
+//
+// AT BOOT, ON EVERY NODE, before anything is provisioned. [Engine.feedFor] asks
+// the same where a feed starts, but only a node that PUBLISHES starts one, so
+// a node in maintenance — or any node before its first company — would boot
+// a build whose feed and trim disagree without a word.
+//
+// A ZERO ENGINE AND AN EMPTY LOG, because what is judged is the group the
+// translator runs under, which is the translator's own constant: nothing is
+// started, read or subscribed to here.
+func checkFeedEntry(entry registration) error {
+	var translator changefeed.Translator
+	if entry.Feed != nil {
+		translator, _ = entry.Feed(&Engine{}, domainFeed{})
+	}
+	return checkFeed(entry.Domain, translator)
 }
 
 // statedBarrier is what an entry said about its barrier, for the refusal.

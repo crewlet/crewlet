@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -190,6 +191,10 @@ type buildOpts struct {
 	context prefetch.Blocks
 	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
 	onPhase func(phase.Phase)
+
+	// calls, when set, is the run's call log, on a turn context the
+	// surfaces are bound to — for the cases about what a run has called.
+	calls *turnctx.CallLog
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -256,6 +261,10 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		task = "post the weekly summary"
 	}
 
+	runTurn := runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"}
+	if opts.calls != nil {
+		runTurn.Context = &turnctx.Turn{RunID: "t-1", WorkKey: "wk-1", Calls: opts.calls}
+	}
 	r, err := runner.New(runner.Config{
 		Seat:      prompts.Seat{Org: organization, Role: role},
 		Registry:  reg,
@@ -268,7 +277,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Resume:    opts.resume,
 		Publisher: opts.pub,
 		OnPhase:   opts.onPhase,
-		Turn:      runner.Turn{RunID: "t-1", WorkKey: "wk-1", AgentID: "a-1"},
+		Turn:      runTurn,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

@@ -15,7 +15,7 @@
  * | 404 `no_active_revision`, no company in the org  | create mode |
  * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
  * | 401 or 403 (either read)                         | the grants the refusal named, or else a request for a credential |
- * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
+ * | any other 404 (`no_route`), or a body not JSON    | this process does not serve the configuration |
  * | nothing (status 0)                               | the engine could not be reached |
  *
  * A change of reader mid-edit re-reads without discarding the draft: the
@@ -837,7 +837,7 @@ function Lens({
     onStopped: () => {},
     onConflict: () => {},
   });
-  const save = useSave({ stateRef, transport, keys, events: saveEvents });
+  const save = useSave({ stateRef, transport, events: saveEvents });
   const saving =
     save.phase.kind === "confirming" ||
     save.phase.kind === "saving" ||

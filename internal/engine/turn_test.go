@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -2444,6 +2445,40 @@ func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
 	if r.reqs[0].RunID == r.reqs[1].RunID {
 		t.Errorf("both runs share the id %q — the retry would publish its phases "+
 			"under the identity the previous attempt already occupied", r.reqs[0].RunID)
+	}
+}
+
+// AND THE INSTANT THE WORK BEGAN IS REPRODUCED WITH THE KEY, because it is half
+// of the same identity: every operation id a turn derives from the key carries
+// it as its mint instant, and the state log refuses to decide again an
+// operation minted before its node adopted a donated snapshot. A redelivery
+// that derived it from anything the dispatch itself does — its own clock, its
+// run — would read a re-run after an adoption as a brand new operation.
+func TestARedeliveredTriggerReproducesWhenItsWorkBegan(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
+	d := dispatcher(t, r)
+	trigger := ev("notification")
+	trigger.Timestamp = time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
+
+	d.Dispatch(context.Background(), "ceo", []*events.Event{trigger})
+	d.Dispatch(context.Background(), "ceo", []*events.Event{trigger})
+
+	if len(r.reqs) != 2 {
+		t.Fatalf("the turn engine ran %d times, want 2", len(r.reqs))
+	}
+	for i, req := range r.reqs {
+		if !req.WorkSince.Equal(trigger.Timestamp) {
+			t.Errorf("run %d began its work at %s, want the trigger's own %s — "+
+				"the instant a write derived from the key carries has to be one "+
+				"every redelivery reproduces", i+1, req.WorkSince, trigger.Timestamp)
+		}
+		// AND A RUN'S OWN ID CARRIES WHEN IT STARTED, which is the instant
+		// a write seeded from the run rather than a key carries.
+		if _, ok := statelog.OpMintedAt(req.RunID); !ok {
+			t.Errorf("run id %q carries no instant — a write seeded from it "+
+				"would read as older than every adoption", req.RunID)
+		}
 	}
 }
 

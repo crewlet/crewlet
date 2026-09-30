@@ -103,6 +103,12 @@ const (
 	// --- taking something out of circulation ------------------------ //
 	ActionWorkRemove  Action = "remove_work_item"
 	ActionWorkRestore Action = "restore_work_item"
+	// A MOVE TAKES AN ITEM OUT OF ITS PROJECT, which is the gesture a
+	// removal is decided on: asked of the project the item is IN (read by
+	// the tool from the stored row), because that project's lead is who
+	// may take work out of it — a colleague may file work in a project and
+	// may not carry it away again.
+	ActionWorkMove    Action = "move_work_item"
 	ActionPageTrash   Action = "pages.trash"
 	ActionPageRestore Action = "pages.restore"
 
@@ -408,6 +414,7 @@ var rules = map[Action]rule{
 
 	ActionWorkRemove:  {class: ClassDestructive, recency: iam.RecencyAny},
 	ActionWorkRestore: {class: ClassDestructive, recency: iam.RecencyAny},
+	ActionWorkMove:    {class: ClassDestructive, recency: iam.RecencyAny},
 	ActionPageTrash:   {class: ClassDestructive, recency: iam.RecencyAny},
 	ActionPageRestore: {class: ClassDestructive, recency: iam.RecencyAny},
 

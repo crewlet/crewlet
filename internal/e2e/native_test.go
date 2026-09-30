@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -49,8 +50,13 @@ func newTask(project, title string) tracker.Task {
 	}
 }
 
+// pageOperator is the harness's own Tier A token writing a page, as
+// [builtin.PageActorOf] names one: the credential's login is both who wrote it
+// and what it wrote through, since a token acting for nobody has nobody else
+// to name — and a write naming nobody is refused.
 func pageOperator() pages.Actor {
-	return pages.Actor{Kind: pages.AuthorOperator, OperatorID: "e2e"}
+	login := iam.TokenLogin("e2e")
+	return pages.Actor{Kind: pages.AuthorOperator, Handle: login, OperatorID: login}
 }
 
 // A COMPANY THAT CONFIGURES NOTHING GETS A TRACKER AND A WIKI. That is the

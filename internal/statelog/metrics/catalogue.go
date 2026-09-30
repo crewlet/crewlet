@@ -136,12 +136,46 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogPublishRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "reason"},
-			Shows: "Writes refused before or instead of an append, by reason — " +
-				"an evicted node, a deferred record covering the object, a " +
-				"caller waiting on its own previous write, a full log. A " +
-				"refusal is not one of the three outcomes: it says the write " +
-				"never happened, and each reason has a different remedy, so " +
-				"one counter with an outcome dimension would hide all four.",
+			Shows: "Writes refused before or instead of an append, by `reason`, and " +
+				"EVERY value it carries is here, each with its remedy. The node: " +
+				"`evicted` (this node is removed from the fleet — run the write " +
+				"on another), `eviction_unknown` (its own eviction state could " +
+				"not be read — clears when it is read again), `deferred` (it " +
+				"holds a record it cannot decode — a " +
+				"newer build serves it), `behind` (it has not applied a position " +
+				"the write needs — clears on its own), `below_floor` (it is below " +
+				"the log and must adopt a snapshot — another node writes " +
+				"meanwhile), `floor_unknown` (the floor or the log's ends could " +
+				"not be read — clears when coordination answers). The log: " +
+				"`log_full` (at its ceiling — raise it or unblock the trim), " +
+				"`record_too_large` (the record is larger than the broker takes " +
+				"in one message — split the change; the detail names which " +
+				"limit refused it), `broker_refused` (a refusal this build has " +
+				"no remedy for — the detail carries the broker's own words), " +
+				"`skew` (a store and a stream restored out of step — restore " +
+				"both from one backup), `wrong_stream` (not the log this node's " +
+				"rows came from: rebuilt, ending below its checkpoint, holding " +
+				"another record there, or re-anchored past it by a peer — " +
+				"re-anchor, or adopt where a peer holds the generation), " +
+				"`log_truncated` (it lost records a peer's rows hold — settle " +
+				"which history the fleet keeps). The object: `deleted` (a " +
+				"permanent deletion marker — nothing recreates it). The " +
+				"operation: `op_reused` (its id names a record on another " +
+				"object) and `superseded` (its record landed and a later one " +
+				"undid it) — both answered by a NEW operation under a fresh " +
+				"id, never by a retry. A record that landed and a gate dropped " +
+				"is counted under the gate that dropped it — `evicted`, " +
+				"`deleted`, `retired` (a kind this build no longer applies), " +
+				"`abandoned` (written in a generation a reanchor abandoned) or " +
+				"`overtaken` (written after a restored reanchor, below its " +
+				"generation) — and is never re-decided, because republishing " +
+				"makes another record nothing applies. Beside the refusals: " +
+				"`conflict` for a write that lost every round, `exists` for a " +
+				"create whose object already exists, and `error` for a write " +
+				"that failed before it could answer. A refusal is not one of " +
+				"the three outcomes: it says the write never happened, and each " +
+				"reason has a different remedy, so one counter with an outcome " +
+				"dimension would hide them all.",
 		},
 		{
 			Name: StatelogWriteSessionWait, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -377,10 +411,13 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
-			Shows: "How much of the ceiling is left. A full log refuses every " +
-				"write AND every linearizable read, and the remedy is a " +
-				"fleet-wide maintenance cycle, so this is the one number " +
-				"worth alarming on long before it is small.",
+			Shows: "How much of the ceiling ordinary writes are held to is " +
+				"left — on every log that claims identity (the tracker, the " +
+				"pages, the org chart and the identity estate), the ceiling " +
+				"less the gate reserve kept above it for evictions. At zero the log " +
+				"refuses every write AND every linearizable read, and the " +
+				"remedy is a fleet-wide maintenance cycle, so this is the one " +
+				"number worth alarming on long before it is small.",
 		},
 		{
 			Name: StatelogTrimBlockedSeconds, Kind: KindGauge, Unit: UnitSeconds,
@@ -400,7 +437,13 @@ func Catalogue() []Instrument {
 				"took a backup; the disk records that one exists, and they " +
 				"differ in exactly the cases the alarm is for — a copy " +
 				"deleted, a volume never mounted, a schedule pointing at a " +
-				"path nobody ships from.",
+				"path nobody ships from. A node holding no manifest reports " +
+				"NO SERIES rather than a value: zero is the freshest backup " +
+				"imaginable and every other number is an age nobody " +
+				"measured, so neither can stand for an absence. The absence " +
+				"is what the `backup_age` alarm says in words, and an " +
+				"`absent()` rule over this gauge is what a collector alerts " +
+				"on.",
 		},
 		{
 			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,

@@ -130,7 +130,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// company-wide feed is the one answer that is both expensive and
 	// almost never what was meant.
 	if q.Task == "" && q.Project == "" {
-		q.Project = t.deps.defaultProject(actor.Handle)
+		q.Project = t.deps.defaultProject(actor)
 		if q.Project == "" {
 			q.Workspace = true
 		}
@@ -197,6 +197,11 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// which is a colleague's inbox, their priorities and the questions
 	// they owe, handed to an agent nobody asked. The operator surface
 	// supplies its own identity the same way, through the actor seam.
+	//
+	// AND IT IS THE ACTOR'S OWN RECORD, which is its handle: a person the
+	// identity directory binds to a seat writes AS that seat
+	// ([PrincipalActor]), so their day is the seat's and never the
+	// credential's.
 	out, err := reader.MyWork(ctx, tracker.MyWorkQuery{
 		Handle: actor.Handle, Level: seatReadLevel,
 	}, t.deps.now())

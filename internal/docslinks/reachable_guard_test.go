@@ -26,7 +26,7 @@ import (
 // that shape.
 func TestEveryDocsPageIsReachableFromTheIndex(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join(repoRoot(t), "docs")
+	root := filepath.Join(sourcetree.Root(t), "docs")
 
 	reached := map[string]bool{"index.md": true}
 	queue := []string{"index.md"}

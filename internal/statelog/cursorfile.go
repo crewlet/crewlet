@@ -95,23 +95,46 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 // its broker consumer from the sequence, stamps its records with the
 // generation, and detects a recreated stream from the instant. Reading them
 // separately is how one of them ends up describing a different checkpoint from
-// the other two.
+// the other two. [CheckpointOf] is the same read with the record the
+// checkpoint names beside it.
 func CursorFor(ctx context.Context, db *store.DB, stream string) (Position, time.Time, bool, error) {
-	var generation, seq, created int64
+	cp, found, err := CheckpointOf(ctx, db, stream)
+	return cp.At, cp.KeyedTo, found, err
+}
+
+// Checkpoint is one stream's committed checkpoint row as a live estate holds
+// it: the position, the creation instant of the stream its rows are keyed to,
+// and the broker's instant for the record at the position — the one this node
+// consumed there, zero where that is unknown.
+type Checkpoint struct {
+	At       Position
+	KeyedTo  time.Time
+	StoredAt time.Time
+}
+
+// CheckpointOf reads ONE stream's committed checkpoint row, whole, out of a LIVE
+// replicated estate, reporting false when this node has never committed on it.
+//
+// ONE READ for what a verification of the checkpoint's record needs
+// ([CheckpointDiverged]): a sequence from one read paired with the instant of
+// another's names no record this node ever consumed.
+func CheckpointOf(ctx context.Context, db *store.DB, stream string) (Checkpoint, bool, error) {
+	var generation, seq, created, storedAt int64
 	err := db.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT generation, seq, stream_created_at FROM statelog_cursor WHERE stream = ?`,
-			stream).Scan(&generation, &seq, &created)
+		return tx.QueryRowContext(ctx, `
+			SELECT generation, seq, stream_created_at, stored_at
+			FROM statelog_cursor WHERE stream = ?`,
+			stream).Scan(&generation, &seq, &created, &storedAt)
 	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Position{Stream: stream}, time.Time{}, false, nil
+		return Checkpoint{At: Position{Stream: stream}}, false, nil
 	case err != nil:
-		return Position{}, time.Time{}, false,
-			fmt.Errorf("statelog: read %s's checkpoint: %w", stream, err)
+		return Checkpoint{}, false, fmt.Errorf("statelog: read %s's checkpoint: %w", stream, err)
 	}
-	return Position{
-			Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
-		},
-		store.DecodeTime(created), true, nil
+	return Checkpoint{
+		At:       Position{Stream: stream, Generation: uint32(generation), Seq: uint64(seq)},
+		KeyedTo:  store.DecodeTime(created),
+		StoredAt: decodeInstant(storedAt),
+	}, true, nil
 }

@@ -27,6 +27,13 @@ type Container struct {
 	Name    string `json:"name,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
 
+	// ChartPosition is the packed position on the ORG CHART's log of the
+	// chart Name and Purpose were last derived from, zero for a container
+	// written before containers carried one. A POSITION AND NOT A CLOCK, for
+	// the reason [tracker.Project.ChartPosition] gives. See
+	// [Store.EnsureContainer].
+	ChartPosition int64 `json:"chart_position,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 
 	Extra map[string]json.RawMessage `json:"-"`

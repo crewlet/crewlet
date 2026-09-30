@@ -66,9 +66,17 @@ type ViewRow struct {
 type ViewQuery struct {
 	Container Container
 
-	// Viewer is whose pins order the saved half. Empty asks for the
-	// shared strip: no pins, and no personal views but the shared ones.
+	// Viewer is whose pins order the saved half, and whose personal views
+	// join it. Empty asks for the shared strip: no pins, and no personal
+	// views but the shared ones.
 	Viewer string
+
+	// Units resolves a UNIT container's two spellings, so a strip asked
+	// for by a team's id carries the views saved against its name and the
+	// other way round — see [Units] and [CanonicalContainer]. Nil matches
+	// the container as asked, which is the honest answer for a surface
+	// holding no chart.
+	Units Units
 
 	Level statelog.ReadLevel
 
@@ -156,7 +164,7 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 			return err
 		}
 		implicit := implicitViews(q.Container)
-		saved, err := savedViews(ctx, tx, q.Container, q.Viewer, pinned)
+		saved, err := savedViews(ctx, tx, q.Container, q.Units, q.Viewer, pinned)
 		if err != nil {
 			return err
 		}
@@ -249,16 +257,36 @@ func implicitViews(container Container) []ViewRow {
 // answer at all. Filtering in SQL rather than after the fact is what stops a
 // personal view riding a page boundary into somebody else's strip.
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
-	viewer string, pinned map[string]bool) ([]ViewRow, error) {
+	units Units, viewer string, pinned map[string]bool) ([]ViewRow, error) {
 
+	// A UNIT CONTAINER MATCHES BOTH OF ITS TEAM'S SPELLINGS, which is the
+	// same rule a `unit=` filter follows and for the same reason: a strip
+	// saved before the team had an id is addressed by its name, and one
+	// saved after it by the id. Every other kind addresses itself one way
+	// and [unitSpellings] hands that one back.
+	ids := []string{container.ID}
+	if container.Kind == ContainerUnit {
+		if spellings := unitSpellings(units, ids); len(spellings) > 0 {
+			ids = spellings
+		}
+	}
+	// THE SHARED HALF IS `owner = ''`, and it is all an anonymous strip
+	// gets. The personal half is the viewer's own name — the one a person
+	// saves under, since bound to a seat they write AS it (iam.ActorFor).
+	own := ""
+	args := []any{container.Kind}
+	args = append(args, anyOf(ids)...)
+	if viewer != "" {
+		own = " OR owner = ?"
+		args = append(args, viewer)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
 		       params_json
 		FROM tracker_views
-		WHERE container_kind = ? AND container_id = ?
-		  AND (owner = '' OR owner = ?)
-		ORDER BY rank, name`,
-		container.Kind, container.ID, viewer)
+		WHERE container_kind = ? AND container_id IN (`+placeholders(len(ids))+`)
+		  AND (owner = ''`+own+`)
+		ORDER BY rank, name`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read %s %s's views: %w",
 			container.Kind, container.ID, err)

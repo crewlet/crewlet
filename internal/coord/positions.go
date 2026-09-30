@@ -36,6 +36,43 @@ type DomainPosition struct {
 	Generation     uint32 `json:"generation"`
 	AppliedThrough uint64 `json:"applied_through"`
 
+	// StreamCreatedAt is the creation instant of the stream this node's
+	// checkpoint is KEYED TO — the one its rows were derived from, which is
+	// not the one the broker serves while this node knows its log was
+	// rebuilt under it.
+	//
+	// THE THIRD COORDINATE OF A POSITION, and the one a generation cannot
+	// stand in for. A stream deleted and remade keeps the generation and
+	// counts from 1 again, so two rows at one generation are comparable
+	// only if they are about one stream — and a reanchor's guards compare
+	// exactly that: whether a peer went further along the stream this
+	// node's rows came from. Without it every peer still on the lost
+	// stream read as one caught up on the live one, and no node of a
+	// fleet could ever re-anchor.
+	//
+	// ZERO IS UNKNOWN, never "no stream": a row written by a build that
+	// did not publish it, which a reader weighs conservatively.
+	StreamCreatedAt time.Time `json:"stream_created_at,omitzero"`
+
+	// CheckpointStoredAt is the broker's instant for the record at this
+	// node's checkpoint — the one it consumed at Seq — and with Seq it NAMES
+	// that record, which a sequence alone cannot: after a broker restored
+	// from an older copy is written past a node's rows, the same sequence
+	// holds another record in the log than in those rows.
+	//
+	// WHAT IT LETS A PEER ASK is whether this node's history is the log's.
+	// A node whose checkpoint record the log holds is on the log, whatever
+	// its sequence — nothing it holds is lost by a reanchor that follows the
+	// log — while one whose record the log does not hold, or holds another
+	// record at, holds history the log lost; only the second is weighed
+	// against a reanchoring node's own position
+	// ([statelog.ReanchorInputs.Highest]).
+	//
+	// ZERO IS UNKNOWN — a checkpoint naming no record, or a build that did
+	// not publish it — and a reader weighs it as history the log may not
+	// hold.
+	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
+
 	// Snapshot is the newest VERIFIED snapshot this node holds, and its
 	// generation travels with it: a snapshot from before a reanchor is not
 	// a donor for a node that needs one after it, and a bare sequence
@@ -48,6 +85,19 @@ type DomainPosition struct {
 	// applied. Zero on a healthy node, and the number an operator reads
 	// beside AppliedThrough to tell a lagging node from a stalled one.
 	Deferred int `json:"deferred,omitempty"`
+
+	// LogDiverged reports that the log holds, at this node's checkpoint,
+	// another record than the one it consumed there: a broker restored from
+	// an older copy and written past this node's rows, so they hold history
+	// the log lost and the log holds history they never saw.
+	//
+	// PUBLISHED because it is the one such node the fleet cannot otherwise
+	// see: its position is at or below the log's end, where a lagging node's
+	// is, so nothing else on this row says its rows and the log are two
+	// histories — and every other node on that log refuses its own writes of
+	// it while this says so, as it does for a peer whose position is past the
+	// log's end, until the operator decides which history the fleet keeps.
+	LogDiverged bool `json:"log_diverged,omitempty"`
 }
 
 // NodePositions is one node's row in the register: every domain it runs, and
@@ -114,11 +164,16 @@ type PositionRegister interface {
 	// round trips for one answer.
 	Positions(ctx context.Context) ([]NodePositions, error)
 
-	// ForgetPositions removes a node's row.
+	// ForgetPositions removes a node's row, and it is the only way a row
+	// leaves.
 	//
-	// THE OPERATOR'S GESTURE, and the only way a row leaves. It is what an
-	// eviction calls after its own record is written, so the trim stops
-	// waiting for a node nobody is going to bring back.
+	// AN EVICTION DOES NOT CALL IT, and must not. What stops the trim
+	// waiting for an evicted node is its TOMBSTONE, which the counted set
+	// subtracts from these keys; the row itself is what a READMISSION is
+	// judged by — the node's last position against the floor — so an
+	// eviction that forgot it would turn every later readmission of a
+	// machine that is still switched off into a judgement about a node
+	// that has never reported anything.
 	ForgetPositions(ctx context.Context, nodeID string) error
 }
 

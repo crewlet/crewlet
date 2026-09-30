@@ -239,14 +239,32 @@ type Engine struct {
 	batch *queue.BatchOptions
 
 	// sandbox is this node's code-work machinery: the coordinator holding
-	// the busy set, the waiter polling detached runs, and the durable row
-	// store behind both. On the ENGINE rather than on an epoch, because
-	// they are facts about this process — rebuilding them on an apply would
-	// forget which seats are mid-run and start a second poll loop against
-	// the same rows.
-	sandboxCoordinator *sandbox.Coordinator
-	sandboxWaiter      *sandbox.Waiter
-	sandboxPending     sandbox.PendingStore
+	// the busy set and the durable row store behind it. On the ENGINE
+	// rather than on an epoch, because they are facts about this process —
+	// rebuilding them on an apply would forget which seats are mid-run.
+	//
+	// AN ATOMIC POINTER, published whole and at most once — nil until the
+	// first company that reaches a sandbox cell, at boot or at an apply,
+	// never cleared — for the reason [Engine.native] is one: a node that
+	// booted with no sandbox has a seat host, a dispatcher and a tool loop
+	// reading it before an apply brings it up. Every reader loads it once.
+	// See [Engine.startSandbox].
+	sandbox atomic.Pointer[sandboxRuntime]
+
+	// sandboxWaiter is the completion poll, started once, on a node that
+	// publishes, the first time a runtime exists and the node does.
+	sandboxWaiter atomic.Pointer[sandbox.Waiter]
+
+	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
+	// apply can be what starts the poll.
+	sandboxPollInterval time.Duration
+
+	// sandboxSeats are the seats whose sandbox control topic this node has
+	// attached, so a seat is attached exactly once however it came to be
+	// prepared — by its own acquisition, or by the apply that brought the
+	// runtime up while it was already held. See [Engine.prepareHeldSeats].
+	sandboxSeatsMu sync.Mutex
+	sandboxSeats   map[string]bool
 
 	// leaseTTL is the seat lease TTL, which is also the seat lease bucket's
 	// own age, resolved once from Tier A.
@@ -296,18 +314,36 @@ type Engine struct {
 	// state — see learning.Reflector.
 	reflector *learning.Reflector
 
-	// native is this node's copy of the company's own tracker and
-	// knowledge base: the projectors, their index, and the read and write
-	// sides over them. Nil on a company running the vendor backends, which
-	// is the whole switch — see native.go.
+	// native is this node's copy of the company's own durable state — the
+	// state log and every domain in its register (the org chart and the
+	// identity estate always; the tracker and the knowledge base where the
+	// company runs them natively), and the read and write sides over them.
+	// Nil on a node that has not yet been handed a company, which is the
+	// whole switch — see native.go.
 	//
-	// On the ENGINE rather than on an epoch, because a projector follows a
-	// coordination FAMILY and a family does not change when a company
-	// revision does. Rebuilding it on an apply would drop the projection
-	// and re-run a boot reconcile on every configuration change, which for
-	// a company that edits its org chart twice a day is a projection that
-	// is never hydrated.
-	native *native
+	// On the ENGINE rather than on an epoch, because the runtime follows
+	// the fleet's LOGS and a log does not change when a company revision
+	// does. Rebuilding it on an apply would drop the applied rows' runtime
+	// and re-run a boot bring-up on every configuration change, which for
+	// a company that edits its org chart twice a day is a runtime that is
+	// never hydrated.
+	//
+	// ATOMIC, AND WRITTEN AT MOST ONCE: nil until the node's first company
+	// is met — at boot, or by the apply that brings a node that booted with
+	// none its first ([Engine.startNativeFor]) — and never
+	// cleared after, not even by the teardown. A plain field was correct
+	// only while boot was the one writer, before any goroutine could read
+	// it; a node that booted unconfigured and met its company later wrote
+	// it with the seat host, the API and every tool already reading. The
+	// monotonic nil-to-runtime transition is what lets a caller that reads
+	// it more than once rely on the later reads.
+	native atomic.Pointer[native]
+
+	// boot is the operator's Tier A configuration this engine was built
+	// from. Immutable; kept because a node that meets its first company
+	// at an apply brings the state log up then, and the log's
+	// ceilings, volume and snapshot policy are Tier A's.
+	boot *config.Bootstrap
 
 	// env is this node's ${VAR} resolver and the store snapshot it answers
 	// from: the secret store in front of the process environment, refreshed
@@ -445,9 +481,18 @@ type Engine struct {
 
 	// maintenance is the retention sweep for the short-horizon tables. On
 	// the engine for the same reason the sandbox machinery is: it is a
-	// loop this process runs, and rebuilding it on an apply would start a
-	// second one against the same rows.
-	maintenance  *maintenance.Worker
+	// loop this process runs, and rebuilding it on every apply would churn
+	// a duty that has nothing new to sweep.
+	//
+	// REBUILT ONCE MORE on a node's FIRST company, the one time its job
+	// list changes after boot: a node that booted unconfigured built it
+	// with no native runtime and no company, so it swept no operation
+	// ledger, ran none of the tracker's repairs and read the conversation
+	// horizon's floor. The old worker is stopped — its in-flight tick
+	// waited out — before the new one starts, so there is never a second
+	// loop. Atomic because that write happens while the process runs. See
+	// [Engine.rebuildMaintenance].
+	maintenance  atomic.Pointer[maintenance.Worker]
 	integrations *integration.Worker
 
 	// mailboxes registers each seat's mailbox with the fleet and retires
@@ -474,7 +519,11 @@ type Engine struct {
 	// concluded. On the ENGINE for the reason maintenance is — it is a
 	// loop this process runs, and rebuilding it on an apply would leave
 	// two loops publishing one fleet's floor.
-	retention *retention
+	//
+	// ATOMIC because it is armed with the native runtime, which a node
+	// that booted unconfigured meets at an apply — while the API is
+	// already reading it for `crewlet retention status`.
+	retention atomic.Pointer[retention]
 
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
@@ -572,9 +621,10 @@ type Options struct {
 	// SandboxRuns reports what a seat's detached runs mean for its inbox:
 	// whether one HOLDS the seat — a job outlasting any broker ack window,
 	// so the seat's mail is parked — and whether one is waiting for a
-	// person's answer, which any delivery might be. Nil answers no to both,
-	// which is correct for a build with no sandbox provider wired: a seat
-	// that cannot start a detached run is never in either state.
+	// person's answer, which any delivery might be. Nil reads this engine's
+	// own coordinator, live — no to both until one exists, which is correct
+	// for a node that has never run code: a seat that cannot start a
+	// detached run is never in either state.
 	//
 	// ONE SEAM FOR BOTH, because the two move together: a run that parks on
 	// a question stops holding its seat in the same moment it starts
@@ -614,6 +664,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// with none.
 	cipher, err := openCipher(opts.Bootstrap)
 	if err != nil {
+		return nil, err
+	}
+	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
+	// sandbox: an apply can bring it its first, and the poll starts there.
+	// See [checkSandboxPollInterval].
+	if err = checkSandboxPollInterval(opts.SandboxPollInterval); err != nil {
 		return nil, err
 	}
 
@@ -696,16 +752,19 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	}
 
 	e := &Engine{
+		boot:     opts.Bootstrap,
 		backends: backends, ownsBackends: ownsBackends, cipher: cipher,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
-		mcp:         mcp.NewBridge(nil),
-		sandboxOtel: otel,
-		bridge:      bridge,
-		metrics:     opts.Metrics,
-		mode:        mode,
-		incarnation: incarnation,
-		id:          nodeID,
-		startedAt:   time.Now().UTC(),
+		mcp:                 mcp.NewBridge(nil),
+		sandboxOtel:         otel,
+		sandboxPollInterval: opts.SandboxPollInterval,
+		sandboxSeats:        map[string]bool{},
+		bridge:              bridge,
+		metrics:             opts.Metrics,
+		mode:                mode,
+		incarnation:         incarnation,
+		id:                  nodeID,
+		startedAt:           time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
 		// value to every seat attachment.
@@ -820,11 +879,13 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return nil, err
 		}
 	}
-	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Both of these are derived
-	// from a company — the sandbox backends it configures, the tools its
-	// seats are given — and an unconfigured node has neither to build. The
-	// apply that brings it its first revision runs both then, on the same
-	// path every later apply takes.
+	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Everything here is derived
+	// from a company — the sandbox backends it configures, the native
+	// runtime its backends ask for, the tools its seats are given — and an
+	// unconfigured node has none of them to build. The apply that brings it
+	// its first revision builds all of it then: the native runtime
+	// ([Engine.startNativeFor]) and the sandbox runtime
+	// ([Engine.startSandbox]), each before that apply equips.
 	if company != nil {
 		// BEFORE equip, because equip registers run_sandbox and only a
 		// node with a coordinator can offer it: a tool whose dependency is
@@ -832,7 +893,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// engine that equipped first would build a code-enabled company
 		// whose seats have no code tool and plan around one anyway.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := e.buildSandboxRuntime(company); err != nil {
+		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
 		// BEFORE equip too, and for exactly the same reason: the ten
@@ -849,6 +910,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
 			return nil, err
 		}
+		// NOT THE PROJECTS AND THE CONTAINERS HERE. They are derived from
+		// the org CHART, which the seed below writes and the view
+		// composes, and they are stamped with the position on the chart's
+		// log that view was composed at — so they follow the published
+		// company through [Engine.convergeOn], which the end of this
+		// constructor runs.
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
 		// a seat with no tools at all — a company that boots cleanly and
@@ -1044,7 +1111,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
-	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
+	if err := e.startSandboxWaiter(ctx); err != nil {
 		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
@@ -1058,20 +1125,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// before the native backends, because it needs neither: the counters
 	// are coordination's and the company's caps are the epoch's.
 	e.startBudgetReports(ctx)
-	if e.native != nil {
-		e.startRetention(ctx, opts.Bootstrap, e.native.log)
-		// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other
-		// half of semantic search is present and correct over an empty
-		// corpus — which reports as a healthy domain rather than as a
-		// missing one.
-		e.startEmbedding(ctx, e.native.log)
-		// AND THE IDENTITY ESTATE'S FOUR, on a node that runs that
-		// domain: without them a removal's failed key delete lives for
-		// ever, the trail is never swept, a duplicate a restore made is
-		// never named and a person disabled at the provider keeps their
-		// session to its deadline. See identityduties.go.
-		e.startIdentityDuties(ctx, opts.Bootstrap)
-	}
+	// The native runtime's own duties — the trim, the vector domain's one
+	// writer and the identity estate's — where there is a runtime. An
+	// unconfigured node has none yet, and the apply that brings its first
+	// company arms them then — see [Engine.startNativeFor].
+	e.startNativeDuties(ctx)
 	// Beside the sweep, and a fleet singleton on the same terms: two nodes
 	// reconciling one third-party app at the same moment can each create an identity
 	// for one seat, and no later pass can detect or repair that.
@@ -1145,8 +1203,13 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Conditions == nil {
 		runs := opts.SandboxRuns
-		if runs == nil && e.sandboxCoordinator != nil {
-			runs = e.sandboxCoordinator.SeatRuns
+		if runs == nil {
+			// READ LIVE, never bound here: this runs once, in New, and on
+			// a node whose first sandbox company arrives by apply there is
+			// no coordinator yet to bind — so every delivery after that
+			// apply was screened as though no run could exist, and a seat
+			// with a job still running took new turns beside it.
+			runs = e.sandboxSeatRuns
 		}
 		d.Conditions = e.conditionsFor(runs)
 	}
@@ -1177,13 +1240,17 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Pause == nil {
 		d.Pause = e.pause
 	}
-	if d.Answer == nil && e.sandboxCoordinator != nil {
+	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
 		// nothing in the engine called it — so a coding run that asked a
 		// person a question waited out its pause TTL however promptly they
 		// replied.
-		d.Answer = e.sandboxCoordinator.TryResumeFromAnswer
+		//
+		// LIVE, for the reason the conditions above are: bound here, a
+		// node whose sandbox arrived by apply offered no reply to any
+		// parked run for the life of the process.
+		d.Answer = e.answerParkedRun
 	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
@@ -1462,11 +1529,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	// tick of this node runs once a peer can take the duty.
 	e.releaseDuties(ctx)
 	e.stopCooldownRefresh()
-	// BEFORE the native backends, whose page projection its walk reads, and
-	// before backends.Close, which closes the broker its nudge listens on.
+	// BEFORE the native backends, whose pages its walk reads, and before
+	// backends.Close, which closes the broker its nudge listens on.
 	e.stopSkillSync(ctx)
 	// BEFORE backends.Close, for the same reason and with more at stake:
-	// the projectors and the indexer both write, and an apply landing
+	// the apply loops and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
 	// cursor ahead of the rows it claims to describe.
 	e.stopNative(ctx)
@@ -1835,12 +1902,11 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.Draining = host.Draining()
 		}
 	}
-	// The native replication loops — the wiki's projector and every
-	// state-log domain's applier — so an operator asking why a fresh node
-	// holds no seats can see the answer in the fleet view rather than
-	// inferring it from an empty claim list. See
-	// [coord.NodeStatus.ProjectionsReady] for why this is not a readiness
-	// signal.
+	// The native replication loops — every state-log domain's applier —
+	// so an operator asking why a fresh node holds no seats can see the
+	// answer in the fleet view rather than inferring it from an empty claim
+	// list. See [coord.NodeStatus.ProjectionsReady] for why this is not a
+	// readiness signal.
 	for _, loop := range e.NativeStatus(ctx) {
 		status.ProjectionsTotal++
 		if loop.Ready {

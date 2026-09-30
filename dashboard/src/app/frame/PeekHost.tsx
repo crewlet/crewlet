@@ -25,7 +25,15 @@
  * would make every list's row type part of the frame's contract.
  */
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { DetailRail, usePeek, usePeekControls } from "./DetailRail.tsx";
 import { PEEKS } from "./peeks.tsx";
@@ -92,7 +100,14 @@ export function PeekHost() {
 
   return (
     <DetailRail ref={object} onStep={step}>
-      {body({ id: object.id })}
+      {/* KEYED ON THE SUBJECT, which is rule 14 for a route and holds for a
+          rail: `[` and `]` move the peek from task A to task B by changing
+          one query key, so React reconciles ONE body rather than mounting
+          another, and everything that body remembers — an open disclosure,
+          a chosen tab, a held refusal — describes A until something clears
+          it. The token is the whole identity, kind and id, so a page and an
+          item that happen to share an id are still two bodies. */}
+      <Fragment key={refToken(object)}>{body({ id: object.id })}</Fragment>
     </DetailRail>
   );
 }

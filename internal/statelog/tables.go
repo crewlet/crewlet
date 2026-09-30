@@ -17,9 +17,11 @@ import (
 //
 // # Why the framework writes a domain's tables
 //
-// The operation ledger and the deferred-record table are `Local` — this node's
-// own — but they are written in the APPLIER's transaction, beside the rows,
-// because contract 2 puts them there and a transaction is one file. Their
+// The operation ledger is `Divergent` — it travels in every snapshot but stays
+// out of the identity claim, since only `applied_at` differs between nodes —
+// and the deferred-record table is `Local`, this node's own. Both are written
+// in the APPLIER's transaction, beside the rows, because contract 2 puts them
+// there and a transaction is one file. Their
 // contents are framework facts: an operation id and a position, a record this
 // build could not decode. So the domain owns the schema, which is in its own
 // migration, and the framework owns the statements, which are here — one
@@ -93,23 +95,85 @@ func newTables(d Domain) (tables, error) {
 	return t, nil
 }
 
+// cursorRow is one domain's checkpoint row, whole.
+type cursorRow struct {
+	at      Position
+	created time.Time
+
+	// storedAt is the broker's own instant for the record at the
+	// checkpoint's sequence — the one this node consumed there — and zero
+	// where that is unknown: a row older than the column, a checkpoint at
+	// sequence 0, or one a reanchor placed where the log holds no record.
+	// It is what [Runner.VerifyCheckpoint] compares the log's record with.
+	storedAt time.Time
+
+	// void is the generations the reanchor that placed this checkpoint
+	// ABANDONED — see [ReanchorPlan.From].
+	void voidRange
+}
+
+// encodeInstant is a broker instant as a checkpoint column holds it: zero for
+// an unknown one, which [store.EncodeTime] would write as the year one and read
+// back as a real instant nothing could ever equal.
+func encodeInstant(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return store.EncodeTime(t)
+}
+
+// decodeInstant is [encodeInstant]'s inverse: zero is the zero instant.
+func decodeInstant(micros int64) time.Time {
+	if micros == 0 {
+		return time.Time{}
+	}
+	return store.DecodeTime(micros)
+}
+
+// voidRange is what the reanchor that placed a checkpoint made VOID wherever
+// that checkpoint is followed from, in two rules: the generations strictly
+// between after and before, the ones it ABANDONED ([ReanchorPlan.From]); and,
+// for a RESTORED reanchor, every record positioned after staleAfter — the
+// generation record it appended — whose generation is below before, the one it
+// opened ([ReanchorPlan.StaleAfter]). Zero, zero and zero on every checkpoint
+// no such reanchor placed.
+type voidRange struct {
+	after, before uint32
+	staleAfter    uint64
+}
+
+// abandons reports whether generation gen is one a reanchor abandoned.
+func (v voidRange) abandons(gen uint32) bool { return gen > v.after && gen < v.before }
+
+// overtakes reports whether a record at seq written in generation gen is one a
+// restored reanchor overtook: after its generation record, in a generation
+// below the one it opened.
+func (v voidRange) overtakes(seq uint64, gen uint32) bool {
+	return v.staleAfter > 0 && seq > v.staleAfter && gen < v.before
+}
+
 // readCursor reads this domain's checkpoint, reporting false when the applier
 // has never committed on this stream.
-func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (Position, time.Time, bool, error) {
-	var gen int64
-	var seq int64
-	var created int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT generation, seq, stream_created_at FROM statelog_cursor WHERE stream = ?`,
-		t.stream).Scan(&gen, &seq, &created)
+func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, error) {
+	var gen, seq, created, storedAt, voidAfter, voidBefore, staleAfter int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT generation, seq, stream_created_at, stored_at, void_after, void_before,
+			stale_after
+		FROM statelog_cursor WHERE stream = ?`,
+		t.stream).Scan(&gen, &seq, &created, &storedAt, &voidAfter, &voidBefore, &staleAfter)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Position{Stream: t.stream}, time.Time{}, false, nil
+		return cursorRow{at: Position{Stream: t.stream}}, false, nil
 	case err != nil:
-		return Position{}, time.Time{}, false, fmt.Errorf("statelog: read the cursor: %w", err)
+		return cursorRow{}, false, fmt.Errorf("statelog: read the cursor: %w", err)
 	}
-	return Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
-		store.DecodeTime(created), true, nil
+	return cursorRow{
+		at:       Position{Stream: t.stream, Generation: uint32(gen), Seq: uint64(seq)},
+		created:  store.DecodeTime(created),
+		storedAt: decodeInstant(storedAt),
+		void: voidRange{after: uint32(voidAfter), before: uint32(voidBefore),
+			staleAfter: uint64(staleAfter)},
+	}, true, nil
 }
 
 // setCursor writes the checkpoint, in the SAME transaction as the rows it
@@ -122,19 +186,66 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (Position, time.Time
 // is free. That is true while the source can always redeliver, and FALSE for a
 // log that gets trimmed: the replay it counts on is a replay of records the
 // trim has already removed.
-func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created time.Time, now time.Time) error {
+//
+// storedAt is the broker's instant for the record at p — the one this
+// transaction consumed there — which is how the checkpoint NAMES its record
+// ([cursorRow.storedAt]).
+func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, storedAt,
+	now time.Time) error {
+
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO statelog_cursor (stream, generation, seq, stream_created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO statelog_cursor
+			(stream, generation, seq, stream_created_at, stored_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
 			stream_created_at = excluded.stream_created_at,
+			stored_at         = excluded.stored_at,
 			updated_at        = excluded.updated_at`,
 		t.stream, int64(p.Generation), int64(p.Seq),
-		store.EncodeTime(created), store.EncodeTime(now))
+		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now))
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
+	}
+	return nil
+}
+
+// reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
+// created, naming the log's record at p by storedAt (zero where the log holds
+// none there) — together with what it made void: every generation strictly
+// between from and p's own ([ReanchorPlan.From]), and, for a restored reanchor,
+// every lower-generation record after staleAfter, the generation record it
+// appended ([ReanchorPlan.StaleAfter]), zero when there is no such rule.
+//
+// ITS OWN STATEMENT rather than a flag on setCursor, because the two write
+// different things for a reason: the applier's checkpoint moves every batch
+// and must leave the abandoned range alone, since a node part-way through the
+// abandoned generation's records keeps voiding them after a restart; and a
+// reanchor must REPLACE it, since the range an earlier reanchor abandoned says
+// nothing about the log this one follows.
+func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
+	created, storedAt time.Time, from uint32, staleAfter uint64, now time.Time) error {
+
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO statelog_cursor
+			(stream, generation, seq, stream_created_at, stored_at, updated_at,
+			 void_after, void_before, stale_after)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (stream) DO UPDATE SET
+			generation        = excluded.generation,
+			seq               = excluded.seq,
+			stream_created_at = excluded.stream_created_at,
+			stored_at         = excluded.stored_at,
+			updated_at        = excluded.updated_at,
+			void_after        = excluded.void_after,
+			void_before       = excluded.void_before,
+			stale_after       = excluded.stale_after`,
+		t.stream, int64(p.Generation), int64(p.Seq),
+		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now),
+		int64(from), int64(p.Generation), int64(staleAfter))
+	if err != nil {
+		return fmt.Errorf("statelog: write the reanchored cursor at %s: %w", p, err)
 	}
 	return nil
 }
@@ -173,15 +284,19 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 	return Unpack(t.stream, packed), nil
 }
 
-// writeOp records that this node applied an operation at a position.
-func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p Position, now time.Time) error {
+// writeOp records that this node applied an operation at a position, by the
+// record whose broker instant is storedAt.
+func (t tables) writeOp(ctx context.Context, tx *sql.Tx, opID, subject string, p Position,
+	storedAt, now time.Time) error {
+
 	if t.ops == "" || opID == "" {
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO `+t.ops+` (op_id, subject, position, applied_at) VALUES (?, ?, ?, ?)
+		INSERT INTO `+t.ops+` (op_id, subject, position, applied_at, stored_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (op_id) DO NOTHING`,
-		opID, subject, p.Packed(), store.EncodeTime(now))
+		opID, subject, p.Packed(), store.EncodeTime(now), encodeInstant(storedAt))
 	if err != nil {
 		return fmt.Errorf("statelog: record operation %q at %s: %w", opID, p, err)
 	}
@@ -212,8 +327,18 @@ const OpsPurgeBatch = 2000
 // BATCHED, AND EACH BATCH ITS OWN TRANSACTION. One transaction over the whole
 // backlog would hold the writer the applier is queued behind for the length of
 // it, which on a first tick after a long absence is the whole month.
+//
+// A BATCH THAT DELETED ANYTHING RECORDS WHAT IT FORGOT, in its own
+// transaction ([tables.markLost]): the watermark is how the publisher tells a
+// row that was never written from one that was swept ([tables.lostBefore]),
+// and one written after the delete it describes — or in another transaction —
+// could trail the rows actually gone, which is the one direction that
+// re-decides an operation that already landed. A batch that deleted nothing
+// records nothing, because nothing was forgotten.
 func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int64, error) {
-	return t.purgeOpsWhere(ctx, db, `applied_at < ?`, store.EncodeTime(cutoff))
+	return t.purgeOpsWhere(ctx, db, func(tx *sql.Tx) error {
+		return t.markLost(ctx, tx, cutoff)
+	}, `applied_at < ?`, store.EncodeTime(cutoff))
 }
 
 // purgeOpsOfKind deletes the operation rows on one subject KIND applied before
@@ -226,18 +351,27 @@ func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int6
 // kind with a horizon of its own is one whose rows the default sweep would
 // otherwise keep for the default's length, and only a domain that declares
 // one pays for the index.
+//
+// ITS LOSS IS THE KIND'S, NOT THE TABLE'S ([tables.markLostKind]). Recorded
+// as the table's, an hourly sweep of one kind would tell the publisher the
+// whole ledger lost everything older than an hour, and every other kind's
+// operation minted before that would be answered `unknown` without being
+// published — see migration 0037.
 func (t tables) purgeOpsOfKind(ctx context.Context, db Estate, kind string,
 	cutoff time.Time) (int64, error) {
 
 	whole := t.prefix + "." + kind
-	return t.purgeOpsWhere(ctx, db,
-		`(subject = ? OR (subject >= ? AND subject < ?)) AND applied_at < ?`,
+	return t.purgeOpsWhere(ctx, db, func(tx *sql.Tx) error {
+		return t.markLostKind(ctx, tx, kind, cutoff)
+	}, `(subject = ? OR (subject >= ? AND subject < ?)) AND applied_at < ?`,
 		whole, whole+".", whole+"/", store.EncodeTime(cutoff))
 }
 
-// purgeOpsWhere is both sweeps' loop over one predicate.
-func (t tables) purgeOpsWhere(ctx context.Context, db Estate, predicate string,
-	args ...any) (int64, error) {
+// purgeOpsWhere is both sweeps' loop over one predicate, recording what each
+// batch that deleted anything forgot through mark, in that batch's own
+// transaction.
+func (t tables) purgeOpsWhere(ctx context.Context, db Estate, mark func(*sql.Tx) error,
+	predicate string, args ...any) (int64, error) {
 
 	if t.ops == "" {
 		return 0, nil
@@ -254,7 +388,10 @@ func (t tables) purgeOpsWhere(ctx context.Context, db Estate, predicate string,
 				return err
 			}
 			deleted, err = res.RowsAffected()
-			return err
+			if err != nil || deleted == 0 {
+				return err
+			}
+			return mark(tx)
 		})
 		if err != nil {
 			return total, fmt.Errorf("statelog: sweep %s: %w", t.ops, err)
@@ -324,21 +461,285 @@ func (t tables) purgeAnchors(ctx context.Context, db Estate, floor Position) (in
 	}
 }
 
-// op answers where an operation was applied on this node.
-func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool, error) {
+// markLost records that the ops table may have lost rows applied before
+// before, in the caller's transaction — which must be the one that loses them.
+//
+// MONOTONE, so a later loss with an earlier instant — a sweep after a clock
+// stepped back, a shorter horizon — never un-forgets rows an earlier one lost.
+func (t tables) markLost(ctx context.Context, tx *sql.Tx, before time.Time) error {
 	if t.ops == "" {
-		return Position{}, false, nil
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO statelog_ops_lost (ops_table, lost_before)
+		VALUES (?, ?)
+		ON CONFLICT (ops_table) DO UPDATE SET
+			lost_before = MAX(lost_before, excluded.lost_before)`,
+		t.ops, store.EncodeTime(before))
+	if err != nil {
+		return fmt.Errorf("statelog: record that %s lost rows before %s: %w",
+			t.ops, before.UTC().Format(time.RFC3339Nano), err)
+	}
+	return nil
+}
+
+// markLostKind records that the ops table may have lost rows of one subject
+// KIND applied before before, in the caller's transaction — the one that loses
+// them — and monotone for [tables.markLost]'s reason. It is the watermark of a
+// kind whose rows a domain sweeps sooner than the rest ([OpsHorizon.Kinds]);
+// see migration 0037.
+func (t tables) markLostKind(ctx context.Context, tx *sql.Tx, kind string,
+	before time.Time) error {
+
+	if t.ops == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO statelog_ops_lost_kind (ops_table, subject_kind, lost_before)
+		VALUES (?, ?, ?)
+		ON CONFLICT (ops_table, subject_kind) DO UPDATE SET
+			lost_before = MAX(lost_before, excluded.lost_before)`,
+		t.ops, kind, store.EncodeTime(before))
+	if err != nil {
+		return fmt.Errorf("statelog: record that %s lost %s rows before %s: %w",
+			t.ops, kind, before.UTC().Format(time.RFC3339Nano), err)
+	}
+	return nil
+}
+
+// lostBefore answers the instant before which the ops table may have lost
+// rows of an operation on a subject of this kind, reporting false when it has
+// lost none — see [Rows.LostBefore] and migrations 0017 and 0037.
+//
+// THE LATER OF TWO WATERMARKS: the table's, which every kind shares, and the
+// kind's own where a sweep of that kind alone has run. An empty kind asks the
+// table's alone.
+func (t tables) lostBefore(ctx context.Context, tx *sql.Tx, kind string) (time.Time, bool, error) {
+	if t.ops == "" {
+		return time.Time{}, false, nil
+	}
+	var table, ofKind sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+		SELECT
+			(SELECT lost_before FROM statelog_ops_lost WHERE ops_table = ?),
+			(SELECT lost_before FROM statelog_ops_lost_kind
+				WHERE ops_table = ? AND subject_kind = ? AND ? <> '')`,
+		t.ops, t.ops, kind, kind).Scan(&table, &ofKind)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("statelog: read how far back %s "+
+			"may have lost rows: %w", t.ops, err)
+	}
+	switch {
+	case !table.Valid && !ofKind.Valid:
+		return time.Time{}, false, nil
+	case !ofKind.Valid || (table.Valid && table.Int64 >= ofKind.Int64):
+		return store.DecodeTime(table.Int64), true, nil
+	}
+	return store.DecodeTime(ofKind.Int64), true, nil
+}
+
+// OpEntry is one row of a domain's operation ledger: an operation this node's
+// applier applied, where its record landed, and the WIRE subject it landed on
+// — the domain's prefix and the object's kind and id, as the anchor is keyed.
+//
+// THE SUBJECT IS WHAT MAKES A ROW AN ANSWER. An operation id is the caller's,
+// and one carried to a second object finds the first object's row under it —
+// so a row answers for a write only on the subject that write is to, and
+// [Publisher.heldHere] refuses the rest.
+type OpEntry struct {
+	Position Position
+	Subject  string
+}
+
+// op answers where an operation was applied on this node, and on what.
+func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (OpEntry, bool, error) {
+	if t.ops == "" {
+		return OpEntry{}, false, nil
 	}
 	var packed int64
+	var subject string
 	err := tx.QueryRowContext(ctx,
-		`SELECT position FROM `+t.ops+` WHERE op_id = ?`, opID).Scan(&packed)
+		`SELECT position, subject FROM `+t.ops+` WHERE op_id = ?`, opID).
+		Scan(&packed, &subject)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Position{}, false, nil
+		return OpEntry{}, false, nil
 	case err != nil:
-		return Position{}, false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
+		return OpEntry{}, false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
 	}
-	return Unpack(t.stream, packed), true, nil
+	return OpEntry{
+		Position: Position{
+			Stream:     t.stream,
+			Generation: uint32(packed / GenerationStride),
+			Seq:        uint64(packed % GenerationStride),
+		},
+		Subject: subject,
+	}, true, nil
+}
+
+// appliedRecord answers whether this node applied the record with operation
+// opID, stored by the broker at storedAt, at position p — the one question a
+// restored reanchor asks of the ledger ([UnheldTail]).
+//
+// ALL THREE MUST AGREE. The operation alone is a caller's intent, which a
+// retry after the restore carries into a second record; the position alone is
+// a sequence, which the restored log reissues to whatever was written there
+// next; the instant is the record's own, and a row that names none (written
+// before the ledger kept it) vouches for nothing.
+func (t tables) appliedRecord(ctx context.Context, tx *sql.Tx, opID string, p Position,
+	storedAt time.Time) (bool, error) {
+
+	if t.ops == "" || opID == "" {
+		return false, nil
+	}
+	var packed, recorded int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT position, stored_at FROM `+t.ops+` WHERE op_id = ?`, opID).
+		Scan(&packed, &recorded)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
+	}
+	named := decodeInstant(recorded)
+	return packed == p.Packed() && !named.IsZero() && sameRecord(named, storedAt), nil
+}
+
+// consumed is what this node's own ledgers say about the record it consumed at
+// one position ([tables.consumedAt]): its broker instant and which evidence
+// named it, or — where the operation ledger names at that position another
+// operation than the log's record carries, and keeps no instant — that
+// operation.
+type consumed struct {
+	storedAt time.Time
+	evidence string
+	otherOp  string
+}
+
+// consumedAt answers, from this node's own ledgers in tx, what it consumed at
+// position p — given that the log's record there carries operation opID (empty
+// where its envelope did not decode) and was stored at held. See
+// [Runner.nameCheckpoint].
+//
+//   - `ledger_instant`: the operation ledger's row at p keeps its record's
+//     instant. That instant is the answer whether or not it is the log's —
+//     another one is exactly the divergence the caller compares for.
+//   - `ledger_operation`: the row at p predates the instant column and names
+//     opID, so the operation and the position agreeing is the evidence, and
+//     the log's instant the answer.
+//   - `retained`: this node kept a record it could not decode at p, with its
+//     instant.
+//   - otherOp: the row at p predates the instant column and names another
+//     operation than opID — the log's record at p is not the one this node
+//     applied there.
+//
+// No row at p is not evidence either way: the record there may have written
+// none (a read barrier, a repeat of an operation applied earlier, a record a
+// gate kept out of the rows), or the sweep may have taken it.
+//
+// BY THE LOG'S OPERATION FIRST, which is the table's primary key and the
+// ordinary answer; BY POSITION only where that misses, which no index serves —
+// a scan of a ledger the sweep bounds to its retention window, asked once per
+// copy of the rows of a checkpoint that names nothing, and never on the apply
+// path.
+func (t tables) consumedAt(ctx context.Context, tx *sql.Tx, p Position, opID string,
+	held time.Time) (consumed, error) {
+
+	if t.ops != "" {
+		named := func(recorded int64, op string) (consumed, bool) {
+			switch {
+			case recorded != 0:
+				return consumed{storedAt: decodeInstant(recorded), evidence: "ledger_instant"}, true
+			case opID == "":
+				// NOTHING TO COMPARE the ledger's operation with.
+				return consumed{}, false
+			case op == opID:
+				return consumed{storedAt: held, evidence: "ledger_operation"}, true
+			}
+			return consumed{otherOp: op}, true
+		}
+		if opID != "" {
+			var packed, recorded int64
+			err := tx.QueryRowContext(ctx,
+				`SELECT position, stored_at FROM `+t.ops+` WHERE op_id = ?`, opID).
+				Scan(&packed, &recorded)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
+				return consumed{}, fmt.Errorf("statelog: read operation %q: %w", opID, err)
+			case packed == p.Packed():
+				if c, ok := named(recorded, opID); ok {
+					return c, nil
+				}
+			}
+		}
+		var op string
+		var recorded int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT op_id, stored_at FROM `+t.ops+` WHERE position = ? LIMIT 1`, p.Packed()).
+			Scan(&op, &recorded)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return consumed{}, fmt.Errorf("statelog: read the operation applied at %s: %w", p, err)
+		default:
+			if c, ok := named(recorded, op); ok {
+				return c, nil
+			}
+		}
+	}
+	if t.deferred != "" {
+		var recorded int64
+		err := tx.QueryRowContext(ctx,
+			`SELECT stored_at FROM `+t.deferred+` WHERE position = ?`, p.Packed()).
+			Scan(&recorded)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return consumed{}, fmt.Errorf("statelog: read the retained record at %s: %w", p, err)
+		case recorded != 0:
+			return consumed{storedAt: store.DecodeTime(recorded), evidence: "retained"}, nil
+		}
+	}
+	return consumed{}, nil
+}
+
+// nameCursor writes storedAt as the record the checkpoint at p names — only
+// while the row stands at p and names none, so a write for a checkpoint that
+// has since moved, or been named by a commit, changes nothing.
+func (t tables) nameCursor(ctx context.Context, tx *sql.Tx, p Position, storedAt time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE statelog_cursor SET stored_at = ?
+		WHERE stream = ? AND generation = ? AND seq = ? AND stored_at = 0`,
+		encodeInstant(storedAt), t.stream, int64(p.Generation), int64(p.Seq))
+	if err != nil {
+		return fmt.Errorf("statelog: name the record at the cursor %s: %w", p, err)
+	}
+	return nil
+}
+
+// retainedRecord answers whether this node consumed and RETAINED the record at
+// position p stored by the broker at storedAt: a record this build could not
+// read is held here byte for byte, and is these rows' history as much as one
+// they applied.
+func (t tables) retainedRecord(ctx context.Context, tx *sql.Tx, p Position,
+	storedAt time.Time) (bool, error) {
+
+	if t.deferred == "" {
+		return false, nil
+	}
+	var recorded int64
+	err := tx.QueryRowContext(ctx,
+		`SELECT stored_at FROM `+t.deferred+` WHERE position = ?`, p.Packed()).
+		Scan(&recorded)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("statelog: read the retained record at %s: %w", p, err)
+	}
+	return sameRecord(store.DecodeTime(recorded), storedAt), nil
 }
 
 // retain stores a record this build cannot decode, byte for byte, with every

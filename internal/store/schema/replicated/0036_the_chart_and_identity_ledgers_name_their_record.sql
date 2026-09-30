@@ -1,0 +1,29 @@
+-- The org chart's and the identity estate's operation ledgers name the record
+-- that applied each operation, as 0021 made the tracker's and the knowledge
+-- base's do.
+--
+-- # Why these two were missed
+--
+-- 0021 says it covers "both domains that keep a ledger, in one file, because
+-- the framework writes the statement for every domain it carries" — and on the
+-- line it was written for that was true. The chart (0023) and the identity
+-- estate (0026) arrived on a line that forked before it, so their ledgers still
+-- have the framework's first four columns, and the framework's write names the
+-- fifth: the first record either log applied would fail on every node.
+--
+-- The shape and the meaning of `stored_at` are 0021's, unchanged: the applying
+-- record's broker storage instant, in micros, with zero meaning a row written
+-- before this file — a record a reanchor weighs as one it cannot vouch for.
+--
+-- # What 0023 and 0026 say that is no longer true
+--
+-- Both call a donor's operation ledger "the sharpest thing a snapshot must
+-- scrub". The framework reversed that for every domain: the ledger TRAVELS in
+-- every snapshot and stays out of the identity claim, because only
+-- `applied_at` differs between nodes, and a node that adopted a donor's rows
+-- without its ledger would decide again an operation the donor had applied —
+-- the double apply the ledger exists to prevent. Applied migrations are
+-- history and are not edited, so the reversal is stated here, where the next
+-- change to these two tables will be read.
+ALTER TABLE chart_ops ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE iam_ops ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;

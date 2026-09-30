@@ -6,10 +6,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"sort"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 const (
@@ -53,7 +54,7 @@ func list(t *testing.T) []pkg {
 		goCmd = "go"
 	}
 	cmd := exec.Command(goCmd, "list", "-json=ImportPath,Imports,TestImports,XTestImports", "./...")
-	// THE MODULE ROOT, two levels up from internal/solo — not one.
+	// THE MODULE ROOT, from sourcetree rather than a counted `..`.
 	//
 	// It was "..", which is internal/, so `go list ./...` enumerated
 	// internal/... alone and this guard never saw cmd/crewlet or static.
@@ -63,7 +64,7 @@ func list(t *testing.T) []pkg {
 	// Makefile and checked by nothing — a hole in exactly the guard whose job
 	// is that there are no holes. The assertion below is what stops it
 	// coming back.
-	cmd.Dir = filepath.Join("..", "..")
+	cmd.Dir = sourcetree.Root(t)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

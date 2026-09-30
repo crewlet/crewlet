@@ -324,8 +324,7 @@ func workSurface(e *engine.Engine) (guardedMounter, error) {
 	}
 	if writer := e.TrackerWriter(); writer != nil {
 		opts.Tracker = func(actor builtin.Actor) workapi.TrackerWriter {
-			return writer.As(actor.Handle, actor.Kind,
-				tracker.Provenance{OperatorID: actor.OperatorID})
+			return personWriter(writer, actor)
 		}
 	}
 	// THE CONVERSION IS THE POINT: a typed nil *pages.Store inside the
@@ -342,6 +341,19 @@ func workSurface(e *engine.Engine) (guardedMounter, error) {
 		return nil, nil
 	}
 	return surface, nil
+}
+
+// personWriter is the node's tracker writer acting as one person-facing
+// actor: the author [builtin.PrincipalActor] made of the request's principal,
+// of its kind, with the credential it acted through.
+//
+// ONE HELPER FOR EVERY SEAM a person's surface writes the tracker through —
+// the nine tool seams below and the work surface's own writer — because
+// turning a tool-layer actor into a writer is a single rule, and ten
+// hand-copied spellings of it are ten chances for one seam to record an
+// identity the others do not.
+func personWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
+	return w.As(actor.Handle, actor.Kind, tracker.Provenance{OperatorID: actor.OperatorID})
 }
 
 // NativeToolDeps are the deps the builtin tools are built from for a surface
@@ -371,8 +383,7 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// an audit trail, and there is deliberately no way to name a
 			// seat to act as.
 			Writer: func(actor builtin.Actor) builtin.WorkWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			// AND THE TWO SEQUENCES, which this surface went
 			// without — so an operator's assistant was refused
@@ -382,12 +393,19 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// estate, which this writer has; nothing else about
 			// them differs from a seat's.
 			Dependencies: func(actor builtin.Actor) builtin.WorkDepender {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			Merges: func(actor builtin.Actor) builtin.WorkMerger {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
+			},
+			// AND THE CROSS-PROJECT MOVE, the third sequence: a subtree
+			// walked record by record onto another project's keys, which
+			// needs the replicated estate for the walk exactly as the
+			// two above do. Without it `move_work_item` is not
+			// registered here at all, and the only way to move a
+			// person's item was to ask a seat to.
+			Moves: func(actor builtin.Actor) builtin.WorkMover {
+				return personWriter(writer, actor)
 			},
 			// AND THE RANKED SEARCH. It reads, so it takes no actor —
 			// the corpus is the same for everybody and there is nothing
@@ -398,22 +416,19 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// view is furniture a person arranges, and no seat is
 			// given the tools that reach it.
 			ViewWriter: func(actor builtin.Actor) builtin.ViewWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			// AND THE CATALOGUE WRITER: the company's own vocabulary is
 			// a person's to set, never a seat's to widen so its own
 			// create succeeds.
 			CatalogueWriter: func(actor builtin.Actor) builtin.CatalogueWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			// AND THE PERSON WRITER. Who may write what is the
 			// tracker's own rule; what this surface supplies is the
 			// identity it is judged against.
 			PersonWriter: func(actor builtin.Actor) builtin.PersonWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			// AND THE INBOX READ. It takes no actor for the reason
 			// Search takes none — it reads, and whose inbox is an
@@ -427,16 +442,14 @@ func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 			// purge the CLI guards with a typed confirmation. No seat
 			// holds either — see internal/agent/builtin/worktrash.go.
 			TrashWriter: func(actor builtin.Actor) builtin.TrashWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			// AND A PROJECT'S OWN SETTINGS. Unlike the five above,
 			// this one is on every surface — declaring a tag is open
 			// to every seat — and what an operator adds here is the
 			// credential the archive facet asks for.
 			ProjectWriter: func(actor builtin.Actor) builtin.ProjectWriter {
-				return writer.As(actor.Handle, actor.Kind,
-					tracker.Provenance{OperatorID: actor.OperatorID})
+				return personWriter(writer, actor)
 			},
 			// WHOSE RECORD A LOGIN NAMES, which every person verb
 			// resolves its name through: a login is never a seat, and

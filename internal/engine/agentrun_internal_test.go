@@ -417,9 +417,8 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	// listener took opens no session.
 	_ = bridge.Handler()
 	e := &Engine{
-		backends:       &Backends{Queue: q},
-		sandboxPending: pending,
-		bridge:         bridge,
+		backends: &Backends{Queue: q},
+		bridge:   bridge,
 	}
 	// The engine's own resumer, as buildSandboxRuntime hands it over: the
 	// coordinator refuses to be built without one.
@@ -429,7 +428,7 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	e.sandboxCoordinator = coordinator
+	e.useSandbox(pending, coordinator)
 	e.epoch.current.Store(c)
 	return e
 }
@@ -466,7 +465,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	if e.bridge.Live() != 0 {
 		t.Errorf("%d bridge sessions live for a run that was refused", e.bridge.Live())
 	}
-	if _, found, getErr := e.sandboxPending.Get(t.Context(), "t1"); getErr != nil || found {
+	if _, found, getErr := e.sandbox.Load().pending.Get(t.Context(), "t1"); getErr != nil || found {
 		t.Errorf("a run row exists for a launch that was refused (found %v, err %v)", found, getErr)
 	}
 }

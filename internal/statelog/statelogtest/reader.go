@@ -49,9 +49,10 @@ func LocalReader(domain statelog.Domain, db DB, at statelog.Position) (*statelog
 // tighter bound is what makes the last hop — the domain's query into
 // [statelog.Query] — observable at all.
 //
-// The node is still CAUGHT UP in every other sense: the floor reads, the
-// position is the one given, and nothing is deferred. The only thing this
-// changes is how far behind the node says it is.
+// The node is still HEALTHY in every other sense: it has drained the log at
+// least once, the floor reads, the position is the one given, and nothing is
+// deferred. The only thing this changes is how far behind the node says it is
+// right now.
 func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 	lag uint64) (*statelog.Reader, error) {
 
@@ -62,7 +63,7 @@ func LocalReaderBehind(domain statelog.Domain, db DB, at statelog.Position,
 		Health: func() statelog.Health {
 			behind, first, floor := lag, uint64(1), uint64(0)
 			return statelog.Health{
-				Position: at, AppliedThrough: at.Seq, CaughtUp: lag == 0,
+				Position: at, AppliedThrough: at.Seq, Drained: true,
 				Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
 				Lag:       &behind,
 				FirstSeq:  &first,
@@ -116,7 +117,7 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 			at := waiter.Committed()
 			behind, first, floor := uint64(0), uint64(1), uint64(0)
 			return statelog.Health{
-				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
+				Position: at, AppliedThrough: at.Seq, Drained: true,
 				Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
 				Lag:       &behind,
 				FirstSeq:  &first,

@@ -13,12 +13,16 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
 // dashboardProtocol is the dashboard's own declaration of the wire, as SOURCE:
 // the dashboard's source is committed, so it is in every checkout, and the
 // built bundle would be a step behind any change a branch makes to it.
-const dashboardProtocol = "../../../dashboard/src/protocol/types.ts"
+func dashboardProtocol(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(clientsource.Tree(t), "protocol", "types.ts")
+}
 
 // clientOnlyCodes are the query error codes the dashboard's socket produces
 // itself, which no engine frame carries: a sent query that went unanswered,
@@ -171,7 +175,8 @@ func engineCodes(t *testing.T) []string {
 // dashboard's protocol declares under name.
 func dashboardUnion(t *testing.T, name string) []string {
 	t.Helper()
-	source, err := os.ReadFile(filepath.FromSlash(dashboardProtocol))
+	protocol := dashboardProtocol(t)
+	source, err := os.ReadFile(protocol)
 	if err != nil {
 		// FAILS rather than skips: the dashboard source is committed, so a
 		// missing file is a moved file, and a skip would certify nothing.
@@ -181,7 +186,7 @@ func dashboardUnion(t *testing.T, name string) []string {
 	head := "export type " + name + " ="
 	start := strings.Index(text, head)
 	if start < 0 {
-		t.Fatalf("%s declares no %s union", dashboardProtocol, name)
+		t.Fatalf("%s declares no %s union", protocol, name)
 	}
 	// The members' doc comments are prose: they quote words ("there is
 	// nothing") and may carry a semicolon of their own. They go BEFORE the
@@ -190,7 +195,7 @@ func dashboardUnion(t *testing.T, name string) []string {
 	body := regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`).ReplaceAllString(text[start+len(head):], "")
 	end := strings.Index(body, ";")
 	if end < 0 {
-		t.Fatalf("the %s union in %s never ends", name, dashboardProtocol)
+		t.Fatalf("the %s union in %s never ends", name, protocol)
 	}
 	body = body[:end]
 	var members []string

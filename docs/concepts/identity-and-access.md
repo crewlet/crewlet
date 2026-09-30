@@ -2091,9 +2091,15 @@ them: a removal below the trim floor has no record left on the log to prove it
 happened, and `iam_removed` is what still says so.
 
 Beside them sit the log's own three machinery tables — the operation ledger,
-the deferred records and their scope index — which are local to each node,
-excluded from the identity claim, and scrubbed out of any snapshot a node
-donates to a joining peer.
+the deferred records and their scope index — all excluded from the identity
+claim. They do not all travel. The deferred records and their scope are this
+node's own verdict about bytes its build could not decode, and are scrubbed
+out of any snapshot a node donates to a joining peer. The operation ledger
+**travels** with the snapshot: its rows are what every node writes from the
+same records, only the instant each node applied them differs, and a joiner
+that arrived without them could not tell a retry of something the donor
+applied from a first attempt — in this estate, a second enrolment, a second
+grant change or a second bump of somebody's revocation epoch.
 
 ### Two counters, and why there are two
 

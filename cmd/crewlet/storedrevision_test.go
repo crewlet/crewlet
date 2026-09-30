@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -54,6 +55,55 @@ func activateStored(t *testing.T, cfg, payload string) string {
 		t.Fatalf("store the revision: %v", err)
 	}
 	return id
+}
+
+// runnableRevisionDoc is a settings document this build runs.
+const runnableRevisionDoc = `{"name":"Nimbus",` +
+	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
+	`"api_keys":["${ANTHROPIC_API_KEY}"]}}}}`
+
+// `crewlet run` BOOTS ON THE COMPANY IT WAS GIVEN: its store's when it was
+// given no file, and the file's when it was — without reading the store.
+//
+// An empty store is the UNCONFIGURED state, a company-less boot rather than a
+// failure: the documented bootstrap is to start a node and push the first
+// revision into it. And a file wins without the store being read, which is
+// what keeps `-import-company` a repair: a node whose stored revision this
+// build refuses to run still starts on the file that replaces it, where
+// reading the store first would refuse the boot the repair needs.
+func TestRunBootsTheEngineOnTheCompanyItWasGiven(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	boot := &config.Bootstrap{}
+
+	opts, err := bootOptions(t.Context(), cfg, boot, nil)
+	if err != nil || opts.Company != nil {
+		t.Fatalf("an empty store booted (%+v, %v), want the unconfigured state: "+
+			"no company and no error", opts.Company, err)
+	}
+	if opts.Bootstrap != boot {
+		t.Error("the engine is not handed the Tier A the run loaded")
+	}
+
+	activateStored(t, cfg, runnableRevisionDoc)
+	if opts, err = bootOptions(t.Context(), cfg, boot, nil); err != nil ||
+		opts.Company == nil || opts.Company.Name != "Nimbus" {
+		t.Fatalf("the options from the store = (%+v, %v), want its company",
+			opts.Company, err)
+	}
+
+	id := activateStored(t, cfg, storedRevisionDoc)
+	if _, err = bootOptions(t.Context(), cfg, boot, nil); err == nil ||
+		!strings.Contains(err.Error(), id) {
+		t.Errorf("a store holding a revision this build cannot run booted "+
+			"(%v), want a refusal naming %s", err, id)
+	}
+	file := &config.Company{Name: "From a file"}
+	if opts, err = bootOptions(t.Context(), cfg, boot, file); err != nil || opts.Company != file {
+		t.Errorf("a file's company boots as (%v, %v) over a stored revision this "+
+			"build cannot run, want the file's — -import-company is how that "+
+			"revision is replaced", opts.Company, err)
+	}
 }
 
 // SHOW, EXPORT AND DIFF READ A REVISION WITHOUT RUNNING IT.

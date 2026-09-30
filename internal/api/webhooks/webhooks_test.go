@@ -47,7 +47,11 @@ import (
 //
 // TRUNCATED TO THE HOUR so a rendered timestamp is stable within one run, and
 // an hour in the PAST rather than at `now` so no assertion here depends on a
-// clock that moved between two statements of one test.
+// clock that moved between two statements of one test. An hour boundary is
+// also a whole Unix second, which is what the Standard Webhooks timestamp
+// travels as: a pin with a fraction on it makes the signed instant and
+// `pinned.Unix()` disagree by up to a second, which is exactly the quantity the
+// replay-window cases measure.
 var pinned = time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 
 // recorder is a queue.Publisher that keeps what it was given, and can be made

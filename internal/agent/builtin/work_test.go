@@ -46,6 +46,12 @@ type fakeTracker struct {
 
 	created []tracker.Task
 	merged  []mergeCall
+	moved   []moveCall
+
+	// createAnswer overrides what CreateTask answers, for the cases about
+	// what the TOOL makes of an outcome rather than about the task it
+	// composed.
+	createAnswer *tracker.WriteResult
 
 	// searched is every text the ranked search was asked for, and ranked
 	// what it answers with.
@@ -71,16 +77,29 @@ type fakeTracker struct {
 
 	// depended is every dependency change the tool composed, and
 	// dependErr what the sequence answers.
-	depended  []tracker.DependencyChange
-	dependErr error
+	depended     []tracker.DependencyChange
+	dependErr    error
+	dependAnswer *tracker.DependencyResult
 
 	projectEdits     []tracker.ProjectEdit
 	projectAuthority []tracker.ProjectAuthority
-	tagEdits         []tracker.TagEdit
-	tagAuthority     []tracker.TagAuthority
-	tagWarnings      []string
-	ensured          [][]string
-	ensuredIn        []string
+
+	// declaredTypes and declaredFields are the catalogue as the WRITE
+	// tools composed it, which is the half of those verbs that lives in
+	// this package: the tracker's own suite certifies what it does with a
+	// declaration, and nothing else can say what a model's arguments
+	// BECAME.
+	declaredTypes  [][]tracker.TaskType
+	declaredFields [][]tracker.FieldDef
+	tagEdits       []tracker.TagEdit
+	tagAuthority   []tracker.TagAuthority
+	tagWarnings    []string
+	ensured        [][]string
+	ensuredIn      []string
+	// ensureErr is what the INLINE declaration alone answers, so a case can
+	// stop a create or an update at its labels while every write after it
+	// would succeed — and so catch a tool that carried on to one.
+	ensureErr error
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
@@ -95,6 +114,17 @@ type fakeTracker struct {
 	// viewQuery is the last strip the view listing asked for, so a case
 	// can assert WHOSE strip a caller was shown.
 	viewQuery tracker.ViewQuery
+
+	// viewer is who the last list was expanded FOR, which is the half of a
+	// personal filter — `preset=my_queue`, `assignee=me` — that decides
+	// whose queue a caller is answered about.
+	viewer tracker.Viewer
+
+	// personQuery and inboxQuery are the last personal reads this fake was
+	// asked, so a case can assert WHOSE record a tool resolved the question
+	// to.
+	personQuery tracker.PersonQuery
+	inboxQuery  tracker.InboxQuery
 
 	readErr  error
 	writeErr error
@@ -167,7 +197,9 @@ func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.Vie
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+
+	f.viewer = viewer
 
 	// THE KEYS THE TOOL COMPOSED, kept as strings: what a case here is
 	// about is the TRANSLATION from a model's arguments to the grammar's
@@ -186,7 +218,10 @@ func (f *fakeTracker) Catalogue(context.Context, tracker.CatalogueQuery) (tracke
 
 // Person answers an empty record under the handle it was ASKED for, so a case
 // can assert whose record a name resolved to rather than only that it read one.
-func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery, _ time.Time) (tracker.PersonState, error) {
+func (f *fakeTracker) Person(_ context.Context, q tracker.PersonQuery,
+	_ time.Time) (tracker.PersonState, error) {
+
+	f.personQuery = q
 	return tracker.PersonState{Handle: q.Handle}, nil
 }
 
@@ -311,6 +346,35 @@ func (f *fakeTracker) MergeDuplicates(_ context.Context, _ string,
 	}}, nil
 }
 
+// moves is its sixth, for the cross-project move.
+func (f *fakeTracker) moves(actor builtin.Actor) builtin.WorkMover {
+	f.actors = append(f.actors, actor)
+	return f
+}
+
+// moveCall is one move as the tool composed it.
+type moveCall struct {
+	task, target string
+	notify       *tracker.Notify
+}
+
+// MoveTaskToProject records the move — the sequence itself is certified
+// against a real store in the tracker's own suite.
+func (f *fakeTracker) MoveTaskToProject(_ context.Context, opID, taskID, target string,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
+
+	f.moved = append(f.moved, moveCall{task: taskID, target: target, notify: notify})
+	f.opIDs = append(f.opIDs, opID)
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
+		Version:  71,
+	}}, nil
+}
+
 func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Task,
 	notify *tracker.Notify) (tracker.WriteResult, error) {
 
@@ -320,6 +384,9 @@ func (f *fakeTracker) CreateTask(_ context.Context, opID string, task tracker.Ta
 	f.created = append(f.created, task)
 	f.notified = append(f.notified, notify)
 	f.opIDs = append(f.opIDs, opID)
+	if f.createAnswer != nil {
+		return *f.createAnswer, nil
+	}
 	return tracker.WriteResult{
 		Key: "ENG-9", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 11},
@@ -382,11 +449,47 @@ func (f *fakeTracker) WriteTags(_ context.Context, opID, project string,
 	}, nil
 }
 
+// The CATALOGUE write side, which is the OPERATOR's alone. The declaration a
+// tool composed is what a case here asserts; whether the tracker accepts it is
+// the tracker's own suite (internal/tracker/config_test.go), and a second copy
+// of that gate in this fake would certify nothing but itself.
+func (f *fakeTracker) WriteTypes(_ context.Context, opID string,
+	types []tracker.TaskType) (tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.declaredTypes = append(f.declaredTypes, types)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 5,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 15},
+	}, nil
+}
+
+func (f *fakeTracker) WriteFields(_ context.Context, opID string,
+	fields []tracker.FieldDef) (tracker.WriteResult, error) {
+
+	if f.writeErr != nil {
+		return tracker.WriteResult{}, f.writeErr
+	}
+	f.declaredFields = append(f.declaredFields, fields)
+	f.opIDs = append(f.opIDs, opID)
+	return tracker.WriteResult{
+		Outcome: statelog.OutcomeApplied, Version: 6,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 16},
+	}, nil
+}
+
 func (f *fakeTracker) EnsureTags(_ context.Context, opID, project string,
 	tags []string) ([]string, []string, error) {
 
 	if f.writeErr != nil {
 		return nil, nil, f.writeErr
+	}
+	if f.ensureErr != nil {
+		f.opIDs = append(f.opIDs, opID)
+		return nil, nil, f.ensureErr
 	}
 	f.ensured = append(f.ensured, tags)
 	f.ensuredIn = append(f.ensuredIn, project)
@@ -398,7 +501,7 @@ type fakeMentions []string
 
 func (f fakeMentions) Mentions(string) []string { return f }
 
-// workRegistry registers the five tools over a fake tracker.
+// workRegistry registers a seat's tracker tools over a fake tracker.
 func workRegistry(t *testing.T, deps builtin.WorkDeps) *tools.Registry {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -461,7 +564,7 @@ func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves})
 
 	deliveries := reg.Deliveries()
 	for _, name := range builtin.WorkWrites() {
@@ -576,7 +679,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 	})
 	for _, name := range builtin.WorkTools() {
@@ -767,6 +870,125 @@ func TestAFailedWriteSaysSo(t *testing.T) {
 	if !strings.Contains(got.Output, "Do not reassign it again") {
 		t.Errorf("the budget refusal invites another attempt: %q", got.Output)
 	}
+
+	// AND A WALK THAT STOPPED AT AN UNKNOWN STEP IS NEITHER: some of it may
+	// have landed, so "NOT made" would be false, and the same call again is
+	// what finishes it.
+	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+	got = callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
+		!strings.Contains(got.Output, "exactly the same arguments") {
+		t.Errorf("a walk that stopped at an unresolved step gave %q", got.Output)
+	}
+}
+
+// A CREATE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS FILED, NOR AS NOT
+// MADE, and what it tells the caller to do is what a repeat would actually be.
+//
+// The answer used to be the create's receipt with `outcome: unknown` in it: a
+// key the seat read as its item's — a gap in the numbering if the task step
+// never landed — or, where the ledger could not vouch for the operation, the
+// default failure's "The change was NOT made" about an item the first run
+// filed, after which the seat reworded the call and filed a duplicate.
+func TestACreateWhoseOutcomeIsUnknownIsNeverReportedAsFiled(t *testing.T) {
+	t.Parallel()
+	lostAck := tracker.WriteResult{
+		Key:    "ENG-9",
+		Result: statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op.task"},
+	}
+	unvouched := tracker.WriteResult{Result: statelog.Result{
+		Outcome: statelog.OutcomeUnknown, OpID: "op.counter", Unvouched: true,
+	}}
+	cases := []struct {
+		name     string
+		operator bool
+		answer   tracker.WriteResult
+		want     []string
+		refuse   []string
+	}{
+		{
+			name: "a seat under a lost acknowledgement repeats the same call", answer: lostAck,
+			want: []string{"exactly the same arguments", "Do not reword it",
+				"If this attempt filed it, it is ENG-9"},
+			refuse: []string{"cannot tell", "list_work_items"},
+		},
+		{
+			name: "a seat the ledger cannot vouch for looks before it refiles", answer: unvouched,
+			want: []string{"this node cannot tell", "list_work_items",
+				"Never make it again under different arguments"},
+			refuse: []string{"If this attempt filed it", "acknowledgement was lost"},
+		},
+		{
+			name: "an operator's repeat is a new operation", operator: true, answer: lostAck,
+			want:   []string{"list_work_items", "files a second item"},
+			refuse: []string{"exactly the same arguments", "cannot tell"},
+		},
+		{
+			name: "an operator the ledger cannot vouch for looks first", operator: true,
+			answer: unvouched,
+			want:   []string{"this node cannot tell", "list_work_items"},
+			refuse: []string{"exactly the same arguments"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			trk.createAnswer = &tc.answer
+			deps := builtin.WorkDeps{Reader: trk, Writer: trk.as}
+			call := callWork
+			if tc.operator {
+				deps.Actor, call = operatorActor, callNoTurn
+			}
+			got := call(t, workRegistry(t, deps), builtin.CreateWorkItemTool,
+				map[string]any{"title": "the follow-up", "project": "ENG"})
+			if !got.Failed {
+				t.Fatalf("an unknown create answered as a receipt: %s", got.Output)
+			}
+			for _, bad := range []string{"NOT made", `"key"`} {
+				if strings.Contains(got.Output, bad) {
+					t.Errorf("the answer carries %q, which is a claim about an "+
+						"item nobody can say was filed: %s", bad, got.Output)
+				}
+			}
+			if !strings.Contains(got.Output, trk.opIDs[0]) {
+				t.Errorf("the answer does not name operation %s: %s",
+					trk.opIDs[0], got.Output)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got.Output, want) {
+					t.Errorf("the answer lacks %q: %s", want, got.Output)
+				}
+			}
+			for _, bad := range tc.refuse {
+				if strings.Contains(got.Output, bad) {
+					t.Errorf("the answer says %q, which is not what a repeat "+
+						"here would be: %s", bad, got.Output)
+				}
+			}
+		})
+	}
+}
+
+// A WALK THIS NODE CANNOT VOUCH FOR IS NOT ANSWERED "CALL AGAIN". The same
+// call re-runs under the same operation, and the step it stopped at needs the
+// ledger row the loss took — so on this node it stops there every time, and a
+// model told to repeat it loops until its rounds run out.
+func TestAWalkThisNodeCannotVouchForIsNotAnsweredWithARetry(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "status": "done",
+	})
+	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
+		strings.Contains(got.Output, "exactly the same arguments") ||
+		!strings.Contains(got.Output, "stops at the same step") {
+		t.Errorf("a walk this node cannot vouch for gave %q", got.Output)
+	}
 }
 
 // A REFERENCE IS RESOLVED TO AN ID BEFORE IT IS STORED. A model types the key
@@ -936,7 +1158,7 @@ func TestAStaleVersionSaysToReadItAgain(t *testing.T) {
 func TestTheTrackerWritesAreClassifiedAsSharedWrites(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves})
 
 	for _, name := range builtin.WorkWrites() {
 		entry, ok := reg.Lookup(name)
@@ -1043,7 +1265,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	// is missing because the registry does not offer it rather than
 	// because its dependency was nil.
 	reg := workRegistry(t, builtin.WorkDeps{
-		Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+		Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 		ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 		CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 		PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
@@ -1062,7 +1284,7 @@ func TestNoSeatHoldsAnOperatorOnlyTool(t *testing.T) {
 	operator := map[string]bool{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
-			Reader: trk, Writer: trk.as, Merges: trk.merges, Search: trk,
+			Reader: trk, Writer: trk.as, Merges: trk.merges, Moves: trk.moves, Search: trk,
 			ViewWriter:      func(builtin.Actor) builtin.ViewWriter { return nil },
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return nil },
 			PersonWriter:    func(builtin.Actor) builtin.PersonWriter { return nil },
@@ -1123,6 +1345,33 @@ func TestAGroupedAnswerIsNotReportedAsEmpty(t *testing.T) {
 	}
 }
 
+// AND A BOARD OF EMPTY COLUMNS IS EMPTY.
+//
+// A closed axis carries every column the query admits whether or not anything
+// is in it, so "the answer has groups" stopped meaning "the answer has work":
+// a seat handed three columns at zero and told nothing would read them as a
+// board and go looking for the rows.
+func TestABoardWhoseEveryColumnIsEmptyIsReportedEmpty(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.answer = &tracker.Answer{
+		Groups: []tracker.Group{
+			{Key: "todo", Rows: []tracker.TaskRow{}},
+			{Key: "in_progress", Rows: []tracker.TaskRow{}},
+			{Key: "in_review", Rows: []tracker.TaskRow{}},
+		},
+		Complete: true,
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"project": "eng",
+	})
+	if !strings.Contains(got.Output, "No work items match") {
+		t.Fatalf("three columns at zero were reported as a board: %s", got.Output)
+	}
+}
+
 // EVERY OPERATOR TOOL ANSWERS WITHOUT A TURN.
 //
 // The operator surface calls through Callable.Call, which passes a nil turn,
@@ -1147,7 +1396,12 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 		},
 	}
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Work: work}) {
+	// AN AUTHORIZER THAT ADMITS, because a nil one refuses every call before
+	// the tool runs — and a refusal is not the turn prelude this is about, so
+	// without one the case passed having reached nothing.
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: work, Authorize: builtin.Decide(chartLeads),
+	}) {
 		// THE READS ONLY. A write called with no arguments refuses on
 		// its own missing arguments, which is correct and says nothing
 		// about the turn; what this case is about is the prelude that
@@ -1160,6 +1414,11 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tool.Name(), err)
 		}
+		if errors.Is(result.Cause, builtin.ErrNoAuthorizer) ||
+			errors.Is(result.Cause, builtin.ErrRefused) {
+			t.Fatalf("%s was refused before it ran (%s), so this case reached "+
+				"nothing", tool.Name(), result.Output)
+		}
 		if strings.Contains(result.Output, "can only be called during a turn") {
 			t.Errorf("%s refuses outside a turn even though the surface "+
 				"supplies its own actor — the identity check must be "+
@@ -1168,16 +1427,12 @@ func TestEveryOperatorToolAnswersOutsideATurn(t *testing.T) {
 	}
 }
 
-// Depend records the dependency change the tool composed.
-//
-// THE COMPOSITION IS THE HALF THAT CAN BE WRONG HERE: the tool turns keys into
-// ids and a `{set}` gesture into the adds and removes a two-ended write needs,
-// and the sequence itself is certified against a real store elsewhere.
 // Inbox answers one notice, which is all the placement test needs: what it is
 // about is whether the surface SERVES the verb, never what the verb returns.
 func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	_ time.Time) (tracker.InboxAnswer, error) {
 
+	f.inboxQuery = q
 	return tracker.InboxAnswer{
 		Handle:         q.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,
@@ -1189,12 +1444,20 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	}, nil
 }
 
+// Depend records the dependency change the tool composed.
+//
+// THE COMPOSITION IS THE HALF THAT CAN BE WRONG HERE: the tool turns keys into
+// ids and a `{set}` gesture into the adds and removes a two-ended write needs,
+// and the sequence itself is certified against a real store elsewhere.
 func (f *fakeTracker) Depend(_ context.Context, _ string,
 	change tracker.DependencyChange, _ tracker.Leads) (tracker.DependencyResult, error) {
 
 	f.depended = append(f.depended, change)
 	if f.dependErr != nil {
 		return tracker.DependencyResult{}, f.dependErr
+	}
+	if f.dependAnswer != nil {
+		return *f.dependAnswer, nil
 	}
 	return tracker.DependencyResult{WriteResult: tracker.WriteResult{
 		Result: statelog.Result{
@@ -1875,6 +2138,51 @@ func TestACreateRetriedUnderOneSeedFilesOnce(t *testing.T) {
 	}
 	if len(plain.created) != 2 || plain.created[0].ID == plain.created[1].ID {
 		t.Errorf("two unseeded creates were given one id: %+v", plain.created)
+	}
+}
+
+// A CREATE THAT NAMES NO PROJECT IS ONE OPERATION WHEREVER ITS DEFAULT POINTS.
+//
+// The default is read from the chart when the call runs, so it can move
+// between a turn and its re-run — the seat moved to another team, or the
+// parent a subtask defaults to moved to another project. The operation was
+// named for the project the default resolved to, so the re-run derived a
+// second operation and filed a second item for one request. The call is what
+// the operation is; the project it NAMES stays part of it, as the control
+// shows.
+func TestACreateRerunAfterItsDefaultMovedFilesOnce(t *testing.T) {
+	t.Parallel()
+	file := func(home string, args map[string]any) (string, string) {
+		t.Helper()
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{
+			Reader: trk, Writer: trk.as,
+			DefaultProject: func(string) string { return home },
+		})
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); got.Failed {
+			t.Fatalf("create in %s: %s", home, got.Output)
+		}
+		if len(trk.created) != 1 || trk.created[0].Project != home &&
+			args["project"] == nil {
+
+			t.Fatalf("the create in %s filed %+v", home, trk.created)
+		}
+		return trk.created[0].ID, trk.opIDs[0]
+	}
+	unnamed := map[string]any{"title": "rotate the signing key"}
+	firstID, firstOp := file("ENG", unnamed)
+	rerunID, rerunOp := file("OPS", unnamed)
+	if firstID != rerunID || firstOp != rerunOp {
+		t.Errorf("a re-run whose default moved was another operation: %s/%s "+
+			"then %s/%s — a second item for one request",
+			firstID, firstOp, rerunID, rerunOp)
+	}
+
+	// THE CONTROL: a project the call NAMES is part of the call.
+	engID, _ := file("ENG", map[string]any{"title": "rotate the signing key", "project": "ENG"})
+	opsID, _ := file("ENG", map[string]any{"title": "rotate the signing key", "project": "OPS"})
+	if engID == opsID {
+		t.Error("two creates naming two projects were given one id")
 	}
 }
 

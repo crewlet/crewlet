@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // credentialView is one credential as the directory renders it.
@@ -203,6 +204,11 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	principal, _ := iam.From(r.Context())
 
 	id := uuid.Must(uuid.NewV7()).String()
+	// A STEP OF THE CREDENTIAL IT MINTS, so it carries the instant the
+	// credential's own uuid7 was minted at — now — in the grammar the ledger
+	// vouches for a retry by. It was `credentials:mint:<id>`, which carries
+	// no instant and read as minted at the epoch.
+	opID := statelog.StepOpID(id, "mint")
 	secret, err := credential.NewTokenSecret()
 	if err != nil {
 		log.ErrorContext(r.Context(), "api_iam_token_mint_failed", "error", err)
@@ -228,7 +234,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		// token that verifies against nothing. A mint that answered
 		// `unknown` is retried as a new mint; the one that may have
 		// landed is a token nobody holds, and it expires.
-		OpID:   "credentials:mint:" + id,
+		OpID:   opID,
 		Reason: reason,
 	})
 	if err != nil || !landed(minted.Result) {
@@ -242,7 +248,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		// anything refuses. The secret is dropped with this answer; the
 		// record that may have landed is a token nobody holds, and it
 		// expires.
-		s.answerWrite(w, r, "credentials:mint:"+id, minted.Result, err, nil)
+		s.answerWrite(w, r, opID, minted.Result, err, nil)
 		return
 	}
 	// THE VALUE CARRIES WHERE THE MINT LANDED, which is only known now: a
@@ -270,7 +276,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	// package's whole shape is against. A PENDING mint is durable and
 	// handed out with 202: a node below its position answers "not yet"
 	// for the value rather than refusing it.
-	s.answer(w, r, "credentials:mint:"+id, minted.Result, nil, http.StatusCreated,
+	s.answer(w, r, opID, minted.Result, nil, http.StatusCreated,
 		map[string]any{
 			"id": id, "person": owner, "token": token.Value(),
 			"grants": minted.Grants, "colleague": minted.Colleague,
@@ -352,7 +358,11 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	found = false
 	var method iamdomain.CredentialMethod
 	const reason = "a credential was revoked"
-	opID := s.opIDFor(r, "credentials:revoke:"+id)
+	op, ok := s.opIDFor(w, r, "credentials-revoke", nil)
+	if !ok {
+		return
+	}
+	opID := op.key
 	revoked, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
@@ -374,7 +384,7 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 			}
 			return out, nil
 		},
-		OpID:   opID,
+		OpID:   op.id,
 		Reason: reason,
 	})
 	if err != nil || !landed(revoked) {
@@ -382,6 +392,19 @@ func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 		// "nothing changed" nor the event: each is a verdict the decide
 		// reached in a run whose record may not be on the log.
 		s.answerWrite(w, r, opID, revoked, err, map[string]any{"id": id})
+		return
+	}
+	if revoked.Collapsed {
+		// A RETRY OF A REVOCATION THAT HAD ALREADY LANDED, answered from
+		// the ledger before this call's decide ran — so `found` above is
+		// nobody's verdict, and "nothing changed" would report a
+		// revocation that landed as one that did not. The call that made
+		// it is the one that announced it, where it saw its own outcome.
+		s.answerWrite(w, r, opID, revoked, nil, map[string]any{
+			"id": id,
+			"detail": "this revocation had already landed under this " +
+				"operation; read the person's credentials to see what it left",
+		})
 		return
 	}
 	if !found {

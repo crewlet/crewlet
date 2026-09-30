@@ -54,9 +54,14 @@ type PageChange struct {
 	Actor     string     `json:"actor,omitempty"`
 	ActorKind string     `json:"actor_kind,omitempty"`
 
-	// OperatorID names the person when the actor was an operator's own
-	// assistant rather than a seat, which is the one case where the actor
-	// alone does not say who.
+	// OperatorID is the CREDENTIAL the change was made through, recorded
+	// beside the actor rather than instead of it — a machine token
+	// (`pat:<id>`), a browser session, or a credential's own login, as
+	// [iam.ActorFor] records it — so "what did this credential do" is a
+	// question the feed answers without reasoning about kinds. The actor
+	// says WHO: for a person bound to a seat that is the seat, and the
+	// credential is the one thing that tells their own write from their
+	// assistant's.
 	OperatorID string `json:"operator_id,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`

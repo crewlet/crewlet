@@ -14,7 +14,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Callout, Tag, cx } from "@crewlethq/ui";
+import { Avatar, Callout, Card, Tag, cx } from "@crewlethq/ui";
 import {
   ArrowUpwardGlyph,
   CalendarTodayGlyph,
@@ -30,23 +30,57 @@ import { Mark } from "~/ui/glyph.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import { fmtDateCompact, fmtDateTime, relTime } from "~/lib/format.ts";
+// TYPE ONLY: these pieces render with no provider above them, so the chart
+// reaches them as resolvers on the chrome and never as a module they import.
+import type { SeatKind } from "~/lib/seats.ts";
 import { fmtMinutes, statusLabel, STATUS_TONE, typeIcon, typeName } from "~/lib/work.ts";
 import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
 
 export interface RowChrome {
   /** What a handle is called. The chart's, so a row shows a person's name. */
   seatName?: (handle: string) => string;
+  /**
+   * Which KIND of seat a handle is — the chart's again, and the other half of
+   * drawing a person.
+   *
+   * An identity badge has exactly one variant and it is structural: the dashed
+   * ring a HUMAN seat wears, which says the engine does not run it. Without
+   * this the compact cells could not draw it at all, so one person was a
+   * dashed disc in a column that happened to be handed a kind and a solid one
+   * in the column beside it — on the same grid, over the same row.
+   *
+   * `undefined` is a seat the chart does not hold, and it draws the neutral
+   * disc rather than claiming the seat is an agent. Both resolvers come from
+   * [seatResolvers], so a builder cannot thread the name and drop this.
+   */
+  seatKind?: (handle: string) => SeatKind | undefined;
   types?: WorkTypeDef[];
   statuses?: WorkStatusDef[];
 }
 
-/** The task type as its mark, with the company's own word for it on hover. */
-export function TypeIcon({ type, types }: { type?: string; types?: WorkTypeDef[] }) {
+/**
+ * The task type as its mark, with the company's own word for it on hover.
+ *
+ * `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT — the rule [Assignee]
+ * keeps for the avatar, and for the same reason: the mark always read its
+ * name aloud, so a properties row that printed "Task" after it announced
+ * "Task Task". A card, a row and a column cell draw the mark alone and keep
+ * the hidden name; the two places that print the word say so.
+ */
+export function TypeIcon({
+  type,
+  types,
+  decorative,
+}: {
+  type?: string;
+  types?: WorkTypeDef[];
+  decorative?: boolean;
+}) {
   const name = typeName(type, types) || "Untyped";
   return (
-    <span className="work-type" title={name}>
+    <span className="work-type" title={name} aria-hidden={decorative || undefined}>
       <Mark name={typeIcon(type)} size="sm" />
-      <span className="sr-only">{name}</span>
+      {!decorative && <span className="sr-only">{name}</span>}
     </span>
   );
 }
@@ -110,11 +144,13 @@ export function StatusBadge({ status, defs }: { status: string; defs?: WorkStatu
 export function Assignee({
   handle,
   seatName,
+  seatKind,
   size = "sm",
   name: showName,
 }: {
   handle?: string;
   seatName?: (handle: string) => string;
+  seatKind?: (handle: string) => SeatKind | undefined;
   size?: "sm" | "md";
   name?: boolean;
 }) {
@@ -133,8 +169,19 @@ export function Assignee({
       {/* `decorative` ONLY WHERE THE NAME IS PRINTED BESIDE IT. Ours was
           `aria-hidden` either way and leant on a `title` on the wrapper, which
           a screen reader is free to ignore — so the four columns that draw the
-          badge alone announced the assignee as nothing at all. */}
-      <Avatar name={label} size={size} decorative={showName} />
+          badge alone announced the assignee as nothing at all.
+
+          AND THE DASHED RING IS THE ONE VARIANT A BADGE HAS: `SeatCell` drew
+          it from the kind it was handed and this cell could not be handed one,
+          so the same human seat was drawn two ways on the two column sets of
+          ONE grid. A kind the chart does not hold draws the neutral disc,
+          which is the honest badge for a seat nobody can classify. */}
+      <Avatar
+        name={label}
+        size={size}
+        variant={seatKind?.(handle) === "human" ? "dashed" : "solid"}
+        decorative={showName}
+      />
       {showName && <span className="truncate">{label}</span>}
     </span>
   );
@@ -213,6 +260,29 @@ export function AsksTag({ count }: { count?: number }) {
 }
 
 /**
+ * Whether a card's foot has a single mark to draw.
+ *
+ * EVERY MARK DECIDES ITS OWN ABSENCE by rendering nothing — every mark but
+ * one. [Assignee] draws a dashed "nobody" square instead, deliberately, and
+ * that square's job is to hold a COLUMN OPEN on `.work-row`, which is a grid:
+ * a cell that disappeared there would take its track with it and pull every
+ * later column one place left. A card is inline flow and has no track to hold,
+ * so on a task nobody has touched — no priority, no due date, no estimate, not
+ * blocked, unassigned — the foot came out as that ghost and nothing else,
+ * floated on its own under the title, reading as a control somebody could
+ * press rather than as the absence of five facts.
+ *
+ * So the foot is drawn only when something goes in it, and the ghost stays on
+ * rows. The predicate restates each mark's own emptiness rule from the same
+ * fields, which is the one copy of it and the price of asking the question
+ * BEFORE rendering: a container cannot ask a child that drew nothing whether
+ * it did. A mark that gains a field is a mark that adds it here.
+ */
+function hasFootMarks(row: WorkSummary): boolean {
+  return Boolean(row.blocked || row.due || row.points || row.estimate_min || row.assignee);
+}
+
+/**
  * One task as a board card.
  *
  * The three rows are fixed — identity, title, facts — so a column of cards
@@ -248,17 +318,19 @@ export function BoardCard({
         <PriorityMark priority={row.priority} />
       </div>
       <div className="work-card-title clamp">{row.title}</div>
-      <div className="work-card-foot">
-        {row.blocked && (
-          <Tag variant="danger" appearance="outline">
-            Blocked
-          </Tag>
-        )}
-        <DueMark due={row.due} overdue={row.overdue} now={now} />
-        <SizeMark points={row.points} minutes={row.estimate_min} />
-        <span className="spacer" />
-        <Assignee handle={row.assignee} seatName={chrome.seatName} />
-      </div>
+      {hasFootMarks(row) && (
+        <div className="work-card-foot">
+          {row.blocked && (
+            <Tag variant="danger" appearance="outline">
+              Blocked
+            </Tag>
+          )}
+          <DueMark due={row.due} overdue={row.overdue} now={now} />
+          <SizeMark points={row.points} minutes={row.estimate_min} />
+          <span className="spacer" />
+          <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+        </div>
+      )}
     </a>
   );
 }
@@ -278,6 +350,8 @@ export function WorkRow({
   selected,
   now,
   chrome = {},
+  keyOf,
+  ordinal,
 }: {
   row: WorkSummary;
   href: string;
@@ -285,6 +359,18 @@ export function WorkRow({
   selected?: boolean;
   now: number;
   chrome?: RowChrome;
+  /** A blocker's KEY from its id, where this list holds its row — see
+   *  [blockedBy]. */
+  keyOf?: (id: string) => string | undefined;
+  /**
+   * This row's PLACE in a list whose order is its content — see [RowList].
+   *
+   * A COLUMN RATHER THAN A PREFIX on the title: the rank is data about the
+   * row, and written into the title it would be sorted with it, copied with
+   * it and read aloud as part of it. The list declares the track, so it is
+   * omitted where the list has none.
+   */
+  ordinal?: number;
 }) {
   return (
     <a
@@ -292,35 +378,44 @@ export function WorkRow({
       href={href}
       onClick={rowPeekHandler(onOpen)}
     >
-      <TypeIcon type={row.type} types={chrome.types} />
-      <span className="work-key mono">{row.key}</span>
-      <span className="work-row-title truncate">
-        {row.title}
-        {row.blocked && (
-          <Tag variant="danger" appearance="outline">
-            Blocked
-          </Tag>
-        )}
+      {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below each
+          render nothing for an absent value — which is right on a CARD, where
+          they sit in inline flow — but this row is a grid, and a child that
+          disappears takes its track with it and pulls every column after it one
+          place left. So the row owns the cells and the marks only decide what
+          goes in them: an unestimated, undated, unassigned task still lines its
+          status up with the task above it. */}
+      {/* THE PLACE SOMEBODY PUT THIS ROW IN, where the list has an order that
+          IS its content. Absent everywhere else, and the track with it — a
+          subgrid row's cells have to match the tracks the list declared. */}
+      {ordinal !== undefined && <span className="work-cell work-cell-ord">{ordinal}</span>}
+      <span className="work-cell work-cell-prio">
+        <PriorityMark priority={row.priority} />
       </span>
-      {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below
-          each render nothing for an absent value — which is right on a
-          CARD, where they sit in inline flow — but this row is a grid,
-          and a child that disappears takes its track with it and pulls
-          every column after it one place left. So the row owns the cells
-          and the marks only decide what goes in them: an unestimated,
-          undated, unassigned task still lines its status up with the
-          task above it. */}
+      <span className="work-key mono">{row.key}</span>
       <span className="work-cell work-cell-status">
         <StatusBadge status={row.status} defs={chrome.statuses} />
       </span>
-      <span className="work-cell work-cell-prio">
-        <PriorityMark priority={row.priority} />
+      <span className="work-row-title truncate">
+        {row.title}
+        {/* WHICH TASK HOLDS THIS ONE UP, not merely that something does. The
+            row carries the edges, so the badge names the blocker a reader can
+            go to — and it names the first of them rather than all, because a
+            row is one line and a task waiting on four is still one fact. */}
+        {row.blocked && (
+          <Tag variant="danger" appearance="outline">
+            {blockedBy(row, keyOf)}
+          </Tag>
+        )}
       </span>
       <span className="work-cell work-cell-due">
         <DueMark due={row.due} overdue={row.overdue} now={now} />
       </span>
+      <span className="work-cell work-cell-type">
+        <TypeIcon type={row.type} types={chrome.types} />
+      </span>
       <span className="work-cell work-cell-who">
-        <Assignee handle={row.assignee} seatName={chrome.seatName} />
+        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
       </span>
       <span className="work-row-when" title={fmtDateTime(row.updated)}>
         {relTime(row.updated, now)}
@@ -329,7 +424,47 @@ export function WorkRow({
   );
 }
 
-/** A stack of rows under a heading, absent when it holds nothing. */
+/**
+ * What a blocked task is waiting on, in the room one line has.
+ *
+ * A bare "Blocked" made every blocked task look alike on a list whose whole
+ * purpose is telling them apart, and the row already carries the edges
+ * (`waiting_on`) — so this names how many hold it up, and WHICH where it can.
+ *
+ * AN EDGE CARRIES AN ID AND NOT A KEY, deliberately: it is drawn between two
+ * rows on one page and `WorkSummary.id` is what they are matched on. So a
+ * blocker the caller's own filter excluded is an id this list holds no row for,
+ * and the honest rendering is the count rather than an invented key. That is
+ * also why the resolver is the LIST's — only a list knows which rows it has.
+ *
+ * EXPORTED, because there are two lists now: this row, which every embedded
+ * task list draws, and the work screen's grid, whose compact column set draws
+ * the same badge in its title cell. One sentence rather than two, for the
+ * reason every other mark in this file is shared — the second copy is the one
+ * that stops saying `Blocked · ENG-4 +2` the day somebody changes this one.
+ */
+export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | undefined): string {
+  // `open` IS THE FLAG THE EDGE CARRIES, and `false` is a settled fact rather
+  // than a missing one — the blocker has finished. An edge that says nothing is
+  // counted as open, because `blocked` on the row is exactly "some entry here
+  // is open" and the two must not disagree.
+  const held = (row.waiting_on ?? []).filter((edge) => edge.open !== false);
+  if (held.length === 0) return "Blocked";
+  const named = held.map((edge) => keyOf?.(edge.id)).find(Boolean);
+  if (!named) return held.length > 1 ? `Blocked · ${held.length}` : "Blocked";
+  return held.length > 1 ? `Blocked · ${named} +${held.length - 1}` : `Blocked · ${named}`;
+}
+
+/**
+ * A stack of rows under a heading, absent when it holds nothing.
+ *
+ * `ordinals` IS FOR THE ONE LIST WHOSE ORDER IS ITS CONTENT. A queue somebody
+ * arranged is not a list that happens to be in an order — the order is what
+ * was decided — and drawn as an ordinary run of rows it is indistinguishable
+ * from the same tasks sorted by date. It is the LIST's own decision rather
+ * than the row's, because the tracks are the list's: a row cannot grow a
+ * column its list did not declare.
+ */
 export function RowList({
   rows,
   now,
@@ -337,6 +472,7 @@ export function RowList({
   hrefOf,
   onOpen,
   selected,
+  ordinals,
 }: {
   rows: WorkSummary[];
   now: number;
@@ -344,10 +480,18 @@ export function RowList({
   hrefOf: (row: WorkSummary) => string;
   onOpen?: (row: WorkSummary) => void;
   selected?: string;
+  /** Number each row by its place in `rows`, from 1. */
+  ordinals?: boolean;
 }) {
+  // THE LIST IS WHAT CAN RESOLVE AN EDGE. A dependency names the blocking
+  // task's id, and the key a reader recognises is on that task's own row — so
+  // only a component holding the rows can turn one into the other. Built once
+  // per list rather than per row, because a lookup rebuilt inside the map is
+  // quadratic over a page of a hundred.
+  const keys = new Map(rows.map((row) => [row.id, row.key]));
   return (
-    <div className="work-rows">
-      {rows.map((row) => (
+    <div className="work-rows" data-ordinals={ordinals ? "true" : undefined}>
+      {rows.map((row, at) => (
         <WorkRow
           key={row.id}
           row={row}
@@ -356,6 +500,8 @@ export function RowList({
           href={hrefOf(row)}
           selected={selected === row.key}
           onOpen={onOpen ? () => onOpen(row) : undefined}
+          keyOf={(id) => keys.get(id)}
+          ordinal={ordinals ? at + 1 : undefined}
         />
       ))}
     </div>
@@ -497,23 +643,43 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   );
 }
 
-/** A labelled fact, in the one shape the head and the properties panel share. */
-export function Fact({
-  label,
-  children,
-  icon,
+/**
+ * A stack of tasks under a heading, as a card.
+ *
+ * THE SCREEN CHOOSES THE FRAME AND THIS IS ONE OF THEM. A seat's page stacks
+ * several of these among other cards, so a heading and a count are what tell
+ * one block from the next; My work draws the same rows under a TAB, where a
+ * card inside a tab panel is a second boundary around a thing that already has
+ * one. Both render [RowList], so a task looks the same wherever it appears.
+ *
+ * ABSENT WHEN IT HOLDS NOTHING, which is right for a stack: a page of seven
+ * "nothing here" panels buries the one that has something. A tab cannot do
+ * that — it would take its own name off the strip — which is why My work draws
+ * an empty state instead of this.
+ */
+export function TaskBlock({
+  title,
+  hint,
+  rows,
+  now,
+  chrome,
+  hrefOf,
 }: {
-  label: ReactNode;
-  children: ReactNode;
-  icon?: ReactNode;
+  title: string;
+  hint?: string;
+  rows: WorkSummary[];
+  now: number;
+  chrome?: RowChrome;
+  /** Where a row goes. The screen owns the address. */
+  hrefOf: (row: WorkSummary) => string;
 }) {
+  if (rows.length === 0) return null;
   return (
-    <div className="work-fact">
-      <div className="work-fact-label">{label}</div>
-      <div className="work-fact-value truncate">
-        {icon}
-        {children}
-      </div>
-    </div>
+    <Card padding="none">
+      <Card.Header subtitle={hint} count={rows.length}>
+        <Card.Title>{title}</Card.Title>
+      </Card.Header>
+      <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />
+    </Card>
   );
 }

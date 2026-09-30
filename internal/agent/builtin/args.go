@@ -2,13 +2,16 @@ package builtin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // The shared argument and output helpers.
@@ -203,14 +206,94 @@ func failedBy(cause error, msg string) tools.Result {
 	return tools.Result{Output: msg, Failed: true, Cause: cause}
 }
 
+// ErrOutcomeUnknown is the cause a write tool's failed result carries when
+// whether its write LANDED is unknown — see [unknownWrite] for why such a
+// write is a failed result at all rather than a receipt.
+//
+// A CAUSE OF ITS OWN, because a caller answering in status codes has a third
+// answer for it that is neither a refusal nor a success: the HTTP write
+// surface answers `unknown` with a 503 carrying the operation to retry under,
+// and without a cause to read that from it had only the sentence — and a
+// failed result it cannot place is rendered as a refusal, which tells a
+// client its change was NOT made when it may well have been. [UnknownOutcome]
+// is the value, and it matches this with [errors.Is].
+var ErrOutcomeUnknown = errors.New("builtin: whether the write landed is unknown")
+
+// UnknownOutcome is [ErrOutcomeUnknown] with the facts a caller acts on.
+type UnknownOutcome struct {
+	// OpID is the operation the caller retries under: the `op_id` a caller
+	// with no turn brought back, or the one the tool wrote under. Empty for
+	// a walking gesture a seat made, whose steps' ids are its turn's and
+	// never a caller's to name — the same call made again is the retry.
+	OpID string
+
+	// Unvouched says this node's operation ledger cannot vouch for the
+	// operation ([statelog.Result.Unvouched]): the same operation asked
+	// HERE answers the same way until the write reaches this node, so the
+	// retry that can say sooner is one made on another node.
+	Unvouched bool
+
+	// Err is what the writer answered, for a gesture that STOPPED at the
+	// unknown step ([tracker.ErrStepUnresolved]); nil for a write that
+	// answered `unknown` with no error of its own.
+	Err error
+}
+
+func (e *UnknownOutcome) Error() string {
+	what := "the write"
+	if e.OpID != "" {
+		what = "operation " + e.OpID
+	}
+	msg := fmt.Sprintf("builtin: whether %s landed is unknown", what)
+	if e.Unvouched {
+		msg += ", and this node's operation ledger cannot vouch for it"
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+// Unwrap makes every [UnknownOutcome] an [ErrOutcomeUnknown], and keeps the
+// writer's own error reachable beside it.
+func (e *UnknownOutcome) Unwrap() []error {
+	if e.Err == nil {
+		return []error{ErrOutcomeUnknown}
+	}
+	return []error{ErrOutcomeUnknown, e.Err}
+}
+
+// failedUnknown is [failed] for a write whose outcome is unknown, carrying
+// [UnknownOutcome] as the result's cause.
+func failedUnknown(opID string, unvouched bool, msg string) tools.Result {
+	return failedBy(&UnknownOutcome{OpID: opID, Unvouched: unvouched}, msg)
+}
+
 // readFailed, writeFailed and pageWriteFailed are the three failure
 // sentences, each carrying the error it explains.
 func readFailed(name string, err error) tools.Result {
 	return failedBy(err, readFailure(name, err))
 }
 
-func writeFailed(name string, err error) tools.Result {
-	return failedBy(err, writeFailure(name, err))
+func writeFailed(actor Actor, name string, err error) tools.Result {
+	return failedBy(writeCause(actor, err), writeFailure(actor, name, err))
+}
+
+// writeCause is the cause a write's failed result carries: the error itself,
+// or — for a walking gesture that stopped at a step whose outcome is unknown
+// ([tracker.ErrStepUnresolved]) — an [UnknownOutcome] wrapping it.
+//
+// BECAUSE THAT STOP IS AN UNKNOWN, not a refusal: the steps before it landed
+// and the step itself may have, so a caller answering in status codes owes it
+// the answer it gives every unknown (the same operation, retried), and read as
+// the error alone it was a refusal saying nothing had been written. The error
+// stays inside it, so errors.Is still answers every question it did.
+func writeCause(actor Actor, err error) error {
+	if !errors.Is(err, tracker.ErrStepUnresolved) {
+		return err
+	}
+	return &UnknownOutcome{OpID: actor.Operation,
+		Unvouched: errors.Is(err, tracker.ErrStepUnvouched), Err: err}
 }
 
 func pageWriteFailed(name string, err error) tools.Result {
@@ -236,3 +319,101 @@ func sortedKeys(m map[string]string) []string {
 	out := slices.Sorted(maps.Keys(m))
 	return out
 }
+
+// argIntValue and argFloatValue read a number, reporting whether they COULD.
+//
+// # Why not [argInt] and [argFloat]
+//
+// Because both answer a fallback for a value they cannot read, and every
+// caller of these two holds a value whose zero is a SETTING rather than an
+// absence: zero minutes and zero points both mean UNESTIMATED, a `min` of 0 is
+// a real floor, and a `precision` of 0 declares a field exact to whole
+// numbers. So an unreadable value became `&0` and the write succeeded —
+// `estimate_minutes: "two hours"` answered `applied` and wiped the estimate,
+// which is the exact failure the schedule reader's own header says it exists
+// to prevent, in the half of it that was not written to the rule. [argFloat]'s
+// doc states the condition under which its zero is right — "every caller of
+// this one has a field whose zero IS its default" — and these are the callers
+// that broke it.
+//
+// The parse is the WHOLE string rather than [fmt.Sscanf]'s prefix, which is
+// the other half of the same bug: `Sscanf("%d")` reads "2 days" as 2, so a
+// two-day estimate was stored as two MINUTES and nothing was refused.
+//
+// THEY LIVE HERE rather than beside the schedule, because the custom-field
+// declaration reads its `precision` and its `min`/`max` bounds by the same
+// rule and a second spelling of the json.Number / finiteness discipline is how
+// one of them stops matching the other — the objection [textcut] and [whsec]
+// each record for a grammar that was written twice.
+func argIntValue(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case json.Number:
+		// BACK THROUGH THIS FUNCTION rather than repeating the whole-number
+		// and finiteness discipline below, which is the half a second
+		// spelling always gets wrong. An integer past 2^53 is none of the
+		// things this reads — minutes, story points, decimal places — so
+		// the float is the honest intermediate here, unlike in [argInt].
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return argIntValue(f)
+	case float64:
+		// JSON has one number type, so a whole number arrives here. A
+		// fraction is not a whole number of minutes, nor of decimal
+		// places, and is refused rather than truncated to one nobody
+		// typed.
+		//
+		// FINITE FIRST, because the fraction test does not cover it: an
+		// infinity IS its own truncation, so it passed, and `int(+Inf)`
+		// is not defined by the language — it lands on the platform's
+		// minimum int, which the negative check below then refuses as a
+		// NEGATIVE estimate. Right answer, wrong reason, and a message
+		// naming a sign nobody typed.
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
+			return 0, false
+		}
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func argFloatValue(raw any) (float64, bool) {
+	switch v := raw.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return argFloatValue(f)
+	case float64:
+		return v, finite(v)
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		// [strconv.ParseFloat] ACCEPTS "NaN", "Inf" and "infinity" in
+		// every casing, which is why the check is here rather than left
+		// to the caller: a size of NaN passed the `points < 0` guard
+		// below — every comparison with NaN is false — and an infinity
+		// passed it honestly, so both reached the writer. Downstream
+		// neither is a number a total can be summed from, and JSON
+		// cannot even encode them, so the failure surfaced as a broken
+		// answer somewhere with no memory of who typed it.
+		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return n, err == nil && finite(n)
+	}
+	return 0, false
+}
+
+// finite is what a size has to be: a real number a total can be summed from,
+// which NaN and the infinities are not.
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }

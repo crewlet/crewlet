@@ -55,6 +55,7 @@ import {
   type UnitData,
 } from "./draft.ts";
 import { kindOf } from "./operations.ts";
+import { saveStepID } from "./writes.ts";
 import {
   settingsChanged,
   settingsSaveRequest,
@@ -494,7 +495,7 @@ export function planSave(inputs: PlanInputs): SavePlan {
     return { steps: [] };
   }
   const steps: SaveStep[] = [];
-  const id = () => `${inputs.writeId}-${steps.length + 1}`;
+  const id = () => saveStepID(inputs.writeId, steps.length + 1);
   const settings = {
     mode: inputs.mode,
     baseRevision: inputs.baseRevision,

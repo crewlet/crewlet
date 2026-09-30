@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -1055,9 +1056,8 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // here.
 func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
-	// dashboardTree is rooms_test.go's, for the reason its comment gives:
-	// the source tree, not the build output.
-	typesPath := filepath.Join(dashboardTree, "protocol", "types.ts")
+	// The source tree, not the build output — see [clientsource.Tree].
+	typesPath := filepath.Join(clientsource.Tree(t), "protocol", "types.ts")
 	source, err := os.ReadFile(typesPath)
 	if err != nil {
 		t.Fatalf("read %s: %v — this gate cannot run without the client's "+

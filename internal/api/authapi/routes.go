@@ -162,15 +162,19 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := s.now().Add(tokenLifetime)
+	opID := sessionOpID(lineage)
 	opened, err := s.writer.OpenSession(r.Context(), iamdomain.SessionStart{
 		Lineage: lineage.String(), Person: subject,
 		AbsoluteExpiresAt: expires,
-		OpID:              "session:" + lineage.String(),
+		OpID:              opID,
 		NoWait:            true,
 	})
 	if err != nil {
-		log.ErrorContext(r.Context(), "api_token_exchange_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		// A COLLAPSED START ([iamdomain.ErrCollapsed]) arrives here too:
+		// the counters a bearer carries are the decide's, and nothing can
+		// prove they are the landed record's — so no cookie, and the next
+		// exchange is a new session.
+		writeFailed(w, r, "api_token_exchange_failed", opID, err)
 		return
 	}
 	if !landed(opened.Result) {

@@ -547,8 +547,9 @@ What each of the four holds, in full:
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `chart_import_staged` · `scheduled_runs` · `secret_values` | Revisions, an org chart an offline import staged for this node to publish at its next start, cron bookkeeping, and the secret store's bootstrap half |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
-| `statelog_adoption` | This node's own record of any peer snapshot it has adopted, which is what tells an operation minted before the join from one this node's ledger can answer for |
+| `statelog_adoption` | This node's own history of the peer snapshots it has adopted — which donor's artefact, when the join began and whether it completed. Nothing on the write path reads it: the operation ledger travels inside the snapshot with its own watermark, and the rows an older build wrote, whose adoptions scrubbed the ledger, are carried into that watermark once at boot |
 | `chat_thread_follows` | EMPTY, and kept for one reason: rows written before the follows moved to coordination are carried onto the fleet at the next start, and a migration cannot do that — a `.sql` file has no KV client, and it runs before any Go code on every boot. Nothing reads or writes it at runtime. See node migration 0028 |
+| `statelog_diverged` | This node's finding that a log **diverged** from its rows — the broker was restored from an older copy and another record now sits at the node's checkpoint — keyed to the stream, the checkpoint and both records' broker instants (the consumed one zero where the checkpoint names no record and the node's operation ledger named another operation there). Kept here rather than only in memory because the log can lose the record it was found by (an evicted node's checkpoint stops pinning the trim), and a restart must not then apply the other history on top of these rows. It holds while the checkpoint names the same record, so a reanchor or an adoption is what ends it |
 | `stream_identity` | What this node last saw of each stream's identity, which is how it notices one that was recreated underneath it. A per-node **observation** rather than shared state: two nodes can legitimately have seen different generations, so one agreed value would destroy the comparison it exists to make |
 
 **Every node, identically — the replicated store.**
@@ -576,14 +577,15 @@ there fails one statement for one caller, which is what a constraint is for.
 `internal/store.TestNoReplicatedMigrationDeclaresAConstraintTheApplyCannotSurvive`
 is what makes the three real, and it reads past the prose that names them.
 
-**Three writes in the engine are not records**, and each is a column or a row
-no record could own: the version reset after a log reanchor (the stream a
-record would go to is the one being replaced), the clear of a duplicate-rank
-probe flag each node's own applier sets, and the inbox sweep over rows whose
-class lets two nodes legitimately hold different ones. They are named with
-their reasons in one place, and a fourth fails the build — the rule and its
-exceptions are `adr/0002`, held by
-`internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
+**Two writes in the engine are not records**, and each is a column or a row
+no record could own: the clear of a duplicate-rank probe flag each node's own
+applier sets, and the inbox sweep over rows whose class lets two nodes
+legitimately hold different ones. They are named with their reasons in one
+place, and a third fails the build — the rule and its exceptions are
+`adr/0002`, held by `internal/store.TestOnlyTheApplierWritesTheReplicatedEstate`.
+A log reanchor is not among them: it writes the framework's own checkpoint,
+and the audit row it leaves is applied from the generation record it appends
+to the adopted log.
 
 | Tables | What they hold |
 |---|---|
@@ -591,7 +593,8 @@ exceptions are `adr/0002`, held by
 | **`pages_heads`** · `pages_revisions` · `pages_titles` · … | The company's knowledge base, derived from `CREWLET_PAGES_LOG`: a page's current body, the immutable revisions behind it, and the title claim that is what makes a name an address |
 | **`kb_vectors`** · `kb_vectors_bin` | Page and task embeddings and their 1-bit codes, derived from `CREWLET_TRACKER_VECTORS`. The fleet pays the provider bill **once** and every node holds the answer, which is precisely why these are not in the node's own file |
 | **`chart_units`** · `chart_seats` · `chart_manages` · `chart_leads` · `chart_history` · `chart_import_ledger` | The company's own org chart, derived from `CREWLET_CHART_LOG`: the units and seats a founder authored, the two edges the document states at one end (`manages:` on the seat, `lead:` on the unit) and the record of every change to any of it. The *organisation* a turn reads is derived from these rows rather than stored beside them — see [The Org Chart Domain](chart-domain.md) |
-| `statelog_cursor` · each domain's operation ledger and deferred records | Where this node is on each log, which operations it has already applied, and any record a newer build wrote that this one cannot decode |
+| **`iam_people`** · `iam_credentials` · `iam_invites` · `iam_sessions` · `iam_revocation_epochs` · `iam_session_generation` · `iam_history` | The company's identity estate, derived from `CREWLET_IAM_LOG`: the people and machines who can act, the verifiers they prove themselves with, the invitations that enrolled them, their sessions, the two counters that end sessions, and the authentication trail — see [Identity and Access](identity-and-access.md#the-seven-tables) |
+| `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` · `statelog_ops_lost_kind` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows, to the sweep or to a snapshot from an older build that scrubbed it, so a retry older than that is answered `unknown` rather than applied twice. A ledger that sweeps one kind of operation sooner than the rest — the identity estate's sessions, after an hour — records that kind's loss on its own, so every other kind is still vouched for over the month. And any record a newer build wrote that this one cannot decode |
 
 **The whole company — coordination KV.**
 

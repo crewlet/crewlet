@@ -76,6 +76,15 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 		t.Errorf("the pointer names %s, want the seeded revision %s",
 			target.RevisionID, active.ID)
 	}
+	// AT ONE INSTANT. The local row's is what this node's config history
+	// shows and what the reconciler holds against the pointer's: two
+	// readings of the clock would date the activation twice, and the
+	// reconciler's first tick would re-activate the revision locally to
+	// realign what the seed wrote a moment earlier.
+	if store.EncodeTime(active.ActivatedAt) != store.EncodeTime(target.At) {
+		t.Errorf("the seeded revision was activated at %s here and %s on the "+
+			"pointer, want one instant", active.ActivatedAt, target.At)
+	}
 }
 
 func TestAnUnchangedFileSeedsNothing(t *testing.T) {

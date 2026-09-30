@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE SECOND FACTOR, enrolled and recovered.
@@ -172,6 +173,11 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const reason = "enrolled a second factor"
+	// A FRESH OPERATION PER ENROLMENT, in the grammar the ledger vouches for
+	// a retry by: this request is the whole of it, and an attempt asked
+	// again is a new enrolment of the same seed. It was `totp:<person>:<id>`,
+	// which carries no instant and read as minted at the epoch.
+	opID := statelog.NewOpID(s.now(), "totp-enrol")
 	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
@@ -184,7 +190,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 			return append(without(held, iamdomain.MethodTOTP),
 				totpCredential(id, sealed, step)), nil
 		},
-		OpID:   "totp:" + person + ":" + id,
+		OpID:   opID,
 		Reason: reason,
 	})
 	if errors.Is(err, errFactorHeld) {
@@ -201,18 +207,22 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.ErrorContext(r.Context(), "api_totp_enrol_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		if removed(err) {
+			s.proofOfRemoved(w, r)
+			return
+		}
+		writeFailed(w, r, "api_totp_enrol_failed", opID, err)
 		return
 	}
-	if !landed(stored) {
-		// NOT "enrolled": nothing can say the factor is on the log. The
-		// second leg carries its secret, so presenting it again with a
-		// fresh code enrols it — the same factor whichever attempt lands.
-		// Through a session that may only enrol, a retry that finds the
-		// first attempt landed after all is refused as [errFactorHeld]:
-		// the factor it holds is the seed in hand, so signing in with it
-		// is the way on.
+	if !built(stored) {
+		// NOT "enrolled": nothing can say the factor is on the log — or it
+		// landed as a copy this call cannot prove is its own, whose set is
+		// not this call's to report. The second leg carries its secret, so
+		// presenting it again with a fresh code enrols it — the same
+		// factor whichever attempt lands. Through a session that may only
+		// enrol, a retry that finds the first attempt landed after all is
+		// refused as [errFactorHeld]: the factor it holds is the seed in
+		// hand, so signing in with it is the way on.
 		unresolved(w, r, "api_totp_enrol_unresolved", stored)
 		return
 	}
@@ -368,24 +378,32 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	person := principal.ID.String()
 	id := uuid.New().String()
 	const reason = "regenerated the recovery codes"
+	// A FRESH OPERATION PER SET, for the enrolment's reason: a retry mints
+	// a fresh set, which is a new operation replacing whichever landed.
+	opID := statelog.NewOpID(s.now(), "recovery-codes")
 	stored, err := s.writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: person,
 		Apply: func(held []iamdomain.Credential) ([]iamdomain.Credential, error) {
 			return append(without(held, iamdomain.MethodRecovery),
 				recoveryCredential(id, verifiers)), nil
 		},
-		OpID:   "recovery:" + person + ":" + id,
+		OpID:   opID,
 		Reason: reason,
 	})
 	if err != nil {
-		log.ErrorContext(r.Context(), "api_recovery_store_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		if removed(err) {
+			s.proofOfRemoved(w, r)
+			return
+		}
+		writeFailed(w, r, "api_recovery_store_failed", opID, err)
 		return
 	}
-	if !landed(stored) {
+	if !built(stored) {
 		// THE CODES ARE NOT SHOWN: a set nothing can say is stored is a
-		// set that may not work, handed out as the one way back in. A
-		// retry mints a fresh set, which replaces whichever landed.
+		// set that may not work, handed out as the one way back in — and a
+		// set that landed as a copy this call cannot prove is its own is
+		// not the set in hand. A retry mints a fresh set, which replaces
+		// whichever landed.
 		unresolved(w, r, "api_recovery_store_unresolved", stored)
 		return
 	}
@@ -400,6 +418,15 @@ func (s *Service) RegenerateRecovery(w http.ResponseWriter, r *http.Request) {
 	// that is the property that makes a leaked estate not a set of
 	// bypasses.
 	httpjson.Write(w, http.StatusOK, totpRecoveryResponse{Codes: codes})
+}
+
+// proofOfRemoved answers a change to somebody's proof whose person was removed
+// between the session this was asked through and its record ([removed]): the
+// session is over with them, which nothing will reopen.
+func (s *Service) proofOfRemoved(w http.ResponseWriter, r *http.Request) {
+	log.InfoContext(r.Context(), "api_proof_person_removed")
+	s.clearSession(w)
+	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSessionRevoked)
 }
 
 // mayChangeProof resolves the caller and refuses one who may not change how

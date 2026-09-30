@@ -1,8 +1,11 @@
 package sandbox
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/coord/memory"
 )
 
 func specManager(t *testing.T, opts ManagerOptions) *Manager {
@@ -96,3 +99,81 @@ func TestTheBoxTtlAndTheRoundCapAreSeparateKnobs(t *testing.T) {
 		t.Fatalf("MaxTurns = %d, want 7", spec.MaxTurns)
 	}
 }
+
+// A RELOAD THAT DROPS A CELL KEEPS THE BOXES ALREADY ON IT REACHABLE, AND
+// PROVISIONS NOTHING NEW THERE.
+//
+// A run's placement is on its row, and a revision only changes where the NEXT
+// run may go. Swapped wholesale, the manager answered "not configured" for the
+// cell a job was still running in: the poll settled it failed with its box
+// never reclaimed, and a paused one on it was never killed. And a nil manager —
+// the revision that removed providers.sandbox — keeps the last one, for the
+// runs it can no longer launch and still has to finish.
+func TestAReloadKeepsTheBoxesAlreadyOnADroppedCellReachable(t *testing.T) {
+	t.Parallel()
+	direct, container := NewFakeProvider(), NewFakeProvider()
+	both := specManager(t, ManagerOptions{
+		Providers:        map[Placement]Provider{Direct: direct, Container: container},
+		DefaultPlacement: Direct,
+	})
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: &recorder{}, Pending: NewCoordStore(memory.NewFleet()),
+		Manager: both, Resume: resumeNothing{},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	running, err := container.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// THE RELOAD: the container cell is gone, and direct is rebuilt.
+	rebuilt := NewFakeProvider()
+	coordinator.SetManager(specManager(t, ManagerOptions{
+		Providers: map[Placement]Provider{Direct: rebuilt},
+	}))
+	current := coordinator.Manager()
+
+	reached, err := current.Provider(Container)
+	if err != nil || reached != Provider(container) {
+		t.Fatalf("the dropped cell answers (%v, %v), want the backend its box "+
+			"was made on", reached, err)
+	}
+	if _, _, err := current.Reconnect(t.Context(), Container, running.ID(),
+		"claude-code"); err != nil {
+		t.Errorf("a box on the dropped cell cannot be reconnected to: %v", err)
+	}
+	if _, _, err := current.Acquire(t.Context(), Spec{Placement: Container,
+		CodingAgent: "claude-code"}, nil); err == nil {
+		t.Error("a new box was provisioned on a cell the catalogue no longer configures")
+	}
+	if got := current.Placements(); len(got) != 1 || got[0] != Direct {
+		t.Errorf("the operator surface lists %v, want the configured cell alone", got)
+	}
+	if provider, _ := current.Provider(Direct); provider != Provider(rebuilt) {
+		t.Error("a cell the reload configured again is not served by its new backend")
+	}
+
+	// AND A LATER RELOAD KEEPS CARRYING IT, rather than forgetting it at
+	// the second swap.
+	coordinator.SetManager(specManager(t, ManagerOptions{
+		Providers: map[Placement]Provider{Direct: NewFakeProvider()},
+	}))
+	if reached, _ := coordinator.Manager().Provider(Container); reached != Provider(container) {
+		t.Error("the second reload forgot the backend of a cell the first one dropped")
+	}
+
+	// A REVISION WITH NO CATALOGUE CHANGES NOTHING.
+	before := coordinator.Manager()
+	coordinator.SetManager(nil)
+	if coordinator.Manager() != before {
+		t.Error("a revision with no providers.sandbox replaced the manager the " +
+			"runs in flight are finished through")
+	}
+}
+
+// resumeNothing is a resumer for a coordinator whose resume is not the subject.
+type resumeNothing struct{}
+
+func (resumeNothing) Resume(context.Context, ResumeRequest) error { return nil }

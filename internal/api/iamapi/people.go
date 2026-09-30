@@ -222,7 +222,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		// and the alternative, rolling the enrolment back, would mean
 		// deleting somebody the log already says exists.
 		bound, err := writer.Claim(r.Context(), iamdomain.KindSeat, in.Seat,
-			person, opID+":seat")
+			person, statelog.StepOpID(opID, "seat"))
 		if err != nil {
 			// THE REFUSAL IS THE BIND'S, and it says the person exists:
 			// this answer used to carry the bind's 409 alone, so an
@@ -356,7 +356,13 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		s.unavailable(w, r, "read a person", err)
 		return
 	}
-	opID := s.opIDFor(r, "people:update:"+id)
+	op, ok := s.opIDFor(w, r, "people-update", in)
+	if !ok {
+		return
+	}
+	// THE ANSWER'S OPERATION IS THE KEY a retry sends back; every record
+	// below is published under op.id, a step of it bound to this request.
+	opID := op.key
 	reason := reasonOr(in.Reason, "changed through /iam/people")
 	refused, unreadable := s.judgeEdit(r.Context(), writer, id, in, held)
 	switch {
@@ -411,13 +417,13 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case *in.Seat == "":
 			bound, err = writer.Release(r.Context(), iamdomain.KindSeat,
-				held.Seat, id, opID+":unbind", reason)
+				held.Seat, id, statelog.StepOpID(op.id, "unbind"), reason)
 		case held.Seat == "":
 			bound, err = writer.Claim(r.Context(), iamdomain.KindSeat, *in.Seat,
-				id, opID+":bind")
+				id, statelog.StepOpID(op.id, "bind"))
 		default:
 			bound, err = writer.Rebind(r.Context(), id, held.Seat, *in.Seat,
-				opID, reason)
+				op.id, reason)
 		}
 		if !step("seat")(bound, err) {
 			return
@@ -425,13 +431,13 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Login != nil && *in.Login != held.Login {
 		if !step("login")(writer.Rename(r.Context(), id, held.Login, *in.Login,
-			opID, reason)) {
+			op.id, reason)) {
 			return
 		}
 	}
 	if in.Stage != nil {
 		if !step("stage")(writer.SetStage(r.Context(), id, *in.Stage,
-			opID+":stage", reason)) {
+			statelog.StepOpID(op.id, "stage"), reason)) {
 			return
 		}
 	}
@@ -467,7 +473,7 @@ func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 			}
 			return p, nil
 		},
-		OpID: opID, Reason: reason,
+		OpID: op.id, Reason: reason,
 	})
 	extra := map[string]any{"id": id}
 	if err == nil && landed(updated) {
@@ -532,9 +538,12 @@ func (s *Service) DeletePerson(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	reason := reasonOr(r.URL.Query().Get("reason"), "removed through /iam/people")
-	opID := s.opIDFor(r, "people:remove:"+id)
-	removed, err := writer.Remove(r.Context(), id, opID, reason)
-	if err == nil && landed(removed) {
+	op, ok := s.opIDFor(w, r, "people-remove", nil)
+	if !ok {
+		return
+	}
+	removed, err := writer.Remove(r.Context(), id, op.id, reason)
+	if err == nil && ownLanding(removed) {
 		// A REMOVAL ENDS EVERY SESSION THE PERSON HELD, with everything
 		// else about them, and this is the row that says so — once the
 		// record is durable, and never beside one nothing can confirm.
@@ -543,7 +552,7 @@ func (s *Service) DeletePerson(w http.ResponseWriter, r *http.Request) {
 			By: callerName(r.Context()), OperatorID: callerOperator(r.Context()),
 		})
 	}
-	s.answerWrite(w, r, opID, removed, err, map[string]any{"id": id})
+	s.answerWrite(w, r, op.key, removed, err, map[string]any{"id": id})
 }
 
 // PostMFAReset is `POST /iam/people/{id}/mfa/reset`.
@@ -559,7 +568,11 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	opID := s.opIDFor(r, "people:mfa-reset:"+id)
+	op, ok := s.opIDFor(w, r, "mfa-reset", nil)
+	if !ok {
+		return
+	}
+	opID := op.key
 	const reason = "the second factor was reset"
 	cleared, err := writer.SetCredentials(r.Context(), iamdomain.CredentialSet{
 		PersonID: id,
@@ -574,7 +587,7 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 			}
 			return out, nil
 		},
-		OpID: opID, Reason: reason,
+		OpID: op.id, Reason: reason,
 	})
 	if err != nil || !landed(cleared) {
 		s.answerWrite(w, r, opID, cleared, err, map[string]any{"id": id})
@@ -583,12 +596,16 @@ func (s *Service) PostMFAReset(w http.ResponseWriter, r *http.Request) {
 	// THE RESET IS ANNOUNCED ONCE THE FACTOR IS GONE, whatever the
 	// revocation below does: a cleared factor is the fact an investigation
 	// needs, and a failed revocation is reported to the administrator on
-	// this very answer.
-	s.audit.Emit(r.Context(), types.IAMMFAReset{
-		Person: id, By: callerName(r.Context()),
-		OperatorID: callerOperator(r.Context()), Reason: reason,
-	})
-	revoked, err := writer.Revoke(r.Context(), id, opID+":revoke", reason)
+	// this very answer. By the call that cleared it, and not again by the
+	// retry that finishes the revocation — see [ownLanding].
+	if ownLanding(cleared) {
+		s.audit.Emit(r.Context(), types.IAMMFAReset{
+			Person: id, By: callerName(r.Context()),
+			OperatorID: callerOperator(r.Context()), Reason: reason,
+		})
+	}
+	revoked, err := writer.Revoke(r.Context(), id, statelog.StepOpID(op.id, "revoke"),
+		reason)
 	if err != nil || !landed(revoked) {
 		// LOGGED AND REPORTED, because the half that landed matters: the
 		// factor is gone and the sessions may not be, which is a state an

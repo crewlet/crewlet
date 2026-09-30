@@ -68,7 +68,6 @@ type Store struct {
 	reserved func() Reserved
 
 	now      func() time.Time
-	newID    func() string
 	newSeqID func() string
 }
 
@@ -155,7 +154,7 @@ func NewStore(opts Options) (*Store, error) {
 	s := &Store{
 		publisher: opts.Publisher, db: opts.DB, now: opts.Now,
 		reserved: opts.Reserved,
-		newID:    uuid.NewString, newSeqID: newTimeOrderedID,
+		newSeqID: newTimeOrderedID,
 	}
 	if s.now == nil {
 		s.now = nowUTC
@@ -163,14 +162,21 @@ func NewStore(opts Options) (*Store, error) {
 	return s, nil
 }
 
-// newTimeOrderedID mints an id that sorts by creation time. UUIDv7, for the
-// reason [tracker] gives, falling back to v4 rather than failing a write.
-func newTimeOrderedID() string {
-	if id, err := uuid.NewV7(); err == nil {
-		return id.String()
-	}
-	return uuid.NewString()
-}
+// newTimeOrderedID mints a fresh operation id, which sorts by creation time and
+// carries the instant it was minted.
+//
+// THROUGH [statelog.NewOpID] rather than a UUIDv7 minted here, because the
+// instant is what the state log reads to decide whether its ledger can vouch
+// for a retry of this operation — and the fallback this had, a v4 when a v7
+// could not be minted, is an id carrying no instant at all, which a node whose
+// ledger ever lost a row — to its sweep, or to a snapshot from a donor that
+// scrubbed it — answers `unknown` for ever.
+//
+// THE WALL CLOCK and not the store's own [Store.now], which is the clock the
+// AUTHORED instants are stamped from and which a test pins: the mint instant
+// is compared with the ledger's watermark, which a sweep and a join set off
+// the wall.
+func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 
 // publish forms one record and appends it, translating the framework's
 // refusals into this package's own vocabulary.
@@ -218,8 +224,15 @@ func refusal(err error, subject string) error {
 }
 
 // decide builds one record inside the snapshot's own transaction.
-func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
-	opID string, payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
+//
+// THE STAMP IS THE FRAMEWORK'S, and it goes on the envelope here because this
+// is the one builder every write path shares. It was never set: the writer and
+// the generation were fields every record carried empty, so the eviction gate
+// — which reads the writer on every applier before any kind rule — had nobody
+// to drop, and a node the fleet had evicted went on writing pages everybody
+// applied. The publisher now refuses a record that does not carry it.
+func (s *Store) decide(stamp statelog.Stamp, actor Actor, subject Subject, op OpKind,
+	scope ScopeSet, opID string, payload any, notify *Notify, at time.Time) (statelog.Decision, error) {
 
 	if err := scope.Validate(); err != nil {
 		return statelog.Decision{}, err
@@ -231,8 +244,8 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
+			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Mutation:   body,
 		Actor:      actor.Name(),
@@ -246,14 +259,7 @@ func (s *Store) decide(actor Actor, subject Subject, op OpKind, scope ScopeSet,
 	if err != nil {
 		return statelog.Decision{}, err
 	}
-	return statelog.Decision{
-		Payload: encoded,
-		Envelope: statelog.Envelope{
-			V: record.V, Kind: string(subject.Kind),
-			Subject: statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
-			Op:      string(op), OpID: opID, Scope: scope.Resolve(subject),
-		},
-	}, nil
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // Validate refuses a scope a writer cannot mean.
@@ -330,6 +336,11 @@ type Actor struct {
 	// was `unknown` can only be retried safely under the SAME id, because
 	// the operation ledger is what recognises a second arrival, and a fresh
 	// one would append the trash, the rename or the comment twice.
+	//
+	// AN OPERATION ID THE ENGINE MINTED, held to [statelog.CheckCallerOpID]
+	// by every surface that takes one and by every write here, which refuses
+	// an actor carrying any other: the ids derived from it carry its instant
+	// — see [Store.operation].
 	OpKey string
 }
 
@@ -339,36 +350,137 @@ type Actor struct {
 // THE VERB AND THE OBJECT ARE PART OF THE DERIVATION, so one key covers every
 // record one gesture writes — a save and the rename that follows it are two
 // records, and one id for both would have the ledger collapse the second as a
-// redelivery of the first.
+// redelivery of the first. The verb is also the id's NAME, which is what a
+// reader of the ledger finds it by, so it never holds a dot: in the grammar a
+// dot begins a gesture's STEP ([statelog.StepOpID]), and `comment.edit` would
+// read as the edit step of an operation called `comment`.
+//
+// AND IT CARRIES THE KEY'S OWN INSTANT. The key is an operation id the engine
+// minted — every surface that takes one holds it to
+// [statelog.CheckCallerOpID] — and the ledger vouches for a retry by the
+// instant its id carries ([statelog.OpMintedAt]), so a derivation that
+// dropped it (a name-based uuid over the key) would be read as minted before
+// every loss the ledger ever had, and once it had swept anything such a write
+// was answered `unknown` without being published, on every attempt.
 func (s *Store) operation(actor Actor, verb, object string) string {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
 		return s.newSeqID()
 	}
-	return uuid.NewSHA1(operationNamespace,
-		[]byte(key+"\x00"+verb+"\x00"+object)).String()
+	at, _ := statelog.OpMintedAt(key)
+	return statelog.DeriveOpID(at, verb, key, object)
 }
 
-// operationNamespace scopes the derived operation ids. FIXED for the life of
-// the format: a new one would make a retry that straddles an upgrade append
-// its gesture a second time.
-var operationNamespace = uuid.MustParse("4e2a9c61-7d35-5b0f-9a8e-2c6d1f0b3a57")
+// pageIDOf is the id a create gives its page: a FUNCTION OF THE OPERATION, so
+// the retry an `unknown` asks for names the page its first attempt created.
+//
+// Minted per call instead, a keyed retry of a create that had landed was
+// answered from the ledger ([statelog.Result.Collapsed]) with a page id this
+// call had just made up — one no row, no link and no later read would ever
+// find — while the page the operation did create went unreported. A fresh
+// operation is a fresh id either way, since [statelog.NewOpID] carries random
+// bits, so nothing changes for a caller that brings no key.
+func pageIDOf(opID string) string {
+	return uuid.NewSHA1(pageIDNamespace, []byte(opID)).String()
+}
 
-// Name is how this actor is recorded and rendered.
+// pageIDNamespace scopes [pageIDOf]. FIXED for the life of the format: a new
+// one would give a retry that straddles an upgrade a second page.
+var pageIDNamespace = uuid.MustParse("b4c1e7a2-5f39-5d08-8e6b-1a2f9c3d7e45")
+
+// landed is the answer to a write this call did not decide: a retry of an
+// operation that had ALREADY LANDED under an earlier copy
+// ([statelog.Result.Collapsed]).
+//
+// # Why it is read back rather than taken from the decision
+//
+// The framework answers such a retry from its ledger before any decision runs,
+// or from the broker's duplicate acknowledgement after one ran and was never
+// stored — so whatever a write computes inside its decision is either empty or
+// describes a record nothing published. Every write here that answered with
+// the page its decision read reported, on exactly the retry an `unknown` asks
+// for, a page with no id, no title and version zero, as success. What the
+// operation DID is on the rows, so that is what is answered: the page as this
+// node holds it now, at the earlier copy's revision.
+//
+// # When the rows cannot say
+//
+// The earlier copy may not have applied here yet — the outcome then says
+// `pending` and where to wait — or the page may be gone since (a purge, or the
+// retry of one). Neither is a failure of this write, which did land, so the
+// answer carries the page's identity and nothing a row would have to vouch for.
+func (s *Store) landed(ctx context.Context, identity Page, opID string,
+	result statelog.Result) (Written, error) {
+
+	out := Written{
+		Page: identity, Revision: writtenRevision(result, 0), ChangeID: opID,
+		Outcome: result,
+	}
+	page, _, err := s.headAt(ctx, identity.ID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return out, nil
+	case err != nil:
+		return out, fmt.Errorf("pages: page %s was written by an earlier copy "+
+			"of operation %s; read what it wrote: %w", identity.ID, opID, err)
+	}
+	out.Page = page
+	return out, nil
+}
+
+// landedComment is [Store.landed] for a remark: the comment as this node's
+// rows hold it, or the identity the operation pins where they hold none.
+func (s *Store) landedComment(ctx context.Context, identity Comment,
+	opID string) (Comment, error) {
+
+	var held Comment
+	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		held, err = readCommentTx(ctx, tx, identity.PageID, identity.ID)
+		return err
+	})
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return identity, nil
+	case err != nil:
+		return identity, fmt.Errorf("pages: comment %s was written by an earlier "+
+			"copy of operation %s; read what it wrote: %w", identity.ID, opID, err)
+	}
+	return held, nil
+}
+
+// Name is how this actor is recorded and rendered: its handle, BARE.
 //
 // AN OPERATOR HAS NO SEAT HANDLE, and that is the whole shape of the operator
-// surface: a write there carries the TOKEN's own name and author kind
+// surface: a write there carries the CREDENTIAL's own name — the login
+// [iam.ActorFor] records it under on every other row — and author kind
 // `operator`, and there is deliberately no way for a caller to name a seat to
-// act as — a knowledge base whose author field is chosen by the writer is not
+// act as: a knowledge base whose author field is chosen by the writer is not
 // an audit trail.
-func (a Actor) Name() string {
-	if a.Handle != "" {
-		return a.Handle
+//
+// NO PREFIX AND NO FALLBACK. This rendered `"operator:" + OperatorID` for an
+// actor with no handle, which was a second spelling of one party: the kind is
+// already a column on the row, and the audit feed — which reads this history
+// beside the tracker's, where the same operator is the bare name — showed one
+// person as two. A write with no handle is refused instead ([Actor.validate]).
+func (a Actor) Name() string { return a.Handle }
+
+// subscriber is the handle this actor's own subscription to a page is kept
+// under — a create's author watching what they wrote, a save's `watch` — and
+// EMPTY FOR AN OPERATOR.
+//
+// A seat or a person bound to one writes under a handle a wake can reach; an
+// operator writes under the credential's own login, which is no seat, so a
+// subscription kept under it is a watcher nothing can wake and a `watch: false`
+// that published a record and woke every real watcher for a change to nobody's
+// subscription. It was keyed on the handle being EMPTY, which held only while
+// an operator carried none — every surface names one now ([Actor.Name]) — so
+// the KIND is what says there is no seat.
+func (a Actor) subscriber() string {
+	if a.Kind == AuthorOperator {
+		return ""
 	}
-	if a.OperatorID != "" {
-		return "operator:" + a.OperatorID
-	}
-	return "operator:anonymous"
+	return a.Handle
 }
 
 // refuseReserved refuses an AGENT's write to a container the company holds
@@ -418,12 +530,26 @@ func (a Actor) validate() error {
 	if !a.Kind.Valid() {
 		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
 	}
-	// EVERY KIND BUT AN OPERATOR MUST NAME ITS SEAT. An operator is named
-	// by the token it presented, which [Actor.Name] renders; a seat or an
-	// agent with no handle is a change nobody made.
-	if a.Kind != AuthorOperator && strings.TrimSpace(a.Handle) == "" {
-		return invalid("actor.handle",
-			"an %s write must name the seat it acts as", a.Kind)
+	// A KEY IS AN OPERATION ID THE ENGINE MINTED, or no key. Every id a
+	// write derives from it carries the key's own instant ([Store.operation]),
+	// and a key outside the grammar carries none — read as minted at the
+	// epoch, which is before every loss the ledger will ever have, so once it
+	// had swept anything each such write would be answered `unknown` without
+	// being published, on every attempt, for ever. Refused here, at the one
+	// boundary every write passes, rather than trusted to every surface.
+	if key := strings.TrimSpace(a.OpKey); key != "" {
+		if err := statelog.CheckCallerOpID(key); err != nil {
+			return invalid("actor.op_key", "%v", err)
+		}
+	}
+	// EVERY KIND MUST NAME ITS AUTHOR: a seat or a person the handle they
+	// act as, an operator the credential's own login. A write with no
+	// handle is a change nobody made, and there is no name to fall back on
+	// that is not a second spelling of somebody — see [Actor.Name].
+	if strings.TrimSpace(a.Handle) == "" {
+		return invalid("actor.handle", "an %s write must name who made it — "+
+			"the seat or the person it acts as, or for an operator the "+
+			"credential's own login", a.Kind)
 	}
 	return nil
 }

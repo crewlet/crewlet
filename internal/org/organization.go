@@ -145,14 +145,25 @@ func (o *Organization) Role(handle string) *Role {
 // ([Unit.Key], its id) is chosen once. A `manages:` entry naming a unit and a
 // root seat's `unit:` both resolve here, so a team can be renamed without
 // anything that points at it going dark.
+//
+// EXACT, because a reference inside the chart is one the chart itself wrote.
+// A reference read back out of a row, a record, a query parameter or a tool
+// argument arrives spelled however somebody typed it, and is resolved by
+// [Organization.UnitByRef].
+//
+// AN ID BEFORE A NAME STANDING IN FOR ONE. A unit with no id is keyed on its
+// name ([Unit.Key]'s fallback, for a tree built in Go or a revision stored
+// before ids existed), so one unit's name can equal another's id. The
+// admission rule refuses that pair in any document submitted now, which
+// leaves a stored revision carrying one — and it must not resolve by walk
+// order: the id is the spelling chosen once to be durable, and the name is
+// the one that moves.
 func (o *Organization) Unit(key string) *Unit {
 	if key == "" {
 		return nil
 	}
-	for u := range o.AllUnits() {
-		if u.Key() == key {
-			return u
-		}
+	if u := o.unitByKey(func(k string) bool { return k == key }); u != nil {
+		return u
 	}
 	// A RETIRED KEY, after every live one has missed — see
 	// [Organization.Role], and here it is what keeps a root seat's `unit:`
@@ -166,6 +177,81 @@ func (o *Organization) Unit(key string) *Unit {
 	}
 	for u := range o.AllUnits() {
 		if slices.Contains(u.FormerKeys, key) {
+			return u
+		}
+	}
+	return nil
+}
+
+// UnitByRef resolves a DURABLE unit reference — a value read back out of a
+// row, carried on a record, or typed into a filter or a tool argument — to the
+// unit it names.
+//
+// THE KEY FIRST, in [Organization.Unit]'s order — the live key, the key the
+// unit was created under, a former key — because a key is what every stored
+// row holds and the chart never gives one address to two units. Then the same
+// three under [chart.NormalizeKey], the fold the admission rule claims a key
+// under, never [strings.EqualFold], which is a different fold: a reference
+// arrives from places nobody spells carefully — a model typing
+// `unit: Engineering`, a query string a person wrote, a URL somebody pasted.
+//
+// A NAME ONLY WHEN IT IS ONE UNIT'S. A name is prose, and two units may carry
+// the same one — the chart addresses a unit by its key and admits a repeated
+// name — so a name two units share names neither of them, rather than
+// whichever the walk reached first. Every key is tried before any name, so a
+// reference that is one unit's key and another unit's name resolves to the
+// unit whose KEY it is: the key is the spelling chosen once to be durable.
+//
+// A REFERENCE NAMING NOTHING IS nil, never an error and never a guess. A
+// stored unit may legitimately name a team the chart no longer has, so what
+// that means belongs to the caller: a write refuses it by name, and a read
+// matches the literal rather than widening to everything.
+func (o *Organization) UnitByRef(ref string) *Unit {
+	if u := o.Unit(ref); u != nil {
+		return u
+	}
+	folded := chart.NormalizeKey(ref)
+	if folded == "" {
+		return nil
+	}
+	if u := o.unitByKey(func(k string) bool { return chart.NormalizeKey(k) == folded }); u != nil {
+		return u
+	}
+	for u := range o.AllUnits() {
+		if u.OriginKey != "" && chart.NormalizeKey(u.OriginKey) == folded {
+			return u
+		}
+	}
+	for u := range o.AllUnits() {
+		for _, former := range u.FormerKeys {
+			if chart.NormalizeKey(former) == folded {
+				return u
+			}
+		}
+	}
+	var named *Unit
+	for u := range o.AllUnits() {
+		if chart.NormalizeKey(u.Name) != folded {
+			continue
+		}
+		if named != nil {
+			return nil
+		}
+		named = u
+	}
+	return named
+}
+
+// unitByKey is the first unit whose live key matches, trying every unit that
+// has an id before any unit keyed on its name — see [Organization.Unit].
+func (o *Organization) unitByKey(match func(key string) bool) *Unit {
+	for u := range o.AllUnits() {
+		if strings.TrimSpace(u.ID) != "" && match(u.Key()) {
+			return u
+		}
+	}
+	for u := range o.AllUnits() {
+		if strings.TrimSpace(u.ID) == "" && match(u.Key()) {
 			return u
 		}
 	}

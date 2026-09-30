@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,7 +78,14 @@ type waiterRig struct {
 	manager  *Manager
 	waiter   *Waiter
 	now      time.Time
+
+	// current is what the waiter's manager source answers: the rig's own
+	// manager unless a case swaps it, the way an apply does.
+	current atomic.Pointer[Manager]
 }
+
+// managers is the rig's manager source, as the coordinator's is the engine's.
+func (r *waiterRig) managers() *Manager { return r.current.Load() }
 
 func newWaiterRig(t *testing.T) *waiterRig {
 	t.Helper()
@@ -101,8 +109,9 @@ func newWaiterRig(t *testing.T) *waiterRig {
 		t.Fatalf("NewManager: %v", err)
 	}
 	rig.manager = manager
+	rig.current.Store(manager)
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: manager,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
@@ -338,7 +347,7 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Interval: 100 * time.Millisecond,
 		Now:      func() time.Time { return rig.now },
 	})
@@ -634,7 +643,8 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)
-	rig.waiter.reapExpiredPauses(t.Context(), []PendingRun{withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second))})
+	rig.waiter.reapExpiredPauses(t.Context(), rig.manager,
+		[]PendingRun{withPaused(run, rig.now.Add(-DefaultPauseTTL-time.Second))})
 
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("the reaper destroyed %v underneath a resume that had already claimed the run", killed)
@@ -727,7 +737,7 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
 	})
 	if err != nil {
@@ -751,7 +761,7 @@ func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
@@ -774,7 +784,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
 		Interval: 5 * time.Millisecond,
 	})
 	if err != nil {
@@ -791,6 +801,60 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 	}
 	// Stop is idempotent and returns only once the in-flight tick is done.
 	waiter.Stop()
+}
+
+// A MANAGER SWAPPED AFTER THE WAITER STARTED IS THE ONE THE NEXT TICK POLLS
+// THROUGH — and the box a job is still running in stays reachable on a cell the
+// new catalogue dropped.
+//
+// The waiter used to capture the manager it was built with, so after a reload
+// it went on reconnecting through the boot catalogue's backends while every
+// launch used the new ones: a job started after the reload was on a backend
+// the poll had never heard of, and was declared gone.
+func TestTheWaiterPollsThroughTheManagerCurrentAtEachTick(t *testing.T) {
+	rig := newWaiterRig(t)
+	// A CATALOGUE THAT MOVED THE CELL TO ANOTHER BACKEND, the way a
+	// reload rebuilds every backend it configures.
+	moved := NewFakeProvider()
+	next, err := NewManager(ManagerOptions{
+		Providers: map[Placement]Provider{Direct: moved},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	rig.current.Store(next)
+	box, err := moved.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// The job has not finished, so this tick is a keepalive and nothing else.
+	rig.seedRunning("t-after", box.ID())
+	if _, err := rig.waiter.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if moved.Box(box.ID()).Keepalives() == 0 {
+		t.Fatal("the tick after a reload did not reach a box on the reloaded " +
+			"backend — the waiter polled through the manager it was built with")
+	}
+}
+
+// seedRunning records a running job on a box the case minted itself.
+func (r *waiterRig) seedRunning(turnID, sandboxID string) {
+	r.t.Helper()
+	ctx := r.t.Context()
+	if err := r.pending.BeginLaunch(ctx, PendingRun{
+		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
+		CodingAgent: "claude-code", CreatedAt: r.now,
+	}, Fence{}); err != nil {
+		r.t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
+		SandboxID: sandboxID, CommandID: "cmd-1", CodingAgent: "claude-code",
+	}, Fence{}); err != nil {
+		r.t.Fatalf("AttachSandbox: %v", err)
+	}
+	r.suspend(turnID)
 }
 
 func TestAWaiterNeedsItsCollaborators(t *testing.T) {

@@ -138,6 +138,30 @@ func TestTheWakeIdIsDerivedAndStable(t *testing.T) {
 	}
 }
 
+// EVERY WAKE CARRIES ITS RECORD'S OWN INSTANT, which every redelivery of the
+// record reproduces — see notify.Routed.WakeAt for what the delivery's own
+// clock cost a re-run turn.
+func TestAWakeIsStampedWithItsRecordsInstant(t *testing.T) {
+	t.Parallel()
+	record := parseRecord(&tracker.Notify{
+		Kind: tracker.ChangeStatus,
+		Snapshot: tracker.Snapshot{
+			Key: "ENG-1", Project: "ENG", Watchers: []string{"di", "bo"},
+		},
+	})
+	routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(t.Context(),
+		delivery(t, record), registry(t, "ana", "bo", "di"))
+	if err != nil || len(routed) == 0 {
+		t.Fatalf("Parse = (%d, %v)", len(routed), err)
+	}
+	for _, r := range routed {
+		if !r.WakeAt.Equal(record.CreatedAt) {
+			t.Errorf("%s's wake is stamped %s, want the record's %s",
+				r.To.Handle, r.WakeAt, record.CreatedAt)
+		}
+	}
+}
+
 func parseRecord(n *tracker.Notify) tracker.MutationRecord {
 	return tracker.MutationRecord{
 		RecordEnvelope: tracker.RecordEnvelope{

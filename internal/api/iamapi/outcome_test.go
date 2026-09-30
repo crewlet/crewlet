@@ -259,9 +259,12 @@ func TestARefusedWriteSaysWhenAndWhatToRetry(t *testing.T) {
 					"with %q", tc.reason, got.status, got.header.Get("Retry-After"),
 					tc.retry)
 			}
-			if op, _ := got.body["op_id"].(string); !strings.HasPrefix(op,
-				"sessions:revoke:"+bob.String()) {
-				t.Errorf("op id %q, want the one this route published under", op)
+			// THE KEY THE WRITE WAS PUBLISHED UNDER A STEP OF, which is
+			// what a retry sends back ([iamapi.Service]'s opIDFor).
+			if op, _ := got.body["op_id"].(string); len(r.writer.ops["revoke"]) != 1 ||
+				op == "" || !strings.HasPrefix(r.writer.ops["revoke"][0], op+".") {
+				t.Errorf("op id %q, want the key this route published under a "+
+					"step of %v", op, r.writer.ops["revoke"])
 			}
 		})
 	}

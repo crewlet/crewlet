@@ -34,6 +34,9 @@ import {
 import { templateIntent } from "./templates.ts";
 import { countingKeys, fixtureChart, fixtureSettings } from "./testkit.ts";
 
+/** A write id as the runtime mints one: a bare operation id in the engine's grammar. */
+const WRITE = "01a0f246-7d2d-7c92-b7f0-78dd8229b774";
+
 class MemoryStorage implements DraftStorage {
   readonly items = new Map<string, string>();
   getItem(key: string) {
@@ -274,7 +277,7 @@ describe("restoreOffer", () => {
     // The chart's rows changed while the settings did not: still somebody else's save.
     expect(restoreOffer(kept(), loaded("rev-1", "0123456789abcdef"))).toEqual({ kind: "update" });
     // A save of the draft was out: whatever landed is the rebase's to meet.
-    expect(restoreOffer(kept({ write: "write-0001" }), loaded("rev-1"))).toEqual({
+    expect(restoreOffer(kept({ write: WRITE }), loaded("rev-1"))).toEqual({
       kind: "update",
     });
   });
@@ -286,7 +289,7 @@ describe("restoreOffer", () => {
   test("a draft kept for another reader is discarded, before anything it could be carried onto", () => {
     const other = loaded("rev-1", PRINT, "edit", "p-2");
     expect(restoreOffer(kept(), other)).toEqual({ kind: "discard_other_reader" });
-    expect(restoreOffer(kept({ write: "write-0001" }), other)).toEqual({
+    expect(restoreOffer(kept({ write: WRITE }), other)).toEqual({
       kind: "discard_other_reader",
     });
     expect(restoreOffer(kept(), loaded(null, PRINT, "create", "p-2"))).toEqual({
@@ -302,7 +305,7 @@ describe("restoreOffer", () => {
     });
     const create = kept({ mode: "create", baseRevision: null });
     expect(restoreOffer(create, loaded("rev-1"))).toMatchObject({ kind: "discard_mode_changed" });
-    expect(restoreOffer({ ...create, write: "write-0001" }, loaded("rev-1"))).toEqual({
+    expect(restoreOffer({ ...create, write: WRITE }, loaded("rev-1"))).toEqual({
       kind: "update",
     });
   });
@@ -328,9 +331,9 @@ describe("persistencePlan", () => {
     expect(persistencePlan({ ...state, log: EMPTY_LOG }, 42)).toEqual({ action: "clear" });
     // A save of the log that is out travels with it, and what it creates.
     const creates = [{ key: "new:u1", kind: "unit" as const, address: "legal" }];
-    expect(persistencePlan({ ...state, pending: { write: "write-0001", creates } }, 42)).toEqual({
+    expect(persistencePlan({ ...state, pending: { write: WRITE, creates } }, 42)).toEqual({
       action: "keep",
-      kept: kept({ ops, savedAt: 42, write: "write-0001", creates }),
+      kept: kept({ ops, savedAt: 42, write: WRITE, creates }),
     });
   });
 });
@@ -342,10 +345,10 @@ describe("a save of the kept log whose answer may be lost", () => {
     const storage = new MemoryStorage();
     const draft = kept({ ops: everyOperation().slice(0, 2) });
     expect(keepDraft(storage, draft)).toBe("kept");
-    expect(markPendingWrite(storage, { write: "write-0001", creates })).toBe("kept");
+    expect(markPendingWrite(storage, { write: WRITE, creates })).toBe("kept");
     expect(restoreDraft(storage)).toEqual({
       kind: "restored",
-      kept: { ...draft, write: "write-0001", creates },
+      kept: { ...draft, write: WRITE, creates },
     });
     expect(markPendingWrite(storage, null)).toBe("kept");
     expect(restoreDraft(storage)).toEqual({ kind: "restored", kept: draft });
@@ -354,7 +357,7 @@ describe("a save of the kept log whose answer may be lost", () => {
   // A log no storage holds is never offered again, so no lost answer could
   // replay it; storage that refuses says so rather than pretending.
   test("marks nothing where no draft is kept, and says when storage refuses", () => {
-    const pending = { write: "write-0001", creates };
+    const pending = { write: WRITE, creates };
     expect(markPendingWrite(new MemoryStorage(), pending)).toBe("cleared");
     expect(markPendingWrite(null, pending)).toBe("unavailable");
     expect(markPendingWrite(new RefusingStorage(), pending)).toBe("refused");
@@ -363,8 +366,8 @@ describe("a save of the kept log whose answer may be lost", () => {
   test("a mark that is not a write id, or a creation that is not one, is not a draft this build kept", () => {
     for (const bad of [
       { write: "not one" },
-      { write: "write-0001", creates: [{ key: "seat:x", kind: "seat", address: "x" }] },
-      { write: "write-0001", creates: [{ key: "new:x", kind: "role", address: "x" }] },
+      { write: WRITE, creates: [{ key: "seat:x", kind: "seat", address: "x" }] },
+      { write: WRITE, creates: [{ key: "new:x", kind: "role", address: "x" }] },
     ]) {
       const storage = new MemoryStorage();
       storage.setItem(

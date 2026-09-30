@@ -9,8 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -192,7 +190,7 @@ func (w *Writer) Reseal(ctx context.Context, reader *Reader) (ResealReport, erro
 		}
 		moved := 0
 		result, err := w.UpdatePerson(ctx, PersonUpdate{
-			PersonID: id, OpID: "reseal:" + uuid.Must(uuid.NewV7()).String(),
+			PersonID: id, OpID: statelog.NewOpID(w.Now(), "reseal"),
 			Reason: "re-sealed under keyring key " + w.sealer.active,
 			Apply: func(p Person) (Person, error) {
 				// THE LAST RUN'S COUNT, which is the one the landed

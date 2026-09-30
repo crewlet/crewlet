@@ -373,8 +373,13 @@ type RecordEnvelope struct {
 	// for this struct.
 	V int `json:"v"`
 
-	// OpID is a uuid7: the idempotency key, the Nats-Msg-Id, and the ops
-	// table's key. EMPTY on a barrier, deliberately — an op id is what
+	// OpID is the operation id, in the state log's grammar
+	// (`<uuidv7>[.<name>][.<step>...]`, [statelog.NewOpID]): the
+	// idempotency key, the Nats-Msg-Id, the ops table's key — and the
+	// instant it was minted at, which the publisher reads to decide whether
+	// this node's ledger can vouch for a retry. A step of a gesture carries
+	// the gesture's id and its step ([statelog.StepOpID]). EMPTY on a
+	// barrier, deliberately — an op id is what
 	// invites a message id, and a duplicate ack is served out of the
 	// dedupe window with no quorum round trip at all, which is the one
 	// thing a read barrier must never be.
@@ -405,6 +410,15 @@ type RecordEnvelope struct {
 	// runs before any kind rule, on a node that may not be able to decode
 	// the payload at all. Empty on a barrier, which writes no rows for a
 	// gate to drop.
+	//
+	// IT AND Gen ARE THE FRAMEWORK'S STAMP ([statelog.Stamp]), set from the
+	// stamp a decide is handed — or, on the one record nothing decides, a
+	// reanchor's, from the facts the transition hands [GenerationRecord] —
+	// and from nowhere else: the publisher refuses a record that does not
+	// carry the one it was decided under. Every
+	// writer here left both empty until it did, so the eviction gate
+	// compared an empty writer against every eviction on this log and
+	// dropped nothing.
 	Writer string `json:"writer,omitempty"`
 
 	// Scope is the complete set of identity buckets this record's apply may

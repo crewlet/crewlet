@@ -32,7 +32,7 @@ func peopleInBuckets(n int) []string {
 // writer, so a row under its login exists for a retained record to cover.
 func enrolMachine(t *testing.T, e *Engine, id, login string) {
 	t.Helper()
-	if _, err := e.native.iamWriter.Enrol(t.Context(), iamdomain.Enrolment{
+	if _, err := e.native.Load().iamWriter.Enrol(t.Context(), iamdomain.Enrolment{
 		PersonID: id, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Login: login, OpID: "enrol-" + login, Reason: "a pipeline",
 	}); err != nil {
@@ -68,7 +68,7 @@ func TestARetainedRecordCoversExactlyItsPersonsBucket(t *testing.T) {
 	}
 	a, c := people[0], people[2]
 
-	reader := e.native.iamReader
+	reader := e.native.Load().iamReader
 	cases := []struct {
 		name  string
 		login string
@@ -145,7 +145,7 @@ func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *test
 			t.Fatal(err)
 		}
 		tokens[i] = uuid.Must(uuid.NewV7()).String()
-		if _, err := e.native.iamWriter.MintToken(ctx, iamdomain.TokenMint{
+		if _, err := e.native.Load().iamWriter.MintToken(ctx, iamdomain.TokenMint{
 			PersonID: id, ID: tokens[i],
 			Verifier:  credential.TokenVerifier(tokens[i], secret),
 			ExpiresAt: time.Now().Add(credential.DefaultTokenLifetime),
@@ -156,7 +156,7 @@ func TestAMachineTokenIsVouchedForOnlyWhereNothingRetainedCoversItsOwner(t *test
 	}
 	unknown := uuid.Must(uuid.NewV7()).String()
 
-	reader := e.native.iamReader
+	reader := e.native.Load().iamReader
 	deferredOf := func(id string) bool {
 		t.Helper()
 		row, err := reader.MachineToken(ctx, id)

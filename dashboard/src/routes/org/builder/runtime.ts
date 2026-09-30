@@ -21,6 +21,7 @@
  *   accessor itself can throw (a sandboxed frame, blocked site data).
  */
 
+import { layoutOpID } from "~/protocol/gate.ts";
 import { isAbort, rest, RestError, type RestResponse } from "~/protocol/index.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import type { KeySource } from "./model/keys.ts";
@@ -96,6 +97,18 @@ export const randomKeys: KeySource = {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   },
 };
+
+/**
+ * A fresh write id (`model/writes.ts`'s `isWriteId`): a bare operation id in the
+ * engine's grammar, minted in the browser like a gate's (`newGateOpID`) and on
+ * the browser's clock for its reason. Call it in the event handler that saves.
+ */
+export function newWriteId(
+  now: number = Date.now(),
+  random: (bytes: Uint8Array<ArrayBuffer>) => Uint8Array = (bytes) => crypto.getRandomValues(bytes),
+): string {
+  return layoutOpID(now, random(new Uint8Array(10)), "");
+}
 
 /** The tab's session storage, or `null` when the browser refuses it. */
 export function sessionDraftStorage(): DraftStorage | null {

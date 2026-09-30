@@ -290,14 +290,45 @@ func (w *Writer) gesture() *statelog.Position {
 }
 
 // announce publishes one decided fact once its record is known to have landed.
+//
+// NEVER FOR A COLLAPSED CALL ([statelog.Result.Collapsed]). A collapsed answer
+// is an operation that landed as a copy this call cannot prove is its own —
+// found in the ledger before this call's decide ran, acknowledged by the broker
+// as a duplicate, or found in the ledger when an ambiguous append was resolved
+// — so the facts an announcement carries, which a decide reads inside its own
+// snapshot, may describe a decision nothing published or one never taken at
+// all: a generation of zero, a grant delta from nothing. A copy that landed was
+// announced by the call that made it where that call saw a definite outcome of
+// its own; where none did, the `iam_history` row its apply wrote is the trail,
+// as it is for every unknown.
 func (w *Writer) announce(ctx context.Context, result statelog.Result, err error,
 	payload events.Payload) {
 
-	if w.events == nil || err != nil || result.Outcome == statelog.OutcomeUnknown {
+	if w.events == nil || err != nil || result.Collapsed ||
+		result.Outcome == statelog.OutcomeUnknown {
 		return
 	}
 	w.events.Emit(ctx, payload)
 }
+
+// ErrCollapsed reports a gesture whose operation LANDED but whose ANSWER this
+// call cannot give: the answer is computed inside the decide — the counters a
+// session bearer carries, what a minted token was granted — and the framework
+// answered the call with a copy of the operation it cannot prove is this
+// call's own ([statelog.Result.Collapsed]), so the decide that computed the
+// answer may never have run, or may not be the one published.
+//
+// UNAVAILABLE rather than a fault or an outcome, and on purpose: the operation
+// did land, so it is not unknown, and a caller handed a value that describes
+// another decision builds a credential on it — a bearer carrying an epoch the
+// session was not opened at is one a revocation between the two does not end.
+// What the caller does next is what every unknown's caller does for a
+// credential: the landed copy is one nobody holds, it expires, and a fresh
+// operation mints another.
+var ErrCollapsed = fmt.Errorf("iamdomain: this operation landed as a copy "+
+	"this call cannot prove is its own, so the answer its decide computed may "+
+	"describe no published record — start it again under a fresh operation "+
+	"id: %w", statelog.ErrUnavailable)
 
 // errNothingToPublish is what a decide returns when its snapshot shows the
 // write has nothing left to do — a conditional revocation whose epoch has
@@ -425,9 +456,23 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (
 func (w *Writer) publishAt(ctx context.Context, at *statelog.Position,
 	req statelog.Request) (statelog.Result, error) {
 
+	// NO MINT INSTANT BESIDE THE ID: the id carries its own
+	// ([statelog.OpMintedAt]), and one stamped here would be this CALL's —
+	// later than the mint on every retry, which is the one case the ledger
+	// cannot vouch for.
 	req.Session = *at
-	req.MintedAt = w.Now()
 	result, err := w.publisher.Publish(ctx, req)
+	var refused *statelog.Unavailable
+	if errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused {
+		// THE FRAMEWORK'S "this id already names another write", in this
+		// domain's words. Every create here derives what it creates from its
+		// operation KEY, so a key reused for another address or another login
+		// is refused by the ledger before any decide runs — and a caller that
+		// answers a reused key with 409 and a fresh key asks for this
+		// domain's sentinel, which the framework cannot know. Both stay
+		// readable: the refusal is still the framework's, with its position.
+		err = fmt.Errorf("%w: %w", ErrOperationReused, err)
+	}
 	if err == nil && result.Position.Packed() > at.Packed() {
 		*at = result.Position
 	}
@@ -489,7 +534,7 @@ func (w *Writer) record(subject Subject, op OpKind, person string,
 // mutation the encode below reads has to be the one the last run produced.
 // Taken by value, every one of those wrote into a copy nothing encoded and
 // published an empty payload that every node then failed to decode.
-func (w *Writer) request(rec *MutationRecord, opID string,
+func (w *Writer) request(ctx context.Context, rec *MutationRecord, opID string,
 	pattern statelog.Pattern, decide func(*sql.Tx) error) statelog.Request {
 
 	// THE OP ID GOES ON THE RECORD, not only on the request. The framework
@@ -505,7 +550,10 @@ func (w *Writer) request(rec *MutationRecord, opID string,
 		Scope:   rec.Scope.Resolve(rec.Subject),
 		OpID:    opID,
 		Pattern: pattern,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			if err := removedPersonIn(ctx, tx, *rec); err != nil {
+				return statelog.Decision{}, err
+			}
 			if decide != nil {
 				if err := decide(tx); errors.Is(err, errNothingToPublish) {
 					// THE FRAMEWORK'S OWN "NOTHING TO WRITE": an empty
@@ -516,15 +564,57 @@ func (w *Writer) request(rec *MutationRecord, opID string,
 					return statelog.Decision{}, err
 				}
 			}
+			// THE STAMP IS THE FRAMEWORK'S ([statelog.Stamp]): the node
+			// that writes the record and the generation of the snapshot it
+			// was decided from — which every applier's eviction gate reads,
+			// and the publisher refuses a record without. Set on every
+			// round, since each round is a fresh snapshot.
+			rec.Writer, rec.Gen = stamp.Writer, stamp.Gen
 			payload, err := Encode(*rec)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			env, err := Domain{}.Envelope(payload)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			return statelog.Decision{Payload: payload, Envelope: env}, nil
+			return statelog.Decision{Payload: payload}, nil
 		},
+	}
+}
+
+// removedPersonIn refuses, inside a decide's snapshot, a record about a person
+// a removal has destroyed whose SUBJECT is not that person's own — a claim, a
+// release, a session, a spend.
+//
+// # Why the domain asks here and the framework does not
+//
+// The framework's guard reads the deletion marker on the record's SUBJECT
+// ([iamGuards]), and only a person's own subject carries one. Every other
+// record about somebody names them in its PAYLOAD, which the applier's removal
+// gate decodes — and which the publisher-side reader reads too only for the
+// body it is handed ([gatedPerson]): a record this node appended and a removal
+// raced is named `deleted` there, but a person removed BEFORE the snapshot
+// would have had the record appended only to be dropped by every node.
+// Refused here, it is refused as what it is before anything is appended, with
+// the reason the resolution would have given for a person's own subject.
+//
+// ONE PRIMARY-KEY READ, and only on a record that names a person: an
+// invitation, a sweep, an invalidation and the log's own gates name nobody.
+func removedPersonIn(ctx context.Context, tx *sql.Tx, rec MutationRecord) error {
+	if rec.Person == "" || rec.Subject.Kind == KindPerson {
+		return nil
+	}
+	var removed bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM iam_removed WHERE person_id = ?)`,
+		rec.Person).Scan(&removed); err != nil {
+		return fmt.Errorf("iamdomain: read whether person %s was removed: %w",
+			rec.Person, err)
+	}
+	if !removed {
+		return nil
+	}
+	return &statelog.Unavailable{
+		Reason: statelog.ReasonDeleted,
+		Detail: fmt.Sprintf("person %s was removed and stays removed, so a %s "+
+			"on %s about them applies on no node", rec.Person, rec.Op, rec.Subject),
+		OpID: rec.OpID,
 	}
 }

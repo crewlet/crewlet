@@ -175,6 +175,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	// surface: a screen renders the level and the lag beside the rows, so
 	// a person who asked for a stronger answer is shown the one they got.
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
+	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
+	// reason the level is: it is a property of this SURFACE rather than of
+	// the grammar, so `unit=` takes any spelling of a team — its key, a key
+	// it answered to before a rename, its name — and finds the work filed
+	// under each — see [tracker.Units].
+	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
@@ -263,8 +269,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// that explain it — and a detail that left them out rendered a task
 	// filed with a severity as one that carried none, beside a board that
 	// had just filtered on that very field.
+	//
+	// AND THE CHART, so the properties panel reads "Engineering" where the
+	// row holds `eng` — the same seam the board column and the project
+	// directory resolve through, so one screen cannot call a team two
+	// things. See [tracker.TaskDetail.Units].
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
+		Units: s.chartUnits(),
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -315,6 +327,12 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
+		// THE CHART, so `container=unit:engineering` and
+		// `container=unit:eng` reach one strip — the same rule that
+		// upper-cases a project key, for the container kind a person
+		// can spell more than one way: by key, by a key a rename
+		// retired, or by name. See [tracker.Units].
+		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [freshness] and [Sources.workItems].
@@ -361,8 +379,10 @@ func viewContainer(p Params) (tracker.Container, error) {
 		// A PROJECT KEY IS UPPER-CASE wherever it is minted, and the
 		// tracker's own scope parser upper-cases it for the same reason:
 		// a strip asked for as `project:eng` must be the strip a task
-		// query scoped to `project:ENG` belongs to.
-		id = strings.ToUpper(id)
+		// query scoped to `project:ENG` belongs to. THROUGH
+		// [tracker.ProjectKey], the tracker's one spelling of that rule,
+		// rather than a copy of it here that could drift from the rest.
+		id = tracker.ProjectKey(id)
 	}
 	return tracker.Container{Kind: kind, ID: id}, nil
 }
@@ -401,11 +421,12 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 //
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
-// That reasoning has a hole in it that the other two do not: `api.allow_
-// anonymous_read` opens this surface, and this answer carries the richest
-// personal record the engine keeps — somebody's unread notices, what they mean
-// to work on next, and who set that order. The parameter selected whose. A
-// scope rule two of the three personal questions follow is not a rule.
+// That reasoning stopped holding once a guarded surface meant "somebody
+// signed in" rather than "the operator": every person holding `state:read`
+// reaches this question, and its answer carries the richest personal record
+// the engine keeps — somebody's unread notices, what they mean to work on
+// next, and who set that order. The parameter selected whose. A scope rule
+// two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
 		strings.TrimSpace(p.String("handle")))
@@ -433,7 +454,13 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 
 func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	f := pages.Filter{
-		Container: strings.ToUpper(strings.TrimSpace(p.String("container"))),
+		// THE KNOWLEDGE BASE'S OWN CANONICAL FORM ([pages.ContainerKey]),
+		// never a copy of it: eleven copies of this rule had drifted and
+		// six did not trim. And canonical HERE, before the read, because
+		// the read's deferral scope is composed from the value as handed
+		// in — a `container=eng` would ask whether a record held against
+		// `eng` is pending, which no writer ever files one under.
+		Container: pages.ContainerKey(p.String("container")),
 		ParentID:  strings.TrimSpace(p.String("parent")),
 		Label:     strings.TrimSpace(p.String("label")),
 		Watcher:   strings.TrimSpace(p.String("watcher")),
@@ -564,16 +591,20 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	listing, err := s.Work.Projects(ctx, tracker.ProjectQuery{
-		Q:        strings.TrimSpace(p.String("q")),
-		Unit:     strings.TrimSpace(p.String("unit")),
-		Archived: p.Bool("archived", false),
-		Limit:    p.Int("limit", 0),
-		Units:    s.chartUnits(),
-		// THE CALLER'S OWN — see [freshness].
-		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	})
+	// THE TRACKER'S OWN GRAMMAR, parsed by the tracker. `archived=` and
+	// `sort=` are closed sets it owns, and a copy of either here is a
+	// second answer to a question the engine already has one of.
+	q, err := tracker.ParseProjectQuery(p)
+	if err != nil {
+		// A REFUSAL ABOUT THE REQUEST — the value names itself and the
+		// accepted ones, so a 400 tells the caller what to send instead.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	}
+	q.Units = s.chartUnits()
+	// THE CALLER'S OWN — see [freshness].
+	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
+	q.MinPosition = fresh.MinPosition
+	listing, err := s.Work.Projects(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -627,7 +658,12 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
-		Unit:  strings.TrimSpace(p.String("unit")),
+		Unit: strings.TrimSpace(p.String("unit")),
+		// THROUGH THE CHART, so `?unit=` takes the unit's key, a key
+		// it answered to before a rename, or its name — see
+		// [tracker.Units]. A screen sends whichever it was handed, and
+		// each row holds the key the unit had when it was written.
+		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
@@ -689,10 +725,20 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 				[]string{"workspace", "project:<KEY>"})
 		}
 	}
-	for _, kind := range strings.Split(p.String("kinds"), ",") {
-		if kind = strings.TrimSpace(kind); kind != "" {
-			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
+	// A KIND THIS BUILD DOES NOT HAVE IS REFUSED NAMING THE SET, for the
+	// reason `actor_kinds` below is: it reached the reader as it came and
+	// matched no row, so a mistyped filter answered an empty feed that
+	// looks exactly like a quiet company.
+	for _, name := range strings.Split(p.String("kinds"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
+		kind := tracker.ChangeKind(name)
+		if !kind.Valid() {
+			return nil, badParams("kinds", name, names(tracker.ChangeKinds))
+		}
+		q.Kinds = append(q.Kinds, kind)
 	}
 	// WHO WAS WRITING, which is the audit screen's whole question: every
 	// commit a token or a person made, across the company, rather than one

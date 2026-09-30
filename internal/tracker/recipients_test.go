@@ -260,7 +260,8 @@ func TestADepartedHandleKeepsItsRowAndLosesItsWake(t *testing.T) {
 		t.Fatal("a departed handle is missing from the record of who the change " +
 			"concerned")
 	}
-	routed := tracker.Route(cands, func(h string) bool { return h != "gone" }, "bo")
+	routed := tracker.Route(cands, func(h string) bool { return h != "gone" },
+		"bo")
 	if slices.Contains(handles(routed), "gone") {
 		t.Fatalf("a departed handle was woken: %v", handles(routed))
 	}

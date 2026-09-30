@@ -19,9 +19,9 @@ import {
 // screens pick the density — and a per-seat list that drew its own columns is
 // exactly how the board came to know a task could be blocked while the
 // personal page did not.
-import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
+import { Coverage, RowList, TaskBlock, type RowChrome } from "~/components/work.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/DetailRail.tsx";
-import { Asks, Checklist, TaskBlock } from "~/routes/me/MyWork.tsx";
+import { Asks, Checklist } from "~/routes/me/MyWork.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import {
@@ -96,6 +96,7 @@ import {
   seatByAddress,
   seatPath,
   seatReading,
+  seatResolvers,
   statusLine,
   unitPath,
   afkReason,
@@ -515,13 +516,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   const phaseEvents = usePhaseEvents();
 
   const index = useMemo(() => indexOrg(org), [org]);
-  // A HANDLE IS NOT A NAME. The tracker's rows carry handles and a reader
-  // knows people by name, so every row renderer takes the resolution rather
-  // than each one doing its own lookup.
-  const chrome: RowChrome = useMemo(
-    () => ({ seatName: (h: string) => index.byHandle.get(h)?.name ?? h }),
-    [index],
-  );
+  // A HANDLE IS NOT A NAME, AND IT IS NOT A KIND EITHER. The tracker's rows
+  // carry handles; a reader knows people by name, and an identity badge draws
+  // the dashed ring off the seat's kind. Both come from the chart, so every
+  // row renderer takes the resolution rather than each one doing its own
+  // lookup — and they travel as a pair, because the kind is the half every
+  // builder forgot when each wrote its own name resolver.
+  const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const seat = findSeat(index, handle);
   // A RETIRED ADDRESS IS MOVED TO THE CURRENT ONE, by REPLACE: it is the same
   // place said the way the seat is known now, so Back does not land on the
@@ -1182,6 +1183,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                             <SeatChip
                               name={seat.unitLead}
                               handle={seat.unit?.effectiveLead?.handle}
+                              kind={seat.unit?.effectiveLead?.kind}
                             />
                           ) : index.hierarchy ? (
                             <span className="muted">none</span>
@@ -1192,7 +1194,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                         {
                           label: "Reports to",
                           value: manager ? (
-                            <SeatChip name={manager.name} handle={manager.handle} />
+                            <SeatChip
+                              name={manager.name}
+                              handle={manager.handle}
+                              kind={manager.kind}
+                            />
                           ) : index.hierarchy ? (
                             <span className="muted">nobody</span>
                           ) : (
@@ -1493,6 +1499,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={mine.data?.priorities ?? []}
                   now={now}
                   chrome={chrome}
+                  hrefOf={(row) => href(["work", row.key])}
                 />
                 <TaskBlock
                   title="Collaborating"
@@ -1500,6 +1507,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={mine.data?.collaborating ?? []}
                   now={now}
                   chrome={chrome}
+                  hrefOf={(row) => href(["work", row.key])}
                 />
                 <Checklist rows={mine.data?.checklist_items ?? []} />
               </>

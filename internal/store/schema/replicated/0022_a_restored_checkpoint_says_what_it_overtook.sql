@@ -1,0 +1,32 @@
+-- A restored checkpoint says which records written after it are void.
+--
+-- # What was missing
+--
+-- A reanchor of a broker restored from an older copy keeps THIS node's rows —
+-- newer than the copy — and follows the log from one below the generation
+-- record it appends. The fleet's other nodes do not learn of the move at once:
+-- a node whose rows were the copy's age goes on writing, in the generation the
+-- rows were in before, until its applier reaches the generation record or its
+-- heartbeat reads the fleet's generation. Those records land AFTER the
+-- generation record, decided from the copy-age rows the reanchor did not keep,
+-- and the applier used to apply them: a lower generation is "comparable and
+-- safely stale" for an ordinary record, and nothing said these were decided
+-- from another history. Applied on top of the kept rows they mix two histories
+-- no node could ever separate.
+--
+-- # What a value says
+--
+-- `stale_after` is the sequence of the generation record a RESTORED reanchor
+-- appended: every record positioned after it whose own generation is below the
+-- checkpoint's is void — consumed, its anchor advanced, applied into no row,
+-- gated as `overtaken`. Records of the checkpoint's own generation after it
+-- are the fleet's history in that generation and are applied as ever.
+--
+-- On the CHECKPOINT because that is the one row every follower of it reads
+-- before its first record — the node that re-anchored, after a restart, and a
+-- peer that adopted its snapshot before it got past them — and so the rule
+-- travels with every snapshot of the rows.
+--
+-- ZERO is no such rule: every checkpoint no restored reanchor placed, and every
+-- row that predates this file.
+ALTER TABLE statelog_cursor ADD COLUMN stale_after INTEGER NOT NULL DEFAULT 0;

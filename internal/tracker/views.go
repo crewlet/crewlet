@@ -196,12 +196,11 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 	at := w.Now()
 	view.UpdatedAt = at
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readView(ctx, tx, view.ID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -236,6 +235,10 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 				// which is a thing that happens rather than a
 				// permission scheme this tracker deliberately does
 				// not have.
+				//
+				// AGAINST THE ACTOR, which is the one name a person
+				// saves under: bound to a seat they write AS it
+				// (iam.ActorFor), whatever credential they held.
 				if current.Protected && current.Owner != "" &&
 					current.Owner != w.Actor {
 					return statelog.Decision{}, fmt.Errorf("tracker: view %s "+
@@ -253,7 +256,7 @@ func (w *Writer) WriteView(ctx context.Context, opID string, view View,
 					post.Rank = current.Rank
 				}
 			}
-			return w.decide(subject, OpPatch, ChangeViewSaved, scope, opID,
+			return w.decide(stamp, subject, OpPatch, ChangeViewSaved, scope, opID,
 				post, nil, at)
 		},
 	})

@@ -310,7 +310,7 @@ func (k ChangeKind) TaskCommit() bool {
 	switch k {
 	case ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 		ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
-		ChangeRouted, ChangeReparented,
+		ChangeRouted, ChangeMoved, ChangeReparented,
 		ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 		ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 		ChangeRestored, ChangePurged:
@@ -319,15 +319,15 @@ func (k ChangeKind) TaskCommit() bool {
 	return false
 }
 
-// mayFallBack reports the five kinds that reach a lead when nobody else is
+// mayFallBack reports the six kinds that reach a lead when nobody else is
 // there to hear them.
 //
-// FIVE RATHER THAN EVERY TASK KIND, because a fallback is for a change nobody
+// SIX RATHER THAN EVERY TASK KIND, because a fallback is for a change nobody
 // would otherwise learn about: a tag edit or a checklist tick on an
 // unassigned, unwatched task is not something to page a lead for.
 func (k ChangeKind) mayFallBack() bool {
 	switch k {
-	case ChangeCreated, ChangeStatus, ChangeRemoved,
+	case ChangeCreated, ChangeStatus, ChangeMoved, ChangeRemoved,
 		ChangeComment, ChangeRouted:
 		return true
 	}
@@ -344,6 +344,11 @@ func (k ChangeKind) mayFallBack() bool {
 //  3. Drop the actor, except under the one reason that wakes them.
 //  4. If no ordinary candidate survived, keep the LOWEST-RANKED surviving
 //     fallback and only that one.
+//
+// ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
+// author iam.ActorFor records for them — so the handle their own gestures
+// land on is the author itself, and a credential nobody is bound through
+// writes, and is watched, under its own login.
 func Route(candidates []Candidate, registry func(string) bool, actor string) []Candidate {
 	var ordinary, fallback []Candidate
 	for _, c := range candidates {

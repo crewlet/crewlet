@@ -1401,7 +1401,13 @@ export interface RetentionDomain {
   last_seq: number;
   bytes: number;
   max_bytes?: number;
-  /** ABSENT when the broker could not be asked — which is not zero headroom. */
+  /** On a log that claims identity, the top of `max_bytes` kept for the
+   *  records that install or lift a gate, so an eviction still lands on a log
+   *  full for everything else. ABSENT on a log that keeps none. */
+  reserve_bytes?: number;
+  /** Of the ceiling ORDINARY writes are held to — `max_bytes` less
+   *  `reserve_bytes`. ABSENT when the broker could not be asked — which is not
+   *  zero headroom. */
   headroom_fraction?: number;
   /** What the log took in over the trailing day — the rate `log_ceiling_short`
    *  holds the ceiling against `min_age` of. ABSENT where nothing was measured
@@ -1409,18 +1415,74 @@ export interface RetentionDomain {
    *  ticked), and `0` only for a log that took in nothing: the two are
    *  opposite facts and must never share a rendering. */
   bytes_per_day?: number;
-  /** What has actually been removed, and what THIS tick concluded may be. */
+  /** Everything below it may already be gone; it never moves down within a
+   *  generation. Meaningful only where `trim_floor_state` is `published`. */
   trim_floor: number;
+  /** What the last tick concluded may be removed — zero while blocked.
+   *  Meaningful only where `trim_floor_state` is `published`. */
   trim_to: number;
+  /**
+   * Whether the floor, the conclusion, the terms and the blocking term are a
+   * conclusion at all. After every reanchor the trim has concluded nothing
+   * about the adopted stream until its first tick on it, and that row read
+   * as "floor 0 · advancing" — about a trim that had looked at nothing.
+   */
+  trim_floor_state: RetentionTrimFloorState;
+  /** An EMPTY LIST where nothing is concluded — never null. */
   terms: RetentionTerm[];
   blocked_by?: string;
   blocked_since?: string;
+  /** Why the answering node refuses every read of this domain right now, and
+   *  which finding is behind a `wrong_stream`. ABSENT while it serves them. */
+  not_ready?: RetentionRefusal;
+  /** Why it refuses this domain's WRITES while serving its reads — a peer's
+   *  rows hold records the log lost (`log_truncated`). */
+  writes_refused?: RetentionRefusal;
   /** The sentence a blocked trim leads with. */
   prose?: string;
   /** The snapshot loop's OWN skip reason — a different problem from a blocked
    *  trim, with a different remedy, which is why it is its own field. */
   snapshot_blocked_by?: string;
+  /**
+   * The answering node could not read this log's evictions when it assembled
+   * the report — a failed store read, or the replicated estate closed for an
+   * adoption's rename or a shutdown. An unread log contributes no tombstone,
+   * so every node reads as NOT evicted there: a guess, not a fact, and never
+   * proof that a node was readmitted. ABSENT when they were read.
+   */
+  evictions_unreadable?: boolean;
 }
+
+/**
+ * What a domain's floor is — `statelog.TrimFloorStates`, held to the engine's
+ * by a gate in `internal/statelog`.
+ */
+export type RetentionTrimFloorState = "published" | "none_at_generation" | "unreadable";
+
+/**
+ * Which finding is behind a `wrong_stream` — `statelog.IdentityCauses`. One
+ * word refuses for four facts, each with its own remedy.
+ */
+export type RetentionIdentityCause =
+  "recreated" | "ahead_of_log" | "log_diverged" | "generation_passed";
+
+/** Why the answering node refuses a domain. */
+export interface RetentionRefusal {
+  /** A read refusal (`wrong_stream`, `stalled`, …) or a write refusal (`log_truncated`). */
+  code: string;
+  /** Kept as strings, so a cause a newer node names is shown rather than dropped. */
+  causes?: string[];
+  /** The sentence the refusal carries everywhere else it is met. */
+  detail: string;
+}
+
+/**
+ * A node's position generation against its domain's —
+ * `statelog.GenerationStates`. Only `current` compares with the log's
+ * sequences: a position from a generation the log has left is a number in a
+ * space that no longer exists.
+ */
+export type RetentionGenerationState = "current" | "left" | "ahead" | "unknown";
 
 /**
  * A term's value made explicit: read, unreadable, not applicable, or read and
@@ -1467,9 +1529,19 @@ export interface RetentionNodeDomain {
   /** BESIDE seq, never instead of it: a node applying nothing while its
    *  position advances looks identical to a caught-up one from either alone. */
   applied_through: number;
-  /** ABSENT rather than zero when the stream could not be read. */
+  /** Whether `seq` compares with the log's at all. */
+  generation_state: RetentionGenerationState;
+  /** ABSENT rather than zero when the stream could not be read — and for a
+   *  position from another generation, whose sequence is in another space. */
   lag?: number;
   deferred?: number;
+  /** The node's own report that the log holds another record at its
+   *  checkpoint than the one it consumed there. */
+  log_diverged?: boolean;
+  /** The stream its rows are keyed to, and the record its checkpoint stands
+   *  on — what a reanchor weighs. ABSENT where the node did not publish them. */
+  stream_created_at?: string;
+  checkpoint_stored_at?: string;
 }
 
 export interface RetentionEviction {
@@ -1505,18 +1577,61 @@ export interface RetentionAlarm {
   remedy: string;
 }
 
-/** What a retention gate answered. The outcome is three-valued (D134). */
+/**
+ * What a retention gate answered once the gesture was past its judgement: ONE
+ * GESTURE over every identity-claiming log, answered per log.
+ *
+ * The shape is `api.GateAnswer`, and the fixtures this dashboard's suite
+ * renders it from are the engine's own rendering
+ * (`internal/api/testdata/gate_answer.json`) — the dialog read a top-level
+ * `outcome` for as long as the route had stopped writing one, on fixtures it
+ * had typed itself, and rendered every gesture as "no acknowledgement".
+ */
 export interface RetentionGateResult {
   node: string;
   evicted: boolean;
+  /** The GESTURE's operation id — what finishes it, sent back unchanged. */
+  op_id: string;
+  /** Whether every log holds the record durably (`applied` or `pending`). */
+  complete: boolean;
+  domains: RetentionGateDomain[];
+}
+
+/** One log's answer to a gate gesture. */
+export interface RetentionGateDomain {
+  domain: string;
+  stream: string;
+  /** This log's own operation, derived from the gesture's. */
+  op_id: string;
   /**
-   * `applied` is durable AND in this node's rows; `pending` is durable at the
-   * position and unapplied HERE, so what it produced is unresolved rather
-   * than failed; `unknown` is the only one where retrying is correct.
+   * The write's three-valued outcome (D134), ABSENT when `error` is set: a
+   * refusal is not one of the three. `applied` is durable AND in this node's
+   * rows; `pending` is durable at the position and unapplied HERE; `unknown`
+   * may or may not be on the log.
    */
-  outcome: "applied" | "pending" | "unknown";
-  position?: { stream?: string; generation?: number; seq?: number };
-  op_id?: string;
+  outcome?: "applied" | "pending" | "unknown";
+  /**
+   * Set on an `unknown` THIS node cannot settle: its operation ledger may
+   * have lost the row the operation needs, so it published nothing and
+   * answers the same gesture the same way every time. Its remedy is another
+   * node (`other_node`), never Finish here.
+   */
+  unvouched?: boolean;
+  /** Where the record is durable — ABSENT for `unknown`, which has none: a
+   *  zero position would read as a record at the log's origin. */
+  position?: { stream: string; generation: number; seq: number };
+  /** Why the log gave no outcome, and the refusal's name (`log_full`,
+   *  `evicted`, …) where it was a refusal. */
+  error?: string;
+  reason?: string;
+  /**
+   * What to do about a log the gesture did not finish — values of
+   * [GATE_ACTIONS], kept as strings so an action a newer node sends is shown
+   * rather than dropped — and the sentence saying why, naming no surface's
+   * controls. Both absent on a finished log.
+   */
+  actions?: string[];
+  hint?: string;
 }
 
 export interface FleetSeatLease {
@@ -2162,6 +2277,17 @@ export interface WorkUnitRef {
   resolved: boolean;
 }
 
+/** A task's two unit references as a reader renders them — see
+ *  [WorkItemDetail.units].
+ *
+ *  BOTH HALVES, ALWAYS, because they answer different questions and a screen
+ *  draws them side by side: `filed` is the team the work belongs to and never
+ *  moves, `routing` is whose lead hears about it now. */
+export interface WorkItemUnits {
+  filed: WorkUnitRef;
+  routing: WorkUnitRef;
+}
+
 export interface WorkLeadRef {
   handle?: string;
   kind?: "agent" | "human" | "operator" | "system";
@@ -2179,6 +2305,24 @@ export interface WorkTaskCounts {
   closed: number;
 }
 
+/** When a project's work last changed, and who changed it.
+ *
+ *  MAINTAINED beside the counts, by the apply that writes the project's own
+ *  history row — so this is the head of that project's activity feed and never
+ *  disagrees with it. A turn's spend, a board re-order and an edit to the
+ *  project's own settings do not move it: none of them is the work changing.
+ *
+ *  `actor_kind` is which of the four kinds the handle belongs to, because
+ *  `ana` the person and `ana` the seat are different answers; an `operator` is
+ *  a token acting for the company and belongs to no seat. Either field may be
+ *  empty — a commit can name nobody — and the instant is what says the answer
+ *  exists at all. */
+export interface WorkLastChange {
+  at: string;
+  actor?: string;
+  actor_kind?: "agent" | "human" | "operator" | "system";
+}
+
 export interface WorkProjectRow {
   key: string;
   name: string;
@@ -2187,14 +2331,36 @@ export interface WorkProjectRow {
   lead: WorkLeadRef;
   default_assignee?: string;
   task_counts: WorkTaskCounts;
+  /** ABSENT for a project no work has ever been filed into, which is a
+   *  different fact from a project whose work is old — see
+   *  {@link WorkLastChange}. */
+  last_change?: WorkLastChange;
   archived?: boolean;
   version: number;
 }
 
+/**
+ * How many projects each archival set holds, under the listing's own `q` and
+ * `unit` and nothing else.
+ *
+ * `archived=` SELECTS one set, which is what makes the listing honest and also
+ * what leaves an empty answer ambiguous: a screen asking for the live projects
+ * and getting none cannot tell a company with no projects from one that has
+ * archived every one of them, and a reader acts on those two oppositely. The
+ * census is the same question minus the archival term, so the screen never
+ * guesses and never asks twice.
+ */
+export interface WorkProjectCensus {
+  active: number;
+  archived: number;
+}
+
 export interface WorkProjectsAnswer {
   projects: WorkProjectRow[];
+  /** The count of the set that was ASKED for — `census` of that mode. */
   total: number;
   truncated?: boolean;
+  census: WorkProjectCensus;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2486,6 +2652,10 @@ export interface WorkItem {
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */
   reassignments?: number;
+  /** Keys this task used to answer to — a project rename or a merge leaves
+   *  them, and every one still resolves, which is why they are worth
+   *  showing beside the current one. */
+  former_keys?: string[];
   /** What this task blocks: the MIRRORED half of a dependency, carried so a
    *  close can say who it unblocks without scanning the company. */
   dependents?: string[];
@@ -2558,10 +2728,40 @@ export interface WorkItemDetail {
   task: WorkItem;
   comments?: WorkComment[];
   history?: WorkChange[];
+  /** What the tasks this answer's `history` POINTS AT are called, id to item
+   *  key — the same map `WorkActivityAnswer.keys` carries, asked of one task's
+   *  own rows.
+   *
+   *  A relation, parent or cascade delta names the other end by its ID,
+   *  because a key belongs to that task's own row and a history row is written
+   *  once by every node and repaired by nothing. Neither side can fix
+   *  "Parent: — → 1d573f85-…" alone: the engine may not put a key on the
+   *  record, and this build holds no map to resolve one with. It is what
+   *  `LabelContext.taskKey` is threaded from.
+   *
+   *  PRESENT ONLY WHERE THE HISTORY IS, since those are the rows it labels,
+   *  and an id the answering node holds no row for is simply ABSENT — a
+   *  renderer falls back to the id, which is a value somebody set. */
+  keys?: Record<string, string>;
   links?: WorkLink[];
   /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
    *  raw map stays on the task; this is the reader's view of it. */
   fields?: WorkFieldValue[];
+  /** The task's two unit references RESOLVED against the org chart, on exactly
+   *  the terms `fields` is the custom-field map's reader view: the strings
+   *  stay on the task because they are the record, and this is what a person
+   *  reads.
+   *
+   *  It exists because what those strings hold is the unit's KEY — its `id` on
+   *  a company that gave its units one, which is a word chosen so that a
+   *  rename moves nothing and therefore a word nobody reads. `key` repeats
+   *  exactly what the row holds, so a filter built from it reaches the same
+   *  rows, and `resolved: false` is the finding "this names a team the chart
+   *  no longer has".
+   *
+   *  ABSENT for a task filed into no team at all, because that is what its two
+   *  empty strings already say. */
+  units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
@@ -3329,6 +3529,19 @@ export interface WorkActivityRecord {
 
 export interface WorkActivityAnswer {
   records: WorkActivityRecord[];
+  /** The key of every task id these records NAME, resolved on the answering
+   *  node — a relation delta carries the other task's id, because a key belongs
+   *  to that task's own row and a history row is written once by N nodes and
+   *  repaired by nothing. So the id is what the record claims and the key is
+   *  what this answer resolves, which is the same split `subject_key` already
+   *  takes.
+   *
+   *  ABSENT IS NOT EMPTY, in both directions. An id the answering node holds no
+   *  row for is left OUT rather than mapped to "" — a deferred record names a
+   *  task this node has not applied, and a blank key renders as a task with no
+   *  name — and a page whose deltas name nothing resolvable carries no map at
+   *  all, so a reader guards for undefined rather than for `{}`. */
+  keys?: Record<string, string>;
   /** Resumes exactly after the last row, as a log POSITION — a bare sequence
    *  names no stream and no generation, so a cursor built from one cannot
    *  survive a reanchor. */

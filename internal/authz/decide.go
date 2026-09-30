@@ -114,9 +114,10 @@ const (
 	// and a seat in [Object.Owner].
 	ClassChartObject Class = "chart_object"
 
-	// ClassDestructive — removing and restoring a task, trashing and
-	// restoring a page. The CONTAINER's lead, or the admin path: a
-	// colleague may file work in a project and may not take it out again.
+	// ClassDestructive — removing, restoring and moving a task out of its
+	// project, trashing and restoring a page. The CONTAINER's lead, or the
+	// admin path: a colleague may file work in a project and may not take
+	// it out again.
 	ClassDestructive Class = "destructive"
 
 	// ClassAuthored — editing and removing a comment, on a page or on a

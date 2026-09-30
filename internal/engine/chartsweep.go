@@ -125,11 +125,12 @@ type chartSealSightings struct {
 // chartLogEnd is the chart log's last sequence, as the broker holds it now —
 // what a census of this node's chart rows is proved against.
 func (e *Engine) chartLogEnd(ctx context.Context) (uint64, error) {
-	if e.native == nil || e.native.log == nil {
+	n := e.native.Load()
+	if n == nil || n.log == nil {
 		return 0, errors.New("engine: this node runs no chart domain, so there " +
 			"is no chart log to read the end of")
 	}
-	running := e.native.log.Domain(chart.Domain{}.Name())
+	running := n.log.Domain(chart.Domain{}.Name())
 	if running == nil {
 		return 0, errors.New("engine: the chart log is not running on this node")
 	}

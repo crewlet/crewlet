@@ -162,11 +162,19 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		}
 	}
 
-	// THE SEAT FIRST — see "A seat is claimed first" above. Its op id names the seat's own claim, so a retry of the
-	// gesture collapses into the first attempt's.
+	// THE SEAT FIRST — see "A seat is claimed first" above. Its op id is a
+	// STEP of the gesture's ([statelog.StepOpID]), so a retry of the gesture
+	// collapses into the first attempt's claim, and carries the gesture's
+	// mint instant, which is what the ledger vouches for a retry by.
+	//
+	// A STEP THAT COLLAPSES IS ANSWERED BY THE LEDGER BEFORE ITS DECIDE RUNS
+	// ([statelog.Result.Collapsed]), so nothing after it may build on what a
+	// decide computes — and nothing here does: every step reads what it needs
+	// in its own snapshot, and hands the next only the position it landed at,
+	// which a collapsed answer carries as the earlier copy's.
 	if in.Seat != "" {
 		seated, seatErr := w.claim(ctx, at, KindSeat, in.Seat, in.PersonID,
-			Claim{}, in.OpID+":seat", &in)
+			Claim{}, statelog.StepOpID(in.OpID, "seat"), &in)
 		if seatErr != nil {
 			return statelog.Result{}, seatErr
 		}
@@ -195,7 +203,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 		// is the one that should fail before anything else has
 		// happened.
 		address, claimErr := w.claim(ctx, at, KindEmail, blind, in.PersonID,
-			Claim{Sealed: sealedEmail}, in.OpID+":email", &in)
+			Claim{Sealed: sealedEmail}, statelog.StepOpID(in.OpID, "email"), &in)
 		if claimErr != nil {
 			return statelog.Result{}, claimErr
 		}
@@ -211,7 +219,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// window, and the person would be written holding the login they gave
 	// up rather than the one they chose.
 	claimed, err := w.claim(ctx, at, KindLogin, in.Login, in.PersonID, Claim{},
-		in.OpID+":login:"+in.Login, &in)
+		statelog.StepOpID(in.OpID, "login", in.Login), &in)
 	if err != nil {
 		return statelog.Result{}, err
 	}
@@ -254,7 +262,20 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 	// operation ledger, which is the mechanism for that anyway — the
 	// guarding row never was.
 	result, err := w.publishAt(ctx, at,
-		w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
+		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
+	if err == nil && result.Collapsed && in.Invitation != "" {
+		// A REDEMPTION THAT LANDED AS A COPY THIS CALL CANNOT PROVE IS ITS
+		// OWN IS A LINK ALREADY USED, as [Writer.createsNobodyTwice] says of
+		// one its decide finds: the framework answers a retry from the ledger
+		// before that decide runs, so the refusal is made here instead.
+		// Answered as landed, the redemption goes on to open a session — for
+		// whoever holds the link and the first password, past any second
+		// factor enrolled since. It is refused even where the copy happens
+		// to be this call's own ambiguous append, since nothing can tell the
+		// two apart — and there the refusal's own words are true: the person
+		// the link created is enrolled, and signs in with that password.
+		return statelog.Result{}, in.alreadyEnrolled()
+	}
 	// AN ENROLMENT THAT CONFERS ANYTHING IS A GRANT CHANGE — from nothing
 	// to what it carries — and the first person a company enrols, invited
 	// under the deployment's own token, is the one row of those an audit
@@ -269,8 +290,7 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 }
 
 // createsNobodyTwice refuses a person record for somebody who already exists,
-// read inside the record's own snapshot, unless it is the very enrolment that
-// created them being retried.
+// read inside the record's own snapshot.
 //
 // # An enrolment creates; it never rewrites
 //
@@ -285,22 +305,27 @@ func (w *Writer) Enrol(ctx context.Context, in Enrolment) (statelog.Result, erro
 //     person it created signs in from here on, and a retry answered with a
 //     session would let whoever holds the link and the first password sign in
 //     past a second factor enrolled since, and after a password change.
-//   - AN ADMINISTRATOR'S CREATE is let through only when the operation ledger
-//     holds this very operation — a retry of the create that made them, whose
-//     record the ledger then collapses into the first — and is
-//     [ErrOperationReused] otherwise.
+//   - AN ADMINISTRATOR'S CREATE is [ErrOperationReused].
+//
+// # The retry of the create that made them never gets here
+//
+// The framework answers an operation its ledger already holds BEFORE it runs a
+// decide ([statelog.Snap.Held]), collapsed into the first copy — so a decide
+// that runs has, by construction, an operation id this node's ledger does not
+// hold, and a person already enrolled under it is somebody ANOTHER operation
+// made. This used to read the ledger for its own id to let that retry through;
+// under the framework's answer that read could only ever say "not held", and
+// was a second, dead copy of a question the framework now owns. Where the
+// ledger has LOST the row — its sweep, an adoption — the framework turns this
+// refusal of an operation minted before the loss into `unknown`
+// ([statelog.Result.Unvouched]) rather than a refusal of the caller's own
+// first attempt.
 func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 	in Enrolment) error {
 
 	enrolled, err := isEnrolled(ctx, tx, in.PersonID)
 	if err != nil || !enrolled {
 		return err
-	}
-	if in.Invitation == "" {
-		applied, err := opApplied(ctx, tx, in.OpID)
-		if err != nil || applied {
-			return err
-		}
 	}
 	return in.alreadyEnrolled()
 }
@@ -352,20 +377,6 @@ func isEnrolled(ctx context.Context, tx *sql.Tx, personID string) (bool, error) 
 			personID, err)
 	}
 	return !reservation(kind), nil
-}
-
-// opApplied reports whether this node's operation ledger holds an operation,
-// read inside a decide's snapshot — so the answer is about the same applied
-// state as the rows beside it.
-func opApplied(ctx context.Context, tx *sql.Tx, opID string) (bool, error) {
-	var held bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM iam_ops WHERE op_id = ?)`, opID).
-		Scan(&held); err != nil {
-		return false, fmt.Errorf("iamdomain: read the operation ledger for "+
-			"%s: %w", opID, err)
-	}
-	return held, nil
 }
 
 // basisOf is the check an enrolment's named authority is held to, or nil for
@@ -443,9 +454,17 @@ type Enrolment struct {
 	// any other ([Writer.redeemable]).
 	Seat string
 
-	// OpID is the operation id for the whole gesture. Each append derives
-	// its own from it with a suffix, so a retry of the sequence dedupes
-	// step by step rather than all-or-nothing.
+	// OpID is the operation id for the whole gesture. Each append is a STEP
+	// of it ([statelog.StepOpID]), so a retry of the sequence dedupes step by
+	// step rather than all-or-nothing, and every step carries the gesture's
+	// mint instant.
+	//
+	// IN THE STATE LOG'S GRAMMAR ([statelog.NewOpID], [statelog.DeriveOpID])
+	// — an administrator's create key, a bare uuid7, already is — because
+	// that instant is what the ledger vouches for a retry by: a gesture id
+	// outside it is read as minted at the epoch, and once this node's ledger
+	// has lost a row of the kind a step arbitrates on, every step under it is
+	// answered `unknown` without being published.
 	OpID   string
 	Reason string
 }
@@ -904,7 +923,7 @@ func (w *Writer) claim(ctx context.Context, at *statelog.Position,
 		return nil
 	}
 	return w.publishAt(ctx, at,
-		w.request(&rec, opID, statelog.PatternCreate, decide))
+		w.request(ctx, &rec, opID, statelog.PatternCreate, decide))
 }
 
 // chartPositionOf is the org chart log's checkpoint on THIS node, read inside
@@ -926,11 +945,11 @@ func chartPositionOf(ctx context.Context, tx *sql.Tx) uint64 {
 	if err != nil {
 		return 0
 	}
-	// UINT64 ON THE RECORD, int64 in the column, which is this domain's
-	// existing convention for a packed position ([Eviction.From] is the
-	// same). A packed position is never negative — the generation is a
-	// uint32 shifted 40, which cannot reach the sign bit — so the two
-	// forms name one value.
+	// UINT64 ON THE RECORD, int64 in the column, which is the framework's
+	// own convention for a packed position ([statelog.EvictionRow.From] is
+	// the same). A packed position is never negative — the generation is a
+	// uint32 shifted 40, which cannot reach the sign bit — so the two forms
+	// name one value.
 	return uint64(statelog.Position{
 		Stream: topics.ChartLogStream, Generation: uint32(generation),
 		Seq: uint64(seq),
@@ -1034,7 +1053,7 @@ func (w *Writer) release(ctx context.Context, at *statelog.Position,
 		return nil
 	}
 	return w.publishAt(ctx, at,
-		w.request(&rec, opID, statelog.PatternArbitrated, decide))
+		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 }
 
 // Rename moves a person from one login to another: the NEW ONE IS CLAIMED
@@ -1136,7 +1155,7 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 	// the claim that freed its token.
 	mark := w.gesture()
 	claimed, err := w.claim(ctx, mark, kind, to, personID, Claim{},
-		opID+":"+string(kind), nil)
+		statelog.StepOpID(opID, string(kind)), nil)
 	switch {
 	case err != nil:
 		return statelog.Result{}, err
@@ -1149,7 +1168,7 @@ func (w *Writer) replace(ctx context.Context, kind ObjectKind, personID, from,
 		claimed.OpID = opID
 		return claimed, nil
 	}
-	releaseID := opID + ":release-" + string(kind)
+	releaseID := statelog.StepOpID(opID, "release", string(kind))
 	released, err := w.release(ctx, mark, kind, from, personID, releaseID,
 		reason, true)
 	var taken *ErrClaimed
@@ -1215,7 +1234,7 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 		return err
 	}
 	result, err := w.publish(ctx,
-		w.request(&rec, opID, statelog.PatternArbitrated, decide))
+		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 	return result, err
 }
 
@@ -1286,7 +1305,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 		return err
 	}
 	result, err := w.publish(ctx,
-		w.request(&rec, opID, statelog.PatternArbitrated, decide))
+		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 	w.announce(ctx, result, err, types.IAMSessionGenerationBumped{
 		Generation: generation, By: w.Actor, OperatorID: w.OperatorID,
 		Reason: reason,
@@ -1316,7 +1335,7 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, nil))
+	result, err := w.publish(ctx, w.request(ctx, &rec, opID, statelog.PatternArbitrated, nil))
 	return result, err
 }
 
@@ -1446,7 +1465,7 @@ func (w *Writer) remove(ctx context.Context, personID, opID, reason string) (
 		return err
 	}
 	result, err := w.publish(ctx,
-		w.request(&rec, opID, statelog.PatternArbitrated, decide))
+		w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 	return result, err
 }
 
@@ -1509,12 +1528,22 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 		})
 		return err
 	}
-	req := w.request(&rec, in.OpID, statelog.PatternCreate, decide)
+	req := w.request(ctx, &rec, in.OpID, statelog.PatternCreate, decide)
 	// THE ONE WRITE IN THIS ESTATE THAT DOES NOT WAIT FOR ITS OWN ROW, and
 	// only because nothing in the answer reads it. See
 	// [SessionStart.NoWait].
 	req.NoWait = in.NoWait
 	result, err := w.publish(ctx, req)
+	if err == nil && result.Collapsed {
+		// THE COUNTERS ARE THE DECIDE'S, and the framework answered this
+		// call with a copy of the operation it cannot prove is this call's
+		// — so the epoch and the generation above may describe a decision
+		// nothing published, or none at all. The generation is on no record or row to read back, and
+		// a bearer carrying one the session was not opened at is one a
+		// fleet-wide invalidation between the two does not end. See
+		// [ErrCollapsed].
+		return SessionOpened{Result: result}, ErrCollapsed
+	}
 	opened.Result = result
 	return opened, err
 }
@@ -1661,7 +1690,7 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 		}
 		return nil
 	}
-	result, err := w.publish(ctx, w.request(&rec, opID, statelog.PatternArbitrated, decide))
+	result, err := w.publish(ctx, w.request(ctx, &rec, opID, statelog.PatternArbitrated, decide))
 	return result, err
 }
 
@@ -1931,7 +1960,7 @@ func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
+	req := w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
 		if err = decide(tx); err != nil {
 			return err
 		}
@@ -1961,6 +1990,16 @@ type CredentialSet struct {
 	// the decide unwrapped and nothing is published: decided from a read
 	// the caller made first, it would be decided on a set that may have
 	// moved.
+	//
+	// WHAT IT FORMED IS NOT WHAT LANDED ON A COLLAPSED RESULT
+	// ([statelog.Result.Collapsed]): the framework answered the call with
+	// a copy of the operation it cannot prove is this call's, so this
+	// function may never have run, or run in a round nothing published.
+	// This package cannot tell which of a caller's values that matters
+	// for — only the caller knows it minted recovery codes or a seed to
+	// show — so it answers the result whole, and a caller that shows what
+	// it formed here shows it only on a result that is not collapsed, and
+	// otherwise starts again under a fresh operation id.
 	Apply func([]Credential) ([]Credential, error)
 
 	OpID   string
@@ -2127,7 +2166,15 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		return err
 	}
 	result, err := w.publish(ctx,
-		w.request(&rec, in.OpID, statelog.PatternArbitrated, decide))
+		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
+	if err == nil && result.Collapsed {
+		// WHAT THE TOKEN CARRIES IS THE DECIDE'S — cut to what its owner
+		// held in THAT snapshot — and the framework answered this call with
+		// a copy of the operation it cannot prove is this call's, so the
+		// grants above may describe a decision nothing published. The copy that landed is a token
+		// nobody was shown, and it expires. See [ErrCollapsed].
+		return TokenMinted{Result: result}, ErrCollapsed
+	}
 	minted.Result = result
 	return minted, err
 }
@@ -2493,9 +2540,64 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return nil
 	}
 	result, err := w.publish(ctx,
-		w.request(&rec, in.OpID, statelog.PatternCreate, decide))
+		w.request(ctx, &rec, in.OpID, statelog.PatternCreate, decide))
+	if err == nil && result.Collapsed {
+		// ANSWERED FROM THE LEDGER, so the decide above never compared this
+		// call's terms with the invitation the key issued, nor read the
+		// deadline it keeps. Both are read back now, from the invitation's
+		// own row, by the comparison the decide makes.
+		applied := result.Outcome == statelog.OutcomeApplied
+		if expires, err = w.issuedAs(ctx, id, blind, seat, in, applied); err != nil {
+			return InviteIssued{Result: result}, err
+		}
+	}
 	return InviteIssued{Result: result, ID: id, Secret: secret,
 		ExpiresAt: expires}, err
+}
+
+// issuedAs is the invitation an operation issued, read back after the
+// framework answered its retry from the ledger ([statelog.Result.Collapsed]):
+// the deadline it keeps, or [ErrOperationReused] where the key issued it on
+// other terms — the refusal the decide gives a retry it does run.
+//
+// # No row is two opposite answers, and applied tells them apart
+//
+// The collapsed result says whether THIS NODE applied the invitation: applied
+// is its ledger's answer or its own applier's, pending is a copy the broker
+// holds that has not reached this node yet.
+//
+//   - NOT APPLIED HERE, and no row: the invitation landed and its terms cannot
+//     be read yet — unavailable, and the same key retried once this node has
+//     applied it is answered in full.
+//   - APPLIED HERE, and no row: the row existed and the retention sweep has
+//     COLLECTED it, which it does only to an invitation that was redeemed or
+//     aged out ([SweepRecordVersion]) — so the link the key issued admits
+//     nobody, and the answer is the one the decide gives the row it would
+//     have found: [ErrOperationReused]. Read as "not applied yet" it told the
+//     caller to retry the same key, which found the same absence on every
+//     attempt for the rest of the ledger's month.
+func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
+	in InviteMint, applied bool) (time.Time, error) {
+
+	expires := in.ExpiresAt
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return w.issuedBefore(ctx, tx, id, blind, seat, in, &expires)
+	})
+	switch {
+	case errors.Is(err, errNothingToPublish):
+		return expires, nil
+	case err != nil:
+		return time.Time{}, err
+	case applied:
+		return time.Time{}, fmt.Errorf("%w: operation %s issued invitation %s, "+
+			"which this node applied and the retention sweep has since "+
+			"collected — it was redeemed or aged out, so its link admits "+
+			"nobody; issue a new one under a new key", ErrOperationReused,
+			in.OpID, id)
+	}
+	return time.Time{}, fmt.Errorf("iamdomain: operation %s issued invitation "+
+		"%s and this node has not applied it yet, so it cannot say on which "+
+		"terms — retry the same key: %w", in.OpID, id, statelog.ErrUnavailable)
 }
 
 // invitableSeat refuses a seat an invitation may not bind, read inside the
@@ -2770,7 +2872,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	if err != nil {
 		return statelog.Result{}, err
 	}
-	req := w.request(&rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
+	req := w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, func(tx *sql.Tx) (err error) {
 		if err = decide(tx); err != nil {
 			return err
 		}
@@ -2844,6 +2946,9 @@ type PersonUpdate struct {
 	// IT MAY REFUSE, which a caller uses for everything this package
 	// cannot judge — an unknown colleague level, a stage the surface will
 	// not set here — and the refusal travels out of the decide unwrapped.
+	//
+	// And on a COLLAPSED result what it formed may not be what landed, for
+	// [CredentialSet.Apply]'s reason.
 	Apply func(Person) (Person, error)
 
 	OpID   string
@@ -2893,7 +2998,7 @@ func (w *Writer) SpendInvitation(ctx context.Context, in InvitationSpend) (
 		return statelog.Result{}, err
 	}
 	result, err := w.publish(ctx,
-		w.request(&rec, in.OpID, statelog.PatternArbitrated, nil))
+		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, nil))
 	return result, err
 }
 

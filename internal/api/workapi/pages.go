@@ -110,7 +110,7 @@ func (s *Service) postPageRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	quiet, _ := args["quiet"].(bool)
-	s.pageGesture(w, r, authz.ActionPageRename,
+	s.pageGesture(w, r, authz.ActionPageRename, args,
 		func(ctx context.Context, actor pages.Actor, id string) (pages.Written, error) {
 			return s.store.Rename(ctx, actor, id, title, quiet)
 		})
@@ -118,17 +118,19 @@ func (s *Service) postPageRename(w http.ResponseWriter, r *http.Request) {
 
 // deletePage puts a page in the trash, and postPageRestore takes it back.
 func (s *Service) deletePage(w http.ResponseWriter, r *http.Request) {
-	if args, ok := readArgs(w, r); !ok || !only(w, args) {
+	args, ok := readArgs(w, r)
+	if !ok || !only(w, args) {
 		return
 	}
-	s.pageGesture(w, r, authz.ActionPageTrash, s.store.Trash)
+	s.pageGesture(w, r, authz.ActionPageTrash, args, s.store.Trash)
 }
 
 func (s *Service) postPageRestore(w http.ResponseWriter, r *http.Request) {
-	if args, ok := readArgs(w, r); !ok || !only(w, args) {
+	args, ok := readArgs(w, r)
+	if !ok || !only(w, args) {
 		return
 	}
-	s.pageGesture(w, r, authz.ActionPageRestore, s.store.Restore)
+	s.pageGesture(w, r, authz.ActionPageRestore, args, s.store.Restore)
 }
 
 // postPagePurge destroys a page permanently.
@@ -163,8 +165,11 @@ func (s *Service) postPagePurge(w http.ResponseWriter, r *http.Request) {
 	if !s.maySkillPage(w, r, detail.Page.Container) {
 		return
 	}
-	key := operationKey(r)
-	actor, ok := s.pageActor(w, r, key)
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
+	actor, ok := s.pageActor(w, r, key, purgeArgs(confirm, reason))
 	if !ok {
 		return
 	}
@@ -187,7 +192,8 @@ func (s *Service) postPagePurge(w http.ResponseWriter, r *http.Request) {
 // somebody the caller says may moderate — and this is where the second half
 // is decided.
 func (s *Service) deletePageComment(w http.ResponseWriter, r *http.Request) {
-	if args, ok := readArgs(w, r); !ok || !only(w, args) {
+	args, ok := readArgs(w, r)
+	if !ok || !only(w, args) {
 		return
 	}
 	detail, comment, ok := s.readComment(w, r)
@@ -200,8 +206,11 @@ func (s *Service) deletePageComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	key := operationKey(r)
-	actor, ok := s.pageActor(w, r, key)
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
+	actor, ok := s.pageActor(w, r, key, args)
 	if !ok {
 		return
 	}
@@ -213,14 +222,15 @@ func (s *Service) deletePageComment(w http.ResponseWriter, r *http.Request) {
 	}
 	body := pageReceipt(detail.Page, written)
 	body["comment_id"], body["removed"] = comment.ID, true
-	answer(w, key, written.Outcome.Outcome, body)
+	answer(w, key, written.Outcome.Outcome, written.Outcome.Unvouched, body)
 }
 
 // pageGesture is the shape of the three row-decided page verbs: read the page,
 // decide the verb on its container, act, answer. act is handed the request's
-// context, the one every other step here reads under.
+// context, the one every other step here reads under; args are what the
+// request asks, which its operation is bound to ([pageKey]).
 func (s *Service) pageGesture(w http.ResponseWriter, r *http.Request,
-	action authz.Action,
+	action authz.Action, args map[string]any,
 	act func(context.Context, pages.Actor, string) (pages.Written, error)) {
 
 	detail, ok := s.readPage(w, r, r.PathValue("id"))
@@ -235,8 +245,11 @@ func (s *Service) pageGesture(w http.ResponseWriter, r *http.Request,
 	if !s.maySkillPage(w, r, detail.Page.Container) {
 		return
 	}
-	key := operationKey(r)
-	actor, ok := s.pageActor(w, r, key)
+	key, ok := operationKey(w, r)
+	if !ok {
+		return
+	}
+	actor, ok := s.pageActor(w, r, key, args)
 	if !ok {
 		return
 	}
@@ -277,7 +290,8 @@ func (s *Service) maySkillPage(w http.ResponseWriter, r *http.Request,
 func answerPage(w http.ResponseWriter, key string, page pages.Page,
 	written pages.Written) {
 
-	answer(w, key, written.Outcome.Outcome, pageReceipt(page, written))
+	answer(w, key, written.Outcome.Outcome, written.Outcome.Unvouched,
+		pageReceipt(page, written))
 }
 
 // pageReceipt is what a page write answers with: the page it was about, the

@@ -38,8 +38,7 @@ import { Button, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
 import { ArrowForwardGlyph, DashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { indexOrg, seatLookup, type SeatKind } from "~/lib/seats.ts";
 import type { WorkView } from "~/protocol/index.ts";
 
 /**
@@ -99,13 +98,12 @@ function viewMarks(view: WorkView): ReactNode[] {
 
 export function SavedViews({ id }: { id?: string }) {
   const nav = useNavigator();
-  const viewer = useViewer();
   const org = useOrg();
   // AN OWNER IS A PERSON, and the chart is what turns their handle into the
   // name they are actually called. A handle that is not in it — an operator
   // writing through the MCP surface owns views too — falls through to the
   // handle itself rather than to nothing.
-  const index = useMemo(() => indexOrg(org), [org]);
+  const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
   // THE VIEWER IS THE CALLER, and the engine knows who that is: the strip is
   // ordered by the pins of the seat this browser is bound to, and there is no
   // parameter to choose somebody else's.
@@ -150,14 +148,17 @@ export function SavedViews({ id }: { id?: string }) {
     // FALLING BACK TO THE HANDLE rather than to nothing: an operator writing
     // through the MCP surface owns views too and holds no seat, and their
     // handle is still the thing to say.
-    const ownerName = one.owner ? (index.byHandle.get(one.owner)?.name ?? one.owner) : undefined;
+    //
+    // AND THE KIND TRAVELS WITH IT, because the badge draws the dashed ring
+    // off it: a name alone makes a human owner look like an agent.
+    const owner = one.owner ? who(one.owner) : undefined;
     // A REDIRECT WOULD BE WRONG HERE, because the reader asked for the view
     // rather than for the board: the button says what running it means.
     return (
       <>
         <PageNote>
-          {ownerName
-            ? `A personal view owned by ${ownerName}.`
+          {owner
+            ? `A personal view owned by ${owner.name}.`
             : "A shared view — everybody in this company sees it."}{" "}
           Running it hands its saved parameters to the board, where any one of them can be changed.
         </PageNote>
@@ -170,7 +171,7 @@ export function SavedViews({ id }: { id?: string }) {
           icon="view_column"
           identifier={one.key}
           title={one.name}
-          facts={viewFacts(one, ownerName)}
+          facts={viewFacts(one, owner)}
         />
         <ViewFacts view={one} />
         <Button
@@ -244,7 +245,7 @@ export function SavedViews({ id }: { id?: string }) {
               // view is SHARED, a setting somebody chose.
               cell: (v) =>
                 v.owner ? (
-                  <SeatCell handle={v.owner} name={index.byHandle.get(v.owner)?.name} />
+                  <SeatCell handle={v.owner} {...who(v.owner)} />
                 ) : (
                   <span className="t-caption">shared</span>
                 ),
@@ -293,7 +294,7 @@ export function SavedViews({ id }: { id?: string }) {
  * dropped, and [ViewFacts] below is now what it was always named for: the
  * parameters the view actually carries.
  */
-function viewFacts(view: WorkView, ownerName?: string): Fact[] {
+function viewFacts(view: WorkView, owner?: { name: string; kind?: SeatKind }): Fact[] {
   const marks = viewMarks(view);
   return [
     { label: "Shape", value: view.type },
@@ -303,7 +304,7 @@ function viewFacts(view: WorkView, ownerName?: string): Fact[] {
       // field nobody filled in — so it is a word and never a dash.
       label: "Owner",
       value: view.owner ? (
-        <SeatCell handle={view.owner} name={ownerName} />
+        <SeatCell handle={view.owner} {...owner} />
       ) : (
         <span className="t-caption">shared</span>
       ),

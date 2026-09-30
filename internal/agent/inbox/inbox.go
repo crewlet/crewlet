@@ -17,6 +17,8 @@
 package inbox
 
 import (
+	"time"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -289,6 +291,11 @@ type Routing struct {
 	// itself is keyed to avoid.
 	WorkKey string
 
+	// WorkSince is when that unit of work began — see [WorkSinceFor] —
+	// and it is derived from the same constituents as the key, for the
+	// reason the key is: a redelivery must reproduce it.
+	WorkSince time.Time
+
 	// Coalesce is true when the partition must be merged into one digest
 	// trigger, so the seat runs one turn instead of N.
 	Coalesce bool
@@ -309,9 +316,10 @@ type Routing struct {
 // up by it, so including it would produce a key that matches nothing.
 func Route(evs []*events.Event, ledgered func(eventType string) bool) Routing {
 	return Routing{
-		WorkKey:  WorkKeyFor(evs, ledgered),
-		Coalesce: len(evs) > 1,
-		Events:   evs,
+		WorkKey:   WorkKeyFor(evs, ledgered),
+		WorkSince: WorkSinceFor(evs, ledgered),
+		Coalesce:  len(evs) > 1,
+		Events:    evs,
 	}
 }
 
@@ -324,6 +332,36 @@ func WorkKeyFor(evs []*events.Event, ledgered func(string) bool) string {
 		}
 	}
 	return workkey.Derive(ids)
+}
+
+// WorkSinceFor is when the unit of work [WorkKeyFor] names BEGAN: the earliest
+// instant any event the key is derived from was created, and the zero instant
+// exactly when the key is empty.
+//
+// THE SAME CONSTITUENTS AS THE KEY, filtered by the same predicate, because the
+// two are one identity: every operation id a turn derives from the key carries
+// this instant as its mint time, and the state log will not decide again an
+// operation minted before its node adopted a donated snapshot. A redelivery
+// hands over the very same events, so it reproduces the instant exactly as it
+// reproduces the key — which no instant of the dispatch itself could do.
+//
+// The EARLIEST rather than any other, because the instant is read as a lower
+// bound on when the work could first have written anything: an operation that
+// looks older than it is is answered `unknown` on a node that adopted since,
+// while one that looks younger is decided again. An event carrying no
+// timestamp is read as the zero instant for the same reason.
+func WorkSinceFor(evs []*events.Event, ledgered func(string) bool) time.Time {
+	var since time.Time
+	first := true
+	for _, e := range evs {
+		if e == nil || !ledgered(e.Type) {
+			continue
+		}
+		if first || e.Timestamp.Before(since) {
+			since, first = e.Timestamp.UTC(), false
+		}
+	}
+	return since
 }
 
 // Degraded is the fallback when coalescing declines or fails.

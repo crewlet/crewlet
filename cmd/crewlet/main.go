@@ -57,7 +57,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 
 	"gopkg.in/yaml.v3"
@@ -1128,25 +1127,18 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		}
 	}()
 
-	// THE EPOCH THIS NODE STARTS ON. With a Tier B file it is that file's
-	// company, which the reconcile below converges onto the fleet's before
-	// anything is claimed. Without one it is whatever this node's store has
-	// marked active — because the store is authoritative at runtime and a
-	// node whose company already lives there needs no file at all.
-	//
-	// Read BEFORE the engine, in its own open-and-close, so the engine still
-	// owns the backends it opens; see [companyFromStore].
-	if company == nil {
-		if company, err = companyFromStore(ctx, *cfg.bootstrap); err != nil {
-			return err
-		}
+	// THE EPOCH THIS NODE STARTS ON: see [bootOptions], which is where it
+	// is decided and what its test holds. The options go to the engine
+	// WHOLE, so no field of them can be decided there and dropped here.
+	opts, err := bootOptions(ctx, *cfg.bootstrap, boot, company)
+	if err != nil {
+		return err
 	}
+	opts.Metrics, opts.Mode = recorder, nodeMode
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
-		"company", companyName(company))
-	e, err := engine.New(ctx, engine.Options{
-		Bootstrap: boot, Company: company, Metrics: recorder, Mode: nodeMode,
-	})
+		"company", companyName(opts.Company))
+	e, err := engine.New(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -1217,6 +1209,9 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 		// And the nudge, so an operator's change lands on every node in
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
+		// And this node's Tier A, which a document is judged against as
+		// the apply judges it — see configapi.Options.Bootstrap.
+		Bootstrap: boot,
 	})
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
@@ -1861,9 +1856,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// retention gesture the engine cannot make on its own: an
 		// operator's assertion that a copy has left the host.
 		Retention: e.Backends().Fleet,
-		// And the eviction gate, which is a RECORD rather than a
-		// coordination write — so it goes through the same writer a
-		// seat's tools do, and carries the same three-valued outcome.
+		// And the eviction gate, which is a RECORD on every
+		// identity-claiming log rather than a coordination write —
+		// judged once, written to each log, and answered per log with
+		// the same three-valued outcome every write has.
 		Nodes: nativeNodes(e),
 		// The capacity window. The engine itself refuses the verb when
 		// this node is publishing, so the route exists in every mode and
@@ -2596,37 +2592,20 @@ func nativeWork(e *engine.Engine) queries.WorkReader {
 	return nil
 }
 
-// nativeNodes is the eviction gate, or nil where this node runs no tracker —
-// converted for [nativeWork]'s reason: a typed nil would pass the route's
-// registration check and panic on the first press.
+// nativeNodes is the eviction gate over every identity-claiming log, or nil
+// where this node runs no state log — converted for [nativeWork]'s reason: a
+// typed nil would pass the route's registration check and panic on the first
+// press.
+//
+// NOT THE TRACKER'S WRITER, which is what this was: that wrote the tracker's
+// log alone, so an eviction lifted one log's pin and left the pages, chart and
+// identity logs counting the node for ever — and a company whose tracker is
+// external, which still runs every log, could not evict anybody at all.
 func nativeNodes(e *engine.Engine) api.NodeGate {
-	if w := e.TrackerWriter(); w != nil {
-		return nodeGate{writer: w}
+	if g := e.NodeGate(); g != nil {
+		return g
 	}
 	return nil
-}
-
-// nodeGate writes an eviction or a readmission AS the party that pressed it,
-// through the node's own tracker writer: the record's author is theirs, of
-// their kind, with the credential they pressed it through, rather than the
-// node that happened to serve the request.
-type nodeGate struct{ writer *tracker.Writer }
-
-func (g nodeGate) EvictNode(ctx context.Context, opID, nodeID string,
-	by iam.Actor) (tracker.WriteResult, error) {
-
-	return g.as(by).EvictNode(ctx, opID, nodeID)
-}
-
-func (g nodeGate) ReadmitNode(ctx context.Context, opID, nodeID string,
-	by iam.Actor) (tracker.WriteResult, error) {
-
-	return g.as(by).ReadmitNode(ctx, opID, nodeID)
-}
-
-func (g nodeGate) as(by iam.Actor) *tracker.Writer {
-	return g.writer.As(by.Name, tracker.AuthorKind(by.Kind),
-		tracker.Provenance{OperatorID: by.OperatorID})
 }
 
 func nativePages(e *engine.Engine) queries.PageReader {
@@ -2646,6 +2625,13 @@ func nativePages(e *engine.Engine) queries.PageReader {
 // when it names none, because a seat HAS a unit; an operator does not, so the
 // argument is required and the tool refuses naming it rather than guessing a
 // project on a person's behalf.
+//
+// Which UNIT the work is filed into is not a default of this surface and no
+// longer needs one: the tracker reads it off the project's own row at the
+// write, so an operator's item belongs to the team that owns the project it
+// named. It used to be stamped from the caller's own team, which an operator
+// has not got — so every item filed here read "Filed into: no unit" beside a
+// project page naming its unit.
 func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	var opts opsmcp.Options
 	if c := e.Company(); c != nil && c.Config != nil {
@@ -2666,7 +2652,9 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 		opts.Knowledge = operatorKnowledge{engine: e}
 		// AND THE CHART BESIDE IT. An operator has no turn, so the org
 		// the search is scoped against comes from here; resolved per
-		// call, because a config apply replaces it.
+		// call, because a config apply replaces it. Search is the only
+		// tool that reads it: WHO the caller is comes from the identity
+		// directory through the request's principal, never the chart.
 		opts.Org = func() *org.Organization {
 			c := e.Company()
 			if c == nil {
@@ -2701,14 +2689,13 @@ func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []know
 	return s.Search(ctx, q)
 }
 
-// nativeRetention is this node's retention answer, or nil where there is none.
+// nativeRetention is the retention half of the API's node runtime, or nil on a
+// node that runs no state log.
 //
 // NIL RATHER THAN AN EMPTY DOCUMENT, on the rule every optional surface here
 // follows: a process running no state log has no applier, no stream and no
 // floor, and a report of zeros would claim a fleet whose log is perfectly
 // trimmed. The question is simply unregistered instead.
-// nativeRetention is the retention half of the API's node runtime, or nil on a
-// node that runs no state log.
 //
 // IT TAKES THE CALLER'S CONTEXT FOR THE PROBE and not one of its own: the
 // probe is a coordination read, so on a node whose store cannot be reached it

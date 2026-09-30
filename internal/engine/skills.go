@@ -133,10 +133,9 @@ func (e *Engine) SkillsContainer(c *Company) string {
 // skillsContainer is [Engine.SkillsContainer] read off the CURRENT epoch.
 //
 // The form the long-lived, per-NODE consumers take — the native searcher and
-// the page change feed. Neither is rebuilt by an apply (a projector and a
-// durable consumer both follow a coordination family, which a company
-// revision does not change), so each has to read the key at the moment it
-// uses it or hold a stale one for the life of the process.
+// the page change feed. Neither is rebuilt by an apply (both follow the pages
+// log, which a company revision does not change), so each has to read the key
+// at the moment it uses it or hold a stale one for the life of the process.
 //
 // Empty before the first epoch is published, which is the honest answer:
 // nothing is reserved until there is a company saying so.

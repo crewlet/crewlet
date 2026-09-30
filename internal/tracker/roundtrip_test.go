@@ -4,9 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +29,7 @@ import (
 // and a real store on both ends.
 type roundTrip struct {
 	t        *testing.T
+	broker   *js.Queue
 	db       *store.DB
 	log      *js.DomainLog
 	writer   *tracker.Writer
@@ -40,8 +39,14 @@ type roundTrip struct {
 	metrics  *metrics.Recorder
 	consumed uint64
 
-	// claims is the coordination the writer's walking sequences take their
-	// claims from, so a case can hold one as ANOTHER node would.
+	// reserve is the log's gate reserve on this node, which every
+	// publisher the harness builds over the log is admitted through — one
+	// per log per node, as the engine holds it.
+	reserve *statelog.Reserve
+
+	// claims is the coordination the writer takes a walking sequence's
+	// claim from, so a case can hold one as ANOTHER node — a walk that is
+	// running somewhere else — and see what the duty makes of it.
 	claims *memory.Backend
 
 	// verifier opens a record's frame, because this harness replays the
@@ -53,6 +58,10 @@ type roundTrip struct {
 	// about the order of instants somebody typed. It defaults to
 	// `wednesday` so every case that is not about time sees one instant.
 	at time.Time
+
+	// nodeID is which node this harness is, for the second writer a case
+	// builds over the same store ([roundTrip.lossyWriter]).
+	nodeID string
 }
 
 func newRoundTrip(t *testing.T) *roundTrip {
@@ -114,21 +123,42 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 			t.Errorf("close the store: %v", err)
 		}
 	})
+	return newRoundTripOn(t, q, log, db, "node-a")
+}
 
+// newRoundTripOn is the harness's node over a broker, a log and a store it is
+// handed: the one [newRoundTripWithoutProject] opens, or a second node's
+// joining the same log — a node that adopted a snapshot, say — under its own
+// id.
+func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, db *store.DB,
+	nodeID string) *roundTrip {
+
+	t.Helper()
 	rows, err := tracker.NewRows(db)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
 	// THE HARNESS EXISTS BEFORE THE WRITER, because the writer's authored
 	// clock reads a field on it that a case may move.
-	r := &roundTrip{t: t, db: db, log: log, at: wednesday}
+	r := &roundTrip{t: t, broker: q, db: db, log: log, at: wednesday,
+		claims: memory.New(), nodeID: nodeID}
 
-	fence := tracker.NewFence(db, "node-a")
+	fence := tracker.NewFence(db, nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an empty subject.
-	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	// an absent anchor really does mean an empty subject. The log's own
+	// first sequence is the fence's other bound and its last the check that
+	// this node is on this log at all, both read from the stream the way
+	// the engine reads them.
+	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
+	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
+		first, last, err := log.Bounds(ctx)
+		return statelog.LogEnds{First: first, Last: last}, err
+	}
 	waiter := &testWaiter{}
+	// THIS NODE'S CHECKPOINT IS THE WAITER'S, which is what the harness's
+	// own applier advances — the position the end is compared against.
+	fence.Committed = waiter.Committed
 	// A REAL RECORDER, because two of this harness's invariants are only
 	// visible as instruments: the session wait is a HISTOGRAM and nothing
 	// it does reaches a result, so a case asserting that a gesture waited
@@ -138,26 +168,38 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		t.Fatalf("build a metrics recorder: %v", err)
 	}
 	r.metrics = recorder
+	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
+	// engine's does, so every write here is admitted as a production one is.
+	reserve, err := statelog.NewReserve(tracker.Domain{}.Stream().Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("build the gate reserve: %v", err)
+	}
+	r.reserve = reserve
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: tracker.Domain{}, Log: log, Rows: rows, Fence: fence,
 		Signer: testSigner(t, tracker.Domain{}),
-		Gates:  tracker.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Gates:  tracker.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
+		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	claims := memory.New()
 	writer, err := tracker.NewWriter(tracker.WriterDeps{
-		Publisher: publisher, DB: db, NodeID: "node-a",
+		Publisher: publisher, DB: db, NodeID: nodeID,
 		// A REAL CLAIM BACKEND, because the WALKING sequences refuse
-		// without one and a harness that could not run them leaves a
-		// merge with no test at all. In-memory is the whole of what a
-		// single-node harness needs: the claim is there to exclude a
-		// SECOND node.
-		Claims: claims,
+		// without one and a harness that could not run them left the
+		// cross-project move — and everything it reads, including the
+		// subtree walk the trash shares — with no test at all. In-memory
+		// is the whole of what a single-node harness needs: the claim is
+		// there to exclude a SECOND node.
+		Claims: r.claims,
 		Actor:  "ana", ActorKind: tracker.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
@@ -177,8 +219,7 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, tracker.NewApplier("node-a", nil)
-	r.claims = claims
+	r.writer, r.applier = writer, tracker.NewApplier(nodeID, nil)
 	r.reader, r.waiter = reader, waiter
 	r.verifier = testVerifier(t, tracker.Domain{})
 	return r
@@ -215,6 +256,29 @@ func (r *roundTrip) applyWhileWriting() {
 	r.waiter.mu.Lock()
 	defer r.waiter.mu.Unlock()
 	r.waiter.advance = r.drain
+}
+
+// lagBehindOwnWrites is a node whose applier is behind its own appends: the
+// applier runs when a write waits for its own earlier append — the session
+// wait [tracker.Writer.After] asks for — and never to resolve an outcome, so
+// every append reports `pending`. It is the one state in which a gesture's
+// later append can only see an earlier one by waiting for it, because nothing
+// in between has.
+func (r *roundTrip) lagBehindOwnWrites() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = r.drain
+	r.waiter.lagOutcomes = true
+}
+
+// applyOnlyOnDrain undoes [roundTrip.applyWhileWriting]: from here on nothing
+// applies but an explicit drain, so a case can put a whole sequence on the log
+// and have this node read it before any of it arrives.
+func (r *roundTrip) applyOnlyOnDrain() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = nil
+	r.waiter.lagOutcomes = false
 }
 
 // drain consumes every record the broker holds beyond what this node has
@@ -303,11 +367,16 @@ func (r *roundTrip) apply(from, last uint64) {
 					MaxVariables: r.db.Caps().MaxVariables}); err != nil {
 				return err
 			}
+			// THE WIRE SUBJECT, as the framework's own applier records
+			// it: the ledger's subject is what a write resolving an op id
+			// compares against, so a harness that wrote the bare one
+			// would have every write it resolves refused as a reuse.
 			if _, err := tx.ExecContext(r.t.Context(), `
 				INSERT INTO tracker_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
-				env.OpID, env.Subject.String(), record.Position.Packed(),
-				store.EncodeTime(storedAt)); err != nil {
+				env.OpID,
+				tracker.Domain{}.Stream().SubjectPrefix+"."+env.Subject.String(),
+				record.Position.Packed(), store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(r.t.Context(), `
@@ -410,6 +479,12 @@ type testWaiter struct {
 	// [roundTrip.applyWhileWriting] for why a harness that drives the
 	// applier by hand needs one.
 	advance func()
+
+	// lagOutcomes keeps the applier out of the wait that RESOLVES an
+	// outcome, so every write reports `pending` while a write that waits
+	// for its own earlier append still gets it. See
+	// [roundTrip.lagBehindOwnWrites].
+	lagOutcomes bool
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -425,6 +500,11 @@ func (w *testWaiter) Committed() statelog.Position {
 	defer w.mu.Unlock()
 	return w.at
 }
+
+// StreamIdentity is always the live stream: this harness never rebuilds its
+// log, so every position the waiter holds is a sequence on it.
+func (w *testWaiter) StreamIdentity() error { return nil }
+func (w *testWaiter) Truncated() error      { return nil }
 
 func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {
@@ -475,6 +555,15 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 
 func (w *testWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
+	w.mu.Lock()
+	lag := w.lagOutcomes
+	w.mu.Unlock()
+	if lag && w.Committed().Packed() < p.Packed() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.DeadlineExceeded
+	}
 	return w.WaitCommitted(ctx, p)
 }
 
@@ -522,6 +611,61 @@ func TestATaskWrittenIsATaskRead(t *testing.T) {
 	answer = r.ask(map[string]any{"container": "project:ENG"})
 	if len(answer.Rows) != 1 || answer.Rows[0].Title != "wired" {
 		t.Fatalf("the patch did not reach the rows: %+v", answer.Rows)
+	}
+}
+
+// A SNAPSHOT CARRIES THE CHECKPOINT ITS ROWS ARE AT, and nothing later.
+//
+// The expectation-zero fence compares the snapshot's checkpoint against the
+// trim floor, because the floor theorem's conclusion is about the rows the
+// decision read. So the value has to come from the snapshot's own transaction
+// — the checkpoint commits with the rows — rather than from anything that
+// keeps moving while a write runs: a record on the log this node has not
+// applied must not move it, and applying that record must.
+func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	rows, err := tracker.NewRows(r.db)
+	if err != nil {
+		t.Fatalf("NewRows: %v", err)
+	}
+	checkpoint := func() statelog.Position {
+		t.Helper()
+		snap, err := rows.Snapshot(t.Context(), statelog.Subject{
+			Kind: string(tracker.KindTask), ID: "t-1",
+		}, statelog.ScopeSet{Paths: []string{"task:t-1"}}, "op-probe",
+			func(*sql.Tx, statelog.OpEntry) error { return nil },
+			func(*sql.Tx, statelog.Position) (statelog.Decision, error) {
+				return statelog.Decision{Payload: []byte("{}")}, nil
+			})
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		return snap.Checkpoint
+	}
+	at := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Seq: seq}
+	}
+
+	if got, want := checkpoint(), at(r.consumed); got != want {
+		t.Fatalf("a snapshot over rows applied through %d carries %s, want %s",
+			r.consumed, got, want)
+	}
+	applied := r.consumed
+	if _, err := r.writer.CreateTask(t.Context(), "op-create", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if got, want := checkpoint(), at(applied); got != want {
+		t.Fatalf("a record on the log this node has not applied moved the "+
+			"snapshot's checkpoint to %s, want %s — the rows have not changed", got, want)
+	}
+	r.drain()
+	if r.consumed == applied {
+		t.Fatal("the create never reached the applier, so this case shows nothing")
+	}
+	if got, want := checkpoint(), at(r.consumed); got != want {
+		t.Fatalf("after applying through %d a snapshot carries %s, want %s",
+			r.consumed, got, want)
 	}
 }
 
@@ -683,89 +827,4 @@ func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 	return verifier
-}
-
-// A REANCHOR'S RESET MOVES EVERY POSITION AND NO BODY REVISION.
-//
-// It could not run at all: the list of tables it resets named three with no
-// `version` column, so it failed on a real schema at its first bounded
-// transaction. And the body revisions it also named carry the BODY's version,
-// half of their primary key, which a reset to the generation's floor would
-// collapse. Run over the real schema, it moves a task's composed version to
-// the new generation's floor and leaves every revision number where it was.
-// Mutation: put a column-less table or the revisions back in the list and this
-// case fails.
-func TestAReanchorsResetMovesEveryPositionAndNoBodyRevision(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-
-	task := newTask("t-1")
-	task.Body = "third"
-	if _, err := r.writer.CreateTask(t.Context(), "op-create", task, nil); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	r.drain()
-	// TWO PAST BODIES, written as the applier writes one — at their own
-	// body versions, which is exactly the number a reset must not touch.
-	if err := r.db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		for version, body := range []string{"first", "second"} {
-			if _, err := tx.ExecContext(t.Context(), `
-				INSERT INTO tracker_body_revisions
-					(task_id, version, author, author_kind, at, size, document)
-				VALUES ('t-1', ?, 'ana', 'human', 0, ?, ?)`,
-				version+1, len(body), fmt.Sprintf(`{"body":%q}`, body)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed the revisions: %v", err)
-	}
-	revisions := func() []int64 {
-		t.Helper()
-		var out []int64
-		if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-			rows, err := tx.QueryContext(t.Context(), `
-				SELECT version FROM tracker_body_revisions WHERE task_id = 't-1'
-				ORDER BY version`)
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var v int64
-				if err := rows.Scan(&v); err != nil {
-					return err
-				}
-				out = append(out, v)
-			}
-			return rows.Err()
-		}); err != nil {
-			t.Fatalf("read the revisions: %v", err)
-		}
-		return out
-	}
-	before := revisions()
-	if len(before) < 2 {
-		t.Fatalf("precondition: the task holds %d revision(s), want at least two", len(before))
-	}
-
-	const gen = 1
-	if err := tracker.ResetVersions(t.Context(), r.db.Replicated(), gen); err != nil {
-		t.Fatalf("the reset failed on the real schema: %v", err)
-	}
-	var version int64
-	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		return tx.QueryRowContext(t.Context(),
-			`SELECT version FROM tracker_tasks WHERE id = 't-1'`).Scan(&version)
-	}); err != nil {
-		t.Fatalf("read the task: %v", err)
-	}
-	if want := int64(gen * statelog.GenerationStride); version != want {
-		t.Errorf("the task's version is %d after the reset, want the new "+
-			"generation's floor %d", version, want)
-	}
-	if after := revisions(); !slices.Equal(after, before) {
-		t.Errorf("the reset renumbered the body revisions %v into %v", before, after)
-	}
 }

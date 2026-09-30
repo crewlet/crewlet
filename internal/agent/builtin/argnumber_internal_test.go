@@ -48,25 +48,26 @@ func TestAWideIDReadsExactly(t *testing.T) {
 	}
 }
 
-// THE SCHEDULE READERS KEEP THEIR OWN DISCIPLINE, whichever spelling the
-// number arrived in: a fraction is not a whole number of minutes, and NaN and
-// the infinities are not sizes a total can be summed from. The json.Number arm
-// routes back through the float arm rather than restating any of it.
-func TestScheduleReadersKeepTheirDisciplineOnJSONNumbers(t *testing.T) {
-	if n, ok := scheduleInt(json.Number("15")); !ok || n != 15 {
-		t.Errorf("scheduleInt(15) = %d, %v; want 15, true", n, ok)
+// THE PRESENCE-REPORTING READERS KEEP THEIR OWN DISCIPLINE, whichever spelling
+// the number arrived in: a fraction is not a whole number of minutes — nor of
+// decimal places — and NaN and the infinities are not sizes a total can be
+// summed from. The json.Number arm routes back through the float arm rather
+// than restating any of it.
+func TestPresenceReportingReadersKeepTheirDisciplineOnJSONNumbers(t *testing.T) {
+	if n, ok := argIntValue(json.Number("15")); !ok || n != 15 {
+		t.Errorf("argIntValue(15) = %d, %v; want 15, true", n, ok)
 	}
-	if _, ok := scheduleInt(json.Number("2.5")); ok {
-		t.Error("scheduleInt(2.5) accepted a fraction of a minute")
+	if _, ok := argIntValue(json.Number("2.5")); ok {
+		t.Error("argIntValue(2.5) accepted a fraction of a minute")
 	}
-	if f, ok := scheduleFloat(json.Number("3")); !ok || f != 3 {
-		t.Errorf("scheduleFloat(3) = %v, %v; want 3, true", f, ok)
+	if f, ok := argFloatValue(json.Number("3")); !ok || f != 3 {
+		t.Errorf("argFloatValue(3) = %v, %v; want 3, true", f, ok)
 	}
 	// Not a number json can even encode, so not a size either.
-	if _, ok := scheduleFloat(json.Number("1e400")); ok {
-		t.Error("scheduleFloat(1e400) accepted an overflow as a size")
+	if _, ok := argFloatValue(json.Number("1e400")); ok {
+		t.Error("argFloatValue(1e400) accepted an overflow as a size")
 	}
-	if _, ok := scheduleInt(json.Number("not a number")); ok {
-		t.Error("scheduleInt accepted a malformed number")
+	if _, ok := argIntValue(json.Number("not a number")); ok {
+		t.Error("argIntValue accepted a malformed number")
 	}
 }

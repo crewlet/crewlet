@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -196,7 +197,7 @@ type heldRewrite struct {
 func (h *heldRewrite) SetCredentials(ctx context.Context,
 	in iamdomain.CredentialSet) (statelog.Result, error) {
 
-	if !strings.HasPrefix(in.OpID, "rehash:") {
+	if !isRehash(in.OpID) {
 		return h.estate.SetCredentials(ctx, in)
 	}
 	close(h.started)
@@ -222,7 +223,7 @@ func assertRehashed(t *testing.T, e *estate, current credential.Params,
 	}
 	rehashes := 0
 	for _, op := range e.credentialOps {
-		if strings.HasPrefix(op, "rehash:") {
+		if isRehash(op) {
 			rehashes++
 		}
 	}
@@ -268,4 +269,82 @@ func storeVerifierAt(t *testing.T, e *estate, cost credential.Params) string {
 func params(p credential.Params) string {
 	return "m=" + strconv.Itoa(int(p.Memory)) + ",t=" + strconv.Itoa(int(p.Time)) +
 		",p=" + strconv.Itoa(int(p.Threads))
+}
+
+// isRehash reports whether an operation id is a re-hash's: minted now in the
+// engine's grammar and named for what it does — an id that carried no instant
+// would be answered `unknown` without being published once the ledger had
+// swept anything.
+func isRehash(op string) bool {
+	_, minted := statelog.OpMintedAt(op)
+	return minted && strings.HasSuffix(op, ".rehash")
+}
+
+// budgetedRewrite records how much of its budget a re-hash's WRITE was handed.
+type budgetedRewrite struct {
+	*estate
+	mu        sync.Mutex
+	remaining time.Duration
+	seen      bool
+}
+
+func (b *budgetedRewrite) SetCredentials(ctx context.Context,
+	in iamdomain.CredentialSet) (statelog.Result, error) {
+
+	if isRehash(in.OpID) {
+		deadline, bounded := ctx.Deadline()
+		b.mu.Lock()
+		b.seen = bounded
+		b.remaining = time.Until(deadline)
+		b.mu.Unlock()
+	}
+	return b.estate.SetCredentials(ctx, in)
+}
+
+// A REWRITE'S WRITE IS HANDED ITS WHOLE BUDGET, WHATEVER THE DERIVATION BEFORE
+// IT COST.
+//
+// The budget is the publisher's own resolve budget, sized for what the write
+// waits on — and it was started before the argon2id derivation at the shipped
+// cost that precedes the write, so the derivation spent it: on a loaded host
+// the write began on a context already expired, and the verifier was never
+// rewritten on exactly the host that most needed the time (the case above
+// failed that way under the race detector with the suites beside it). The
+// write is now bounded from where it starts. Measured against what one
+// derivation at that cost takes on this host, so the case holds on a fast
+// machine and a slow one alike.
+//
+// Mutation: start the budget before the derivation again and the write is
+// handed the budget less a derivation.
+func TestARewritesWriteIsHandedItsWholeBudget(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	if _, err := credential.NewHasher(credential.Default(), 1).Hash(t.Context(),
+		"", password); err != nil {
+		t.Fatal(err)
+	}
+	derivation := time.Since(start)
+
+	var writer *budgetedRewrite
+	r := newSignInRigWith(t, func(o *authapi.Options) {
+		o.Hasher = credential.NewHasher(credential.Default(), 1)
+		writer = &budgetedRewrite{estate: o.Writer.(*estate)}
+		o.Writer = writer
+	})
+	storeVerifierAt(t, r.estate, cheap)
+	if got := r.login(t, "jane.doe", password, appCode(t, clock)); got != http.StatusOK {
+		t.Fatalf("the sign-in answered %d", got)
+	}
+	r.svc.Stop(t.Context())
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if !writer.seen {
+		t.Fatal("no bounded rewrite was asked for; this case tests nothing")
+	}
+	// THE PUBLISHER'S OWN RESOLVE BUDGET is the rewrite's, by its doc.
+	if floor := statelog.DefaultResolveBudget - derivation/2; writer.remaining < floor {
+		t.Errorf("the rewrite's write was handed %s of its %s budget — a "+
+			"derivation here takes %s, and the write's budget must not pay it",
+			writer.remaining, statelog.DefaultResolveBudget, derivation)
+	}
 }

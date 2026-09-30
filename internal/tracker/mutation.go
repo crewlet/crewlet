@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape this build writes.
+// RecordVersion is the record shape THIS BUILD can decode.
 //
 // A record at a HIGHER version leaves the envelope decoded and everything else
 // opaque, and is RETAINED at its position rather than skipped — which is the
@@ -18,7 +18,58 @@ import (
 // installs a gate: there an unknown version stops the applier, because a
 // deferred gate licenses every later record on this node and the eviction gate
 // has no inverse that repairs it.
-const RecordVersion = 1
+//
+// # What each version added
+//
+//   - 1: every shape this domain has.
+//   - 2: a task patch may carry the cross-project move's marker
+//     ([TaskPatch.Moving]).
+//
+// A record is WRITTEN at the lowest version a reader can apply without
+// losing anything it says, never simply at this constant — see
+// [recordVersionOf] for why that matters to a node still on the older build.
+const RecordVersion = 2
+
+// baseRecordVersion is the version a record whose shape no later version
+// changed is written at: 1, which every build there has ever been reads.
+//
+// THE BARRIER AND A REANCHOR'S GENERATION ARE WRITTEN AT IT FOR EVER, never at
+// [RecordVersion], because of what an older node does with a record it cannot
+// read: it retains it. A retained barrier is one more deferral row on that
+// node for every linearizable read anybody makes, and a node holding a
+// deferral declines to snapshot until it upgrades; a retained generation is a
+// transition that node never makes. Neither has anything a later version
+// could add to it.
+const baseRecordVersion = 1
+
+// moveMarkVersion is the version a task patch carrying [TaskPatch.Moving] is
+// written at. See [recordVersionOf].
+const moveMarkVersion = 2
+
+// recordVersionOf is the version a record carrying payload is written at: the
+// lowest whose reader applies it without losing anything.
+//
+// A PATCH CARRYING THE MOVE MARKER IS WRITTEN AT 2, because version 2 is when
+// the field began. A build reading only 1 decodes the patch by ignoring the
+// one field it does not know and applies the rest — a root re-homed with no
+// marker on that node's row, where every newer node holds one: rows the
+// identity claim says are identical, and are not ([Domain.ClaimsIdentity]).
+// Written at 2, that build RETAINS the record instead, and applies it once it
+// is upgraded (see the deferral contract in [statelog]).
+//
+// EVERYTHING ELSE STAYS AT 1, and not for tidiness. A retained record holds
+// back every later record whose scope nests under its own on that node, so a
+// rolling upgrade loses coverage exactly where a shape changed — here, the
+// root of a subtree somebody moved, until its walk is done — and nowhere else.
+// A domain that raised every record to its newest version would stall an
+// older node's whole tracker for the length of the upgrade. And a gate is
+// pinned at [GateRecordVersion] for ever, which this function never raises.
+func recordVersionOf(payload any) int {
+	if patch, ok := payload.(TaskPatch); ok && patch.Moving != nil {
+		return moveMarkVersion
+	}
+	return baseRecordVersion
+}
 
 // DocumentVersion is the object shape this build writes.
 //
@@ -132,6 +183,10 @@ const (
 	// object rather than their own kind of record.
 	TermObject TermKind = "object"
 
+	// TermKey is an addressable NAME — "ENG-142" — because the alias row
+	// is keyed on the key rather than on any object's id.
+	TermKey TermKind = "key"
+
 	// TermContainer is a project key, or the workspace.
 	TermContainer TermKind = "container"
 
@@ -144,9 +199,9 @@ const (
 	TermDomain TermKind = "domain"
 )
 
-// TermKinds are the four.
+// TermKinds are the five.
 var TermKinds = []TermKind{
-	TermObject, TermContainer, TermFamily, TermDomain,
+	TermObject, TermKey, TermContainer, TermFamily, TermDomain,
 }
 
 // Valid reports whether a term kind off the wire is one this build knows.
@@ -185,23 +240,24 @@ const (
 	pathContainer = "c"
 	pathFamily    = "f"
 	pathObject    = "o"
+	pathKey       = "k"
 )
 
 // ScopeTerm is one element of a record's blast radius.
 //
 // DATA, NOT CODE: a build that has never heard of the op still reads every
-// term, because a term names an object, a container, a family or the domain
-// and nothing about the operation that produced it.
+// term, because a term names an object, a key, a container, a family or the
+// domain and nothing about the operation that produced it.
 type ScopeTerm struct {
 	Kind TermKind `json:"k"`
 
-	// Container is the project key an object lives in, or
-	// [WorkspaceContainer]. Required for TermObject, empty for the other
-	// three, and never guessed: see the alphabet above.
+	// Container is the project key an object or a key lives in, or
+	// [WorkspaceContainer]. Required for TermObject and TermKey, empty
+	// for the other three, and never guessed: see the alphabet above.
 	Container string `json:"c,omitempty"`
 
-	// ID is the object's uuid, the container's key or the family's name.
-	// Empty for TermDomain, which names everything.
+	// ID is the object's uuid, the key's name, the container's key or the
+	// family's name. Empty for TermDomain, which names everything.
 	ID string `json:"i,omitempty"`
 }
 
@@ -210,6 +266,8 @@ func (t ScopeTerm) Path() string {
 	switch t.Kind {
 	case TermObject:
 		return join(pathDomain, pathContainer, t.container(), pathObject, t.ID)
+	case TermKey:
+		return join(pathDomain, pathContainer, t.container(), pathKey, t.ID)
 	case TermContainer:
 		// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container
 		// field: "container(ENG)" names ENG, and reading the field
@@ -290,10 +348,11 @@ type ScopeSet struct {
 	// # Why the container is ON THE RECORD and not derived from the subject
 	//
 	// A subject names an object, not its home: a task's subject is its
-	// uuid, and which project it lives in is a fact about the ROW rather
-	// than about the subject. So the path a record's scope resolves to
-	// cannot be computed from the subject alone, and the only party that
-	// knows it at the moment the record is written is the writer.
+	// uuid, and which project it lives in is a fact about the row — one
+	// that CHANGES, because a task can move between projects. So the path
+	// a record's scope resolves to cannot be computed from the subject
+	// alone, and the only party that knows it at the moment the record is
+	// written is the writer.
 	//
 	// Leaving it out is silent rather than wrong-looking. Every task
 	// record would file its deferral under the workspace container while
@@ -391,6 +450,10 @@ func subjectPath(s Subject, container string) string {
 		// deferred settings edit block every write inside that project
 		// — which is exactly what an archive is.
 		return ScopeTerm{Kind: TermContainer, ID: s.ID}.Path()
+	case KindAlias:
+		key, _, _ := strings.Cut(s.ID, ".")
+		project, _, _ := strings.Cut(key, "-")
+		return ScopeTerm{Kind: TermKey, Container: project, ID: key}.Path()
 	case KindCatalogue:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path()
 	case KindPerson:
@@ -461,7 +524,7 @@ func (s ScopeSet) Validate() error {
 	}
 	for _, t := range s.Terms {
 		switch t.Kind {
-		case TermObject:
+		case TermObject, TermKey:
 			if t.ID == "" {
 				return fmt.Errorf("tracker: a %s term names nothing", t.Kind)
 			}
@@ -687,10 +750,16 @@ func Decode(payload []byte) (MutationRecord, error) {
 // LISTED RATHER THAN REFLECTED, because the list is the format's own reserved
 // set: a key added to the struct and not here would be carried in Extra as
 // well as in its field, and re-encoded twice.
+//
+// AND ASSERTED IN BOTH DIRECTIONS, which is what the list needed and did not
+// have. `kind` was added to the record and not here, so every record carrying
+// one decoded with it in Extra as well as in its own field and took the
+// merge path on every relay — a drift with no symptom, which is the shape a
+// hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "operator_id", "turn_id",
-	"chain", "batch_id", "notify",
+	"chain", "batch_id", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.
@@ -712,7 +781,11 @@ func (e *ErrFutureVersion) Error() string {
 // applier has nothing to compare it against.
 func (r MutationRecord) Encode() ([]byte, error) {
 	if r.V == 0 {
-		r.V = RecordVersion
+		// THE LOWEST, never [RecordVersion]: a record nobody stated a
+		// version for is one nobody decided needs a newer reader, and
+		// defaulting it to the newest would have every older node
+		// retain it.
+		r.V = baseRecordVersion
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
@@ -767,7 +840,7 @@ func (r MutationRecord) Encode() ([]byte, error) {
 // kind has variants.
 type ChangeKind string
 
-// The twenty-six, and each constant IS its wire value: a kind is written into
+// The twenty-seven, and each constant IS its wire value: a kind is written into
 // every history row and onto every notification the log carries, so these
 // spellings are stored data in every company already running this build.
 // A kind added here goes into [ChangeKinds] in the same change: that slice is
@@ -783,6 +856,7 @@ const (
 	ChangeTags            ChangeKind = "tags"
 	ChangeRelations       ChangeKind = "relations"
 	ChangeRouted          ChangeKind = "routed"
+	ChangeMoved           ChangeKind = "moved"
 	ChangeReparented      ChangeKind = "reparented"
 	ChangeChecklist       ChangeKind = "checklist"
 	ChangeArchived        ChangeKind = "archived"
@@ -817,16 +891,16 @@ const (
 	ChangePersonUpdated ChangeKind = "person_updated"
 )
 
-// ChangeKinds are the twenty-six.
+// ChangeKinds are the twenty-seven.
 //
-// TWENTY-SIX AGAINST TWELVE SUBJECTS, and the gap is not an
+// TWENTY-SEVEN AGAINST THIRTEEN SUBJECTS, and the gap is not an
 // inconsistency: five commit classes carry no notification at all — a turn, a
 // generation, an eviction, a rank move and a barrier — because a reposition is
 // not history and a barrier writes no rows whatever.
 var ChangeKinds = []ChangeKind{
 	ChangeCreated, ChangeFields, ChangeStatus, ChangeAssignee,
 	ChangeCollaborators, ChangeWatchers, ChangeTags, ChangeRelations,
-	ChangeRouted, ChangeReparented,
+	ChangeRouted, ChangeMoved, ChangeReparented,
 	ChangeChecklist, ChangeArchived, ChangeComment, ChangeCommentEdited,
 	ChangeCommentResolved, ChangeCommentRemoved, ChangeRemoved,
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
@@ -1021,7 +1095,20 @@ func (s Snapshot) TaskID(subject Subject) string {
 type Notify struct {
 	Kind ChangeKind `json:"kind"`
 
-	// Fields are the deltas a card renders, capped at MaxDeltas.
+	// Fields is what this change MOVED, capped at MaxDeltas.
+	//
+	// It reaches the woken seat as the wake prompt's "What changed"
+	// block: the parser renders it with [changedText] and stamps it as
+	// [MetaDeltas], because the notification spine's envelope is a string
+	// map and the prompt is handed one of those rather than this record.
+	// It is also the history row's fallback for a record whose apply
+	// found nothing to compare — see `apply_history.go`, which prefers
+	// the applier's own comparison and reaches for this only where the
+	// two builds differ.
+	//
+	// The comment here used to say "the deltas a card renders" while
+	// nothing rendered them at all, and the wake that told a seat its
+	// task had moved status named neither side of the move.
 	Fields map[string]Delta `json:"fields,omitempty"`
 
 	CommentID string `json:"comment_id,omitempty"`
@@ -1188,7 +1275,8 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			// NEVER [RecordVersion]: see [baseRecordVersion].
+			V:       baseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},

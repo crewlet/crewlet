@@ -109,20 +109,20 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 
 	at := s.now()
 	title := strings.Join(strings.Fields(in.Title), " ")
+	opID := s.operation(actor, "create", container+"/"+NormalizeTitle(title))
 	page := Page{
-		V: DocumentVersion, ID: s.newID(), Container: container,
+		V: DocumentVersion, ID: pageIDOf(opID), Container: container,
 		ParentID: strings.TrimSpace(in.ParentID),
 		Title:    title, Body: in.Body, Status: in.Status, Labels: labels,
 		Version: 1, Author: actor.Name(), CreatedAt: at, UpdatedAt: at,
 	}
-	page.Watchers = watcherSet(actor.Handle, in.Watchers)
+	page.Watchers = watcherSet(actor.subscriber(), in.Watchers)
 	if len(page.Watchers) > MaxWatchers {
 		return Written{}, invalid("watchers", "%d watchers, past the cap of %d",
 			len(page.Watchers), MaxWatchers)
 	}
 
 	subject := TitleSubject(container, title)
-	opID := s.operation(actor, "create", container+"/"+NormalizeTitle(title))
 	scope := ScopeSet{Terms: []ScopeTerm{
 		{Kind: TermTitle, Container: container, ID: TitleToken(title)},
 		{Kind: TermObject, Container: container, ID: page.ID},
@@ -131,13 +131,12 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 		excerpt(firstLine(in.Body, title)), nil)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return s.decide(actor, subject, OpCreate, scope, opID, CreatePayload{
+		Subject: statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return s.decide(stamp, actor, subject, OpCreate, scope, opID, CreatePayload{
 				V: DocumentVersion, PageID: page.ID, Container: container,
 				Title: title, ParentID: page.ParentID, Body: page.Body,
 				Status: page.Status, Labels: page.Labels,
@@ -147,6 +146,14 @@ func (s *Store) Create(ctx context.Context, actor Actor, in NewPage) (Written, e
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		// THE ADDRESS AND THE ID ARE WHAT THE OPERATION PINS — its id is
+		// derived from the one and the page's from the id — and nothing
+		// else about the page this call formed is what the earlier copy
+		// wrote.
+		return s.landed(ctx, Page{ID: page.ID, Container: container, Title: title},
+			opID, result)
 	}
 	// NO ROW EXISTED TO READ, so there is no prior revision to fall back
 	// on — and a create that changed nothing is not a shape this path has:
@@ -243,12 +250,11 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 	subject := PageSubject(pageID)
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -288,11 +294,14 @@ func (s *Store) SavePage(ctx context.Context, actor Actor, pageID string,
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(save.Quiet, kind, head,
 				excerptOfSave(save, head), nil)
-			return s.decide(actor, subject, OpPatch, scope, opID, patch, notify, at)
+			return s.decide(stamp, actor, subject, OpPatch, scope, opID, patch, notify, at)
 		},
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
 	}
 	return Written{
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
@@ -327,7 +336,6 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	title = strings.Join(strings.Fields(title), " ")
 
 	at := s.now()
-	opID := s.operation(actor, "rename", pageID)
 	var out Page
 
 	head, err := s.head(ctx, pageID)
@@ -337,9 +345,18 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	if err = s.refuseReserved(actor, head.Container, false); err != nil {
 		return Written{}, err
 	}
+	// TWO SHAPES, TWO OPERATIONS. Which one this is is decided from the row
+	// BEFORE anything is published, and a retry of a move that landed finds
+	// the page already at its new address and is routed to a retitle — on
+	// the page's subject, where one id shared with the move would name a
+	// ledger row on the title's subject and be refused as an operation
+	// reused. Under its own verb the retry decides again and finds nothing
+	// left to change, which is the true answer.
 	if NormalizeTitle(head.Title) == NormalizeTitle(title) {
-		return s.retitle(ctx, actor, pageID, title, opID, at, quiet)
+		return s.retitle(ctx, actor, pageID, title,
+			s.operation(actor, "retitle", pageID), at, quiet)
 	}
+	opID := s.operation(actor, "rename", pageID)
 
 	subject := TitleSubject(head.Container, title)
 	scope := ScopeSet{Terms: []ScopeTerm{
@@ -349,12 +366,11 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	}}
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternCreate,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindTitle), ID: subject.ID},
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternCreate,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			current, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
@@ -364,7 +380,7 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 			out.Title = title
 			out.UpdatedAt = at
 			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(actor, subject, OpRename, scope, opID, RenamePayload{
+			return s.decide(stamp, actor, subject, OpRename, scope, opID, RenamePayload{
 				V: DocumentVersion, PageID: pageID,
 				Container: current.Container, Title: title,
 				FormerContainer: current.Container, FormerTitle: current.Title,
@@ -373,6 +389,9 @@ func (s *Store) Rename(ctx context.Context, actor Actor, pageID string,
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
 	}
 	// A RENAME THAT MOVES THE ADDRESS ALWAYS LANDS A RECORD, so the read
 	// arm is unreachable — the decision is unconditional and its refusals
@@ -423,12 +442,11 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -467,7 +485,7 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 			out.UpdatedAt = at
 			scope := ScopeSet{Subject: true, Container: current.Container}
 			notify := s.notifyOf(quiet, ChangeRenamed, out, "", nil)
-			return s.decide(actor, subject, OpRetitle, scope, opID, RetitlePayload{
+			return s.decide(stamp, actor, subject, OpRetitle, scope, opID, RetitlePayload{
 				V: DocumentVersion, PageID: pageID,
 				Title: title, FormerTitle: current.Title,
 			}, notify, at)
@@ -475,6 +493,9 @@ func (s *Store) retitle(ctx context.Context, actor Actor, pageID, title,
 	})
 	if err != nil {
 		return Written{}, err
+	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
 	}
 	return Written{
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
@@ -516,20 +537,31 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: statelog.Subject{Kind: string(KindPage), ID: pageID},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
 			out, read = head, revision
+			// THE ANSWER IS THE PAGE THE APPLY WILL PRODUCE, as a save's
+			// is: a trash reported the page as it stood before, so the
+			// caller that just trashed it was told it was published.
+			// The instants are this call's clock, which the apply
+			// replaces with the broker's, exactly as a save's are.
+			switch op {
+			case OpTombstone:
+				trashed := at
+				out.Status, out.TrashedAt, out.UpdatedAt = StatusTrashed, &trashed, at
+			case OpRestore:
+				out.Status, out.TrashedAt, out.UpdatedAt = StatusPublished, nil, at
+			}
 			scope := ScopeSet{Subject: true, Container: head.Container}
 			notify := s.notifyOf(false, kind, head, "", nil)
-			return s.decide(actor, subject, op, scope, opID, StatusPayload{
+			return s.decide(stamp, actor, subject, op, scope, opID, StatusPayload{
 				V: DocumentVersion, Reason: reason,
 			}, notify, at)
 		},
@@ -537,41 +569,81 @@ func (s *Store) status(ctx context.Context, actor Actor, pageID string,
 	if err != nil {
 		return Written{}, err
 	}
+	if result.Collapsed {
+		return s.landed(ctx, Page{ID: pageID}, opID, result)
+	}
 	return Written{
 		Page: out, Revision: writtenRevision(result, read), ChangeID: opID,
 		Outcome: result,
 	}, nil
 }
 
-// EnsureContainer creates a space if it is not there, or updates its settings.
+// EnsureContainer creates a space if it is not there, or updates its settings,
+// from the org chart as it stood at chartAt — a packed position on the chart's
+// own log.
 //
 // THE SECOND VALUE IS WHETHER ANYTHING WAS WRITTEN, not whether the call
 // succeeded. This runs on every boot for every unit's space, so the ordinary
 // outcome is that the row already says what the chart says — and a caller
 // that could not tell that from a create would log "applied" on every restart
 // for a company nobody had edited.
-func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) (
-	Container, bool, error) {
+//
+// # Stamped with the chart's position, and never walked back
+//
+// A container's name and purpose are the chart's, and every node derives them
+// from its own rows separately — at its reconcile tick and again at every
+// boot. So the settings carry the POSITION on the chart's log they were
+// derived from, and a write whose position is OLDER than the one the row
+// already holds decides nothing: a node whose chart applier is behind leaves
+// the newer names alone, where it used to rewrite every container back to its
+// own. One at the SAME position with the same settings decides nothing either,
+// which is what makes the call free after the first node; one at the same
+// position with DIFFERENT settings is written, because that is a row an
+// equal-position race left wrong and the chart that is actually current is
+// what sets it right. A POSITION AND NOT A CLOCK, for the reason
+// [tracker.Project.ChartPosition] gives: two nodes derive the same settings
+// from the same rows, and what tells the one that is behind is its cursor,
+// never which of them wrote last. A zero position is refused
+// ([ErrNoChartPosition]): there is no honest default, and a caller that has
+// applied no chart has none to derive from.
+//
+// A FRESH OPERATION PER CALL, on the reasoning [tracker.Writer.ApplyChart]
+// gives for its own: this is a reconcile decided from the row, so a second
+// call — on another node, at the next boot, after a lost acknowledgement —
+// finds its value there, and N nodes racing one chart position are settled by the
+// broker's arbitration. An outcome that is `unknown` is an error, because the
+// next apply is what retries it and the caller is the one that says so.
+func (s *Store) EnsureContainer(ctx context.Context, chartAt int64,
+	key, name, purpose string) (Container, bool, error) {
 
 	key = ContainerKey(key)
-	if key == "" {
+	switch {
+	case key == "":
 		return Container{}, false, invalid("container", "a container needs a key")
+	case chartAt <= 0:
+		return Container{}, false, fmt.Errorf("%w (container %s)", ErrNoChartPosition, key)
 	}
 	at := s.now()
 	opID := s.newSeqID()
 	subject := ContainerSubject(key)
-	changed := true
-	out := Container{V: DocumentVersion, Key: key, Name: name,
-		Purpose: purpose, CreatedAt: at}
+	var (
+		changed, restamp bool
+		out              Container
+	)
 
-	_, err := s.publish(ctx, statelog.Request{
-		Subject:  statelog.Subject{Kind: string(KindContainer), ID: key},
-		Scope:    ScopeSet{Subject: true}.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			var held Container
+	result, err := s.publish(ctx, statelog.Request{
+		Subject: statelog.Subject{Kind: string(KindContainer), ID: key},
+		Scope:   ScopeSet{Subject: true}.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// RESET ON EVERY ROUND. A round that decided to write and
+			// lost the broker's arbitration is followed by one that
+			// finds the winner's value already there, and only the last
+			// round says what this call did.
+			changed, restamp = false, false
+			out = Container{V: DocumentVersion, Key: key, Name: name,
+				Purpose: purpose, ChartPosition: chartAt, CreatedAt: at}
 			var document []byte
 			err := tx.QueryRowContext(ctx,
 				`SELECT document FROM pages_containers WHERE key = ?`, key).
@@ -582,32 +654,66 @@ func (s *Store) EnsureContainer(ctx context.Context, key, name, purpose string) 
 				return statelog.Decision{}, fmt.Errorf(
 					"pages: read the container %s: %w", key, err)
 			default:
-				if held, err = DecodeContainer(document); err != nil {
+				held, err := DecodeContainer(document)
+				if err != nil {
 					return statelog.Decision{}, err
 				}
-				if held.Name == name && held.Purpose == purpose {
-					// UNCHANGED IS A NO-OP. This runs on every
-					// boot for every unit's space, and a record
-					// per boot per space is a log that grows
-					// with restarts rather than with edits.
+				switch {
+				case held.ChartPosition > chartAt:
+					// A LATER CHART ALREADY WON. Two nodes at two
+					// positions on the chart's log is ordinary — one
+					// applier is behind the other — and the newer one
+					// must not be walked back by the older node's own
+					// apply arriving second.
 					out = held
-					changed = false
+					return statelog.Decision{}, nil
+				case held.ChartPosition == chartAt && held.Name == name &&
+					held.Purpose == purpose:
+					// UNCHANGED IS A NO-OP. This runs on every boot
+					// for every unit's space, and a record per boot
+					// per space is a log that grows with restarts
+					// rather than with edits.
+					out = held
 					return statelog.Decision{}, nil
 				}
 				out.CreatedAt = held.CreatedAt
+				restamp = held.Name == name && held.Purpose == purpose
 			}
-			return s.decide(Actor{Handle: "system", Kind: AuthorOperator},
+			changed = true
+			payload := ContainerPayload{
+				V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
+				ChartPosition: chartAt,
+			}
+			// A LATER POSITION OVER THE SAME SETTINGS IS A RE-STAMP, and
+			// it goes out at the version an older build applies whole —
+			// see [recordVersionOf]. The stamp still lands on every node
+			// that can read it, so the guard above holds against the
+			// older chart that would otherwise follow.
+			var record any = payload
+			if restamp {
+				record = restampPayload{payload}
+			}
+			return s.decide(stamp, Actor{Handle: "system", Kind: AuthorOperator},
 				subject, OpPatch, ScopeSet{Subject: true}, opID,
-				ContainerPayload{
-					V: DocumentVersion, Key: key, Name: name, Purpose: purpose,
-				}, nil, at)
+				record, nil, at)
 		},
 	})
 	if err != nil {
 		return Container{}, false, err
 	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return Container{}, false, fmt.Errorf("pages: whether container %s's "+
+			"settings landed is unknown (operation %s); the next apply decides "+
+			"them again", key, opID)
+	}
 	return out, changed, nil
 }
+
+// ErrNoChartPosition refuses a container write that does not name the
+// position on the org chart's log its settings were derived from. See
+// [Store.EnsureContainer].
+var ErrNoChartPosition = errors.New("pages: a container's settings must name the " +
+	"position on the org chart's log they were derived from")
 
 // patchOf turns a save into a record's payload and reports what changed.
 //
@@ -659,10 +765,11 @@ func (s *Store) patchOf(actor Actor, head *Page, save Save, at time.Time) (
 	// the mute is added beside it, so the total moves.) The clause that
 	// used to cover the gap ("the mute now disagrees with what was asked")
 	// is false by construction after applyWatch has run, so it covered
-	// nothing and fired only for an operator, who has no handle at all: a
-	// `watch: false` from the operator surface published a record and woke
-	// every watcher for a change to nobody's subscription.
-	if save.Watch != nil && applyWatch(head, actor.Handle, *save.Watch) {
+	// nothing and fired only for an operator, who has no seat: a `watch:
+	// false` from the operator surface published a record and woke every
+	// watcher for a change to nobody's subscription — see
+	// [Actor.subscriber].
+	if save.Watch != nil && applyWatch(head, actor.subscriber(), *save.Watch) {
 		patch.Watchers = head.Watchers
 		patch.Muted = head.Muted
 		kinds[ChangeWatchers] = true
@@ -737,7 +844,8 @@ func (s *Store) headAt(ctx context.Context, pageID string) (Page, uint64, error)
 }
 
 // watcherSet is the author plus whoever else was named, de-duplicated and
-// sorted so two nodes forming the same set write the same rows.
+// sorted so two nodes forming the same set write the same rows. An empty
+// author — an operator's, which subscribes nobody — adds nothing.
 func watcherSet(author string, extra []string) []string {
 	out := cleanList(append([]string{author}, extra...))
 	slicesSort(out)
@@ -756,8 +864,8 @@ func watcherSet(author string, extra []string) []string {
 // cheaply or safely: [slicesSort] runs in place and the append above it may
 // keep the head's backing array, so a slice saved before the call can be
 // reordered underneath whoever held it. An EMPTY HANDLE moves nothing and says
-// so — an operator write names no seat, and there is no subscription to change
-// on behalf of a token.
+// so — an operator write names no seat ([Actor.subscriber]), and there is no
+// subscription to change on behalf of a credential.
 func applyWatch(page *Page, handle string, watch bool) bool {
 	if handle == "" {
 		return false

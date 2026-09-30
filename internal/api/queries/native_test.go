@@ -220,11 +220,11 @@ func (s *stubPages) Revision(_ context.Context, pageID string, version int,
 }
 
 // personalQuestions are the four scoped by the caller's own record or seat —
-// see Sources.recordHandle and Sources.seatHandle. They refuse an anonymous caller who names somebody
-// else, so a sweep that walks every native question has to present a
-// credential for these four. Named once rather than per sweep: the set grew
-// from one to four, and each sweep that spelled it as `== "work_my_work"`
-// silently stopped covering the rest.
+// see Sources.recordHandle and Sources.seatHandle. They refuse an anonymous
+// caller who names somebody else, so a sweep that walks every native question
+// has to present a credential for these four. Named once rather than per
+// sweep: the set grew from one to four, and each sweep that spelled it as
+// `== "work_my_work"` silently stopped covering the rest.
 var personalQuestions = map[string]bool{
 	"work_my_work":  true,
 	"work_person":   true,
@@ -390,6 +390,29 @@ func TestTheItemQueryAsksForEveryPart(t *testing.T) {
 	}
 }
 
+// AND IT ASKS WITH THE CHART, so the properties panel reads a team's NAME
+// where the row holds its key.
+//
+// What a task's unit fields hold is the unit's KEY as it was when the row was
+// written — an address a person typed, short and possibly retired by a rename
+// since. Without the chart this answer carried that key alone, and an item
+// page said `eng` beside a board column that said Engineering. An unresolved
+// reference is also a FINDING — the team has left the chart — so a surface
+// that holds a chart and does not pass it reports every task as orphaned.
+func TestTheItemQueryAsksWithTheChart(t *testing.T) {
+	w := &stubWork{}
+	cfg := company(t)
+	if _, err := askNative(t, queries.Sources{
+		Work: w, Company: companySource(t, cfg),
+	}, "work_item", map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	if w.taskWants.Units == nil {
+		t.Error("work_item read the item with no chart, so its unit fields " +
+			"render as a key nobody reads and as a team the chart has lost")
+	}
+}
+
 // EVERY FILTER REACHES THE READER. A filter honoured on one transport and
 // dropped on the other is the exact divergence this package exists to
 // prevent, and a board silently ignoring `assignee` looks like a board with
@@ -465,6 +488,38 @@ func TestSkillsIsThreeStated(t *testing.T) {
 	}
 	if p.filter.Skills == nil || *p.filter.Skills {
 		t.Error("skills=false reached the reader as absent or true")
+	}
+}
+
+// A PAGE CONTAINER REACHES THE READER IN THE KNOWLEDGE BASE'S OWN SPELLING, on
+// both reads that take one.
+//
+// The rows are keyed upper-case, and the READ'S DEFERRAL SCOPE is composed from
+// the value as handed in — so a `container=eng` reaching the reader as typed
+// asked whether a record held against `eng` was pending, which no writer ever
+// files one under, and answered complete over a container a retained record
+// was about. The activity read passed its container on untrimmed and
+// un-upper-cased, and the list read kept a private copy of the rule.
+func TestAPageContainerReachesTheReaderCanonical(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"eng", " Eng ", "ENG"} {
+		p := &stubPages{}
+		if _, err := askNative(t, queries.Sources{Pages: p}, "pages",
+			map[string]any{"container": raw}); err != nil {
+			t.Fatalf("pages: %v", err)
+		}
+		if p.filter.Container != "ENG" {
+			t.Errorf("pages container=%q reached the reader as %q, want ENG",
+				raw, p.filter.Container)
+		}
+		if _, err := askNative(t, queries.Sources{Pages: p}, "page_activity",
+			map[string]any{"container": raw}); err != nil {
+			t.Fatalf("page_activity: %v", err)
+		}
+		if p.activity.Container != "ENG" {
+			t.Errorf("page_activity container=%q reached the reader as %q, "+
+				"want ENG", raw, p.activity.Container)
+		}
 	}
 }
 
@@ -737,6 +792,88 @@ func TestAViewStripTakesTheContainerTheBoardTakes(t *testing.T) {
 			map[string]any{"container": raw})
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("container=%q answered %v, want a bad-parameter refusal", raw, err)
+		}
+	}
+}
+
+// THE PROJECTS LISTING'S TWO CLOSED SETS REACH THE READER AS THEMSELVES.
+//
+// `archived=` SELECTS a set and `sort=` orders the WHOLE of it before the
+// engine's own cap takes a page. Both were the screen's own work once — the
+// route sent a widening boolean and the directory narrowed and re-sorted what
+// came back — so past the cap the Archived segment reported a company with
+// dozens of retired projects as having none, and `sort=-open` ranked the most
+// open work among the projects whose keys sort first.
+func TestTheProjectsListingCarriesItsArchivalSetAndOrdering(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		archived   string
+		sort       string
+		wantSet    tracker.ArchivedMode
+		wantSort   tracker.ProjectSort
+		descending bool
+	}{
+		{"", "", tracker.ArchivedExclude, "", false},
+		{"false", "key", tracker.ArchivedExclude, tracker.ProjectSortKey, false},
+		{"only", "-open", tracker.ArchivedOnly, tracker.ProjectSortOpen, true},
+		{"true", "last_change", tracker.ArchivedInclude, tracker.ProjectSortLastChange, false},
+	} {
+		w := &stubWork{}
+		args := map[string]any{}
+		if tc.archived != "" {
+			args["archived"] = tc.archived
+		}
+		if tc.sort != "" {
+			args["sort"] = tc.sort
+		}
+		if _, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+			args); err != nil {
+			t.Fatalf("work_projects%+v: %v", args, err)
+		}
+		if w.projectQuery.Archived != tc.wantSet {
+			t.Errorf("archived=%q reached the reader as %q, want %q",
+				tc.archived, w.projectQuery.Archived, tc.wantSet)
+		}
+		if w.projectQuery.Sort != tc.wantSort ||
+			w.projectQuery.Descending != tc.descending {
+			t.Errorf("sort=%q reached the reader as %q/%v, want %q/%v",
+				tc.sort, w.projectQuery.Sort, w.projectQuery.Descending,
+				tc.wantSort, tc.descending)
+		}
+	}
+
+	// AND A VALUE THAT IS NEITHER SET'S IS A 400 NAMING THE PARAMETER, not
+	// a silent fall back: a screen handed the default for a filter it
+	// asked for draws a set nobody chose, and the reader has no way to
+	// tell. `bad_params` is also the one code the dashboard renders as the
+	// SCREEN's fault, so retrying is not offered.
+	for _, tc := range []struct{ key, value, want string }{
+		{"archived", "yes", "archived"},
+		// `active` READS LIKE A VALUE and is not one — the live set is
+		// `false`. Accepting it as the default would be exactly the
+		// silent narrowing this refusal exists to stop.
+		{"archived", "active", "archived"},
+		{"sort", "lead", "sort"},
+		{"sort", "-progress", "sort"},
+	} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_projects",
+			map[string]any{tc.key: tc.value})
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("%s=%s answered %v, want a bad-parameter refusal",
+				tc.key, tc.value, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) ||
+			!strings.Contains(err.Error(), tc.value) {
+			t.Errorf("%s=%s is refused with %q, want the parameter and the "+
+				"value named", tc.key, tc.value, err)
+		}
+		// AND THE READ IS NEVER MADE. A refusal that had already asked
+		// the store would be a 400 over an answer somebody paid for.
+		if w.projectQuery.Level != "" {
+			t.Errorf("%s=%s reached the reader as %+v, want no read at all",
+				tc.key, tc.value, w.projectQuery)
 		}
 	}
 }
@@ -1197,18 +1334,56 @@ func TestTheViewerIsTheCallersOwnSeat(t *testing.T) {
 	}
 }
 
+// A CHANGE KIND OFF THE WIRE IS CHECKED THE SAME WAY.
+//
+// It was trusted — [tracker.ChangeKind] over whatever string arrived — on the
+// reasoning that an empty feed was survivable. It is the same quiet wrong
+// answer: the history screen takes its kind from a URL a person can bookmark,
+// so a kind this build does not have drew an empty history that reads exactly
+// like a project nothing happened to, where the page activity beside it
+// refuses the same mistake by name.
+func TestAnUnknownChangeKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
+	t.Parallel()
+	w := &stubWork{}
+	_, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+		"container": "workspace", "kinds": "status,promoted",
+	})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "promoted") {
+		t.Fatalf("kinds=status,promoted answered %v, want a bad-parameter refusal "+
+			"naming the kind", err)
+	}
+	if w.activityQuery.Kinds != nil {
+		t.Errorf("the refused query still reached the reader as %v",
+			w.activityQuery.Kinds)
+	}
+
+	// THE CONTROL: every kind this build has goes through as itself.
+	w = &stubWork{}
+	all := make([]string, 0, len(tracker.ChangeKinds))
+	for _, kind := range tracker.ChangeKinds {
+		all = append(all, string(kind))
+	}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{
+		"container": "workspace", "kinds": strings.Join(all, ","),
+	}); err != nil {
+		t.Fatalf("every change kind this build has was refused: %v", err)
+	}
+	if !slices.Equal(w.activityQuery.Kinds, tracker.ChangeKinds) {
+		t.Errorf("the kinds reached the reader as %v, want %v",
+			w.activityQuery.Kinds, tracker.ChangeKinds)
+	}
+}
+
 // AN ACTOR KIND OFF THE WIRE IS CHECKED AT THIS SURFACE, and it is the only
 // place that can check it.
 //
-// `work_activity` builds its `Kinds` by trusting whatever it was handed —
-// [tracker.ChangeKind] over an arbitrary string — and an unknown change kind
-// simply matches nothing, which is a filter that answers empty. That is
-// survivable for a change kind and is not for the ACTOR kind, because it is
-// the filter the audit screen is made of: an empty audit reads as a company
-// nobody has touched, and a filter quietly ignored reads as one where
-// everybody is an operator. The reader takes typed values and cannot tell a
-// kind the caller invented from one this build was compiled without, so the
-// refusal belongs here, at the edge where the string still exists.
+// An unknown kind simply matches nothing, which is a filter that answers
+// empty — and the ACTOR kind is the filter the audit screen is made of: an
+// empty audit reads as a company nobody has touched, and a filter quietly
+// ignored reads as one where everybody is an operator. The reader takes typed
+// values and cannot tell a kind the caller invented from one this build was
+// compiled without, so the refusal belongs here, at the edge where the string
+// still exists.
 func TestAnUnknownActorKindIsRefusedRatherThanFilteringToNothing(t *testing.T) {
 	w := &stubWork{}
 	if _, err := askNative(t, queries.Sources{Work: w}, "work_activity", map[string]any{

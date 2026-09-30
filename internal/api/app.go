@@ -81,9 +81,11 @@ type App struct {
 	// acknowledgement.
 	retention retentionWriter
 
-	// nodes installs and lifts the eviction gate. A RECORD on the log
-	// rather than a coordination write, which is why it is a different
-	// seam from the one above. Nil on a process with no native tracker.
+	// nodes installs and lifts the eviction gate. A RECORD on every
+	// identity-claiming log rather than a coordination write, which is why
+	// it is a different seam from the one above. Nil where the process ran
+	// no state log when this surface was built, whose gate routes answer
+	// `503 no_state_log` for as long as it serves.
 	nodes NodeGate
 
 	// capacity drives a stream's byte ceiling through the maintenance
@@ -462,7 +464,7 @@ type Options struct {
 	Retention retentionWriter
 
 	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
-	// readmit routes answering 503.
+	// readmit routes answering `503 no_state_log`.
 	Nodes NodeGate
 
 	// Capacity drives a stream's byte ceiling.
@@ -713,9 +715,9 @@ func New(opts Options) (*App, error) {
 	// The security headers go on outside both, so a refusal and a preflight
 	// carry them as well as an answer does, and before routing, so the
 	// responses no handler writes deliberately (the mux's own 404 and 405,
-	// the redirect from `/`, which has an HTML body) are covered without
-	// each needing to remember. A handler serving a page replaces the
-	// policy with its own.
+	// which [httpjson.Mux] answers, and the redirect from `/`, which has an
+	// HTML body) are covered without each needing to remember. A handler
+	// serving a page replaces the policy with its own.
 	//
 	// And the drain gate sits inside all three, next to the routes it
 	// refuses: see [App.drainGate].
@@ -733,9 +735,16 @@ func New(opts Options) (*App, error) {
 	// which resolves the principal. Then the CSRF check, INSIDE the guard
 	// because the credential's SHAPE is what decides whether a missing
 	// Origin is a refusal, and nothing before the guard knows which shape
-	// arrived.
+	// arrived. Innermost, the mux's OWN 404 and 405 are answered in the
+	// engine's envelope ([httpjson.Mux]), like every other answer this
+	// surface writes: a client reads a refusal with no code as something in
+	// front of the node, so a route this node simply does not serve — a
+	// work purge on a node serving no human write surface, any route a
+	// newer client asks an older node for — read as a write whose outcome
+	// was unknown.
 	a.handler = pagepolicy.Apply(authz.CanonicalPath(
-		a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(a.drainGate(mux))))),
+		a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
+			a.drainGate(httpjson.Mux(mux)))))),
 		a.secure)
 	return a, nil
 }

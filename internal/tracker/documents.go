@@ -197,6 +197,19 @@ func readCounter(ctx context.Context, tx *sql.Tx, project string) (Counter, bool
 	}, true, nil
 }
 
+// readAlias reports whether a key is claimed, and by which task.
+func readAlias(ctx context.Context, tx *sql.Tx, key string) (string, bool, error) {
+	var task string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT task_id FROM tracker_task_keys WHERE key = ?`, key).Scan(&task); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("tracker: read the claim on key %s: %w", key, err)
+	}
+	return task, true, nil
+}
+
 // readChildBatch is one batch of a task's DIRECT children.
 //
 // # Why direct children rather than the subtree
@@ -226,20 +239,21 @@ func readCounter(ctx context.Context, tx *sql.Tx, project string) (Counter, bool
 // should never have been needed. An id cursor advances on what was PUBLISHED,
 // which is the fact this walk actually knows.
 //
-// # A child in the trash is not one of them
-//
-// A tombstoned task is FROZEN — no field of it can change, its parent
-// included — so a re-parent of one is refused on its own subject, and a walk
-// that selected it failed on it: the duplicate stayed marked mid-merge, and
-// the duty re-ran the same refusal on every tick. It stays under the
-// duplicate instead, which is where a restore brings it back to.
-func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
+// AND ONLY A CHILD IN project — the project the walk is carrying children
+// into; see [Writer.reparentOnto].
+func readChildBatch(ctx context.Context, tx *sql.Tx, parent, project, after string,
 	limit int) ([]Task, error) {
 
+	// NOT A REMOVED CHILD. A tombstoned task is frozen — every write to it
+	// is refused until somebody restores it — so a walk that selected one
+	// stopped on it, and a re-run, and the duty behind both, selected it
+	// again and stopped again: a merge with one subtask in the trash could
+	// never finish. It stays under the parent it had, which is where a
+	// restore finds it.
 	rows, err := tx.QueryContext(ctx, `
 		SELECT document, version, 0 FROM tracker_tasks
-		WHERE parent_id = ? AND id > ? AND removed_at IS NULL
-		ORDER BY id LIMIT ?`, parent, after, limit)
+		WHERE parent_id = ? AND project_key = ? AND id > ? AND removed_at IS NULL
+		ORDER BY id LIMIT ?`, parent, project, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read the children of %s: %w", parent, err)
 	}
@@ -249,9 +263,16 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, after string,
 
 // readSubtree is every descendant of a root task, ORDERED BY (depth, id).
 //
-// # Why the order is part of the answer
+// A STABLE ORDER, because both of its readers — a cross-project move and a
+// subtree's removal — walk it one append at a time: a depth is a fact about
+// the tree and an id never changes, while anything ordered by a rank or a
+// title would re-order under an edit somebody made while the walk ran. It is
+// a walk's order and NOT a key assignment a later run can reproduce, since the
+// membership itself moves as tasks are filed and re-parented — which is why a
+// move's re-run mints a fresh range for what is left rather than re-deriving
+// the first run's.
 //
-// A subtree removal publishes one tombstone per task in THIS order, so a
+// And a subtree removal publishes one tombstone per task in THIS order, so a
 // reader that sees a child removed has already seen its parent go. The depth
 // is what gives that; the id breaks the tie so every node, and every re-run,
 // walks one subtree in one order.

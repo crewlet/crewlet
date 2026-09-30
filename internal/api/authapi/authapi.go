@@ -71,7 +71,21 @@
 // one test — applied or pending — and [unresolved] the one answer, carrying
 // the operation id. Nothing is built on an unknown write and nothing is
 // announced about it, because a row saying a session started, ended or a
-// factor was enrolled is the one row in the trail that must not be false.
+// factor was enrolled is the one row in the trail that must not be false. A
+// write that landed as a copy this call cannot prove is its own
+// ([statelog.Result.Collapsed]) is not built on either, where what it would
+// build is formed inside its decide ([built]).
+//
+// # Every operation id is one the ledger can vouch for
+//
+// The publisher vouches for a retry by the instant an operation id carries,
+// and a session subject's ledger rows go after an hour
+// ([iamdomain.SessionOpsRetention]). So every write here is published under an
+// id in the engine's grammar: a fresh one per request ([statelog.NewOpID]),
+// or a step of the lineage this request minted, for everything answered inside
+// the request and never re-asked — and one DERIVED from the invitation, at its
+// instant, for the redemption a retry must reproduce. None is derived from a
+// session's lineage, whose instant is when that session began.
 //
 // # What it says about itself
 //
@@ -224,22 +238,111 @@ func errText(err error) string {
 // The record may or may not be on the log, so this surface does exactly what
 // a single write does with `unknown`: it opens no session on it, mints no
 // bearer from it, says no event about it, and answers 503 with the identity
-// Retry-After — an unknown outcome is the one a retry under the same id is
-// FOR, so it always carries one — and the OPERATION ID, which is how the write is
-// found in `iam_history` and, where the gesture derives its id from what the
-// caller presented (a logout of one lineage, an invitation), the id the retry
-// lands under by construction.
+// Retry-After — an unknown outcome is the one a retry is FOR, so it carries
+// one — and the OPERATION ID, which is how the write is found in `iam_history`
+// and, where the gesture derives its id from what the caller presented (an
+// invitation), the id the retry lands under by construction. Every other write
+// here is a fresh operation per request, because each is answered inside it
+// and never re-asked: a sign-in, a sign-out or a factor asked again is a new
+// gesture, whose own decide reads what the first one left.
+//
+// # Unless this node's ledger cannot vouch for it
+//
+// An UNVOUCHED unknown ([statelog.Result.Unvouched]) was not published at all:
+// this node's operation ledger may have lost the row the operation needs, so
+// it answers the same operation the same way every time until the write
+// reaches it. Where the operation is derived from what the caller presented —
+// an invitation's redemption is — the same request here re-derives it and
+// meets the same silence, so the answer carries NO Retry-After, says
+// `unvouched`, and sends the caller to another node.
+//
+// # And a COLLAPSED answer is not built on either
+//
+// A write the framework answered with a copy of the operation it cannot prove
+// is this call's own ([statelog.Result.Collapsed]) landed — but whatever this
+// call's decide computed may describe a decision nothing published, or none
+// at all: a second factor's spend whose verdict was another round's, a factor
+// or a set of recovery codes this call formed and nothing stored. Where the
+// answer is formed inside the decide, the route asks [built] rather than
+// [landed], and a collapsed write is answered here as the unknown it is to
+// this call — nothing shown, nothing opened, nothing announced — while a new
+// request is a new operation that forms its own.
 func unresolved(w http.ResponseWriter, r *http.Request, event string,
 	result statelog.Result) {
 
 	log.WarnContext(r.Context(), event, "op_id", result.OpID,
-		"outcome", string(result.Outcome))
-	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil),
-		httpjson.Detail{
-			"detail": "this node cannot establish whether that change landed; " +
-				"nothing was built on it — try again",
-			"op_id": result.OpID,
-		})
+		"outcome", string(result.Outcome), "collapsed", result.Collapsed,
+		"unvouched", result.Unvouched)
+	detail := httpjson.Detail{
+		"detail": "this node cannot establish whether that change landed; " +
+			"nothing was built on it — try again",
+		"op_id": result.OpID,
+	}
+	retry := auth.RetryIdentity(nil)
+	switch {
+	case result.Unvouched:
+		retry = 0
+		detail["detail"] = "this node's operation ledger cannot vouch for that " +
+			"change, so this node answers it the same way every time; nothing " +
+			"was built on it — try again on another node"
+		detail["unvouched"] = true
+	case result.Collapsed:
+		detail["detail"] = collapsedDetail
+	}
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry, detail)
+}
+
+// built reports whether a write landed AS THIS CALL'S OWN, so that what its
+// decide computed describes the record that landed: [landed], and not
+// [statelog.Result.Collapsed] — see [unresolved].
+func built(result statelog.Result) bool {
+	return landed(result) && !result.Collapsed
+}
+
+// writeFailed answers a write the identity estate REFUSED or could not make:
+// 503 carrying the operation it was published under — so the trail can find
+// it — and the Retry-After the refusal's own rule gives ([auth.RetryIdentity]),
+// none for one waiting cannot clear.
+//
+// THE OPERATION ID ON EVERY ONE, because the refusals here used to carry
+// nothing but the code, and a refused write is the one an operator reading
+// the identity trail most needs to find.
+func writeFailed(w http.ResponseWriter, r *http.Request, event, opID string,
+	err error) {
+
+	var refused *statelog.Unavailable
+	if errors.As(err, &refused) && refused.OpID != "" {
+		opID = refused.OpID
+	}
+	log.WarnContext(r.Context(), event, "op_id", opID, "error", err)
+	detail := "this node could not make that change, and nothing was built on it"
+	if errors.Is(err, iamdomain.ErrCollapsed) {
+		// THE ONE REFUSAL HERE THAT IS NOT "COULD NOT": the operation
+		// landed, as a copy whose answer this call cannot give — a session
+		// start's counters, a mint's grants — which [unresolved] words the
+		// same way for a copy found by a write that returns no error.
+		detail = collapsedDetail
+	}
+	httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
+		httpjson.Detail{"detail": detail, "op_id": opID})
+}
+
+// collapsedDetail is what a write that landed as a copy this call cannot prove
+// is its own ([statelog.Result.Collapsed]) is answered with: it did land, so
+// "cannot establish whether it landed" would send a client to find out what it
+// could have been told, and what is true is that nothing this call formed
+// describes it.
+const collapsedDetail = "that change landed as a copy this request cannot " +
+	"prove is its own, so nothing was built on it — try again, which starts " +
+	"it afresh"
+
+// removed reports a write refused because the person it names was removed
+// from the directory ([statelog.ReasonDeleted]) — between the read this
+// surface decided on and the record. Nothing will ever write them again, so no
+// route here answers it as a 503 somebody retries.
+func removed(err error) bool {
+	var refused *statelog.Unavailable
+	return errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted
 }
 
 // Sealer is the sealing this surface does, and nothing else of the estate's.

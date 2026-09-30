@@ -33,7 +33,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, unitPath, type OrgIndex } from "~/lib/seats.ts";
+import { indexOrg, seatLookup, unitPath, type OrgIndex } from "~/lib/seats.ts";
 import { useChartRead } from "~/lib/chartReads.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -669,6 +669,10 @@ function ContainerPages({
  * started and another has rewritten look like the first seat's tree.
  */
 function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: OrgIndex }) {
+  // THE NAME AND THE KIND, from one lookup: a writer's chip draws the dashed
+  // ring off the kind, so resolving only the name makes every human writer
+  // look like an agent.
+  const who = useMemo(() => seatLookup(index), [index]);
   const writers = useMemo(() => {
     const seen: string[] = [];
     for (const page of recent) {
@@ -689,11 +693,7 @@ function ContainerWriters({ recent, index }: { recent: PageSummary[]; index: Org
       {writers.length > 0 ? (
         <div className="row wrap gap-2">
           {writers.slice(0, PEEK_WRITERS).map((handle) => (
-            <SeatChip
-              key={handle}
-              name={index.byHandle.get(handle)?.name ?? handle}
-              handle={handle}
-            />
+            <SeatChip key={handle} handle={handle} {...who(handle)} />
           ))}
           {writers.length > PEEK_WRITERS && (
             <span className="t-caption">+{writers.length - PEEK_WRITERS} more</span>

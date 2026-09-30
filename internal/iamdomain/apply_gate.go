@@ -64,9 +64,15 @@ func (a *Applier) applyInvalidation(ctx context.Context, tx *sql.Tx, at applyCon
 
 // applyEviction records a node's removal from this log, or its readmission.
 //
+// BOTH BOUNDARIES ARE THIS RECORD'S OWN POSITION: an eviction drops the node's
+// records above where it landed, and a readmission counts them again from where
+// it landed — see [Eviction] for why neither is a field of the payload.
+//
 // A READMISSION IS AN INVERSE COMMIT rather than a delete: an eviction's whole
 // history survives a replay, so a node that was evicted, readmitted and
-// evicted again reads correctly rather than as one long absence.
+// evicted again reads correctly rather than as one long absence. A
+// readmission of a node this log never evicted changes no row, which is the
+// standing it asked for.
 func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpEviction {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on an "+
@@ -78,26 +84,39 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 		return 0, fmt.Errorf("iamdomain: the eviction record at %s: %w",
 			at.position, err)
 	}
-	var readmitted any
-	if eviction.Readmitted > 0 {
-		readmitted = int64(eviction.Readmitted)
+	node := at.record.Subject.ID
+	if node == "" {
+		return 0, fmt.Errorf("iamdomain: the eviction at %s names no node, so "+
+			"there is nothing for the gate to drop", at.position)
+	}
+	if eviction.Readmit {
+		result, execErr := tx.ExecContext(ctx, `
+			UPDATE iam_evictions
+			SET readmitted_position = ?, version = ?
+			WHERE node_id = ? AND version < ?`,
+			at.packed, at.packed, node, at.packed)
+		if execErr != nil {
+			return 0, fmt.Errorf("iamdomain: readmit node %s at %s: %w",
+				node, at.position, execErr)
+		}
+		written, _ := result.RowsAffected()
+		return int(written), nil
 	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_evictions
 			(node_id, at, by, from_position, readmitted_position, version)
-		VALUES (?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, NULL, ?)
 		ON CONFLICT(node_id) DO UPDATE SET
 			at                  = excluded.at,
 			by                  = excluded.by,
 			from_position       = excluded.from_position,
-			readmitted_position = excluded.readmitted_position,
+			readmitted_position = NULL,
 			version             = excluded.version
 		WHERE excluded.version > iam_evictions.version`,
-		at.record.Subject.ID, at.unix(), eviction.By, int64(eviction.From),
-		readmitted, at.packed)
+		node, at.unix(), eviction.By, at.packed, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: record the eviction of node %s: %w",
-			at.record.Subject.ID, err)
+			node, err)
 	}
 	written, _ := result.RowsAffected()
 	return int(written), nil

@@ -82,8 +82,11 @@ const (
 	// save a joiner the replay it would cost to transfer.
 	SkipLagging SkipReason = "lagging"
 
-	// SkipUnhydrated — this node has not drained the log even once, so
-	// what it holds is a prefix rather than a state.
+	// SkipUnhydrated — this node cannot vouch for a whole copy: it has
+	// not drained the log since its applier started, or its rows have
+	// stopped moving since it did. Either way what it holds is a prefix
+	// rather than a state. It is [Health.Drained], and the DISTANCE a
+	// drained node has since fallen behind is `lagging` instead.
 	SkipUnhydrated SkipReason = "unhydrated"
 
 	// SkipSoleNode — there is nobody to donate to. The recovery artefact
@@ -108,14 +111,14 @@ const (
 	SkipDeferred SkipReason = "deferred"
 
 	// SkipRecent — the newest local snapshot is younger than the
-	// interval AND names every domain this node runs.
-	//
-	// YOUNG IS NOT ENOUGH. An artefact short of a domain this node runs —
-	// taken before a role added one, or by the build before a domain was
-	// added — is refused wholesale by every joiner that runs it, so it
-	// suppresses nothing: a complete one is taken at once, and the node
-	// logs `statelog_snapshot_recent_but_short` rather than resting on an
-	// artefact nobody can adopt.
+	// interval, and still names every domain at the generation this node
+	// stands at. One from a generation a domain has since left is not a
+	// recent snapshot of anything a joiner can adopt, whatever its age —
+	// nor is one short of a domain this node runs, taken before a role
+	// added one or by the build before a domain was added: every joiner
+	// that runs it refuses it wholesale, so it suppresses nothing, and the
+	// node logs `statelog_snapshot_recent_but_short` as it takes a
+	// complete one rather than resting on an artefact nobody can adopt.
 	SkipRecent SkipReason = "recent"
 
 	// SkipAheadOfLog — this node's checkpoint sits PAST the log's last
@@ -128,9 +131,21 @@ const (
 	// to a sequence space the live stream no longer has — the signature of
 	// a stream that was deleted and recreated — and the artefact would
 	// name a position no recipient can ever replay from. The same state
-	// refuses reads, refuses writes and refuses readiness through
-	// [Health.AheadOfLog]; a donor is the one place it was still allowed.
+	// refuses reads and readiness through [Health.AheadOfLog] and writes
+	// through [Runner.ObserveEnd] and [ZeroFence]; a donor is the one place
+	// it was still allowed.
 	SkipAheadOfLog SkipReason = "ahead_of_log"
+
+	// SkipLogDiverged — the log holds, at this node's checkpoint, another
+	// record than the one it consumed there ([ErrLogDiverged]), so what it
+	// holds is a history the log does not continue.
+	//
+	// ITS OWN REASON beside [SkipAheadOfLog] because it is the state that one
+	// stops seeing: once a restored log has been written past the checkpoint
+	// nothing about the end is wrong, the caught-up term is true, and an
+	// artefact taken here would hand a recipient rows that disagree with the
+	// log at the very position it resumes from.
+	SkipLogDiverged SkipReason = "log_diverged"
 
 	// SkipFailed — the attempt RAN and errored, which is the one reason
 	// here that is not a declined precondition.
@@ -149,7 +164,8 @@ const (
 // rather than discovering them one production incident at a time.
 var SkipReasons = []SkipReason{
 	SkipLagging, SkipUnhydrated, SkipSoleNode,
-	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipAheadOfLog, SkipFailed,
+	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipAheadOfLog, SkipLogDiverged,
+	SkipFailed,
 }
 
 // Valid reports whether a skip reason off the wire is one this build knows.
@@ -251,9 +267,12 @@ type Registered struct {
 	// and whether it holds anything it cannot decode.
 	Health func() Health
 
-	// StreamCreatedAt is the broker's own creation instant for the
-	// domain's stream, which is what detects a recreated one.
-	StreamCreatedAt time.Time
+	// NO CREATION INSTANT. One was carried here, read by nothing: a
+	// manifest names the instant the copied FILE's checkpoint was committed
+	// under ([CursorsInFile]), because an instant from the donor's live
+	// handle describes another stream the moment one is recreated — and a
+	// value nobody reads is one that goes stale without anybody noticing,
+	// which is exactly what a reanchor under a running node did to it.
 }
 
 // SnapshotDeps is everything the snapshot loop needs that it does not own.
@@ -283,6 +302,8 @@ type SnapshotDeps struct {
 	// Interval is how stale the newest local snapshot may be.
 	Interval time.Duration
 
+	// Logger is where this writes. Nil is the package's own component
+	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 	Now    func() time.Time
 }
@@ -313,10 +334,7 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 	case d.Interval <= 0:
 		return nil, fmt.Errorf("statelog: the snapshot loop has no interval")
 	}
-	logger := d.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := loggerOr(d.Logger)
 	now := d.Now
 	if now == nil {
 		now = time.Now
@@ -582,10 +600,28 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"longer has — a copy would name a position no recipient "+
 					"could replay from", name, h.Position.Seq, *h.LastSeq)}
 		}
-		if !h.CaughtUp {
+		// AND FOR THE SAME REASON a log that diverged from these rows: the
+		// end is an ordinary end again and every term below is satisfied,
+		// while the rows hold a history the log does not continue.
+		if h.LogDiverged {
+			return &ErrSkipped{Reason: SkipLogDiverged, Detail: fmt.Sprintf(
+				"the log's record at this node's %s checkpoint %d is not the one "+
+					"it consumed there, so its rows are a history the log does not "+
+					"continue — a copy would hand a recipient rows that disagree "+
+					"with the log at the position it resumes from",
+				name, h.Position.Seq)}
+		}
+		// THE HISTORY, and the term below is the DISTANCE. They were one
+		// bool once — assigned from the instantaneous lag — and this arm
+		// then fired at a lag of one, which made the slack below
+		// unreachable: no node ever skipped for `lagging`, because a node
+		// a hundred records behind was already reported as one that had
+		// never drained at all.
+		if !h.Drained {
 			return &ErrSkipped{Reason: SkipUnhydrated, Detail: fmt.Sprintf(
-				"this node has never drained %s, so what it holds is a prefix "+
-					"rather than a state", name)}
+				"this node has not drained %s since its applier started, or has "+
+					"stalled since it did, so what it holds is a prefix rather "+
+					"than a state", name)}
 		}
 		if h.Lag != nil && *h.Lag > SnapshotLagSlack {
 			return &ErrSkipped{Reason: SkipLagging, Detail: fmt.Sprintf(
@@ -595,26 +631,32 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 		}
 	}
 
-	newest, covers, found, err := s.newest()
+	newest, found, err := s.newest()
 	if err != nil {
 		return err
 	}
-	if found && s.now().Sub(newest) < s.deps.Interval {
-		// YOUNG IS NOT ENOUGH; it must also be adoptable. A recent
-		// artefact short of a domain this node runs suppresses nothing,
-		// because no joiner could use it and the trim must not count it.
-		if missing := missingFrom(covers, s.domainNames()); len(missing) > 0 {
-			s.log.Info("statelog_snapshot_recent_but_short",
-				"taken_at", newest, "covers", covers, "missing", missing,
-				"detail", "taking a complete one now rather than waiting out the "+
-					"interval: an artefact that names no position for a domain "+
-					"this node runs is refused wholesale by every joiner")
-		} else {
+	// RECENT MEANS ADOPTABLE, not merely young. A joiner asks for an
+	// artefact at the generation each domain is on and refuses any other, so
+	// once a reanchor or an adoption has moved one of this node's domains —
+	// or the build that took it ran a domain fewer — the artefact it holds is
+	// a snapshot nobody can use, and the interval would have kept it the
+	// node's only one for up to a day, leaving every peer with no donor to
+	// adopt from.
+	if found && s.now().Sub(newest.TakenAt) < s.deps.Interval {
+		if s.current(newest) {
 			return &ErrSkipped{Reason: SkipRecent, Detail: fmt.Sprintf(
-				"the newest local snapshot is %s old, inside the %s interval, "+
-					"and covers every domain this node runs",
-				s.now().Sub(newest).Round(time.Second), s.deps.Interval)}
+				"the newest local snapshot is %s old, inside the %s interval, and "+
+					"names every domain at the generation this node stands at",
+				s.now().Sub(newest.TakenAt).Round(time.Second), s.deps.Interval)}
 		}
+		covers := slices.Sorted(maps.Keys(newest.Domains))
+		s.log.Info("statelog_snapshot_recent_but_short",
+			"taken_at", newest.TakenAt, "covers", covers,
+			"missing", missingFrom(covers, s.domainNames()),
+			"detail", "taking a complete one now rather than waiting out the "+
+				"interval: an artefact that names no position for a domain this "+
+				"node runs, or names one at a generation it has since left, is "+
+				"refused by every joiner")
 	}
 
 	free, storeSize, err := s.space()
@@ -657,24 +699,19 @@ func (s *Snapshotter) scrubList() []string {
 // it is the debris of a run that did not finish, and treating it as a snapshot
 // would let one crashed attempt suppress every later one.
 //
-// THE DOMAIN SET COMES BACK TOO, because "recent" is not a fact about time
-// alone. An artefact taken by the build before a domain was added names every
-// domain THAT build ran and none of the new one, and [Offer.Usable] refuses
-// such an artefact WHOLESALE — so on the day a domain is added, every node in
-// the fleet is holding a young artefact that no joiner can adopt. Judged on
-// the instant alone, each node then suppresses its first complete take for a
-// whole interval, and the trim keeps counting those artefacts as snapshots
-// the whole time.
-func (s *Snapshotter) newest() (time.Time, []string, bool, error) {
+// THE MANIFEST COMES BACK WHOLE, because "recent" is not a fact about time
+// alone: whether the artefact names every domain this node runs, at the
+// generation each stands at, is what decides whether any joiner could adopt
+// it — see [Snapshotter.current].
+func (s *Snapshotter) newest() (Manifest, bool, error) {
 	entries, err := os.ReadDir(s.deps.Dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return time.Time{}, nil, false, nil
+		return Manifest{}, false, nil
 	}
 	if err != nil {
-		return time.Time{}, nil, false, fmt.Errorf("statelog: read %s: %w", s.deps.Dir, err)
+		return Manifest{}, false, fmt.Errorf("statelog: read %s: %w", s.deps.Dir, err)
 	}
-	var newest time.Time
-	var covers []string
+	var newest Manifest
 	var found bool
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -684,12 +721,11 @@ func (s *Snapshotter) newest() (time.Time, []string, bool, error) {
 		if err != nil {
 			continue
 		}
-		if !found || m.TakenAt.After(newest) {
-			newest, found = m.TakenAt, true
-			covers = slices.Sorted(maps.Keys(m.Domains))
+		if !found || m.TakenAt.After(newest.TakenAt) {
+			newest, found = m, true
 		}
 	}
-	return newest, covers, found, nil
+	return newest, found, nil
 }
 
 // domainNames is every domain this node runs, which is the set an artefact has
@@ -712,6 +748,19 @@ func missingFrom(covers []string, running []string) []string {
 		}
 	}
 	return missing
+}
+
+// current reports whether a manifest names every registered domain at the
+// generation this node's own checkpoint stands at — which is the only
+// generation a joiner asking this node would accept it at.
+func (s *Snapshotter) current(m Manifest) bool {
+	for _, reg := range s.deps.Domains {
+		at, named := m.Domains[reg.Domain.Name()]
+		if !named || at.Generation != reg.Health().Position.Generation {
+			return false
+		}
+	}
+	return true
 }
 
 // rotate removes every snapshot but the newest SnapshotsKept.

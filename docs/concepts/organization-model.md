@@ -156,15 +156,19 @@ Organization
     │                                        unit by it)
     ├── ID string                           (`id`: the unit's KEY — what a
     │                                        `manages:` entry and a root seat's
-    │                                        `unit:` resolve. Minted from the name
-    │                                        at import when unset)
+    │                                        `unit:` resolve, and what everything
+    │                                        durable is filed under. Minted from
+    │                                        the name at import when unset. See
+    │                                        "A unit's key" below)
     ├── Type UnitType; Purpose string; Goals []string
     ├── Lead string                         (the HANDLE of the seat leading it)
     ├── KnowledgeRefs []string
     ├── Channel string                     (team channel on the company's chat
     │                                       surface, inherited by children)
-    ├── Project string                     (tracker identity: lead-fallback routing
-    │                                       and the project the team files under.
+    ├── Project string                     (tracker identity: lead-fallback routing,
+    │                                       the project the team files under, and the
+    │                                       unit an item filed into that project with
+    │                                       no unit of its own belongs to.
     │                                       VENDOR-NEUTRAL: it names a native project
     │                                       or a Jira one, whichever tracker.backend
     │                                       the company runs)
@@ -489,6 +493,56 @@ Handle uniqueness is a **runnable** rule: a file breaking it is refused everywhe
 - **Read where nothing is written.** A `-company` file `crewlet run` boots on without importing it (the store's own company outranks it), and the vendor commands that act on a company file without storing it (`crewlet gitlab provision`, `crewlet slack provision` and their siblings, `crewlet llm status`), read one as it stands.
 
 A stored configuration revision never carries a chart any more — the chart is [its own log](chart-domain.md), and a revision written before the split is refused at boot, naming `crewlet config import` — so no stored revision is applied with an org rule broken.
+
+### A unit's key is what survives a rename
+
+A unit's **name** is what people read — in a prompt, on a board, in a channel
+topic — so it is renamed for the reasons prose is renamed. Its **key** (`id`)
+is its address: what a `lead`, a `manages` entry and a root seat's `unit:`
+name it by, and what everything durable — which team a work item is filed
+into, which team's lead hears about it, which unit a project belongs to — is
+filed under. Every unit has one: a file that declares no `id` has a key minted
+from the unit's name at import, lower-cased with whitespace as a hyphen, and
+re-importing the same file mints the same keys.
+
+```yaml
+units:
+  - name: Engineering
+    id: eng            # optional in a file; minted as `engineering` otherwise
+    project: ENG
+```
+
+So **renaming a unit moves nothing** — the name is content on the unit's own
+object, and nothing is filed under it. A **key** can be renamed too, as a
+structural change to the [org chart](chart-domain.md), and then the key the
+unit was created under (`origin_key`) and the keys it used to answer to go on
+resolving to it, so a reference written before the rename still reaches the
+same team — see
+[A key is an address, not an identity](chart-domain.md).
+
+**Every spelling names the team, everywhere a stored reference is resolved** —
+a `unit` on `create_work_item`, a `routing_unit`, every `unit=` filter, a
+project listing, a workload, a view strip's container: the unit's key, the key
+it was created under or one it used to answer to, compared the way the chart
+compares an address — and its **name**, in any case, where exactly one unit
+carries it. So `unit: Engineering` reaches the team keyed `eng` when no other
+unit is called that. A name two units share names neither of them, rather than
+whichever a walk reached first, and a reference that is one unit's key and
+another unit's name resolves to the unit whose **key** it is.
+
+The references *inside the org chart itself* — a unit's `lead`, a `manages`
+entry, a root seat's `unit:` — are held to the stricter form: a unit by its
+key and a seat by its handle, because they are resolved against the chart they
+are written in. One naming nothing is reported as a
+[dangling reference](#dangling-references) rather than silently ignored.
+
+**Renaming a key does not rewrite the work already filed.** Work filed before
+the rename carries the key it was filed under, and nothing rewrites it — see
+[Naming a team](../guides/work-tracker.md#naming-a-team-its-key-or-its-name).
+Nor does a rename re-onboard anybody: onboarding turns on the chain of
+**origin** identities above a seat (see [Onboarding
+convention](#onboarding-convention)), so neither a new name nor a new key moves
+a seat.
 
 ### Management Hierarchy
 

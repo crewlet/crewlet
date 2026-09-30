@@ -2,7 +2,7 @@
 //
 // # Why it is a surface of its own and not part of /config
 //
-// The chart left the company document (adr/0018, internal/chart): a write is
+// The chart left the company document (internal/chart): a write is
 // one record on an ordered log, arbitrated per object, with its own history
 // and its own author. /config writes a whole document into a revision, so it
 // cannot hold one — and it says so, refusing any body that carries a chart

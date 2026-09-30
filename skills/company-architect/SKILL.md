@@ -215,6 +215,15 @@ names a reader can tell apart anyway (`Software Engineer 2`), since a
 colleague asked for by a shared name is offered every seat that carries it,
 and give every seat an explicit `handle` and every unit its own `id`.
 
+**Set a unit `id` when the team's name may be rewritten.** A unit's name is
+prose and gets renamed; `id` (lowercase, starting with a letter, e.g.
+`id: eng`) is chosen once and read by nobody, and it is what work filed into
+that team is keyed on — so a rename moves nothing. It is optional, and a unit
+without one is keyed by its name, which is why adding one later is safe:
+filters match a team by its id *or* its name, so work filed under either is
+still found. An `id` must not collide with another unit's name — that pair is
+refused as one key, exactly like two units of the same name.
+
 **Secrets are `${VAR}` references, never literals.** Every string field
 supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 `.env`. Never write a token, key, or webhook secret into a config file,

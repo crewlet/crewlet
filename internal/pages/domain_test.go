@@ -1,6 +1,7 @@
 package pages_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -300,23 +301,33 @@ func TestEveryTableTheApplierWritesIsClassified(t *testing.T) {
 		}
 	}
 	for _, name := range pages.MachineryTables {
-		if class, held := tables[name]; !held || class != statelog.Local {
-			t.Errorf("%s is the log's own machinery and is classed %q", name, class)
+		want := statelog.Local
+		if name == (pages.Domain{}).OpsTable() {
+			// THE LEDGER TRAVELS, so an adopter can answer a retry of
+			// anything its donor applied.
+			want = statelog.Divergent
+		}
+		if class, held := tables[name]; !held || class != want {
+			t.Errorf("%s is the log's own machinery and is classed %q, want %q",
+				name, class, want)
 		}
 	}
-	// THE DIVERGENT ONE, and it must be exactly one: the skill flag is
-	// this build's parser answering about this build's rules, so two
-	// builds mid-upgrade legitimately differ — and every OTHER table has
-	// to be inside the identity claim or the claim means nothing.
+	// THE DIVERGENT ONES, and there must be exactly these two: the skill
+	// flag is this build's parser answering about this build's rules, so
+	// two builds mid-upgrade legitimately differ, and the ledger's
+	// `applied_at` is each node's own clock — every OTHER table has to be
+	// inside the identity claim or the claim means nothing.
 	var divergent []string
 	for name, class := range tables {
 		if class == statelog.Divergent {
 			divergent = append(divergent, name)
 		}
 	}
-	if len(divergent) != 1 || divergent[0] != "pages_skills" {
-		t.Fatalf("the divergent tables are %v, and the only value a fleet may "+
-			"legitimately disagree about here is the tool-skill flag", divergent)
+	slices.Sort(divergent)
+	if len(divergent) != 2 || divergent[0] != "pages_ops" || divergent[1] != "pages_skills" {
+		t.Fatalf("the divergent tables are %v, and the only values a fleet may "+
+			"legitimately disagree about here are the tool-skill flag and the "+
+			"instant each node applied an operation", divergent)
 	}
 	if _, claimed := tables["pages_skills"]; !claimed {
 		t.Fatal("pages_skills is not declared at all, so a donated snapshot " +

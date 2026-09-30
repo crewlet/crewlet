@@ -464,7 +464,7 @@ type domainAt struct{ First, Last uint64 }
 func TestTheAlarmTableIsEvaluatedOnTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	e := bootDirectoryNode(t, nil)
-	r := e.retention
+	r := e.retention.Load()
 	if r == nil || r.bindings == nil {
 		t.Fatal("this node runs no retention loop or no binding watch")
 	}
@@ -479,7 +479,7 @@ func TestTheAlarmTableIsEvaluatedOnTheHeartbeat(t *testing.T) {
 // a case can drive the same evaluations on its own clock without racing them.
 func quietRetention(t *testing.T, e *Engine) *retention {
 	t.Helper()
-	r := e.retention
+	r := e.retention.Load()
 	if r == nil {
 		t.Fatal("the node started no retention loop")
 	}

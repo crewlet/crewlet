@@ -294,3 +294,99 @@ func counterOf(t *testing.T, r *roundTrip, project string) int {
 	}
 	return last
 }
+
+func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
+	t.Helper()
+	var task tracker.Task
+	if err := r.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		var body []byte
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT document FROM tracker_tasks WHERE id = ?`, id).
+			Scan(&body); err != nil {
+			return err
+		}
+		return json.Unmarshal(body, &task)
+	}); err != nil {
+		t.Fatalf("read task %s: %v", id, err)
+	}
+	return task
+}
+
+// A TASK THAT NAMES NO UNIT IS FILED INTO ITS PROJECT'S OWN UNIT.
+//
+// `filed_unit` is the unit the work BELONGS to — it is what `unit=` filters
+// on, what a board's `unit` axis groups by, and what the item page labels
+// "Filed into" — and a project already knows which unit owns it, because the
+// chart apply wrote it on the project's own row.
+//
+// Nothing derived it. The one caller that filled the field stamped the FILING
+// SEAT'S team, so an operator — who holds no seat, and therefore no team —
+// filed into ENG and got "Filed into: no unit" on an item whose project said
+// Core, and so did every root-level seat, which belongs to no unit either.
+// This case is the derivation, at the write, where every writer reaches it.
+func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	if _, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+		{Key: "ENG", Name: "Engineering", Unit: "core"},
+		// AND ONE THE CHART GAVE NO UNIT, which is a real shape: a
+		// project on a root-level seat belongs to no team.
+		{Key: "LAB", Name: "Research"},
+	}); err != nil {
+		t.Fatalf("ApplyChart: %v", err)
+	}
+	r.drain()
+
+	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+
+	filed := taskOf(t, r, "t-1")
+	if filed.FiledUnit != "core" {
+		t.Errorf("a task filed into ENG carries filed_unit %q, want core — "+
+			"ENG is owned by core and nobody named anything else",
+			filed.FiledUnit)
+	}
+	// AND THE ROUTING HALF FOLLOWS IT, or the unit's lead is no fallback
+	// for work filed into the unit.
+	if filed.RoutingUnit != "core" {
+		t.Errorf("routing_unit = %q, want core", filed.RoutingUnit)
+	}
+	// AND THE COLUMN CARRIES IT, not only the document: `unit=` filters on
+	// the column, so a value that reached the record and not the row is
+	// one no query can find.
+	if got := r.strings(
+		`SELECT filed_unit FROM tracker_tasks WHERE id = ?`, "t-1"); len(got) != 1 ||
+		got[0] != "core" {
+		t.Errorf("the applied row's filed_unit is %v, want [core]", got)
+	}
+
+	// AN EXPLICIT UNIT IS LEFT ALONE. It is the one thing the project
+	// cannot say: work belonging to another team than the one owning the
+	// project it sits in is what the argument is for.
+	named := newTask("t-2")
+	named.FiledUnit, named.RoutingUnit = "platform", "platform"
+	if _, err := r.writer.CreateTask(t.Context(), "op-2", named, nil); err != nil {
+		t.Fatalf("CreateTask naming a unit: %v", err)
+	}
+	r.drain()
+	if got := taskOf(t, r, "t-2"); got.FiledUnit != "platform" {
+		t.Errorf("filed_unit = %q, want the platform the writer named — the "+
+			"project's own unit overwrote a stated one", got.FiledUnit)
+	}
+
+	// AND A PROJECT THE CHART GAVE NO UNIT FILES INTO NONE, which is
+	// honest: an empty unit is a fact about the chart rather than a
+	// default to invent.
+	unowned := newTask("t-3")
+	unowned.Project, unowned.Key = "LAB", ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-3", unowned, nil); err != nil {
+		t.Fatalf("CreateTask into an unowned project: %v", err)
+	}
+	r.drain()
+	if got := taskOf(t, r, "t-3"); got.FiledUnit != "" {
+		t.Errorf("filed_unit = %q for a project the chart gave no unit",
+			got.FiledUnit)
+	}
+}

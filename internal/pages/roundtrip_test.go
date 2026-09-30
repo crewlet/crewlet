@@ -34,6 +34,12 @@ type roundTrip struct {
 	reader  *pages.Reader
 	waiter  *testWaiter
 
+	// signer is the key this node's publisher seals every record under,
+	// held here too for the cases that append a record by hand — another
+	// build's, a barrier — which the fleet's own writer would have signed
+	// just the same, and which every reader refuses unsigned.
+	signer *statelog.Signer
+
 	// verifier opens a record's frame, because this harness replays the
 	// log exactly as the framework's own loop does and that loop verifies
 	// before any domain decodes.
@@ -68,7 +74,13 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node.db"),
+	return newRoundTripOn(t, log, openNodeStore(t, "node.db"), "node-a")
+}
+
+// openNodeStore opens one node's own store, closed with the test.
+func openNodeStore(t *testing.T, name string) *store.DB {
+	t.Helper()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), name),
 		store.Options{PinnedWriters: 1})
 	if err != nil {
 		t.Fatalf("open a store: %v", err)
@@ -78,21 +90,52 @@ func newRoundTrip(t *testing.T) *roundTrip {
 			t.Errorf("close the store: %v", err)
 		}
 	})
+	return db
+}
 
+// newRoundTripOn is the harness's node over a log and a store it is handed:
+// the ones [newRoundTrip] opens, or a SECOND node joining the same log under
+// its own id and its own store — the shape a race between two nodes needs.
+func newRoundTripOn(t *testing.T, log *js.DomainLog, db *store.DB,
+	nodeID string) *roundTrip {
+
+	t.Helper()
 	rows, err := pages.NewRows(db)
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	fence := pages.NewFence(db, "node-a")
+	fence := pages.NewFence(db, nodeID)
 	// The published trim floor is zero on a fleet that has never trimmed,
 	// which is the state every new company is in — and the state in which
-	// an absent anchor really does mean an unclaimed address.
-	fence.Floor = func(context.Context) (uint64, error) { return 0, nil }
+	// an absent anchor really does mean an unclaimed address. The log's own
+	// first sequence is the fence's other bound and its last the check that
+	// this node is on this log at all, both read from the stream the way
+	// the engine reads them.
+	fence.Floor = func(context.Context, uint32) (uint64, error) { return 0, nil }
+	fence.Ends = func(ctx context.Context) (statelog.LogEnds, error) {
+		first, last, err := log.Bounds(ctx)
+		return statelog.LogEnds{First: first, Last: last}, err
+	}
 	waiter := &testWaiter{}
+	// THIS NODE'S CHECKPOINT IS THE WAITER'S, which is what the harness's
+	// own applier advances — the position the end is compared against.
+	fence.Committed = waiter.Committed
+	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
+	// engine's does, so every write here is admitted as a production one is.
+	reserve, err := statelog.NewReserve(pages.Domain{}.Stream().Name,
+		func(ctx context.Context) (statelog.Usage, error) {
+			stats, err := log.Stats(ctx)
+			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
+		})
+	if err != nil {
+		t.Fatalf("build the gate reserve: %v", err)
+	}
+	signer := testSigner(t, pages.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
 		Domain: pages.Domain{}, Log: log, Rows: rows, Fence: fence,
-		Signer: testSigner(t, pages.Domain{}),
-		Gates:  pages.NewGates(db), Waiter: waiter, NodeID: "node-a",
+		Signer: signer,
+		Gates:  pages.NewGates(db), Waiter: waiter, Identity: waiter, NodeID: nodeID,
+		Admission:     reserve,
 		Generation:    func() uint32 { return 0 },
 		ResolveBudget: 2 * time.Second,
 	})
@@ -130,10 +173,31 @@ func newRoundTrip(t *testing.T) *roundTrip {
 	}
 	return &roundTrip{
 		t: t, db: db, log: log, store: kb,
-		applier: pages.NewApplier("node-a", nil, nil),
+		applier: pages.NewApplier(nodeID, nil, nil),
 		reader:  reader, waiter: waiter,
-		verifier: testVerifier(t, pages.Domain{}),
+		signer: signer, verifier: testVerifier(t, pages.Domain{}),
 	}
+}
+
+// appendSigned puts one hand-built record on the log, SEALED under this
+// fleet's key exactly as the publisher seals what it appends — a record some
+// writer of this fleet wrote, only not through this build's decide. Unsigned it
+// would be a record no node applies, which is a different case from the one a
+// caller of this means.
+func (r *roundTrip) appendSigned(subject, msgID string, body []byte) {
+	r.t.Helper()
+	if _, _, err := r.log.Append(r.t.Context(), subject, msgID, nil,
+		r.signer.Seal(body)); err != nil {
+		r.t.Fatalf("append a record on %s: %v", subject, err)
+	}
+}
+
+// standingLog is this harness's log as a standing read is handed it: the
+// broker's per-subject probe, and each record's BODY through
+// [statelog.StandingOf], because what the broker holds is the signed frame and
+// a standing decoded off the frame is no standing at all.
+func (r *roundTrip) standingLog() statelog.StandingLog {
+	return statelog.StandingOf(r.log, r.verifier)
 }
 
 // drain consumes every record the broker holds beyond what this node has
@@ -197,11 +261,15 @@ func (r *roundTrip) drain() {
 				statelog.ApplyOptions{Now: wednesday, StoredAt: storedAt}); err != nil {
 				return err
 			}
+			// THE WIRE SUBJECT, as the framework's own applier records
+			// it: the ledger's subject is what a write resolving an op id
+			// compares against, so a harness that wrote the bare one
+			// would have every write it resolves refused as a reuse.
 			if _, err := tx.ExecContext(r.t.Context(), `
 				INSERT INTO pages_ops (op_id, subject, position, applied_at)
 				VALUES (?,?,?,?) ON CONFLICT (op_id) DO NOTHING`,
-				env.OpID, env.Subject.String(), record.Position.Packed(),
-				store.EncodeTime(storedAt)); err != nil {
+				env.OpID, spec.SubjectPrefix+"."+env.Subject.String(),
+				record.Position.Packed(), store.EncodeTime(storedAt)); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(r.t.Context(), `
@@ -265,6 +333,22 @@ func (r *roundTrip) get(ref string) pages.Detail {
 type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
+
+	// advance, when set, is this node's applier run from inside a write's
+	// own wait — see [roundTrip.applyWhileWriting].
+	advance func()
+}
+
+// applyWhileWriting makes this node's applier run from inside a write's own
+// wait, which is what it does in production and what this harness otherwise
+// cannot express: a write that lost the broker's arbitration to a peer's
+// record waits for this node to apply that record before it decides again,
+// and in a harness where nothing consumes the log during a call that wait can
+// only expire.
+func (r *roundTrip) applyWhileWriting() {
+	r.waiter.mu.Lock()
+	defer r.waiter.mu.Unlock()
+	r.waiter.advance = r.drain
 }
 
 func (w *testWaiter) reach(p statelog.Position) {
@@ -281,10 +365,21 @@ func (w *testWaiter) Committed() statelog.Position {
 	return w.at
 }
 
+// StreamIdentity is always the live stream: this harness never rebuilds its
+// log, so every position the waiter holds is a sequence on it.
+func (w *testWaiter) StreamIdentity() error { return nil }
+func (w *testWaiter) Truncated() error      { return nil }
+
 func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
+		}
+		w.mu.Lock()
+		advance := w.advance
+		w.mu.Unlock()
+		if advance != nil {
+			advance()
 		}
 		select {
 		case <-ctx.Done():

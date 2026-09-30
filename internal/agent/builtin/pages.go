@@ -411,6 +411,14 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return pageWriteFailed(WritePageTool, err), nil
 	}
+	if got.Outcome.Outcome == statelog.OutcomeUnknown {
+		// A PAGE NOBODY CAN SAY WAS WRITTEN IS NOT ONE TO REPORT: the id and
+		// revision below would be a create's that may never have landed.
+		return pageUnknown(WritePageTool, got.Outcome, fmt.Sprintf(
+			"Read %s/%s with get_page before writing it again: if the first "+
+				"write landed, a second one is refused because the title is taken.",
+			in.Container, in.Title)), nil
+	}
 	t.deps.settle(ctx, got.Outcome.Position)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "container": got.Page.Container,
@@ -543,6 +551,11 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return pageWriteFailed(SavePageTool, err), nil
 	}
+	if got.Outcome.Outcome == statelog.OutcomeUnknown {
+		return pageUnknown(SavePageTool, got.Outcome, "Read the page with "+
+			"get_page: if its version moved past the one you edited, the save "+
+			"landed; if it did not, save again with the version you just read."), nil
+	}
 	at := got.Outcome.Position
 	revision := got.Revision
 	outcome := got.Outcome
@@ -565,6 +578,15 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			return failedBy(err, fmt.Sprintf("The edit was saved and the rename to %q "+
 				"was not: %s", clip(want),
 				pageWriteFailure(SavePageTool, err))), nil
+		}
+		if renamed.Outcome.Outcome == statelog.OutcomeUnknown {
+			return failedUnknown(renamed.Outcome.OpID, renamed.Outcome.Unvouched,
+				fmt.Sprintf("The edit was saved; whether the rename to %q "+
+					"landed is not known. %s", clip(want),
+					pageUnknownText(SavePageTool, renamed.Outcome, "Read the "+
+						"page with get_page: its title says whether the rename "+
+						"landed, and renaming again to the same title is "+
+						"harmless."))), nil
 		}
 		got.Page = renamed.Page
 		// THE LATER OF THE TWO, never the rename's outright. A rename to
@@ -678,6 +700,12 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if err != nil {
 			return pageWriteFailed(CommentOnPageTool, err), nil
 		}
+		if written.Outcome.Outcome == statelog.OutcomeUnknown {
+			return pageUnknown(CommentOnPageTool, written.Outcome,
+				"Editing the comment again with the same body is harmless: it "+
+					"replaces the text with what it already says if the first "+
+					"edit landed."), nil
+		}
 		t.deps.settle(ctx, written.Outcome.Position)
 		return jsonResult(map[string]any{
 			"comment_id": comment.ID, "page": detail.Page.Title,
@@ -688,9 +716,14 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 
 	in := pages.NewComment{
-		Body:    body,
-		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		TurnKey: turnKey(turn),
+		Body:      body,
+		ReplyTo:   strings.TrimSpace(argString(args, "reply_to")),
+		TurnKey:   turnKey(turn),
+		TurnSince: turnSince(turn),
+		// HOW MANY DIFFERENT CALLS TO THIS TOOL CAME FIRST in this run —
+		// see [opIDFor] for what a remark made again after another one
+		// cost without it.
+		Repeat: turn.CallLog().Ordinal(t.Name(), args),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)
@@ -698,6 +731,25 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	comment, written, err := t.deps.Writer.Comment(ctx, actor, detail.Page.ID, in)
 	if err != nil {
 		return pageWriteFailed(CommentOnPageTool, err), nil
+	}
+	if written.Outcome.Outcome == statelog.OutcomeUnknown {
+		// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is
+		// derived from its turn, so the same call again is the same
+		// comment: under a lost acknowledgement it posts once, and where
+		// this node's ledger cannot vouch for it the repeat publishes
+		// nothing and answers the same way — safe, and no answer sooner
+		// than looking. An operator's has no turn to derive from, so its
+		// repeat is a new comment, and a second one if the first landed.
+		// [unknownNext] is the rule every tracker write already answers by.
+		again := ""
+		if in.TurnKey != "" {
+			again = "call comment_on_page again with exactly the same " +
+				"arguments, before calling it with any others"
+		}
+		return pageUnknown(CommentOnPageTool, written.Outcome,
+			unknownNext(written.Outcome.Unvouched, again,
+				"Read the page's comments with get_page",
+				"that is a second comment")), nil
 	}
 	t.deps.settle(ctx, written.Outcome.Position)
 	return jsonResult(map[string]any{
@@ -741,6 +793,38 @@ func lesserOutcome(a, b statelog.Result) statelog.Result {
 		return b
 	}
 	return a
+}
+
+// pageUnknown explains a page write whose outcome is unknown: it may have
+// landed and it may not, so it is reported as neither — and never as done,
+// which is what answering with an id and a revision did.
+//
+// AN UNVOUCHED ONE SAYS SO, because it sends the caller somewhere else: this
+// node's operation ledger may have lost the record of the operation, so the
+// same OPERATION asked here answers the same way every time, and another node
+// — or a person looking at the page — is what can tell. Whether a caller's
+// repeat is that same operation is `next`'s to say: a seat's comment is, and
+// an operator's is not.
+//
+// A FAILED RESULT CARRYING [UnknownOutcome], for the reason [unknownWrite]
+// carries one: the sentence is for a model, and a caller answering in status
+// codes reads the cause. [pageUnknownText] is the sentence alone, for the one
+// answer that says something before it.
+func pageUnknown(name string, result statelog.Result, next string) tools.Result {
+	return failedUnknown(result.OpID, result.Unvouched,
+		pageUnknownText(name, result, next))
+}
+
+// pageUnknownText is [pageUnknown]'s sentence.
+func pageUnknownText(name string, result statelog.Result, next string) string {
+	why := "the write's acknowledgement was lost"
+	if result.Unvouched {
+		why = "this node's operation ledger may have lost the record of it, so " +
+			"this node cannot tell"
+	}
+	return fmt.Sprintf("%s: whether this landed is unknown (%s; operation %s). "+
+		"It may be on the page and it may not — do not report it as done, and "+
+		"do not report it as failed. %s", name, why, result.OpID, next)
 }
 
 // pageWriteFailure explains a write that did not land, in terms the model can

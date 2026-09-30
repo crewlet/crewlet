@@ -55,6 +55,7 @@ import { Avatar, cx, EmptyValue, Tag } from "@crewlethq/ui";
 import { Mark, type MarkName } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
+import type { SeatKind } from "~/lib/seats.ts";
 
 /** An identifier — a key, a handle, an id. Monospaced, and usually a link. */
 export function KeyCell({ value, path }: { value: string; path?: string[] }) {
@@ -137,7 +138,16 @@ export function SeatCell({
 }: {
   handle?: string | null;
   name?: string;
-  kind?: "agent" | "human" | string;
+  /**
+   * The seat's kind, which decides the badge's one variant.
+   *
+   * THE NAMED TYPE, because this said `"agent" | "human" | string` — a union
+   * that collapses to `string`, so it accepted any word and a caller passing
+   * an author kind the chart never mints type-checked and drew a solid disc
+   * for ever. `undefined` is a handle the chart does not hold, and it draws
+   * the neutral disc rather than claiming the seat is an agent.
+   */
+  kind?: SeatKind;
 }) {
   if (!handle) return <EmptyValue label="Nobody" />;
   return (

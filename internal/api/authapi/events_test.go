@@ -104,8 +104,24 @@ type estate struct {
 	over  bool
 
 	// unresolved names the writes whose outcome nothing can establish:
-	// each answers `unknown` under its own op id instead of landing.
+	// each answers `unknown` under its own op id instead of landing — and
+	// unvouched makes each of those one this node's ledger cannot vouch
+	// for.
 	unresolved map[string]bool
+	unvouched  bool
+
+	// collapsed names the writes the framework answers with a copy of the
+	// operation this call cannot prove is its own: landed, with nothing
+	// this call's decide computed — a credential set's Apply never runs,
+	// and a session's start answers [iamdomain.ErrCollapsed], as the
+	// domain's own writer does.
+	collapsed map[string]bool
+
+	// refuse names the writes the domain refuses, with the refusal.
+	refuse map[string]error
+
+	// revokeOps are the operation ids every Revoke was asked under.
+	revokeOps []string
 
 	// credentialOps are the operation ids every SetCredentials was asked
 	// under, in order.
@@ -121,10 +137,12 @@ type estate struct {
 // or — where the case made it so — unknown, under the write's own op id.
 func (e *estate) outcome(write, opID string, seq uint64) statelog.Result {
 	if e.unresolved[write] {
-		return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID}
+		return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID,
+			Unvouched: e.unvouched}
 	}
 	result := applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: seq})
 	result.OpID = opID
+	result.Collapsed = e.collapsed[write]
 	return result
 }
 
@@ -132,6 +150,10 @@ func (e *estate) Revoke(_ context.Context, person, opID, _ string) (statelog.Res
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.revokes = append(e.revokes, person)
+	e.revokeOps = append(e.revokeOps, opID)
+	if err := e.refuse["Revoke"]; err != nil {
+		return statelog.Result{}, err
+	}
 	return e.outcome("Revoke", opID, 11), nil
 }
 
@@ -153,6 +175,9 @@ func (e *estate) CloseSession(_ context.Context, lineage, person, reason,
 		return statelog.Result{}, e.closeErr
 	}
 	e.closes = append(e.closes, closedSession{lineage, person, reason, opID})
+	if err := e.refuse["CloseSession"]; err != nil {
+		return statelog.Result{}, err
+	}
 	return e.outcome("CloseSession", opID, 8), nil
 }
 
@@ -171,8 +196,16 @@ func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamd
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.starts = append(e.starts, in)
+	if err := e.refuse["OpenSession"]; err != nil {
+		return iamdomain.SessionOpened{}, err
+	}
 	opened := e.counters
 	opened.Result = e.outcome("OpenSession", in.OpID, 9)
+	if opened.Result.Collapsed {
+		// THE DOMAIN'S OWN ANSWER to a collapsed start: the counters are
+		// the decide's, and it hands none back.
+		return iamdomain.SessionOpened{Result: opened.Result}, iamdomain.ErrCollapsed
+	}
 	return opened, nil
 }
 
@@ -188,6 +221,14 @@ func (e *estate) SetCredentials(ctx context.Context, in iamdomain.CredentialSet)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.credentialOps = append(e.credentialOps, in.OpID)
+	if err := e.refuse["SetCredentials"]; err != nil {
+		return statelog.Result{}, err
+	}
+	if e.collapsed["SetCredentials"] {
+		// ANSWERED FROM THE LEDGER BEFORE ANY DECIDE: the Apply this call
+		// formed never runs, and the set the estate holds is a copy's.
+		return e.outcome("SetCredentials", in.OpID, 10), nil
+	}
 	held := slices.Clone(e.person.Credentials)
 	if e.before != nil {
 		held = e.before(held)

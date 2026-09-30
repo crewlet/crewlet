@@ -5,9 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -43,7 +41,7 @@ const storeBacked = "WithStore"
 // will be trying to achieve when they write it.
 func TestTierAIsNeverResolvedFromTheSecretStore(t *testing.T) {
 	t.Parallel()
-	root := moduleRootForTrust(t)
+	root := sourcetree.Root(t)
 
 	seen := 0
 	files := 0
@@ -131,19 +129,6 @@ func walkSources(t *testing.T, dir string, fn func(*token.FileSet, *ast.File)) {
 	if err != nil {
 		t.Fatalf("walk %s: %v", dir, err)
 	}
-}
-
-func moduleRootForTrust(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's own source file")
-	}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("expected the module root at %s: %v", root, err)
-	}
-	return root
 }
 
 func shortName(root, pos string) string {

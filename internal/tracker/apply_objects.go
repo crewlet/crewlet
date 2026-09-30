@@ -31,6 +31,19 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 	if err != nil {
 		return 0, err
 	}
+	// WHAT THIS RECORD MOVES, READ BEFORE THE UPSERT REPLACES IT.
+	//
+	// The same frame [Applier.applyTask] computes its own deltas in, and
+	// the same rule: the delta is the APPLIER's, on every commit, loud or
+	// quiet. A document write carries no notification on almost every path
+	// — a project is reconciled from the chart, a view save and a person's
+	// bookkeeping wake nobody, and a catalogue edit is deliberately quiet
+	// — so a delta taken from the wake would have been no delta at all,
+	// which is exactly what this column held. See `deltas.go`.
+	moved, err := documentDeltas(ctx, tx, subject, c.record.Mutation)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := a.upsertDocument(ctx, tx, table, key, c)
 	if err != nil {
 		return 0, err
@@ -52,10 +65,19 @@ func (a *Applier) applyDocument(ctx context.Context, tx *sql.Tx, c applyContext)
 		if extra, err = a.explode(ctx, tx, subject, c); err != nil {
 			return 0, err
 		}
+	} else {
+		// THE VERSION GUARD SKIPPED THIS RECORD, so it wrote no
+		// document and moved no field. [Applier.applyTask] says the
+		// same thing on its own redelivery branch: the history row is
+		// still written, because a record that produced no object
+		// change is still something that happened — and a delta
+		// computed against a document a NEWER record has already
+		// replaced would name a move this record never made.
+		moved = nil
 	}
 	// A PROJECT, A VIEW OR A PERSON — none of which has an item key or a
 	// containing project, so both are honestly empty.
-	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, nil)
+	history, err := a.writeHistory(ctx, tx, c, subjectKeys{}, moved)
 	if err != nil {
 		return 0, err
 	}
@@ -112,13 +134,24 @@ func (a *Applier) upsertDocument(ctx context.Context, tx *sql.Tx, table, key str
 		// through the project DOCUMENT, which this same upsert writes,
 		// and the relational copy that used to hold both scopes'
 		// declarations was rewritten per apply and read by nothing.
+		//
+		// THE MAINTAINED COLUMNS ARE LITERALS ON THE INSERT AND ABSENT
+		// FROM THE UPDATE, which is the whole of how a project document
+		// and the work filed into it stay separate: a create starts the
+		// census at zero and the last-change stamp at NOTHING — a
+		// project somebody has just declared has no work, and stamping
+		// its own creation would report every empty project as freshly
+		// active — and a later rename, a move between units or an
+		// archive leaves both alone, because the project's settings
+		// changing is not its work changing.
 		res, err = tx.ExecContext(ctx, `
 			INSERT INTO tracker_projects
 				(key, name, purpose, unit, chart_position, default_assignee,
 				 policy_version, archived, rank_respread_pending,
 				 rank_duplicate_pending, open_count, done_count, closed_count,
-				 created_at, updated_at, version, document)
-			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,?,?,?,?)
+				 last_change_at, last_change_actor, last_change_actor_kind,
+				 last_change_seq, created_at, updated_at, version, document)
+			VALUES (?,?,?,?,?,?,?,?,0,0,0,0,0,NULL,'','',0,?,?,?,?)
 			ON CONFLICT (key) DO UPDATE SET
 				name = excluded.name, purpose = excluded.purpose,
 				unit = excluded.unit, chart_position = excluded.chart_position,
@@ -406,6 +439,35 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, c applyContex
 	if err != nil {
 		return 0, fmt.Errorf("tracker: record generation %d at %s: %w",
 			gen.Gen, c.position, err)
+	}
+	return affected(res)
+}
+
+// applyAlias claims a key for a task.
+//
+// UPSERTED, NEVER DELETED BY A TASK APPLY, AND NEVER LOWERED FROM CURRENT: a
+// former key must go on resolving for the life of the deployment, because it
+// is pasted into chat and typed into tool calls. A key another task already
+// holds is LEFT AS IT IS — because the alternative, taking the key, silently
+// re-points every reference anybody ever wrote.
+//
+// IT WRITES NO COLLISION FLAG. `key_collision` is derived from the directory
+// on every apply of the task ([Applier.maintainKeys]) and describes the key
+// the task holds NOW: a claim on a key the task is leaving says nothing about
+// the one it is moving to, and a flag written here would be overwritten by the
+// move's own apply, which lands after this one.
+func (a *Applier) applyAlias(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
+	var alias KeyAlias
+	if err := decodePayload(c.record.Mutation, &alias); err != nil {
+		return 0, fmt.Errorf("tracker: decode the alias at %s: %w", c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_task_keys (key, task_id, current) VALUES (?,?,?)
+		ON CONFLICT (key) DO UPDATE SET current = MAX(current, excluded.current)
+		WHERE tracker_task_keys.task_id = excluded.task_id`,
+		alias.Key, alias.TaskID, boolInt(alias.Current))
+	if err != nil {
+		return 0, fmt.Errorf("tracker: claim key %s at %s: %w", alias.Key, c.position, err)
 	}
 	return affected(res)
 }

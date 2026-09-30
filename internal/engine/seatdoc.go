@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/google/uuid"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/chart"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -142,7 +141,13 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 	party := writer.As(by.Name, chart.AuthorKindOf(by.Kind),
 		[]iam.Grant{iam.GrantConfigWrite},
 		chart.Provenance{OperatorID: by.OperatorID})
-	result, err := party.WriteSeat(ctx, uuid.NewString(), chart.SeatContent{
+	// MINTED IN THE STATE LOG'S OWN GRAMMAR, so the id carries the instant
+	// the ledger's vouching reads ([statelog.OpMintedAt]): a bare uuid was
+	// read as minted at the zero instant, and on any node whose ledger had
+	// ever lost a row the write was answered `unknown` without being
+	// published — every time, since nothing about the retry changes it.
+	opID := statelog.NewOpID(time.Now(), "seat-document")
+	result, err := party.WriteSeat(ctx, opID, chart.SeatContent{
 		Handle: detail.Seat.Handle, Unit: detail.Seat.UnitKey,
 		Name: role.Name, Email: role.Email,
 		Backstory: role.Backstory, Goal: role.Goal,
@@ -158,6 +163,17 @@ func (e *Engine) SetSeatDocument(ctx context.Context, handle string, body []byte
 	if err != nil {
 		return statelog.Position{}, fmt.Errorf("engine: write the seat %s (%s): %w",
 			handle, summary, err)
+	}
+	// AN UNKNOWN IS NOT A WRITE. It carries no position, and answered as
+	// one it read to every caller — a provisioning pass among them — as a
+	// seat written at nowhere in particular, so the pass went on to its
+	// next step on a seat that may still hold the old document.
+	if result.Outcome == statelog.OutcomeUnknown {
+		return statelog.Position{}, fmt.Errorf("engine: the write of the seat %s "+
+			"(%s) was published as operation %s and nothing could confirm it "+
+			"landed; read the seat back and write it again if it did not — a "+
+			"retry with the document it was read into is the only safe one",
+			handle, summary, opID)
 	}
 	return result.Result.Position, nil
 }

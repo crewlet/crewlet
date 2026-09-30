@@ -36,9 +36,12 @@ import (
 type CreatePayload struct {
 	V int `json:"v"`
 
-	// PageID is the uuid the applier files the head under. MINTED BY THE
-	// WRITER and carried, never derived: a create that lost its race must
-	// not have written a page under an id the winner also chose.
+	// PageID is the uuid the applier files the head under. CHOSEN BY THE
+	// WRITER and carried, never derived by an applier, and a function of
+	// the create's own operation id ([pageIDOf]): two creates racing for one
+	// address are two operations and so two ids, so the one that lost never
+	// names a page under the winner's — while a retry of one create names
+	// the page its first attempt made.
 	PageID string `json:"page_id"`
 
 	// Container and Title are the address. Title is the DISPLAYED form,
@@ -172,7 +175,64 @@ type ContainerPayload struct {
 	Key     string `json:"key"`
 	Name    string `json:"name,omitempty"`
 	Purpose string `json:"purpose,omitempty"`
+
+	// ChartPosition is the packed position on the org chart's log of the
+	// chart these settings were derived from, which the next EnsureContainer
+	// compares against so a node applying an older chart late cannot walk a
+	// newer one back. Record version 2 onwards; a version-1 record carries
+	// none, and applies as position 0 — older than every chart this build
+	// stamps.
+	ChartPosition int64 `json:"chart_position,omitempty"`
 }
+
+// recordVersionOf is the version a record carrying payload is written at: the
+// lowest whose reader applies it without losing anything.
+//
+// A CONTAINER'S SETTINGS ARE WRITTEN AT 2, because version 2 is when they
+// began to carry [ContainerPayload.ChartPosition]. A build reading only 1 decodes
+// the payload by ignoring the one field it does not know, and applies the rest
+// — which is the walk-back the position exists to stop, performed on the very
+// node that could not read the stamp, and a stored container that no longer
+// says which chart wrote it. Written at 2, that build RETAINS the
+// record instead of applying half of it, and applies it once it is upgraded
+// (see the deferral contract in [statelog]).
+//
+// EVERYTHING ELSE STAYS AT 1, and not for tidiness. A retained record holds
+// back every later record whose scope nests under its own on that node — a
+// container's retained settings hold back every page write in that container
+// until the node upgrades — so a rolling upgrade loses coverage exactly where
+// a shape changed and nowhere else. A domain that raised every record to its
+// newest version would stall every older node's knowledge base for the whole
+// upgrade.
+//
+// AND A RE-STAMP STAYS AT 1 TOO ([restampPayload]): settings the row already
+// holds, carried under a later chart position. The first upgraded node re-stamps
+// every chart-named container — a row an older build wrote carries no stamp
+// at all, and every later chart write moves it — so written at 2 those
+// records held back every page write in every one of those spaces on every
+// older node for the whole upgrade. An older build applies a re-stamp whole:
+// the one field it drops is the stamp, and what it stores is what it already
+// held.
+func recordVersionOf(payload any) int {
+	switch payload.(type) {
+	case restampPayload:
+		return baseRecordVersion
+	case ContainerPayload:
+		return containerPositionVersion
+	}
+	return baseRecordVersion
+}
+
+// restampPayload is a container record that changes nothing but the
+// chart-position stamp: the settings the row already holds, under a later
+// position. See [recordVersionOf] for why that one shape is written at
+// version 1.
+//
+// IT ENCODES EXACTLY AS A [ContainerPayload] — the embedded struct's fields,
+// and nothing of its own — so every build decodes it as one, and the only
+// thing the type carries is the writer's knowledge that the settings did not
+// change.
+type restampPayload struct{ ContainerPayload }
 
 // StatusPayload is a trash, a restore or a purge — the three ops that change
 // what a reader sees without changing what a page says.
@@ -307,7 +367,8 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	}
 	return Encode(MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V:       RecordVersion,
+			// NEVER [RecordVersion]: see [baseRecordVersion].
+			V:       baseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
 			Scope:   ScopeSet{Subject: true},

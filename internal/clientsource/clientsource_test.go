@@ -97,6 +97,29 @@ func TestASecondDeclarationInAnotherFileIsReported(t *testing.T) {
 	}
 }
 
+// A NESTED CHECKOUT'S COPY IS NOT A SECOND DECLARATION.
+//
+// A worktree or a clone inside the tree carries every file here at some
+// other commit, so read as this tree's it would put the constant in two
+// places and fail a gate on a tree holding one — or, once the constant had
+// been deleted here, pass it on the stale copy. Which directories are this
+// tree's is internal/sourcetree's rule, and this walk follows it.
+func TestANestedCheckoutsCopyIsNotASecondDeclaration(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"routes/activity/Activity.tsx":         "const CATEGORIES = [\"task\"] as const;\n",
+		"wt/.git":                              "gitdir: /elsewhere/.git/worktrees/wt\n",
+		"wt/dashboard/src/routes/Activity.tsx": "const CATEGORIES = [\"stale\"] as const;\n",
+	})
+	body, err := clientsource.Declaration(root, pattern)
+	if err != nil {
+		t.Fatalf("Declaration: %v", err)
+	}
+	if got := clientsource.Strings(body); len(got) != 1 || got[0] != "task" {
+		t.Errorf("strings = %q, want this tree's one", got)
+	}
+}
+
 // NOTHING DECLARING IT IS A GATE CERTIFYING NOTHING, and therefore an error
 // rather than an empty body every caller would compare an empty list against.
 func TestNothingDeclaringItIsAnError(t *testing.T) {

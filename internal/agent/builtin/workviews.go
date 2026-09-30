@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -100,6 +101,9 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    actor.Handle,
+		// THE CHART, so `unit:engineering` and `unit:eng` are one
+		// strip rather than two — see [tracker.Units].
+		Units: t.deps.Units,
 		// THE SEAT'S OWN LEVEL, like every other tool read here: a
 		// caller that saves a view and then lists the strip sees the
 		// view it just saved — see [seatReadLevel].
@@ -130,7 +134,7 @@ func (t *saveWorkView) Description() string {
 }
 
 func (t *saveWorkView) Parameters() map[string]any {
-	return map[string]any{
+	return t.deps.operationParam(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"id": map[string]any{
@@ -196,7 +200,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 			"icon": map[string]any{"type": "string"},
 		},
 		"required": []string{"container", "name", "type"},
-	}
+	})
 }
 
 func (t *saveWorkView) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -213,6 +217,10 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if t.deps.ViewWriter == nil {
 		return unconfigured(tracker.SaveWorkViewTool), nil
+	}
+	actor, denied := t.deps.bindOperation(actor, tracker.SaveWorkViewTool, args)
+	if denied != "" {
+		return failed(denied), nil
 	}
 	container, refusal := parseContainerArg(argString(args, "container"))
 	if refusal != "" {
@@ -233,15 +241,25 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"it shared instead."), nil
 		}
 	}
-	// THE CALLER'S ID WHEN IT HAS ONE, a fresh one when it does not. A
-	// verb that always minted would write a second view on every retry of
-	// an `unknown` outcome; one that always required an id could not
-	// create.
+	// AND A UNIT CONTAINER IS STORED UNDER THE TEAM'S OWN KEY, exactly as
+	// a project container is stored upper-cased: a model writes the
+	// spelling it remembers, and a view saved under one spelling of a team
+	// is a view the strip asked for under the other never shows.
+	container = tracker.CanonicalContainer(t.deps.Units, container)
 	writer := t.deps.ViewWriter(actor)
+	// THE CALLER'S ID WHEN IT HAS ONE, and one derived from the call's
+	// operation when it does not. A verb that always minted would write a
+	// second view on every retry of an `unknown` outcome; one that always
+	// required an id could not create. And a new view's id minted per call
+	// made every retry of one — the `op_id` an operator brings back, an
+	// HTTP write's `Idempotency-Key`, a re-run turn — a second view: the id
+	// is the subject the write arbitrates on, so it has to be a function of
+	// the operation, exactly as a created task's is ([createdTaskID]).
 	id := strings.TrimSpace(argString(args, "id"))
+	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
 	var prior tracker.ViewPrior
 	if id == "" {
-		id = uuid.NewString()
+		id = createdViewID(opID)
 	} else {
 		// A SAVE UNDER AN ID IT DID NOT MINT MAY REPLACE SOMEBODY ELSE'S
 		// VIEW, so the view it would overwrite is decided on as well as
@@ -275,15 +293,53 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Default:   argBool(args, "default"),
 		Icon:      strings.TrimSpace(argString(args, "icon")),
 	}
-	result, err := writer.WriteView(ctx, "view-"+id, view, prior)
+	result, err := writer.WriteView(ctx, opID, view, prior)
 	if err != nil {
-		return writeFailed(tracker.SaveWorkViewTool, err), nil
+		return writeFailed(actor, tracker.SaveWorkViewTool, err), nil
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		// NEVER THE ID OF A VIEW NOBODY CAN SAY WAS SAVED: handed back to
+		// save it again, it names a view that may not exist.
+		where := container.Kind
+		if container.ID != "" {
+			where += ":" + container.ID
+		}
+		return unknownWrite(actor, tracker.SaveWorkViewTool,
+			fmt.Sprintf("the view %q was saved", view.Name), opID,
+			result.Unvouched, unknownNext(result.Unvouched,
+				sameCall(actor, tracker.SaveWorkViewTool),
+				fmt.Sprintf("List the views in %s with list_work_views", where),
+				"it saves a second view")), nil
 	}
 	t.deps.settle(ctx, result.Position)
-	return jsonResult(map[string]any{
+	return jsonResult(withOperation(map[string]any{
 		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
-	})
+	}, actor))
 }
+
+// createdViewID is the id a new view is saved under: a UUIDv5 over the
+// operation that saves it, for [createdTaskID]'s reason — the same operation
+// made again (a brought-back `op_id`, an `Idempotency-Key` retried, a re-run
+// turn) addresses the view its first attempt saved, and where the operation is
+// fresh, so is the view.
+func createdViewID(opID string) string {
+	return uuid.NewSHA1(createdViewNamespace, []byte(opID)).String()
+}
+
+// viewObjectKey is the object a save's operation is named for: the view it
+// names, or — for a new view, whose id is derived FROM the operation — the
+// fixed word `new`, which the digest of the call's own arguments beside it
+// tells apart from every other new view.
+func viewObjectKey(id string) string {
+	if id == "" {
+		return "new"
+	}
+	return id
+}
+
+// createdViewNamespace is the uuid namespace a new view's id is derived under.
+// Fixed for the life of the format: it is durable in every view row.
+var createdViewNamespace = uuid.MustParse("3d5c2f0e-8a4b-4c1d-9e7f-6b2a1c0d9e8f")
 
 // containerParameter is the one container argument both tools take.
 func containerParameter() map[string]any {

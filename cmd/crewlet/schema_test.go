@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // THE CHECKED-IN SCHEMAS ARE REGENERATED AND COMPARED, which is the whole
@@ -30,7 +32,7 @@ func TestTheCheckedInSchemasAreWhatTheGeneratorEmits(t *testing.T) {
 			if err := run([]string{"schema", tier}, &out, &errs); err != nil {
 				t.Fatalf("schema %s: %v (%s)", tier, err, errs.String())
 			}
-			path := filepath.Join("..", "..", "schema", tier+".schema.json")
+			path := filepath.Join(sourcetree.Root(t), "schema", tier+".schema.json")
 			want, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read %s: %v", path, err)

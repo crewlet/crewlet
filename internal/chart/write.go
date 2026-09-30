@@ -326,12 +326,11 @@ func (w *Writer) WriteBatch(ctx context.Context, opID string, batch Batch) (
 	declared := batch.Scope()
 
 	result, err := w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    declared.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   declared.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// EVERY RULE INSIDE THE SNAPSHOT. The replay reads the
 			// chart's whole structure out of this transaction and
 			// checks each operation against the state the ones before
@@ -361,7 +360,7 @@ func (w *Writer) WriteBatch(ctx context.Context, opID string, batch Batch) (
 					ErrRefused)
 			}
 			if len(removed) > 0 {
-				return w.decideRemoval(subject, opID, at, removed, batch.Reason)
+				return w.decideRemoval(stamp, subject, opID, at, removed, batch.Reason)
 			}
 			if len(edges) == 0 {
 				// A BATCH THAT CHANGES NOTHING SUCCEEDS. An empty
@@ -370,7 +369,7 @@ func (w *Writer) WriteBatch(ctx context.Context, opID string, batch Batch) (
 				// holds should be told it landed.
 				return statelog.Decision{}, nil
 			}
-			return w.decidePlacement(subject, opID, at, edges)
+			return w.decidePlacement(stamp, subject, opID, at, edges)
 		},
 	})
 	return WriteResult{Result: result, Objects: objects}, err
@@ -395,12 +394,11 @@ func (w *Writer) WriteRemoval(ctx context.Context, opID string, batch Batch) (
 	declared := batch.Scope()
 
 	result, err := w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    declared.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   declared.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			edges, removed, err := batch.Validate(ctx, tx, w.holders)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -414,14 +412,14 @@ func (w *Writer) WriteRemoval(ctx context.Context, opID string, batch Batch) (
 				return statelog.Decision{}, nil
 			}
 			objects = removed
-			return w.decideRemoval(subject, opID, at, removed, batch.Reason)
+			return w.decideRemoval(stamp, subject, opID, at, removed, batch.Reason)
 		},
 	})
 	return WriteResult{Result: result, Objects: objects}, err
 }
 
 // decidePlacement forms the structural record.
-func (w *Writer) decidePlacement(subject Subject, opID string, at time.Time,
+func (w *Writer) decidePlacement(stamp statelog.Stamp, subject Subject, opID string, at time.Time,
 	edges []Edge) (statelog.Decision, error) {
 
 	terms := make([]ScopeTerm, 0, len(edges))
@@ -435,12 +433,12 @@ func (w *Writer) decidePlacement(subject Subject, opID string, at time.Time,
 		}
 	}
 	scope := BatchScope(terms)
-	return w.record(subject, OpPlace, opID, at, scope,
+	return w.record(stamp, subject, OpPlace, opID, at, scope,
 		PlacementPayload{V: DocumentVersion, Edges: edges}, structural)
 }
 
 // decideRemoval forms the gate-installing record.
-func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
+func (w *Writer) decideRemoval(stamp statelog.Stamp, subject Subject, opID string, at time.Time,
 	removed []ObjectRef, reason string) (statelog.Decision, error) {
 
 	terms := make([]ScopeTerm, 0, len(removed))
@@ -461,7 +459,7 @@ func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
 	// PINNED AT [GateRecordVersion] FOR EVER. This is the one record here a
 	// node must not be able to defer, so its shape can never be one a node
 	// might not know.
-	return w.record(subject, OpRemove, opID, at, scope,
+	return w.record(stamp, subject, OpRemove, opID, at, scope,
 		RemovePayload{V: GateRecordVersion, Objects: removed, Reason: reason},
 		removal)
 }
@@ -476,8 +474,12 @@ func (w *Writer) decideRemoval(subject Subject, opID string, at time.Time,
 // NEED IS THE DECIDE'S, stated by every caller: what a record asks of its
 // party depends on what it changes, which only the decide's snapshot can say
 // — see [requirement].
-func (w *Writer) record(subject Subject, op OpKind, opID string, at time.Time,
-	scope ScopeSet, payload any, need requirement) (statelog.Decision, error) {
+//
+// AND THE STAMP IS THE FRAMEWORK'S ([statelog.Stamp]): the writer's node id and
+// the generation of the snapshot the decision was taken from, which every
+// applier's eviction gate reads and the publisher refuses a record without.
+func (w *Writer) record(stamp statelog.Stamp, subject Subject, op OpKind, opID string,
+	at time.Time, scope ScopeSet, payload any, need requirement) (statelog.Decision, error) {
 
 	// THE DOMAIN'S OWN HALF OF THE AUTHORITY QUESTION, asked here because
 	// this is the one funnel every decide in this package reaches. See
@@ -492,7 +494,7 @@ func (w *Writer) record(subject Subject, op OpKind, opID string, at time.Time,
 	rec := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
 			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			Gen: stamp.Gen, Writer: stamp.Writer, CreatedAt: at, Scope: scope,
 		},
 		Mutation:   body,
 		Actor:      w.Actor,
@@ -501,23 +503,18 @@ func (w *Writer) record(subject Subject, op OpKind, opID string, at time.Time,
 		TurnID:     w.TurnID,
 		Revision:   w.Revision,
 	}
-	if op == OpRemove {
+	// EVERY RECORD THAT INSTALLS A GATE is pinned, not only the removal: an
+	// eviction a node's build cannot decode is deferred there, and a
+	// deferred eviction is one that node never installs — it would go on
+	// applying the evicted writer's records.
+	if rec.InstallsGate() {
 		rec.V = GateRecordVersion
 	}
 	encoded, err := Encode(rec)
 	if err != nil {
 		return statelog.Decision{}, err
 	}
-	return statelog.Decision{
-		Payload: encoded,
-		Envelope: statelog.Envelope{
-			V: rec.V, Kind: string(subject.Kind),
-			Subject: statelog.Subject{
-				Kind: string(subject.Kind), ID: subject.ID,
-			},
-			Op: string(op), OpID: opID, Scope: scope.Resolve(subject),
-		},
-	}, nil
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // publish runs one request and translates the framework's refusals into this
@@ -599,18 +596,17 @@ func (w *Writer) WriteImport(ctx context.Context, opID, revision string,
 	scope := BatchScope(terms)
 
 	result, err := w.publish(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			// THE LEDGER IS CHECKED AT THE APPLY, not here, and that is
 			// deliberate: every node has to reach the same no-op, and a
 			// decision taken on this node's own rows would have a node
 			// that has not applied the previous import publish a second
 			// one. The apply is where every node sees the same ledger.
-			return w.record(subject, OpImport, opID, at, scope, ImportPayload{
+			return w.record(stamp, subject, OpImport, opID, at, scope, ImportPayload{
 				V: DocumentVersion, Revision: revision, Edges: placed,
 			}, structural)
 		},

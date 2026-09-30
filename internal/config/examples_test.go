@@ -12,11 +12,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
-
-// repoRoot is where the shipped examples and the docs live, relative to
-// this package.
-const repoRoot = "../.."
 
 // readRepoFile reads a file shipped in this repository, and FAILS when it
 // cannot.
@@ -36,7 +33,7 @@ const repoRoot = "../.."
 // looking.
 func readRepoFile(t *testing.T, parts ...string) []byte {
 	t.Helper()
-	path := filepath.Join(append([]string{repoRoot}, parts...)...)
+	path := filepath.Join(append([]string{sourcetree.Root(t)}, parts...)...)
 	data, err := os.ReadFile(path) //nolint:gosec // a path this repository ships
 	if err != nil {
 		t.Fatalf("read %s: %v — this case certifies a file this repository "+

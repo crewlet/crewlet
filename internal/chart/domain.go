@@ -139,12 +139,13 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 // silently short rather than one error. It is built from the exported
 // inventories rather than typed a third time.
 //
-// THERE IS NO DIVERGENT TABLE HERE, and that is a statement rather than an
-// omission: every column this domain writes is a function of the record that
-// wrote it, so there is nothing a per-node or per-epoch value reaches. The
-// knowledge base's `pages_skills` is the counter-example — a flag THIS BUILD's
-// parser derives — and the chart has no equivalent, because nothing here is
-// re-derived at apply time from anything but the payload.
+// ONE DIVERGENT TABLE, and it is the operation ledger. Every other column this
+// domain writes is a function of the record that wrote it; the ledger's
+// `applied_at` is the instant THIS node applied it. So the ledger TRAVELS inside
+// a snapshot — an adopter that arrived without its donor's rows would decide
+// again an operation the donor had applied, the double apply the ledger exists
+// to prevent — and stays out of the identity claim, which the one per-node
+// column would otherwise trip.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -154,6 +155,9 @@ func (Domain) Tables() map[string]statelog.TableClass {
 	for _, table := range MachineryTables {
 		out[table] = statelog.Local
 	}
+	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
+	// [MachineryTables].
+	out[Domain{}.OpsTable()] = statelog.Divergent
 	return out
 }
 
@@ -166,7 +170,7 @@ func (Domain) ScopeIndex() string { return "chart_log_deferred_scope" }
 // OpsTable is contract 3's first layer: what this node has already applied.
 //
 // ONE OPS HORIZON FOR THE WHOLE DOMAIN, which is why the table takes the
-// framework's four columns and nothing else. A `kind` column and an index over
+// framework's five columns and nothing else. A `kind` column and an index over
 // (kind, applied_at) would be a second horizon — a claim that a structural
 // record's op id may be swept on a different schedule from a content record's —
 // and two horizons on one ledger is a retry that resolves against a history

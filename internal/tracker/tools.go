@@ -39,6 +39,14 @@ const (
 	// triage, which is the work itself rather than furniture around it.
 	MergeWorkItemTool = "merge_work_item"
 
+	// MoveWorkItemTool moves a top-level item, and everything under it,
+	// to another project. A seat's, behind the gate a re-route has: the
+	// lead of the item's project decides where its work lives, or a
+	// person does. It is the one gesture that clears a subtask filed in
+	// another project than its root, and it re-keys what it carries, so a
+	// patch field could not have been it.
+	MoveWorkItemTool = "move_work_item"
+
 	// SearchWorkItemsTool finds an item by what it SAYS, ranked over every
 	// item's title and description.
 	//
@@ -150,24 +158,27 @@ func OperatorOnlyTools() []string {
 	}
 }
 
-// Tools are the thirteen a seat holds, so a caller registering them names one
+// Tools are the fourteen a seat holds, so a caller registering them names one
 // thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
-		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool,
+		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool, MoveWorkItemTool,
 		SearchWorkItemsTool, GetWorkCatalogueTool, ListProjectsTool, DescribeProjectTool,
 		WriteProjectTool,
 		TaskActivityTool, MyWorkTool}
 }
 
-// WriteTools are the four that count as a DELIVERY.
+// WriteTools are the five that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the task, commenting on it,
 // or filing the follow-up work — and the delivery gate has to know that, or
 // such a turn is corrected and looped for having "done nothing". Reading is not
 // delivering, which is why get and list are not here: a turn that only read is
 // exactly the turn the gate exists to catch.
+//
+// A MOVE IS ONE: a lead woken to triage an item filed in the wrong project
+// answers by moving it, and the root's own move wakes the people on it.
 func WriteTools() []string {
 	return []string{CreateWorkItemTool, UpdateWorkItemTool, CommentOnWorkTool,
-		MergeWorkItemTool}
+		MergeWorkItemTool, MoveWorkItemTool}
 }

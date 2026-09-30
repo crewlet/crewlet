@@ -101,16 +101,19 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 	// rewrites every row the other already wrote.
 	revision := chart.ImportKey(authored)
 
-	// THE OP ID IS THE REVISION, so a retry of a seed that published and
-	// then lost its answer is the same operation rather than a second one.
-	// The ledger makes the APPLY idempotent on every node; this makes the
-	// PUBLISH idempotent on this one.
+	// THE OP ID IS DERIVED FROM THE REVISION, so a retry of a seed that
+	// published and then lost its answer is the same operation rather than
+	// a second one, and so is a second node seeding the same file — see
+	// [Engine.seedGesture]. The ledger makes the APPLY idempotent on every
+	// node; this makes the PUBLISH idempotent across them.
 	// UNWAITED, because this node reads at the last position below before
 	// anything reads the rows ([chart.Writer.Unwaited]): a wait after each
 	// record is a few hundred milliseconds per object spent in sequence, and
 	// a company of sixty seats ran out of the seed's budget on it.
 	writer = writer.Unwaited()
-	result, err := writer.WriteImport(ctx, "seed:"+revision, revision, edges)
+	gesture := e.seedGesture(revision)
+	result, err := writer.WriteImport(ctx, statelog.StepOpID(gesture, "import"),
+		revision, edges)
 	if err != nil {
 		return fmt.Errorf("engine: seed the org chart from the company file: %w", err)
 	}
@@ -120,10 +123,19 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 		// UNKNOWN IS NOT A FAILURE HERE. The broker may have taken the
 		// record and not answered, and the ledger is what decides — so a
 		// boot that refused on this would refuse on a seed that landed.
+		detail := "the broker did not say whether the seed landed; the " +
+			"import ledger makes a re-publish a no-op, so the next boot " +
+			"settles it"
+		if result.Unvouched {
+			// NO NEXT BOOT SETTLES THIS ONE: the id is the same every
+			// time, and so is the ledger that cannot vouch for it.
+			detail = "this node's operation ledger has lost rows older " +
+				"than the chart log, so it cannot say whether this seed " +
+				"already landed and did not publish it; publish the file " +
+				"with `crewlet config import`"
+		}
 		log.WarnContext(ctx, "chart_seed_unknown", "revision", revision,
-			"detail", "the broker did not say whether the seed landed; the "+
-				"import ledger makes a re-publish a no-op, so the next boot "+
-				"settles it")
+			"unvouched", result.Unvouched, "detail", detail)
 	}
 
 	// AND THEN THE CONTENT, one record per object.
@@ -143,9 +155,9 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 	//
 	// EACH ONE DECIDES AFTER THE IMPORT, which is what an unwaited writer
 	// still owes itself: a content write reads the row the import placed.
-	last, err := e.seedContent(ctx, writer.After(result.Position), authored, revision)
+	last, err := e.seedContent(ctx, writer.After(result.Position), authored, gesture)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (seed of revision %s)", err, revision)
 	}
 
 	// AND THEN WAIT FOR THIS NODE TO APPLY ITS OWN SEED, by reading at a
@@ -195,15 +207,19 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 
 // seedContent publishes each object's own content after the structure.
 //
-// # Why every record is keyed on the seed's revision
+// # Why every record is a step of the gesture
 //
-// The op ids are `seed:<revision>:<kind>:<key>`, which makes each one
-// idempotent across a retry and across two nodes seeding at once: the
-// operation ledger collapses the second publish of an id it has already
-// applied. Without that, two nodes booting the same file at the same instant
-// would write every seat twice — harmless in the rows, because the second is
-// identical, and not harmless in the history, which would read as somebody
-// having edited every seat in the company.
+// Each record's op id is one step of the gesture's ([statelog.StepOpID] over
+// the object's kind and key), so a retry names the record its first attempt
+// may have landed. For the SEED the gesture is derived ([Engine.seedGesture]),
+// which makes each id idempotent across two nodes seeding at once as well:
+// the broker's duplicate window and the operation ledger collapse the second
+// publish of an id already published. Without that, two nodes booting the
+// same file at the same instant would write every seat twice — harmless in
+// the rows, because the second is identical, and not harmless in the history,
+// which would read as somebody having edited every seat in the company, nor
+// in the secret store, where each would seal the seat's credentials under a
+// name of its own operation.
 //
 // # A file states every object's runtime half, or clears it
 //
@@ -223,7 +239,7 @@ func (e *Engine) seedChart(ctx context.Context, cfg *config.Company) error {
 // it stopped on, and the next boot resumes — the ledger makes what landed a
 // no-op, so there is nothing to undo.
 func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
-	authored chart.Authored, revision string) (statelog.Position, error) {
+	authored chart.Authored, gesture string) (statelog.Position, error) {
 
 	// THE FURTHEST POSITION ANY OF THESE REACHED, which is what the caller
 	// waits on. The LAST one is not necessarily it — a write that came back
@@ -237,7 +253,8 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 	}
 
 	for _, unit := range authored.Units {
-		result, err := writer.WriteUnit(ctx, seedOpID(revision, "u", unit.Key),
+		result, err := writer.WriteUnit(ctx,
+			statelog.StepOpID(gesture, "unit", chart.NormalizeKey(unit.Key)),
 			chart.UnitContent{
 				Key: unit.Key, Name: unit.Name, Type: unit.Type,
 				Purpose: unit.Purpose, Goals: unit.Goals,
@@ -252,7 +269,8 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 		reached(result.Position)
 	}
 	for _, seat := range authored.Seats {
-		result, err := writer.WriteSeat(ctx, seedOpID(revision, "s", seat.Handle),
+		result, err := writer.WriteSeat(ctx,
+			statelog.StepOpID(gesture, "seat", chart.NormalizeKey(seat.Handle)),
 			chart.SeatContent{
 				Handle: seat.Handle, Unit: seat.Unit,
 				Name: seat.Name, Email: seat.Email,
@@ -271,9 +289,45 @@ func (e *Engine) seedContent(ctx context.Context, writer *chart.Writer,
 	return last, nil
 }
 
-// seedOpID is one seeded object's operation id.
-func seedOpID(revision, kind, key string) string {
-	return "seed:" + revision + ":" + kind + ":" + chart.NormalizeKey(key)
+// seedGesture is the operation id every record of one seed is a step of.
+//
+// # Derived, because two nodes seed one file
+//
+// A fleet started together boots every node on the same file against the
+// same empty chart, and each one seeds it. The import ledger makes the second
+// IMPORT a no-op wherever it lands, but the content records after it are
+// ordinary writes: under an id of each node's own they are every seat written
+// twice. So the id is DERIVED ([statelog.DeriveOpID]) from what makes the
+// seed this seed — the authored chart's own key, which `crewlet config import`
+// computes the same way — and every node, and every retry on one, names the
+// same operation.
+//
+// # At the instant the chart log was created
+//
+// A derived id still carries an instant, because the ledger's vouching reads
+// one off every id ([statelog.OpMintedAt]); a spelling the op-id grammar does
+// not recognise is read as minted at the zero instant and answered `unknown`,
+// unpublished, on any node whose ledger has ever lost a row. The instant has
+// to be one every node reads identically and one no retry moves, so it is
+// NOT a clock: it is the creation of the chart log this node's applier reads
+// ([statelog.Runner.StreamCreatedAt]) — the earliest moment a seed onto that
+// log could exist, off the broker, which is [statelog.GenerationFacts.OpID]'s
+// reasoning for a reanchor's id. A log recreated is a new instant and a new
+// operation, which it is.
+//
+// The residue is stated rather than hidden: a chart emptied of every object
+// on a node whose ledger has since swept the rows those removals left is a
+// seed the ledger cannot vouch for, and it answers `unknown` there without
+// publishing ([Engine.seedChart] warns). `crewlet config import`, which
+// mints its own operation, is what publishes that file.
+func (e *Engine) seedGesture(revision string) string {
+	var created time.Time
+	if n := e.native.Load(); n != nil && n.log != nil {
+		if running := n.log.Domain(chart.Domain{}.Name()); running != nil {
+			created = running.runner.StreamCreatedAt()
+		}
+	}
+	return statelog.DeriveOpID(created, "chart-seed", "crewlet.chart.seed", revision)
 }
 
 // seedTimeout bounds the seed's publish.
@@ -346,17 +400,22 @@ func (e *Engine) publishStagedChart(ctx context.Context) error {
 	if len(edges) == 0 {
 		return nil
 	}
-	// THE OP ID IS THE KEY, so a retry of a publish that lost its answer is
-	// the same operation rather than a second one.
+	// ONE OPERATION MINTED NOW, every record a step of it, so a retry of a
+	// publish that lost its answer is the same operation rather than a
+	// second one. MINTED rather than derived as the seed's is, because a
+	// stage is ONE node's: it was taken above, so no peer and no later boot
+	// publishes it again, and the import ledger absorbs a duplicate anyway.
 	//
 	// UNWAITED, for [Engine.seedChart]'s reason: this reads at the last
 	// position below before the epoch does.
 	writer = writer.Unwaited()
-	result, err := writer.WriteImport(ctx, "staged:"+staged.ID, staged.ID, edges)
+	gesture := statelog.NewOpID(time.Now(), "chart-staged")
+	result, err := writer.WriteImport(ctx, statelog.StepOpID(gesture, "import"),
+		staged.ID, edges)
 	if err != nil {
 		return spent("publish", err)
 	}
-	last, err := e.seedContent(ctx, writer.After(result.Position), authored, staged.ID)
+	last, err := e.seedContent(ctx, writer.After(result.Position), authored, gesture)
 	if err != nil {
 		return spent("publish the seats of", err)
 	}

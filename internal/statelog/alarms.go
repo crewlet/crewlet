@@ -79,6 +79,11 @@ const (
 	// writes rather than dropping records, so the failure is loud — but
 	// raising a ceiling needs a maintenance window, and a tenth of a
 	// 29 GiB log is days of writing at this engine's rate.
+	//
+	// OF THE CEILING ORDINARY WRITES ARE HELD TO ([Headroom]), which on a
+	// log that keeps a gate reserve is [GateReserve] below the broker's:
+	// that is where writes start being refused, so it is what "full"
+	// means to everybody but an eviction.
 	HeadroomAlarmFraction = 0.10
 
 	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
@@ -198,8 +203,8 @@ type Reading struct {
 	// BarrierP95 is the read barrier's 95th percentile.
 	BarrierP95 time.Duration
 
-	// HeadroomFraction is how much of the log's byte ceiling is unused, as
-	// a fraction.
+	// HeadroomFraction is how much of the byte ceiling the log's ordinary
+	// writes are held to is unused, as a fraction ([Headroom]).
 	//
 	// A POINTER, because zero is a real value here and it is the worst
 	// one: a full log and a node that has not measured its log are
@@ -209,18 +214,20 @@ type Reading struct {
 	HeadroomFraction *float64
 
 	// BackupAge is how old the newest verified backup is, and BackupMaxAge
-	// what the operator asked for. Both zero on a node with no backup
-	// policy, which is not an alarm — it is a deployment that has said it
-	// does not want one.
-	BackupAge, BackupMaxAge time.Duration
-
-	// NoBackup is the fleet having no verified backup at all, which is the
-	// OLDEST backup there is rather than the youngest: under a policy it
-	// raises `backup_age` at once, since a company that never backs up is
-	// one whose trim never advances. A field of its own rather than an age
-	// made up to exceed the policy, which the alarm then printed as the age
-	// of a backup that does not exist.
-	NoBackup bool
+	// what the operator asked for. A zero BackupMaxAge is a node with no
+	// backup policy, which is not an alarm — it is a deployment that has
+	// said it does not want one.
+	//
+	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
+	// is a real and reassuring value here — a copy verified this second —
+	// and "no verified backup has ever been recorded" is the opposite
+	// fact. A plain duration gave them one representation, so the reading
+	// was filled with a fabricated age past the policy to make the alarm
+	// fire, and the alarm then told a four-second-old company that its
+	// newest backup was twenty-five hours old. Nil is the absence, and the
+	// condition below says so in words.
+	BackupAge    *time.Duration
+	BackupMaxAge time.Duration
 
 	// TrimBlockedFor is how long the trim has been unable to advance, and
 	// TrimBlockedBy names the term holding it. Per DOMAIN, like
@@ -432,8 +439,10 @@ var table = []rule{
 				r.ApplyLag > StallGrace
 		},
 		remedy: "Check this node's applier: `crewlet retention status` names the " +
-			"domain and its position. A node that stays behind past the deferral " +
-			"grace loses its seats to a peer.",
+			"domain and its position. A node that is behind keeps the seats it " +
+			"holds and claims no new ones; it gives them up only if its position " +
+			"stops moving for the stall grace, or it holds a record it cannot " +
+			"decode past the deferral grace.",
 	},
 	{
 		kind: KindReadRefusals,
@@ -463,13 +472,17 @@ var table = []rule{
 			if r.HeadroomFraction == nil {
 				return "", false
 			}
-			return fmt.Sprintf("%.0f%% of the log's byte ceiling is left",
-					*r.HeadroomFraction*100),
+			return fmt.Sprintf("%.0f%% of the log's byte ceiling for "+
+					"ordinary writes is left", *r.HeadroomFraction*100),
 				*r.HeadroomFraction < HeadroomAlarmFraction
 		},
 		remedy: "Raise the log's ceiling with `crewlet retention set-capacity` " +
 			"during a maintenance window, or find out why the trim is not " +
-			"advancing. A full log refuses writes; it does not drop records.",
+			"advancing (`crewlet retention status` names the term holding it). " +
+			"A full log refuses writes; it does not drop records. On a log " +
+			"that claims identity the top of the ceiling is kept for gate " +
+			"records, so if the term is a node that is gone, `crewlet " +
+			"retention evict` still lands and unpins the trim.",
 	},
 	{
 		// THE FORWARD-LOOKING HALF OF THE HEADROOM ALARM, and the one
@@ -514,22 +527,33 @@ var table = []rule{
 		// THAT had been true for backup_max_age again — so a 24-hour
 		// policy alarmed at 48 hours, eight missed six-hourly runs after
 		// the first one that mattered.
+		//
+		// TWO STATES, because a company with no backup at all is not a
+		// company with an old one. Both fire — the trim does not advance
+		// either way and an operator has to hear it — but they are
+		// different facts and the detail says which. Fabricating an age
+		// to make the first condition cover the second is what this
+		// replaces, and it put "the newest verified backup is 25h0m0s
+		// old" in the log of a company four seconds after its first
+		// boot, one line above the trim term saying no backup had been
+		// recorded at all.
 		kind: KindBackupAge,
 		fires: func(r Reading) (string, bool) {
 			if r.BackupMaxAge <= 0 {
 				return "", false
 			}
-			if r.NoBackup {
-				return fmt.Sprintf("no verified backup has been taken, and the "+
-					"policy asks for one every %s", round(r.BackupMaxAge)), true
+			if r.BackupAge == nil {
+				return fmt.Sprintf("no verified backup has been recorded, and "+
+					"the policy asks for one every %s", round(r.BackupMaxAge)), true
 			}
 			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", round(r.BackupAge), round(r.BackupMaxAge)),
-				r.BackupAge > r.BackupMaxAge
+					"policy asks for %s", round(*r.BackupAge), round(r.BackupMaxAge)),
+				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
-			"and check whatever was meant to run it. The trim will not " +
-			"advance past a backup this old.",
+			"and check whatever was meant to run it. The trim does not " +
+			"advance past a backup older than the policy, and does not " +
+			"advance at all until there is one.",
 	},
 	{
 		// A BLOCKED TRIM IS AN ORDINARY STATE until it has cost something,
@@ -827,6 +851,11 @@ func PerLogKinds() []Kind {
 	}
 	return out
 }
+
+// Age is a measured age, for the Reading field whose zero value is a real and
+// REASSURING measurement — a backup verified this second — rather than an
+// absent one.
+func Age(d time.Duration) *time.Duration { return &d }
 
 // Kinds is every alarm this engine can raise, sorted. For the reference doc
 // and for a surface that renders a row per kind.

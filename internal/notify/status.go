@@ -50,11 +50,39 @@ import (
 // goroutine, which is also what makes the ORDER of what a backend hears total:
 // one writer, so a re-assertion can never overtake the raise it belongs to.
 //
-// The teardown is the deliberate exception. [StatusSession.End] and
-// [StatusDriver.Stop] cancel the goroutine, WAIT for it, and only then clear —
-// because the clear has to be the last thing the backend hears, and a process
-// that exits before it lands leaves an indicator claiming an agent is working
-// for the whole of the backend's expiry.
+// The teardown is the deliberate exception. [StatusSession.End],
+// [StatusDriver.ClearFor] and [StatusDriver.Stop] STOP the goroutine at its
+// next boundary between posts, WAIT for it, and only then clear — because the
+// clear has to be the last thing the backend hears, and a process that exits
+// before it lands leaves an indicator claiming an agent is working for the
+// whole of the backend's expiry.
+//
+// # Stopped between posts, never cancelled in the middle of one
+//
+// CANCELLING A REQUEST ABANDONS IT; IT DOES NOT WITHDRAW IT. The teardown used
+// to cancel the goroutine's context, which made an in-flight raise or
+// re-assertion return at once — while the request itself was already on the
+// wire, or already in the server's hands. The clear then went out on a second
+// connection, and the server was free to apply the two in either order: when
+// the abandoned raise landed second, the indicator stayed up over a turn that
+// had ended, with nothing left to take it down but the backend's own expiry.
+// So a teardown asks the loop to stop and lets the post in flight finish:
+// once its response is back, the server has applied it, and the clear that
+// follows is ordered after it for real. A backend with no clear at all (the
+// typing indicator) gets the same guarantee from the same rule — nothing it
+// was sent can arrive after the turn that raised it is over.
+//
+// BOUNDED, because the wait is now for a real request: every request an
+// indicator makes runs under [statusRequestTimeout], the clear included, so a
+// teardown waits at most one post and one clear however slow the backend is.
+// A post that runs out of that time is abandoned after all, and its fate is
+// the one thing no client can know; that is the only case left in which the
+// clear can be overtaken, and the indicator then lapses on the backend's own
+// expiry.
+//
+// DETACHED, the clear especially: the ending being reported is often the
+// cancellation itself — a shed seat, a drained node, a turn that ran out of
+// time — and a clear made on a dead context does nothing at all.
 
 // StatusMode is when an agent shows a working status.
 type StatusMode string
@@ -193,6 +221,20 @@ type StatusPoster interface {
 	ClearStatus(ctx context.Context, handle, channel, thread string) bool
 }
 
+// statusRequestTimeout bounds every request an indicator makes: the raise,
+// each re-assertion, and the clear.
+//
+// ONE REQUEST, ONE BUDGET, and it is what bounds a teardown, which waits for at
+// most the post in flight and then makes the clear (see the opening comment).
+// Five seconds: long enough for a chat instance under load to answer, short
+// enough that a drain of a dozen seats against one that has stopped answering
+// finishes in seconds rather than waiting out a vendor client's timeout per
+// request, on the one surface whose every failure is swallowed as cosmetic.
+// What a request that runs out loses is one indicator left standing until the
+// backend's own expiry lapses it — about two minutes on the surface that
+// renders text, seconds on the one that does not.
+const statusRequestTimeout = 5 * time.Second
+
 // statusKey identifies one live indicator.
 type statusKey struct{ handle, channel, thread string }
 
@@ -219,8 +261,15 @@ type session struct {
 	// a phase the reader is better off never seeing.
 	poke chan struct{}
 
-	cancel context.CancelFunc
-	done   chan struct{}
+	// stop asks the goroutine to exit at its next boundary between posts,
+	// and done is closed once it has. Closed exactly once, by the teardown
+	// that took the session out of the driver's map — which only one can do.
+	//
+	// A CHANNEL RATHER THAN A CANCELLED CONTEXT, because cancelling would
+	// abandon the post in flight rather than let it finish, and an abandoned
+	// raise can land after the clear. See "Stopped between posts" above.
+	stop chan struct{}
+	done chan struct{}
 }
 
 // wake asks the session's goroutine to re-assert, and never blocks. See
@@ -367,13 +416,15 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 		// makes their lines differ.
 		seed: turnID, phase: phase,
 		poke: make(chan struct{}, 1),
+		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	// DETACHED FROM THE CALLER'S CONTEXT, because the indicator outlives the
 	// call that raised it in the one case it matters most: a turn that
 	// suspends into a detached coding run ends its own context and keeps the
-	// indicator up (see [StatusSession.End]).
-	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	s.cancel, s.done = cancel, make(chan struct{})
+	// indicator up (see [StatusSession.End]). Its values stay — the trace a
+	// debug line is filed under — and nothing cancels it: the goroutine ends
+	// on [session.stop], and each request on its own deadline.
+	loopCtx := context.WithoutCancel(ctx)
 	d.sessions[key] = s
 	d.mu.Unlock()
 
@@ -439,11 +490,7 @@ func (d *StatusDriver) ClearFor(ctx context.Context, handle string) {
 	}
 	d.mu.Unlock()
 
-	for _, s := range live {
-		s.cancel()
-		<-s.done
-		d.clear(ctx, s.key)
-	}
+	d.retire(ctx, live)
 }
 
 // Phase moves the indicator to a new phase's wording.
@@ -488,6 +535,10 @@ func (s *StatusSession) Phase(phase string) {
 // half takes this hold back with [StatusDriver.Rejoin], and ends it without
 // keepAlive; a node that never sees that resume takes it down when it stops
 // running the seat ([StatusDriver.ClearFor]).
+//
+// Taking it down waits for the post in flight to finish and then clears, on a
+// context detached from ctx and bounded — so ctx may be the turn's own,
+// cancelled or not. See "Stopped between posts" at the top of this file.
 func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 	if s == nil || s.driver == nil || keepAlive {
 		return
@@ -507,9 +558,7 @@ func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 	delete(d.sessions, s.key)
 	d.mu.Unlock()
 
-	sess.cancel()
-	<-sess.done
-	d.clear(ctx, s.key)
+	d.retire(ctx, []*session{sess})
 }
 
 // Conversation is the thread this session's indicator sits in.
@@ -555,29 +604,55 @@ func (d *StatusDriver) Stop(ctx context.Context) {
 	}
 	d.mu.Unlock()
 
-	for _, s := range live {
-		s.cancel()
-		<-s.done
-		d.clear(ctx, s.key)
+	d.retire(ctx, live)
+}
+
+// retire takes down the indicators of sessions already out of the driver's
+// map, each in the one order that keeps its clear last: stop its goroutine at
+// the next boundary between posts, wait for the post in flight to FINISH, then
+// clear. Never cancel that post — see "Stopped between posts" in the opening
+// comment.
+//
+// ALL AT ONCE rather than one after another, so the call is bounded by one
+// post and one clear however many indicators it takes down: every stop is
+// asked for before any wait, and each clear goes out as soon as its own
+// session's goroutine is gone. One after another, a node stopping with a
+// dozen live indicators against a chat instance that had stopped answering
+// would wait out a dozen budgets in turn.
+//
+// ctx may be dead already — the ending being reported is often the
+// cancellation itself — because each clear detaches from it and carries its
+// own deadline ([StatusDriver.clear]); the waits take nothing from it at all.
+func (d *StatusDriver) retire(ctx context.Context, sessions []*session) {
+	for _, s := range sessions {
+		close(s.stop)
 	}
+	var wg sync.WaitGroup
+	for _, s := range sessions {
+		wg.Go(func() {
+			<-s.done
+			d.clear(ctx, s.key)
+		})
+	}
+	wg.Wait()
 }
 
 // run is the session's own goroutine, and the ONLY writer of its indicator:
 // the opening raise, every phase change and every re-assertion inside the
 // backend's expiry window are all this loop.
 //
-// No liveness re-check anywhere in it, and the ORDERING is why that is safe:
-// End, ClearFor and Stop all cancel this context and wait for this goroutine
-// to exit BEFORE they clear the indicator. So a post can never follow a clear
-// — the worst case is one extra post that the clear immediately takes down. A
-// check here would read as though that ordering were in doubt.
+// It exits only at a boundary BETWEEN posts, and the ORDERING is why nothing
+// else needs checking: End, ClearFor and Stop all ask it to stop and wait for
+// it to exit BEFORE they clear the indicator, and the post it was making when
+// they asked is allowed to finish. So a post can never follow a clear — the
+// worst case is one extra post that the clear immediately takes down.
 func (d *StatusDriver) run(ctx context.Context, s *session) {
 	defer close(s.done)
 	// THE RAISE. Skipped only where the session is already over, which is a
 	// turn that ended before its own indicator went up: posting then would
 	// raise an indicator for nobody, and the clear that follows would be
 	// taking down something the reader never saw.
-	if ctx.Err() != nil {
+	if s.stopped() {
 		return
 	}
 	d.repost(ctx, s)
@@ -597,13 +672,29 @@ func (d *StatusDriver) run(ctx context.Context, s *session) {
 	}
 	for {
 		select {
-		case <-ctx.Done():
+		case <-s.stop:
 			return
 		case <-s.poke:
-			d.repost(ctx, s)
 		case <-tick:
-			d.repost(ctx, s)
 		}
+		// A STOP THAT ARRIVED WITH THE WAKE WINS: select picks among
+		// ready cases at random, and a re-assertion made after the
+		// teardown asked for none is one more request for it to wait out.
+		if s.stopped() {
+			return
+		}
+		d.repost(ctx, s)
+	}
+}
+
+// stopped reports whether a teardown has asked this session's goroutine to
+// exit.
+func (s *session) stopped() bool {
+	select {
+	case <-s.stop:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -621,6 +712,8 @@ func (d *StatusDriver) repost(ctx context.Context, s *session) {
 }
 
 func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
+	ctx, cancel := context.WithTimeout(ctx, statusRequestTimeout)
+	defer cancel()
 	if !d.poster.SupportsStatusText() {
 		// The indicator still goes up; the words are the part this
 		// backend cannot render.
@@ -632,7 +725,12 @@ func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
 	}
 }
 
+// clear takes one indicator down, on a context of its own: detached, because
+// the ending being reported is often the caller's cancellation, and bounded,
+// because detaching also dropped the caller's deadline.
 func (d *StatusDriver) clear(ctx context.Context, key statusKey) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusRequestTimeout)
+	defer cancel()
 	if !d.poster.ClearStatus(ctx, key.handle, key.channel, key.thread) {
 		log.DebugContext(ctx, "working_status_not_cleared", "backend", d.poster.StatusBackend(),
 			"handle", key.handle, "channel", key.channel)

@@ -548,15 +548,25 @@ type Invalidation struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// Eviction gates a node's records on this log, or readmits it.
+// Eviction gates a node's records on this log, or readmits it. The node is the
+// record's SUBJECT ([EvictionSubject]), so nothing here repeats it.
+//
+// # The position is the record's own, and never a field
+//
+// The gate drops the node's records ABOVE the eviction's own position and
+// counts them again FROM the readmission's, so the boundary is where the
+// record LANDED — which only the broker knows, after the writer has formed the
+// payload. A payload that stated its positions asked the writer for a number
+// it cannot have; the applier takes both from the record's position, as every
+// sibling log's does, and the payload says only which of the two it is.
 type Eviction struct {
 	V int `json:"v"`
 
-	// From is the position above which this node's records are dropped,
-	// and Readmitted the position at or above which they count again.
-	// Zero Readmitted is a node still out.
-	From       uint64 `json:"from"`
-	Readmitted uint64 `json:"readmitted,omitempty"`
+	// Readmit turns the record into the INVERSE COMMIT rather than a
+	// delete, so an eviction's whole history survives a replay and a node
+	// that was evicted, readmitted and evicted again reads correctly
+	// rather than as one long absence.
+	Readmit bool `json:"readmit,omitempty"`
 
 	// By is who decided, which is the first thing an operator reading an
 	// eviction they did not expect needs.

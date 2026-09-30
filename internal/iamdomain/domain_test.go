@@ -94,12 +94,17 @@ func TestTheDeclaredCeilingIsTierAsDefault(t *testing.T) {
 	}
 }
 
-// THE THREE MACHINERY TABLES ARE NAMED, CLASSED LOCAL, AND EXCLUDED FROM THE
-// AUDIT.
+// THE THREE MACHINERY TABLES ARE NAMED, EXCLUDED FROM THE AUDIT, AND KEPT OUT
+// OF THE IDENTITY CLAIM — the deferred record and its scope as this node's own
+// (Local, scrubbed from every snapshot), and the operation ledger as the one
+// table that TRAVELS without being claimed identical (Divergent).
 //
-// A donor's operation ledger is the sharpest of them: an adopted peer's ops
-// table would let this node resolve its own ambiguous publish against somebody
-// else's history, which is a write reported as landed that never happened.
+// THE LEDGER'S CLASS IS THE FRAMEWORK'S CONTRACT, and it reversed: this used
+// to require it Local, scrubbed from every artefact, and an adopter then could
+// not tell a retry of anything its donor applied from a first attempt — in
+// this estate a second enrolment, a second grant change, a second epoch bump.
+// Classed Replicated it would trip the identity claim on `applied_at`, the one
+// column each node writes from its own clock.
 func TestTheMachineryTablesAreLocalAndTheRestAreReplicated(t *testing.T) {
 	t.Parallel()
 	d := iamdomain.Domain{}
@@ -110,10 +115,14 @@ func TestTheMachineryTablesAreLocalAndTheRestAreReplicated(t *testing.T) {
 			t.Fatal("a machinery table is unnamed, and the framework interpolates " +
 				"these names into statements it generates")
 		}
-		if tables[name] != statelog.Local {
-			t.Errorf("%s is classed %v, want Local — a replicated classification "+
-				"would put a donor's own ledger into this node's adoption",
-				name, tables[name])
+		want := statelog.Local
+		if name == d.OpsTable() {
+			want = statelog.Divergent
+		}
+		if tables[name] != want {
+			t.Errorf("%s is classed %v, want %v — the deferred record and its "+
+				"scope are this node's own verdict and never travel, and the "+
+				"ledger travels outside the identity claim", name, tables[name], want)
 		}
 		if iamdomain.Reproducible(name) {
 			t.Errorf("%s is in the completeness audit — a replay from zero "+

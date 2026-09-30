@@ -72,6 +72,14 @@ const NoIfMatch uint64 = 0
 const ReassignmentBudget = 8
 
 // Writer is the tracker's write authority.
+//
+// Every write takes the OPERATION ID it publishes under from its caller, and
+// the id carries the instant it was minted: a caller mints it with
+// [statelog.NewOpID], or derives it with [statelog.DeriveOpID] when a retry
+// must reproduce it. There is no instant beside it to stamp, because the
+// state log reads that one to decide whether this node's ledger can vouch for
+// a retry — see [statelog.OpMintedAt] — and the writer's own clock at the call
+// is always later than the mint on exactly the retry that question is for.
 type Writer struct {
 	publisher *statelog.Publisher
 
@@ -82,17 +90,12 @@ type Writer struct {
 	db *store.DB
 
 	// claims is the coordination a walking sequence takes its claim from,
-	// and nodeID is who holds it. Both may be nil or empty on a writer
-	// that only makes single-append writes; a sequence that needs one
+	// and nodeID is where it runs — the prefix of every claim's owner, never
+	// the owner itself ([Writer.claimOwner]). Both may be nil or empty on a
+	// writer that only makes single-append writes; a sequence that needs one
 	// refuses by name rather than running without it.
 	claims Claims
 	nodeID string
-
-	// local is the IN-PROCESS half of every claim this node's writers take,
-	// shared by every copy [Writer.As] and [Writer.After] make of the one
-	// writer the node builds — see [localHolds] for why the lease alone
-	// does not exclude a second walk on the same node.
-	local *localHolds
 
 	// Actor and ActorKind are who this writer acts as, and OperatorID,
 	// TurnID and Chain the provenance that travels with it.
@@ -172,7 +175,8 @@ type WriterDeps struct {
 
 	// World is the chart seam the custom-field coercion needs for the one
 	// field type whose value is a colleague — see [Writer.World].
-	World     FieldWorld
+	World FieldWorld
+
 	Metrics   *metrics.Recorder
 	Drain     func() float64
 	Actor     string
@@ -327,7 +331,6 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		local:   &localHolds{held: map[string]bool{}},
 		metrics: d.Metrics, Actor: d.Actor, ActorKind: d.ActorKind,
 		Drain: d.Drain, Leads: d.Leads, World: d.World, Now: now,
 	}, nil
@@ -479,7 +482,17 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 		patch.Tags = &tags
 	}
 	subject := TaskSubject(id)
+	// A PROJECT MOVE TOUCHES BOTH CONTAINERS, so it states them: the
+	// task's rows leave one project's closure and arrive in another's, and
+	// a scope naming only the destination would let a write into the
+	// project it left slip past a deferral that covers it.
 	scope := ScopeSet{Subject: true, Container: project}
+	if patch.Project != nil && *patch.Project != project {
+		scope = ScopeSet{Terms: []ScopeTerm{
+			{Kind: TermObject, Container: project, ID: id},
+			{Kind: TermObject, Container: *patch.Project, ID: id},
+		}}
+	}
 	// EVERY PATCH, not only a status one. The apply rewrites every row
 	// naming this task as a blocker on EVERY task apply — `maintainDeps`
 	// runs out of `explodeTask`, which nothing gates — so a patch that
@@ -502,12 +515,11 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	// the slice is replaced rather than appended to.
 	var fieldWarnings []string
 	result, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			current, held, err := readTask(ctx, tx, id)
 			if err != nil {
@@ -518,36 +530,56 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// see [absentTask].
 				return statelog.Decision{}, absentTask(ctx, tx, id, "task")
 			}
-			// THE PROJECT THE CALLER DECIDED ON IS THIS TASK'S — see
-			// [filedUnder]. A re-route is the project's own decision and
+			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
+			// see [stillIn]. A re-route is the project's own decision and
 			// the tag set, the scope and every lead check upstream were
-			// formed against it.
-			if wrong := filedUnder(current, project); wrong != nil {
-				return statelog.Decision{}, wrong
-			}
-			if patch.Parent != nil && *patch.Parent != "" {
-				// A RE-PARENT IS HELD TO THE CREATE'S RULE — see
-				// [refuseParent] — decided here, in the snapshot the
-				// record's expectation is formed in.
-				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := refuseParent(ctx, tx, current, *patch.Parent); err != nil {
-					return statelog.Decision{}, err
-				}
+			// formed against it, so a task that moved in between is
+			// another project's write.
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
 			}
 			if current.Removed != nil {
 				// A TOMBSTONED TASK IS FROZEN — no comment, body, field
 				// or relation of it can change — which is what makes a
 				// removal an entirely local decision with no walk
-				// behind it.
+				// behind it. Asked before anything about a new parent,
+				// because it is the answer whatever the parent is.
 				return statelog.Decision{}, fmt.Errorf("tracker: task %s was "+
 					"removed by %s at %s; restore it first",
 					id, current.Removed.By, current.Removed.At.Format(time.RFC3339))
+			}
+			if patch.Parent != nil {
+				// A TASK A MOVE HAS NOT CARRIED KEEPS ITS PLACE until it
+				// has, whether this files it under another task or makes
+				// it a root: the walk carries every task it read, so one
+				// moved out from under the subtree would still be carried
+				// into the move's project — see [refuseMidMove].
+				if err = refuseMidMove(ctx, tx, current, "task",
+					"filed elsewhere now it would still be carried"); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
+			if patch.Parent != nil && *patch.Parent != "" {
+				// A RE-PARENT IS HELD TO THE CREATE'S RULE — see
+				// [refuseParent] — decided here, in the snapshot the
+				// record's expectation is formed in.
+				if err = refuseParent(ctx, tx, current, *patch.Parent); err != nil {
+					return statelog.Decision{}, err
+				}
 			}
 			if ifMatch != 0 && current.Version != ifMatch {
 				return statelog.Decision{}, fmt.Errorf("%w: task %s is at "+
 					"version %d and the edit was conditioned on %d — re-read "+
 					"it and decide again rather than re-sending this patch",
 					ErrStaleVersion, id, current.Version, ifMatch)
+			}
+			if markOnly(patch) && *patch.Moving == current.Moving {
+				// THE MARK ALREADY SAYS IT: a walk's last append whose
+				// mark somebody else took down — the holder, racing the
+				// duty that finished its walk — or a re-run of one that
+				// landed. An empty decision is a success rather than a
+				// history row recording that nothing moved.
+				return statelog.Decision{Version: int64(current.Version)}, nil
 			}
 			// A COPY, for [settleWatch]'s reason: Decide runs again on a
 			// retry, and an amendment folded into the captured patch would
@@ -562,8 +594,16 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				patch = amended
 			}
 			if patch.Tags != nil {
+				// AGAINST THE TASK'S OWN PROJECT rather than the
+				// argument's, because a move carries the tags into
+				// the destination before it re-homes the task and
+				// this read is the one that sees both.
+				home := current.Project
+				if patch.Project != nil {
+					home = *patch.Project
+				}
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := declaredTags(ctx, tx, current.Project, *patch.Tags); err != nil {
+				if err := declaredTags(ctx, tx, home, *patch.Tags); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
@@ -623,7 +663,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 			if err := scope.covers(current.Dependents); err != nil {
 				return statelog.Decision{}, err
 			}
-			decision, err := w.decide(subject, OpPatch, kind, scope, opID,
+			decision, err := w.decide(stamp, subject, OpPatch, kind, scope, opID,
 				charged, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -637,6 +677,15 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	}
 	result.Warnings = append(result.Warnings, fieldWarnings...)
 	return result, err
+}
+
+// markOnly reports a patch whose one change is the cross-project move's mark.
+func markOnly(patch TaskPatch) bool {
+	if patch.Moving == nil {
+		return false
+	}
+	patch.Moving = nil
+	return patch.Empty()
 }
 
 // settleWatch resolves a membership gesture into the whole watcher sets.
@@ -803,12 +852,11 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 	at := w.Now()
 
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			for _, placement := range placements {
 				if !placement.Rank.Valid() {
 					return statelog.Decision{}, fmt.Errorf("tracker: %q is not "+
@@ -819,7 +867,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 			// history: it changes where a card sits and nothing about
 			// what the work is, so waking anybody for it would make a
 			// board's own drag a source of inbox traffic.
-			return w.decide(subject, OpPatch, "", scope, opID, RankOrder{
+			return w.decide(stamp, subject, OpPatch, "", scope, opID, RankOrder{
 				V: DocumentVersion, Project: project, Placements: placements,
 			}, nil, at)
 		},
@@ -851,13 +899,12 @@ func (w *Writer) WriteDocument(ctx context.Context, opID string, subject Subject
 	scope := ScopeSet{Subject: true, Container: container}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpPatch, kind, scope, opID, document, notify, at)
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpPatch, kind, scope, opID, document, notify, at)
 		},
 	})
 }
@@ -879,13 +926,12 @@ func (w *Writer) RecordTurn(ctx context.Context, opID, taskID, project string,
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternAdditive,
-		Decide: func(*sql.Tx) (statelog.Decision, error) {
-			return w.decide(subject, OpTurn, "", scope, opID, payload, nil, at)
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternAdditive,
+		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			return w.decide(stamp, subject, OpTurn, "", scope, opID, payload, nil, at)
 		},
 	})
 }
@@ -948,8 +994,14 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 // in one place: a path that filled seven of them would publish a record the
 // deferral index could not file, and the failure would only show up on a
 // rolling upgrade.
-func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
-	scope ScopeSet, opID string, payload any, notify *Notify,
+//
+// IT FILLED SIX. The generation and the writer were declared, documented and
+// read — the writer by the eviction gate on every applier — and never set, so
+// every record this domain ever published named nobody and the gate had no
+// node to drop. Both now arrive as the framework's [statelog.Stamp], which the
+// publisher checks on the encoded record before it appends anything.
+func (w *Writer) decide(stamp statelog.Stamp, subject Subject, op OpKind,
+	kind ChangeKind, scope ScopeSet, opID string, payload any, notify *Notify,
 	at time.Time) (statelog.Decision, error) {
 
 	if err := checkChangeKind(subject, op, kind, notify); err != nil {
@@ -974,8 +1026,8 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 	}
 	record := MutationRecord{
 		RecordEnvelope: RecordEnvelope{
-			V: RecordVersion, OpID: opID, Subject: subject, Op: op,
-			CreatedAt: at, Scope: scope,
+			V: recordVersionOf(payload), OpID: opID, Subject: subject, Op: op,
+			CreatedAt: at, Gen: stamp.Gen, Writer: stamp.Writer, Scope: scope,
 		},
 		Kind:       kind,
 		Mutation:   body,
@@ -999,27 +1051,7 @@ func (w *Writer) decide(subject Subject, op OpKind, kind ChangeKind,
 			"rather than trimmed, because a trimmed one cannot rebuild its row",
 			op, subject, len(encoded), MaxCommitBytes)
 	}
-	return statelog.Decision{
-		Payload:  encoded,
-		Envelope: envelopeOf(record, scope, subject),
-	}, nil
-}
-
-// envelopeOf is the framework's own view of a record.
-//
-// IT RESOLVES THE SAME SCOPE THE RECORD CARRIES, through the same one-argument
-// call every other side uses. The publisher probes the deferral index with the
-// request's scope and the applier files a deferral under the envelope's, so a
-// second spelling here is a record filed where its own writer never looks.
-func envelopeOf(record MutationRecord, scope ScopeSet, subject Subject) statelog.Envelope {
-	return statelog.Envelope{
-		V:       record.V,
-		Kind:    string(subject.Kind),
-		Subject: wire(subject),
-		Op:      string(record.Op),
-		OpID:    record.OpID,
-		Scope:   scope.Resolve(subject),
-	}
+	return statelog.Decision{Payload: encoded}, nil
 }
 
 // wire is the framework's subject for one of this domain's.

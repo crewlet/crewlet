@@ -124,6 +124,12 @@ const (
 	// automation holding only the grant that applies a configuration
 	// cannot dissolve a team between two of its runs.
 	ClassRemoval PayloadClass = "removal"
+
+	// ClassNodeGate is a node's eviction from this log, or its readmission:
+	// a gesture about the DEPLOYMENT rather than the company, so it takes
+	// the deployment's grant alone. Whether the node may be evicted at all
+	// is judged once, before any log is written, by the engine's node gate.
+	ClassNodeGate PayloadClass = "node_gate"
 )
 
 // GrantsFor is the capabilities a class requires — every one of them — or
@@ -140,6 +146,8 @@ func GrantsFor(c PayloadClass) []iam.Grant {
 		return nil
 	case ClassRemoval:
 		return []iam.Grant{iam.GrantConfigWrite, iam.GrantFleetOperate}
+	case ClassNodeGate:
+		return []iam.Grant{iam.GrantFleetOperate}
 	}
 	// FAIL-CLOSED for a class nobody named here, as for the two that are:
 	// a record is refused below the company's grant unless a decide said
@@ -174,6 +182,7 @@ type requirement struct {
 var (
 	structural = requirement{class: ClassStructure}
 	removal    = requirement{class: ClassRemoval}
+	nodeGate   = requirement{class: ClassNodeGate}
 )
 
 // contentRequirement is the requirement of a content record whose changed

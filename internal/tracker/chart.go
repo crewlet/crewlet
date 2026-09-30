@@ -3,7 +3,9 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -41,8 +43,9 @@ import (
 // # Idempotence, and why a matching row is the thing that decides it
 //
 // Each project is its own append on its own subject, so N nodes running this
-// at once contend per project and exactly one wins each; the losers see the
-// value they wanted already there and write nothing.
+// at once contend per project and exactly one wins each; the losers re-decide
+// on the rows the winner wrote, see the value they wanted already there and
+// write nothing.
 //
 // WHAT MAKES A RECONCILE FREE IS THE ROW MATCHING, never the stamp. This runs
 // on every apply, on every boot and on every chart write, and `at` moves on
@@ -55,26 +58,36 @@ import (
 // FIRST and the position is consulted only when they differ.
 //
 // It returns the projects it actually wrote, so a caller can log the change
-// rather than the attempt.
+// rather than the attempt; a write whose outcome is `unknown` is an error,
+// because the next apply is what retries it and the caller is the one that
+// says so.
+//
+// EVERY PROJECT IS ATTEMPTED, and the error names every one that failed. One
+// project's broker refusal must not leave the rest of a company unable to file
+// anything, and the caller is a reconcile that runs again. The loop used to
+// say so and return at the first failure, so a chart whose first project hit a
+// full stream or an unknown outcome reconciled none of the projects after it —
+// on every apply, for as long as that one kept failing.
 func (w *Writer) ApplyChart(ctx context.Context, at int64, chart []ChartProject) ([]string, error) {
-	var wrote []string
+	var (
+		wrote  []string
+		failed []error
+	)
 	for _, p := range chart {
 		if p.Key == "" {
 			continue
 		}
 		changed, err := w.applyChartProject(ctx, at, p)
 		if err != nil {
-			// EVERY PROJECT IS ATTEMPTED. One project's broker refusal
-			// must not leave the rest of a company unable to file
-			// anything, and the caller is a reconcile that runs again.
-			return wrote, fmt.Errorf("tracker: reconcile project %s from the "+
-				"org chart: %w", p.Key, err)
+			failed = append(failed, fmt.Errorf("tracker: reconcile project %s "+
+				"from the org chart: %w", p.Key, err))
+			continue
 		}
 		if changed {
 			wrote = append(wrote, p.Key)
 		}
 	}
-	return wrote, nil
+	return wrote, errors.Join(failed...)
 }
 
 // ChartProject is one project as the org chart declares it — the three
@@ -93,15 +106,24 @@ func (w *Writer) applyChartProject(ctx context.Context, at int64,
 	subject := ProjectSubject(p.Key)
 	scope := ScopeSet{Subject: true}
 	now := w.Now()
+	// THE WALL CLOCK for the mint and not the writer's own, which is the
+	// clock AUTHORED instants are stamped from and a test pins: the mint
+	// is compared with the ledger's watermark, which a sweep and a join
+	// set off the wall.
+	op := chartOpID(time.Now(), p.Key)
 	var changed bool
 
-	_, err := w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     chartOpID(at, p.Key),
-		MintedAt: now,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+	result, err := w.published(ctx, statelog.Request{
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    op,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			// RESET ON EVERY ROUND. A round that decided to write and
+			// lost the broker's arbitration is followed by one that
+			// finds the winner's value already there, and only the
+			// last round says what this call did.
+			changed = false
 			current, held, err := readProject(ctx, tx, p.Key)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -140,12 +162,12 @@ func (w *Writer) applyChartProject(ctx context.Context, at int64,
 			next.UpdatedAt = now
 			changed = true
 
-			op, kind := OpPatch, ChangeProjectUpdated
+			verb, kind := OpPatch, ChangeProjectUpdated
 			if !held {
-				op, kind = OpCreate, ChangeProjectCreated
+				verb, kind = OpCreate, ChangeProjectCreated
 			}
-			decision, err := w.decide(subject, op, kind, scope,
-				chartOpID(at, p.Key), next, nil, now)
+			decision, err := w.decide(stamp, subject, verb, kind, scope,
+				op, next, nil, now)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -156,24 +178,32 @@ func (w *Writer) applyChartProject(ctx context.Context, at int64,
 	if err != nil {
 		return false, err
 	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return false, fmt.Errorf("tracker: whether project %s's chart landed "+
+			"is unknown (operation %s); the next apply decides it again", p.Key, op)
+	}
 	return changed, nil
 }
 
 // chartOpID is the operation id one project's chart apply writes under.
 //
-// DERIVED FROM THE CHART POSITION AND THE KEY, so two nodes reconciling the
-// SAME chart state mint the same id for one project and the ledger collapses
-// the one that lost the broker's arbitration into a no-op. It is deliberately
-// not time-based: a reconcile runs on every apply, on every boot and on every
-// chart write, and a fresh id per run would make each of those a new operation
-// deduped by nothing.
+// FRESH PER APPLY, minted at the apply's own instant through the state log's
+// grammar ([statelog.NewOpID]), because a chart apply is a RECONCILE rather
+// than an operation a retry has to be matched to: it decides from the
+// project's rows what, if anything, is left to write, so a second apply of one
+// chart state — on another node, at the next boot, after a lost
+// acknowledgement — finds its value there and writes nothing, and N nodes
+// racing one chart state are settled by the broker's arbitration with the
+// losers re-deciding on the winner's rows. None of that needs the ledger.
 //
-// Two nodes at DIFFERENT cursors mint different ids, which is correct and
-// costs nothing: the one that is behind derives the same three field values
-// from the rows it has, so its decide finds the row already saying them and
-// returns an empty decision before any append. The ledger is the collapse for
-// the identical-position case; the row comparison is the collapse for every
-// other case.
-func chartOpID(at int64, key string) string {
-	return fmt.Sprintf("chart:%d:%s", at, key)
+// An id DERIVED FROM THE POSITION would put the ledger in charge instead, and
+// the instant the ledger vouches by would be one the id does not carry: this
+// used to be `chart:<position>:<key>`, which is outside the op-id grammar, so
+// the ledger read it as minted at the zero instant and could vouch for it on
+// no node whose ledger ever lost a row. And the ledger would answer a SECOND
+// apply of one chart state from the first's row rather than re-reading the
+// project, so a project a behind node walked back could never be set right by
+// the chart that is actually current.
+func chartOpID(at time.Time, key string) string {
+	return statelog.NewOpID(at, "chart-"+key)
 }

@@ -1,0 +1,29 @@
+-- A checkpoint names the record it stands on.
+--
+-- # What was missing
+--
+-- A broker restored from an older copy keeps its stream, creation instant and
+-- all, so the one thing that told a node its rows were ahead of the log was
+-- the log ENDING below its checkpoint. Once anything wrote the restored log
+-- past that checkpoint — a node whose own rows were not ahead of the copy —
+-- nothing observable separated the log from the history the node had applied:
+-- its sequences were ordinary sequences again, the refusal lifted, and the
+-- node went on applying a different history on top of rows the log does not
+-- hold. The same happened at a boot on a log already written past it, where
+-- nothing was ever refused at all.
+--
+-- The record at a sequence never changes on one stream, so what separates the
+-- two is the RECORD: the log's record at this node's checkpoint either is the
+-- one it consumed there or is not. stored_at is the broker's own storage
+-- instant of that record, as the record carried it when it was consumed —
+-- every node reads it identically — and the applier compares it with the
+-- record the log holds at the same sequence before it applies anything past
+-- it. An equality, never an ordering: no clock is compared with another.
+--
+-- # Why zero
+--
+-- Zero is UNKNOWN: a checkpoint written before this file, one at sequence 0
+-- (nothing consumed), and one a reanchor placed where the log holds no record
+-- (one below a rebuilt stream's first). Nothing is compared against it, and
+-- the next batch this node commits names its record.
+ALTER TABLE statelog_cursor ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;

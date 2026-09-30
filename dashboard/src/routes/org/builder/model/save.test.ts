@@ -427,7 +427,11 @@ describe("naming every step", () => {
       { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
     );
     const steps = plan(draft);
-    expect(steps.map((s) => s.id)).toEqual(["write-0001-1", "write-0001-2", "write-0001-3"]);
+    expect(steps.map((s) => s.id)).toEqual([
+      "write-0001.builder-save.1",
+      "write-0001.builder-save.2",
+      "write-0001.builder-save.3",
+    ]);
     for (const step of steps.filter((s) => s.kind !== "settings")) {
       expect(step.request.headers).toEqual({ "Idempotency-Key": step.id });
     }
@@ -440,7 +444,7 @@ describe("naming every step", () => {
 
 describe("what an answer means", () => {
   const seatStep: SaveStep = {
-    id: "write-0001-2",
+    id: "write-0001.builder-save.2",
     kind: "seat",
     request: {
       method: "PATCH",
@@ -455,7 +459,7 @@ describe("what an answer means", () => {
   };
   const batchStep: SaveStep = {
     ...seatStep,
-    id: "write-0001-1",
+    id: "write-0001.builder-save.1",
     kind: "structure",
     nodes: ["seat:a", "unit:b"],
   };
@@ -475,14 +479,14 @@ describe("what an answer means", () => {
     });
     expect(
       classifyStep(
-        { status: 503, body: { error: "unavailable", op_id: "write-0001-2" } },
+        { status: 503, body: { error: "unavailable", op_id: "write-0001.builder-save.2" } },
         seatStep,
       ),
-    ).toMatchObject({ kind: "unknown", opId: "write-0001-2" });
+    ).toMatchObject({ kind: "unknown", opId: "write-0001.builder-save.2" });
     // Never answered: still the step's own id, which is always safe to resend.
     expect(classifyStep({ status: 0, body: null }, seatStep)).toMatchObject({
       kind: "unknown",
-      opId: "write-0001-2",
+      opId: "write-0001.builder-save.2",
     });
     expect(landed({ kind: "pending", position: "" })).toBe(true);
     expect(landed({ kind: "unknown", opId: "x", detail: "" })).toBe(false);

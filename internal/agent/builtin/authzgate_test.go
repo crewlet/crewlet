@@ -109,6 +109,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Search: trk, Inbox: trk,
 			Merges:        func(builtin.Actor) builtin.WorkMerger { return trk },
+			Moves:         trk.moves,
 			PersonWriter:  func(builtin.Actor) builtin.PersonWriter { return person },
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return trk },
 			// A CONSTRUCTOR THAT ANSWERS NIL still registers the tool,

@@ -47,7 +47,7 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import { needsSentence } from "~/lib/refusal.ts";
 import { chartPrint, fingerprint } from "./model/document.ts";
-import type { KeySource, NodeKey } from "./model/keys.ts";
+import type { NodeKey } from "./model/keys.ts";
 import { locate } from "./model/draft.ts";
 import type { PendingWrite } from "./model/persistence.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -63,13 +63,8 @@ import {
 } from "./model/save.ts";
 import type { ConflictReason } from "./model/scheduler.ts";
 import type { BuilderMode, EngineTransport } from "./model/transport.ts";
-import {
-  newWriteId,
-  readChart,
-  settleUnknownWrite,
-  signedSummary,
-  type SaveAttempt,
-} from "./model/writes.ts";
+import { newWriteId } from "./runtime.ts";
+import { readChart, settleUnknownWrite, signedSummary, type SaveAttempt } from "./model/writes.ts";
 
 /** One save, as it is being sent. */
 export interface SaveRun {
@@ -216,12 +211,10 @@ export function stepLabel(step: SaveStep, nameOf: (key: NodeKey) => string): str
 export function useSave({
   stateRef,
   transport,
-  keys,
   events,
 }: {
   stateRef: MutableRefObject<BuilderState>;
   transport: EngineTransport;
-  keys: KeySource;
   events: MutableRefObject<SaveEvents>;
 }): Save {
   const [phase, setPhase] = useState<SavePhase>({ kind: "idle" });
@@ -252,11 +245,11 @@ export function useSave({
     // id already sent under, or prepared for another draft, is replaced.
     const stale = !write.current || write.current.used || write.current.generation !== generation;
     if (stale && !unsettledRef.current) {
-      write.current = { id: newWriteId(keys), generation, used: false };
+      write.current = { id: newWriteId(), generation, used: false };
     }
     setWriteId(write.current!.id);
     return write.current!.id;
-  }, [keys, stateRef]);
+  }, [stateRef]);
 
   const nameOf = useCallback(
     (key: NodeKey) => {

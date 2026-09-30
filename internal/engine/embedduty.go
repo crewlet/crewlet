@@ -202,7 +202,9 @@ func (d *embedDuty) tick(ctx context.Context) {
 		Embedder:  provider,
 		Model:     model,
 		Corpora:   d.corpora,
-		Logger:    log,
+		// No Logger: an absent one is the search package's own, so the
+		// duty's batch failures say `component=search` like every other
+		// line that package writes.
 	})
 	if err != nil {
 		// REFUSED WIRING IS AN OPERATOR'S PROBLEM, said once a tick

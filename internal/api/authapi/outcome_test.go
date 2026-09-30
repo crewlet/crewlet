@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THREE OUTCOMES STAY THREE, ON EVERY WRITE THIS SURFACE MAKES.
@@ -175,7 +176,18 @@ func TestAnEnrolmentNobodyCanConfirmBuildsNothing(t *testing.T) {
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 			"/auth/invite/"+invitationID, strings.NewReader(
 				`{"secret":"`+invitationSecret+`","login":"dana.sre","name":"Dana","password":"a-perfectly-fine-passphrase"}`)))
-		check(t, rec, writer, "invite:"+invitationID)
+		// DERIVED FROM THE INVITATION, AT ITS INSTANT: the op id a retry
+		// re-derives, in the grammar the ledger vouches for a retry by.
+		if len(writer.enrolled) != 1 {
+			t.Fatalf("enrolments %d, want 1", len(writer.enrolled))
+		}
+		op := writer.enrolled[0].OpID
+		issued, _ := statelog.OpMintedAt(invitationID)
+		if at, ok := statelog.OpMintedAt(op); !ok || !at.Equal(issued) {
+			t.Errorf("the redemption ran under %q, which does not carry the "+
+				"invitation's instant %s", op, issued)
+		}
+		check(t, rec, writer, op)
 	})
 }
 

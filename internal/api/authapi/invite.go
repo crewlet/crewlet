@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE INVITATION, AND WHY ITS TWO METHODS ARE DIFFERENT OPERATIONS.
@@ -184,7 +185,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	opID := "invite:" + held.ID
+	opID := redemptionOpID(held.ID)
 	// AN ADDRESS SOMEBODY IS ENROLLED UNDER IS A LINK ALREADY USED — and
 	// with the person derived, it is what keeps the link single-use when
 	// the spend did not land: a re-redemption would otherwise re-enrol the
@@ -257,7 +258,7 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 			return
 		}
-		refuseEnrolment(w, r, "api_invite_enrol_failed", err)
+		refuseEnrolment(w, r, "api_invite_enrol_failed", opID, err)
 		return
 	}
 	if !landed(enrolled) {
@@ -276,6 +277,29 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		Seat: held.Seat,
 	}, signIn{method: types.SignInInvite})
 }
+
+// redemptionOpID is the operation an invitation's redemption is published
+// under: DERIVED from the invitation, so every attempt at one redemption — a
+// retry after `unknown`, a redeemer told their login was taken choosing
+// another — is the same operation, and the steps its first attempt landed are
+// answered from the ledger rather than claimed a second time.
+//
+// AT THE INVITATION'S OWN INSTANT, which its id carries (a uuid7 minted when it
+// was issued — [iamdomain.Blinder.InvitationID]), in the grammar the ledger
+// vouches for a retry by: it was `invite:<id>`, which carries none and read as
+// minted at the epoch, so once this node's ledger had swept anything every
+// redemption was answered `unknown` without being published. The issue is at
+// most the invitation window ago, well inside the month the ledger keeps an
+// identity operation for.
+func redemptionOpID(invitation string) string {
+	at, _ := statelog.OpMintedAt(invitation)
+	return statelog.DeriveOpID(at, "invite-redeem", redemptionNamespace, invitation)
+}
+
+// redemptionNamespace keeps [redemptionOpID]'s ids apart from every other
+// derivation. FIXED for the life of the format: a new one would make a
+// redemption retried across the change a second operation.
+const redemptionNamespace = "crewlet.authapi.invite-redeem"
 
 // refuseEnrolment answers an enrolment the domain did not land, and it is the
 // one place this surface decides which of those failures are the caller's.
@@ -299,7 +323,8 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 // names the holder's id, which is right for an administrator and wrong here:
 // the caller is holding an invitation link, which is evidence of who THEY are
 // and of nothing about anybody else.
-func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err error) {
+func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID string,
+	err error) {
 	var claimed *iamdomain.ErrClaimed
 	switch {
 	case errors.Is(err, iamdomain.ErrInvalidLogin),
@@ -326,9 +351,17 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event string, err e
 		}
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeBadParams,
 			map[string]string{"detail": detail})
+	case removed(err), errors.Is(err, iamdomain.ErrOperationReused):
+		// THE PERSON THIS LINK CREATES WAS CREATED AND THEN REMOVED — its
+		// spend never landed, so the row still read redeemable, and the
+		// person it names is one nothing will ever write again — or the
+		// redemption's operation, which the invitation derives, already
+		// names another record. Either way the link has stopped working,
+		// which is every way a link stops working.
+		log.InfoContext(r.Context(), event, "refused", "link used", "error", err)
+		httpjson.Fail(w, http.StatusGone, httpjson.CodeInviteSpent)
 	default:
-		log.ErrorContext(r.Context(), event, "error", err)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		writeFailed(w, r, event, opID, err)
 	}
 }
 
@@ -410,7 +443,7 @@ func (s *Service) spendInvitation(r *http.Request, held iamdomain.InvitationRow,
 
 	spent, err := s.writer.SpendInvitation(r.Context(), iamdomain.InvitationSpend{
 		ID: held.ID, Blind: held.Blind, Person: person,
-		OpID: opID + ":spend", Reason: "redeemed",
+		OpID: statelog.StepOpID(opID, "spend"), Reason: "redeemed",
 	})
 	if err != nil || !landed(spent) {
 		log.WarnContext(r.Context(), "api_invite_spend_failed",

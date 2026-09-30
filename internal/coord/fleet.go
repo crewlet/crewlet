@@ -509,6 +509,43 @@ type Activation struct {
 // other backend.
 const MaxApplyErrorLength = 2000
 
+// ActivationAt is the instant an activation is published at: the one the
+// caller asked for, or one millisecond after the activation it replaces when
+// the request is not later than that.
+//
+// # Why the pointer forces its instants forward
+//
+// Because the instant is how a node tells WHICH OF TWO ACTIVATIONS IS NEWER,
+// and that answer has to follow the order the pointer took them in rather than
+// the clocks of the nodes that asked. A booting node republishes its locally
+// active revision only when that revision's `activated_at` is LATER than the
+// pointer's, and the reconciler holds a node's own copy to the pointer by
+// revision and instant together (re-activating an unchanged revision is the
+// credential-rotation gesture). The instant is the activating node's own
+// clock, so an operator whose node runs a few seconds behind the one that
+// activated last, a node republishing the `activated_at` it holds, and two
+// activations inside one millisecond each put an instant on the pointer no
+// later than the one it replaced — and a node holding the replaced revision
+// read its own copy as the newer and published it back over the fleet's.
+//
+// Decided INSIDE the compare-and-set that replaces the pointer, against the
+// pointer it replaces, so two activations racing each other cannot both be
+// told the same instant: whichever lands second is compared with the first.
+//
+// # In milliseconds
+//
+// Compared in Unix MILLISECONDS, which is coarser than every place the instant
+// is kept — the pointer's nanoseconds and the node store's microseconds — so a
+// later activation is still later once a node has stored its copy and read it
+// back. The zero instant — no previous activation — leaves the request as it
+// is.
+func ActivationAt(requested, previous time.Time) time.Time {
+	if previous.IsZero() || requested.UnixMilli() > previous.UnixMilli() {
+		return requested.UTC()
+	}
+	return time.UnixMilli(previous.UnixMilli() + 1).UTC()
+}
+
 // TruncateApplyError applies [MaxApplyErrorLength].
 //
 // NEVER THROUGH A RUNE. A plain byte slice splits whatever multi-byte
@@ -574,6 +611,10 @@ type ActivationRequest struct {
 	// body went on the wire encoded twice and a third larger for nothing.
 	Payload json.RawMessage
 
+	// At is the instant the caller activated the revision at. The pointer
+	// may carry a LATER one — see [ActivationAt] — and the [Activation]
+	// Activate returns says which, so a caller keeping a local copy of the
+	// instant keeps the pointer's.
 	At time.Time
 
 	// Expect is the revision the caller read before building this one.

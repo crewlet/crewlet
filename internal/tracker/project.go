@@ -134,12 +134,11 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	scope := ScopeSet{Subject: true, Container: key}
 	at := w.Now()
 	return w.published(ctx, statelog.Request{
-		Subject:  wire(subject),
-		Scope:    scope.Resolve(subject),
-		OpID:     opID,
-		MintedAt: at,
-		Pattern:  statelog.PatternArbitrated,
-		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+		Subject: wire(subject),
+		Scope:   scope.Resolve(subject),
+		OpID:    opID,
+		Pattern: statelog.PatternArbitrated,
+		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			current, held, err := readProject(ctx, tx, key)
 			switch {
 			case err != nil:
@@ -150,14 +149,14 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 					"so check the key or wait for the config to apply: %w",
 					key, statelog.ErrUnavailable)
 			}
-			next, changed, err := applyProjectEdit(current, edit, at)
+			next, changed, err := applyProjectEdit(current, edit, w.Actor, at)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
 			if !changed {
 				return statelog.Decision{}, nil
 			}
-			decision, err := w.decide(subject, OpPatch, ChangeProjectUpdated,
+			decision, err := w.decide(stamp, subject, OpPatch, ChangeProjectUpdated,
 				scope, opID, next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -173,8 +172,8 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 // PURE for [applyTagEdit]'s reason: the one refusal a lead actually meets — an
 // un-archive of a field — is a comparison between two lists, and a rule only
 // reachable through a published record is a rule nobody re-measures.
-func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
-	Project, bool, error) {
+func applyProjectEdit(current Project, edit ProjectEdit, actor string,
+	at time.Time) (Project, bool, error) {
 
 	next := current
 	changed := false
@@ -188,8 +187,13 @@ func applyProjectEdit(current Project, edit ProjectEdit, at time.Time) (
 		if err := archiveIsOneWay(current.Fields, *edit.Fields); err != nil {
 			return Project{}, false, err
 		}
-		if !sameFields(current.Fields, *edit.Fields) {
-			next.Fields = *edit.Fields
+		// STAMPED BEFORE THE COMPARISON, or a form that resubmits the
+		// declarations unchanged would differ from the stored ones by
+		// exactly the two facts a caller never sends, and write a record
+		// that says nothing.
+		stamped := stampFields(current.Fields, *edit.Fields, actor, at)
+		if !sameFields(current.Fields, stamped) {
+			next.Fields = stamped
 			changed, policy = true, true
 		}
 	}

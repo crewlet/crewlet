@@ -1,0 +1,48 @@
+-- An operation names the record that applied it.
+--
+-- # What was missing
+--
+-- A reanchor of a broker restored from an older copy follows the log from its
+-- END, because the rows already hold every record the copy kept. But a node
+-- whose rows were the copy's age can write the restored log before anybody
+-- re-anchors it, and those records sit below the end too: followed from there,
+-- they are applied on no node, and whoever they were acknowledged to has lost
+-- them — with nothing anywhere saying so. The transition has to know whether
+-- the log holds a record these rows do not, and the one record it has to ask
+-- about is the newest one that writes rows: on a restored log every record
+-- past the copy was written after it, so if that newest one is this node's
+-- own, nothing after the restore wrote rows at all.
+--
+-- The operation ledger is where "this node applied that record" is written,
+-- and it said so by operation id and position. A record written after the
+-- restore can carry an operation this node applied before it — a caller
+-- retrying an operation the restore lost — and land at the very position the
+-- original held. What separates the two is the broker's own storage instant,
+-- which every node reads identically and which a second append never shares
+-- with the first: stored_at is that instant for the record that applied the
+-- operation here, and a record the ledger names only when both agree.
+--
+-- # The shape, stated here because 0001 documents the first one and is never edited
+--
+--   <domain>_ops(
+--       op_id      TEXT    NOT NULL PRIMARY KEY,
+--       subject    TEXT    NOT NULL,
+--       position   INTEGER NOT NULL,
+--       applied_at INTEGER NOT NULL,
+--       stored_at  INTEGER NOT NULL DEFAULT 0)  -- the applying record's
+--                                               --   broker instant, micros
+--
+-- Zero is UNKNOWN — a row written before this file — and a reanchor weighs it
+-- as a record it cannot vouch for rather than one it holds.
+--
+-- IT TRAVELS WITH THE LEDGER. The ledger rides every snapshot and stays out of
+-- the identity claim because only applied_at differs between nodes; stored_at
+-- is the record's own instant, which every node writes identically from the
+-- same record, so a node that adopted a donor's snapshot names each record the
+-- donor applied exactly as the donor does.
+--
+-- BOTH DOMAINS THAT KEEP A LEDGER, in one file, because the framework writes
+-- the statement for every domain it carries: a column one of them lacked would
+-- fail its applier's first write, on the one path nothing else exercises.
+ALTER TABLE tracker_ops ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pages_ops ADD COLUMN stored_at INTEGER NOT NULL DEFAULT 0;

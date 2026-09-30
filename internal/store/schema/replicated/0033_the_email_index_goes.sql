@@ -1,0 +1,23 @@
+-- `chart_seats.email_index` goes, with `chart_seats_email_idx` over it.
+--
+-- 0023 shipped the column as the form a vendor payload's address is MATCHED
+-- on — lower-cased, plus tag stripped — so an inbound webhook could resolve a
+-- seat in one indexed read. Nothing ever read it. What resolves a payload's
+-- address is the party registry (`internal/notify`), an in-memory index every
+-- node builds from the org chart's view, and it never asked SQL. And the value
+-- was not an address in the first place: the chart seals a literal address
+-- into the company's secret store and its row carries the `${VAR}` reference,
+-- so the column held that reference lower-cased, which matches nothing a
+-- payload carries. The registry now resolves the reference and folds it with
+-- `iam.NormalizeEmail`, the fold the identity estate blinds a person's address
+-- under, so the one rule is written once and in the one place that runs it.
+--
+-- THE INDEX FIRST, because a column an index still names cannot be dropped.
+--
+-- DROPPED IN THE COMMIT THAT STOPS THE APPLIER WRITING IT, and not before, for
+-- 0025's reason: an insert naming a column that is gone fails the apply on
+-- every node at once, which in a derived estate is a stalled log rather than
+-- one bad row. There is nothing to migrate — every value was derived from the
+-- `email` column beside it, which stays.
+DROP INDEX chart_seats_email_idx;
+ALTER TABLE chart_seats DROP COLUMN email_index;

@@ -35,11 +35,17 @@ func (Domain) Name() string { return "iam" }
 // month the framework keeps is sized for a SEAT carrying an op id to its next
 // wake after a weekend, and nothing does that with a session's: a sign-in is
 // answered inside its request and never re-asked; a sign-out and an
-// administrator ending somebody's session re-decide rather than re-ask, and a
-// close repeated after its row has gone lands on a closed session, which it
-// leaves as it was: a close applies only to a session still open. Kept a month, these
-// rows are a row per sign-in for a question nobody asks after an hour, and the
-// busiest thing this domain writes.
+// administrator ending somebody's session re-decide under a fresh operation
+// rather than re-ask. Kept a month, these rows are a row per sign-in for a
+// question nobody asks after an hour, and the busiest thing this domain writes.
+//
+// A SESSION OPERATION RE-ASKED PAST THE HOUR IS NOT DECIDED AGAIN. The sweep
+// that takes these rows records that THIS KIND lost them, apart from the
+// table's month (migration 0037), so the publisher answers an operation minted
+// before that instant whose row is gone `unknown` without publishing it
+// ([statelog.Result.Unvouched]) — never a second start of a session, never a
+// close decided on rows that may already hold the first — while every other
+// kind's retry is still vouched for across the month.
 const SessionOpsRetention = time.Hour
 
 // IamLogMaxBytes is the ceiling this domain declares for its log, which is
@@ -181,12 +187,17 @@ func (Domain) InstallsGate(env statelog.Envelope) bool {
 // silently short rather than one error. It is built from the exported
 // inventories rather than typed a third time.
 //
-// THERE IS NO DIVERGENT TABLE HERE, and that is a statement rather than an
-// omission: every column this domain writes is a function of the record that
-// wrote it, including the sealed ones, because the sealing happens at the
-// WRITER before publication. A per-node re-encryption would have made this
-// domain's rows legitimately different on every node and its identity claim
-// meaningless — which is exactly why it does not happen.
+// ONE DIVERGENT TABLE, and it is the operation ledger. Every other column this
+// domain writes is a function of the record that wrote it, the sealed ones
+// included, because the sealing happens at the WRITER before publication — a
+// per-node re-encryption would have made this domain's rows legitimately
+// different on every node and its identity claim meaningless, which is exactly
+// why it does not happen. The ledger's `applied_at` is the instant THIS node
+// applied an operation, so the ledger TRAVELS inside a snapshot — an adopter
+// that arrived without its donor's rows would decide again an operation the
+// donor had applied, and in this estate that is a second enrolment, a second
+// grant change, a second bump of somebody's epoch — and stays out of the
+// identity claim, which the one per-node column would otherwise trip.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -196,6 +207,9 @@ func (Domain) Tables() map[string]statelog.TableClass {
 	for _, table := range MachineryTables {
 		out[table] = statelog.Local
 	}
+	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
+	// [MachineryTables].
+	out[Domain{}.OpsTable()] = statelog.Divergent
 	return out
 }
 
@@ -207,18 +221,24 @@ func (Domain) ScopeIndex() string { return "iam_log_deferred_scope" }
 
 // OpsTable is contract 3's first layer: what this node has already applied.
 //
-// ONE OPS HORIZON FOR THE WHOLE DOMAIN, which is why the table takes the
-// framework's four columns and nothing else. A `kind` column and an index over
-// (kind, applied_at) would be a second horizon — a claim that a session's op
-// id may be swept on a different schedule from an enrolment's — and two
-// horizons on one ledger is a retry that resolves against a history half of
-// which has been deleted.
+// THE FRAMEWORK'S COLUMNS AND NOTHING ELSE — the operation, its subject, where
+// it landed, when this node applied it and the broker's instant for the record
+// that did (migration 0036) — and TWO HORIZONS, stated rather than hidden in a
+// column: a session subject's rows go after [SessionOpsRetention] and every
+// other kind's after the framework's month. The sweep of the hour is a range
+// over the stored SUBJECT, which already carries the kind (migration 0030),
+// and it records that kind's loss APART from the table's (migration 0037), so
+// the publisher holds a session operation to the hour and every other kind to
+// the month. One watermark moved hourly would have answered every identity
+// operation minted more than an hour earlier — a redemption, a create retried
+// under its key — `unknown` without publishing it; an unmarked sweep would have
+// let a session operation whose row the hour took be decided again.
 //
-// The authentication TRAIL has two horizons and this ledger has one, which is
-// not a contradiction: the trail is what a person reads, and the ledger is what
-// a publisher resolves an ambiguous write against. Their retentions answer
-// different questions and are measured against different things — an audit
-// obligation, and the longest a client will retry.
+// The authentication TRAIL has two horizons too, and they are not these: the
+// trail is what a person reads, and the ledger is what a publisher resolves an
+// ambiguous write against. Their retentions answer different questions and are
+// measured against different things — an audit obligation, and the longest a
+// client will retry.
 func (Domain) OpsTable() string { return "iam_ops" }
 
 // ReadinessInput reports that this domain's health does NOT gate seat

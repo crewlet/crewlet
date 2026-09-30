@@ -475,11 +475,11 @@ func Register(r *Registry, s Sources) {
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
 		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.recordHandle].
-		// A caller reads their own record, and naming anybody
-		// else's is the owner-or-lead rule the tools that WRITE these
-		// records are decided by: theirs, whoever leads them, or the
-		// deployment's admin grant. Registered operator-only, as `work_my_work` was, the
-		// landing screen becomes the most-gated screen in the product
+		// A caller reads their own record, and naming anybody else's is
+		// the owner-or-lead rule the tools that WRITE these records are
+		// decided by: theirs, whoever leads them, or the deployment's
+		// admin grant. Registered operator-only, as `work_my_work` was,
+		// the landing screen becomes the most-gated screen in the product
 		// and the human teammate — one of the two readers this
 		// dashboard is for — is fictional. `work_person` has always
 		// been registered ungated, so this is what already ships rather

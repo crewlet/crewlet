@@ -57,12 +57,16 @@ func (s *Service) rename(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	result, err := s.writerFor(r).WriteBatch(r.Context(), s.opID(r), chart.Batch{
+	op, ok := s.operation(w, r, "chart-rename", body)
+	if !ok {
+		return
+	}
+	result, err := s.writerFor(r).WriteBatch(r.Context(), op.id, chart.Batch{
 		Operations: []chart.Operation{{
 			Kind:   chart.OpRename,
 			Object: chart.ObjectRef{Kind: kind, ID: former},
 			To:     body.To,
 		}},
 	})
-	s.answerWrite(w, result, err)
+	s.answerWrite(w, op, result, err)
 }

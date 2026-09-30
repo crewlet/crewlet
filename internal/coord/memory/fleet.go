@@ -327,12 +327,18 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	}
 
 	// The payload and the pointer in one step, as the KV writes them in
-	// one record (see [coord.Plane.Activate]).
+	// one record (see [coord.Plane.Activate]). THE INSTANT IS DECIDED UNDER
+	// THE SAME MUTEX as the compare, against the pointer being replaced —
+	// see [coord.ActivationAt].
+	var previous time.Time
+	if f.set {
+		previous = f.target.At
+	}
 	f.payload = payload
 	f.epoch++
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
-		At: req.At.UTC(), Summary: req.Summary,
+		At: coord.ActivationAt(req.At, previous), Summary: req.Summary,
 		CreatedBy: req.CreatedBy, CreatedByKind: req.CreatedByKind,
 		OperatorID: req.OperatorID,
 	}

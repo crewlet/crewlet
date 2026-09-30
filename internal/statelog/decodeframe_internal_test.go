@@ -56,7 +56,7 @@ func TestTheApplierIsHandedTheBodyAndTheTableTheFrame(t *testing.T) {
 		domain:   frameProbeDomain{},
 		verifier: verifier,
 		spec:     frameProbeDomain{}.Stream(),
-		gen:      1,
+		cursor:   Position{Stream: frameProbeDomain{}.Stream().Name, Generation: 1},
 		logger:   slog.New(slog.DiscardHandler),
 		now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 	}
@@ -101,6 +101,8 @@ func (frameProbeDomain) Envelope(payload []byte) (Envelope, error) {
 	return env, err
 }
 func (frameProbeDomain) InstallsGate(Envelope) bool { return false }
+func (frameProbeDomain) NodeGate(Envelope) bool     { return false }
+func (frameProbeDomain) FeedGroup() string          { return "" }
 func (frameProbeDomain) Tables() map[string]TableClass {
 	return map[string]TableClass{"probe_rows": Replicated}
 }

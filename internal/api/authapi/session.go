@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // directoryFor adapts this surface's own seam to the one
@@ -261,17 +262,30 @@ func (s *Service) endHeld(r *http.Request, presented session.Validation) {
 	// THE PERSON COMES OFF THE SAME VERIFIED BEARER as the lineage, and
 	// the record is filed under their bucket — where a node that cannot
 	// decode it has to say it is behind about them.
+	//
+	// A FRESH OPERATION, as every sign-out is ([iamdomain.SessionOpsRetention]
+	// says why): it was derived from the lineage, whose instant is when the
+	// session BEGAN, and a session subject's ledger rows go after an hour —
+	// so the sign-out of any session older than that carried an id the
+	// ledger could not vouch for, and was answered `unknown` without being
+	// published. A second sign-out is a second close of a closed session,
+	// which changes nothing.
+	opID := statelog.NewOpID(s.now(), "logout")
 	closed, err := s.writer.CloseSession(r.Context(), lineage, bearer.Person,
-		"signed out", "logout:"+lineage)
+		"signed out", opID)
 	switch {
+	case removed(err):
+		// THEIR PERSON WAS REMOVED, and every session of theirs with them.
+		log.InfoContext(r.Context(), "api_sign_out_person_removed",
+			"lineage", lineage)
+		return
 	case err != nil:
 		log.WarnContext(r.Context(), "api_sign_out_record_failed",
-			"error", err, "lineage", lineage)
+			"error", err, "lineage", lineage, "op_id", opID)
 	case !landed(closed):
 		// UNKNOWN IS NOT LANDED. Nothing can say whether the record is on
-		// the log, so nothing is said about it; the op id is derived from
-		// the lineage, so the next sign-out of this session is the same
-		// operation.
+		// the log, so nothing is said about it; the next sign-out of this
+		// session closes it again if this one did not.
 		log.WarnContext(r.Context(), "api_sign_out_record_unresolved",
 			"lineage", lineage, "op_id", closed.OpID)
 	case announce:
@@ -331,18 +345,24 @@ func (s *Service) LogoutEverywhere(w http.ResponseWriter, r *http.Request) {
 	// epoch under it is what every session exchanged from that token is
 	// checked against.
 	person := subjectOf(r, principal)
-	revoked, err := s.writer.Revoke(r.Context(), person,
-		"logout-all:"+person+":"+s.now().UTC().Format(time.RFC3339Nano),
+	opID := statelog.NewOpID(s.now(), "logout-all")
+	revoked, err := s.writer.Revoke(r.Context(), person, opID,
 		"signed out everywhere")
-	if err != nil {
+	switch {
+	case removed(err):
+		// THEIR PERSON WAS REMOVED, and every session they held went with
+		// them — this one included, whose cookie is gone above.
+		log.InfoContext(r.Context(), "api_sign_out_all_person_removed",
+			"person", person)
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeSessionRevoked)
+		return
+	case err != nil:
 		// REPORTED, unlike the single logout above, and the difference
 		// is what the caller asked for: clearing this browser's cookie
 		// does not end the OTHER sessions, so a failure here means the
 		// thing they asked for did not happen and they have to ask
 		// again.
-		log.WarnContext(r.Context(), "api_sign_out_all_failed",
-			"error", err, "person", person)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		writeFailed(w, r, "api_sign_out_all_failed", opID, err)
 		return
 	}
 	if !landed(revoked) {
@@ -465,12 +485,21 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 		httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
 		return
 	}
+	// A FRESH OPERATION, for the sign-out's reason above: derived from the
+	// lineage, the close of a session older than an hour carried an id the
+	// ledger could not vouch for.
+	opID := statelog.NewOpID(s.now(), "logout-one")
 	closed, err := s.writer.CloseSession(r.Context(), lineage, owner,
-		"signed out from another session", "logout-one:"+lineage)
-	if err != nil {
-		log.WarnContext(r.Context(), "api_sign_out_one_failed",
-			"error", err, "lineage", lineage)
-		httpjson.Unavailable(w, httpjson.CodeUnavailable, auth.RetryIdentity(err))
+		"signed out from another session", opID)
+	switch {
+	case removed(err):
+		// ITS PERSON WAS REMOVED, and the session with them: what the
+		// caller asked for is so, and there is nothing to announce.
+		s.clearIfPresented(w, r, lineage)
+		httpjson.Write(w, http.StatusOK, map[string]string{"status": "ended"})
+		return
+	case err != nil:
+		writeFailed(w, r, "api_sign_out_one_failed", opID, err)
 		return
 	}
 	if !landed(closed) {

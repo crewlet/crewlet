@@ -244,6 +244,12 @@ var subjectOf = map[string]subject{
 	// holds for `update_work_item`'s re-route.
 	"remove_work_item":  {kind: authz.KindTask, inTool: true},
 	"restore_work_item": {kind: authz.KindTask, inTool: true},
+
+	// AND SO IS A MOVE, for the same reason and against the same project:
+	// the item's own, read off the row. Moving work to another project is
+	// a re-route with a re-key, so it is the lead's of the project the
+	// item is LEAVING — see workmove.go.
+	"move_work_item": {kind: authz.KindTask, inTool: true},
 }
 
 // subject is what one tool is about, as the names of its own arguments.

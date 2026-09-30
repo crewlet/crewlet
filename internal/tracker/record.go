@@ -105,6 +105,11 @@ const (
 	MaxChecklistItems      = 64
 	MaxChecklistItemsTotal = 256
 
+	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
+	// every former key also has an alias row, and the applier never
+	// deletes one on a task apply.
+	MaxFormerKeys = 16
+
 	// MaxMentions bounds a comment's resolved mentions.
 	MaxMentions = 32
 
@@ -300,15 +305,27 @@ type Task struct {
 	Version       uint64 `json:"version"`
 	ScopedThrough uint64 `json:"scoped_through,omitempty"`
 
-	Key     string `json:"key"`
-	Project string `json:"project"`
+	Key        string   `json:"key"`
+	FormerKeys []string `json:"former_keys,omitempty"`
+	Project    string   `json:"project"`
 
 	// FiledUnit is IMMUTABLE and is a RECORD OF WHAT WAS TRUE: nothing
 	// rewrites it, and it may legitimately name a unit the chart no longer
 	// has, or a spelling it no longer uses.
+	//
+	// WHAT A WRITE STORES IS THE UNIT'S KEY — `org.Unit.Key`, resolved
+	// through [Units] by whoever holds the chart — so a rename does not
+	// move the work. WHAT A READ MATCHES IS BOTH OF THE UNIT'S SPELLINGS,
+	// through [unitSpellings], and that is the whole repair for the rows
+	// already written: these are REPLICATED rows derived from an ordered
+	// log, so nothing may rewrite them in place, and a repair record per
+	// task would rewrite history to say a team was called something it was
+	// not. The rows stay as they were written, the stored form is the key
+	// from here on, and every reader resolves the set.
 	FiledUnit string `json:"filed_unit,omitempty"`
 	// RoutingUnit is the mutable half — whose lead hears about this task
-	// NOW — and is the only unit field any write touches.
+	// NOW — and is the only unit field any write touches. It takes the
+	// key and is read back through the same resolution.
 	RoutingUnit string `json:"routing_unit,omitempty"`
 
 	// Parent and Depth: Depth is a HINT. The applier derives the real
@@ -393,10 +410,16 @@ type Task struct {
 	// It rides the DOCUMENT rather than a column of its own: nothing
 	// selects on it, and what the duty selects on is `merging`, which
 	// already has its partial index.
-	Merging       bool       `json:"merging,omitempty"`
-	MergeReparent bool       `json:"merge_reparent,omitempty"`
-	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
-	ArchivedBy    string     `json:"archived_by,omitempty"`
+	Merging       bool `json:"merging,omitempty"`
+	MergeReparent bool `json:"merge_reparent,omitempty"`
+
+	// Moving is true on a ROOT whose cross-project move has carried it
+	// and has not yet carried every task beneath it. See
+	// [TaskPatch.Moving].
+	Moving bool `json:"moving,omitempty"`
+
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	ArchivedBy string     `json:"archived_by,omitempty"`
 
 	Removed *Tombstone `json:"removed,omitempty"`
 
@@ -491,6 +514,17 @@ type BodyRevision struct {
 	At         time.Time  `json:"at"`
 }
 
+// KeyAlias is a row created by the commit that mints or moves a key.
+//
+// NEVER DELETED BY A TASK APPLY and never lowered from current by a later one:
+// a former key must go on resolving for the life of the deployment, because it
+// is pasted into chat and typed into tool calls.
+type KeyAlias struct {
+	Key     string `json:"key"`
+	TaskID  string `json:"task_id"`
+	Current bool   `json:"current,omitempty"`
+}
+
 // Counter is a project's key sequence, on its own subject so a mint never
 // contends with an edit to that project's settings.
 type Counter struct {
@@ -583,6 +617,7 @@ type TaskPatch struct {
 	Assignee    *string   `json:"assignee,omitempty"`
 	RoutingUnit *string   `json:"routing_unit,omitempty"`
 	Parent      *string   `json:"parent,omitempty"`
+	Project     *string   `json:"project,omitempty"`
 
 	// Mint is the counter value this record took, and THE ONLY WAY A
 	// PATCH MAY WRITE A KEY OR A RANK.
@@ -627,6 +662,23 @@ type TaskPatch struct {
 	// down, so the pair cannot drift into "not merging, but re-parenting".
 	Merging       *bool `json:"merging,omitempty"`
 	MergeReparent *bool `json:"merge_reparent,omitempty"`
+
+	// Moving is the cross-project move's own marker, and it does for that
+	// walk what Merging does for a merge's: it is set by the SAME append
+	// that moves the root, cleared by the move's last one, and it is what
+	// the duty selects on to finish a walk whose holder died.
+	//
+	// ON THE ROOT'S OWN MOVE rather than an append of its own before it,
+	// because the root landing in the target is the moment the subtree is
+	// split: a separate mark could land without the move behind it, or the
+	// move without the mark, and either is a state no reader can tell
+	// from the other.
+	//
+	// A NEW FIELD ON A SHARED RECORD, so a record carrying it is written at
+	// [moveMarkVersion] — see [recordVersionOf]. Merging is a version-1
+	// field every build reads; this one the build before it would drop,
+	// and that node would then hold a row the rest of the fleet does not.
+	Moving *bool `json:"moving,omitempty"`
 
 	// Reassignments is the hand-off counter this write leaves behind,
 	// decided by the WRITER inside its own snapshot — see
@@ -680,6 +732,7 @@ type TaskPatch struct {
 	Relations     *[]Relation                 `json:"relations,omitempty"`
 	Dependents    *[]string                   `json:"dependents,omitempty"`
 	Checklists    *[]Checklist                `json:"checklists,omitempty"`
+	FormerKeys    *[]string                   `json:"former_keys,omitempty"`
 
 	// Comment rides a task write, because a comment is a mutation of the
 	// task and shares its arbitration.
@@ -887,6 +940,16 @@ type Rollup struct {
 }
 
 // FieldConfig is everything a field's type may need.
+//
+// EVERY KEY HERE IS DECLARABLE, which is a property somebody has to keep: a
+// setting no surface can set and nothing reads is a knob a reader will one day
+// wire up to whatever they guess it meant. `Tracking` and `Rollup` stay
+// although the tracker refuses both — a refusal has to DECODE what it refuses,
+// and each names something this build could one day compute — while `Project`
+// went, because it named nothing: a field's project is the document it is
+// declared in, which is what [declaredFields] merges, and a second copy of it
+// on the declaration was written by nothing, read by nothing and checked by
+// nothing.
 type FieldConfig struct {
 	Options   []Option `json:"options,omitempty"`
 	Unit      string   `json:"unit,omitempty"`
@@ -896,7 +959,6 @@ type FieldConfig struct {
 	Time      bool     `json:"time,omitempty"`
 	Progress  string   `json:"progress,omitempty"`
 	Tracking  []string `json:"tracking,omitempty"`
-	Project   string   `json:"project,omitempty"`
 	Multi     bool     `json:"multi,omitempty"`
 	Rollup    *Rollup  `json:"rollup,omitempty"`
 }
@@ -921,18 +983,21 @@ type FieldDef struct {
 	// for every step somebody breaks a task into.
 	RequiredInSubtasks bool `json:"required_in_subtasks,omitempty"`
 
-	Default json.RawMessage `json:"default,omitempty"`
-	Config  FieldConfig     `json:"config,omitzero"`
+	Config FieldConfig `json:"config,omitzero"`
 
 	// Archived is ONE-WAY: values stay on their tasks, leave the value
 	// table, and a restored field is a NEW declaration — because a field
 	// that came back with its old id would silently re-admit values
 	// validated against a definition nobody has seen for a year.
-	Archived       bool   `json:"archived,omitempty"`
-	Pinned         bool   `json:"pinned,omitempty"`
-	HideFromAgents bool   `json:"hide_from_agents,omitempty"`
-	CreatedBy      string `json:"created_by,omitempty"`
+	Archived       bool `json:"archived,omitempty"`
+	Pinned         bool `json:"pinned,omitempty"`
+	HideFromAgents bool `json:"hide_from_agents,omitempty"`
 
+	// CreatedBy and CreatedAt are the WRITE's, never the caller's — see
+	// [stampFields]. They are served on every catalogue read, and nothing
+	// wrote them: a tag records who declared it and a field did not, which
+	// is the same column on the same kind of vocabulary.
+	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
@@ -1017,6 +1082,15 @@ type Project struct {
 	// by the chart apply, under the position guard below. A project
 	// genuinely can move between units, so Unit is not immutable — but it
 	// is not a field a tool writes either.
+	//
+	// UNIT IS THE UNIT'S KEY (`org.Unit.Key`: its id where the chart gave
+	// it one, its name where it did not) rather than its display name,
+	// because a task filed into this project takes its own filed unit from
+	// here and never rewrites it. A reader renders the key back to the
+	// team's current name through [Units], and being chart-owned this
+	// column re-settles on the current key at the next chart apply — which
+	// is why a company that adds an id holds the older spelling only in
+	// TASK rows, and only those need reading through [unitSpellings].
 	Name    string `json:"name"`
 	Purpose string `json:"purpose,omitempty"`
 	Unit    string `json:"unit,omitempty"`
@@ -1257,6 +1331,14 @@ type Position struct {
 const MaxCommitBytes = 1_279_262
 
 // KeyMint is a counter value a record took, carried on the record that uses it.
+//
+// ONE NUMBER, even on the root of a moving subtree. The root's record carried
+// the whole range's base and length once, for a repair that would complete an
+// abandoned walk by re-deriving every descendant's number from them; nothing
+// read the two fields, and the re-derivation could not have worked — the
+// subtree's membership moves while a walk is stopped. A move that stopped is
+// finished by its re-run or by the tracker duty, each on a FRESH range
+// ([Writer.followRoot]).
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
 	// and its rank is the n-th key of the create lattice.

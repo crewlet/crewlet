@@ -76,10 +76,11 @@ func PrefixIn(ctx context.Context, tx *sql.Tx, d Domain) (Prefix, error) {
 	if err != nil {
 		return Prefix{}, err
 	}
-	settled, _, _, err := t.readCursor(ctx, tx)
+	row, _, err := t.readCursor(ctx, tx)
 	if err != nil {
 		return Prefix{}, err
 	}
+	settled := row.at
 	retained, retains, err := t.oldestDeferred(ctx, tx)
 	if err != nil {
 		return Prefix{}, err

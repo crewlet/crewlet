@@ -160,7 +160,9 @@ describe("what the strip says of the chart", () => {
     node_id,
     counted: true,
     live: true,
-    domains: { chart: { generation, seq: applied_through, applied_through } },
+    domains: {
+      chart: { generation, seq: applied_through, applied_through, generation_state: "current" },
+    },
   });
   const report = (nodes: RetentionNode[]) => ({ nodes }) as unknown as RetentionReport;
 

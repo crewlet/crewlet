@@ -94,11 +94,21 @@ var ReproducibleTables = []string{
 }
 
 // MachineryTables are the log's own, excluded from the audit and from the
-// identity claim, and scrubbed out of every donated snapshot.
+// identity claim.
 //
-// A DONOR'S OPERATION LEDGER IS THE SHARPEST OF THEM: an adopted peer's ops
-// table would let this node resolve its own ambiguous publish against somebody
-// else's history, which is a write reported as landed that never happened.
+// THEY DO NOT ALL TRAVEL. The deferred record and its scope are this node's
+// own verdict about bytes this build could not decode, and are scrubbed out of
+// every donated snapshot. The operation ledger (iam_ops) TRAVELS, and
+// [Domain.Tables] classes it Divergent to say so: its rows are what every
+// node's applier writes from the same records — only `applied_at`, this node's
+// own clock, differs — so the donor's are exactly the ones this node would have
+// written, and an adopter without them cannot tell a first attempt from a retry
+// of anything the donor applied. It used to be scrubbed as "the sharpest" of
+// these, on the reading that a donor's ledger would resolve this node's
+// ambiguous publish against somebody else's history; but an operation id names
+// one operation fleet-wide, so the donor's row for it IS its history, and
+// without the row the adopter answered a turn's first attempt `unknown` or
+// decided a landed one again. See [statelog.Domain.OpsTable].
 var MachineryTables = []string{
 	"iam_ops", "iam_log_deferred", "iam_log_deferred_scope",
 }

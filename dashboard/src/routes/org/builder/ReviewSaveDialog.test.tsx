@@ -87,7 +87,9 @@ describe("the save", () => {
       project: "",
       space: "",
     });
-    expect(write.headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{32}-1$/);
+    expect(write.headers["Idempotency-Key"]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.builder-save\.1$/,
+    );
     // The chart was read once more before the first write, and nothing else was written.
     expect(sent.slice(0, sent.indexOf(write)).some((r) => r.path === "/chart")).toBe(true);
     expect(engine.chartWrites()).toEqual([write]);
@@ -131,7 +133,9 @@ describe("the save", () => {
     expect(settings.headers["Content-Type"]).toBe("application/merge-patch+json");
     const { _summary, ...patch } = settings.body as { _summary: string };
     expect(patch).toEqual({ name: "Acme Labs" });
-    expect(_summary).toMatch(/ \(write [0-9a-f]{32}\)$/);
+    expect(_summary).toMatch(
+      / \(write [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\)$/,
+    );
     // THE CHART FIRST: a settings revision that names the company's new name
     // is what re-onboards every seat, so it lands last.
     const seat = engine.requests.findIndex(isSeatWrite("ceo"));
@@ -294,7 +298,9 @@ describe("a write whose answer never arrives", () => {
     // Nothing can be edited while the outcome is unknown, and the kept log
     // is marked with the save.
     expect(screen.getByText("read only")).toBeDefined();
-    expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
+    expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
@@ -392,11 +398,15 @@ describe("a write whose answer never arrives", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(engine.requests.filter(isSeatWrite("ceo"))).toHaveLength(1));
       // Marked before it went, so a reload now would find it too.
-      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
       cleanup();
       lose();
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
       engine.script = () => null;
     }
 

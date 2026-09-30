@@ -321,6 +321,28 @@ type fakeWriter struct {
 	// refusals is what a named call REFUSES with — a record's own decide
 	// meeting what the surface's early read could not see.
 	refusals map[string]error
+
+	// unvouched names the calls whose `unknown` this node's ledger cannot
+	// vouch for.
+	unvouched map[string]bool
+
+	// collapsed names the calls the framework answers from its ledger, as
+	// a retry of an operation that had already landed: applied, with
+	// nothing this call's decide computed — a credential set's Apply is
+	// never run.
+	collapsed map[string]bool
+
+	// ops is the operation id every call was asked under, by call, in
+	// order.
+	ops map[string][]string
+}
+
+// op records the operation id one call was asked under.
+func (w *fakeWriter) op(what, opID string) {
+	if w.ops == nil {
+		w.ops = map[string][]string{}
+	}
+	w.ops[what] = append(w.ops[what], opID)
 }
 
 func (w *fakeWriter) did(what string) (statelog.Result, error) {
@@ -338,6 +360,9 @@ func (w *fakeWriter) did(what string) (statelog.Result, error) {
 	result := statelog.Result{Outcome: outcome}
 	if outcome != statelog.OutcomeUnknown {
 		result.Position = statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 7}
+		result.Collapsed = w.collapsed[what]
+	} else {
+		result.Unvouched = w.unvouched[what]
 	}
 	return result, nil
 }
@@ -346,6 +371,7 @@ func (w *fakeWriter) Enrol(_ context.Context, in iamdomain.Enrolment) (
 	statelog.Result, error) {
 
 	w.enrolled = in
+	w.op("enrol", in.OpID)
 	return w.did("enrol")
 }
 
@@ -353,12 +379,14 @@ func (w *fakeWriter) UpdatePerson(_ context.Context, in iamdomain.PersonUpdate) 
 	statelog.Result, error) {
 
 	w.updated = in
+	w.op("update", in.OpID)
 	return w.did("update")
 }
 
 func (w *fakeWriter) SetStage(_ context.Context, _ string, _ iam.Stage,
-	_, _ string) (statelog.Result, error) {
+	opID, _ string) (statelog.Result, error) {
 
+	w.op("stage", opID)
 	return w.did("stage")
 }
 
@@ -366,7 +394,8 @@ func (w *fakeWriter) SetCredentials(_ context.Context, in iamdomain.CredentialSe
 	statelog.Result, error) {
 
 	w.creds = in
-	if in.Apply != nil {
+	w.op("credentials", in.OpID)
+	if in.Apply != nil && !w.collapsed["credentials"] {
 		held, err := in.Apply(w.held)
 		if err != nil {
 			return statelog.Result{}, err
@@ -385,34 +414,44 @@ func (w *fakeWriter) MintToken(_ context.Context, in iamdomain.TokenMint) (
 	iamdomain.TokenMinted, error) {
 
 	w.minted = in
+	w.op("mint", in.OpID)
 	at, err := w.did("mint")
+	if err == nil && at.Collapsed {
+		// THE DOMAIN'S OWN ANSWER to a collapsed mint: what it granted is
+		// the decide's, and none of it is handed back.
+		return iamdomain.TokenMinted{Result: at}, iamdomain.ErrCollapsed
+	}
 	return iamdomain.TokenMinted{Result: at, Grants: in.Grants,
 		Colleague: in.Colleague, ExpiresAt: in.ExpiresAt}, err
 }
 
 func (w *fakeWriter) Claim(_ context.Context, kind iamdomain.ObjectKind,
-	_, _, _ string) (statelog.Result, error) {
+	_, _, opID string) (statelog.Result, error) {
 
+	w.op("claim:"+string(kind), opID)
 	return w.did("claim:" + string(kind))
 }
 
 func (w *fakeWriter) Release(_ context.Context, kind iamdomain.ObjectKind,
-	_, holder, _, _ string) (statelog.Result, error) {
+	_, holder, opID, _ string) (statelog.Result, error) {
 
 	w.releasedFrom = append(w.releasedFrom, holder)
+	w.op("release:"+string(kind), opID)
 	return w.did("release:" + string(kind))
 }
 
-func (w *fakeWriter) Rename(_ context.Context, person, from, to, _, _ string) (
+func (w *fakeWriter) Rename(_ context.Context, person, from, to, opID, _ string) (
 	statelog.Result, error) {
 
+	w.op("rename", opID)
 	w.moved = append(w.moved, move{"login", person, from, to})
 	return w.did("rename")
 }
 
-func (w *fakeWriter) Rebind(_ context.Context, person, from, to, _, _ string) (
+func (w *fakeWriter) Rebind(_ context.Context, person, from, to, opID, _ string) (
 	statelog.Result, error) {
 
+	w.op("rebind", opID)
 	w.moved = append(w.moved, move{"seat", person, from, to})
 	return w.did("rebind")
 }
@@ -424,6 +463,7 @@ func (w *fakeWriter) Invite(_ context.Context, in iamdomain.InviteMint) (
 	iamdomain.InviteIssued, error) {
 
 	w.invited = in
+	w.op("invite", in.OpID)
 	result, err := w.did("invite")
 	// THE REAL DERIVATION, under a fixture key: the id is the operation's,
 	// and a case about a retry holds the surface to handing back the same
@@ -458,21 +498,24 @@ func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
 	return nil
 }
 
-func (w *fakeWriter) Revoke(_ context.Context, _, _, _ string) (
+func (w *fakeWriter) Revoke(_ context.Context, _, opID, _ string) (
 	statelog.Result, error) {
 
+	w.op("revoke", opID)
 	return w.did("revoke")
 }
 
-func (w *fakeWriter) InvalidateAll(_ context.Context, _, _ string) (
+func (w *fakeWriter) InvalidateAll(_ context.Context, opID, _ string) (
 	statelog.Result, error) {
 
+	w.op("invalidate", opID)
 	return w.did("invalidate")
 }
 
-func (w *fakeWriter) Remove(_ context.Context, _, _, _ string) (
+func (w *fakeWriter) Remove(_ context.Context, _, opID, _ string) (
 	statelog.Result, error) {
 
+	w.op("remove", opID)
 	return w.did("remove")
 }
 
@@ -1299,8 +1342,11 @@ func TestACreateWhoseBindIsRefusedSaysThePersonExists(t *testing.T) {
 // publish carrying it inside its duplicate window into the first. It used to
 // be derived from the person alone, so a second, DIFFERENT edit of somebody
 // inside two minutes was acknowledged as the first and never happened. With no
-// Idempotency-Key every request is its own operation; with one, the caller's
-// key is the id, which is what makes a retry after `unknown` land once.
+// Idempotency-Key every request is its own operation; with one, the SAME
+// request is one operation however often it is sent, which is what makes a
+// retry after `unknown` land once — and another request under the key is
+// another, rather than the first one's answered from the ledger with nothing
+// of it written.
 func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
@@ -1326,8 +1372,20 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 		t.Errorf("two different edits of one person were published under one "+
 			"op id %q, so the broker acknowledges the second as the first", first)
 	}
-	if again := patch("retry-7", []iam.Grant{iam.GrantStateRead}); again != "retry-7" {
-		t.Errorf("a request carrying an Idempotency-Key was published as %q", again)
+	key := statelog.NewOpID(time.Now(), "people-update")
+	keyed := patch(key, []iam.Grant{iam.GrantStateRead})
+	if !strings.HasPrefix(keyed, key+".") {
+		t.Errorf("a request carrying the Idempotency-Key %q was published as "+
+			"%q, which is not a step of it", key, keyed)
+	}
+	if again := patch(key, []iam.Grant{iam.GrantStateRead}); again != keyed {
+		t.Errorf("the same request under the same key was published as %q "+
+			"and then %q: a retry would land twice", keyed, again)
+	}
+	if other := patch(key, []iam.Grant{iam.GrantPeopleManage}); other == keyed {
+		t.Errorf("another edit under the same key was the first one's "+
+			"operation %q: the ledger answers it as landed and writes "+
+			"nothing of it", keyed)
 	}
 }
 

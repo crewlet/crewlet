@@ -101,6 +101,19 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
+	// THE LEDGER TRAVELS. Scrubbed out of a snapshot, it leaves the node
+	// that adopts one unable to tell a first attempt from a retry of
+	// anything the donor applied, and the only safe answer to both is
+	// `unknown` — which is a recovering node refusing its own backlog.
+	if ops := c.Domain.OpsTable(); ops != "" {
+		if class, held := tables[ops]; !held || class != statelog.Divergent {
+			add("%s classes its operation ledger %s as %v, and it must be "+
+				"divergent: a ledger that does not travel inside a snapshot "+
+				"leaves every node that adopts one answering `unknown` for "+
+				"operations its donor could have answered", name, ops, class)
+		}
+	}
+
 	// THE TABLE NAMES THE FRAMEWORK INTERPOLATES ARE PLAIN IDENTIFIERS. A
 	// table name is not a value a driver can bind, so the alternative to
 	// checking is a domain that can name a table with a quote in it.

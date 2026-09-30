@@ -6,8 +6,8 @@
 
 import { afterEach, expect, test, vi } from "vitest";
 import { isMintedKey, mintKey } from "./model/keys.ts";
-import { newWriteId } from "./model/writes.ts";
-import { randomKeys, restTransport } from "./runtime.ts";
+import { isWriteId } from "./model/writes.ts";
+import { newWriteId, randomKeys, restTransport } from "./runtime.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -134,14 +134,31 @@ test("the dry run and the save carry exactly the request the model built", async
   expect(init.body).toBe(JSON.stringify({ name: "Acme" }));
 });
 
+// A WRITE ID IS AN OPERATION ID IN THE ENGINE'S GRAMMAR (statelog.NewOpID),
+// carrying the instant it was minted: the chart surface refuses a key that is
+// not one and reads the instant back out of it to decide whether its ledger
+// can vouch for a retry. Two saves never share one.
+test("a write id is minted in the engine's grammar at its instant, and does not repeat", () => {
+  const at = Date.UTC(2026, 8, 30, 12, 0, 0, 250);
+  const id = newWriteId(at, () => new Uint8Array(10).fill(0xab));
+  expect(isWriteId(id)).toBe(true);
+  expect(parseInt(id.replace(/-/g, "").slice(0, 12), 16)).toBe(at);
+  const seen = new Set<string>();
+  for (let i = 0; i < 200; i++) {
+    const fresh = newWriteId();
+    expect(isWriteId(fresh)).toBe(true);
+    seen.add(fresh);
+  }
+  expect(seen.size).toBe(200);
+});
+
 // The model refuses a token it cannot use, and a token that repeats would
-// give two nodes one key or two saves one write id.
-test("random tokens are accepted as keys and write ids, and do not repeat", () => {
+// give two nodes one key.
+test("random tokens are accepted as keys, and do not repeat", () => {
   const seen = new Set<string>();
   for (let i = 0; i < 200; i++) {
     const token = randomKeys.next();
     expect(() => mintKey({ next: () => token })).not.toThrow();
-    expect(() => newWriteId({ next: () => token })).not.toThrow();
     seen.add(token);
   }
   expect(seen.size).toBe(200);

@@ -96,6 +96,10 @@ type writer struct {
 	calls   []string
 	outcome statelog.Outcome
 	err     error
+
+	// unvouched makes an `unknown` one this node's ledger cannot vouch for.
+	unvouched bool
+
 	opIDs   []string
 	batches []chart.Batch
 	imports [][]chart.Edge
@@ -112,7 +116,8 @@ func (w *writer) result(verb, opID string) (chart.WriteResult, error) {
 		outcome = statelog.OutcomeApplied
 	}
 	return chart.WriteResult{
-		Result: statelog.Result{Outcome: outcome, OpID: opID},
+		Result: statelog.Result{Outcome: outcome, OpID: opID,
+			Unvouched: w.unvouched && outcome == statelog.OutcomeUnknown},
 	}, nil
 }
 
@@ -1049,20 +1054,21 @@ func TestAnUnknownOutcomeHandsBackTheIdThatMakesARetrySafe(t *testing.T) {
 		t.Fatalf("decode: %v: %s", err, rec.Body)
 	}
 	got, _ := body["op_id"].(string)
-	if got == "" || got != r.writer.opIDs[0] {
-		t.Fatalf("op_id = %q, want the id the write was published under (%v)",
-			got, r.writer.opIDs)
+	if got == "" || !strings.HasPrefix(r.writer.opIDs[0], got+".") {
+		t.Fatalf("op_id = %q, want the key the write was published under a "+
+			"step of (%v)", got, r.writer.opIDs)
 	}
-	// AND SENDING IT BACK REUSES IT. A route that minted a fresh one
-	// anyway would carry the id for decoration.
+	// AND SENDING IT BACK REUSES THE OPERATION. A route that minted a fresh
+	// one anyway would carry the id for decoration.
 	r.writer.outcome = statelog.OutcomeApplied
 	rec = patchWith(r.mux, "/chart/units/engineering", `{"name":"E"}`,
 		map[string]string{chartapi.IdempotencyHeader: got})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("the retry answered %d: %s", rec.Code, rec.Body)
 	}
-	if r.writer.opIDs[1] != got {
-		t.Errorf("the retry published under %q, want %q", r.writer.opIDs[1], got)
+	if r.writer.opIDs[1] != r.writer.opIDs[0] {
+		t.Errorf("the retry published under %q, want the first attempt's %q",
+			r.writer.opIDs[1], r.writer.opIDs[0])
 	}
 }
 

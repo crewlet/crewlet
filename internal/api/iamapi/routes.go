@@ -1,8 +1,11 @@
 package iamapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -175,10 +178,21 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return out, true
 }
 
-// opIDFor is the operation id one gesture is published under.
+// operation is one gesture's two operation ids: the KEY a caller holds — the
+// one every answer hands back as `op_id` and a retry sends as the
+// Idempotency-Key — and the id the gesture is PUBLISHED under, derived from the
+// key and the request ([Service.opIDFor]), from which every step of a
+// sequence derives its own ([statelog.StepOpID]).
+type operation struct {
+	key string
+	id  string
+}
+
+// opIDFor is the [operation] one gesture is published under, answering false
+// once it has refused the caller's key.
 //
-// THE CALLER'S OWN WHERE THEY SENT ONE, which is what makes a retry after an
-// `unknown` land once: the ledger resolves it, and a fresh id per attempt
+// THE CALLER'S OWN KEY WHERE THEY SENT ONE, which is what makes a retry after
+// an `unknown` land once: the ledger resolves it, and a fresh id per attempt
 // would defeat the mechanism that exists for exactly this case.
 //
 // AND A FRESH ONE PER REQUEST WHERE THEY DID NOT. An op id is the identity of
@@ -189,11 +203,107 @@ func readBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 // back in, or a second company-wide invalidation was acknowledged as the first
 // and silently never happened. A request with no key is a new operation; the
 // key is how a caller says it is not.
-func (s *Service) opIDFor(r *http.Request, derived string) string {
-	if given := strings.TrimSpace(r.Header.Get(IdempotencyHeader)); given != "" {
-		return given
+//
+// # In the engine's grammar, both ways
+//
+// The publisher vouches for a retry by the instant its operation id carries
+// ([statelog.OpMintedAt]), against the point this node's ledger may have lost
+// rows from. The fresh id was `<name>:<uuid4>` and a caller's key was taken as
+// sent, and neither carried an instant: read as minted at the epoch, every such
+// write was answered `unknown` without being published once the ledger had
+// swept anything — and every step the domain derives from the id
+// ([statelog.StepOpID]) inherited the same nothing. So a fresh key is minted
+// through [statelog.NewOpID], and a caller's is held to
+// [statelog.CheckCallerOpID] and refused naming it ([refuseKey]).
+//
+// # The published id is bound to the request
+//
+// The ledger answers an operation it already holds BEFORE the write is decided
+// ([statelog.Result.Collapsed]), so a gesture published under the key itself
+// made the same key sent with ANOTHER request — other grants for the same
+// person, a suspension where an unknown grant came back, somebody else's
+// sessions — the first request's operation: answered `applied` from the
+// ledger, with nothing of the second written. That is an administrator's
+// change reported as made and silently dropped, and `crewlet iam` sends
+// whatever key it is given with whatever subcommand it is given. So the
+// gesture is published under a STEP of the key named for the verb and a digest
+// of the request — the object its path names, its query and its decoded body
+// — which makes the same request the same operation however often it is sent,
+// and any other request under the key an operation of its own that lands as
+// asked. A step, rather than an id derived afresh, because it keeps the key as
+// its prefix, so the trail finds every write a key made by the key the caller
+// holds, and it inherits the key's instant, which is what the ledger vouches
+// for.
+//
+// name is the gesture's verb, which a reader of the ledger finds the operation
+// by; it never holds a dot, which in the grammar begins a step. asks is the
+// request's decoded body, nil for a route that takes none.
+func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
+	asks any) (operation, bool) {
+
+	key := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
+	switch {
+	case key == "":
+		key = statelog.NewOpID(s.now(), "")
+	default:
+		if err := statelog.CheckCallerOpID(key); err != nil {
+			refuseKey(w, err)
+			return operation{}, false
+		}
 	}
-	return derived + ":" + uuid.NewString()
+	digest, err := requestDigest(r, asks)
+	if err != nil {
+		// A BODY THAT DECODED AND WILL NOT ENCODE is a type this surface
+		// declared wrongly, not the caller's to fix.
+		log.ErrorContext(r.Context(), "api_iam_request_digest_failed",
+			"error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return operation{}, false
+	}
+	return operation{key: key, id: statelog.StepOpID(key, name, digest)}, true
+}
+
+// requestDigest is what binds a gesture's operation to its request: the path
+// (the object), the query and the decoded body, in a form one request always
+// produces — the body re-encoded from its decoded value, so the same fields in
+// another order or spacing are the same request.
+//
+// SIXTEEN HEX DIGITS, 64 bits of SHA-256: it tells an accidental change of
+// request apart with certainty, which is all it is for — a caller can mint any
+// key it likes, so this is not a credential — in an id that is published in
+// every record and ledger row the gesture makes.
+func requestDigest(r *http.Request, asks any) (string, error) {
+	body, err := json.Marshal(asks)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	for _, part := range [][]byte{[]byte(r.URL.Path),
+		[]byte(r.URL.Query().Encode()), body} {
+		_, _ = h.Write(part)
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:requestDigestLen], nil
+}
+
+// requestDigestLen is how many hex digits of a request's digest its operation
+// carries — see [requestDigest].
+const requestDigestLen = 16
+
+// refuseKey answers an `Idempotency-Key` this surface cannot publish under:
+// `400 op_id_invalid`, naming the header and the rule, with nothing read or
+// written — a key outside the grammar, and a create's key carrying anything
+// after its uuid7 ([Service.createKey]).
+//
+// [httpjson.CodeOpIDInvalid], THE ONE CODE EVERY SURFACE REFUSES A CALLER'S
+// OPERATION ID WITH — the node gate's `?op_id=`, the org chart's and the human
+// write surface's keys, this one — so a client branches on one spelling
+// whichever route it sent the id to. It was `invalid_input`, from before the
+// table carried a code of its own for it. The field still names the header,
+// and the detail says which rule the key broke.
+func refuseKey(w http.ResponseWriter, err error) {
+	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
+		httpjson.Detail{"field": IdempotencyHeader, "detail": err.Error()})
 }
 
 // createKey is the operation key a CREATE is published under — the caller's
@@ -210,20 +320,27 @@ func (s *Service) opIDFor(r *http.Request, derived string) string {
 // somebody else's: the documented retry of an unknown answered 409 against its
 // own first attempt, and what that attempt created could not be recovered.
 //
-// A UUID7 AND NOTHING ELSE, because every id this estate creates is one and its
-// instant is the creation — a key that is not one is refused naming the rule,
-// rather than accepted as the other routes' opaque keys are.
+// A BARE UUID7 AND NOTHING ELSE, because every id this estate creates is one
+// and its instant is the creation — so a create's key is an operation id in the
+// engine's grammar ([statelog.CheckCallerOpID], which every other route here
+// holds its key to) that carries no NAME after the uuid: the id it seeds is
+// derived from the uuid alone ([iamdomain.CreatedPersonID]), and a name there
+// would be a second key naming the same person. The fresh one is minted
+// through [statelog.NewOpID] with no name, for the same reason.
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	given := strings.TrimSpace(r.Header.Get(IdempotencyHeader))
 	if given == "" {
-		return uuid.Must(uuid.NewV7()).String(), true
+		return statelog.NewOpID(s.now(), ""), true
+	}
+	if err := statelog.CheckCallerOpID(given); err != nil {
+		refuseKey(w, err)
+		return "", false
 	}
 	if id, err := uuid.Parse(given); err != nil || id.Version() != 7 {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": "the " + IdempotencyHeader + " on a " +
-				"create is the seed of the id it creates, so it must be a " +
-				"uuid7 — send back the op_id the first attempt answered with, " +
-				"or omit it for a new create"})
+		refuseKey(w, fmt.Errorf("the %s on a create is the seed of the id it "+
+			"creates, so it is a bare uuid7 with nothing after it — send back "+
+			"the op_id the first attempt answered with, or omit it for a new "+
+			"create", IdempotencyHeader))
 		return "", false
 	}
 	return given, true
@@ -257,12 +374,18 @@ func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 // while any one record is only pending here, and a step nobody can confirm
 // makes the gesture unconfirmed. The position is the latest any step landed
 // at, which is what a caller reads at to see all of it.
+//
+// AN UNKNOWN STEP THIS NODE'S LEDGER CANNOT VOUCH FOR makes the whole one it
+// cannot vouch for ([statelog.Result.Unvouched]): the gesture retried here
+// meets that step's silence again, so the answer has to send the caller to
+// another node rather than back here.
 func sequence(opID string, steps ...statelog.Result) statelog.Result {
 	out := statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}
 	for _, step := range steps {
 		switch {
 		case step.Outcome == statelog.OutcomeUnknown || !step.Outcome.Valid():
 			out.Outcome = statelog.OutcomeUnknown
+			out.Unvouched = out.Unvouched || step.Unvouched
 		case step.Outcome == statelog.OutcomePending &&
 			out.Outcome == statelog.OutcomeApplied:
 			out.Outcome = statelog.OutcomePending
@@ -280,6 +403,24 @@ func sequence(opID string, steps ...statelog.Result) statelog.Result {
 func landed(result statelog.Result) bool {
 	return result.Outcome == statelog.OutcomeApplied ||
 		result.Outcome == statelog.OutcomePending
+}
+
+// ownLanding reports whether a write landed AS THIS CALL'S OWN: [landed], and
+// not [statelog.Result.Collapsed] — the one condition under which what its
+// decide computed describes the record that landed, and under which this
+// surface announces it.
+//
+// # Why a collapsed write is answered and never announced
+//
+// A retry under the key an earlier answer handed back is answered from the
+// ledger before this call's decide runs, so a verdict the decide reaches — a
+// credential found and revoked, the set a reset cleared — is empty, and the
+// write is announced by the call that MADE it, where that call saw a definite
+// outcome of its own ([iamdomain.Writer]'s own rule). Announced again here, one
+// reset was two rows in the trail; announced from an empty verdict, a
+// revocation that landed was reported as "nothing changed".
+func ownLanding(result statelog.Result) bool {
+	return landed(result) && !result.Collapsed
 }
 
 // answerWrite renders one identity write's outcome, `200` on success.
@@ -317,14 +458,21 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //     node, and the only safe retry is the SAME id, sent back as the
 //     Idempotency-Key.
 //
-// THE OP ID is the refusal's own where the framework named one, the write's
-// where it answered, and otherwise the one this route published under.
+// # The op id is always the GESTURE's KEY
+//
+// It is the one a retry sends back as the Idempotency-Key — the key every id
+// this gesture publishes under derives from ([Service.opIDFor], and each step
+// of a sequence from that, [statelog.StepOpID]) — and never an id derived from
+// it, although a step's refusal and a step's result each name their own: an
+// id derived from the key, sent back as a key, is a NEW gesture, every one of
+// whose steps derives an id the first attempt never used — so the steps that
+// had landed were made again, as operations the ledger had never seen. The id
+// a refusal names goes to the log, where the trail finds it under the key it
+// begins with. A create and a mint are published under their key itself, so
+// for them the two are one.
 func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	result statelog.Result, err error, success int, extra map[string]any) {
 
-	if result.OpID != "" {
-		opID = result.OpID
-	}
 	var (
 		claimed *iamdomain.ErrClaimed
 		refused *statelog.Unavailable
@@ -381,17 +529,26 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		refuse(http.StatusConflict, httpjson.CodeStale,
 			httpjson.Detail{"detail": err.Error()})
 		return
+	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
+		// THE PERSON WAS REMOVED — between the read this route decided on
+		// and the record — and nothing will ever write them again: the
+		// person this route names does not exist, which is a 404 and not a
+		// 503 sending an administrator to find a node that will take it.
+		refuse(http.StatusNotFound, httpjson.CodeNotFound,
+			httpjson.Detail{"detail": err.Error(), "op_id": opID})
+		return
 	case errors.Is(err, statelog.ErrUnavailable):
-		if errors.As(err, &refused) && refused.OpID != "" {
-			opID = refused.OpID
-		}
 		// THE REFUSAL'S OWN HINT: the identity estate's two seconds for
 		// one that clears here, and NONE for one no wait clears — a
 		// record too large, a full log, a refusal the broker named, an
 		// evicted node — so a client is not sent back to be refused the
 		// same way.
+		step := opID
+		if errors.As(err, &refused) && refused.OpID != "" {
+			step = refused.OpID
+		}
 		log.WarnContext(r.Context(), "api_iam_write_unavailable",
-			"op_id", opID, "error", err)
+			"op_id", opID, "step_op_id", step, "error", err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(err),
 			withExtra(extra, httpjson.Detail{"detail": err.Error(), "op_id": opID}))
 		return
@@ -424,7 +581,8 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		}
 		httpjson.Write(w, http.StatusAccepted, body)
 	default:
-		log.WarnContext(r.Context(), "api_iam_write_unresolved", "op_id", opID)
+		log.WarnContext(r.Context(), "api_iam_write_unresolved", "op_id", opID,
+			"unvouched", result.Unvouched)
 		detail := httpjson.Detail{
 			"detail": "this node cannot establish what happened to this " +
 				"change. Retry it with the SAME operation id — send it back " +
@@ -432,7 +590,22 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 				"one would defeat the ledger that makes the retry safe.",
 			"op_id": opID,
 		}
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, auth.RetryIdentity(nil),
+		retry := auth.RetryIdentity(nil)
+		if result.Unvouched {
+			// THIS NODE'S LEDGER CANNOT VOUCH FOR IT, so nothing was
+			// published and the same request asked here answers the same
+			// way until the change reaches this node: no Retry-After, which
+			// a client obeys by asking again, and another node named.
+			retry = 0
+			detail["detail"] = "this node's operation ledger cannot vouch " +
+				"for this change, so the same request asked here answers the " +
+				"same way until the change reaches this node. Read whether it " +
+				"landed, or send it with the SAME " + IdempotencyHeader +
+				" to another node; never under a fresh one, which is a second " +
+				"change if the first one landed."
+			detail["unvouched"] = true
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, retry,
 			withExtra(extra, detail))
 	}
 }

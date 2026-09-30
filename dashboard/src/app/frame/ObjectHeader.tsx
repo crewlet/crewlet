@@ -1,7 +1,7 @@
 /**
  * The header of an object — on its page, in a peek, and in a hover card.
  *
- * ONE COMPONENT, because the reader scans the same six facts in the same order
+ * ONE COMPONENT, because the reader scans the same facts in the same order
  * wherever the object appears. A page that put status first and a peek that
  * put the assignee first would make the reader re-learn the object every time
  * it changed frame.
@@ -11,7 +11,27 @@
  * mostly written by agents: "in progress" is a different fact from "moved to
  * in progress by ada, eleven minutes ago, in turn ↗" — where the arrow is
  * the design system's own `arrow_outward`, the one drawing every "this leaves
- * the page" in the product is made of.
+ * the page" in the product is made of. [SetByLine] draws it, and the
+ * properties rail draws the same component: one wording, one markup, and one
+ * place to fix the glyph that used to fall off the end of it.
+ *
+ * # A HEADER AND A RAIL STACKED IN ONE COLUMN ARE ONE READING
+ *
+ * `facts` is the PAGE's slot. On a page the properties rail sits BESIDE the
+ * header, in a side column, so the header's line and the rail's rows are two
+ * readings a reader chooses between — the line to scan in a second, the rows
+ * to study. In a peek both are in ONE 420px column, the rail a hundred pixels
+ * under the header, and there the same facts twice is not a second reading:
+ * it is the same answer given twice before the description has been reached.
+ * So a peek whose body is a properties rail passes NO facts, and the rail
+ * states every property once. See `routes/work/WorkItem.tsx` for the worked
+ * case.
+ *
+ * THE CALLER DECIDES, and this component does not drop `facts` on `size`.
+ * Plenty of peeks here have no rail under them at all — a unit, a revision, a
+ * schedule — and for those the fact line is the only place the object's own
+ * values are ever stated. A component that swallowed them by size would take
+ * a rule about one frame's BODY and apply it to every frame's header.
  */
 
 import type { ReactNode } from "react";
@@ -30,6 +50,80 @@ export interface SetBy {
   at?: string;
   /** Rendered as the relative time; the caller formats it. */
   ago?: string;
+  /**
+   * The change this names EMPTIED the field rather than filling it.
+   *
+   * The one case in which provenance belongs under a value that is not there.
+   * "Nobody has set a due date" and "ada took the due date off yesterday" are
+   * different facts about the same blank cell, and only the second one is
+   * something the change log actually witnessed — see [SetByLine], which is
+   * what turns it into "cleared by" instead of "set by".
+   */
+  cleared?: boolean;
+}
+
+/**
+ * Who set a value, in the one wording the whole product uses.
+ *
+ * TWO COPIES OF THIS EXISTED — the fact line's said "set by ada · 2h ago ·
+ * turn ↗" and the properties rail's said "ada · 2h ago · turn ↗", the same
+ * provenance phrased two ways on ONE screen, where a bare handle under a
+ * value reads as who wrote the ROW rather than as who set the field. Written
+ * twice a wording drifts with nothing to catch it, which is the shape
+ * `textcut` and `api/httpjson` were each written to end.
+ *
+ * `fields` is how a RUN of properties shares one line: the rail coalesces
+ * consecutive rows set by one actor in one turn at one instant and names them
+ * here ("Status, Priority and Type · set by …"), because a create sets six
+ * fields at once and six identical by-lines under six rows is the same
+ * sentence copied out six times. It is the rule
+ * [A row is not a row](../../../../docs/reference/dashboard-design.md) already
+ * states for a feed: rows under one heading do not each repeat the actor.
+ */
+export function SetByLine({
+  setBy,
+  fields,
+  className,
+}: {
+  setBy: SetBy;
+  /** The properties this one line covers, when it covers more than its own. */
+  fields?: string[];
+  className: string;
+}) {
+  return (
+    <span className={className}>
+      {fields && fields.length > 1 && <>{listOf(fields)} · </>}
+      {setBy.cleared ? "cleared by " : "set by "}
+      {setBy.actor}
+      {setBy.ago ? ` · ${setBy.ago}` : ""}
+      {setBy.turnId && (
+        <>
+          {" · "}
+          {/* THE LINK IS ONE TOKEN, and `.setby-turn` is what keeps it one:
+              the glyph is a `display: block` svg by the base reset, and a
+              block box inside an inline anchor splits the anchor around it,
+              so the arrow landed on a line of its own at EVERY width. A
+              `white-space` cannot suppress that — `.t-link` already carries
+              one — and only a formatting context of the anchor's own can. */}
+          <a className="t-link setby-turn" href={href(["activity", "turns", setBy.turnId])}>
+            turn <ArrowOutwardGlyph size="xs" />
+          </a>
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
+ * "Status", "Status and Priority", "Status, Priority and Type".
+ *
+ * BY HAND RATHER THAN `Intl.ListFormat`, which is locale-keyed: `en-US`
+ * writes the Oxford comma and `en-GB` does not, so the string this product
+ * renders would depend on the reader's browser and no test could name it.
+ */
+function listOf(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 export interface Fact {
@@ -78,21 +172,10 @@ export function FactLine({ facts }: { facts: Fact[] }) {
           {fact.note && <span className="fact-note">{fact.note}</span>}
           {/* NEVER "set by —". A fact nothing recorded a change for renders
               no line at all: an em dash there would claim the engine keeps a
-              record it does not. */}
-          {fact.setBy && (
-            <span className="fact-setby">
-              set by {fact.setBy.actor}
-              {fact.setBy.ago ? ` · ${fact.setBy.ago}` : ""}
-              {fact.setBy.turnId && (
-                <>
-                  {" · "}
-                  <a className="t-link" href={href(["activity", "turns", fact.setBy.turnId])}>
-                    turn <ArrowOutwardGlyph size="xs" />
-                  </a>
-                </>
-              )}
-            </span>
-          )}
+              record it does not. A fact with no VALUE never reaches here —
+              the filter above drops it — so `cleared` has no worked case on
+              this line and one on the rail's, which keeps its row. */}
+          {fact.setBy && <SetByLine setBy={fact.setBy} className="fact-setby" />}
         </span>
       ))}
     </div>

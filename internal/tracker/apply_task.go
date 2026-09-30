@@ -81,11 +81,36 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, fmt.Errorf("tracker: encode task %s at %s: %w", id, c.position, err)
 	}
+
+	// THE PROJECT'S FIELD DECLARATIONS, READ ONCE FOR BOTH READERS OF THEM.
+	//
+	// [Applier.explodeFieldValues] needs them to decide which typed column
+	// each value goes in, and [TaskDeltas] needs them to name a value by its
+	// SLUG rather than by the uuid it is keyed under. Two reads of one
+	// document in one transaction is waste, and the two could drift on a
+	// catalogue commit interleaved between them, so the read is hoisted
+	// here and the map is passed down.
+	//
+	// READ ONLY WHEN A SIDE CARRIES VALUES, which is what keeps this off the
+	// hot path: the overwhelming majority of task commits touch no custom
+	// field at all, and a company that declares none never reads a
+	// catalogue here. BOTH sides, because a commit that CLEARED every value
+	// still has to name what it cleared, and `next` alone would answer for
+	// neither. The guard is one line from its consumers so the invariant
+	// they rest on — a nil map means neither side had a value — is checkable
+	// by eye.
+	var declared map[string]FieldDef
+	if len(current.Fields) > 0 || len(next.Fields) > 0 {
+		if declared, err = declaredFields(ctx, tx, next.Project); err != nil {
+			return 0, err
+		}
+	}
+
 	rows, err := upsertTask(ctx, tx, next, document, c)
 	if err != nil {
 		return 0, err
 	}
-	children, err := a.explodeTask(ctx, tx, next, c)
+	children, err := a.explodeTask(ctx, tx, next, declared, c)
 	if err != nil {
 		return 0, err
 	}
@@ -104,7 +129,7 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if !held {
 		before = Task{}
 	}
-	applied := TaskDeltas(before, next)
+	applied := TaskDeltas(before, next, declared)
 	history, err := a.writeHistory(ctx, tx, c,
 		subjectKeys{Project: next.Project, Key: next.Key}, applied)
 	if err != nil {
@@ -301,8 +326,9 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 		// it, so a second one on the same subject loses there. What
 		// reaches here is a REDELIVERY at a position the checkpoint has
 		// already passed — collapsed by the operation ledger on the
-		// ordinary path and, when that ledger has been scrubbed by an
-		// adoption, by this branch. Applying the payload is correct
+		// ordinary path and, when that ledger has lost the row (to its
+		// sweep, or to a snapshot adopted from a donor that scrubbed
+		// it), by this branch. Applying the payload is correct
 		// because a create carries the COMPLETE state, so the row ends
 		// where the record says either way.
 		created.ID = c.subject().ID
@@ -366,6 +392,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.Type, patch.Type)
 	setString(&task.Assignee, patch.Assignee)
 	setString(&task.RoutingUnit, patch.RoutingUnit)
+	setString(&task.Project, patch.Project)
 	if patch.Mint != nil {
 		// THE MINT IS THE AUTHORITY FOR BOTH, derived rather than
 		// carried, so a record cannot claim a key and a rank that
@@ -424,6 +451,9 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.MergeReparent = false
 		}
 	}
+	if patch.Moving != nil {
+		task.Moving = *patch.Moving
+	}
 	if patch.Reassignments != nil {
 		task.Reassignments = *patch.Reassignments
 	}
@@ -444,6 +474,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 	setSlice(&task.Relations, patch.Relations)
 	setSlice(&task.Dependents, patch.Dependents)
 	setSlice(&task.Checklists, patch.Checklists)
+	setSlice(&task.FormerKeys, patch.FormerKeys)
 	if patch.Fields != nil {
 		task.Fields = *patch.Fields
 	}
@@ -487,12 +518,12 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 points, spend_turns, spend_rounds, spend_input, spend_output,
 			 spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens,
 			 done_at, closed_at, finished_at, archived, archived_at, removed_at,
-			 removed_with, batch_id, merging, reassignments, policy_stamp,
+			 removed_with, batch_id, merging, moving, reassignments, policy_stamp,
 			 unblocked_told_at, search_rev, embed_rev, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
+		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,
@@ -508,7 +539,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			finished_at = excluded.finished_at, archived = excluded.archived,
 			archived_at = excluded.archived_at, removed_at = excluded.removed_at,
 			removed_with = excluded.removed_with, batch_id = excluded.batch_id,
-			merging = excluded.merging,
+			merging = excluded.merging, moving = excluded.moving,
 			reassignments = excluded.reassignments,
 			policy_stamp = excluded.policy_stamp,
 			updated_at = excluded.updated_at, version = excluded.version,
@@ -527,7 +558,8 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 		nullableTime(task.ClosedAt), nullableTime(task.FinishedAt()),
 		boolInt(task.Archived), nullableTime(task.ArchivedAt),
 		removedAt(task), removedWith(task), batchOf(c.record),
-		boolInt(task.Merging), task.Reassignments, task.PolicyStamp,
+		boolInt(task.Merging), boolInt(task.Moving), task.Reassignments,
+		task.PolicyStamp,
 		store.EncodeTime(task.CreatedAt), store.EncodeTime(task.UpdatedAt),
 		c.packed, document)
 	if err != nil {
@@ -543,7 +575,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 // handful of rows and is a pure function of the document, where a diff would
 // depend on what this node happened to hold.
 func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
-	task Task, c applyContext) (int, error) {
+	task Task, declared map[string]FieldDef, c applyContext) (int, error) {
 
 	written := 0
 	for _, child := range []struct {
@@ -657,13 +689,15 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	// THE FIELD VALUES ARE THEIR OWN COLLECTION, and they are not in the
 	// loop above because the delete-then-insert there is keyed on task_id
 	// alone while this one needs the DECLARATIONS to decide which typed
-	// column each value goes in — a read the loop's shape has no room for.
+	// column each value goes in — which the loop's shape has no room for,
+	// and which [Applier.applyTask] reads and hands down rather than
+	// re-reading here.
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tracker_field_values WHERE task_id = ?`, task.ID); err != nil {
 		return 0, fmt.Errorf("tracker: clear tracker_field_values for %s: %w",
 			task.ID, err)
 	}
-	values, err := a.explodeFieldValues(ctx, tx, task, c)
+	values, err := a.explodeFieldValues(ctx, tx, task, declared, c)
 	if err != nil {
 		return 0, err
 	}
@@ -677,7 +711,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return 0, err
 	}
-	keys, err := a.maintainKeys(ctx, tx, task)
+	keys, err := a.maintainKeys(ctx, tx, task, c)
 	if err != nil {
 		return 0, err
 	}
@@ -843,13 +877,14 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 	return written, nil
 }
 
-// maintainKeys keeps the key directory: one row per key, naming the task that
-// holds it.
+// maintainKeys keeps the key directory, current and former: one row per key,
+// naming the task that claimed it.
 //
-// A KEY IS MINTED ONCE AND NEVER CHANGES, so a task has exactly one row here
-// for its life and the row is claimed by the first task to hold the key. A
-// key another task already holds is LEFT AS IT IS, because taking it would
-// silently re-point every reference anybody ever wrote.
+// A KEY CHANGES ONLY WHEN A CROSS-PROJECT MOVE RE-KEYS ITS TASK, and the old
+// one stays as a FORMER key, so every link, chat message and comment that
+// named it still opens the right record. A key another task already holds is
+// LEFT AS IT IS, because taking it would silently re-point every reference
+// anybody ever wrote.
 //
 // # And the task that could not claim it carries `key_collision`
 //
@@ -861,19 +896,37 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 // attention set is where somebody finds it. The flag is DERIVED from the
 // directory rather than carried, so it is identical on every node and follows
 // the claim wherever a purge hands it.
-func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task) (int, error) {
+func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
+	c applyContext) (int, error) {
+
 	if task.Key == "" {
 		return 0, nil
 	}
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO tracker_task_keys (key, task_id) VALUES (?,?)
-		ON CONFLICT (key) DO NOTHING`, task.Key, task.ID)
-	if err != nil {
-		return 0, fmt.Errorf("tracker: claim the key of %s: %w", task.ID, err)
+	// THE CURRENT KEY AND THE FORMER ONES ARE ONE COLLECTION, with the
+	// empty ones dropped rather than skipped mid-loop — a row template
+	// repeats for every element it is given, so the filtering happens here
+	// instead.
+	//
+	// A key that is in both lists — a rename that came back — is two rows
+	// in one statement, and they agree: `current` is computed from the
+	// entry rather than from its position, so the upsert resolves the pair
+	// to the same value whichever of them lands second.
+	entries := make([]string, 0, 1+len(task.FormerKeys))
+	for _, entry := range append([]string{task.Key}, task.FormerKeys...) {
+		if entry != "" {
+			entries = append(entries, entry)
+		}
 	}
-	claimed, err := affected(res)
+	claimed, err := insertMany(ctx, tx, c.maxVariables,
+		`INSERT INTO tracker_task_keys (key, task_id, current) VALUES`,
+		`(?,?,?)`,
+		`ON CONFLICT (key) DO UPDATE SET current = excluded.current
+		 WHERE tracker_task_keys.task_id = excluded.task_id`,
+		entries, func(entry string) []any {
+			return []any{entry, task.ID, boolInt(entry == task.Key)}
+		})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("tracker: claim the keys of %s: %w", task.ID, err)
 	}
 	flagged, err := flagKeyCollisions(ctx, tx, task.Key)
 	if err != nil {
@@ -917,41 +970,57 @@ func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	if held {
 		was = bucketOf(current)
 	}
-	// A TASK'S PROJECT NEVER CHANGES — it is part of the key, which is
-	// minted once — so a count moves only when the task changes bucket.
-	if was == is {
+	// A CROSS-PROJECT MOVE CHANGES THE PROJECT without changing the
+	// bucket, and the counts are per project — so the task leaves one
+	// project's count and joins the other's.
+	if was == is && current.Project == next.Project {
 		return 0, nil
 	}
 	written := 0
 	if was != "" {
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(
-			`UPDATE tracker_projects SET %s_count = MAX(%s_count - 1, 0) WHERE key = ?`,
-			was, was), current.Project)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: lower the %s count of %s: %w",
-				was, current.Project, err)
-		}
-		n, err := affected(res)
+		n, err := moveProjectCount(ctx, tx, was, current.Project, -1)
 		if err != nil {
 			return 0, err
 		}
 		written += n
 	}
 	if is != "" {
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(
-			`UPDATE tracker_projects SET %s_count = %s_count + 1 WHERE key = ?`,
-			is, is), next.Project)
-		if err != nil {
-			return 0, fmt.Errorf("tracker: raise the %s count of %s: %w",
-				is, next.Project, err)
-		}
-		n, err := affected(res)
+		n, err := moveProjectCount(ctx, tx, is, next.Project, +1)
 		if err != nil {
 			return 0, err
 		}
 		written += n
 	}
 	return written, nil
+}
+
+// moveProjectCount moves one of the three maintained counters by one.
+//
+// ONE STATEMENT BUILDER FOR THE THREE CALLERS — a task entering a bucket, a
+// task leaving one, and the purge that deletes the row instead of writing one.
+// The bucket is always [bucketOf]'s own closed answer and never a value off
+// the wire, which is what makes interpolating it into the column name safe: a
+// column cannot be a parameter.
+//
+// The decrement CLAMPS AT ZERO. A negative census is a number no screen can
+// render and no repair can interpret, and the clamp costs nothing on the path
+// where the count is right.
+func moveProjectCount(ctx context.Context, tx *sql.Tx, bucket, project string,
+	by int) (int, error) {
+
+	set := fmt.Sprintf(`%s_count = %s_count + 1`, bucket, bucket)
+	verb := "raise"
+	if by < 0 {
+		set = fmt.Sprintf(`%s_count = MAX(%s_count - 1, 0)`, bucket, bucket)
+		verb = "lower"
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE tracker_projects SET `+set+` WHERE key = ?`, project)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: %s the %s count of %s: %w",
+			verb, bucket, project, err)
+	}
+	return affected(res)
 }
 
 // bucketOf is which maintained count a task belongs to, or empty for a task
@@ -973,10 +1042,11 @@ func bucketOf(task Task) string {
 // EVERYWHERE the task is named.
 //
 // Its own rows and its OUTBOUND references go with it; so do the INBOUND ones,
-// with the key directory row that made the key resolvable at all — because a
-// reference to a key nothing resolves is a dangling link a reader cannot tell
-// from a typo. All in one transaction, and the marker it writes is what stops
-// a redelivery months later resurrecting any of it.
+// with the key directory rows — current and former — that made the key
+// resolvable at all, because a reference to a key nothing resolves is a
+// dangling link a reader cannot tell from a typo. All in one transaction, and
+// the marker it writes is what stops a redelivery months later resurrecting
+// any of it.
 //
 // # Its CHILDREN are re-parented, not destroyed and not orphaned
 //
@@ -1003,7 +1073,7 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	// The row is read BEFORE it is deleted, because the marker records
 	// what the task WAS: a deletion whose key and project are empty is a
 	// marker nobody can resolve back to anything.
-	task, _, err := readTask(ctx, tx, id)
+	task, held, err := readTask(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
@@ -1014,6 +1084,30 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	written := 0
+	// AND THE PROJECT'S CENSUS COMES DOWN WITH THE ROW.
+	//
+	// Every other departure from a bucket is a task RECORD and goes
+	// through [Applier.maintainProjectCounts]; a purge deletes the row
+	// instead of writing one, so nothing lowered the count it was in. A
+	// task purged while it was open left `open_count` one too high on
+	// every node — for ever, because these counts are MAINTAINED and
+	// nothing anywhere aggregates them back into agreement — and a purge
+	// does not require the task to have been removed first, so this is
+	// the ordinary shape rather than a corner of one.
+	//
+	// GATED ON THE ROW HAVING BEEN HERE, because the deletion gate lets
+	// this record's own redelivery through by op id (it is what wrote the
+	// marker) and every statement below is then a no-op. A second
+	// decrement would take the census one BELOW the truth, which is the
+	// half the clamp in [moveProjectCount] cannot see.
+	if bucket := bucketOf(task); held && bucket != "" {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		n, err := moveProjectCount(ctx, tx, bucket, task.Project, -1)
+		if err != nil {
+			return 0, err
+		}
+		written += n
+	}
 	for _, statement := range []struct {
 		sql  string
 		args []any
@@ -1064,9 +1158,16 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	handed, err := handOnKey(ctx, tx, task.Key)
-	if err != nil {
-		return 0, err
+	// EVERY KEY IT CLAIMED, the former ones included: a task that moved
+	// took its old key along as an alias, and a task minted onto that key
+	// since holds it only as a collision until the claimant is gone.
+	handed := 0
+	for _, key := range append([]string{task.Key}, task.FormerKeys...) {
+		n, handErr := handOnKey(ctx, tx, key)
+		if handErr != nil {
+			return 0, handErr
+		}
+		handed += n
 	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
@@ -1207,11 +1308,16 @@ func removedAt(task Task) any {
 	return store.EncodeTime(task.Removed.At)
 }
 
+// removedWith binds the cascade root into the task's own column, or NULL.
+//
+// DERIVED FROM [removedWithText], which is the delta's form of the same fact,
+// so the column and the history row cannot name two different roots.
 func removedWith(task Task) any {
-	if task.Removed == nil || task.Removed.RemovedWith == nil {
+	with := removedWithText(task.Removed)
+	if with == "" {
 		return nil
 	}
-	return *task.Removed.RemovedWith
+	return with
 }
 
 func nullableStringPtr(v *string) any {

@@ -2,8 +2,12 @@ package tracker_test
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -66,6 +70,7 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 		t.Fatalf("first apply: %v", err)
 	}
 	r.drain()
+	end := r.logEnd(t)
 	wrote, err := r.writer.ApplyChart(t.Context(), 100, chart)
 	if err != nil {
 		t.Fatalf("second apply: %v", err)
@@ -73,6 +78,9 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 	if len(wrote) != 0 {
 		t.Errorf("re-applying one revision wrote %v — every boot of every node "+
 			"would put a record on the log for a value nobody changed", wrote)
+	}
+	if got := r.logEnd(t); got != end {
+		t.Errorf("re-applying one revision put %d record(s) on the log", got-end)
 	}
 
 	// A LATER REVISION THAT CHANGES SOMETHING DOES write.
@@ -98,6 +106,149 @@ func TestReapplyingOneChartWritesNothing(t *testing.T) {
 
 	if name := r.projectName("ENG"); name != "Engineering & Ops" {
 		t.Errorf("the project's name is %q — the newer chart lost", name)
+	}
+}
+
+// A REAPPLY AT ONE POSITION SETS RIGHT WHAT AN EQUAL POSITION WALKED BACK —
+// which is why a chart apply decides from the project's rows rather than
+// letting the operation ledger answer it.
+//
+// The guard lets an EQUAL position through, so a stale write that lands at the
+// same number as the current one stands until the next apply puts it back. An
+// operation id derived from the position is one the ledger already holds from
+// that position's first write, so it answered the reapply as done and the
+// stale names stood until the chart moved again.
+func TestAReapplySetsRightWhatAnEqualPositionWalkedBack(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	const at = int64(100)
+	current := []tracker.ChartProject{{Key: "ENG", Name: "Engineering & Ops", Unit: "Eng"}}
+	stale := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
+
+	if _, err := r.writer.ApplyChart(t.Context(), at, current); err != nil {
+		t.Fatalf("the current chart's apply: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.ApplyChart(t.Context(), at, stale); err != nil {
+		t.Fatalf("the equal-position stale apply: %v", err)
+	}
+	r.drain()
+	if name := r.projectName("ENG"); name != "Engineering" {
+		t.Fatalf("the stale apply left %q — the premise of this case is an equal "+
+			"position the guard lets through", name)
+	}
+
+	wrote, err := r.writer.ApplyChart(t.Context(), at, current)
+	if err != nil {
+		t.Fatalf("the reapply: %v", err)
+	}
+	r.drain()
+	if len(wrote) != 1 {
+		t.Errorf("the reapply wrote %v, want [ENG]", wrote)
+	}
+	if name := r.projectName("ENG"); name != "Engineering & Ops" {
+		t.Errorf("after reapplying the current chart the project is named %q — "+
+			"the stale names stand until the chart moves again", name)
+	}
+}
+
+// A CHART APPLY IS DECIDED WHATEVER THE OPERATION LEDGER HAS LOST — which is
+// most companies' steady state: a chart nobody has changed for longer than the
+// ledger keeps its rows.
+//
+// The operation is the APPLY, minted when it runs through the state log's own
+// grammar. The id it replaced, `chart:<position>:<key>`, was outside that
+// grammar, so the ledger read it as minted at the zero instant and could vouch
+// for it on no node whose ledger had ever lost a row: every boot of every such
+// node had every project answered `unknown` without being decided.
+func TestAChartApplyIsDecidedWhateverTheLedgerLost(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	// THE LEDGER HAS LOST ROWS UP TO A MINUTE AGO — a sweep, say. A minute
+	// rather than now, so the apply's own mint, which an id resolves to the
+	// millisecond, is unambiguously after it.
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+		tracker.Domain{}, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("record the ledger's watermark: %v", err)
+	}
+	wrote, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
+	})
+	if err != nil {
+		t.Fatalf("an apply on a node whose ledger lost rows: %v — it is a "+
+			"reconcile decided from the project's rows, and nothing about it "+
+			"needs the ledger to vouch", err)
+	}
+	if len(wrote) != 1 {
+		t.Fatalf("the apply wrote %v, want [ENG]", wrote)
+	}
+	r.drain()
+	if name := r.projectName("ENG"); name != "Engineering" {
+		t.Errorf("the project is named %q", name)
+	}
+}
+
+// TWO NODES APPLYING ONE CHART PUT ONE RECORD ON THE LOG — the second decided
+// on rows that did not have the first's yet, lost the broker's arbitration,
+// and re-decided on the rows the winner wrote. And it REPORTS that it wrote
+// nothing: the round that lost had decided to write, and a flag that round set
+// and the next never cleared told the caller it had.
+func TestTwoNodesApplyingOneChartWriteOnce(t *testing.T) {
+	t.Parallel()
+	a := newRoundTripWithoutProject(t)
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "node-b.db"),
+		store.Options{PinnedWriters: 1})
+	if err != nil {
+		t.Fatalf("open node b's store: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	b := newRoundTripOn(t, a.broker, a.log, db, "node-b")
+	b.applyWhileWriting()
+	chart := []tracker.ChartProject{{Key: "ENG", Name: "Engineering", Unit: "Eng"}}
+
+	wroteA, err := a.writer.ApplyChart(t.Context(), 100, chart)
+	if err != nil || len(wroteA) != 1 {
+		t.Fatalf("node a's apply = (%v, %v), want [ENG]", wroteA, err)
+	}
+	end := a.logEnd(t)
+
+	// NODE B HAS NOT APPLIED NODE A'S RECORD: it decides a create on rows
+	// with no project in them.
+	wroteB, err := b.writer.ApplyChart(t.Context(), 100, chart)
+	if err != nil {
+		t.Fatalf("node b's apply: %v — losing the arbitration to an identical "+
+			"write is not a failure", err)
+	}
+	if len(wroteB) != 0 {
+		t.Errorf("node b reports it wrote %v — its first decision lost the "+
+			"arbitration and its second found the chart already there", wroteB)
+	}
+	if got := a.logEnd(t); got != end {
+		t.Errorf("node b put %d record(s) on the log for a chart node a had "+
+			"already written", got-end)
+	}
+	if name := b.projectName("ENG"); name != "Engineering" {
+		t.Errorf("node b's project is named %q", name)
+	}
+}
+
+// A CHART WRITE WHOSE OUTCOME IS UNKNOWN IS AN ERROR, never a project the
+// caller logs as applied: the next apply decides it again, and only a caller
+// told so can say that.
+func TestAnUnknownChartWriteIsAnError(t *testing.T) {
+	t.Parallel()
+	r := newRoundTripWithoutProject(t)
+	// THE LEDGER HAS LOST ROWS UP TO AN HOUR FROM NOW, so it can vouch for
+	// no operation minted before then — which is every one this apply mints.
+	if err := statelog.RecordLedgerLoss(t.Context(), r.db.Replicated(),
+		tracker.Domain{}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("record the ledger's watermark: %v", err)
+	}
+	wrote, err := r.writer.ApplyChart(t.Context(), 100, []tracker.ChartProject{
+		{Key: "ENG", Name: "Engineering", Unit: "Eng"},
+	})
+	if err == nil {
+		t.Fatalf("an unknown outcome was reported as success (wrote %v)", wrote)
 	}
 }
 

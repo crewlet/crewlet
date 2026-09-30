@@ -45,6 +45,12 @@
 // any wait, and the header's absence is how a client learns not to hammer it.
 // `internal/api`'s source walk holds the settings surfaces to this,
 // to hand-built bodies, and to codes minted outside the table.
+//
+// # And the answers no handler writes
+//
+// The router's own 404 and 405, which [Mux] turns into this envelope, so that
+// EVERY refusal the engine writes carries a code — which is what lets a client
+// tell the node's own answer from a proxy's page in front of it.
 package httpjson
 
 import (
@@ -113,6 +119,24 @@ const (
 	// begun to drain. The request was fine and nothing was done with it; it
 	// belongs on another node, or on this one once it has restarted.
 	CodeDraining Code = "draining"
+
+	// CodeNoRoute is a path nothing on this node serves — a route that is
+	// not registered, a surface its build or configuration does not mount,
+	// an asset that is not in the build. Answered by [Mux] for the mux's
+	// own 404.
+	//
+	// NOT `not_found`, which the routes that DO exist already answer for a
+	// record they do not hold — a secret, an event, a project. A client
+	// branches on that one as "there is no such thing", and `crewlet
+	// secrets get` answers it by reporting the secret absent: a node with no
+	// /secrets surface at all would have been read as a store holding
+	// nothing.
+	CodeNoRoute Code = "no_route"
+
+	// CodeMethodNotAllowed is a path this node serves under another method.
+	// Answered by [Mux] for the mux's own 405, which also carries the
+	// `Allow` header naming the methods it does take.
+	CodeMethodNotAllowed Code = "method_not_allowed"
 
 	// CodeInvalidToken is a credential that is missing, or present and not
 	// one this engine accepts — a Tier A token, a session, a machine token.
@@ -507,17 +531,59 @@ const (
 	CodeUnknownStream Code = "unknown_stream"
 	// CodeAckFailed is a backup acknowledgement that was not recorded.
 	CodeAckFailed Code = "ack_failed"
-	// CodeNoTracker is an eviction or readmission sent to a node that runs
-	// no native tracker, which is where the gate lives.
-	CodeNoTracker Code = "no_tracker"
+	// CodeNoStateLog is an eviction or readmission sent to a node whose API
+	// holds no gate to write it through: one that ran no state log when it
+	// started serving, because it started with no company. 503 with no
+	// Retry-After, because waiting does not hand this surface a gate — it is
+	// given one once, as the node starts serving — and the detail says to ask
+	// a node that runs the company. It was `no_tracker`, from when the
+	// tracker's log was the only one a gate was written to.
+	CodeNoStateLog Code = "no_state_log"
 	// CodeConfirmRequired is a destructive gesture whose confirmation did
 	// not repeat what it acts on. The detail says what to repeat.
 	CodeConfirmRequired Code = "confirm_required"
+	// CodeOpIDInvalid is a write sent under an operation id this engine
+	// would not have minted ([statelog.CheckCallerOpID]): no mint instant,
+	// or bytes the broker would carry as a different id — or, where a route
+	// derives what it creates from the id, one carrying more than the bare
+	// uuid7 it needs. 400, with nothing judged or written, because an id
+	// carrying no instant reads as older than every loss the ledger has had
+	// — a write answered `unknown` without being published, on the first
+	// attempt as on every retry.
+	//
+	// ONE CODE WHEREVER THE ID ARRIVED — the node gate's `?op_id=` and
+	// every surface's `Idempotency-Key` (`/work`, `/pages`, `/chart`,
+	// `/iam`) — so a client branches on one spelling for one mistake. A
+	// refusal of a header also carries `field`, naming it.
+	CodeOpIDInvalid Code = "op_id_invalid"
+	// CodeInvalidGate is an eviction or readmission naming a node id no
+	// node could run under. 400: nothing was judged or written, and the
+	// detail says what a node id may hold.
+	CodeInvalidGate Code = "invalid_gate"
+	// CodeEvictionRefused is an eviction of a node still holding a live
+	// presence lease, so still reaching the fleet. 409 with nothing written
+	// anywhere; the detail, `hint` and `actions` say what to do.
+	CodeEvictionRefused Code = "eviction_refused"
+	// CodeEvictionUnjudged is an eviction this node could not judge,
+	// because the presence leases it is decided against could not be read.
+	// 503 — the condition is this node's, not the target's — carrying
+	// `actions`, one of which is forcing it past the leases.
+	CodeEvictionUnjudged Code = "eviction_unjudged"
+	// CodeReadmissionRefused is a readmission of a node below a trim floor
+	// it would be counted against. 409 with nothing written, carrying the
+	// numbers the refusal is about.
+	CodeReadmissionRefused Code = "readmission_refused"
 	// CodeGateFailed is an eviction or readmission that was not recorded.
 	CodeGateFailed Code = "gate_failed"
 	// CodeStreamRequired is a capacity or reanchor question that named no
 	// stream.
 	CodeStreamRequired Code = "stream_required"
+	// CodeStreamUnreadable is a reanchor question about a log this node
+	// runs whose broker did not answer the live read. 503 with a
+	// Retry-After, because the stream name was right and asking again is
+	// the remedy — told apart from [CodeUnknownStream] so an operator does
+	// not go looking for a typo.
+	CodeStreamUnreadable Code = "stream_unreadable"
 	// CodeReanchorRefused is a reanchor the stream refused.
 	CodeReanchorRefused Code = "reanchor_refused"
 	// CodeTargetRequired is a capacity change that named no stream or no
@@ -597,6 +663,10 @@ var codes = map[Code]string{
 		"in this node's log.",
 	CodeDraining: "This node is shutting down and is not taking new work. " +
 		"Try another node, or this one once it has restarted.",
+	CodeNoRoute: "Nothing on this node serves that path. Check the address — " +
+		"or whether this node runs the surface it belongs to.",
+	CodeMethodNotAllowed: "That path does not take this method. The Allow " +
+		"header names the ones it does.",
 	CodeInvalidToken: "This request needs a credential, and none this engine " +
 		"accepts was presented. Sign in, or send an API token this deployment " +
 		"issued.",
@@ -682,13 +752,26 @@ var codes = map[Code]string{
 		"the retention status.",
 	CodeAckFailed: "The acknowledgement was not recorded, so what the trim may " +
 		"delete has not moved. The reason is in this node's log.",
-	CodeNoTracker: "This node runs no native tracker, so it has no eviction " +
-		"gate to move. Send this to a node that runs one.",
+	CodeNoStateLog: "This node has no state log to write an eviction or a " +
+		"readmission to. Send this to a node that runs the company.",
 	CodeConfirmRequired: "This change needs a confirmation that repeats what it " +
 		"acts on. The detail says what to repeat.",
+	CodeOpIDInvalid: "That operation id is not one this engine would have " +
+		"issued for this request, so nothing was judged or written. Send back " +
+		"the id an earlier answer carried, or none for a new request.",
+	CodeInvalidGate: "That is not a node id any node can run under, so " +
+		"nothing was judged or written. The detail says what a node id may hold.",
+	CodeEvictionRefused: "That node is still reaching the fleet, so it was " +
+		"not evicted and nothing was written. The hint says what to do.",
+	CodeEvictionUnjudged: "This node could not tell whether that node is still " +
+		"running, so nothing was written. The hint says how to go on.",
+	CodeReadmissionRefused: "That node is too far behind to be counted again " +
+		"yet, so nothing was written. The detail gives the positions.",
 	CodeGateFailed: "The eviction or readmission was not recorded. The detail " +
 		"says why.",
 	CodeStreamRequired: "Name the stream this is about.",
+	CodeStreamUnreadable: "This node could not read that stream just now, so " +
+		"nothing was decided. Ask again in a moment.",
 	CodeReanchorRefused: "The reanchor was refused and nothing changed. The " +
 		"detail says why.",
 	CodeTargetRequired: "Name the stream and the byte ceiling to move it to. A " +
@@ -873,6 +956,17 @@ func FailWith(w http.ResponseWriter, status int, code Code, detail map[string]st
 // are always present and always win cannot hold for one of them and not the
 // other. The caller's map is not written to.
 func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail) {
+	Write(w, status, Envelope(code, detail))
+}
+
+// Envelope is the refusal body [FailWithFields] writes, as a value: the
+// detail with `error` and `message` over it.
+//
+// EXPORTED FOR A RENDERING THAT IS ALSO A FIXTURE — the node gate's refusals,
+// whose bodies a golden file pins and the dashboard's suite reads — so the
+// bytes a test records are the bytes the route sends, assembled here and
+// nowhere else. The caller's map is not written to.
+func Envelope(code Code, detail Detail) map[string]any {
 	body := make(map[string]any, len(detail)+2)
 	maps.Copy(body, detail)
 	body[keyError] = string(code)
@@ -885,7 +979,7 @@ func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail)
 		// grep for.
 		slog.Debug("http_refusal_without_message", "code", string(code))
 	}
-	Write(w, status, body)
+	return body
 }
 
 // BodyReadTimeout bounds how long a client may take to deliver its body.

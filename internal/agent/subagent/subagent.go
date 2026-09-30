@@ -548,8 +548,8 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 	callCtx, cancelCall := context.WithTimeoutCause(ctx, cfg.Limits.CallTimeout, errCallDeadline)
 	defer cancelCall()
 
-	results := runGraph(callCtx, tasks, cfg.Limits.MaxParallel,
-		func(taskCtx context.Context, r resolved, deps []Result) Result {
+	results := runGraph(callCtx, tasks, cfg.Limits.MaxParallel, cfg.Turn.CallLog(),
+		func(taskCtx context.Context, r resolved, deps []Result, calls *turnctx.CallLog) Result {
 			provider, key, err := resolveProvider(taskCtx, cfg, r.model)
 			if err != nil {
 				// A model key that does not resolve is this TASK's
@@ -577,7 +577,7 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 			began := time.Now()
 			childCtx, cancel := context.WithTimeoutCause(taskCtx, cfg.Limits.TaskTimeout, errTaskDeadline)
 			defer cancel()
-			return run(childCtx, began, cfg, provider, key, meter, r, deps)
+			return run(childCtx, began, cfg, provider, key, meter, r, deps, calls)
 		})
 
 	publishCall(ctx, cfg, tasks, results)
@@ -589,8 +589,12 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 // began is when this task's wall-clock cap started, which is the caller's to
 // stamp: the deadline context is created there, and a clock started here would
 // run from a point strictly later than the one the cap is measured against.
+//
+// calls is this task's own fork of the run's call log, which its surface is
+// bound to — see [runGraph].
 func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider,
 	key string, meter toolloop.BudgetMeter, task resolved, deps []Result,
+	calls *turnctx.CallLog,
 ) (res Result) {
 	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
 
@@ -681,9 +685,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	}
 	surface = tools.NewSurface(phase.Subagent.String(), universe, active)
 	// BOUND to the parent turn, or every seat-scoped tool in the grant
-	// fails at call time — see Config.Turn.
+	// fails at call time — see Config.Turn. On this task's own fork of the
+	// run's call log, never the parent's — see [runGraph].
 	if cfg.Turn != nil {
-		surface = surface.ForTurn(cfg.Turn)
+		surface = surface.ForTurn(cfg.Turn.WithCalls(calls))
 	}
 	if cfg.Guard != nil {
 		// AFTER the surface exists and from that surface, so what the

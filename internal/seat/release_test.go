@@ -22,6 +22,8 @@ func TestReleaseReasonsSeparateLossFromDrain(t *testing.T) {
 		ReasonDrain:         false,
 		ReasonRoleGone:      false,
 		ReasonPlacement:     false,
+		ReasonUnserviceable: false,
+		ReasonUnprepared:    false,
 		ReasonLeaseLost:     true,
 		ReasonAcquireFailed: true,
 		ReasonPosture:       true,
@@ -31,6 +33,71 @@ func TestReleaseReasonsSeparateLossFromDrain(t *testing.T) {
 			t.Errorf("%s.Fenced() = %v, want %v", reason, reason.Fenced(), fenced)
 		}
 	}
+}
+
+// WithHeldSeat RUNS ONLY FOR A SEAT THIS NODE HOLDS, hands it the lease the
+// seat is held under, and holds the seat's own lock while it runs — so a caller
+// preparing the seats it already holds fences its writes as the seat's own
+// acquisition did, and a release cannot tear down what it is attaching.
+func TestWithHeldSeatRunsUnderTheSeatsLeaseAndLock(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	hooks := &hookLog{}
+	h := f.newHost("node-a", Config{Seats: seatsNamed("ceo"), Hooks: hooks})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	epoch, ok := h.EpochFor("ceo")
+	if !ok {
+		t.Fatal("the premise: the node holds ceo")
+	}
+
+	var got coord.Lease
+	held, err := h.WithHeldSeat("ceo", func(lease coord.Lease) error {
+		got = lease
+		return nil
+	})
+	if !held || err != nil {
+		t.Fatalf("WithHeldSeat(ceo) = (%v, %v), want the held seat's fn run", held, err)
+	}
+	if got.Epoch != epoch || got.Owner != h.Owner() {
+		t.Errorf("fn was handed epoch %d owner %q, want the held lease's %d %q",
+			got.Epoch, got.Owner, epoch, h.Owner())
+	}
+
+	refused := errors.New("refused")
+	if held, err := h.WithHeldSeat("ceo", func(coord.Lease) error { return refused }); !held ||
+		!errors.Is(err, refused) {
+		t.Errorf("WithHeldSeat = (%v, %v), want fn's own error back", held, err)
+	}
+
+	ran := false
+	if held, err := h.WithHeldSeat("eng", func(coord.Lease) error {
+		ran = true
+		return nil
+	}); held || err != nil || ran {
+		t.Errorf("WithHeldSeat(eng) = (%v, %v) with fn run %v, want a seat this node "+
+			"does not hold left alone", held, err, ran)
+	}
+
+	// THE LOCK: a release started while fn runs waits for it.
+	released := make(chan struct{})
+	_, _ = h.WithHeldSeat("ceo", func(coord.Lease) error {
+		go func() {
+			h.Release(f.ctx, "ceo", ReasonDrain)
+			close(released)
+		}()
+		select {
+		case <-released:
+			t.Error("a release ran while WithHeldSeat held the seat")
+		case <-time.After(100 * time.Millisecond):
+		}
+		return nil
+	})
+	<-released
+	if held, _ := h.WithHeldSeat("ceo", func(coord.Lease) error { return nil }); held {
+		t.Error("a seat released after fn returned still reads as held")
+	}
+	wantStrings(t, hooks.released(), []string{"ceo:drain"}, "releases")
 }
 
 func TestTheHookIsToldWhyTheSeatIsGoing(t *testing.T) {

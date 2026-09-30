@@ -98,11 +98,16 @@ func (s *Service) postBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	batch := chart.Batch{Operations: ops, Reason: body.Reason}
 	writer := s.writerFor(r)
+	// A BATCH OF REMOVALS ALONE is its own gesture, published as one — the
+	// domain refuses a removal beside a placement — and named for it.
+	write, name := writer.WriteBatch, "chart-batch"
 	if removals == len(ops) {
-		result, err := writer.WriteRemoval(r.Context(), s.opID(r), batch)
-		s.answerWrite(w, result, err)
+		write, name = writer.WriteRemoval, "chart-removal"
+	}
+	op, ok := s.operation(w, r, name, body)
+	if !ok {
 		return
 	}
-	result, err := writer.WriteBatch(r.Context(), s.opID(r), batch)
-	s.answerWrite(w, result, err)
+	result, err := write(r.Context(), op.id, batch)
+	s.answerWrite(w, op, result, err)
 }

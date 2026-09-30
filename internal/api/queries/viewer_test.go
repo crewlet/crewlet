@@ -245,6 +245,29 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	}
 }
 
+// A HANDLE NO SEAT HOLDS IS STILL READ, AS NAMED.
+//
+// Somebody who left, a name still on old rows: a caller entitled to read
+// anybody's record naming a handle the chart no longer holds is asking about
+// those rows, and is answered about them rather than refused or told there is
+// nobody. Refusing here would make the reader's answer depend on the chart
+// rather than on the rows the question is about — and a seat-shaped name is
+// never a login, so the identity directory is not the one to ask either.
+func TestAHandleNoSeatHoldsIsStillRead(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{}
+	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_my_work",
+		map[string]any{"handle": "departed"},
+		iam.GrantStateRead, iam.GrantFleetOperate); err != nil {
+
+		t.Fatalf("work_my_work for a handle nobody holds: %v", err)
+	}
+	if work.myWorkQuery.Handle != "departed" {
+		t.Errorf("read %q's day, want the handle as it was named",
+			work.myWorkQuery.Handle)
+	}
+}
+
 // EACH PERSONAL QUESTION ASKS ITS OWN VERB, rather than all of them asking
 // whether the caller may read a person record.
 //

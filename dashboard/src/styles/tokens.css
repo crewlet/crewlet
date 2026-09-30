@@ -58,9 +58,15 @@
      panels drew their content four pixels inside their own titles while the
      panels between them did not, and the screen read as though two people had
      built it. A literal per row class is how that happened; the token is what
-     stops it happening again. Not scaled by `--density`, which is about the
-     HEIGHT a row takes: compact mode packs more rows in, it does not move the
-     left edge of the list away from the heading above it. */
+     stops it happening again. AND IT IS SCALED BY `--density`, because
+     `--space-4` is: every step of the package's spacing scale is emitted as
+     `calc(Npx * var(--density, 1))`, and `Card.Header` pads with that same
+     `--spacing-4`. So the inset follows the header at compact and comfortable
+     exactly as it does at normal, which is the whole point of the token — a
+     row list that held its left edge still while the card around it moved
+     would reintroduce the four-pixel misalignment above at two settings of
+     three. (The sentence this replaces asserted the opposite, and had since
+     the token was written.) */
   --row-inline: var(--space-4);
   --row-h-sm: calc(28px * var(--density));
   --row-h-lg: calc(48px * var(--density));

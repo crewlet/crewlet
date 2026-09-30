@@ -118,6 +118,94 @@ func TestOnlyAnUnblockedNoticeWakesItsActor(t *testing.T) {
 	}
 }
 
+// A CHANGE WAKE TELLS THE SEAT WHAT MOVED, NOT ONLY THAT SOMETHING DID.
+//
+// [tracker.Notify] has carried the deltas since the first wake this engine
+// wrote, under a comment calling them "the deltas a card renders" — and no
+// card rendered them. The prompt said "The status changed by ana." and
+// stopped, so the seat's only route to the value was a `get_work_item` round,
+// which cannot recover the side the field moved FROM: that side is nowhere on
+// the task.
+//
+// THROUGH THE PARSER rather than a hand-built [notify.Inbound], because the
+// gap was exactly the seam between the two — the record holds typed deltas,
+// the prompt is handed a string map, and each half read as complete on its
+// own.
+func TestAChangeWakeNamesWhatMoved(t *testing.T) {
+	t.Parallel()
+	record := parseRecord(&tracker.Notify{
+		Kind: tracker.ChangeStatus,
+		Fields: map[string]tracker.Delta{
+			"status":   {From: "todo", To: "in_progress"},
+			"assignee": {From: "", To: "cy"},
+		},
+		Snapshot: tracker.Snapshot{
+			Key: "ENG-1", Project: "ENG", Title: "wire it",
+			Status: tracker.StatusInProgress, Assignee: "cy",
+		},
+	})
+	body := promptFor(t, record)
+	for _, want := range []string{
+		"## What changed",
+		"- status: todo → in_progress",
+		// AN EMPTY SIDE IS AN EM DASH, which is what every other surface
+		// draws for one: a blank reads as a rendering fault where the
+		// dash reads as an assignment.
+		"- assignee: — → cy",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the prompt does not carry %q:\n%s", want, body)
+		}
+	}
+	// IN FIELD ORDER, so one record renders one prompt wherever it is
+	// delivered and however often it is redelivered — a map's range order
+	// would make the bytes the event store keeps differ per delivery.
+	if strings.Index(body, "- assignee:") > strings.Index(body, "- status:") {
+		t.Errorf("the deltas are not sorted by field name:\n%s", body)
+	}
+}
+
+// AND THE EXCERPT IS STILL THERE, under the same heading.
+//
+// The two answer different questions — the deltas are what moved and the
+// excerpt is what was said about it (a new task's description, a purge's
+// reason) — so the block carries both rather than one displacing the other.
+func TestAChangeWakeKeepsTheExcerptBesideTheDeltas(t *testing.T) {
+	t.Parallel()
+	record := parseRecord(&tracker.Notify{
+		Kind:    tracker.ChangeCreated,
+		Excerpt: "the payment webhook drops retries",
+		Fields: map[string]tracker.Delta{
+			"status": {From: "", To: "todo"},
+		},
+		Snapshot: tracker.Snapshot{
+			Key: "ENG-1", Project: "ENG", Title: "wire it",
+			Status: tracker.StatusTodo, Assignee: "cy",
+		},
+	})
+	body := promptFor(t, record)
+	if !strings.Contains(body, "- status: — → todo") {
+		t.Errorf("the create does not name what it set:\n%s", body)
+	}
+	if !strings.Contains(body, "the payment webhook drops retries") {
+		t.Errorf("the deltas displaced the excerpt:\n%s", body)
+	}
+}
+
+// promptFor routes a record and builds the first recipient's prompt.
+func promptFor(t *testing.T, record tracker.MutationRecord) string {
+	t.Helper()
+	routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
+		t.Context(), delivery(t, record), registry(t, "ana", "cy"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(routed) == 0 {
+		t.Fatal("the change woke nobody, so the case asserts nothing")
+	}
+	return tracker.Prompt{}.Build(routed[0].Inbound, nil)
+}
+
 func promptNotification(reason tracker.Reason, kind tracker.ChangeKind) notify.Inbound {
 	return notify.Inbound{
 		Source:    tracker.Source,
