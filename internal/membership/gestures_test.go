@@ -352,3 +352,118 @@ func TestAnOutNeverDropsACopy(t *testing.T) {
 		refused(t, back, "data-00", "only 1 of the 2 copies")
 	})
 }
+
+// A BAR OUTLIVES MEMBERSHIP: an evicted node is placed on nothing until it is
+// put back, whatever becomes of it meanwhile.
+//
+// Barred while a member, it is out at once; gone past the grace, it is removed
+// — and a bar, unlike an out, stays; gone for another grace, it is forgotten,
+// and the bar still stays; seen back and present for far longer than any
+// probation, it is a member again and still placed on nothing. Only In lifts
+// it. And a node the map has already removed, or never held, is barred all the
+// same — the usual case, since an operator evicts a machine that is gone.
+func TestABarOutlivesMembership(t *testing.T) {
+	t.Parallel()
+	c := company(1, 2, "")
+	base := first(t, roster(3), c)
+	s, d, err := Bar(base.s, base.d, "data-02", "ops@example.com", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	barred := record{s, d}
+	if placeable(barred, "data-02") {
+		t.Fatal("a barred member is still placed on")
+	}
+	gone := ticks(t, barred, without(roster(3), "data-02"), c, OutTicks)
+	if gone.d.Holds("data-02") {
+		t.Fatal("the premise: a barred member gone past the grace is removed")
+	}
+	forgotten := ticks(t, gone, without(roster(3), "data-02"), c, OutTicks)
+	if _, remembered := forgotten.s.Removed["data-02"]; remembered {
+		t.Fatal("the premise: a removed node gone for another grace is forgotten")
+	}
+	for name, r := range map[string]record{"removed": gone, "forgotten": forgotten} {
+		back := ticks(t, r, roster(3), c, 2*StableTicks)
+		if !back.d.Holds("data-02") {
+			t.Errorf("%s: the node back for %d ticks is not a member again", name, 2*StableTicks)
+		}
+		if placeable(back, "data-02") {
+			t.Errorf("%s: a barred node back for %d ticks is placed on", name, 2*StableTicks)
+		}
+		s, d, err := In(back.s, back.d, "data-02")
+		if err != nil {
+			t.Fatalf("%s: In: %v", name, err)
+		}
+		if !placeable(record{s, d}, "data-02") || s.Barred != nil {
+			t.Errorf("%s: put back, the node is placeable %v with bars %v", name,
+				placeable(record{s, d}, "data-02"), s.Barred)
+		}
+	}
+
+	// A NODE THE MAP NO LONGER HOLDS, AND ONE IT NEVER DID, ARE BARRED ALL
+	// THE SAME — where Out would have answered that there is nothing to
+	// take out.
+	unbarred := ticks(t, base, without(roster(3), "data-02"), c, OutTicks)
+	for _, node := range []string{"data-02", "data-09"} {
+		s, d, err := Bar(unbarred.s, unbarred.d, node, "ops", "evicted", t0)
+		if err != nil {
+			t.Fatalf("bar %s, which the map does not hold: %v", node, err)
+		}
+		if _, recorded := s.Barred[node]; !recorded {
+			t.Errorf("the bar on %s was not recorded", node)
+		}
+		back := ticks(t, record{s, d}, append(roster(3), up("data-09", 1)), c, 2*StableTicks)
+		if placeable(back, node) {
+			t.Errorf("%s, barred while the map did not hold it, is placed on once back", node)
+		}
+		s, _, err = In(s, d, node)
+		if err != nil || s.Barred != nil {
+			t.Errorf("In of barred %s the map does not hold = (%v, %v), want the bar lifted",
+				node, s.Barred, err)
+		}
+	}
+}
+
+// A BAR IS A GESTURE LIKE THE REST: barring a node already barred changes
+// nothing, the first gesture's record kept; barring the last member present to
+// place on is refused, as taking it out is; and what it was given is left
+// alone.
+func TestABarIsRepeatableAndRefusesTheLastMember(t *testing.T) {
+	t.Parallel()
+	c := company(1, 2, "")
+	base := first(t, roster(3), c)
+	s, d, err := Bar(base.s, base.d, "data-01", "ops@example.com", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.s.Barred != nil {
+		t.Fatal("Bar wrote into what it was given")
+	}
+	again, againD, err := Bar(s, d, "data-01", "someone-else", "a retry", t0.Add(time.Hour))
+	if err != nil || !reflect.DeepEqual(record{again, againD}, record{s, d}) {
+		t.Errorf("a repeated bar changed the record (%v)", err)
+	}
+	one := first(t, roster(1), c)
+	if _, _, err := Bar(one.s, one.d, "data-00", "ops", "evicted", t0); !errors.Is(err, ErrNothingPlaceable) {
+		t.Errorf("barring the only member = %v, want ErrNothingPlaceable", err)
+	}
+}
+
+// A BAR IS NOT REFUSED FOR THE COPIES IT LEAVES NOWHERE TO GO, where an out is:
+// an out keeps the copies of a node that still serves them, and a bar records
+// a machine judged gone, whose copies are not there to keep.
+func TestABarIsNotRefusedForCopiesItCannotKeep(t *testing.T) {
+	t.Parallel()
+	full := first(t, roster(3), company(1, 3, ""))
+	if _, _, err := Out(full.s, full.d, "data-01", "ops", "shrinking", t0); !errors.Is(err, ErrNowhereToRebuild) {
+		t.Fatalf("the premise: taking data-01 out of three members at three copies = %v, "+
+			"want ErrNowhereToRebuild", err)
+	}
+	s, d, err := Bar(full.s, full.d, "data-01", "ops", "evicted", t0)
+	if err != nil {
+		t.Fatalf("barring data-01 = %v, want it barred", err)
+	}
+	if placeable(record{s, d}, "data-01") {
+		t.Error("the barred member is still placed on")
+	}
+}

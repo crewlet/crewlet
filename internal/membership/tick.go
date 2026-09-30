@@ -145,7 +145,8 @@ func (c Company) field(name string) string {
 //     [OutTicks] is removed — unless a hold is active, or it is one that
 //     takes copies and no member that takes copies is present and healthy
 //     on this tick to take its share.
-//  6. Out: a member is out exactly while an operator's gesture says so.
+//  6. Out: a member is out exactly while an operator's gesture says so — taken
+//     out, or barred, which a removal does not lift ([State.Barred]).
 //
 // What a map does next with a change to its members — balance it, move an
 // epoch — is the map's.
@@ -403,18 +404,14 @@ func (t *ticking) removal() {
 	if len(due) == 0 {
 		return
 	}
-	isOut := func(node string) bool {
-		_, out := t.next.TakenOut[node]
-		return out
-	}
 	present := 0
 	for node, m := range t.members {
-		if !isOut(node) && !m.Probation && !t.counted[node] {
+		if !t.next.out(node) && !m.Probation && !t.counted[node] {
 			present++
 		}
 	}
 	for _, node := range due {
-		if present == 0 && !isOut(node) {
+		if present == 0 && !t.next.out(node) {
 			continue
 		}
 		run := t.next.Absence[node]
@@ -426,6 +423,10 @@ func (t *ticking) removal() {
 }
 
 // out is step 6.
+//
+// AN OUT ENDS WITH MEMBERSHIP AND A BAR DOES NOT: the operator's out did its
+// work once the member's share moved and it was removed, while a bar is kept
+// for the node it names whether or not the map holds it ([State.Barred]).
 func (t *ticking) out() {
 	for node := range t.next.TakenOut {
 		if _, member := t.members[node]; !member {
@@ -433,7 +434,7 @@ func (t *ticking) out() {
 		}
 	}
 	for node, m := range t.members {
-		_, m.Out = t.next.TakenOut[node]
+		m.Out = t.next.out(node)
 		t.members[node] = m
 	}
 }

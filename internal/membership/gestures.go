@@ -117,13 +117,7 @@ func Out(s State, d placement.Draw, node, by, reason string, now time.Time) (Sta
 	}
 	taken := setMember(d, node, func(m *placement.Member) { m.Out = true })
 	if member.Placeable() {
-		others := 0
-		for _, m := range d.Placeable() {
-			if m.Node != node && !absentNow(s, m.Node) {
-				others++
-			}
-		}
-		if others == 0 {
+		if lastPlaceable(s, d, node) {
 			return s, d, fmt.Errorf("%w: %s", ErrNothingPlaceable, node)
 		}
 		// BEFORE THE STATE IS TOUCHED, and after the refusal above: a
@@ -143,30 +137,89 @@ func Out(s State, d placement.Draw, node, by, reason string, now time.Time) (Sta
 	return next, taken, nil
 }
 
+// lastPlaceable reports whether node is the last member present to place
+// copies on — which [Out] and [Bar] refuse to take away. Present is what the
+// latest tick saw ([absentNow]), so a member back from a missed tick counts.
+func lastPlaceable(s State, d placement.Draw, node string) bool {
+	for _, m := range d.Placeable() {
+		if m.Node != node && !absentNow(s, m.Node) {
+			return false
+		}
+	}
+	return true
+}
+
+// Bar bars a node from the map: it is placed on nothing — a member now is taken
+// out, its share moving to the others — and stays so WHATEVER BECOMES OF ITS
+// MEMBERSHIP, removed for absence, forgotten, seen back, until [In] lifts the
+// bar ([State.Barred]). It is how a map records an EVICTION: the operator's
+// judgement that the machine is gone, whose copies are fenced off until it is
+// readmitted.
+//
+// A NODE THE MAP DOES NOT HOLD IS BARRED ALL THE SAME — one it removed for
+// absence, or one it has never seen: a bar is about a machine that may come
+// back, and a node an operator evicts is usually one the map has already let
+// go. Where [Out] answers such a node that it places nothing to take out, the
+// bar is exactly what must still be written.
+//
+// BARRING A NODE ALREADY BARRED CHANGES NOTHING, the first gesture's who, why
+// and when included, so a re-sent gesture writes nothing — [Out]'s rule. And
+// like [Out] it refuses to take out the last member present to place copies
+// on ([ErrNothingPlaceable]).
+//
+// UNLIKE [Out], IT IS NOT REFUSED FOR THE COPIES IT LEAVES NOWHERE TO GO
+// ([ErrNowhereToRebuild]). An out moves the copies of a node that still
+// serves them, so refusing one that has nowhere to rebuild them keeps those
+// copies; a bar records a machine the operator has judged gone, whose copies
+// are no longer there to keep — refused, the map would go on placing copies on
+// it, and membership's own removal for absence drops the same placements
+// anyway.
+func Bar(s State, d placement.Draw, node, by, reason string, now time.Time) (State, placement.Draw, error) {
+	if _, barred := s.Barred[node]; barred {
+		return s, d, nil
+	}
+	member, isMember := d.Member(node)
+	if isMember && member.Placeable() && lastPlaceable(s, d, node) {
+		return s, d, fmt.Errorf("%w: %s", ErrNothingPlaceable, node)
+	}
+	next := s.Clone()
+	if next.Barred == nil {
+		next.Barred = map[string]Gesture{}
+	}
+	next.Barred[node] = Gesture{By: by, Reason: reason, At: now.UTC()}
+	if !isMember || member.Out {
+		return next, d, nil
+	}
+	return next, setMember(d, node, func(m *placement.Member) { m.Out = true }), nil
+}
+
 // In puts a member back: the map places on it again, and its share moves back.
 //
 // IT VOUCHES FOR THE NODE, whatever is keeping it off the map: an operator's
-// out, a probation the maintainer is counting, or a removal the map
-// remembers. A member out or on probation is placed on at once; a node
-// removed and not seen since is FORGOTTEN, so it joins — placeable — the next
-// time it is seen present and healthy, rather than after it has proven itself
-// stable: the operator vouching for it in place of the ticks. Forgetting it
-// changes no member, only the state.
+// out, a bar ([Bar]), a probation the maintainer is counting, or a removal the
+// map remembers. A member out, barred or on probation is placed on at once; a
+// node removed and not seen since is FORGOTTEN, so it joins — placeable — the
+// next time it is seen present and healthy, rather than after it has proven
+// itself stable: the operator vouching for it in place of the ticks; and a bar
+// on a node the map does not hold is lifted, so it joins as any node would.
+// Forgetting it and lifting a bar change no member, only the state.
 //
 // PUTTING BACK A MEMBER ALREADY PLACED ON CHANGES NOTHING: the answer is the
 // state and draw it was given, so a re-sent `in` writes nothing.
 func In(s State, d placement.Draw, node string) (State, placement.Draw, error) {
 	member, isMember := d.Member(node)
 	_, removed := s.Removed[node]
+	_, barred := s.Barred[node]
 	switch {
-	case !isMember && !removed:
+	case !isMember && !removed && !barred:
 		return s, d, fmt.Errorf("%w: %q", ErrUnknownMember, node)
-	case isMember && member.Placeable():
+	case isMember && member.Placeable() && !barred:
 		return s, d, nil
 	}
 	next := s.Clone()
 	delete(next.Removed, node)
 	delete(next.TakenOut, node)
+	delete(next.Barred, node)
 	next.tidy()
 	if !isMember {
 		return next, d, nil

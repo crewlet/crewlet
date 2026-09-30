@@ -51,8 +51,10 @@
 // be placed on and removed again every cycle ([Removal]). An operator may take
 // a member OUT ([Out]) so what it holds moves while it still serves — never
 // onto nothing, so an out no other member could rebuild the copies of is
-// refused rather than taken as a copy dropped — and HOLD the map ([HoldFor])
-// through planned maintenance so nothing is removed while nodes restart.
+// refused rather than taken as a copy dropped — HOLD the map ([HoldFor])
+// through planned maintenance so nothing is removed while nodes restart, and
+// BAR a node ([Bar]) — an eviction's record — so it is placed on nothing
+// whatever becomes of its membership, until it is put back ([In]).
 //
 // How many copies a map keeps and which label they are spread across are the
 // COMPANY's (ADR-0020), taken from the company configuration stamped with the
@@ -175,6 +177,30 @@ type State struct {
 	// on its way down, and taking a member out is close to the opposite —
 	// the node keeps running and serving while what it holds moves off it.
 	TakenOut map[string]Gesture `json:"taken_out,omitempty"`
+
+	// Barred records each node an operator barred from the map ([Bar]) —
+	// who, why and when — whether or not it is a member.
+	//
+	// UNLIKE AN OUT, IT OUTLIVES MEMBERSHIP. An out is about a member, and
+	// ends when the member is removed for absence: it did its work, the
+	// share has moved. A bar is about the MACHINE — an eviction, the
+	// operator's judgement that it is gone and that its copies are fenced
+	// off until it is readmitted — and a node an operator evicts is usually
+	// one the map has already let go, or soon will. So neither removal nor
+	// forgetting lifts it: a barred node seen back joins as a member OUT,
+	// placed on nothing, until [In] lifts the bar. Kept only while it was a
+	// member, the bar vanished with the removal and a repaired machine
+	// restarted under its old id was placed on after its probation, while
+	// every log it was placed to serve still gated its writes as evicted.
+	Barred map[string]Gesture `json:"barred,omitempty"`
+}
+
+// out reports whether node is placed on nothing by an operator's gesture: taken
+// out, or barred.
+func (s State) out(node string) bool {
+	_, taken := s.TakenOut[node]
+	_, barred := s.Barred[node]
+	return taken || barred
 }
 
 // Absence is one member's current run of absence.
@@ -330,6 +356,7 @@ func (s State) Clone() State {
 	out.Absence = maps.Clone(s.Absence)
 	out.Removed = maps.Clone(s.Removed)
 	out.TakenOut = maps.Clone(s.TakenOut)
+	out.Barred = maps.Clone(s.Barred)
 	if s.Hold != nil {
 		hold := *s.Hold
 		out.Hold = &hold
@@ -369,5 +396,8 @@ func (s *State) tidy() {
 	}
 	if len(s.TakenOut) == 0 {
 		s.TakenOut = nil
+	}
+	if len(s.Barred) == 0 {
+		s.Barred = nil
 	}
 }
