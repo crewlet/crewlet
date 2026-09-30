@@ -61,7 +61,7 @@ type DutyDeps struct {
 
 // Jobs is the tracker's housekeeping, as the maintenance worker's own shape.
 //
-// SIX JOBS, every one [maintenance.Fleet] and all but one gated. The names
+// SEVEN JOBS, every one [maintenance.Fleet] and all but one gated. The names
 // are the log's, and each is the table or the walk it is about rather than the
 // code that runs it.
 func Jobs(d DutyDeps) []maintenance.Job {
@@ -90,6 +90,12 @@ func Jobs(d DutyDeps) []maintenance.Job {
 			Scope: maintenance.Fleet,
 			Gate:  duty.pendingMoves,
 			Run:   duty.finishMoves,
+		},
+		{
+			Name:  "tracker_move_stragglers",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingStragglers,
+			Run:   duty.carryStragglers,
 		},
 		{
 			Name:  "tracker_unblocked",
@@ -648,6 +654,138 @@ func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error)
 		}
 	}
 	return finished, nil
+}
+
+// strandedFrom is the predicate the straggler gate and walk share: a live task
+// flagged `inconsistent_project` under a root that is itself live, not mid-move
+// and a real root.
+//
+// THE PARTIAL INDEX'S OWN WHERE, SPELLED OUT, because this engine's planner
+// does not infer it from a query that omits it (migration 0038). The root's
+// three conditions are each a reason there is nothing to do: a root in the
+// TRASH is frozen until its restore; a MARKED root is a walk the abandoned-move
+// job owns, whose pass carries a straggler as well; and a root with a PARENT is
+// no root at all but where a cycle's walk stopped, which is the `cycle` flag's
+// to report and no move's to repair. Selected anyway, each would hold the gate
+// open on every tick for work this job refuses.
+const strandedFrom = `
+	FROM tracker_tasks t JOIN tracker_tasks r ON r.id = t.root_id
+	WHERE t.inconsistent_project = 1 AND t.removed_at IS NULL
+	  AND r.removed_at IS NULL AND r.moving = 0
+	  AND (r.parent_id IS NULL OR r.parent_id = '')`
+
+// pendingStragglers reads whether any live task sits in another project than
+// its root with nothing walking that root — see [duty.carryStragglers]. ONE
+// PROBE on the partial index migration 0038 ships for it.
+func (d *duty) pendingStragglers(ctx context.Context) (bool, error) {
+	var found int
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 `+strandedFrom+`)`).Scan(&found)
+	})
+	if err != nil {
+		return false, fmt.Errorf("tracker: read whether a task was filed "+
+			"behind a move: %w", err)
+	}
+	return found == 1, nil
+}
+
+// carryStragglers carries into its root's project every task a finished move
+// left behind.
+//
+// # The one ordering the move cannot see
+//
+// A move refuses a child filed under a task its walk has not carried — on a
+// node that has applied the root's move — and its last append keeps the mark
+// up over anything under the root still outside its project, running one more
+// pass for it. What neither sees is a create DECIDED on a node that had not
+// applied the root's move yet and ACCEPTED by the broker after the mark came
+// down: the applier files it under its parent, now in the new project, and
+// flags it `inconsistent_project`, and with the mark down the abandoned-move
+// job never looks at that root again. So the task stayed in the old project for
+// good, on neither project's board. The same shape is left by a re-parent a
+// lagging node decided under a descendant of a root that has since moved.
+//
+// # What finishing is
+//
+// The move's own pass ([Writer.followRoot]), under the move's own claim — so a
+// move of the same root that is running now is left alone this tick exactly as
+// the abandoned-move job leaves one, and a gesture that starts while this runs
+// waits for it. A root is read again under the claim, since it may have moved
+// again, gone to the trash or been marked in between; a straggler in the trash
+// is not carried and not waited for, because nothing marks the move as
+// unfinished any more — its restore flags it live again, and the next tick
+// carries it.
+//
+// ONE ROOT'S FAILURE IS NOT THE TICK'S, for [duty.finishMerges]' reason; the
+// budget is [WalkBatch] roots attempted, paged in root order on the partial
+// index.
+func (d *duty) carryStragglers(ctx context.Context, now, _ time.Time) (int64, error) {
+	var (
+		carried   int64
+		attempted int
+		after     string
+	)
+	for attempted < WalkBatch {
+		roots, err := d.strandedAfter(ctx, after)
+		if err != nil {
+			return carried, err
+		}
+		if len(roots) == 0 {
+			break
+		}
+		for _, root := range roots {
+			if attempted == WalkBatch {
+				break
+			}
+			after = root
+			attempted++
+			claim, err := d.deps.Writer.hold(ctx, moveClaim(root))
+			if err != nil {
+				d.walkHeld(ctx, "tracker_move_walk_held", root, err)
+				continue
+			}
+			moved, err := d.deps.Writer.carryStragglers(ctx,
+				d.opID("stragglers", root, now), root)
+			claim.release(ctx)
+			if err != nil {
+				d.deps.Logger.WarnContext(ctx, "tracker_move_stragglers_failed",
+					"task", root, "error", err)
+				continue
+			}
+			if moved > 0 {
+				carried++
+				d.deps.Logger.InfoContext(ctx, "tracker_move_stragglers_carried",
+					"task", root, "tasks", moved)
+			}
+		}
+	}
+	return carried, nil
+}
+
+// strandedAfter is one page of the roots with a straggler under them, in root
+// order, after a cursor — the partial index's own order, so each page is a
+// seek.
+func (d *duty) strandedAfter(ctx context.Context, after string) ([]string, error) {
+	var roots []string
+	err := d.deps.DB.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.root_id `+
+			strandedFrom+` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
+			after, WalkBatch)
+		if err != nil {
+			return fmt.Errorf("tracker: read the tasks filed behind a move: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var root string
+			if err := rows.Scan(&root); err != nil {
+				return err
+			}
+			roots = append(roots, root)
+		}
+		return rows.Err()
+	})
+	return roots, err
 }
 
 // abandonedMerge is a mid-merge task's own account of the walk that stopped:

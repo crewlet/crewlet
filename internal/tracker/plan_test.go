@@ -200,6 +200,12 @@ func dutyReads() map[string]struct {
 		"the abandoned move gate": {
 			`SELECT EXISTS (SELECT 1 FROM tracker_tasks
 			                WHERE moving = 1 AND removed_at IS NULL)`, nil},
+		"the move stragglers gate": {
+			`SELECT EXISTS (SELECT 1 ` + strandedFrom + `)`, nil},
+		"the move stragglers walk": {
+			`SELECT DISTINCT t.root_id ` + strandedFrom +
+				` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
+			[]any{"", 64}},
 		"the apply's duplicate probe": {
 			`SELECT 1 FROM tracker_tasks
 			 WHERE project_key = ? AND rank = ? AND id <> ?`,

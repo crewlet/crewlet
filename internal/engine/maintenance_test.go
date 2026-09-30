@@ -151,6 +151,11 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_abandoned_moves",
 		"tracker_anchors",
 		"tracker_duplicate_ranks",
+		// AND A TASK FILED BEHIND A MOVE THAT HAS FINISHED: a create a
+		// lagging node decided before it heard of the move, accepted after
+		// the walk's last append, lands in the old project under a root in
+		// the new one, and nothing but this carries it.
+		"tracker_move_stragglers",
 		// AND A PERSON'S INBOX, which IS a range delete and is the one
 		// entry on this list that deletes something a person reads. The
 		// table shipped `tracker_notifications_swept_idx ON

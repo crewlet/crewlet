@@ -1737,6 +1737,65 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 	return true, w.followRoot(ctx, opID, root, subtree)
 }
 
+// carryStragglers carries into a root's project every live task under it that
+// is still outside it although no move of that root is running: the tracker
+// duty's repair for a task filed behind a finished move ([duty.carryStragglers]),
+// run under the move's own claim, which the caller holds. It answers how many
+// it carried.
+//
+// THE ROOT IS READ AGAIN HERE, under the claim, and anything that makes it no
+// longer this repair's is nothing to do: a root in the trash is frozen, a
+// MARKED one is a walk the abandoned-move job finishes, and one with a parent
+// is where a cycle's walk stopped rather than a root. A straggler in the trash
+// is left out of the pass rather than waited for — with the mark down there is
+// no walk to hold open for it, and its restore brings it back to the duty.
+func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, error) {
+	if w.db == nil {
+		return 0, fmt.Errorf("tracker: this writer has no store, so it " +
+			"cannot read the subtree a move left a task behind in")
+	}
+	var (
+		root    Task
+		subtree []Task
+		left    int
+	)
+	err := w.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
+		current, held, err := readTask(ctx, tx, id)
+		switch {
+		case err != nil:
+			return err
+		case !held:
+			return fmt.Errorf("tracker: task %s has a task filed behind its "+
+				"move and is not on this node: %w", id, statelog.ErrUnavailable)
+		case current.Removed != nil, current.Moving,
+			current.Parent != nil && *current.Parent != "":
+			return nil
+		}
+		all, err := readSubtree(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		root = current
+		for _, descendant := range all {
+			if descendant.Removed != nil {
+				continue
+			}
+			subtree = append(subtree, descendant)
+			if descendant.Project != current.Project {
+				left++
+			}
+		}
+		return nil
+	})
+	if err != nil || left == 0 {
+		return 0, err
+	}
+	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
+		return 0, err
+	}
+	return left, nil
+}
+
 // followRoot moves every descendant a root's move has not carried yet, and
 // then takes the root's mark down. SHARED BY THE RE-RUN AND THE DUTY, so a walk
 // finished either way is finished by one algorithm rather than by two that

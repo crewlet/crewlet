@@ -89,10 +89,22 @@ move's claim has lapsed, which is a minute after its last heartbeat and never
 while it is still running: the tasks still in the old project follow on fresh
 keys, which leaves a gap in the numbering like any other interrupted write. A
 task removed while the move was running is waited for — the root stays marked
-until it is restored, and the next pass carries it. Until the walk is finished,
-every task still in the old project is in the attention queue as
-`flag=inconsistent_project`: a subtask filed in another project than its root
-is not drawn under that root on either board. A merge never leaves one: a fold
+until it is restored, and the next pass carries it. A task **filed behind the
+walk** is carried too, whichever way it arrived. One filed under a task the
+walk read before it was filed keeps the mark up — the walk's last append checks
+that nothing under the root is still in the old project — and the walk runs one
+more pass for it. And one decided on a node that had not yet heard of the move,
+whose record only landed after the mark came down, is found by the `tracker`
+duty's `tracker_move_stragglers` job on its next pass: every live task still in
+another project than its root, under a root nothing is walking, follows it on a
+fresh key, under the move's own claim, so never beside a move of that root that
+is running (`tracker_move_stragglers_carried` names the root and how many
+followed, and `tracker_move_stragglers_failed` a repair that is retried on the
+next pass). A straggler in the trash is left where it is until it is restored,
+and its restore is what brings it to the duty. Until then, every task still in
+the old project is in the attention queue as `flag=inconsistent_project`: a
+subtask filed in another project than its root is not drawn under that root on
+either board. A merge never leaves one: a fold
 that would re-parent a duplicate's subtasks onto an item in another project is
 refused before it starts, naming the move that makes it possible.
 

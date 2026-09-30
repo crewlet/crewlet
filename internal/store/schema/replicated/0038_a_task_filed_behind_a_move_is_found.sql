@@ -1,0 +1,42 @@
+-- A task filed behind a cross-project move that has finished is found.
+--
+-- # What was missing
+--
+-- A move re-keys its root, marks it mid-move and walks the subtree it read
+-- before its first append; its last append takes the mark down only in a
+-- snapshot where nothing under the root is outside the root's project, and
+-- the walk runs one more pass for a task filed behind it. That covers every
+-- create a node decides once it has applied the root's move — it refuses a
+-- child under a task the walk has not carried — and every create whose record
+-- lands before the walk's last append.
+--
+-- It does not cover the one ordering left: a create DECIDED on a node that had
+-- not applied the root's move yet, whose record the broker accepted AFTER the
+-- mark came down. The applier files it under its parent, now in the new
+-- project, flags it `inconsistent_project` and moves on — a committed record
+-- is never refused there, since refusing would stall every node on it. The
+-- mark is down, so the duty that finishes an abandoned move never looks at
+-- that root again, and the task stayed in the old project for good, under a
+-- root in the new one, on neither project's board.
+--
+-- # What this index is for
+--
+-- The tracker duty's `tracker_move_stragglers` job: its gate asks whether any
+-- live task is flagged, and its walk selects the ROOTS those tasks sit under,
+-- in root order, and carries each root's stragglers into its project under
+-- the move's own claim. Partial on exactly the predicate both statements
+-- spell out — this engine's planner does not infer a partial index's WHERE
+-- from a query that omits it — so a company where every subtree lives in one
+-- project pays one probe that touches no row, and the walk reads the flagged
+-- rows already in root order rather than sorting them.
+--
+-- A task in the TRASH is left out: it takes no write until somebody restores
+-- it, and its restore clears `removed_at`, which is what brings it into the
+-- index — and to the duty's next tick.
+--
+-- 0002 IS NOT EDITED. `schema_migrations` keys on the filename, so a file
+-- that has already run never runs again: a fresh database and an upgraded one
+-- converge here, by the same route.
+
+CREATE INDEX tracker_tasks_stranded_idx ON tracker_tasks (root_id)
+    WHERE inconsistent_project = 1 AND removed_at IS NULL;
