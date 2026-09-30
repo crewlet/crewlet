@@ -172,12 +172,27 @@ type Presence struct {
 // effect only after the window — because a node that has not yet noticed is a
 // node still writing. An eviction and a release are subtracted alike
 // ([EvictionRow.Kind]): each is a node whose later records apply nowhere.
+//
+// And a row that says the node has RELEASED the log ([NodePosition.Released])
+// takes it out at once, as the node's own report rather than the fleet's: it
+// is the node saying its release is applied, which is the tombstone this
+// node's copy may not have applied yet, and a leaver the map still names as
+// the partition's holder is not a joiner about to replay — so it is not counted
+// at zero either.
 func CountedSet(now time.Time, reported []NodePosition, holders []Presence, tombs []Tombstone) []NodePosition {
 	byID := make(map[string]NodePosition, len(reported)+len(holders))
+	released := map[string]bool{}
 	for _, n := range reported {
+		if n.Released {
+			released[n.NodeID] = true
+			continue
+		}
 		byID[n.NodeID] = n
 	}
 	for _, p := range holders {
+		if released[p.NodeID] {
+			continue
+		}
 		if _, known := byID[p.NodeID]; !known {
 			// A HOLDER WITH NO POSITION YET COUNTS AT ZERO and blocks.
 			// It is a node between boot, or the start of its join, and

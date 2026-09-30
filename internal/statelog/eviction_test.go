@@ -82,6 +82,35 @@ func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	}
 }
 
+// A NODE WHOSE ROW SAYS IT RELEASED THE LOG IS COUNTED NOWHERE ON IT.
+//
+// Its release is on the log and applied, so everything it could still publish
+// there is gated and the position it names will never move. Counted at that
+// position it would pin the log until its row forgot the log; counted at zero
+// as the holder the map still names it, until the map let it go, it would block
+// the trim outright — and neither is a node the log keeps a tail for. A holder
+// with no row at all is still the joiner it always was.
+func TestANodeThatReleasedTheLogIsCountedNowhereOnIt(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	counted := statelog.CountedSet(now,
+		[]statelog.NodePosition{
+			{NodeID: "server", Generation: 1, Seq: 9_000},
+			{NodeID: "leaver", Generation: 1, Seq: 12, Released: true},
+		},
+		[]statelog.Presence{{NodeID: "server"}, {NodeID: "leaver"}, {NodeID: "joiner"}}, nil)
+	var names []string
+	for _, n := range counted {
+		names = append(names, n.NodeID)
+		if n.NodeID == "leaver" {
+			t.Errorf("the node that released the log is counted at %d", n.Seq)
+		}
+	}
+	if !slices.Equal(names, []string{"joiner", "server"}) {
+		t.Errorf("counted %v, want the joiner and the server", names)
+	}
+}
+
 // A LIVE LEASE REFUSES AN EVICTION.
 //
 // A node renewing its presence lease is reaching the fleet and almost always
