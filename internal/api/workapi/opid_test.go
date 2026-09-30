@@ -284,7 +284,13 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 // client to another node or to the tracker duty; where a task in the trash
 // holds the walk, to its restore.
 //
-// Mutation: drop moveStoppedHere and every case names the tool's own remedy.
+// AND IT SAYS WHERE THE KEY IS. These requests send none, so the key is the
+// one the surface minted and answers as `op_id`: told only to repeat "the SAME
+// Idempotency-Key", a client that never sent one resends without it — a new
+// operation, which is exactly the one that is refused.
+//
+// Mutation: drop moveStoppedHere and every case names the tool's own remedy;
+// drop the op_id clause and the three cases lack it.
 func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -295,18 +301,20 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 2, Of: 5, Err: errors.New("refused")},
 			want: []string{"ENG-1 moved to OPS as OPS-7", "2 of the 5",
-				"SAME " + workapi.IdempotencyHeader, "a new key is refused"},
+				"SAME " + workapi.IdempotencyHeader, "send op_id back",
+				"A new key is refused"},
 		},
 		"a task in the trash": {
 			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 4, Of: 5, Waiting: "ENG-9", Err: errors.New("frozen")},
 			want: []string{"ENG-9 is in the trash", "/work/items/ENG-9/restore",
-				"SAME " + workapi.IdempotencyHeader},
+				"SAME " + workapi.IdempotencyHeader, "send op_id back"},
 		},
 		"a step this node cannot vouch for": {
 			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 1, Of: 5, Err: tracker.ErrStepUnvouched},
-			want: []string{"cannot vouch", "another node", "tracker duty"},
+			want: []string{"cannot vouch", "another node", "tracker duty",
+				"send op_id back"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -321,9 +329,15 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 				t.Fatalf("answered %d %v, want the root's receipt with how to "+
 					"finish the move", got.status, got.body)
 			}
-			if strings.Contains(said, "op_id") || strings.Contains(said, "same arguments") {
+			// THE TOOL'S OWN REMEDIES ARE ARGUMENTS — the same ones, or an
+			// `op_id` among them — and this route takes neither.
+			if strings.Contains(said, "`op_id`") || strings.Contains(said, "same arguments") {
 				t.Errorf("the instruction is %q, which names a remedy this route "+
 					"does not take", said)
+			}
+			if key, _ := got.body["op_id"].(string); key == "" {
+				t.Errorf("the answer carries no op_id, so the key it tells the "+
+					"client to send back is nowhere: %v", got.body)
 			}
 			for _, want := range tc.want {
 				if !strings.Contains(said, want) {

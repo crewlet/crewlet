@@ -720,6 +720,13 @@ func subtreeStoppedHere(receipt map[string]any) {
 // cannot vouch for the step the walk stopped at, since the same key here stops
 // there again. Formed from the receipt's own fields, never from words read out
 // of the tool's sentence.
+//
+// THE KEY IS THE ANSWER'S `op_id` AS WELL AS THE REQUEST'S, and the sentence
+// says so: a request that sent no key had one minted for it ([operationKey]),
+// so "the SAME key" told that client to repeat a header it never held — and a
+// resend without one is a new operation, which is exactly what is refused.
+// The answer carries the key as `op_id` whichever way it was made, and
+// [unknownOutcome] words its own retry the same way.
 func moveStoppedHere(receipt map[string]any) {
 	said, stopped := receipt["move_stopped"]
 	if !stopped {
@@ -736,21 +743,23 @@ func moveStoppedHere(receipt map[string]any) {
 	total, _ := receipt["subtree_total"].(float64)
 	duty := "the tracker duty finishes the move on its own once nobody is " +
 		"walking it"
-	next := fmt.Sprintf("To finish it, send this request again under the SAME "+
-		"%s — a new key is refused, since the item is already in %s — or leave "+
-		"it: %s.", IdempotencyHeader, project, duty)
+	sameKey := "the SAME " + IdempotencyHeader + " — send op_id back as that " +
+		"header, which is this request's key whether it sent one or not"
+	next := fmt.Sprintf("To finish it, send this request again under %s. A "+
+		"new key is refused, since the item is already in %s. Or leave it: %s.",
+		sameKey, project, duty)
 	waits, _ := receipt["move_waits_for"].(string)
 	unvouched, _ := receipt["move_unvouched"].(bool)
 	switch {
 	case unvouched:
 		next = fmt.Sprintf("This node cannot vouch for the task the walk "+
-			"stopped at, so the same %s here stops there again: send it to "+
-			"another node, or leave it: %s.", IdempotencyHeader, duty)
+			"stopped at, so the same request here stops there again: send it "+
+			"to another node under %s, or leave it: %s.", sameKey, duty)
 	case waits != "":
 		next = fmt.Sprintf("%s is in the trash under it, and the move waits for "+
 			"it: restore it (POST /work/items/%s/restore) or purge it, then send "+
-			"this request again under the SAME %s — or leave it: once it is "+
-			"restored, %s.", waits, waits, IdempotencyHeader, duty)
+			"this request again under %s. Or leave it: once it is restored, %s.",
+			waits, waits, sameKey, duty)
 	}
 	receipt["move_stopped"] = fmt.Sprintf("%s moved to %s%s, but only %d of the "+
 		"%d tasks under it followed before the walk stopped; the rest are still "+

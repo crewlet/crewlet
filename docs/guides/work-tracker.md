@@ -131,7 +131,9 @@ and has to be restored or purged first; and where the node cannot vouch for
 the task the walk stopped at (`move_unvouched`), the same call there stops at
 the same place, so it is left to the `tracker` duty or made on another node.
 Over HTTP the move is `POST /work/items/{key}/move` with `{"project": "OPS"}`,
-and the same call is the same `Idempotency-Key`.
+and the same call is the same `Idempotency-Key` — the `op_id` every answer
+carries, sent back as that header, which is the request's key whether it sent
+one or the node minted it.
 
 The same call made again — what a move answered `unknown`, or stopped part-way,
 tells you to do — is answered by the move itself even once its first attempt has
