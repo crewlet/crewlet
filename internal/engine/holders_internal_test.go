@@ -139,6 +139,19 @@ func TestAPartitionedLayoutCountsTheMapsHoldersNotTheDataNodes(t *testing.T) {
 			t.Errorf("%s is held by %v, want the map's holders in every state %v", p, got, nodes)
 		}
 	}
+	// THE LEAVER SAYS SO, the one state a released row takes a holder out in;
+	// the joiner does not, so a released row left from its last tenure never
+	// hides it.
+	for _, h := range held[tracker1] {
+		if h.Leaving != (h.NodeID == "node-l") {
+			t.Errorf("%s on %s says leaving = %v", h.NodeID, tracker1, h.Leaving)
+		}
+	}
+	for _, h := range held[tracker0] {
+		if h.Leaving {
+			t.Errorf("%s on %s, which is not leaving, says it is", h.NodeID, tracker0)
+		}
+	}
 
 	// AND THE TRIM COUNTS THEM: the joiner at zero on its own partition's
 	// log, the idle data node on none.

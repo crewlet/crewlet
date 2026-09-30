@@ -145,6 +145,18 @@ func (k EvictionKind) Reason() Reason {
 // evict, or one holding a log's partition, which that log's counted set counts.
 type Presence struct {
 	NodeID string
+
+	// Leaving says the estate map lists this holder as LEAVING the log's
+	// partition — the one state in which a node releases the partition's
+	// logs, so the one in which its row's release takes it out of the
+	// counted set ([CountedSet]). False for a holder joining or serving, and
+	// for every presence that is not a map holder at all.
+	//
+	// LEAVING RATHER THAN A STATE, so the zero value is the one that COUNTS:
+	// a caller that knows no map state never has a released row suppress a
+	// holder, which errs toward keeping a tail rather than trimming past a
+	// joiner.
+	Leaving bool
 }
 
 // CountedSet is who the trim counts on ONE LOG: the positions register's rows
@@ -177,8 +189,18 @@ type Presence struct {
 // takes it out at once, as the node's own report rather than the fleet's: it
 // is the node saying its release is applied, which is the tombstone this
 // node's copy may not have applied yet, and a leaver the map still names as
-// the partition's holder is not a joiner about to replay — so it is not counted
-// at zero either.
+// the partition's holder ([Presence.Leaving]) is not a joiner about to replay —
+// so it is not counted at zero either.
+//
+// BUT ONLY A LEAVER. A released row outlives the leave until the node forgets
+// the log, and the map may place the node on the partition again before then —
+// a re-balance, a move cancelled — as a JOINER that has not declared the log
+// yet. That node is exactly the one whose tail must not be trimmed, and its
+// released row is about its previous tenure: so a holder the map lists in any
+// other state than leaving is counted at zero whatever its row says, as any
+// holder with no position yet is. Suppressed by the row alone, it was counted
+// nowhere, and only its trim hold — stale after [TrimHoldStale] — stood
+// between its adoption and the trim.
 func CountedSet(now time.Time, reported []NodePosition, holders []Presence, tombs []Tombstone) []NodePosition {
 	byID := make(map[string]NodePosition, len(reported)+len(holders))
 	released := map[string]bool{}
@@ -190,7 +212,7 @@ func CountedSet(now time.Time, reported []NodePosition, holders []Presence, tomb
 		byID[n.NodeID] = n
 	}
 	for _, p := range holders {
-		if released[p.NodeID] {
+		if released[p.NodeID] && p.Leaving {
 			continue
 		}
 		if _, known := byID[p.NodeID]; !known {

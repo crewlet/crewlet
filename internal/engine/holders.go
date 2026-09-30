@@ -205,7 +205,10 @@ func (h mapHolders) Holders(_ context.Context,
 		holders := m.HoldersOf(p)
 		presences := make([]statelog.Presence, 0, len(holders))
 		for _, holder := range holders {
-			presences = append(presences, statelog.Presence{NodeID: holder.Node})
+			// LEAVING SAID, because it is the one state in which a
+			// released row takes the holder out ([statelog.CountedSet]).
+			presences = append(presences, statelog.Presence{NodeID: holder.Node,
+				Leaving: holder.State == partmap.Leaving})
 		}
 		out[p] = presences
 	}

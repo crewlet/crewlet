@@ -98,7 +98,7 @@ func TestANodeThatReleasedTheLogIsCountedNowhereOnIt(t *testing.T) {
 			{NodeID: "server", Generation: 1, Seq: 9_000},
 			{NodeID: "leaver", Generation: 1, Seq: 12, Released: true},
 		},
-		[]statelog.Presence{{NodeID: "server"}, {NodeID: "leaver"}, {NodeID: "joiner"}}, nil)
+		[]statelog.Presence{{NodeID: "server"}, {NodeID: "leaver", Leaving: true}, {NodeID: "joiner"}}, nil)
 	var names []string
 	for _, n := range counted {
 		names = append(names, n.NodeID)
@@ -108,6 +108,30 @@ func TestANodeThatReleasedTheLogIsCountedNowhereOnIt(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"joiner", "server"}) {
 		t.Errorf("counted %v, want the joiner and the server", names)
+	}
+}
+
+// A RELEASED ROW TAKES OUT ONLY A LEAVER: a node the map lists as joining the
+// partition again — placed back before its row forgot the log — is counted at
+// ZERO, whatever position its released row names. The row is about its last
+// tenure, and the joiner is exactly the node whose tail must not be trimmed.
+func TestAReleasedRowDoesNotHideAJoiner(t *testing.T) {
+	t.Parallel()
+	counted := statelog.CountedSet(time.Now(),
+		[]statelog.NodePosition{
+			{NodeID: "server", Generation: 1, Seq: 9_000},
+			{NodeID: "back", Generation: 1, Seq: 12, Released: true},
+		},
+		[]statelog.Presence{{NodeID: "server"}, {NodeID: "back"}}, nil)
+	var back *statelog.NodePosition
+	for i := range counted {
+		if counted[i].NodeID == "back" {
+			back = &counted[i]
+		}
+	}
+	if back == nil || back.Seq != 0 {
+		t.Errorf("a joiner whose row still says it released the log is counted as %+v, "+
+			"want it at zero", back)
 	}
 }
 
