@@ -118,12 +118,7 @@ const (
 // domain registered is a domain layout 0 carries and the two orders cannot
 // disagree.
 func LayoutZero() statelog.Layout {
-	domains := registeredDomains()
-	names := make([]string, 0, len(domains))
-	for _, d := range domains {
-		names = append(names, d.Name())
-	}
-	return statelog.EstateLayout(names...)
+	return statelog.EstateLayout(registeredNames()...)
 }
 
 // layout is the layout this node runs: its state log's, or [LayoutZero] on a

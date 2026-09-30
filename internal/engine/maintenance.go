@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -169,11 +170,19 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				// tracker.Jobs because that list runs under the
 				// duty and this one must not.
 				//
+				// OVER EVERY TRACKER PARTITION THIS NODE RUNS AT
+				// THE SWEEP, asked each time: each file holds its
+				// own projects' inbox, and the partitions a node
+				// holds change while it runs.
+				//
 				// Its horizon is the company's and is read at
 				// every sweep, for the conversation ledger's
 				// reason above.
-				jobs = append(jobs, tracker.InboxJobs(
-					trackerEstate, e.inboxRetention)...)
+				if n.log != nil {
+					jobs = append(jobs, tracker.InboxJobs(func() []store.PartitionHandle {
+						return n.log.filesOf(tracker.Domain{}.Name())
+					}, e.inboxRetention)...)
+				}
 			}
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
 			// registered domain. Every `<domain>_ops` migration says
@@ -183,8 +192,8 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// the singleton, because each node owns its own copy —
 			// see [maintenance.StatelogJobs].
 			if n.log != nil {
-				jobs = append(jobs, maintenance.StatelogJobs(
-					n.log.opsLedgers(), maintenance.Fixed(statelog.OpsRetention))...)
+				jobs = append(jobs, maintenance.StatelogJobs(registeredNames(),
+					n.log.opsLedgers, maintenance.Fixed(statelog.OpsRetention))...)
 			}
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
 			// absence is a consequence rather than an omission. Its

@@ -34,7 +34,8 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(before.Notices))
 	}
 
-	jobs := tracker.InboxJobs(r.db, maintenance.Fixed(365*24*time.Hour))
+	jobs := tracker.InboxJobs(func() []store.PartitionHandle { return []store.PartitionHandle{r.db} },
+		maintenance.Fixed(365*24*time.Hour))
 	if len(jobs) != 1 {
 		t.Fatalf("InboxJobs returned %d jobs, want 1", len(jobs))
 	}
@@ -96,11 +97,40 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 }
 
 // TestTheInboxSweepDeclinesWithNoStore keeps the zero guard honest: a node
-// holding no partition contributes no job rather than a job that fails on its
-// first tick.
+// with no tracker to sweep contributes no job rather than a job that fails on
+// its first tick.
 func TestTheInboxSweepDeclinesWithNoStore(t *testing.T) {
 	t.Parallel()
-	if jobs := tracker.InboxJobs(store.PartitionHandle{}, maintenance.Fixed(time.Hour)); jobs != nil {
-		t.Fatalf("a node with no store contributed %d sweep jobs", len(jobs))
+	if jobs := tracker.InboxJobs(nil, maintenance.Fixed(time.Hour)); jobs != nil {
+		t.Fatalf("a node with no tracker contributed %d sweep jobs", len(jobs))
+	}
+}
+
+// THE INBOX SWEEP SWEEPS THE PARTITIONS HELD AT THE SWEEP.
+//
+// Each tracker partition's file holds its own projects' inbox rows, and a node
+// joins and leaves partitions while it runs; a sweep that fixed its files when
+// it was built never swept one joined since. So the job asks for the files at
+// every run: one that arrived after the job was built is swept, and a partition
+// held no longer is left alone.
+func TestTheInboxSweepSweepsThePartitionsHeldAtTheSweep(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.at = wednesday.Add(-400 * 24 * time.Hour)
+	routeTo(t, r, "t-1", "ENG-1", "bob")
+	r.at = wednesday
+
+	var held []store.PartitionHandle
+	jobs := tracker.InboxJobs(func() []store.PartitionHandle { return held },
+		maintenance.Fixed(365*24*time.Hour))
+	holdTheAppliersPin(t, r)
+	cutoff := wednesday.Add(-365 * 24 * time.Hour)
+	if swept, err := jobs[0].Run(t.Context(), wednesday, cutoff); err != nil || swept != 0 {
+		t.Fatalf("with no partition held the sweep deleted %d rows (%v)", swept, err)
+	}
+	held = []store.PartitionHandle{r.db}
+	if swept, err := jobs[0].Run(t.Context(), wednesday, cutoff); err != nil || swept != 1 {
+		t.Fatalf("the sweep of a partition held since the job was built deleted %d "+
+			"rows (%v), want the one past the horizon", swept, err)
 	}
 }

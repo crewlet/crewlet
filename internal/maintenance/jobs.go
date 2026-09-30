@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -130,7 +131,9 @@ type OpsLedger interface {
 	PurgeOps(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// StatelogJobs sweeps each registered domain's operation ledger.
+// StatelogJobs sweeps each registered domain's operation ledgers: one job per
+// domain, named `<domain>_ops`, over every log of that domain this node runs AT
+// THE SWEEP — ledgers answers them.
 //
 // [NodeLocal], and that is what this job is FOR. Every `<domain>_ops` migration
 // says the table is swept and ships `<domain>_ops_swept_idx` for the range
@@ -145,23 +148,38 @@ type OpsLedger interface {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
-func StatelogJobs(ledgers map[string]OpsLedger, retention Horizon) []Job {
-	names := make([]string, 0, len(ledgers))
-	for name := range ledgers {
-		names = append(names, name)
-	}
+//
+// # Every partition file the node holds, asked at every sweep
+//
+// A domain has a log in each partition of its space, each with its own ledger
+// in its own file, and the logs a node runs change while it runs — it joins a
+// partition and leaves another. So the job is per DOMAIN and asks for the
+// domain's ledgers every time it runs: a job per log fixed when the sweep was
+// built never swept a partition joined after it, and swept a stopped runner's
+// ledger for ever. A ledger that fails is reported and the rest are still
+// swept — they are independent files.
+func StatelogJobs(domains []string, ledgers func(domain string) []OpsLedger, retention Horizon) []Job {
 	// SORTED, so the log's job order is the same on every node and every
-	// tick. A map's iteration order would make one node's sweep line look
-	// like a different sweep from its peer's.
-	slices.Sort(names)
+	// tick. A caller's order would make one node's sweep line look like a
+	// different sweep from its peer's.
+	names := slices.Sorted(slices.Values(domains))
+	names = slices.Compact(names)
 
 	jobs := make([]Job, 0, len(names))
 	for _, name := range names {
-		ledger := ledgers[name]
 		jobs = append(jobs, Job{
 			Name: name + "_ops", Scope: NodeLocal, Horizon: retention,
 			Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
-				return ledger.PurgeOps(ctx, cutoff)
+				var swept int64
+				var errs []error
+				for _, ledger := range ledgers(name) {
+					n, err := ledger.PurgeOps(ctx, cutoff)
+					swept += n
+					if err != nil {
+						errs = append(errs, err)
+					}
+				}
+				return swept, errors.Join(errs...)
 			},
 		})
 	}

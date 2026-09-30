@@ -786,3 +786,65 @@ func TestTheMarkerSweepRunsUnderTheDutyAtItsOwnHorizon(t *testing.T) {
 		t.Errorf("the sweep saw cutoffs %v, want %v", m.cutoffs, want)
 	}
 }
+
+// opsLedger is one log's operation ledger, counting what it was asked to purge.
+type opsLedger struct {
+	rows  int64
+	err   error
+	calls atomic.Int32
+}
+
+func (l *opsLedger) PurgeOps(context.Context, time.Time) (int64, error) {
+	l.calls.Add(1)
+	return l.rows, l.err
+}
+
+// THE OPERATION-LEDGER SWEEP SWEEPS THE LOGS RUNNING AT THE SWEEP.
+//
+// A domain has a log — and a ledger — in each partition of its space, and a
+// node joins and leaves partitions while it runs. A job per log fixed when the
+// sweep was built never swept a partition joined after it and swept a stopped
+// runner's ledger for ever; so there is one job per DOMAIN, named as the
+// single-file estate's always were, and it asks for the domain's ledgers at
+// every run — summing them, and sweeping every one even when another fails.
+func TestTheOpsSweepSweepsTheLogsRunningAtTheSweep(t *testing.T) {
+	t.Parallel()
+	first, joined := &opsLedger{rows: 2}, &opsLedger{rows: 5}
+	broken := &opsLedger{err: errors.New("the file is gone")}
+	running := map[string][]maintenance.OpsLedger{"tracker": {first}}
+	var mu sync.Mutex
+	jobs := maintenance.StatelogJobs([]string{"tracker", "pages", "tracker"},
+		func(domain string) []maintenance.OpsLedger {
+			mu.Lock()
+			defer mu.Unlock()
+			return running[domain]
+		}, maintenance.Fixed(30*24*time.Hour))
+
+	var names []string
+	for _, j := range jobs {
+		names = append(names, j.Name)
+		if j.Scope != maintenance.NodeLocal {
+			t.Errorf("%s has scope %q; each node owns its own ledgers", j.Name, j.Scope)
+		}
+	}
+	if !slices.Equal(names, []string{"pages_ops", "tracker_ops"}) {
+		t.Fatalf("the sweep's jobs are %v, want one per domain", names)
+	}
+	tracker := jobs[1]
+	if n, err := tracker.Run(t.Context(), base, base); err != nil || n != 2 {
+		t.Fatalf("the tracker sweep of one log swept %d (%v), want 2", n, err)
+	}
+
+	// A PARTITION JOINED SINCE THE SWEEP WAS BUILT, and one that fails.
+	mu.Lock()
+	running["tracker"] = []maintenance.OpsLedger{first, broken, joined}
+	mu.Unlock()
+	n, err := tracker.Run(t.Context(), base, base)
+	if n != 7 || err == nil || !strings.Contains(err.Error(), "the file is gone") {
+		t.Fatalf("the sweep of three logs swept %d (%v), want 7 and the failure", n, err)
+	}
+	if joined.calls.Load() != 1 {
+		t.Errorf("the ledger of the log joined since was swept %d times, want once",
+			joined.calls.Load())
+	}
+}

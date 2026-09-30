@@ -1257,6 +1257,16 @@ func registeredDomains() []statelog.Domain {
 	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}}
 }
 
+// registeredNames is every registered domain's name, in the register's order.
+func registeredNames() []string {
+	domains := registeredDomains()
+	out := make([]string, 0, len(domains))
+	for _, d := range domains {
+		out = append(out, d.Name())
+	}
+	return out
+}
+
 // provisionAll provisions every log of the running layout, in the layout's
 // order, and opens each, keyed as the register keys them.
 func (s *stateLog) provisionAll(ctx context.Context, host domainHost) (map[string]*jetstream.DomainLog, error) {
@@ -4253,21 +4263,30 @@ func (s *stateLog) logOf(stream string) *runningLog {
 	return nil
 }
 
-// opsLedgers is every registered domain's operation ledger, keyed by domain.
-//
-// THE REGISTERED SET RATHER THAN A HAND-WRITTEN LIST, which is the whole point
-// of building it here: a domain added to [statelogDomains] and forgotten in a
-// sweep list is a table that grows for ever with nothing to notice, and that
-// is exactly how these two came to be unswept.
-func (s *stateLog) opsLedgers() map[string]maintenance.OpsLedger {
-	if s == nil {
-		return nil
+// opsLedgers is the operation ledger of every log of the named domain this node
+// runs NOW, in the layout's order — what the domain's sweep walks at each run
+// ([maintenance.StatelogJobs]), asked afresh because the logs a node runs
+// change while it runs.
+func (s *stateLog) opsLedgers(domain string) []maintenance.OpsLedger {
+	var out []maintenance.OpsLedger
+	for _, r := range s.running() {
+		if r.domain.Name() == domain && r.runner != nil {
+			out = append(out, r.runner)
+		}
 	}
-	running := s.running()
-	out := make(map[string]maintenance.OpsLedger, len(running))
-	for _, r := range running {
-		if r.runner != nil {
-			out[r.key] = r.runner
+	return out
+}
+
+// filesOf is the file of every partition carrying a log of the named domain
+// that this node runs NOW, once each, in the layout's order — what a per-node
+// sweep of one of that domain's tables walks.
+func (s *stateLog) filesOf(domain string) []store.PartitionHandle {
+	var out []store.PartitionHandle
+	seen := map[statelog.PartitionID]bool{}
+	for _, r := range s.running() {
+		if r.domain.Name() == domain && !seen[r.id.Partition] {
+			seen[r.id.Partition] = true
+			out = append(out, s.estate(r.id.Partition))
 		}
 	}
 	return out
