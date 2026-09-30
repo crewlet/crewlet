@@ -223,6 +223,11 @@ type retentionNode struct {
 }
 
 type retentionEviction struct {
+	// Kind is which gate the tombstone is — [statelog.EvictionKind] — and
+	// decides what the row calls it: a node that released its logs as it
+	// left said so itself, and "evicted by" it would send an operator after
+	// a gesture nobody made.
+	Kind        string    `json:"kind"`
 	By          string    `json:"by"`
 	At          time.Time `json:"at"`
 	EffectiveAt time.Time `json:"effective_at"`
@@ -1068,15 +1073,18 @@ func yesNo(v bool) string {
 // set, and the row is how an operator finds the block's cause.
 func noteOrStamp(n retentionNode) string {
 	if n.Evicted != nil {
+		gone := "evicted by " + n.Evicted.By
+		if statelog.EvictionKind(n.Evicted.Kind) == statelog.EvictionKindRelease {
+			gone = "left, releasing its logs itself"
+		}
 		if !n.Evicted.Effective {
 			// INSIDE THE FENCE WINDOW the node is still counted, and
 			// an operator reading an unchanged floor beside a bare
 			// "evicted" runs the gesture again.
-			return fmt.Sprintf("evicted by %s, still counted until %s",
-				n.Evicted.By, stampOrDash(n.Evicted.EffectiveAt))
+			return fmt.Sprintf("%s, still counted until %s", gone,
+				stampOrDash(n.Evicted.EffectiveAt))
 		}
-		return fmt.Sprintf("evicted by %s, effective %s", n.Evicted.By,
-			stampOrDash(n.Evicted.EffectiveAt))
+		return fmt.Sprintf("%s, effective %s", gone, stampOrDash(n.Evicted.EffectiveAt))
 	}
 	if n.At.IsZero() {
 		return "no position yet"

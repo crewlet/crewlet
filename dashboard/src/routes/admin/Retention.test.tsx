@@ -21,6 +21,7 @@ import {
   NodePositions,
   ServedLevelBanner,
   Terms,
+  Tombstone,
 } from "./Retention.tsx";
 import type { RetentionDomain, RetentionNode, RetentionTerm } from "~/protocol/index.ts";
 
@@ -266,7 +267,12 @@ test("a node with an unfinished gesture offers to finish it rather than start af
   // THE CONTROL: nothing held is the ordinary gesture for the node's state.
   expect(gateAction(node(), {})).toEqual({ evict: true, label: "Evict…" });
   expect(
-    gateAction(node({ evicted: { by: "o", at: "", effective_at: "", effective: true } }), {}),
+    gateAction(
+      node({
+        evicted: { kind: "eviction", by: "o", at: "", effective_at: "", effective: true },
+      }),
+      {},
+    ),
   ).toEqual({ evict: false, label: "Readmit…" });
 });
 
@@ -337,6 +343,33 @@ test("a refused domain names its refusal, the finding and the sentence", () => {
   expect(screen.getByText(/\(recreated\)/)).toBeTruthy();
   expect(screen.getByText(/keyed to the stream created at/)).toBeTruthy();
   expect(screen.getByText("log_truncated")).toBeTruthy();
+});
+
+// A RELEASE IS A NODE THAT LEFT, NOT ONE SOMEBODY EVICTED. Both tombstones
+// gate alike and the trim stops counting both alike, but a release is the
+// node's own word as it left the logs' partitions — "evicted by" the node
+// itself sends an operator looking for a gesture nobody made.
+test("a node that released its logs reads as left, and an evicted one as evicted", () => {
+  const at = "2031-04-01T12:00:00Z";
+  const { rerender } = render(
+    <Tombstone
+      evicted={{ kind: "release", by: "node-a", at, effective_at: at, effective: true }}
+      now={Date.parse(at)}
+    />,
+  );
+  expect(screen.getByText("left")).toBeTruthy();
+  expect(screen.getByTitle(/released its logs itself/)).toBeTruthy();
+  expect(screen.queryByText("evicted")).toBeNull();
+  expect(screen.queryByTitle(/evicted by/)).toBeNull();
+
+  rerender(
+    <Tombstone
+      evicted={{ kind: "eviction", by: "ops", at, effective_at: at, effective: true }}
+      now={Date.parse(at)}
+    />,
+  );
+  expect(screen.getByText("evicted")).toBeTruthy();
+  expect(screen.getByTitle("evicted by ops")).toBeTruthy();
 });
 
 // A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT SUBTRACTED, and a

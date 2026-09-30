@@ -412,6 +412,7 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 	type seen struct {
 		logs int
 		at   time.Time
+		kind statelog.EvictionKind
 	}
 	evicted := map[string]*seen{}
 	for _, running := range d.identity {
@@ -435,14 +436,14 @@ func (d *embedDuty) evicted(ctx context.Context) ([]statelog.Tombstone, error) {
 			}
 			s.logs++
 			if row.At.After(s.at) {
-				s.at = row.At
+				s.at, s.kind = row.At, row.Kind
 			}
 		}
 	}
 	var out []statelog.Tombstone
 	for node, s := range evicted {
 		if s.logs == len(d.identity) {
-			out = append(out, statelog.Tombstone{NodeID: node, At: s.at})
+			out = append(out, statelog.Tombstone{NodeID: node, At: s.at, Kind: s.kind})
 		}
 	}
 	return out, nil

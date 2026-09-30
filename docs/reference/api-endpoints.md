@@ -2421,6 +2421,13 @@ fleet has no nodes" cannot happen, and "coordination could not be listed"
 happens during exactly the outage somebody is running this in. Without the flag
 a renderer prints the impossible one.
 
+A node row's **`evicted`** is its tombstone once every log holds one, dated
+from the latest, and its **`kind`** says which gate that latest one is:
+`eviction`, an operator's, or `release`, the node's own as it left a partition.
+Both stop the trim counting the node alike; a surface renders a release as the
+node having **left** rather than as "evicted by" the node itself, since nobody
+ran a gesture against it.
+
 **`evictions_unreadable`** is `true` on the tracker's or the pages log's row
 when the answering node could not read that log's evictions as it assembled
 the report — a failed store read, or its replicated estate closed for a

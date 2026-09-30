@@ -562,6 +562,13 @@ func (s GenerationState) Valid() bool { return slices.Contains(GenerationStates(
 
 // EvictionReport is a tombstone as the operator surface renders it.
 type EvictionReport struct {
+	// Kind is which gate it is — an operator's `eviction` or the node's own
+	// `release` of the logs it left ([EvictionKind]) — because a surface
+	// says "evicted by" of the first and "left" of the second, and calling a
+	// node that left "evicted by itself" sends an operator after a gesture
+	// nobody made.
+	Kind EvictionKind `json:"kind"`
+
 	By string    `json:"by"`
 	At time.Time `json:"at"`
 
@@ -1011,6 +1018,7 @@ func (in ReportInputs) nodes() []NodeReport {
 		}
 		if t, ok := tombs[id]; ok {
 			row.Evicted = &EvictionReport{
+				Kind:        t.Kind,
 				By:          t.By,
 				At:          t.At.UTC(),
 				EffectiveAt: t.At.Add(EvictionFenceWindow).UTC(),

@@ -677,7 +677,11 @@ effect. **The evicted node stays counted for about a minute** on each log after
 that log's record lands, so a live node is certain to have read its own
 tombstone before the trim passes it. `crewlet retention status` shows the node
 as evicted only once every log holds its tombstone, and dates it from the
-latest of them.
+latest of them. A node whose latest tombstone is its own **release** — written
+as it left a partition, not by an operator — is shown as having **left**
+(`left, releasing its logs itself`; `left` on the Fleet screen) rather than as
+evicted by itself: the trim stops counting it the same way, and nobody ran a
+gesture against it.
 
 The honest worst case for that window is **zero**: a node three heartbeats late
 reads its tombstone exactly when the trim may pass it. So the window is a

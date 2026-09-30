@@ -291,6 +291,32 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 	}
 }
 
+// A NODE THAT RELEASED ITS LOGS IS REPORTED AS HAVING LEFT, NOT AS EVICTED.
+//
+// Both tombstones gate alike and the counted set drops both alike, but a
+// release is the node's own statement as it leaves a partition: rendered as an
+// eviction it reads "evicted by <the node itself>", and an operator goes
+// looking for a gesture nobody made. So the row carries the kind it read.
+func TestAReleasedNodesRowSaysItLeft(t *testing.T) {
+	t.Parallel()
+	at := reportAt.Add(-2 * statelog.EvictionFenceWindow)
+	for _, kind := range statelog.EvictionKinds {
+		rep := statelog.NewReport(statelog.ReportInputs{
+			NodeID:           "node-1",
+			At:               reportAt,
+			RegisterReadable: true,
+			Register:         []coord.NodePositions{{NodeID: "node-9", At: at}},
+			Tombstones: []statelog.Tombstone{{NodeID: "node-9", At: at,
+				By: "node-9", Kind: kind}},
+		})
+		row := rep.Nodes[0]
+		if row.Evicted == nil || row.Evicted.Kind != kind {
+			t.Errorf("a node whose tombstone is a %s is reported %+v, want the "+
+				"kind carried", kind, row.Evicted)
+		}
+	}
+}
+
 // A LIVE NODE WITH NO POSITION YET IS COUNTED, AND VISIBLE.
 //
 // It is a node between boot and its first heartbeat — a node adopting a

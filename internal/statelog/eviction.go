@@ -34,16 +34,24 @@ import (
 // give.
 const EvictionFenceWindow = 4 * coord.ReconcileInterval
 
-// Tombstone is an eviction as coordination holds it.
+// Tombstone is a node put out of a log — by an operator's eviction or by its
+// own release — as the counted set and the report read it.
 type Tombstone struct {
-	// NodeID is who was evicted.
+	// NodeID is who was put out.
 	NodeID string
 
 	// At is when the tombstone was written.
 	At time.Time
 
-	// By is the operator who ran it, which is what a refusal names.
+	// By is who ran it, which is what a refusal names: the operator for an
+	// eviction, the node itself for a release.
 	By string
+
+	// Kind is which gate the tombstone is ([EvictionRow.Kind]), read off
+	// the domain's own row. The counted set treats both alike; a surface
+	// does not, because a node that LEFT a log said so itself and is not a
+	// machine an operator judged gone.
+	Kind EvictionKind
 
 	// Generation is the domain's generation at the time. One from a
 	// previous generation is UNKNOWN rather than old, on the same rule
@@ -527,12 +535,21 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 			"estate is not one a retry can be judged against", opID, nodeID,
 			held, detail)
 	}
+	// A LATER GATE IS NAMED AS WHAT IT IS: a row's latest gate may be the
+	// node's own release, and an operator told "a later eviction" of a node
+	// nobody evicted goes looking for a gesture that was never made. So a
+	// row that names no gate this build knows is not judged at all.
+	if found && !row.Kind.Valid() {
+		return inconsistent(fmt.Sprintf("the node's row records the gate %q, "+
+			"which this build does not know", row.Kind))
+	}
+	later := "a later " + string(row.Kind)
 	if !readmit {
 		switch {
 		case !found:
 			return inconsistent("no eviction row holds " + nodeID)
 		case row.From > landed:
-			return superseded("a later eviction", row.From)
+			return superseded(later, row.From)
 		case row.From < landed:
 			return inconsistent(fmt.Sprintf(
 				"the node's eviction row is at the earlier composed position %d", row.From))
@@ -552,7 +569,7 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 	case row.Readmitted > landed:
 		return superseded("a later readmission", row.Readmitted)
 	case row.From > landed:
-		return superseded("a later eviction", row.From)
+		return superseded(later, row.From)
 	}
 	return inconsistent(fmt.Sprintf("the node's row is evicted at composed "+
 		"position %d and readmitted at %d", row.From, row.Readmitted))

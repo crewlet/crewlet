@@ -27,6 +27,10 @@ func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 			stringsOf(statelog.GenerationStates())},
 		{`export type RetentionIdentityCause =([^;]*);`,
 			stringsOf(statelog.IdentityCauses())},
+		// A KIND THE UNION DOES NOT NAME renders as an eviction: a node that
+		// left the logs itself shown as one an operator evicted.
+		{`export type RetentionEvictionKind =([^;]*);`,
+			stringsOf(statelog.EvictionKinds)},
 	} {
 		body, err := clientsource.Declaration(clientsource.Tree(t), gate.declaration)
 		if err != nil {

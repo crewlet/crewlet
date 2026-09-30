@@ -824,6 +824,9 @@ func (r *retention) tombstones(ctx context.Context, running *runningLog,
 		}
 		out = append(out, statelog.Tombstone{
 			NodeID: row.NodeID, At: row.At, By: row.By, Generation: generation,
+			// WHICH GATE, off the row, so a node that left the log is
+			// never reported as one an operator evicted.
+			Kind: row.Kind,
 		})
 	}
 	return out, true

@@ -1596,7 +1596,16 @@ export interface RetentionNodeDomain {
   checkpoint_stored_at?: string;
 }
 
+/** Which gate put a node out of the logs — `statelog.EvictionKind`, held to
+ *  it both ways by `internal/statelog`'s `report_client_test.go`: an
+ *  operator's `eviction`, or the node's own `release` of the logs it left. */
+export type RetentionEvictionKind = "eviction" | "release";
+
 export interface RetentionEviction {
+  /** A release is the node's own word as it left: shown as "left", never as
+   *  "evicted by" the node itself, which sends an operator after a gesture
+   *  nobody made. */
+  kind: RetentionEvictionKind;
   by: string;
   at: string;
   /** When the trim stops counting the node — one fence window after the
