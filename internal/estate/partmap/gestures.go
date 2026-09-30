@@ -102,10 +102,28 @@ func Out(state MapState, node, by, reason string, now time.Time) (MapState, erro
 	})
 }
 
+// Bar bars a node from the estate map ([membership.Bar]) — an eviction's part in
+// the map: a member is taken out as [Out] takes one, and the bar is recorded
+// whether or not the map holds the node, and lasts through its removal and
+// its return until [In] lifts it — so the maintainer never places a partition
+// on an evicted node that comes back while its logs still gate it. Barring a
+// node already barred answers the record it was given.
+//
+// NO EPOCH MOVES, as with every membership gesture.
+func Bar(state MapState, node, by, reason string, now time.Time) (MapState, error) {
+	if state.Map.Generation == uuid.Nil {
+		return state, ErrNoMap
+	}
+	return gesture(state, func(s membership.State, d placement.Draw) (membership.State, placement.Draw, error) {
+		return membership.Bar(s, d, node, by, reason, now)
+	})
+}
+
 // In puts a member back ([membership.In]): the targets name it again, and the
 // shares are balanced again. A node removed and not seen since is forgotten,
-// which changes no target. Putting back a member already placed on answers
-// the record it was given.
+// and a bar on a node the map does not hold is lifted, neither of which
+// changes a target. Putting back a member already placed on answers the record
+// it was given.
 func In(state MapState, node string) (MapState, error) {
 	if state.Map.Generation == uuid.Nil {
 		return state, ErrNoMap

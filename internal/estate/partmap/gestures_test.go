@@ -19,6 +19,7 @@ func TestAGestureWithNoMapIsRefused(t *testing.T) {
 	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
 	for name, gesture := range map[string]func() error{
 		"out":     func() error { _, err := Out(MapState{}, "data-00", "op", "", base); return err },
+		"bar":     func() error { _, err := Bar(MapState{}, "data-00", "op", "", base); return err },
 		"in":      func() error { _, err := In(MapState{}, "data-00"); return err },
 		"hold":    func() error { _, err := HoldFor(MapState{}, time.Hour, "op", "", base); return err },
 		"release": func() error { _, err := Release(MapState{}); return err },
@@ -76,6 +77,47 @@ func TestTakingAMemberOutMovesItsPartitionsWhileItServes(t *testing.T) {
 
 	if _, err := Out(s.state, "data-99", "op", "", base); !errors.Is(err, membership.ErrUnknownMember) {
 		t.Fatalf("taking out a stranger: %v, want membership's refusal", err)
+	}
+}
+
+// AN EVICTED NODE THAT COMES BACK IS PLACED ON NOTHING UNTIL IT IS PUT BACK.
+//
+// The eviction bars it: its partitions are rebuilt on the others, it is
+// removed for its absence, and when the machine returns under its old id — and
+// stays for far longer than any probation — no partition is placed on it,
+// because every log it would serve still gates it as evicted. Putting it back
+// is the one thing that places on it again.
+func TestAnEvictedNodeThatComesBackIsPlacedOnNothing(t *testing.T) {
+	t.Parallel()
+	s := settled(t, smallLayout, 2, nodeIDs(4)...)
+	next, err := Bar(s.state, "data-01", "op", "evicted", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = next
+	s.nodes["data-01"].down = true
+	for range 2*membership.OutTicks + 5 {
+		s.tick()
+	}
+	if s.state.Map.Draw().Holds("data-01") {
+		t.Fatal("the premise: a node gone for two graces is still a member")
+	}
+	s.nodes["data-01"].down = false
+	s.settle(4 * membership.StableTicks)
+	s.converged()
+	if held := s.holding("data-01"); len(held) != 0 {
+		t.Fatalf("an evicted node back for %d ticks holds %v", 4*membership.StableTicks, held)
+	}
+
+	back, err := In(s.state, "data-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.state = back
+	s.settle(200)
+	s.converged()
+	if s.holding("data-01")[Serving] == 0 {
+		t.Fatal("the node put back holds nothing")
 	}
 }
 
