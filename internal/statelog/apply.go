@@ -2380,6 +2380,14 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		if err != nil {
 			return err
 		}
+		// A RECORD THIS BUILD COULD NOT READ WHEN IT ARRIVED, now in the
+		// rows — the one case the checkpoint's own write never sees, since a
+		// reprocess does not move it.
+		if !dropped {
+			if err := r.tables.raiseApplied(ctx, tx, rec.V); err != nil {
+				return err
+			}
+		}
 		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
 			return err
 		}
@@ -2728,6 +2736,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 						tally.gated++
 					} else {
 						tally.applied++
+						tally.version = max(tally.version, rec.V)
 					}
 				}
 			}
@@ -2779,7 +2788,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			committedRecord = top.StoredAt
 		}
 		return r.tables.setCursor(ctx, tx, committedAt, r.StreamCreatedAt(),
-			committedRecord, r.now())
+			committedRecord, r.now(), tally.version)
 	})
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
@@ -3088,6 +3097,11 @@ type results struct {
 	retained int
 	gated    int
 	skipped  int
+
+	// version is the highest record version of a record this transaction
+	// APPLIED — what the checkpoint row's applied record version is raised
+	// to ([tables.setCursor]) — zero where it applied none.
+	version int
 
 	// barriers is how many of the records this batch consumed for the
 	// first time were barriers, whatever became of them — each is a record

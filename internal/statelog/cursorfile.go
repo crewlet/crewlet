@@ -30,6 +30,12 @@ type FileCursor struct {
 	// row predates the column, which is a claim about nothing rather than
 	// a claim about a stream created at the epoch.
 	StreamCreatedAt time.Time
+
+	// AppliedVersion is the highest record version the copy's rows on the
+	// stream were applied from, and NIL where nothing recorded it — a row
+	// that predates the record (migration 0027) — which is unknown rather
+	// than "applied nothing": zero is that, and a real value.
+	AppliedVersion *int
 }
 
 // CursorsInFile reads every domain's committed checkpoint out of a COPY of the
@@ -62,8 +68,9 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 
 	out := map[string]FileCursor{}
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT stream, generation, seq, stream_created_at FROM statelog_cursor`)
+		rows, err := tx.QueryContext(ctx, `
+			SELECT stream, generation, seq, stream_created_at, applied_version
+			FROM statelog_cursor`)
 		if err != nil {
 			return err
 		}
@@ -71,15 +78,21 @@ func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, err
 		for rows.Next() {
 			var stream string
 			var generation, seq, created int64
-			if err := rows.Scan(&stream, &generation, &seq, &created); err != nil {
+			var applied sql.NullInt64
+			if err := rows.Scan(&stream, &generation, &seq, &created, &applied); err != nil {
 				return err
 			}
-			out[stream] = FileCursor{
+			cursor := FileCursor{
 				Position: Position{
 					Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
 				},
 				StreamCreatedAt: store.DecodeTime(created),
 			}
+			if applied.Valid {
+				v := int(applied.Int64)
+				cursor.AppliedVersion = &v
+			}
+			out[stream] = cursor
 		}
 		return rows.Err()
 	}); err != nil {

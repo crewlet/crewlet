@@ -123,8 +123,8 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 				"up on", name)
 		}
 		if want := reg.Domain.RecordVersion(); pos.RecordVersion > want {
-			return fmt.Errorf("%s was written by a build reading record version "+
-				"%d and this one reads %d — its checkpoint sits above records "+
+			return fmt.Errorf("%s's rows were applied from records up to version "+
+				"%d and this build reads %d — its checkpoint sits above records "+
 				"this node cannot read, and once those sequences are trimmed it "+
 				"never can", name, pos.RecordVersion, want)
 		}

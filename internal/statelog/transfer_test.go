@@ -226,7 +226,7 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			breaks: func(o *statelog.Offer) { delete(o.Manifest.Domains, "probe") },
 			names:  "adopted wholesale",
 		},
-		"a donor that read more record versions than this build": {
+		"rows applied from a record version above this build's": {
 			breaks: func(o *statelog.Offer) {
 				p := o.Manifest.Domains["probe"]
 				p.RecordVersion = 9

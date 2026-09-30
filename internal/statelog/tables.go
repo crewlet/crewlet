@@ -212,26 +212,63 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (cursorRow, bool, er
 //
 // storedAt is the broker's instant for the record at p — the one this
 // transaction consumed there — which is how the checkpoint NAMES its record
-// ([cursorRow.storedAt]).
+// ([cursorRow.storedAt]). applied is the highest record version this
+// transaction APPLIED a record of, zero where it applied none, and it raises the
+// row's own ([tables.raiseApplied]).
 func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, storedAt,
-	now time.Time) error {
+	now time.Time, applied int) error {
 
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
-			(stream, generation, seq, stream_created_at, stored_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+			(stream, generation, seq, stream_created_at, stored_at, updated_at,
+			 applied_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
 			stream_created_at = excluded.stream_created_at,
 			stored_at         = excluded.stored_at,
-			updated_at        = excluded.updated_at`,
+			updated_at        = excluded.updated_at,
+			applied_version   = `+raisedApplied("excluded.applied_version"),
 		t.stream, int64(p.Generation), int64(p.Seq),
-		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now))
+		store.EncodeTime(created), encodeInstant(storedAt), store.EncodeTime(now),
+		int64(applied))
 	if err != nil {
 		return fmt.Errorf("statelog: write the cursor at %s: %w", p, err)
 	}
 	return nil
+}
+
+// raiseApplied raises the highest record version this stream's rows were
+// applied from to at least v, in the transaction that applied a record of it
+// outside the checkpoint's own write — a build reprocessing what an earlier
+// one retained, which does not move the checkpoint.
+//
+// # Why the rows keep it at all
+//
+// A snapshot's manifest states it, and a joiner refuses an artefact whose rows
+// hold a record of a version its build cannot read: arriving past such a
+// record, it could never apply it, defer it or reprocess it. Stated as the
+// donor BUILD's version instead, the claim was false for every record version
+// nothing had published yet, and a rolling upgrade's older nodes refused every
+// upgraded donor for records that did not exist.
+func (t tables) raiseApplied(ctx context.Context, tx *sql.Tx, v int) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE statelog_cursor SET applied_version = `+raisedApplied("?")+`
+		WHERE stream = ?`, int64(v), t.stream)
+	if err != nil {
+		return fmt.Errorf("statelog: raise the applied record version to %d: %w", v, err)
+	}
+	return nil
+}
+
+// raisedApplied is the one expression that raises the row's applied record
+// version to at least by: the larger of the two, and UNKNOWN STAYS UNKNOWN — a
+// row from before the column held rows nothing recorded, and a maximum over
+// the records since is no bound on the ones before (migration 0027).
+func raisedApplied(by string) string {
+	return `CASE WHEN statelog_cursor.applied_version IS NULL THEN NULL
+		ELSE MAX(statelog_cursor.applied_version, ` + by + `) END`
 }
 
 // reanchorCursor writes the checkpoint a reanchor places — at p, keyed to
@@ -250,11 +287,15 @@ func (t tables) setCursor(ctx context.Context, tx *sql.Tx, p Position, created, 
 func (t tables) reanchorCursor(ctx context.Context, tx *sql.Tx, p Position,
 	created, storedAt time.Time, from uint32, staleAfter uint64, now time.Time) error {
 
+	// A ROW THIS CREATES STARTS AT APPLIED VERSION ZERO — there is no row
+	// only where nothing was ever applied on the stream — and a row it
+	// replaces keeps its own: a reanchor moves the checkpoint and keeps
+	// every row, whatever it was applied from.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO statelog_cursor
 			(stream, generation, seq, stream_created_at, stored_at, updated_at,
-			 void_after, void_before, stale_after)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 void_after, void_before, stale_after, applied_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 		ON CONFLICT (stream) DO UPDATE SET
 			generation        = excluded.generation,
 			seq               = excluded.seq,
