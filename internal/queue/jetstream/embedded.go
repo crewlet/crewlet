@@ -694,18 +694,16 @@ func joinURLs(urls []string) string {
 	return out
 }
 
-// Dial opens a NATS connection to an external server with this package's own
-// reconnect policy.
+// dial opens a NATS connection to an external server with this package's own
+// reconnect policy, held to the transport's contract. The caller owns the
+// connection and must close it.
 //
-// Exported so a caller outside this package that needs a plain connection to
-// the same estate gets the same reconnect-forever behaviour. Reimplementing
-// the option list there would give two places to disagree about how long a
-// node survives a broker blip — and the whole point of that policy is that it
-// keeps its seats through one.
-//
-// The caller owns the connection and must close it.
-func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }
-
+// UNEXPORTED, because a caller outside this package reaches it through a
+// queue: [Queue.DialOwned] is how a subsystem gets a second connection with
+// the same reconnect-forever policy, and it dials the estate the queue
+// already proved. An exported Dial beside it was kept for a caller that would
+// otherwise reimplement the option list, and none ever existed — it was code
+// with no caller, indistinguishable from code whose caller nobody had found.
 func dial(cfg Config) (*nats.Conn, error) {
 	opts, err := dialOptions(cfg)
 	if err != nil {
