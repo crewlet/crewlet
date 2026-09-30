@@ -1516,6 +1516,9 @@ func (s *stateLog) publisherOver(domain statelog.Domain, id statelog.LogID, spec
 
 	deps := statelog.Deps{
 		Domain: domain, Spec: spec, Log: publishTo, Waiter: runner, NodeID: s.nodeID,
+		// THE SAME LOG READ BY POSITION, which a resolution reads to learn
+		// whose a record it did not append itself is.
+		Records: appendTo,
 		// WHERE THE LOG SITS, which the write authority's partition gates
 		// read: a record or a scope naming another partition is refused
 		// before anything is appended.

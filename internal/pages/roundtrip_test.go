@@ -127,7 +127,7 @@ func newRoundTripOn(t *testing.T, log *js.DomainLog, db store.PartitionHandle,
 	holding := statelogtest.NewHolding(statelog.EstatePartition)
 	race := statelogtest.NewRace(log)
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: race, Rows: rows, Fence: fence,
+		Domain: pages.Domain{}, Spec: statelog.EstateStream(pages.Domain{}), Layout: statelog.EstateLayout(pages.Domain{}.Name()), LogID: statelog.EstateLog(pages.Domain{}), Log: race, Records: log, Rows: rows, Fence: fence,
 		Gates: pages.NewGates(db.Reader()), Waiter: waiter, Identity: waiter, NodeID: nodeID,
 		Admission:     reserve,
 		Holding:       holding,

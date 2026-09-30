@@ -499,12 +499,61 @@ type fakeGates struct {
 	mu     sync.Mutex
 	reason statelog.Reason
 	gated  bool
+
+	// writer, when set, is the one writer the gate holds — a writer's gate
+	// is an eviction or a release, which drops a record by who wrote it —
+	// and asked is every writer the publisher asked about, in order.
+	writer string
+	asked  []string
 }
 
-func (g *fakeGates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
+func (g *fakeGates) GatedAt(_ context.Context, _ statelog.Subject, writer, _ string, _ statelog.Position) (statelog.Reason, bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.asked = append(g.asked, writer)
+	if g.writer != "" && writer != g.writer {
+		return "", false, nil
+	}
 	return g.reason, g.gated, nil
+}
+
+// holdWriter makes the gate hold writer's records, under reason, and no one
+// else's.
+func (g *fakeGates) holdWriter(writer string, reason statelog.Reason) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.writer, g.reason, g.gated = writer, reason, true
+}
+
+// askedAbout is every writer the gate was asked about.
+func (g *fakeGates) askedAbout() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.asked...)
+}
+
+// faultyRecords is the log read by position, as the publisher's resolution
+// reads it, with a failure a case can inject.
+type faultyRecords struct {
+	inner statelog.LogReader
+	mu    sync.Mutex
+	err   error
+}
+
+func (r *faultyRecords) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	r.mu.Lock()
+	err := r.err
+	r.mu.Unlock()
+	if err != nil {
+		return "", nil, time.Time{}, false, err
+	}
+	return r.inner.At(ctx, seq)
+}
+
+func (r *faultyRecords) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
 }
 
 // sweep is this node's retention sweep deleting every ledger row, as a sweep
@@ -624,6 +673,7 @@ type harness struct {
 	gates   *fakeGates
 	applier *applier
 	appends *countingAppender
+	records *faultyRecords
 	log     *js.DomainLog
 
 	// reserve is the log's gate reserve, nil for a domain that keeps none.
@@ -701,6 +751,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	h.fence = &fakeFence{}
 	h.gates = &fakeGates{}
 	h.appends = &countingAppender{inner: log, applier: h.applier, gen: h.gen.Load}
+	h.records = &faultyRecords{inner: log}
 	// A REAL RECORDER, because what the publisher counts a refusal as is an
 	// operator's only view of which remedy a fleet needs, and a case that
 	// asserts it has no other witness.
@@ -715,6 +766,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain), LogID: logOf(domain),
 		Holding:       h.holding,
 		Log:           h.appends,
+		Records:       h.records,
 		Rows:          h.rows,
 		Fence:         h.fence,
 		Gates:         h.gates,

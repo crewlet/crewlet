@@ -88,7 +88,7 @@ func Stamped(t *testing.T, new Factory) error {
 		// SERVING ITS LOG'S PARTITION, which is what a node deciding a
 		// write through the domain's own path is.
 		Holding: statelog.ServesOnly(c.log().Partition),
-		Log:     log, Rows: rows,
+		Log:     log, Records: log, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
 		Waiter: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
@@ -184,6 +184,17 @@ func (l *recordingLog) LastSeq(_ context.Context, subject string) (uint64, bool,
 	defer l.mu.Unlock()
 	seq, ok := l.last[subject]
 	return seq, ok, nil
+}
+
+// At is the record appended at seq, which a resolution reads to learn whose a
+// record it did not append itself is.
+func (l *recordingLog) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if seq == 0 || seq > uint64(len(l.records)) {
+		return "", nil, time.Time{}, false, nil
+	}
+	return "", l.records[seq-1], time.Time{}, true, nil
 }
 
 func (l *recordingLog) appended() [][]byte {

@@ -49,6 +49,16 @@ different with each.
   log and it may not. This is the only outcome a retry is correct for, and the
   retry carries the same operation id so the ledger collapses a duplicate.
 
+A lost acknowledgement is resolved from the log before it is ever called
+`unknown`: the write reads the newest record on its subject, and a record that
+carries its own operation id is its answer — `applied` where this node has
+applied it and no gate dropped it, even where this node's ledger has lost the
+operation's row, and refused under the gate that dropped it otherwise. A gate
+that drops a record by who wrote it (an eviction, a release) is asked about the
+node the record names, which is not always the one asking: an append the broker
+collapses onto another node's copy of the same operation is answered by that
+copy.
+
 A gesture made of **several** records in order — a cross-project move, a merge
 of duplicates, a checklist item's promotion, a dependency with its mirror, a
 subtree's removal or restore — treats a step answered `unknown` as the end of
@@ -287,6 +297,18 @@ it as one: a node that left a partition is not a node the fleet removed. When
 the node joins the partition again, a node that serves the partition readmits
 it before it adopts the partition's data. Nothing in today's single-partition
 estate releases a log.
+
+A write refused `released` is on the log, and it holds its operation id for
+the log's **duplicate window** (two minutes for every shipped log): the broker
+collapses the same id, sent again inside it by any node, onto that record, and
+the answer is `released` again — the resolution judges the record by the node
+that *wrote* it, never by the node asking. So a node that serves the partition
+takes the write under a fresh operation id, or under the same one once the
+window has passed; neither can apply twice, because the record in the way
+applies nowhere. The same holds for a write refused `evicted` that names a
+position: that record landed too. An `evicted` refusal with no position was
+made before anything was appended, and another node takes the write under the
+same id at once.
 
 ### A record whose scope meets a deferred scope is deferred too
 

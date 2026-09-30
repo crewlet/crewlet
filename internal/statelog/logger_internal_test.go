@@ -39,7 +39,8 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		t.Fatalf("NewRunner: %v", err)
 	}
 	publisher, err := NewPublisher(Deps{
-		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{}, Rows: struct{ Rows }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{},
+		Records: struct{ LogReader }{}, Rows: struct{ Rows }{},
 		Layout: EstateLayout(loggerProbe{}.Name()), LogID: loggerProbeLog,
 		Holding: ServesOnly(loggerProbeLog.Partition),
 		Fence:   struct{ Fence }{}, Gates: struct{ Gates }{},

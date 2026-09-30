@@ -99,6 +99,17 @@
 // row may be an earlier copy's, which a node that was behind decided against
 // other rows than this call did.
 //
+// A copy the broker collapsed an append onto need not be this node's at all:
+// an operation handed to another node — a write refused `released` or
+// `evicted` by one that left, retried through one that serves — lands on the
+// first copy while the window lasts, and when that copy applied nowhere there
+// is no ledger row to answer from. Whether a gate dropped it is a question
+// about the node that WROTE it, so the resolution reads the record off the log
+// and asks the gates about its writer, answering that writer's refusal; asked
+// about itself, the retrying node found no gate and a ledger that vouched, and
+// reported a contract violation. The id stays spent on that log until the
+// window passes, which is what the refusal tells its caller.
+//
 // # An operation id carries the instant it was minted
 //
 // Layer 1 has a hole the other two cannot fill: the ops table can LOSE ROWS.

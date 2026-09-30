@@ -207,6 +207,13 @@ type DomainGate struct {
 	// from the gesture's.
 	OpID string
 
+	// Duplicates is the log's duplicate window: how long the broker holds an
+	// operation id on the record it first landed, collapsing the same id
+	// sent again onto it. A record of this gesture's that landed and applies
+	// nowhere — refused `evicted` or `released` with a position — keeps the
+	// gesture's id spent on this log for that long, which the remedy says.
+	Duplicates time.Duration
+
 	// Outcome is the write's own three-valued answer — applied, pending or
 	// unknown — and EMPTY when Err is set: a write that answered with an
 	// error gave no outcome, which is not one of the three.
@@ -297,14 +304,20 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 	if errors.As(d.Err, &refusal) {
 		switch refusal.Reason {
 		case statelog.ReasonEvicted:
+			if refusal.Position.Stream != "" {
+				return only(statelog.GateOtherNode, "this node is evicted itself, and "+
+					d.landedNowhere(refusal.Position, "a node the fleet still counts"))
+			}
 			return only(statelog.GateOtherNode, "this node is evicted itself and "+
 				"writes nothing to any log: run the gesture through a node the fleet "+
 				"still counts, under the same operation id")
 		case statelog.ReasonReleased:
+			// ALWAYS A RECORD THAT LANDED: a node that has begun to leave
+			// is refused `not_holder` before anything is appended, so a
+			// release gate only ever drops a write already on its way.
 			return only(statelog.GateOtherNode, fmt.Sprintf("this node released %s "+
-				"when it left that log's partition, so nothing it writes there applies: "+
-				"run the gesture through a node that serves the partition, under the "+
-				"same operation id", d.Stream))
+				"when it left that log's partition, and ", d.Stream)+
+				d.landedNowhere(refusal.Position, "a node that serves the partition"))
 		case statelog.ReasonNotHolder:
 			return only(statelog.GateOtherNode, fmt.Sprintf("this node does not "+
 				"serve the partition %s is on, and only a node that serves a partition "+
@@ -373,6 +386,33 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 		"the same operation id finishes it")
 }
 
+// landedNowhere is the remedy for a record of this gesture that landed at on
+// this log and applies nowhere: the gesture is finished through another node,
+// named by who, under the SAME operation id — but only once the broker has let
+// go of that id.
+//
+// # Why neither "now" nor a fresh id
+//
+// The broker holds the operation id on the record it first landed for the
+// log's duplicate window, so the same id sent before then — by any node — is
+// collapsed onto that record and refused the same way. A fresh id would be
+// written at once, but it is a SECOND gesture: every log that already holds
+// this one's record would be written again, its gate re-dated, and the first
+// id would answer `superseded` to anyone finishing it. The record in the way
+// applies nowhere, so the same id after the window cannot apply twice.
+func (d DomainGate) landedNowhere(at statelog.Position, who string) string {
+	window := "the log's duplicate window"
+	if d.Duplicates > 0 {
+		window = fmt.Sprintf("the log's duplicate window, %s,", d.Duplicates)
+	}
+	return fmt.Sprintf("the record this gesture put on %s at %s applies nowhere — "+
+		"the broker holds its operation id for %s from when it landed. Once that "+
+		"has passed, run the gesture through %s under the same operation id: "+
+		"before then the id is collapsed onto that record and refused the same "+
+		"way, and a fresh id would write every log that already holds the "+
+		"gesture's record again", d.Stream, at, window, who)
+}
+
 // NodeGate is the gesture, over every identity-claiming log this node runs.
 type NodeGate struct {
 	// logs is every identity-claiming log this node runs AT THE GESTURE,
@@ -401,6 +441,10 @@ type NodeGate struct {
 type gateLog struct {
 	domain string
 	stream string
+
+	// duplicates is the log's duplicate window, which a remedy for a record
+	// that landed and applies nowhere names ([DomainGate.Duplicates]).
+	duplicates time.Duration
 
 	// write publishes the log's own gate record — or, for a retried
 	// operation whose record is already the gate in force, answers where it
@@ -553,7 +597,8 @@ func gateLogFor(running *runningLog, publisher *statelog.Publisher, db store.Par
 	// log in each of two partitions has two gates to write, and each is
 	// reported — and its operation derived — as its own.
 	name := running.domain.Name()
-	gl := gateLog{domain: running.key, stream: running.spec.Name}
+	gl := gateLog{domain: running.key, stream: running.spec.Name,
+		duplicates: running.spec.Duplicates}
 	switch name {
 	case tracker.Domain{}.Name():
 		w, err := tracker.NewWriter(tracker.WriterDeps{
@@ -691,7 +736,7 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (Ga
 	defer cancel()
 	out := GateResult{Node: req.Node, OpID: req.OpID}
 	for _, l := range logs {
-		d := DomainGate{Domain: l.domain, Stream: l.stream,
+		d := DomainGate{Domain: l.domain, Stream: l.stream, Duplicates: l.duplicates,
 			OpID: domainOpID(req.OpID, readmit, l.domain, req.Node)}
 		res, err := l.write(ctx, req.By, d.OpID, req.Node, readmit)
 		if err != nil {

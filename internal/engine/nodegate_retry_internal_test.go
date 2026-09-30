@@ -505,6 +505,13 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		return DomainGate{Stream: "CREWLET_PAGES_LOG",
 			Err: &statelog.Unavailable{Reason: reason}}
 	}
+	// landed is a refusal of a record the log holds at a position and a gate
+	// dropped there.
+	landed := func(reason statelog.Reason) DomainGate {
+		return DomainGate{Stream: "CREWLET_PAGES_LOG", Duplicates: 2 * time.Minute,
+			Err: &statelog.Unavailable{Reason: reason, Position: statelog.Position{
+				Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}}
+	}
 	retry, other := statelog.GateRetrySameOp, statelog.GateOtherNode
 	for name, tc := range map[string]struct {
 		gate    DomainGate
@@ -521,10 +528,16 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"floor":       {gate: refused(statelog.ReasonFloorUnknown), actions: []statelog.GateAction{retry}, detail: "coordination"},
 		"below floor": {gate: refused(statelog.ReasonBelowFloor), actions: []statelog.GateAction{retry, other}, detail: "snapshot"},
 		"evicted":     {gate: refused(statelog.ReasonEvicted), actions: []statelog.GateAction{other}, detail: "still counts"},
+		// A RECORD THAT LANDED AND APPLIES NOWHERE holds the gesture's id
+		// on the log for its duplicate window: the same id through another
+		// node, but only once that has passed — never a fresh id, which
+		// would write every other log's record again.
+		"evicted, landed": {gate: landed(statelog.ReasonEvicted), actions: []statelog.GateAction{other},
+			detail: "duplicate window, 2m0s, from when it landed. Once that has passed, run the gesture through a node the fleet still counts under the same operation id"},
 		// A NODE THAT LEFT THE LOG'S PARTITION writes nothing that applies
-		// there, whichever id it retries under: another node serves it.
-		"released": {gate: refused(statelog.ReasonReleased), actions: []statelog.GateAction{other},
-			detail: "serves the partition"},
+		// there — and its record is always one that landed.
+		"released": {gate: landed(statelog.ReasonReleased), actions: []statelog.GateAction{other},
+			detail: "duplicate window, 2m0s, from when it landed. Once that has passed, run the gesture through a node that serves the partition under the same operation id"},
 		// A NODE THAT DOES NOT SERVE THE LOG'S PARTITION never writes it,
 		// whichever id it retries under; one that cannot tell may again.
 		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{other},

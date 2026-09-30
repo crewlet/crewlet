@@ -128,7 +128,10 @@ const partitionedDeadline = 20 * time.Second
 //  4. A RELEASE RACING A WRITER: a serving node leaves a partition between one
 //     of its writes' last question and that write's landing, so the write lands
 //     above the node's release — and is dropped on every holder, its writer told
-//     `released`; after the release the node writes nothing there.
+//     `released`; after the release the node writes nothing there. A node that
+//     serves the partition, handed the same operation, is told `released` too —
+//     the broker collapses the id onto the dropped record for the log's
+//     duplicate window — and takes the write under a fresh one.
 //  5. A readmission by another serving node takes the leaver back: once it
 //     serves again, what it writes applies on every holder.
 //  6. Every record on every log declares a scope inside its log's partition
@@ -310,10 +313,36 @@ func Partitioned(t *testing.T, new PartitionedFactory) error {
 	}
 	w.drain()
 	for _, node := range w.nodes {
-		if holds, err := c.Holds(ctx, node.parts[p].db.Reader(), racing); err != nil || holds {
+		if holds, readErr := c.Holds(ctx, node.parts[p].db.Reader(), racing); readErr != nil || holds {
 			add("%s's copy of %s holds %s, which %s wrote after it released the "+
 				"log (%v) — the release gate did not drop it", node.id, p, racing,
-				leaver.id, err)
+				leaver.id, readErr)
+		}
+	}
+	// THE WRITE, TAKEN BY A NODE THAT SERVES THE PARTITION. Its operation id
+	// is spent for the log's duplicate window — the broker collapses the
+	// same id onto the record that applies nowhere — so the server handed
+	// that operation is told the record's own gate, and not a contract
+	// violation about a record that was only ever gated; under a fresh id
+	// it takes the write, which cannot apply twice.
+	taking := stayer.parts[p]
+	_, err = c.WriteObject(ctx, taking.pub, taking.db.Reader(), racing, "parted-racing-"+racing)
+	if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonReleased {
+		add("%s, which serves %s, writing %s under the operation of %s's gated "+
+			"write was answered %v, want a refusal %q — its append is collapsed "+
+			"onto that write's record, which applies nowhere", stayer.id, p, racing,
+			leaver.id, err, statelog.ReasonReleased)
+	}
+	if _, err := c.WriteObject(ctx, taking.pub, taking.db.Reader(), racing,
+		"parted-retaken-"+racing); err != nil {
+		add("%s's write of %s under a fresh operation id was refused: %v", stayer.id,
+			racing, err)
+	}
+	w.drain()
+	for _, node := range w.nodes {
+		if holds, readErr := c.Holds(ctx, node.parts[p].db.Reader(), racing); readErr != nil || !holds {
+			add("%s's copy of %s does not hold %s, written by %s under a fresh "+
+				"operation id (%v)", node.id, p, racing, stayer.id, readErr)
 		}
 	}
 	after := c.Object(p, 94)
@@ -540,7 +569,7 @@ func (w *partitionedWorld) hold(ctx, run context.Context, loops *sync.WaitGroup,
 	race := NewRace(misroute)
 	deps := statelog.Deps{
 		Domain: c.Domain, Spec: spec, Layout: w.layout, LogID: id,
-		Holding: node.holding, Log: race, Rows: rows,
+		Holding: node.holding, Log: race, Records: log, Rows: rows,
 		Fence: openFence{}, Gates: c.Gates(db.Reader()),
 		Waiter: runner, Identity: runner, Metrics: recorder, NodeID: node.id,
 		Generation:    func() uint32 { return runner.Committed().Generation },

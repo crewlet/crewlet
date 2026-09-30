@@ -130,7 +130,17 @@ type Reason string
 
 const (
 	// ReasonEvicted — this node has been removed from the fleet. Nothing
-	// it publishes will be applied anywhere. There is no retry.
+	// it publishes will be applied anywhere, so there is no retry HERE:
+	// another node the fleet still counts takes the write. A refusal that
+	// names no position was made before anything was appended, and that
+	// node takes the write under the same operation id. One that names a
+	// position is a record of this node's that landed and applies nowhere,
+	// and it holds the operation id for the log's duplicate window
+	// ([StreamSpec.Duplicates]): the same id sent inside it — by any node —
+	// is collapsed onto that record and refused the same way, so the other
+	// node takes the write under a fresh id, or under this one once the
+	// window has passed. Neither can apply twice, because the record in
+	// the way applies nowhere.
 	ReasonEvicted Reason = "evicted"
 
 	// ReasonReleased — the record's writer RELEASED this log before the
@@ -139,8 +149,15 @@ const (
 	// publishes on the log afterwards applies anywhere ([EvictionKindRelease]).
 	// A record that landed after it — a write that was in flight while the
 	// node left — is dropped on every holder, which is what lets the node
-	// leave without a coordination round trip anybody has to trust. Another
-	// node that serves the partition takes the write.
+	// leave without a coordination round trip anybody has to trust.
+	//
+	// ALWAYS A RECORD THAT LANDED, and it holds its operation id for the
+	// log's duplicate window: the same id sent inside it — by any node,
+	// one that serves the partition included — is collapsed onto the
+	// record and refused `released` again. A node that serves the
+	// partition takes the write under a fresh id, or under this one once
+	// the window has passed; neither can apply twice, because the record
+	// in the way applies nowhere.
 	ReasonReleased Reason = "released"
 
 	// ReasonNotHolder — this node does not serve the partition of the log the

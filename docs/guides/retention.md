@@ -555,10 +555,19 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
-  (`-url`).
+  (`-url`). Where the answer names a **position**, the gesture's record on that
+  log landed and applies nowhere, and it holds the operation id there for the
+  log's duplicate window (two minutes) from when it landed: the same `-op-id`
+  sent sooner — through any node — is collapsed onto that record and answered
+  `evicted` again, so wait out the window first. A fresh id is not the way
+  round it, for the reason above.
 - `released` — the node you ran it on released that log when it left the log's
-  partition, so nothing it writes there applies: run the gesture, under the
-  same `-op-id`, through a node that serves the partition (`-url`).
+  partition, and the gesture's record there landed after the release and
+  applies nowhere. It holds the operation id on that log for the log's
+  duplicate window (two minutes) from when it landed, so once that has passed,
+  run the gesture, under the same `-op-id`, through a node that serves the
+  partition (`-url`); sooner, the id is collapsed onto the record and answered
+  `released` again.
 - `not_holder` — the node you ran it on does not serve that log's partition,
   and only a node that serves a partition writes its logs: run the gesture,
   under the same `-op-id`, through one that does (`-url`).

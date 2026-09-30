@@ -138,9 +138,7 @@ func Catalogue() []Instrument {
 			Shows: "Writes refused before or instead of an append, by `reason`, and " +
 				"EVERY value it carries is here, each with its remedy. The node: " +
 				"`evicted` (this node is removed from the fleet — run the write " +
-				"on another), `released` (it released this log when it left the " +
-				"log's partition — a node that serves the partition writes " +
-				"it), `not_holder` (it does not serve the log's partition, never " +
+				"on another), `not_holder` (it does not serve the log's partition, never " +
 				"having held it or having begun to leave it — a node that serves " +
 				"it writes it), `holding_unknown` (it could not tell whether it " +
 				"serves the partition — clears when it can, and a node that " +
@@ -165,7 +163,9 @@ func Catalogue() []Instrument {
 				"undid it) — both answered by a NEW operation under a fresh " +
 				"id, never by a retry. A record that landed and a gate dropped " +
 				"is counted under the gate that dropped it — `evicted`, " +
-				"`released` (written by a node after it released the log), " +
+				"`released` (written by a node after it released the log as it " +
+				"left the log's partition — a node that serves the partition " +
+				"takes the write), " +
 				"`deleted`, `retired` (a kind this build no longer applies), " +
 				"`abandoned` (written in a generation a reanchor abandoned), " +
 				"`overtaken` (written after a restored reanchor, below its " +
@@ -173,7 +173,11 @@ func Catalogue() []Instrument {
 				"another partition than the log it is on — another writer's, " +
 				"since this one refuses such a record before appending it) — " +
 				"and is never re-decided, because republishing " +
-				"makes another record nothing applies. Beside the refusals: " +
+				"makes another record nothing applies. Such a record holds its " +
+				"operation id for the log's duplicate window, so the same id sent " +
+				"inside it, by any node, is collapsed onto the record and refused " +
+				"the same way: the write is retried under a fresh id, or under the " +
+				"same one once the window has passed. Beside the refusals: " +
 				"`conflict` for a write that lost every round, `exists` for a " +
 				"create whose object already exists, and `error` for a write " +
 				"that failed before it could answer. A refusal is not one of " +
