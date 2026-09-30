@@ -317,7 +317,7 @@ function ProjectsSection({ path }: { path: string[] }) {
   if (rows.length === 0) return null;
   // THE PROJECT A READER IS INSIDE is the one marked — its page, or an item
   // filed in it, whose key names the project — and the one this group's `+`
-  // files into. THE ROUTE'S OWN RESOLVER, the one the rail's head `+` asks:
+  // files into. THE ROUTE'S OWN RESOLVER, the one the sidebar's head `+` asks:
   // the path's second segment with a number stripped read every other Work
   // page as a project, so on `#/work/views` this `+` offered "New task in
   // views" and opened the sheet on a project called `views`, and on a task

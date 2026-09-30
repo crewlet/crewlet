@@ -166,7 +166,7 @@ test("the bare-@ reading sees both markup spellings and nothing outside markup",
  * card, a seat's from a colleague chip, a page's from a search hit, a turn's
  * from an item's history, a project's from an item. Every one of them
  * is a way OUT of the screen a reader is on, which is the half of navigation
- * the rail cannot provide.
+ * the sidebar cannot provide.
  *
  * The check is on the FIRST SEGMENT, because that is what route dispatch
  * switches on: a literal that names a segment no workspace owns cannot reach

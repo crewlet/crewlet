@@ -998,7 +998,7 @@ the base is not the permission to register; having a sink is.
 
 Both record their outcome on the same fleet integration status the reconcile
 loop writes, through the same fold, so a pass run by hand and a tick that runs
-a minute later cannot disagree, and the Integrations screen updates with no
+a minute later cannot disagree, and Settings › Integrations updates with no
 extra plumbing. A pass that **failed** is recorded too, as the loop records
 one: phase `activating`, actor `engine`, findings dropped, because a pass that
 failed did not observe anything.
@@ -1207,18 +1207,31 @@ would be two forms writing one field.
 
 ## Live Stream
 
-`/ws/stream` is the dashboard's **only** data channel. State comes down
-it and requests go up it, so a running dashboard makes no HTTP request
-at all: the handshake snapshot carries every section a screen needs on
-first paint, subsequent pushes carry what changed, and anything fetched
-on demand — an agent's LLM history, one event's payload, a trace, a
-different spend window, the configuration document — is a query sent on
-the same socket and answered on it.
+`/ws/stream` is where the dashboard READS. State comes down it and questions
+go up it: the handshake snapshot carries every section a screen needs on first
+paint, subsequent pushes carry what changed, and anything fetched on demand — an
+agent's LLM history, one event's payload, a trace, a different spend window —
+is a query sent on the same socket and answered on it. The socket carries no
+write.
 
-The REST endpoints below remain a public read API, and
-`GET /stream/snapshot` is still the fallback for a browser that cannot
-upgrade to a WebSocket (corporate proxies). They are no longer part of
-the dashboard's normal operation.
+REST carries the rest, and it is two things the socket deliberately is not:
+
+- **Writes.** A change to the company's work is `POST /operator/act/{tool}`,
+  made as the person the dashboard's token is bound to (see
+  [`/operator/act`](#operatoract--the-dashboards-write-surface)); a change to
+  the company document is `PATCH /config`; a credential is `/secrets`; an
+  integration's setup is `/setup`; a backup is `POST /backup`. A write answers
+  with the position it landed at, and the reads it moved are asked again on the
+  socket at that position.
+- **Guarded reads the query registry does not answer** — the secret names
+  (`/secrets`), where each `${VAR}` resolves from (`/config/references`) and an
+  integration's setup (`/setup/integrations`). They are credential-scoped
+  surfaces with their own refusals, read through the dashboard's one REST
+  loader rather than mirrored onto the socket.
+
+The REST read routes below are also a public read API, and
+`GET /stream/snapshot` is the fallback for a browser that cannot upgrade to a
+WebSocket (corporate proxies).
 
 Every named read route is an **adapter**, never a second implementation: it
 resolves its path values and hands them to the same answer the socket's query
@@ -1249,7 +1262,7 @@ one list differently:
 
 `payload` is present only where the event was fetched by id or by trace: a
 listing deliberately never selects it, because a page of events with every
-payload attached is the query that makes an activity screen slow.
+payload attached is the query that makes a live screen slow.
 
 ### A seat's LLM history
 
@@ -1717,7 +1730,7 @@ Both are filed under `lifecycle`.
 {"type": "operator_acted", "source": "operator",
  "operator_id": "founder", "actor_seat": "jane-founder",
  "transport": "act", "tool": "update_work_item",
- "request_id": "0f7c1a4e-9b2d-4e51-8c3a-6d7e8f9a0b1c",
+ "request_id": "0192f1a4-9b2d-7e51-8c3a-6d7e8f9a0b1c",
  "outcome": "applied", "position": "CREWLET_TRACKER_LOG@1:4711"}
 ```
 
@@ -1958,7 +1971,9 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 > same fall-through is what a kind this build's engine sends and its own
 > client forgot looks like, and the e2e replay fails on a non-zero count.
 
-**Server → client kinds**
+#### Pushes
+
+Server → client kinds:
 
 | `kind` | When | `data` |
 |--------|------|--------|
@@ -1975,14 +1990,18 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error, retry_after_seconds?, detail? }` where `error` is a code: `unknown_query`, `unauthorized`, `not_found`, `bad_params`, `unavailable`, or `query_failed` for every other failure (the reason goes to the log, never to the socket). **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node a store it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join, or a coordination store it could not reach — so a client says "ask again in a moment" rather than reporting a fault. It is the one code that carries **`retry_after_seconds`**: how long to wait, from the same helper as its REST twin's `503` `Retry-After` header, so the two transports never disagree — the refusal's own derived hint where it has one (how far behind this node is, over how fast it is draining), rounded and never below a second, and the health tick's five seconds otherwise. The dashboard asks again after exactly that wait and keeps no wait of its own, so this hint — and the `Retry-After` on a REST refusal — is the only retry clock it has. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. It is the one code that carries **`detail`**: the refusal's own sentence, which names the parameter to change and what it accepts (`days is 91, and a spend window is 1 to 90 company days — ask for at most 90`), written for the person who will read it: no class name, the engine's or a finer one (`tokens.ErrWindowLength`, which a Go caller tests with `errors.Is`), and no echo of the query's name — the REST `400` body carries the same `detail` beside its `error`. Every other code's text stays in the node's log, since a failure's own text can carry a path. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
-**Client → server kinds**
+#### Client frames
+
+Client → server kinds:
 
 | `kind` | Purpose |
 |--------|---------|
 | `ping` | Keepalive; server replies with `pong`. |
 | `query` | Request one thing, answered with exactly one `result` or `error` frame. `{ kind, id, what, params, token? }` — `id` is any client-chosen value echoed back on the reply, and `token` carries the operator bearer token that the `config`-family queries require (validated with the same constant-time comparison the `/config` middleware performs). Queries run concurrently with each other and with the push stream, so one database read cannot stall a tab's live rows — at most **four** at a time per socket, which is the size of the node's reader pool: one tab may use every reader connection and no more, and a fifth query waits on its own socket rather than in the pool the engine's own reads share. |
 
-**Queries** (`what`), each answered by the *same* function the matching
+#### Queries
+
+Each query (`what`) is answered by the *same* function the matching
 REST route calls, so the two surfaces cannot diverge:
 
 | `what` | `params` | Answers with |
@@ -2007,7 +2026,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `credential_pool` | `{}` | `GET /credential-pool`: every model's keys and their cooldowns, the Settings › Models & keys screen. **Operator-only**. See [below](#get-credential-pool) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Operator-only**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › Tools & MCP screen's Servers section. **Operator-only**. See [below](#get-mcp-servers) |
-| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
+| `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Operator-only**, like the rest of Settings. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by (empty on a row an older build wrote) |
 | `sandbox_tail` | `{turn_id, launch_id}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output: {text, source: transcript\|stderr\|none, cut, as_of, finished}` (the last 8 KiB, redacted), `not_running` with the record's `status` (`awaiting_clarification`, `launching`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left), `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget (no `node` for a run nobody holds right now), or `owner_upgrading` naming an owner whose build does not advertise the `sandbox_tail` feature. A record that could not be read, or a box the owner could not read, is an error carrying the reason. There is no event and no row: the dashboard asks it every 3 s while a running job's span is open, and nothing else asks |
 | `budgets` | `{}` | `GET /budgets` |
@@ -2044,7 +2063,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `config` | `{}` | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
-| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
+| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of Settings › Configuration, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 **Every tracker answer carries how far this node had got, and both halves
 matter.** `read_level` is the level the read was ACTUALLY served at, never the
@@ -2164,10 +2183,16 @@ tabs.
 
 The dashboard itself is a React + TypeScript application, built by Vite
 from `crewlet/dashboard/` into `crewlet/static/dashboard/`, which the
-binary embeds — a store that mirrors the projection and derives nothing,
-a reconnecting WebSocket client with heartbeat, query channel and
-REST-snapshot fallback, a hash router that keeps every screen, section
-and filter in the URL, and one file per screen.  `/dashboard` serves the
+binary embeds. Its wire half is `src/protocol/`: a store that mirrors the
+projection and derives nothing (`protocol/store.ts`), a reconnecting WebSocket
+client with heartbeat, query channel and REST-snapshot fallback
+(`protocol/socket.ts`), the one REST transport (`protocol/rest.ts`) and the
+one write client (`protocol/act.ts`). Every list the engine owns and the
+dashboard must repeat — the event categories, the push kinds, the act
+refusals, the tools a button may call — is declared once in `src/contract/`,
+and a Go gate holds each against the engine's own value. Around that sit a
+hash router that keeps every screen, section and filter in the URL, and one
+file per screen.  `/dashboard` serves the
 shell; `/static/{path}` serves its assets.  The build output is
 COMMITTED, so `go build ./...` needs no Node.
 
@@ -2213,7 +2238,8 @@ build from `@crewlethq/icons` beside the raster `favicon.ico`; the tab icon, the
 dashboard's lockup and the GitHub App landing page all draw that one file.
 
 A second build target, `/static/dashboard/protocol.js`, is the wire
-protocol alone as plain ESM: `internal/e2e` replays a real company's
+protocol alone as plain ESM — `src/protocol/`, the store (`protocol/store.ts`)
+included, with nothing of React: `internal/e2e` replays a real company's
 captured frames through it under `node`, so the client's understanding
 of this contract is checked against a real server rather than against a
 fixture.
@@ -3139,9 +3165,9 @@ same kind of honesty for the node block's `evicted`: an unread log contributes
 no tombstone, so every node reads as **not** evicted there and stays counted
 (the conservative side, which is the trim's own), and "not evicted" is then not
 an answer. Read it before concluding a node was readmitted; both `crewlet
-retention status` and the Fleet screen say so above the node block, and the
-Fleet screen keeps an eviction it just made on the row until a report whose
-evictions were read.
+retention status` and **Settings › Backups & retention** say so above the node
+block, and that screen keeps an eviction it just made on the row until a report
+whose evictions were read.
 
 `headroom_fraction` is a **pointer** and is absent when the broker could not be
 asked. A fraction of an unknown ceiling is not zero headroom, and zero is what
@@ -3676,7 +3702,7 @@ worker leases name their holder, and the per-node config epoch comes from
 the control plane's apply status.
 
 **It needs a token, reads included**, like every other answer the
-dashboard's Admin workspace draws. What it describes is the DEPLOYMENT
+dashboard's Settings draws. What it describes is the DEPLOYMENT
 rather than the company's work — the node ids, which node holds which
 seat, the lease epochs, how far a rollout has reached — so it is scoped
 the way `/integrations` beside it always has been, and
@@ -4358,7 +4384,7 @@ Notes:
   under one key. `models` is every model the entry answered with, biggest
   first; `seats` the three handles that spent the most through it and
   `seats_total` how many did at all. A call recorded before the key was
-  promoted (node migration 0030) is under `unknown`.
+  promoted (node migration 0032) is under `unknown`.
 - `by_agent[].turns` and `failed` are how many of the seat's turns ENDED in
   the window, and how many of those failed — a named window only. The live
   window holds phase records, not endings, so it carries neither rather than

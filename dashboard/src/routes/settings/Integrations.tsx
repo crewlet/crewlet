@@ -2768,7 +2768,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
-        description="The link that opened this names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
+        description="The link that opened this names a surface this engine does not have. Every integration it does serve is in Settings › Integrations."
       />
     );
   }
@@ -3256,7 +3256,7 @@ export function Integrations({ kind }: { kind?: string }) {
           <EmptyState
             icon={<PlugGlyph size="xl" />}
             title={`This build serves no integration called “${kind}”`}
-            description="The link that brought you here names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
+            description="The link that brought you here names a surface this engine does not have. Every integration it does serve is in Settings › Integrations."
           />
         )}
         {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each

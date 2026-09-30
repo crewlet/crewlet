@@ -297,7 +297,7 @@ describe("the frame's layout", () => {
   test("the peek's threshold counts every width in front of the list", () => {
     const kit = kitSheet();
     const ours = sheet("frame.css");
-    // The sheet: inset on the right only — the rail is the gap on the left —
+    // The sheet: inset on the right only — the sidebar is the gap on the left —
     // and a hairline each side.
     expect(block(kit, ".crewlet-app-shell__sheet")).toMatch(
       /margin:\s*var\(--size-shell-inset\) var\(--size-shell-inset\) var\(--size-shell-inset\) 0;/,
@@ -319,7 +319,7 @@ describe("the frame's layout", () => {
     );
     expect(CONTENT_PADDING).toBe(20);
     // The column inside the screen is as wide as the shell says — the number
-    // the arithmetic below counted — and Settings' is one rail wide.
+    // the arithmetic below counted — and Settings' is one sidebar wide.
     expect(block(ours, ".section-frame")).toMatch(
       /grid-template-columns:\s*var\(--section-column\) minmax\(0, 1fr\)/,
     );
@@ -967,7 +967,7 @@ describe("the frame's layout", () => {
 
     // The one rule that hands the ring back, and what it hands back: the
     // BASELINE's ring, outset by 2px. A control that draws an INSET ring of
-    // its own (a sidebar card, whose outset ring the rail's edge would clip)
+    // its own (a sidebar card, whose outset ring the sidebar's edge would clip)
     // is not handing anything back, and is not counted here.
     const ring = new Set<string>();
     for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {

@@ -1288,7 +1288,7 @@ func eventIDs(evs []*events.Event) []string {
 // A MERGE HAS TO BE RECORDED HERE, because here is where the constituent
 // list exists: a coalesced digest is minted fresh and carries no memory of
 // what it absorbed, so by the time a turn is running there is nothing left
-// to count. Nothing else emits it, which is why the Integrations room could
+// to count. Nothing else emits it, which is why Settings › Integrations could
 // report how many deliveries ARRIVED and not how many turns they became.
 func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	t.Parallel()
@@ -1326,7 +1326,7 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	// THE VENDOR, not the producer of the wake. internal/notify stamps the
 	// envelope "notify.slack"; every other notification event carries the
 	// bare third-party app name, and a record that disagrees is filed under a source
-	// no dashboard filter matches — so the Integrations room reported zero
+	// no dashboard filter matches — so Settings › Integrations reported zero
 	// coalesced merges for every integration.
 	if rec.NotificationSource != "slack" {
 		t.Errorf("source = %q, want the bare third-party app name", rec.NotificationSource)

@@ -2749,7 +2749,7 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 	// THE REASON LAST REPORTED is the other half: a state that has not
 	// changed is not news, and the loop retries every thirty seconds for as
 	// long as it holds. A tick that changes nothing says nothing; the
-	// register is still stamped, so the fleet screen and the trim see every
+	// register is still stamped, so Settings › Nodes and the trim see every
 	// tick whether or not the log does.
 	var reported statelog.SkipReason
 	for {

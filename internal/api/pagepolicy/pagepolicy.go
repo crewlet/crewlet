@@ -60,7 +60,7 @@ import (
 //
 // form-action is 'self' AND https:, and the https: is load bearing. Creating a
 // seat's GitHub App posts a manifest form from the dashboard to the code host
-// (`postManifest`, which the dashboard's integrations screen owns — named by
+// (`postManifest`, which the dashboard's Settings › Integrations owns — named by
 // its function rather than a path, because the screen has already moved once
 // and the path this used to give went stale), because the host must
 // see the operator's own session and render its own confirmation page. That

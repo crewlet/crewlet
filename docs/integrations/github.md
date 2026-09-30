@@ -28,7 +28,7 @@ the agent's own identity.
 
 ## Setting it up from the dashboard
 
-Connect GitHub on the Integrations screen. The engine generates the webhook
+Connect GitHub in Settings › Integrations. The engine generates the webhook
 secret and the reconcile loop registers the hook on its next tick, running the
 same pass `crewlet github provision` runs with the same secret store behind
 it. The connect step asks for a personal access token nowhere — only the
@@ -220,7 +220,7 @@ of them would no longer say which agent was meant.
 Two acts, both performed by a person signed in to GitHub, and the second can be
 a day after the first.
 
-1. **Create the app.** The Integrations screen asks the engine for a manifest
+1. **Create the app.** Settings › Integrations asks the engine for a manifest
    and submits it to GitHub as a form POST carrying the operator's own GitHub
    session. GitHub shows what is about to be created and, on approval, sends
    the browser back to the engine with a one-time code. The engine converts the
@@ -266,7 +266,7 @@ That discovery used to wait out the loop's admin backoff, which runs from fiftee
 Two things now close that gap:
 
 - **GitHub's return brings the next pass forward.** The install redirect lands at `/webhooks/github-app`, and that arrival asks the loop to look now. It is not a write and nothing in the redirect is believed — no installation id travels with the ask — so the pass that runs is the same verified listing as always, and adopting anything from an unauthenticated query stays out of the question. See [the cadence](../concepts/integration-reconcile.md#the-cadence-follows-who-has-to-act) for the rate limit on that route and why it is where it is.
-- **The Integrations screen re-asks when you come back to the tab.** Setting an integration up means leaving for GitHub and returning, and returning is a stronger signal that the answer moved than any poll interval can be. The screen held its pre-departure reading for up to a minute otherwise, which is the other half of what made this look broken.
+- **Settings › Integrations re-asks when you come back to the tab.** Setting an integration up means leaving for GitHub and returning, and returning is a stronger signal that the answer moved than any poll interval can be. The screen held its pre-departure reading for up to a minute otherwise, which is the other half of what made this look broken.
 
 Together the card is normally correct by the time you switch back to it. If it is not — an engine built without the loop wired, or a second install inside the rate-limited window — the return page says so plainly instead of promising a wait it is not taking, and `POST /setup/integrations/github/provision` runs the pass on demand.
 

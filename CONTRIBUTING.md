@@ -642,6 +642,16 @@ The pages under `docs/` are the source of truth and are published to
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
 
+Links are checked, not trusted. `internal/docsgate` fails the suite on a
+relative link to a file that does not exist, on an `#anchor` that names no
+heading of its target (by GitHub's slug: rename a heading and every anchor to
+it goes red), and on a page under `docs/` that `docs/index.md` does not list.
+The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
+string the engine composes — are held by `dashboard/src/app/links.test.ts`
+against the dashboard's route resolver, along with every pointer at a
+`dashboard-design.md` heading. A link to a page that moved is fixed by pointing
+it at where the subject lives now, never by deleting the gate's view of it.
+
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the
 code — including the part that matters most: why the obvious alternative is

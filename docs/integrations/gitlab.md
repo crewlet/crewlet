@@ -10,7 +10,7 @@ What GitLab adds over GitHub is **automated, per-agent identity provisioning**. 
 
 ## Setting it up from the dashboard
 
-Connect GitLab on the Integrations screen with the instance address, the group
+Connect GitLab in Settings › Integrations with the instance address, the group
 and a group Owner token. The engine generates the signing secret and the
 reconcile loop creates the service accounts on its next tick, running the same
 pass `crewlet gitlab provision` runs.

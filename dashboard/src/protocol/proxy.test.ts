@@ -32,7 +32,7 @@
  *    `src/protocol/` may read (`transport.test.ts`);
  *  - MARKUP: a JSX `src`, `href` or `poster` holding a path, and the same
  *    attributes in the shell (`index.html`). The browser fetches those itself,
- *    with no call anywhere to read — which is how the brand mark in the rail
+ *    with no call anywhere to read — which is how the brand mark in the sidebar
  *    and the tab icon in the shell both answered 404 under `npm run dev` while
  *    every call in the tree was forwarded. The shell's own module entry
  *    (`/src/main.tsx`) names a file under the dev server's root, which Vite

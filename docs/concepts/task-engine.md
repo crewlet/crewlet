@@ -41,7 +41,7 @@ assignee, a thread, a history, subtasks, tags, typed custom fields,
 and saved views in three shapes. The line is between **structure a
 company records** and **process a tool enforces**: the first is here, the
 second is not. There is no gate that refuses a transition, no scheme that
-hides a field from a role, and no configuration screen standing between a
+hides a field from a role, and no setup form standing between a
 founder and their first task.
 
 The whole surface is in **[The Work Tracker](../guides/work-tracker.md)**.

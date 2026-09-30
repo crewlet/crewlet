@@ -479,7 +479,7 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
-// EVERY ANSWER THE ADMIN WORKSPACE DRAWS NEEDS AN OPERATOR CREDENTIAL.
+// EVERY ANSWER SETTINGS DRAWS NEEDS AN OPERATOR CREDENTIAL.
 //
 // The dashboard's rail marks all five Admin destinations `guarded: true`: it
 // draws a lock on the row and its palette says "needs a token". That flag is

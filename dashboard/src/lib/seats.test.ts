@@ -869,7 +869,7 @@ describe("a unit's headcount", () => {
   });
 
   // AND THE HEADLINE NUMBER CARRIES ITS OWN SENTENCE. A bare number beside a
-  // name is read as "how many there are"; this is what the rail's badge and
+  // name is read as "how many there are"; this is what the sidebar's badge and
   // the unit page's fact both hand a reader instead.
   test("the total's hint names what it counted", () => {
     expect(UNIT_TOTAL_HINT).toContain("everything under it");

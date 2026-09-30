@@ -1629,7 +1629,7 @@ func payloadBody(ev *events.Event) string {
 // count. So the record is written at the one frame that still holds the
 // events — the same reason the work key is derived here.
 //
-// Nothing else emits this event, which is why the Integrations room could
+// Nothing else emits this event, which is why Settings › Integrations could
 // report how many deliveries ARRIVED and not how many turns they became: a
 // seat draining a thread's backlog as one turn looked, from the feed, like a
 // seat that ignored twelve messages.

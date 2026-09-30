@@ -32,7 +32,7 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // written by nobody or read by nobody, and no test anywhere could see it.
 // That is not hypothetical. `notification_source` lived only here, read only
 // by a mapping function in this package that had no production caller —
-// observe.Record is the writer — so the tag the Integrations room counts its
+// observe.Record is the writer — so the tag Settings › Integrations counts its
 // merges and drops by was never written at all, and every one of those counts
 // read zero on a company whose third-party apps were delivering fine. That
 // function is gone; internal/observe imports this package, so it calls

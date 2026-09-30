@@ -1,6 +1,6 @@
 /**
  * The addressable collections of the active revision, as `configapi` names
- * them — the Configuration screen's Entities lens.
+ * them — Settings › Configuration's Entities lens.
  *
  * FOUR NAMES THE ENGINE OWNS, held against `configapi.EntityKinds()` by
  * `internal/api/configapi/entities_client_test.go` — a kind this list spells

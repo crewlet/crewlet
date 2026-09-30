@@ -26,7 +26,7 @@ html {
 
 /* THE DOCUMENT DOES NOT SCROLL. The shell's `main` does, and it is the only
    thing that may: the sidebar is a fixed column beside a scrolling sheet, and a page that
-   can also scroll as a whole moves that rail off the top of the window and
+   can also scroll as a whole moves that sidebar off the top of the window and
    leaves the reader looking at background below the app.
    `min-height` only asked the body to be at least a viewport tall — it still
    PERMITTED it to grow, so the shell's invariant held by nobody ever
@@ -80,11 +80,11 @@ p {
    So the frame's own hover vocabulary carries it instead. The sidebar's rows,
    `.section-tab` and `.crumb-link` already answer a pointer by moving to
    `--color-text-primary`, and a link does the same: in dark the accent ink
-   (#8b9ff5) brightens toward near-white, in light the indigo (#3e50b8) darkens
+   (#b3a1ff) brightens toward near-white, in light the violet (#5a33de) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
    rather than merely different. Both ends are measured text rungs, which is
    what rules this out: the accent family publishes exactly one text step, and
-   `--color-brand-accent`, `--color-brand-accent-hover` and `--accent-active` are fills that
+   `--color-brand-accent`, `--color-brand-accent-hover` and `--color-brand-accent-active` are fills that
    `styles/rungs.test.ts` refuses as a colour.
 
    WHERE AN UNDERLINE IS THE ONLY HONEST MARK IT IS PERMANENT, not a hover: a

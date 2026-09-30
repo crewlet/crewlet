@@ -80,7 +80,7 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "info" | "n
  * The five facts a page is read by, in one order, on its page and in the rail.
  *
  * ONE FUNCTION rather than two lists that happen to agree today — the same
- * argument `nodeFacts` makes on the fleet screen. A reader scans a page's
+ * argument `nodeFacts` makes on Settings › Nodes. A reader scans a page's
  * place, its version, who wrote it, when, and who is watching, and a header
  * written twice is two orders as soon as somebody adds a sixth fact.
  *

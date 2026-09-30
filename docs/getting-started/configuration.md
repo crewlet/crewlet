@@ -9,7 +9,10 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 
 > **Machine-readable version.** `crewlet schema company` emits the JSON
 > Schema for everything on this page, generated from the models
-> themselves. Point your editor at it for autocomplete and typo
+> themselves — the same files the repository commits under `schema/`,
+> which `make schema` regenerates whenever a model changes, so a field
+> named here and a field the schema accepts cannot drift. Point your
+> editor at it for autocomplete and typo
 > squiggles, or hand it to an AI assistant — see
 > [Authoring with an AI assistant](ai-authoring.md). Check your file with
 > `crewlet validate <file>` (add `-json` for located, classified problems
@@ -455,8 +458,10 @@ turn" and carries on with recency. Nothing here retries — the caller's
 degradation costs less than a retry spent inside a turn-start prefetch
 somebody is waiting on.
 
-Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
-API are.  Example:
+## Tier A (`crewlet.yaml`)
+
+Tier A is restart-only and says where this node's stream, store and API
+are. Example:
 
 ```yaml
 # crewlet.yaml — Tier A bootstrap
@@ -1185,7 +1190,7 @@ tracker:
                                          #   answered by the history either way
 ```
 
-Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a-crewletyaml), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
 
 **A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
 

@@ -157,7 +157,7 @@ export function useConnection() {
  *
  * READ FROM THE SLICE, never asked for. The push used to carry three fields
  * while a `stream` query answered the rest, and five places polled that query
- * at 5 s and 15 s of their own — so the rail could say a revision had applied
+ * at 5 s and 15 s of their own — so the sidebar could say a revision had applied
  * while the panel in front of it said it had not. The snapshot and every
  * five-second tick carry the whole body now, and there is no query to ask.
  */

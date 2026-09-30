@@ -19,7 +19,7 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 
 ## Setting it up from the dashboard
 
-**Connect** on the Atlassian tile of the Integrations screen collects the
+**Connect** on the Atlassian tile in Settings › Integrations collects the
 site address, the account email and the API token and generates whichever
 webhook credential your deployment needs (a signing secret for Data Center, a
 shared token for Cloud); the reconcile loop then registers the hooks on its

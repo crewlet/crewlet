@@ -30,6 +30,7 @@ import {
 } from "./nav.ts";
 import { crumbsFor, titleOf } from "./crumbs.ts";
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
+import { segmentsOf } from "~/test/routes.ts";
 
 describe("parsing", () => {
   test("a bare hash is the overview", () => {
@@ -595,38 +596,6 @@ describe("the information architecture", () => {
     expect(out.length, "the route table holds too few routes to be the table").toBeGreaterThan(30);
     return out;
   }
-
-  /** A placeholder, filled with a value of the shape it names. */
-  const FILL: Record<string, string> = {
-    "{KEY}": "ENG",
-    "{KEY}-{n}": "ENG-42",
-    "{CONTAINER}": "ENG",
-    "{id}": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
-    "{turn_id}": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
-    "{handle}": "pm",
-    "{unit}": "Platform",
-    "{scope_type}": "role",
-    "{scope_id}": "ceo",
-    "{name}": "standup",
-    "{kind}": "github",
-    "{tool}": "search_work_items",
-    "{node}": "node-1",
-    "{domain}": "tracker",
-  };
-
-  const segmentsOf = (route: string): string[] =>
-    route
-      .replace(/^#\//, "")
-      .split("/")
-      .filter((segment) => segment !== "")
-      .map((segment) => {
-        const filled = FILL[segment];
-        expect(
-          filled !== undefined || !segment.includes("{"),
-          `${route}: the placeholder “${segment}” has no value to test it with`,
-        ).toBe(true);
-        return filled ?? segment;
-      });
 
   // DOC → CODE. Every address the document promises resolves to a screen.
   test("every route in the design doc resolves to a screen", () => {

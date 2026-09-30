@@ -12,7 +12,7 @@
  * So the strip watches two things the dashboard already has: the health
  * push's `applied_epoch` for this node, and the `fleet` query for every
  * node's `config_epoch` and `config_status`. It resolves to Applied, to
- * Applied on N of M nodes, or to the refusal with a link to the Fleet screen,
+ * Applied on N of M nodes, or to the refusal with a link to Settings › Nodes,
  * and stops polling once it has.
  *
  * It also offers the two things an operator wants right after a save: the
@@ -74,7 +74,7 @@ export interface ApplyState {
   readonly message: string;
   /** True once nothing more is expected to change. */
   readonly resolved: boolean;
-  /** The Fleet screen answers what a refusal was about. */
+  /** Settings › Nodes answers what a refusal was about. */
   readonly showFleet: boolean;
 }
 
@@ -154,7 +154,7 @@ export function applyState(
   return { tone: "info", message: "The engine is applying it.", resolved: false, showFleet: false };
 }
 
-/** The first characters of a revision id, as the Configuration screen shows one. */
+/** The first characters of a revision id, as Settings › Configuration shows one. */
 export const shortRevision = (id: string) => id.slice(0, 10);
 
 export function AfterSaveStrip({

@@ -185,7 +185,8 @@ internal/
 │                         #   gives a typed answer), prefetch/, prompts/,
 │                         #   skills/, skillsync/ (keeps every node's
 │                         #   skill registry current), builtin/,
-│                         #   subagent/ (workers)
+│                         #   subagent/ (workers), steer/ (a person's note
+│                         #   to a running turn)
 ├── queue/                # The EventQueue contract + the jetstream backend
 │                         #   and the in-memory twin, both certified by one
 │                         #   suite
@@ -198,6 +199,11 @@ internal/
 │                         #   domain: records, subjects, ranks, custom fields
 ├── pages/                # The engine's own knowledge base — statelog's third
 │                         #   domain: containers, pages, revisions, comments
+├── usage/                # Each node's day, replicated — statelog's fourth
+│                         #   domain: spend, turns and reads that outlive the
+│                         #   node that recorded them
+├── eventfan/             # The fleet's turn-level history, read from every
+│                         #   node at query time, with coverage on every answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
 │                         #   embedding domain and the fleet's bucket fan-out
@@ -253,7 +259,9 @@ internal/
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/, and pagepolicy/:
+│                         #   auth/, httpjson/, mcpbridge/, operator/ (the
+│                         #   operator catalogue over /operator/mcp and the
+│                         #   dashboard's /operator/act), and pagepolicy/:
 │                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
@@ -267,6 +275,8 @@ internal/
 │                         #   resolver is config.Resolver)
 ├── skipgate/ solo/       # The suite's own gates: a skip is not a pass, and
 │                         #   which packages need the runner to themselves
+├── docsgate/             # Every markdown link, anchor and docs index entry
+│                         #   resolves (test-only)
 ├── clientsource/         # Holds a declaration the dashboard makes against the
 │                         #   engine's own, found by name and read by syntax;
 │                         #   every one lives in dashboard/src/contract/

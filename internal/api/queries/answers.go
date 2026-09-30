@@ -421,7 +421,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("seat_activity", s.seatActivity)
 	}
 	if s.Coord != nil {
-		// OPERATOR-ONLY, like every other answer the Admin workspace
+		// OPERATOR-ONLY, like every other answer Settings › Nodes
 		// draws. It reports the node ids, which node holds which seat,
 		// the lease epochs and how far a config rollout has reached —
 		// the shape of the deployment rather than the company's work.

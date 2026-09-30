@@ -10,7 +10,7 @@
  * unmounted by that switch, so what it saved is kept here, outside any one
  * screen, rather than in the Builder's own state.
  *
- * In memory only: a reload starts without it, and the Fleet screen remains
+ * In memory only: a reload starts without it, and Settings › Nodes remains
  * the place to read where every node stands.
  */
 

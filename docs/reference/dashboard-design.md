@@ -553,11 +553,11 @@ in the grammar's tree mode, where an open epic's finished subtasks rode along), 
 **health card** and the **user block**. The head carries the company's lockup
 and, at the end of the same line, the chrome's one create: `+` New task.
 
-**Every "New task" is one sheet.** The rail's head `+`, the Projects group's
+**Every "New task" is one sheet.** The sidebar's head `+`, the Projects group's
 `+`, a work screen's page-bar New task (Home, Work, a project) and a board
 lane's `+` all open the frame's single New task sheet
 (`dashboard/src/routes/work/NewTask.tsx`, mounted by the shell out of the Work
-chunk), each door telling it only what it knows. The two rail doors file into
+chunk), each door telling it only what it knows. The two sidebar doors file into
 the project the route is in — its page, or the project a task key names —
 asked of the route's own resolver, so `#/work/views` and a task opened by its
 uuid are in no project and their `+` reads "New task in a project". A board
@@ -618,7 +618,7 @@ title alone, as the kit's sheet head (the page bar's height) is sized for.
 
 **Settings is never hidden.** A section that vanishes without a credential is
 indistinguishable from one that does not exist, so an operator on a fresh
-browser would conclude the product has no configuration screen. General — the
+browser would conclude the product has nowhere to configure anything. General — the
 charter — and Tools & MCP — the registry every reader is pushed — are readable
 by anybody; the key mark says the rest needs an operator. It is a KEY rather than
 a padlock because the kit's glyph set carries no padlock, and a key names what
@@ -762,15 +762,15 @@ somewhere else, permanently, with the address bar agreeing with them — which i
 strictly worse than the dead link it exists to avoid, because a dead link is
 visible. It happened once, when `#/work` still meant a coding run. No `v*` tag
 has ever shipped a route from this tree, so there is nobody holding an old link:
-an address from before the one-sidebar rebuild (`#/company/…`, `#/activity/…`,
-`#/cost/…`, `#/admin/…`) is Not Found, which names what was asked for, says
+an address from before the one-sidebar rebuild (one under the retired `company`,
+`activity`, `cost` or `admin` heads) is Not Found, which names what was asked for, says
 where the product knows why there is nothing there, and offers the way home.
 
 **An object's segment is decided by its shape, never by a lookup**, so every
 address resolves before any answer arrives. A project or container key is
 uppercase, a task is `KEY-n` or its uuid, and a page is its uuid — so a word in
-one of those positions (`#/work/tasks`, `#/knowledge/pages/runbook`) is Not
-Found rather than an object the engine never minted, which would draw its
+one of those positions (`tasks` after `work`, `runbook` after `knowledge/pages`)
+is Not Found rather than an object the engine never minted, which would draw its
 refusal under a trail naming a page that does not exist.
 
 **Three of those surfaces are the engine answering a question it has always
@@ -1329,7 +1329,7 @@ selected one reads zero and the rail is a dead end.
 | `peek={kind}:{id}` | section | the detail rail is open on that object |
 | `tab=` | section | the object page's tab |
 | `view=` | section | a list container's view |
-| `lens=` | section | which whole reading of an object is drawn — a project's items, about and history, the Configuration screen's active, history and diff |
+| `lens=` | section | which whole reading of an object is drawn — a project's items, about and history, Settings › Configuration's active, history and diff |
 | `sort=` `cols=` | filter | the grid's order and its visible columns |
 | `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page — and `cols.<shape>=` alone on the work screen, whose one grid has a column set per shape while both share its `sort=` |
 
@@ -1684,7 +1684,7 @@ Both of these shipped wrong once, and neither is visible in a URL.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
-(`#/org?unit=Backend`, with a router-level reveal hook); this tree gives a unit
+(an `org` address carrying `?unit=Backend`, with a router-level reveal hook); this tree gives a unit
 its own page instead — `#/agents/teams/{unit}` — so it can be linked to, opened
 in a peek, and carry its own state. There is no reveal-on-arrival hook here.
 Where a selection genuinely belongs in the URL rather than in the path it stays
@@ -2594,6 +2594,284 @@ access rather than about where they are.
 
 ---
 
+## Acting, as yourself
+
+**The dashboard acts as you.** Every change in a Crewlet company is attributed
+to whoever made it, and the one actor an audit trail cannot name is "the
+dashboard" — so there is no such actor. A write from a browser is made by the
+**person your token is bound to** (`contact.crewlet_operator_id` on your seat),
+through the same operator tools your own assistant calls, and it is recorded
+exactly as that assistant's would be: your token as the author, author kind
+`operator`, your seat as the person.
+
+**The audit log draws an operator as a person.** A write your token made
+reads as you — the person's circle and your seat's name, linking to your seat,
+with the token in the tooltip and in the export's `who` column (`who_seat`
+beside it names the seat). A token no seat binds is a person too, but it has
+no page: its row is the circle and the token's name as plain text, never a
+link to a seat of that name. A seat's own write takes the chart's kind, or,
+for a seat the chart no longer holds, the kind the write was recorded under.
+
+The engine's half is [`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface):
+one catalogue tool per request, a `request_id` the screen mints per gesture
+and repeats on a retry, and an answer carrying the write's `outcome` and
+`position` — the floor the screen's next read waits for. The live socket stays
+read-only; writes and credentials travel over REST. A token no seat binds, and
+every caller while the guard is disabled, is refused `unbound`, and
+`viewer.acts` is empty for exactly those callers — which is what a screen
+reads to disable a control and say why, rather than offer a press the engine
+refuses.
+
+### A write control is never hidden
+
+Every control that changes the company is drawn for every reader. Where your
+browser cannot make the change it is **disabled, and says why** — the kit
+button's `disabledReason`, which keeps it focusable and reads the sentence to
+a screen reader as the button's description. The kit draws that sentence for
+nobody else, so the same words are the button's `title` while it is held — a
+pointer resting on it sees why — and a screen reader, which reads a described
+button's description rather than its title, hears it once. A form whose
+primary action is held also writes the reason on the page beside it (the New
+task sheet's foot), because neither reaches a touch screen. The five reasons,
+in the order you clear them:
+
+| You are | The control says |
+|---|---|
+| Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
+| Not yet known | Checking who you are before anything can be changed. |
+| Anonymous | Set an API token to act — every change is recorded under your name. |
+| An unbound token | This token is not bound to a person — set contact.crewlet_operator_id on your seat to act as yourself. |
+| A person the engine does not make this change for | This engine does not make this change for you. |
+
+**One press at a time, by every way in.** A write control refuses a press
+while its last one is still out, and so does every other way into the same
+press — a dialog is a form Enter submits without touching the button, a reply
+field sends on ⌘Enter, a one-line form (a sub-task, a title) files on Enter —
+because each reaches the same gate (`pressable` in `components/WriteButton.tsx`).
+They used to go straight to the write, and a second Enter before the first
+answer came back filed a second sub-task or posted the comment twice, under a
+new request id the engine rightly took for a second change. On a task page a
+change conditional on the version you were looking at is not sent at all while
+another is out: it carries the version the first is about to move, so the
+engine could only refuse it, and the page would then have reported your own
+first change as somebody else's. A checklist tick or a follow, which carry no
+version, still go.
+
+A change is **never queued**: a write sent when the connection came back would
+be one you walked away from believing it had happened, onto a company that may
+have moved since. `viewer.acts` is the engine's own list of what it makes for
+you, and the last row is read from it, never guessed from a tool's name — a
+company whose tracker is Jira has no native writer, and its task page shows
+Assign disabled rather than a button the engine refuses.
+
+### Writes are confirmed, not optimistic
+
+Nothing on screen moves until the engine has answered. Each answer is one of
+four, and each tells you something different:
+
+| Outcome | What you see |
+|---|---|
+| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
+| `pending` | "Sent — this node has not applied it yet." The re-read waits until this node has. |
+| `unknown` | "Could not confirm — it may have landed", which **stays** until you dismiss it, with Retry. |
+| refused | The engine's reason, beside the control that caused it, until your next press. |
+
+**The re-read waits for your write.** An `applied` or `pending` answer carries
+the position its record landed at in its domain's log, and the tab keeps it as
+a **read floor** for that domain (`protocol/session.ts`) — a per-tab value that
+only rises. From then on every question that reads that log
+(`contract/domains.ts`, held against the engine by
+`TestEverySessionQueryTakesAFreshnessFloor`) asks with
+`read_level=session&min_position=<floor>`, which the engine answers only once
+the serving node holds that position. So the list you just changed never comes
+back from a node that has not applied the change, whether the next read is the
+refetch your press fires or a poll a second later.
+
+**A retry is the same write.** `unknown` means nobody can vouch either way —
+the connection dropped after the request left, a gateway gave up, or the
+engine's call was interrupted (the act route says `outcome: unknown` for that
+one, beside its class). The dashboard never retries on its own. When you press
+Retry it sends the **same `request_id`** it sent the first time, from which the
+engine derives the same operations; a new press is a new id. Each Retry is
+bound to the press it reports — press twice and the first toast's Retry still
+sends the first press, never the second. A refusal a busy or draining node
+caused offers "Try again" on the same terms; one the request caused does not,
+because the same request would be refused again. A control reused across
+objects — the Inbox's Mark read as you move between notices — belongs to the
+object it is drawn for, so one notice's refusal never appears under another's.
+
+**The refusal is in the dashboard's words**, except where the engine's own
+sentence names the argument that was wrong (`invalid`) or the rule that
+forbade it (`forbidden`): every other tool sentence is written for a model
+reading a tool result. Those two carry the writer's sentence alone — the
+tracker's refusals hold their words apart from the `tracker:` a Go error opens
+with (`tracker.Sentence`), so a person reads "create_work_item refused that: a
+decision has 0 option(s) …" rather than the package's name in front of it, and
+a forbidden one no longer ends by repeating the sentinel's own "not this
+actor's to write". `contract/errors.ts` `ACT_ERRORS` holds one sentence per
+code and is held against the engine's codes both ways
+(`TestTheDashboardKnowsExactlyTheActRefusals`). A conditional edit that lost
+the race reads "Changed by somebody else since you opened it." — somebody
+else, not a name, because the refusal carries the version it lost to and not
+its author. That refusal, and every other that says the screen is out of date
+(`conflict`, `not_found`, `exists`, `already_answered`), asks the write's
+questions again without raising your read floor, so the page redraws what is
+there now and your next press is made against it.
+
+### What a screen can change today
+
+`contract/actions.ts` `ACTIONS` is the dashboard's whole write vocabulary —
+the tool, the arguments a screen may send, the log it lands in and the
+questions it moves — and `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`
+holds it against the real operator catalogue: every tool is served by the act
+route and is not a read, every argument is one the tool takes, every required
+one can be sent. It carries a row for each tool a control presses and no
+other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
+a tool arrives in it with the control that sends it. The controls
+(`components/writes.tsx`):
+
+| Control | Where | Tool |
+|---|---|---|
+| Assign / Reassign (with a reason) | A task's page | `update_work_item` (`if_match` on the version you are looking at) |
+| Status · Priority · Labels · Due · Start · Estimate · a custom field · the title · the description | A task's page, from the value itself | `update_work_item` (`if_match` on the version you are looking at) |
+| A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
+| + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
+| Create task (the New task sheet) | The sidebar's head `+`, the Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
+| Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
+| Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
+| Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
+| Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
+| Pin / Unpin | A saved view's page | `set_pins` |
+| Done · Snooze · Mark unread | The open row in the Inbox | `mark_inbox` (exactly the notices that row holds; every other mark and your read position stay) |
+| Mark all read | The Inbox's page bar | `mark_inbox{read_through}` at the newest notice LOADED — never past it |
+| An option card | A decision in the Inbox's pane | `comment_on_work_item{item, answers, choice}` |
+| Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
+| Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
+| Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
+| An option · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
+| Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
+
+A change to the **company document** — a seat, a budget ceiling, an MCP
+server, a model — is not an act: it is a new configuration revision, and every
+screen that makes one goes through `protocol/configWrite.ts` (read the document
+and its entity tag, or one entity and the same tag; dry-run a merge patch or an
+entity replacement; save either with its audit summary), always conditional on
+the revision it edited. Its gate is the operator credential rather than a seat
+binding — `/config` is guarded by the API token and nothing narrower — so its
+controls ask `useConfigWriteAccess()`, which is `viewer.operator`, and are
+disabled with that sentence for anybody else.
+`protocol/configAnswer.ts` is the one reading of a `/config` refusal — a
+conflict to re-read, the drain gate's certain `503`, a request that may have
+landed, or the problems the document has — which the org builder's model
+classifies through too.
+
+## Honest empty states
+
+A screen that renders a blank where data would go is a screen that cannot be
+trusted when it IS blank. Four distinctions the product makes everywhere:
+
+- **Nothing happened** vs **nothing could be read.** "No events" on a fresh
+  company and "no events" from a query the engine refused are the same empty
+  list and completely different problems. `QueryState` renders the engine's own
+  code (`unknown_query`, `unauthorized`, `not_found`, `unavailable`,
+  `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
+  saying which. `bad_params` is the one that names the SCREEN as the fault: the
+  engine understood the question and refused it, so retrying sends the same bad
+  request again. `unavailable` is the opposite: the node will answer in a
+  moment, so `useQuery` asks again on its own rather than leaving a person to
+  reload — after the wait the engine named in the refusal's
+  `retry_after_seconds`, never after a constant of the client's. The table is keyed on the contract's `QueryErrorCode` union, so a
+  code added to the union without a sentence here is a compile error, and a Go
+  test in `internal/api/stream` pins that union to the codes the engine sends.
+- **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
+  are three-valued, and a count this node could not read comes back `null`,
+  never `0`; `inbound` is a plain count whose unknown-ness rides on the
+  answer's own `traffic_known`. The budgets answer says `durable: false` when
+  the counter could not be READ.
+- **Not configured** vs **empty.** A knowledge search with no backend says so;
+  a company with no seats says roles come from the configuration.
+- **Everything in the window** vs **everything that arrived.** Where a screen
+  narrows client-side it says so, naming the SOURCE rather than hedging the
+  whole answer. **Audit** is the case that made this a rule: it composes four
+  subsystems and only one of them — the tracker's feed — takes a wall-clock
+  window, so the other three are asked for their newest page and narrowed on
+  the client. A page that fills up before it reaches the start of the window is
+  older rows the screen never saw, and a caption reading "some of this may be
+  missing" is one nobody can act on where "Knowledge answered one page" says
+  where to look.
+- **Not recorded** vs **the engine.** An empty actor on a tracker or wiki
+  commit is the engine's own write, and the Audit screen draws it as "the
+  engine". A configuration revision is different: the revision states WHAT
+  wrote it (`created_by_kind`, `operator` or `node`) and the row shows that
+  word rather than assuming one — it used to label every revision `operator`,
+  so a node's boot seed and the reconcile loop's reloads read as a person's
+  writes. A revision whose kind is EMPTY was adopted from an older engine's
+  pointer that named nobody, and it reads "Not recorded" on both the Audit
+  screen and Configuration's history, never "the engine" and never a guess.
+- **An empty CONTAINER** vs **a query that matched nothing.** A container says
+  its own emptiness, from what it already knows about itself, before the list
+  it holds has answered anything — and that state REPLACES the list rather than
+  sitting under it. A project page handed its whole body to the work list, so a
+  project nobody has ever filed anything in said "Nothing matches — no item
+  matches these filters. Widen them", with no filter set: a claim about a
+  narrowing that did not exist, on the day-one state of every project. It is
+  drawn from the project's own maintained counts now, names the project, and
+  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
+  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
+  reserved for a query that genuinely narrowed. The same rule sorts the two
+  empty pages apart: the work list's empty state is about ITEMS and the
+  projects directory's is about PROJECTS, so a company with no projects is told
+  what a project is and that a unit's `project` key in the company
+  configuration is what mints one.
+- **An empty SEGMENT is not an empty company — so the answer carries the
+  census.** The projects directory's three segments each ask the engine for
+  their own set, which is what makes the listing honest and is also what makes
+  an empty answer ambiguous: an empty **Active** answer is either a company
+  with no projects or one that has archived every one of them, and a reader
+  acts on those oppositely. The screen cannot derive the difference, because on
+  the Active segment the archived projects have no row on screen to be derived
+  from. So `work_projects` answers with a `census` of BOTH sets under the same
+  narrowing, and the page never guesses: `active + archived === 0` is the
+  company having nothing and draws "No project has been created yet" on
+  **whichever segment the reader is on** — which matters, because they land on
+  Active; an empty Active answer with archived projects behind it says how many
+  and links to them; and Archived says nothing is archived. The counts also sit
+  on the segment control itself, so the switch says what is behind each option
+  before it is pressed. A screen that hedges — one sentence naming both ways a
+  state happens — is a screen missing a number, and the fix is to send the
+  number rather than to word around it.
+
+  **And the directory is not the only reader of it.** Every surface that draws
+  a conclusion from an empty project listing reads the same census, because
+  every one of them asks the ACTIVE set: the sidebar's Projects group, and
+  the `#/work` landing, which replaces the whole list with "No work has been
+  filed yet". Read from the ROWS, each concluded the first state — so a
+  company that had archived all four of its projects was told by the sidebar that
+  no project had been created and by the landing that nothing could be filed
+  until a unit declared a `project` key, both beside a directory saying all
+  four had been archived, and both false about a company holding every item it
+  ever filed. `active + archived === 0` is the only thing that draws the
+  first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
+  and gives it an empty state naming the count with the way to
+  `#/work/projects?shown=archived` — the same sentence the directory's own
+  Active state writes, because it is the same fact. An answer carrying no
+  census concludes neither, on the rule its rows already followed.
+
+Every empty state names what would fill it.
+
+**And a restart is not an empty company.** The pushed surfaces come from the
+engine's live projection, which is seeded from the node's own event store when
+the process starts: the newest events for the activity feed, and the 24-hour
+spend window the Overview and Spend screens are folded from. Until that read
+existed, every one of these screens started blank after a restart, a deploy or
+a node joining a fleet, which is the one empty state a reader has no way to
+question. What the seed cannot cover is a fleet peer's history, because the
+event store is per node; that is what the `events` query's fleet scatter and
+the `tokens` query's replicated company days are for, and what the window badge
+on Spend names.
+
+---
+
 ## A cron expression is read, not printed
 
 The schedules screen printed `0 9 * * 1-5` and nothing else. A reader who
@@ -3352,7 +3630,7 @@ component animates from a `style` attribute, where no sheet could stop it.
 distinction is what the pointer did: a fill that changes because somebody moved
 onto a row is a response and should look like one, and a fill that changes
 because the engine said something must land on the frame it is told. Almost
-every interactive surface in the frame — the rail's rows, the sidebar's links,
+every interactive surface in the frame — the sidebar's rows and links,
 a grid row, a crumb, the viewer chip, a work row, a turn row, a feed row — used
 to snap, and a whole product of instant fills reads as a thing that jerks
 rather than a thing that responds. It is ONE declaration in `base.css` naming
@@ -3682,22 +3960,29 @@ way on a narrow card: the message truncates, the source stays whole.
 ### The document does not scroll
 
 `#screen-scroll`, the shell's own main region, scrolls, and it is the only
-thing that may. The rail is fixed beside a scrolling pane, so a page that can
-*also* scroll as a whole carries that rail off the top of the window and leaves
-the reader looking at background below the application, with two scrollbars and
-neither obviously the one they want. The shell is the design system's, and it
-is what holds that: the document is not allowed to grow, so the invariant is
-unreachable rather than merely unused.
+thing that may. The sidebar is a fixed column beside a scrolling sheet, so a
+page that can *also* scroll as a whole carries the sidebar off the top of the
+window and leaves the reader looking at background below the application, with
+two scrollbars and neither obviously the one they want. The frame is the design
+system's `AppShell`, which is exactly one viewport tall, and `base.css` gives
+`body` a fixed `100dvh` with its overflow hidden: the document is not allowed to
+grow, so the invariant is unreachable rather than merely unused.
 
-It carries an id so the things that need it can find it without depending on a
-class that styling owns. The router holds the only accessor (`scrollTarget`,
-private to `app/router.tsx`) and uses it to restore a position per history
-entry. The settled list reaches the same element to ask whether the reader is
-at the top before it splices rows in — today by its `.screen` class rather than
-by the id, which works only because one element carries both.
+The shell hands the kit that id as its `mainId`, and everything that needs the
+scroller finds it through ONE accessor, `screenScroller()` in `lib/scroller.ts`:
+the router restoring a position per history entry, the settled list asking
+whether the reader is at the top before it splices rows in, and a seat's Memory
+tab checking whether a detail it opened is in view. It used to have two
+spellings — the router's `getElementById` and the settled list's `.screen`
+class, the same node only by coincidence of markup — and a class is a styling
+hook, so a layout change could have split them silently. The id identifies the
+element; the class only paints it.
 
-Everything here scrolls a chosen element directly rather than calling
-`scrollIntoView`, which scrolls every scrollable ancestor it can find.
+The router and the settled list scroll that element directly rather than
+calling `scrollIntoView`, which scrolls every scrollable ancestor it can find.
+The one `scrollIntoView` (the Memory tab bringing a stacked detail's heading
+into view) runs only when the heading is outside the scroller's box, and with a
+document that cannot scroll there is no other ancestor for it to move.
 
 ### A card has one left edge
 
@@ -3857,8 +4142,8 @@ declaration the package has dropped is a rule with nothing on the other side,
 indistinguishable to the next reader from one whose declaration they failed to
 find.
 
-So the frame's own hover vocabulary carries it. `.rail-row`, `.side-link`,
-`.rail-engine` and `.crumb-link` already answer a pointer by moving to
+So the frame's own hover vocabulary carries it. The sidebar's rows,
+`.section-tab` and `.crumb-link` already answer a pointer by moving to
 `--color-text-primary`, and a link does the same — in dark the accent ink (#b3a1ff) brightens
 toward near-white, in light the violet (#5a33de) darkens toward near-black, so
 in BOTH themes hovering makes a link MORE prominent rather than merely
@@ -3873,8 +4158,8 @@ the rung step this whole section trades the underline for is unobservable, and
 it composites the 4–5% row wash onto its own `Canvas` as nothing. Measured in
 Chromium with the mode on: after the reset, `.crumb-link`, `.t-link`,
 `.cell-seat`, `.work-col-foot a` and every prose register render pixel-identical
-hovered and unhovered, and only `.rail-row` and `.side-link` still answer at
-all. `text-decoration` is the one property the mode leaves to the author — which
+hovered and unhovered, and only a row that paints a wash on hover still
+answers at all, because its wash happens to survive. `text-decoration` is the one property the mode leaves to the author — which
 is exactly why the baseline's default is right *there* and wrong everywhere
 else — so `base.css` puts it back inside an `@media (forced-colors: active)`
 block, and the gate requires that block to exist for as long as the reset does.
@@ -5202,284 +5487,6 @@ empty). **It is read-only for the document**: a revision is written by
 budget ceiling, the org builder), each of which validates against the schema
 before anything is stored.
 
-## Honest empty states
-
-A screen that renders a blank where data would go is a screen that cannot be
-trusted when it IS blank. Four distinctions the product makes everywhere:
-
-- **Nothing happened** vs **nothing could be read.** "No events" on a fresh
-  company and "no events" from a query the engine refused are the same empty
-  list and completely different problems. `QueryState` renders the engine's own
-  code (`unknown_query`, `unauthorized`, `not_found`, `unavailable`,
-  `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
-  saying which. `bad_params` is the one that names the SCREEN as the fault: the
-  engine understood the question and refused it, so retrying sends the same bad
-  request again. `unavailable` is the opposite: the node will answer in a
-  moment, so `useQuery` asks again on its own rather than leaving a person to
-  reload — after the wait the engine named in the refusal's
-  `retry_after_seconds`, never after a constant of the client's. The table is keyed on the contract's `QueryErrorCode` union, so a
-  code added to the union without a sentence here is a compile error, and a Go
-  test in `internal/api/stream` pins that union to the codes the engine sends.
-- **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
-  are three-valued, and a count this node could not read comes back `null`,
-  never `0`; `inbound` is a plain count whose unknown-ness rides on the
-  answer's own `traffic_known`. The budgets answer says `durable: false` when
-  the counter could not be READ.
-- **Not configured** vs **empty.** A knowledge search with no backend says so;
-  a company with no seats says roles come from the configuration.
-- **Everything in the window** vs **everything that arrived.** Where a screen
-  narrows client-side it says so, naming the SOURCE rather than hedging the
-  whole answer. **Audit** is the case that made this a rule: it composes four
-  subsystems and only one of them — the tracker's feed — takes a wall-clock
-  window, so the other three are asked for their newest page and narrowed on
-  the client. A page that fills up before it reaches the start of the window is
-  older rows the screen never saw, and a caption reading "some of this may be
-  missing" is one nobody can act on where "Knowledge answered one page" says
-  where to look.
-- **Not recorded** vs **the engine.** An empty actor on a tracker or wiki
-  commit is the engine's own write, and the Audit screen draws it as "the
-  engine". A configuration revision is different: the revision states WHAT
-  wrote it (`created_by_kind`, `operator` or `node`) and the row shows that
-  word rather than assuming one — it used to label every revision `operator`,
-  so a node's boot seed and the reconcile loop's reloads read as a person's
-  writes. A revision whose kind is EMPTY was adopted from an older engine's
-  pointer that named nobody, and it reads "Not recorded" on both the Audit
-  screen and Configuration's history, never "the engine" and never a guess.
-- **An empty CONTAINER** vs **a query that matched nothing.** A container says
-  its own emptiness, from what it already knows about itself, before the list
-  it holds has answered anything — and that state REPLACES the list rather than
-  sitting under it. A project page handed its whole body to the work list, so a
-  project nobody has ever filed anything in said "Nothing matches — no item
-  matches these filters. Widen them", with no filter set: a claim about a
-  narrowing that did not exist, on the day-one state of every project. It is
-  drawn from the project's own maintained counts now, names the project, and
-  says how work gets filed (a seat's `create_work_item`, an inbound webhook, a
-  schedule, or your own assistant at `/operator/mcp`). "Nothing matches" is
-  reserved for a query that genuinely narrowed. The same rule sorts the two
-  empty pages apart: the work list's empty state is about ITEMS and the
-  projects directory's is about PROJECTS, so a company with no projects is told
-  what a project is and that a unit's `project` key in the company
-  configuration is what mints one.
-- **An empty SEGMENT is not an empty company — so the answer carries the
-  census.** The projects directory's three segments each ask the engine for
-  their own set, which is what makes the listing honest and is also what makes
-  an empty answer ambiguous: an empty **Active** answer is either a company
-  with no projects or one that has archived every one of them, and a reader
-  acts on those oppositely. The screen cannot derive the difference, because on
-  the Active segment the archived projects have no row on screen to be derived
-  from. So `work_projects` answers with a `census` of BOTH sets under the same
-  narrowing, and the page never guesses: `active + archived === 0` is the
-  company having nothing and draws "No project has been created yet" on
-  **whichever segment the reader is on** — which matters, because they land on
-  Active; an empty Active answer with archived projects behind it says how many
-  and links to them; and Archived says nothing is archived. The counts also sit
-  on the segment control itself, so the switch says what is behind each option
-  before it is pressed. A screen that hedges — one sentence naming both ways a
-  state happens — is a screen missing a number, and the fix is to send the
-  number rather than to word around it.
-
-  **And the directory is not the only reader of it.** Every surface that draws
-  a conclusion from an empty project listing reads the same census, because
-  every one of them asks the ACTIVE set: the Work rail's Projects section, and
-  the `#/work` landing, which replaces the whole list with "No work has been
-  filed yet". Read from the ROWS, each concluded the first state — so a
-  company that had archived all four of its projects was told by the rail that
-  no project had been created and by the landing that nothing could be filed
-  until a unit declared a `project` key, both beside a directory saying all
-  four had been archived, and both false about a company holding every item it
-  ever filed. `active + archived === 0` is the only thing that draws the
-  first-run panel now; `active === 0 && archived > 0` keeps the ordinary list
-  and gives it an empty state naming the count with the way to
-  `#/work/projects?shown=archived` — the same sentence the directory's own
-  Active state writes, because it is the same fact. An answer carrying no
-  census concludes neither, on the rule its rows already followed.
-
-Every empty state names what would fill it.
-
-**And a restart is not an empty company.** The pushed surfaces come from the
-engine's live projection, which is seeded from the node's own event store when
-the process starts: the newest events for the activity feed, and the 24-hour
-spend window the Overview and Spend screens are folded from. Until that read
-existed, every one of these screens started blank after a restart, a deploy or
-a node joining a fleet, which is the one empty state a reader has no way to
-question. What the seed cannot cover is a fleet peer's history, because the
-event store is per node; that is what the `events` query's fleet scatter and
-the `tokens` query's replicated company days are for, and what the window badge
-on Spend names.
-
----
-
-## Acting, as yourself
-
-**The dashboard acts as you.** Every change in a Crewlet company is attributed
-to whoever made it, and the one actor an audit trail cannot name is "the
-dashboard" — so there is no such actor. A write from a browser is made by the
-**person your token is bound to** (`contact.crewlet_operator_id` on your seat),
-through the same operator tools your own assistant calls, and it is recorded
-exactly as that assistant's would be: your token as the author, author kind
-`operator`, your seat as the person.
-
-**The audit log draws an operator as a person.** A write your token made
-reads as you — the person's circle and your seat's name, linking to your seat,
-with the token in the tooltip and in the export's `who` column (`who_seat`
-beside it names the seat). A token no seat binds is a person too, but it has
-no page: its row is the circle and the token's name as plain text, never a
-link to a seat of that name. A seat's own write takes the chart's kind, or,
-for a seat the chart no longer holds, the kind the write was recorded under.
-
-The engine's half is [`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface):
-one catalogue tool per request, a `request_id` the screen mints per gesture
-and repeats on a retry, and an answer carrying the write's `outcome` and
-`position` — the floor the screen's next read waits for. The live socket stays
-read-only; writes and credentials travel over REST. A token no seat binds, and
-every caller while the guard is disabled, is refused `unbound`, and
-`viewer.acts` is empty for exactly those callers — which is what a screen
-reads to disable a control and say why, rather than offer a press the engine
-refuses.
-
-### A write control is never hidden
-
-Every control that changes the company is drawn for every reader. Where your
-browser cannot make the change it is **disabled, and says why** — the kit
-button's `disabledReason`, which keeps it focusable and reads the sentence to
-a screen reader as the button's description. The kit draws that sentence for
-nobody else, so the same words are the button's `title` while it is held — a
-pointer resting on it sees why — and a screen reader, which reads a described
-button's description rather than its title, hears it once. A form whose
-primary action is held also writes the reason on the page beside it (the New
-task sheet's foot), because neither reaches a touch screen. The five reasons,
-in the order you clear them:
-
-| You are | The control says |
-|---|---|
-| Offline | Offline — reconnect to make changes. Nothing is queued while you are away. |
-| Not yet known | Checking who you are before anything can be changed. |
-| Anonymous | Set an API token to act — every change is recorded under your name. |
-| An unbound token | This token is not bound to a person — set contact.crewlet_operator_id on your seat to act as yourself. |
-| A person the engine does not make this change for | This engine does not make this change for you. |
-
-**One press at a time, by every way in.** A write control refuses a press
-while its last one is still out, and so does every other way into the same
-press — a dialog is a form Enter submits without touching the button, a reply
-field sends on ⌘Enter, a one-line form (a sub-task, a title) files on Enter —
-because each reaches the same gate (`pressable` in `components/WriteButton.tsx`).
-They used to go straight to the write, and a second Enter before the first
-answer came back filed a second sub-task or posted the comment twice, under a
-new request id the engine rightly took for a second change. On a task page a
-change conditional on the version you were looking at is not sent at all while
-another is out: it carries the version the first is about to move, so the
-engine could only refuse it, and the page would then have reported your own
-first change as somebody else's. A checklist tick or a follow, which carry no
-version, still go.
-
-A change is **never queued**: a write sent when the connection came back would
-be one you walked away from believing it had happened, onto a company that may
-have moved since. `viewer.acts` is the engine's own list of what it makes for
-you, and the last row is read from it, never guessed from a tool's name — a
-company whose tracker is Jira has no native writer, and its task page shows
-Assign disabled rather than a button the engine refuses.
-
-### Writes are confirmed, not optimistic
-
-Nothing on screen moves until the engine has answered. Each answer is one of
-four, and each tells you something different:
-
-| Outcome | What you see |
-|---|---|
-| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
-| `pending` | "Sent — this node has not applied it yet." The re-read waits until this node has. |
-| `unknown` | "Could not confirm — it may have landed", which **stays** until you dismiss it, with Retry. |
-| refused | The engine's reason, beside the control that caused it, until your next press. |
-
-**The re-read waits for your write.** An `applied` or `pending` answer carries
-the position its record landed at in its domain's log, and the tab keeps it as
-a **read floor** for that domain (`protocol/session.ts`) — a per-tab value that
-only rises. From then on every question that reads that log
-(`contract/domains.ts`, held against the engine by
-`TestEverySessionQueryTakesAFreshnessFloor`) asks with
-`read_level=session&min_position=<floor>`, which the engine answers only once
-the serving node holds that position. So the list you just changed never comes
-back from a node that has not applied the change, whether the next read is the
-refetch your press fires or a poll a second later.
-
-**A retry is the same write.** `unknown` means nobody can vouch either way —
-the connection dropped after the request left, a gateway gave up, or the
-engine's call was interrupted (the act route says `outcome: unknown` for that
-one, beside its class). The dashboard never retries on its own. When you press
-Retry it sends the **same `request_id`** it sent the first time, from which the
-engine derives the same operations; a new press is a new id. Each Retry is
-bound to the press it reports — press twice and the first toast's Retry still
-sends the first press, never the second. A refusal a busy or draining node
-caused offers "Try again" on the same terms; one the request caused does not,
-because the same request would be refused again. A control reused across
-objects — the Inbox's Mark read as you move between notices — belongs to the
-object it is drawn for, so one notice's refusal never appears under another's.
-
-**The refusal is in the dashboard's words**, except where the engine's own
-sentence names the argument that was wrong (`invalid`) or the rule that
-forbade it (`forbidden`): every other tool sentence is written for a model
-reading a tool result. Those two carry the writer's sentence alone — the
-tracker's refusals hold their words apart from the `tracker:` a Go error opens
-with (`tracker.Sentence`), so a person reads "create_work_item refused that: a
-decision has 0 option(s) …" rather than the package's name in front of it, and
-a forbidden one no longer ends by repeating the sentinel's own "not this
-actor's to write". `contract/errors.ts` `ACT_ERRORS` holds one sentence per
-code and is held against the engine's codes both ways
-(`TestTheDashboardKnowsExactlyTheActRefusals`). A conditional edit that lost
-the race reads "Changed by somebody else since you opened it." — somebody
-else, not a name, because the refusal carries the version it lost to and not
-its author. That refusal, and every other that says the screen is out of date
-(`conflict`, `not_found`, `exists`, `already_answered`), asks the write's
-questions again without raising your read floor, so the page redraws what is
-there now and your next press is made against it.
-
-### What a screen can change today
-
-`contract/actions.ts` `ACTIONS` is the dashboard's whole write vocabulary —
-the tool, the arguments a screen may send, the log it lands in and the
-questions it moves — and `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`
-holds it against the real operator catalogue: every tool is served by the act
-route and is not a read, every argument is one the tool takes, every required
-one can be sent. It carries a row for each tool a control presses and no
-other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
-a tool arrives in it with the control that sends it. The controls
-(`components/writes.tsx`):
-
-| Control | Where | Tool |
-|---|---|---|
-| Assign / Reassign (with a reason) | A task's page | `update_work_item` (`if_match` on the version you are looking at) |
-| Status · Priority · Labels · Due · Start · Estimate · a custom field · the title · the description | A task's page, from the value itself | `update_work_item` (`if_match` on the version you are looking at) |
-| A checklist box · Watch / Unwatch | A task's page | `update_work_item{checklist}` / `{watch}` — gestures applied as they land, with no `if_match` |
-| + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
-| Create task (the New task sheet) | The rail's head `+`, the Projects group's `+`, a work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}` — only what was set |
-| Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
-| Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
-| Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
-| Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
-| Pin / Unpin | A saved view's page | `set_pins` |
-| Done · Snooze · Mark unread | The open row in the Inbox | `mark_inbox` (exactly the notices that row holds; every other mark and your read position stay) |
-| Mark all read | The Inbox's page bar | `mark_inbox{read_through}` at the newest notice LOADED — never past it |
-| An option card | A decision in the Inbox's pane | `comment_on_work_item{item, answers, choice}` |
-| Send / Send answer | The Inbox's composer | `comment_on_work_item{item, body, reply_to}` for a reply, `{item, body, answers}` for an answer |
-| Link a task · Attach a page | The Inbox's composer | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| Answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
-| An option · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
-| Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
-
-A change to the **company document** — a seat, a budget ceiling, an MCP
-server, a model — is not an act: it is a new configuration revision, and every
-screen that makes one goes through `protocol/configWrite.ts` (read the document
-and its entity tag, or one entity and the same tag; dry-run a merge patch or an
-entity replacement; save either with its audit summary), always conditional on
-the revision it edited. Its gate is the operator credential rather than a seat
-binding — `/config` is guarded by the API token and nothing narrower — so its
-controls ask `useConfigWriteAccess()`, which is `viewer.operator`, and are
-disabled with that sentence for anybody else.
-`protocol/configAnswer.ts` is the one reading of a `/config` refusal — a
-conflict to re-read, the drain gate's certain `503`, a request that may have
-landed, or the problems the document has — which the org builder's model
-classifies through too.
-
 ## How it is built
 
 ```
@@ -5529,7 +5536,7 @@ dashboard-dev` proxies to an engine on `localhost:8000`, and
 socket or a beacon, and every path a JSX `src`, `href` or `poster` names, the
 shell's `index.html` included — parsed, up to its first substitution — against
 the proxy table in `vite.config.ts`. The markup is read because the browser
-fetches it with no call to read: the tab icon and the rail's brand mark both
+fetches it with no call to read: the tab icon and the sidebar's brand mark both
 answered 404 in the dev loop while every call was forwarded. It fails five
 ways: a path no entry forwards, which Vite would answer with a 404 of its own
 that a screen cannot tell from the engine's refusal; a socket whose entry does
@@ -6263,7 +6270,7 @@ to.
    same engineer was "FE" on the board and an identical generic robot on
    Search and on a project's Lead panel. `ring="brand"` — the accent drawn as a
    ring round the neutral badge, meaning *selected* — is for the one badge that
-   IS the reader, in the rail's own account row, and for nothing else.
+   IS the reader, in the sidebar's own account row, and for nothing else.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.
 3. **A fill step is never text and an `-ink` step is never a background.** The
@@ -6294,7 +6301,7 @@ to.
    returns one, and never dots as the value: a placeholder cannot be
    submitted, and a sentinel that has to be recognised on the way out is one
    an edit can defeat.
-9. **A catalogue tile carries one action.** The Integrations screen draws
+9. **A catalogue tile carries one action.** Settings › Integrations draws
    one tile per tool with exactly one control — Connect, Continue, Rotate
    token, Manage or Learn more — because a grid is read in one glance, and
    the card it replaced carried a tag, a Connect, a Disconnect, a settings
@@ -6369,7 +6376,7 @@ to.
     silent. Spending `--color-brand-accent` as text gives 3.09:1 on its own soft ground and
     3.71 on the page, against the 4.5 small text needs; the ink gives 5.96 and
     7.15. Putting an `-ink` **on** its family's solid fill is the one pairing
-    of the three that was never measured — the rail's attention badge did it,
+    of the three that was never measured — the old workspace rail's attention badge did it,
     at 1.72:1 on a 9px digit, so the unread count rendered as a dot. That
     badge is the ACCENT's ink on the accent's soft ground now: a count of
     things waiting for the reader is "act here", never a caution.
@@ -6381,8 +6388,13 @@ to.
     `--color-text-tertiary` (6.1–6.6:1). What is left on the faint rung is ten marks —
     two tree characters, a breadcrumb slash, four icons and three icon-only
     controls — each named in `styles/rungs.test.ts` with the reason it is one.
-17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
-    diffs it; a bundle that has drifted from its source is a red build.
+17. **Run `make dashboard` and commit `static/dashboard` with the change —
+    `git add -A -- static/dashboard`, not `git add -u`.** CI rebuilds and
+    fails on a diff AND on an untracked file there (`make dashboard-check`),
+    because a lazy chunk is a NEW hashed file every time its source changes:
+    `git add -u` stages the entry that imports it and leaves the chunk behind,
+    and a binary built from that commit serves a screen whose code is not in
+    it. A bundle that has drifted from its source is a red build.
 18. **Everything the page runs or loads is its own bundle.** The engine serves
     the shell under a Content-Security-Policy that allows scripts, styles,
     fonts, images and connections from this origin only (images also as

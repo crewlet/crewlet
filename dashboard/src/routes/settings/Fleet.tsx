@@ -505,7 +505,7 @@ function FleetScreen() {
 
           {/* `> 0`, NOT the bare length. `0 || 0` is `0`, and React renders a
             zero as the text "0" — so a healthy fleet drew a stray digit under
-            the panels, which is the one thing a fleet screen must not do:
+            the panels, which is the one thing a nodes page must not do:
             an operator reading this page is looking for a number that is
             wrong, and here was one with no label at all. */}
           {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (

@@ -183,7 +183,7 @@ const PAGE: KeyRow[] = [
   },
   {
     // ESCAPE CLOSES FROM INSIDE A FIELD TOO: the peek holds inputs, and a
-    // reader who has focused one and wants out means the rail.
+    // reader who has focused one and wants out means the peek.
     id: "peek.close",
     scope: "peek",
     presses: [{ key: "escape" }],

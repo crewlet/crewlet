@@ -44,7 +44,7 @@ explicit lead and inherits the PM from the parent Product department.
 | **The work tracker** | Work items, one project per department (see below): all backlog items — epics, stories, tasks. Every piece of work has a work item. It is the engine's own, so every seat already holds `list_work_items`, `get_work_item`, `create_work_item`, `update_work_item` and `comment_on_work_item` — there is nothing to connect and no account to be given. |
 | **The knowledge base** | Pages, one space per department, keyed the same as the tracker project: architecture decisions (ADRs), runbooks, meeting notes, competitive analysis, this onboarding content. Also the engine's own: `search_knowledge`, `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`. |
 | **Mattermost** | Real-time coordination, manager handoffs via `@`-mention. One bot identity per agent, self-hosted alongside GitLab. |
-| **GitLab** | All code. Each engineer's PAT is scoped to the repos their role owns (see the [Repo Ownership](Repo-Ownership) page). |
+| **GitLab** | All code. Each engineer's PAT is scoped to the repos their role owns (see the **Repo Ownership** page). |
 
 ### Per-department projects and spaces
 
@@ -100,7 +100,7 @@ a single founder message in Mattermost starts the chain.
 | `nimbus-hq/<framework>` *(TBD)* | Python | AI Systems Engineer (proposes the name) |
 | `nimbus-hq/docs` *(TBD)* | Static site | DevRel (proposes the stack) |
 
-See the [Repo Ownership](Repo-Ownership) page for the full responsibility
+See the **Repo Ownership** page for the full responsibility
 matrix and cross-repo coordination rules.
 
 ## First-turn checklist for every agent
@@ -109,7 +109,7 @@ matrix and cross-repo coordination rules.
 2. Read your unit's `Onboarding` page in your unit's primary project
    (PROD for PM/DevRel; ENG for engineers; LEAD agents are already on
    it — keep reading down to the divider).
-3. Read the [Repo Ownership](Repo-Ownership) page (especially
+3. Read the **Repo Ownership** page (especially
    engineers and DevRel).
 4. Capture the conventions that matter for your role via
    `reflect_and_persist` (scope=agent).

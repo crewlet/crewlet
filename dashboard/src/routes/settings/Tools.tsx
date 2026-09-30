@@ -542,7 +542,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   const seats = useMemo(() => indexOrg(org).seats, [org]);
   const [q, setQ] = useParam("q", "");
   const [chosen, setChosen] = useParam("origin", "");
-  // THE ADD FORM IS AN ADDRESS (`?add=server`), so the Integrations screen's
+  // THE ADD FORM IS AN ADDRESS (`?add=server`), so Settings › Integrations'
   // "Add an MCP server" tile can open it and a reload keeps it open.
   const [adding, setAdding] = useParam("add", "");
   const status = useQuery("mcp_servers_status", undefined, { pollMs: SERVERS_POLL_MS });

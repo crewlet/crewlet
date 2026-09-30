@@ -106,7 +106,7 @@ company is never applied to one that exists, and never replayed onto it.
 beside it.
 
 After a successful create, two steps remain that the dashboard cannot take:
-connecting chat and trackers on the Integrations screen, and adding a model
+connecting chat and trackers in Settings › Integrations, and adding a model
 provider, which no dashboard screen writes. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
@@ -288,8 +288,10 @@ engine applies such a company and places its seats, but no agent seat takes a
 turn until a provider exists: work sent to a seat waits on its inbox and runs
 once one is added
 ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
-The dashboard does not write providers. Add one with `crewlet config import`
-or `PATCH /config` ([Configure via the API](configure-via-api.md)).
+The builder does not write providers, and the dashboard does not add one:
+Settings › Models & keys edits a model the configuration already declares.
+Add one with `crewlet config import` or `PATCH /config`
+([Configure via the API](configure-via-api.md)).
 
 ## Adding a unit or a seat
 
@@ -673,7 +675,7 @@ draft. A draft of more than 500 changes is not kept either; save it in steps.
 
 Every check is conditional on the revision the draft was started from, so a
 revision saved by somebody else (another operator, `crewlet config import`, a
-setup flow on the Integrations screen) is found at the next check, not at the
+setup flow in Settings › Integrations) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
 draft was started from) and **Update my draft**. A builder with no changes on

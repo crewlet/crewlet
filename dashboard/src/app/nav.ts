@@ -449,7 +449,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // LAST AND LOCKED, and the row is never hidden: a section that vanishes
     // when a credential is absent is indistinguishable from one that does not
     // exist, so an operator on a fresh browser would conclude the product has
-    // no configuration screen. General is the one section a reader without a
+    // nowhere to configure anything. General is the one section a reader without a
     // credential can read — the charter is the org projection's, which is
     // public — so the workspace is not guarded as a whole; its operator
     // sections are.

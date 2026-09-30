@@ -10,7 +10,7 @@ import (
 //
 // TWO WEEKLY REVIEWS. A token is rotated by a person — a new one minted at the
 // vendor and sealed into this deployment's secret store — and the person who
-// reads the Integrations screen does it on their own schedule, usually once a
+// reads Settings › Integrations does it on their own schedule, usually once a
 // week. Fourteen days means the warning is on screen for at least two of
 // those looks before the credential lapses, so one missed week is not an
 // outage. Shorter and a holiday is one; longer and the note sits on a working

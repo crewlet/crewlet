@@ -649,7 +649,7 @@ func (x *Indexer) orphansOf(ctx context.Context, source LexicalSource,
 // Pending is how many documents are waiting to be indexed.
 //
 // A REPORTING NUMBER rather than the gate — see [Indexer.Ready] for why it
-// stopped being one. It is what a fleet screen renders beside the index's
+// stopped being one. It is what a nodes page renders beside the index's
 // size, and it is one count per source per call.
 // TWO COUNTS AND A SUBTRACTION, because the sources and the index are in
 // different estates and no read joins them. It answers how many published

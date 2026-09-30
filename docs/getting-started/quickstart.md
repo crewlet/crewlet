@@ -492,7 +492,8 @@ org** button (`#/agents/edit`). With no configuration active it opens
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
 it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
-dashboard writes no model provider, so one step stays outside it. Until it is
+dashboard adds no model provider — Settings › Models & keys edits one the
+configuration already declares — so one step stays outside it. Until it is
 done the company runs and no agent seat takes a turn; whatever is sent to a
 seat waits on its inbox. Add `providers.llm` afterwards with
 `crewlet config import` or `PATCH /config`, as the builder's next steps show

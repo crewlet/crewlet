@@ -65,8 +65,9 @@ token_budget:
 # its skills need is where this deployment answers, and the engine injects
 # that itself as ${crewlet_base_url} from ``integrations.public_base_url``
 # below.  The bundled platform-mentions skill builds every shareable link
-# on it — ${crewlet_base_url}/#/work/ENG-42, ${crewlet_base_url}/#/knowledge/pages/…
-# — so there is nothing for an operator to keep in step.
+# on it — ${crewlet_base_url}/#/work/ENG-42 and
+# ${crewlet_base_url}/#/knowledge/pages/{page-id} — so there is nothing
+# for an operator to keep in step.
 #
 # The name is RESERVED: a company that declares ``crewlet_base_url`` itself
 # is refused, because two sources for one address is how a skill comes to

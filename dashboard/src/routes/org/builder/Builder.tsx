@@ -1620,7 +1620,7 @@ function BuilderScreen({
             action={
               <span className="row gap-1 wrap">
                 {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
-                    against that base. The Configuration screen compares with
+                    against that base. Settings › Configuration compares with
                     the active revision unless told otherwise, and the base
                     against the active one reads every change backwards. */}
                 {state.base.revision && conflict.currentRevisionId && (

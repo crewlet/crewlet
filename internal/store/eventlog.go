@@ -1262,7 +1262,7 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // The seat page's LLM-invocation list. It is a separate method rather than a
 // flag on ListQuery precisely because of the payload: the feed's own listing
 // deliberately never selects it — a page of events with every payload attached
-// is the query that makes an activity screen slow — and a boolean on the
+// is the query that makes a live screen slow — and a boolean on the
 // shared query type would put that mistake one keystroke away.
 //
 // Matched on EITHER identifier, because a caller holds whichever the seat page
@@ -1345,7 +1345,7 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // It is a read of its own rather than a flag on ListQuery, for the reason
 // AgentPhases gives: the feed's listing deliberately never selects the payload,
 // and a page of ordinary events with every payload attached is the query that
-// makes an activity screen slow. A boolean on the shared type would put that
+// makes a live screen slow. A boolean on the shared type would put that
 // one keystroke away.
 //
 // `agentID` narrows to ONE SEAT, by the id every node derives for its handle

@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
-// TestEntityKindsMatchTheClient holds the names the Configuration screen offers
+// TestEntityKindsMatchTheClient holds the names Settings › Configuration offers
 // against the collections `config_entities` will actually answer for.
 //
 // THE FAILURE IS A SCREEN THAT ASKS FOR NOTHING. A kind the client spells its
@@ -36,7 +36,7 @@ func TestEntityKindsMatchTheClient(t *testing.T) {
 
 	for _, kind := range client {
 		if !slices.Contains(engine, kind) {
-			t.Errorf("the Configuration screen offers %q, which config_entities refuses: "+
+			t.Errorf("Settings › Configuration offers %q, which config_entities refuses: "+
 				"the engine serves %v", kind, engine)
 		}
 	}
@@ -47,7 +47,7 @@ func TestEntityKindsMatchTheClient(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Logf("the engine serves %v, which the Configuration screen does not offer — "+
+		t.Logf("the engine serves %v, which Settings › Configuration does not offer — "+
 			"a product decision rather than a failure, but a collection nobody can reach",
 			missing)
 	}

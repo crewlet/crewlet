@@ -304,7 +304,7 @@ func TestAnUnknownTurnIsAnEmptyList(t *testing.T) {
 //
 // `events?type=agent_phase_completed` is not a substitute: the event listing
 // deliberately never selects the payload — a page of ordinary events with every
-// payload attached is the query that makes an activity screen slow — and a
+// payload attached is the query that makes a live screen slow — and a
 // phase record without one has no prompts, no response, no tool calls and no
 // decision, which is everything a reader came for.
 func TestPhasesCarryPayloadsAndPage(t *testing.T) {

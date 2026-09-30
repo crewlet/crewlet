@@ -252,7 +252,7 @@ type BudgetMeter struct {
 // ON THE TYPE, not at the sites that build one: a report whose org scope caps
 // nothing arrives with the list absent or null, and the client reads the list
 // as the wire types promise — a `null` here once threw reading `.length` on
-// the Cost screen. The meter BEFORE any report is a different fact and is not
+// the Spend screen. The meter BEFORE any report is a different fact and is not
 // this type at all: [LiveState.Budget] is nil then. A value receiver, so a
 // pointer and a value marshal alike.
 func (m BudgetMeter) MarshalJSON() ([]byte, error) {

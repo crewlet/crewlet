@@ -272,7 +272,7 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 		}
 		places, err := s.Work.TurnPlaces(ctx, runs, statelog.Freshness{Level: statelog.ReadStale})
 		if err != nil {
-			log.WarnContext(ctx, "page_readers_turns_unread", "page", page, "error", err.Error())
+			log.WarnContext(ctx, "page_reads_turns_unread", "page", page, "error", err.Error())
 		}
 		for i, r := range answer.Readers {
 			if place, ok := places[r.LastTurnID]; ok {

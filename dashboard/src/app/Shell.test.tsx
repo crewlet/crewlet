@@ -470,11 +470,11 @@ describe("the sidebar's figures", () => {
   });
 
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, the
-  // rail's head `+` and the Projects group's `+` — not a second form each, and
+  // sidebar's head `+` and the Projects group's `+` — not a second form each, and
   // not the palette it stood in for until the sheet landed.
   test.each([
     ["Home's New task", "button", /^New task$/],
-    ["the rail's head +", "button", /^New task$/],
+    ["the sidebar's head +", "button", /^New task$/],
   ] as const)("%s opens the frame's New task sheet", async (who, role, name) => {
     location.hash = "#/home";
     const { store, socket } = answering({
@@ -485,7 +485,7 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket, <Home key="home" />);
     await settle();
     const presses = screen.getAllByRole(role, { name });
-    // The page bar's button comes after the rail's in document order.
+    // The page bar's button comes after the sidebar's in document order.
     const press = who === "Home's New task" ? presses[presses.length - 1]! : presses[0]!;
     await act(async () => {
       fireEvent.click(press);
@@ -517,7 +517,7 @@ describe("the sidebar's figures", () => {
     expect(sheet.textContent).toContain("ENG · Core platform");
   });
 
-  // THE PROJECT A READER IS IN IS THE ROUTE'S OWN ANSWER, the one the rail's
+  // THE PROJECT A READER IS IN IS THE ROUTE'S OWN ANSWER, the one the sidebar's
   // head `+` asks — never the path's second segment. Read off the path, every
   // other Work page was a project: `#/work/views` offered "New task in views"
   // and opened the sheet asking for a project called `views`, and a task
@@ -1008,12 +1008,12 @@ describe("where the peek is a column", () => {
     const { win, app } = await peekAt("#/work?peek=seat:ceo", 639);
     try {
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      const rail = document.querySelector(".crewlet-app-shell__rail");
-      expect(rail?.getAttribute("data-open")).not.toBe("true");
+      const sidebar = document.querySelector(".crewlet-app-shell__rail");
+      expect(sidebar?.getAttribute("data-open")).not.toBe("true");
       act(() => {
         window.dispatchEvent(new KeyboardEvent("keydown", { key: "\\", ctrlKey: true }));
       });
-      expect(rail?.getAttribute("data-open")).toBe("true");
+      expect(sidebar?.getAttribute("data-open")).toBe("true");
     } finally {
       win.restore();
     }
@@ -1048,10 +1048,10 @@ describe("the drawer's key", () => {
       const { store, socket } = answering({});
       mountShell(store, socket);
       await settle();
-      const rail = document.querySelector(".crewlet-app-shell__rail");
-      expect(rail?.getAttribute("data-open")).not.toBe("true");
+      const sidebar = document.querySelector(".crewlet-app-shell__rail");
+      expect(sidebar?.getAttribute("data-open")).not.toBe("true");
       press();
-      expect(rail?.getAttribute("data-open")).toBe("true");
+      expect(sidebar?.getAttribute("data-open")).toBe("true");
     } finally {
       win.restore();
     }

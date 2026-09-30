@@ -102,7 +102,7 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},
-		// THE RETENTION DOCUMENT, which the Fleet screen's replication
+		// THE RETENTION DOCUMENT, which Settings › Nodes' replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
 		// names exist, so what it answers is nothing.

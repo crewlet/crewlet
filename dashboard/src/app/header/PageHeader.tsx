@@ -413,7 +413,7 @@ function useTabFit(
  * Settings row does: a section that vanished for a reader without an operator
  * credential is one they cannot know exists. A CROSS-LINK (Budgets, which
  * lives once, under Spend) draws an arrow, because pressing it leaves
- * Settings. A figure beside a section is handed in whole, in the rail's own
+ * Settings. A figure beside a section is handed in whole, in the column's own
  * two shapes (`settingsFigures.tsx` decides them and asks for what they need),
  * so the column itself asks nothing.
  */

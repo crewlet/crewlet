@@ -134,7 +134,7 @@ export function densityScale(choice: keyof typeof density): number {
  *
  * WIDER THAN SETTINGS' COLUMN, deliberately. Settings lists nine sections at
  * one level; the tree nests a space, a folder and a page under each other,
- * each level indented, with a space's key on the right — and at the rail's
+ * each level indented, with a space's key on the right — and at the sidebar's
  * 236 a third-level title had under 120px before it was cut.
  */
 export const TREE_COLUMN = 256;
