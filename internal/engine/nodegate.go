@@ -885,8 +885,33 @@ func countedGateLogs(ctx context.Context, s *stateLog, holders partitionHolders,
 // nothing: a node the map names a holder of a partition it has never reported
 // on is counted there at zero, so a gesture written from the register alone
 // would leave it pinning that log while reporting itself complete.
+//
+// It reads the positions register itself, once, and only under a divided
+// layout; a caller that goes on to judge from the register hands its own
+// reading to [stateLog.countedOn] instead.
 func (s *stateLog) countedOnLogs(ctx context.Context, holders partitionHolders,
 	node string) ([]statelog.LogID, error) {
+
+	if s.layout.Number == 0 {
+		return s.identityLogs()
+	}
+	rows, err := s.positions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("engine: read the positions register for the logs %s is "+
+			"counted on: %w", node, err)
+	}
+	return s.countedOn(ctx, holders, node, rows)
+}
+
+// countedOn is [stateLog.countedOnLogs] over a reading of the positions
+// register the caller already took — rows, as [stateLog.positions] answers
+// them — so a caller that judges the node against the register chooses the
+// logs from the SAME reading it judges on. Two readings of one register can
+// disagree: a row that lands between them names a log the first never
+// offered to be judged, and one that is gone from the second judges a log the
+// first chose against no position at all.
+func (s *stateLog) countedOn(ctx context.Context, holders partitionHolders,
+	node string, rows []coord.NodePositions) ([]statelog.LogID, error) {
 
 	identity, err := s.identityLogs()
 	if err != nil || s.layout.Number == 0 {
@@ -897,11 +922,6 @@ func (s *stateLog) countedOnLogs(ctx context.Context, holders partitionHolders,
 		if !slices.Contains(partitions, id.Partition) {
 			partitions = append(partitions, id.Partition)
 		}
-	}
-	rows, err := s.positions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: read the positions register for the logs %s is "+
-			"counted on: %w", node, err)
 	}
 	var row *coord.NodePositions
 	for i := range rows {

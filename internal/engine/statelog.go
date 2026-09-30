@@ -1935,10 +1935,11 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 // has no such write, and a node behind in one is a coverage figure rather
 // than a node that cannot resume.
 //
-// AND ONLY THE LOGS THE NODE WOULD BE COUNTED ON ([stateLog.countedOnLogs]):
+// AND ONLY THE LOGS THE NODE WOULD BE COUNTED ON ([stateLog.countedOn]):
 // those whose partition holders names it a holder of, in any state, and those
 // its positions row names and has not released — the logs the trim would
-// count it on once readmitted. Under layout 0 that is every identity log, as
+// count it on once readmitted — chosen from the very reading of the register
+// they are then judged against. Under layout 0 that is every identity log, as
 // it always was. Under a divided layout a node is counted only where it holds
 // or has reported, and judged everywhere a node with no row was refused on
 // every trimmed log — at position zero — for partitions it holds nothing of
@@ -1953,14 +1954,16 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 		return fmt.Errorf("engine: this node reads no positions register, so it "+
 			"cannot judge where %s stands against the trim floor", nodeID)
 	}
-	counted, err := s.countedOnLogs(ctx, holders, nodeID)
-	if err != nil {
-		return fmt.Errorf("engine: which logs %s would be counted on: %w", nodeID, err)
-	}
+	// ONE READING OF THE REGISTER chooses the logs and judges them: see
+	// [stateLog.countedOn].
 	register, err := s.positions(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: read the positions register to judge %s's "+
 			"readmission: %w", nodeID, err)
+	}
+	counted, err := s.countedOn(ctx, holders, nodeID, register)
+	if err != nil {
+		return fmt.Errorf("engine: which logs %s would be counted on: %w", nodeID, err)
 	}
 	floors, err := s.floors(ctx)
 	if err != nil {
