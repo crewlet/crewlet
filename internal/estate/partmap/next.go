@@ -1,8 +1,11 @@
 package partmap
 
 import (
+	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,10 +48,13 @@ import (
 // ten transfers per tick shorten the small-partition case by that factor and
 // hand the large-partition case — the one where a copy is actually at risk —
 // the shared pipe above. The cure is a ration that knows what it rations: a
-// convergence the maintainer runs again when an estate lease changes, rather
-// than a tick later, with absence still counted on the tick; or a ration by
-// bytes in flight once the lease says how large each partition is. Both are
-// decided where the lease is written and the map maintained, not here.
+// ration by bytes in flight, once the lease says how large each partition is.
+// The maintainer now converges again when an estate lease changes ([Converge]),
+// with absence still counted on the tick, so a transfer that finished is
+// routed to, and the copy it replaced let go, as soon as its node says so —
+// and that pass names NO join, so the ration stays one transfer per tick: the
+// owner's decision, which the join's own lifecycle speeding up does not
+// change.
 const MaxJoinsPerNode = 1
 
 // Input is what one maintainer tick reads.
@@ -137,10 +143,90 @@ func Next(state MapState, in Input) (next MapState, changed bool) {
 		next.Balance = rebalance(&next.Map)
 	}
 	at := before.Epoch + 1
-	if converge(&next.Map, live, able, at) || first {
+	if converge(&next.Map, live, able, at, true) || first {
 		next.Map.Epoch = at
 	}
 	return next, !sameState(state, next)
+}
+
+// Converge is [Next]'s holder convergence ALONE, which the maintainer runs
+// BETWEEN ticks once an estate lease has changed ([Maintainer.Converge]): every
+// partition's holders brought one make-before-break step toward the targets
+// the map already draws — a joiner that says it serves promoted, a leaver that
+// says it has released let go, a copy nobody listed adopted, a server the
+// target no longer names retired under the two conditions — and nothing else.
+//
+// # Why between ticks at all
+//
+// Every step above waits on a node's own word, which reaches the map on its
+// lease's next renewal, and then waited for the next tick as well: a joiner
+// that finished its transfer went unrouted, and the copy it replaced went on
+// being held, for up to a tick after it said so. Run when a lease changes, the
+// map answers a node's word as soon as it is given.
+//
+// # What it leaves to the tick
+//
+// It counts NO ABSENCE and changes no member, share, copy count or label:
+// absence is counted in ticks, [membership.TickInterval] apart, and a pass run
+// on every lease change would count it as fast as leases change. And it names
+// NO JOIN. A join into a served partition is the transfer [MaxJoinsPerNode]
+// rations, and naming a node's next the moment its last is promoted would turn
+// one transfer per node per tick into transfers back to back — the bandwidth
+// question that ration answers, which stays decided where it was: the ration
+// is one transfer per tick. No map, no convergence either: a first map is the
+// tick's, the one place a map is created.
+//
+// PURE, as [Next] is, and stamps what it changes with the next epoch.
+func Converge(state MapState, live []Presence) (next MapState, changed bool) {
+	if state.Map.Generation == uuid.Nil {
+		return state, false
+	}
+	byNode := membership.ByNode(live, func(p Presence) membership.Presence {
+		return membership.Presence{Node: p.Node, Weight: p.Meta.Weight}
+	})
+	next = state.Clone()
+	at := state.Map.Epoch + 1
+	if !converge(&next.Map, byNode, Able(live, state.Map.Layout.Number), at, false) {
+		return state, false
+	}
+	next.Map.Epoch = at
+	return next, true
+}
+
+// LeaseKey is what [Converge] reads of the live estate leases, as one comparable
+// value: for each node offering a share, in node order, the layout it runs,
+// whether its store says it is healthy, the map it last acted on and what it
+// holds of each partition. Two listings with one key converge a map to the same
+// holders, so a caller converges again only when the key moves — never on a
+// renewal that changed nothing but the lease's expiry, its free space, its
+// detail or the index it is building.
+func LeaseKey(live []Presence) string {
+	byNode := membership.ByNode(live, func(p Presence) membership.Presence {
+		return membership.Presence{Node: p.Node, Weight: p.Meta.Weight}
+	})
+	var b strings.Builder
+	for _, node := range slices.Sorted(maps.Keys(byNode)) {
+		m := byNode[node].Meta
+		layout, healthy := "-", "-"
+		if m.Layout != nil {
+			layout = strconv.Itoa(*m.Layout)
+		}
+		if m.Healthy != nil {
+			healthy = strconv.FormatBool(*m.Healthy)
+		}
+		// QUOTED, so no node id or partition name can run into the next
+		// field and make two different listings one key.
+		fmt.Fprintf(&b, "%q %s %s %s %d", node, layout, healthy, m.MapGeneration, m.MapEpoch)
+		for _, p := range slices.Sorted(maps.Keys(m.Partitions)) {
+			fmt.Fprintf(&b, " %q=%q", p, m.Partitions[p])
+		}
+		if m.Partitions == nil {
+			// NOT SAYING is not holding nothing ([Meta.Partitions]).
+			b.WriteString(" unsaid")
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // samePlacement reports whether two maps draw every target from the same
@@ -224,8 +310,9 @@ type converging struct {
 // converge brings every partition's holders one make-before-break step toward
 // its target, stamping every holder it changes with the epoch at, and reports
 // whether it changed any. able is the live nodes the tick counts present and
-// healthy.
-func converge(m *Map, live map[string]Presence, able map[string]bool, at uint64) bool {
+// healthy, and joins whether it names new joiners — a tick's work, never a
+// convergence between ticks ([Converge]).
+func converge(m *Map, live map[string]Presence, able map[string]bool, at uint64, joins bool) bool {
 	c := &converging{m: m, draw: m.Draw(), at: at, reports: map[string]report{},
 		targets: m.targets(), able: able}
 	for node, p := range live {
@@ -242,7 +329,9 @@ func converge(m *Map, live map[string]Presence, able map[string]bool, at uint64)
 	for g := range m.Partitions {
 		c.settle(g)
 	}
-	c.join()
+	if joins {
+		c.join()
+	}
 	for g := range m.Partitions {
 		sortHolders(m.Partitions[g].Holders)
 		if len(m.Partitions[g].Holders) == 0 {

@@ -94,9 +94,10 @@ type MaintainerOptions struct {
 
 // Maintainer keeps the stored estate map in step with the fleet. A FLEET
 // SINGLETON: the caller runs [Maintainer.Tick] only while it holds the duty,
-// once per [membership.TickInterval] after a tick that found a map, and every
-// write is a compare-and-set, so a tick that lost the duty mid-write loses the
-// race rather than overwriting its successor.
+// once per [membership.TickInterval] after a tick that found a map — and
+// [Maintainer.Converge] between two of them when an estate lease changes — and
+// every write is a compare-and-set, so a pass that lost the duty mid-write
+// loses the race rather than overwriting its successor.
 type Maintainer struct {
 	opts MaintainerOptions
 
@@ -227,6 +228,55 @@ func (m *Maintainer) Tick(ctx context.Context) (TickResult, error) {
 	}
 	logChanges(ctx, state, next)
 	return res, nil
+}
+
+// Converge runs [Converge] — the holder convergence alone — against the stored
+// map and writes the answer back by compare-and-set, reporting whether it
+// wrote. The map's duty runs it BETWEEN ticks, once the live estate leases have
+// changed and then held still ([LeaseKey]); it counts no absence, so it may run
+// as often as they change, and it never creates a map.
+//
+// ON A TICK'S TERMS otherwise: an input it could not read, or a map this build
+// cannot rewrite, changes nothing; the map's logs are made sure of first, once
+// per tenure, because a copy it adopts may be a joiner that opens them; and a
+// lost race is the other writer's, read again next time.
+func (m *Maintainer) Converge(ctx context.Context) (bool, error) {
+	live, err := m.opts.Live(ctx)
+	if err != nil {
+		return false, fmt.Errorf("estate/partmap: read the live estate leases: %w", err)
+	}
+	rec, found, err := m.opts.Store.EstateMap(ctx)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("estate/partmap: read the estate map: %w", err)
+	case !found:
+		return false, nil
+	}
+	state, err := DecodeMapStateForUpdate(rec.Value)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", errNewerMap, err)
+	}
+	if perr := m.provision(ctx, state.Map); perr != nil {
+		return false, fmt.Errorf("estate/partmap: create the logs of layout %d, which the "+
+			"estate map names: %w", state.Map.Layout.Number, perr)
+	}
+	next, changed := Converge(state, live)
+	if !changed {
+		return false, nil
+	}
+	raw, err := next.Encode()
+	if err != nil {
+		return false, err
+	}
+	_, won, err := m.opts.Store.UpdateEstateMap(ctx, raw, rec.Version)
+	if err != nil {
+		return false, fmt.Errorf("estate/partmap: write the estate map: %w", err)
+	}
+	if !won {
+		return false, nil
+	}
+	logChanges(ctx, state, next)
+	return true, nil
 }
 
 // provision creates the logs of the map read, unless this tenure already has.

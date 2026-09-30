@@ -161,6 +161,14 @@
 //     across the whole map; a join into one nobody serves — every partition
 //     of a new deployment — has no donor to wait for and is not rationed.
 //
+// Every step but the last also runs BETWEEN ticks ([Converge]): a node's word
+// reaches the map on its lease's next renewal, and the maintainer's duty
+// converges again once the leases have changed and held still, so a joiner is
+// routed to — and the copy it replaces let go — as soon as it says it serves,
+// rather than a tick later. That pass counts no absence and names no join,
+// both of which stay the tick's: absence is counted in ticks, and the join
+// ration stays one transfer per tick.
+//
 // # Pure, and unknown is the caller's
 //
 // [Next] and the gestures are pure functions of values, so every rule is
