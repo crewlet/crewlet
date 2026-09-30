@@ -908,7 +908,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// that blocked here would serve no dashboard, answer no probe and run no
 	// duty until it finished. Seat acquisition is what waits; see
 	// [Engine.StateLogHydrated].
-	if err = e.startCore(ctx, opts.Bootstrap, company.Epoch()); err != nil {
+	if err = e.startCore(ctx, opts.Bootstrap); err != nil {
 		return nil, err
 	}
 	// THE REST IS SKIPPED WHEN THERE IS NO EPOCH. Everything here is

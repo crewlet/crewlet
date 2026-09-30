@@ -132,9 +132,11 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 			// its own rows and a singleton would tidy one and let the
 			// rest grow for ever. Contributed here rather than in
 			// tracker.Jobs because that list runs under the duty and
-			// this one must not.
+			// this one must not. At the horizon the PUBLISHED company
+			// states when it ticks, which is the one the applier reads
+			// per batch — see [tracker.InboxJobs].
 			jobs = append(jobs, tracker.InboxJobs(
-				e.backends.Store, e.inboxRetention())...)
+				e.backends.Store, e.inboxRetention)...)
 		}
 		if core != nil {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
@@ -431,7 +433,9 @@ func (e *Engine) stopMaintenance() {
 	}
 }
 
-// inboxRetention is how long this company's inbox rows live.
+// inboxRetention is how long this company's inbox rows live, read off the
+// PUBLISHED company each time it is asked — the sweep asks it per tick, for
+// the reason [tracker.InboxJobs] gives.
 //
 // A NODE WITH NO COMPANY STATES NO HORIZON, for the reason
 // [Engine.ConversationRetention] gives: a literal zero duration read as

@@ -133,11 +133,12 @@ type core struct {
 //
 // # The epoch its appliers read
 //
-// THE BOOT COMPANY'S, captured here: [statelog.RunnerDeps.Epoch] is a value
-// rather than a source, so a node that boots with no company hands its
-// appliers none, and a later revision that moves one of those keys — the
-// tracker's inbox retention — reaches the applier at the next restart.
-func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap, epoch map[string]any) error {
+// NOT THE BOOT COMPANY'S, although this is where the runners are built: each
+// asks [Engine.applyEpoch] per batch, so a node that booted with no company
+// applies under its first one from the batch after that company is
+// published, and a revision that moves a key an applier reads — the tracker's
+// inbox retention — reaches the applier without a restart.
+func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 	// AN IN-MEMORY STREAM NEVER GETS THIS FAR: [New] refused it before
 	// anything was opened — see [config.CheckTiers].
 	//
@@ -171,7 +172,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap, epoch ma
 
 	// THE LOG COMES UP BEFORE ANYTHING READS IT, once for the node: every
 	// domain in the register or none — see [Engine.startStateLog].
-	sl, err := e.startStateLog(ctx, boot, nodeID, epoch)
+	sl, err := e.startStateLog(ctx, boot, nodeID)
 	if err != nil {
 		return err
 	}

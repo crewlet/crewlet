@@ -33,7 +33,12 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(before.Notices))
 	}
 
-	jobs := tracker.InboxJobs(r.db, 365*24*time.Hour)
+	// THE HORIZON IS ASKED AT EVERY TICK, because the applier reads it off
+	// the epoch at every batch and the two must agree: a first tick under
+	// a longer horizon keeps the year-old notice, and the next, after the
+	// company shortened it, deletes it — the same job, rebuilt by nothing.
+	horizon := 500 * 24 * time.Hour
+	jobs := tracker.InboxJobs(r.db, func() time.Duration { return horizon })
 	if len(jobs) != 1 {
 		t.Fatalf("InboxJobs returned %d jobs, want 1", len(jobs))
 	}
@@ -45,17 +50,30 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("the inbox sweep has scope %q, so it tidies one node's "+
 			"rows and lets every peer's grow for ever", jobs[0].Scope)
 	}
-	if jobs[0].Horizon != 365*24*time.Hour {
-		t.Fatalf("the job's horizon is %s, want the retention it was given",
-			jobs[0].Horizon)
+	// NO HORIZON OF ITS OWN, so the worker hands it no cutoff to trust:
+	// a static one is the value that stayed at the boot company's.
+	if jobs[0].Horizon != 0 {
+		t.Fatalf("the job declares a horizon of %s, which the worker would "+
+			"hold for the life of the process", jobs[0].Horizon)
 	}
 
 	// THE SWEEP RUNS BESIDE A LIVE APPLIER, which holds the estate's pin
 	// for the life of the process: a sweep that asked for one of its own
 	// was refused on every tick of a running node.
 	holdTheAppliersPin(t, r)
-	swept, err := jobs[0].Run(t.Context(), wednesday,
-		wednesday.Add(-365*24*time.Hour))
+	// The cutoff argument is the worker's, derived from a horizon the job
+	// does not declare, so it is deliberately nonsense here: the job must
+	// derive its own from the instant.
+	swept, err := jobs[0].Run(t.Context(), wednesday, wednesday)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Fatalf("the sweep deleted %d rows under a 500-day horizon, want "+
+			"none — the oldest notice is 400 days old", swept)
+	}
+	horizon = 365 * 24 * time.Hour
+	swept, err = jobs[0].Run(t.Context(), wednesday, wednesday)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -85,8 +103,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 
 	// A SECOND SWEEP IS A NO-OP, so a tick with nothing to do costs one
 	// range delete and reports zero rather than re-reporting the first.
-	again, err := jobs[0].Run(t.Context(), wednesday,
-		wednesday.Add(-365*24*time.Hour))
+	again, err := jobs[0].Run(t.Context(), wednesday, wednesday)
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}
@@ -99,7 +116,26 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 // no store contributes no job rather than a job that panics on its first tick.
 func TestTheInboxSweepDeclinesWithNoStore(t *testing.T) {
 	t.Parallel()
-	if jobs := tracker.InboxJobs(nil, time.Hour); jobs != nil {
+	if jobs := tracker.InboxJobs(nil, func() time.Duration { return time.Hour }); jobs != nil {
 		t.Fatalf("a node with no store contributed %d sweep jobs", len(jobs))
+	}
+}
+
+// A HORIZON NOBODY STATED SWEEPS NOTHING. Zero is the answer of a source with
+// no company behind it, and read as a duration it is "retain nothing" — the
+// cutoff would be the tick's own instant and every notice would go.
+func TestAnInboxHorizonOfZeroSweepsNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.at = wednesday
+	routeTo(t, r, "t-1", "ENG-1", "bob")
+	holdTheAppliersPin(t, r)
+	jobs := tracker.InboxJobs(r.db, func() time.Duration { return 0 })
+	swept, err := jobs[0].Run(t.Context(), wednesday.Add(time.Hour), wednesday)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Fatalf("a zero horizon deleted %d notices", swept)
 	}
 }

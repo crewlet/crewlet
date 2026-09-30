@@ -280,6 +280,11 @@ type stateLog struct {
 	db     *store.DB
 	fleet  coord.Fleet
 
+	// epoch is where every domain's applier reads its per-epoch
+	// configuration from, once per batch ([statelog.RunnerDeps.Epoch]) —
+	// [Engine.applyEpoch], the published company's.
+	epoch func() map[string]any
+
 	// publishing serializes [stateLog.publishPositions], whose reading of
 	// the runners and write of the row must not interleave with another's.
 	publishing sync.Mutex
@@ -553,7 +558,7 @@ type snapshotHeld struct {
 // from; a runner started before its consumer resumed from the rows reads from
 // wherever the broker's default happened to put it.
 func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
-	nodeID string, epoch map[string]any) (*stateLog, error) {
+	nodeID string) (*stateLog, error) {
 
 	host, ok := e.backends.Queue.(domainHost)
 	if !ok {
@@ -599,6 +604,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		domains: map[string]*runningDomain{},
 		ring:    recordKeyring(boot),
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
+		epoch:   e.applyEpoch,
 		metrics: e.metrics,
 		witness: e.stateLogWitness(),
 		skills:  skillDetector{}, applyHooks: e.applyHooks(),
@@ -675,7 +681,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		// WHETHER AN IDENTITY-CLAIMING DOMAIN CAN SAY WHO IS EVICTED ON IT,
 		// AND BE WRITTEN BY THE NODE GATE, WAS ASKED BY [checkRegister]
 		// before anything was provisioned — see [checkIdentityEntry].
-		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()], epoch)
+		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()])
 		if err != nil {
 			// EVERY DOMAIN, OR NONE. A node running half of the
 			// register serves rows derived from one log while
@@ -938,7 +944,7 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 
 // start brings up one domain on the log [stateLog.provision] opened.
 func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, domain statelog.Domain,
-	appendTo *jetstream.DomainLog, epoch map[string]any) (*runningDomain, error) {
+	appendTo *jetstream.DomainLog) (*runningDomain, error) {
 
 	spec := domain.Stream()
 
@@ -1021,7 +1027,11 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		// the log still holds, at its checkpoint, the record it consumed
 		// there before it applies anything past it.
 		Log:             appendTo,
-		StreamCreatedAt: created, Epoch: epoch, Metrics: s.metrics,
+		StreamCreatedAt: created, Metrics: s.metrics,
+		// THE EPOCH AS A SOURCE, read per batch: the runner is built once,
+		// at boot, and outlives every activation — see
+		// [statelog.RunnerDeps.Epoch].
+		Epoch: s.epoch,
 		// A RECORD THIS NODE WOULD NOT AUTHENTICATE reaches the
 		// company's audit feed as well as this node's log.
 		Witness: s.witness,
@@ -1899,6 +1909,9 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 //
 // Keys are qualified by the domain that reads them, so a second domain adding
 // one cannot collide with the first's.
+//
+// A nil company — a node that has not been handed one — declares none, and
+// every applier then applies its own default.
 func (c *Company) Epoch() map[string]any {
 	if c == nil || c.Config == nil {
 		return nil
@@ -1909,6 +1922,15 @@ func (c *Company) Epoch() map[string]any {
 	}
 	return epoch
 }
+
+// applyEpoch is what every domain's applier reads per batch: the epoch of the
+// company this node has PUBLISHED, which is one atomic load.
+//
+// THE PUBLISHED COMPANY and nothing earlier, because an apply that is refused
+// before its swap never becomes this node's company, and an applier that read
+// the revision being built would write rows under an epoch the node never
+// served. A node with no company hands its appliers none.
+func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 
 // join adopts a peer's snapshot when this node cannot replay its way back,
 // and does nothing at all when it can.

@@ -1622,7 +1622,11 @@ briefly on different epochs would then write different rows for one record.
 **Inbox rows age out; the history does not.** `tracker.native.inbox_retention_days`
 (default 365, 30..3650) is how long an entry lives. A sweep on every node
 deletes what is past the horizon — per node rather than once across the fleet,
-because each node applies the log into its own copy. A notice is a *pointer* at
+because each node applies the log into its own copy. It is **live**: a
+revision that changes it reaches every node's applier at its next batch and its
+sweep at its next tick, with no restart — the two read one horizon, because a
+record older than it writes no inbox row when the log is replayed and the sweep
+deletes exactly the rows a replay would not write. A notice is a *pointer* at
 a history row, and the history answers for ever: "what was I told about in
 2024" is a `work_activity` question, not an inbox one.
 

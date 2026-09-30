@@ -608,10 +608,13 @@ type ApplyOptions struct {
 	// does rather than a second copy.
 	ArbitratedKinds []string
 
-	// Epoch is the per-epoch configuration the domain declared it reads.
-	// It is here rather than read by the applier because two nodes
-	// briefly on different epochs must still produce rows a reader can
-	// account for — which is exactly what the Divergent class names.
+	// Epoch is the per-epoch configuration the domain declared it reads,
+	// as this node's epoch stood when the BATCH began
+	// ([RunnerDeps.Epoch]). It is here rather than read by the applier
+	// because two nodes briefly on different epochs must still produce
+	// rows a reader can account for — which is exactly what the Divergent
+	// class names — and "briefly" is the whole of it: each node moves to
+	// a new epoch at its next batch, not at its next restart.
 	Epoch map[string]any
 
 	// MaxVariables is the engine's probed bind-parameter limit, which is

@@ -526,7 +526,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 				t.Fatalf("stage the checkpoint: %v", err)
 			}
 
-			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo, nil)
+			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}

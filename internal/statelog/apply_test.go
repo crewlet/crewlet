@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 type probeApplier struct {
 	mu       sync.Mutex
 	applied  []statelog.Position
+	epochs   []map[string]any
 	commits  int
 	rows     int
 	gate     statelog.Reason
@@ -83,6 +85,7 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 	}
 	a.mu.Lock()
 	a.applied = append(a.applied, rec.Position)
+	a.epochs = append(a.epochs, opts.Epoch)
 	a.mu.Unlock()
 	return per, nil
 }
@@ -103,6 +106,13 @@ func (a *probeApplier) seen() []statelog.Position {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]statelog.Position(nil), a.applied...)
+}
+
+// epochsSeen is the epoch each applied record was handed, in apply order.
+func (a *probeApplier) epochsSeen() []map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]map[string]any(nil), a.epochs...)
 }
 
 // probeFetch hands the loop whatever the test queued, and records what was
@@ -317,6 +327,10 @@ type applyHarness struct {
 	applier *probeApplier
 	fetch   *probeFetch
 	metrics *metrics.Recorder
+
+	// epoch is the source [applyHarness.rebuild] hands the runner, nil for
+	// none — as a caller that declares no epoch builds one.
+	epoch func() map[string]any
 }
 
 func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
@@ -411,6 +425,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		Checkpoint:         checkpoint.At,
 		CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt:    created,
+		Epoch:              h.epoch,
 		Metrics:            recorder,
 	})
 	if err != nil {
@@ -1329,6 +1344,71 @@ func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 			"budget of %d — the split never happened, so this case proved "+
 			"nothing about a boundary",
 			commits, records, h.applier.rowsPer, statelog.ApplyTxRowBudget)
+	}
+}
+
+// AN EPOCH THAT MOVES REACHES THE APPLIER AT ITS NEXT BATCH, WITH NO RESTART.
+//
+// The runner is built once, at boot, and the epoch moves with every
+// activation. It was handed the epoch as a VALUE, so every batch for the life
+// of the process applied under the boot company's — a node that booted with no
+// company under none at all — and a revision that moved a key an applier reads
+// (the tracker's inbox retention) reached the applier at the next restart,
+// while two nodes that had restarted at different times applied one record
+// under two epochs for as long as both ran.
+//
+// ONE RUN spans both records, because a restart between them is exactly what
+// the case must not need. Mutation: read the source once, in NewRunner, and
+// the second record is handed the first epoch.
+func TestAChangedEpochReachesTheApplierWithNoRestart(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	var current atomic.Pointer[map[string]any]
+	first := map[string]any{"probe.retention_days": 30}
+	current.Store(&first)
+	h.epoch = func() map[string]any { return *current.Load() }
+	h.rebuild(probeDomain{}, time.Time{})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-errs
+	}()
+	committed := func(want uint64) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for h.runner.Committed().Seq < want {
+			if err := h.runner.Stopped(); err != nil {
+				t.Fatalf("the runner stopped: %v", err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the runner committed %v, want sequence %d",
+					h.runner.Committed(), want)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	h.fetch.offer(1, env(1, "edit", "o1", "op-1", 1))
+	committed(1)
+	second := map[string]any{"probe.retention_days": 7}
+	current.Store(&second)
+	h.fetch.offer(2, env(2, "edit", "o2", "op-2", 1))
+	committed(2)
+
+	seen := h.applier.epochsSeen()
+	if len(seen) != 2 {
+		t.Fatalf("the applier was handed %d epoch(s), want one per record", len(seen))
+	}
+	if seen[0]["probe.retention_days"] != 30 {
+		t.Errorf("the first record was applied under %v, want the epoch in force "+
+			"when it arrived", seen[0])
+	}
+	if seen[1]["probe.retention_days"] != 7 {
+		t.Errorf("the second record was applied under %v after the epoch moved "+
+			"to %v — a revision reaches this runner only at a restart", seen[1], second)
 	}
 }
 

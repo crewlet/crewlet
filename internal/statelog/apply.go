@@ -193,8 +193,25 @@ type RunnerDeps struct {
 	// operator confirmed, which is the stream the checkpoint then names.
 	StreamCreatedAt time.Time
 
-	// Epoch is the per-epoch configuration the domain declared it reads.
-	Epoch map[string]any
+	// Epoch is where the per-epoch configuration the domain declared it
+	// reads comes from, asked once per BATCH ([ApplyOptions.Epoch]). Nil
+	// hands every batch none.
+	//
+	// A SOURCE AND NOT A VALUE, because the runner outlives every epoch it
+	// applies under: it is built once, at boot, and the epoch moves with
+	// every activation. As a value it was the boot company's for the life
+	// of the process — a node that booted with no company handed its
+	// appliers none at all — so a revision that moved one of those keys
+	// (the tracker's inbox retention) reached the applier only at the next
+	// restart, and two nodes that had restarted at different times applied
+	// one record under two different epochs for as long as they ran.
+	//
+	// ONCE PER BATCH rather than per record, because the batch is the
+	// transaction: every record in one commits under the same options, as
+	// it does under the same [ApplyOptions.Now]. It must not block — it is
+	// asked on the apply loop — and it must be safe to call from that
+	// loop's goroutine while the caller's own changes it.
+	Epoch func() map[string]any
 
 	Metrics *metrics.Recorder
 
@@ -249,6 +266,7 @@ type Runner struct {
 	logger   *slog.Logger
 	now      func() time.Time
 	opts     ApplyOptions
+	epoch    func() map[string]any
 	nodeID   string
 	evicted  func(ctx context.Context, node string) (bool, error)
 
@@ -558,13 +576,27 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		witnessTo: d.Witness,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
-			Epoch:           d.Epoch,
 		},
+		epoch: d.Epoch,
 		// THE CHECKPOINT AND THE RECORD IT NAMES, together, for the reason
 		// [Runner.checkpointAt] gives.
 		cursor:       checkpoint,
 		checkpointAt: d.CheckpointStoredAt,
 	}, nil
+}
+
+// batchOptions is what every record of one transaction is applied under: the
+// runner's static declarations, the batch's instant, the store's bind limit
+// and the epoch AS IT STANDS NOW — read here, per batch, so an activation
+// reaches the next batch rather than the next process ([RunnerDeps.Epoch]).
+func (r *Runner) batchOptions(now time.Time) ApplyOptions {
+	opts := r.opts
+	opts.Now = now
+	opts.MaxVariables = r.db.Caps().MaxVariables
+	if r.epoch != nil {
+		opts.Epoch = r.epoch()
+	}
+	return opts
 }
 
 // Committed is this node's committed position on the stream.
@@ -2423,9 +2455,7 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		} else if covered {
 			return nil
 		}
-		opts := r.opts
-		opts.Now = r.now()
-		opts.MaxVariables = r.db.Caps().MaxVariables
+		opts := r.batchOptions(r.now())
 		_, gate, gated, err := r.applyOne(ctx, tx, rec, opts)
 		if err != nil {
 			return err
@@ -2731,9 +2761,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// only the committed cursor would apply such a record twice —
 		// the second time against rows the first one wrote.
 		highWater := r.Committed()
-		opts := r.opts
-		opts.Now = txStart
-		opts.MaxVariables = r.db.Caps().MaxVariables
+		opts := r.batchOptions(txStart)
 
 		for i := range run {
 			rec := run[i]

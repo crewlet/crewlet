@@ -43,15 +43,34 @@ import (
 // What ages out is the mailbox entry, which is what the config doc promises:
 // "the history it points at is untouched".
 
-// InboxJobs is the sweep for a person's inbox rows.
-func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
-	if db == nil {
+// InboxJobs is the sweep for a person's inbox rows, at the horizon retention
+// answers WHEN IT RUNS.
+//
+// # A source, read per tick, and never a value
+//
+// The applier declines to write an inbox row for a record older than the
+// horizon, reading it off the epoch at every batch, and [purgeInbox] deletes
+// exactly the rows a replay would decline to write — the two must hold ONE
+// horizon, or an inbox grows back on every reanchor by the width of their
+// disagreement. The applier follows an activation from its next batch, so the
+// sweep follows it from its next tick: handed a value, it kept the horizon the
+// node's first company stated for the life of the process while the applier
+// moved on. So the job declares no [maintenance.Job.Horizon] of its own and
+// derives its cutoff from the tick's instant, as the event log's job does. A
+// non-positive answer sweeps nothing: a horizon of zero is "none stated",
+// never "retain nothing", which would empty every inbox.
+func InboxJobs(db *store.DB, retention func() time.Duration) []maintenance.Job {
+	if db == nil || retention == nil {
 		return nil
 	}
 	return []maintenance.Job{{
-		Name: "tracker_notifications", Scope: maintenance.NodeLocal, Horizon: retention,
-		Run: func(ctx context.Context, _, cutoff time.Time) (int64, error) {
-			return purgeInbox(ctx, db, cutoff)
+		Name: "tracker_notifications", Scope: maintenance.NodeLocal,
+		Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
+			horizon := retention()
+			if horizon <= 0 {
+				return 0, nil
+			}
+			return purgeInbox(ctx, db, now.Add(-horizon))
 		},
 	}}
 }
