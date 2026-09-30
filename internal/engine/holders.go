@@ -50,6 +50,49 @@ func (e *Engine) holdersOf(layout statelog.Layout) partitionHolders {
 	return mapHolders{layout: layout, view: e.estateMapView}
 }
 
+// watchedHolders is who holds the partitions of layout as this node's WATCHED
+// views answer it — the presence view under layout 0 ([viewHolders]), the
+// estate map's view under any other ([mapHolders]) — for a question asked often
+// that decides nothing a view's age could make unsafe: whether a partition has
+// anybody to donate a snapshot to ([Engine.countedOn]).
+//
+// NOT THE TRIM'S ANSWER at layout 0, which lists presence afresh on every tick
+// ([Engine.holdersOf]): the trim licenses removing records, and a listing up to
+// a heartbeat old may miss a node that has just booted — the one node the trim
+// must not pass. Under any other layout both read the one estate view, which
+// answers only while it is fresh.
+func (e *Engine) watchedHolders(layout statelog.Layout) partitionHolders {
+	if layout.Number == 0 {
+		return viewHolders{view: e.dataView}
+	}
+	return mapHolders{layout: layout, view: e.estateMapView}
+}
+
+// viewHolders answers who holds a partition from the watched presence view:
+// every live data node holds layout 0's one partition, as [presenceHolders]
+// says, from memory rather than a listing.
+type viewHolders struct{ view *coord.LeaseView }
+
+// Holders is every live data node the view names, for each partition asked
+// about — or why the view cannot say.
+func (h viewHolders) Holders(ctx context.Context,
+	partitions []statelog.PartitionID) (map[statelog.PartitionID][]statelog.Presence, error) {
+
+	nodes, err := presenceRoster{view: h.view}.LiveDataNodes()
+	if err != nil {
+		return nil, err
+	}
+	live := make([]statelog.Presence, 0, len(nodes))
+	for _, id := range nodes {
+		live = append(live, statelog.Presence{NodeID: id})
+	}
+	out := make(map[statelog.PartitionID][]statelog.Presence, len(partitions))
+	for _, p := range partitions {
+		out[p] = live
+	}
+	return out, nil
+}
+
 // estateMapView is this node's estate view, looked up at every read — the
 // watch may start after the loops that read it — and nil where it runs none.
 func (e *Engine) estateMapView() estateHolderView {

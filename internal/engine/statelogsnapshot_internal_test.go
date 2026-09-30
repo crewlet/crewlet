@@ -799,7 +799,7 @@ func TestTheSnapshotLoopCountsAPartitionsHolders(t *testing.T) {
 	e := &Engine{backends: &Backends{Coord: backend}}
 	e.estateWatch.Store(runningWatch(t, fleet, backend, nil, layout, &viewClock{now: time.Now()}))
 	s := &stateLog{layout: layout, fleet: fleet}
-	n, err := e.countedOn(ctx, s, tracker0)
+	n, err := e.countedOn(ctx, s, tracker0, time.Now())
 	if err != nil {
 		t.Fatalf("countedOn: %v", err)
 	}

@@ -3543,7 +3543,7 @@ func (e *Engine) snapshotterOf(s *stateLog, p statelog.PartitionID, dir string,
 		NodeID:        s.nodeID,
 		EngineVersion: version.String(),
 		Counted: func(ctx context.Context) (int, error) {
-			return e.countedOn(ctx, s, p)
+			return e.countedOn(ctx, s, p, time.Now())
 		},
 		Interval: interval,
 	})
@@ -3988,12 +3988,12 @@ func stampPartition(row *coord.NodePositions, p statelog.PartitionID, held snaps
 // window a rolling upgrade lives in.
 const snapshotSkipRetry = 30 * time.Second
 
-// countedOn is how many nodes the fleet counts on partition p's logs, which is
-// what decides whether there is anybody to donate an artefact of p to at all:
-// every node whose positions row names one of p's logs and has not released
-// it, and every node HOLDING p — the two halves of the trim's own counted set
-// ([statelog.CountedSet]), so the loop and the trim's snapshot term ask one
-// question of one set.
+// countedOn is how many nodes the fleet counts on partition p's logs at now,
+// which is what decides whether there is anybody to donate an artefact of p to
+// at all: THE TRIM'S OWN COUNTED SET, log by log ([statelog.CountedSet]) —
+// every node whose positions row names the log and has not released it, UNION
+// every holder of p, LESS the tombstones past their window — so the loop and
+// the trim's snapshot term ask one question of one set.
 //
 // # The holders, and not the register alone
 //
@@ -4004,7 +4004,31 @@ const snapshotSkipRetry = 30 * time.Second
 // exist, while the trim, counting the joiner at zero, waited for two donors.
 // Under layout 0 the holders are the live data nodes, so a data node joining
 // is counted from its presence rather than its first row.
-func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.PartitionID) (int, error) {
+//
+// # Less the tombstones, and not a released row
+//
+// A row never expires, so an evicted node's row outlives the machine, and a
+// node that left p keeps naming p's logs, released, until it forgets them:
+// counted from rows alone, a partition with one server beside either took a
+// full copy every interval for a peer the trim no longer waits for.
+//
+// # From the watched views, and unknown is the register's half
+//
+// It is asked every thirty seconds for as long as a partition declines, and it
+// decides nothing about what may be removed — so it reads the views this node
+// already keeps ([Engine.watchedHolders]) rather than listing the store each
+// time. A view that cannot answer leaves the holder half out, and the count is
+// the register's alone: a lower bound, which errs toward declining a copy for
+// a tick rather than toward failing one — a failed take is stamped on the
+// node's row and warned about on every retry, for a coordination blip that
+// says nothing about this node's disk.
+//
+// A log whose eviction rows cannot be read subtracts none, which counts more
+// rather than less — the direction that takes a copy nobody needed rather than
+// one that declines a copy a joiner is waiting for.
+func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.PartitionID,
+	now time.Time) (int, error) {
+
 	if s.fleet == nil {
 		return 0, fmt.Errorf("engine: no coordination to count the fleet with")
 	}
@@ -4012,21 +4036,23 @@ func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.Partitio
 	if err != nil {
 		return 0, err
 	}
-	counted := map[string]bool{}
-	for _, row := range rows {
-		for _, id := range s.layout.Logs(p) {
-			if at, names := row.Domains[id.String()]; names && at.State != coord.LogReleased {
-				counted[row.NodeID] = true
-			}
-		}
+	var holders []statelog.Presence
+	if held, err := e.watchedHolders(s.layout).Holders(ctx, []statelog.PartitionID{p}); err == nil {
+		holders = held[p]
 	}
-	if e.backends != nil && e.backends.Coord != nil {
-		held, err := e.holdersOf(s.layout).Holders(ctx, []statelog.PartitionID{p})
+	var db *store.DB
+	if e.backends != nil {
+		db = e.backends.Store
+	}
+	counted := map[string]bool{}
+	for _, id := range s.layout.Logs(p) {
+		domain, err := registeredDomain(id.Domain)
 		if err != nil {
-			return 0, fmt.Errorf("engine: who holds %s: %w", p, err)
+			return 0, err
 		}
-		for _, h := range held[p] {
-			counted[h.NodeID] = true
+		tombs, _ := logTombstones(ctx, db, domain, id.Partition, 0)
+		for _, n := range statelog.CountedSet(now, reportedPositions(rows, id.String()), holders, tombs) {
+			counted[n.NodeID] = true
 		}
 	}
 	return len(counted), nil

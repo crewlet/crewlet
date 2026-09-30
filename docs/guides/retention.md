@@ -330,7 +330,7 @@ partitioned layout — so a failed join has an answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
-| `sole_node` | fewer than two counted nodes on the partition; nothing to donate to |
+| `sole_node` | fewer than two counted nodes on the partition; nothing to donate to. Counted as the trim counts: every node whose row names one of the partition's logs and has not released it, every holder of the partition — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted or released longer ago than the fence window. A view of the holders this node cannot confirm leaves them out, and the rows alone are counted |
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
