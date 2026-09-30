@@ -466,6 +466,40 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	}
 }
 
+// AN UNKNOWN MINT IS RETRIED AS A NEW MINT, NEVER UNDER A KEY.
+//
+// A mint's route reads no Idempotency-Key and this command refuses the flag on
+// `token`, so the retry every other unknown prescribes here — the same command
+// with -idempotency-key — sent an operator to a flag they would be refused.
+// The node's own sentence says to mint again; the op id is named for the
+// trail. Mutation: prescribe the key for every 503 again and this goes red.
+func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
+	op := statelog.NewOpID(time.Now(), "")
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
+			"detail": "no token was issued: mint again for one you hold"})
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	err := run([]string{"iam", "token", "-person", "svc-1", "-config", cfg, "-api",
+		node.URL}, &out, &errs)
+	if err == nil {
+		t.Fatal("an unknown mint was reported as a success")
+	}
+	for _, want := range []string{"could not establish whether this landed",
+		"mint again", "op " + op} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "-idempotency-key") {
+		t.Errorf("an unknown mint prescribes a flag `iam token` refuses: %v", err)
+	}
+}
+
 // AN UNKNOWN THIS NODE CANNOT VOUCH FOR IS RETRIED THROUGH ANOTHER NODE.
 //
 // The node says `unvouched` when its operation ledger may have lost the row

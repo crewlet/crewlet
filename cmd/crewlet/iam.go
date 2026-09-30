@@ -237,7 +237,7 @@ func runIAM(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	client.key = *key
+	client.key, client.keyed = *key, iamKeyed[sub]
 
 	switch sub {
 	case "people":
@@ -494,6 +494,12 @@ type iamClient struct {
 	// named — sent as the Idempotency-Key on every write this command
 	// makes, and never on a read.
 	key string
+
+	// keyed is whether the route this command writes to reads a key at all
+	// ([iamKeyed]). Only where it does is a refusal's retry spelled as
+	// -idempotency-key: a mint reads none, and was told to retry with a
+	// flag this command refuses on it.
+	keyed bool
 }
 
 func newIAMClient(boot *config.Bootstrap, override string) (*iamClient, error) {
@@ -578,7 +584,7 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	var answer map[string]any
 	_ = json.Unmarshal(raw, &answer)
 	if resp.StatusCode >= 400 {
-		return answer, iamRefusal(resp.StatusCode, answer, raw)
+		return answer, iamRefusal(resp.StatusCode, answer, raw, c.keyed)
 	}
 	return answer, nil
 }
@@ -612,7 +618,11 @@ const iamMaxAnswer = 8 << 20
 // as a field (`outcome: "unknown"`), which is what this reads — never the
 // sentence beside it. Rendered as `unavailable: …` it read as a node that did
 // nothing, of a write that may have landed.
-func iamRefusal(status int, answer map[string]any, raw []byte) error {
+//
+// keyed is whether the command's route reads a key. One that does not — a
+// mint — is retried as a new write, which the node's own sentence says, so
+// the op id is named for the trail and no -idempotency-key is prescribed.
+func iamRefusal(status int, answer map[string]any, raw []byte, keyed bool) error {
 	if msg, ok := credentialRefusal(status, raw, true); ok {
 		return errors.New(msg)
 	}
@@ -644,7 +654,7 @@ func iamRefusal(status int, answer map[string]any, raw []byte) error {
 	}
 	if op := str(answer["op_id"]); op != "" {
 		switch unvouched, _ := answer["unvouched"].(bool); {
-		case status != http.StatusServiceUnavailable:
+		case status != http.StatusServiceUnavailable, !keyed:
 			said += "\nop " + op
 		case unvouched:
 			// NOT THROUGH THIS NODE: its operation ledger cannot vouch

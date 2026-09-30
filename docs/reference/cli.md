@@ -605,7 +605,10 @@ was published under. `unknown` means nothing can be established from here, and
 it fails naming the op id and the one safe retry: the **same** command with
 `-idempotency-key <op id>`. A fresh attempt would be a second operation — for
 `create` and `invite` a second person or a second invitation, refused as a
-conflict by the address the first may already hold.
+conflict by the address the first may already hold. `token` is the exception,
+because its route reads no key: an unknown mint names its op id for the trail
+and is run again as a new mint, and the one that may have landed is a token
+nobody holds, which expires.
 
 **An edit refused partway says what landed.** `bind`, `suspend` and the rest
 are one `PATCH`, which moves a seat before a login and both before the stage

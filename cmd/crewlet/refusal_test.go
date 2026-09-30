@@ -77,7 +77,7 @@ func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 			return chartRefusal("PATCH /chart/units/x", status, raw)
 		},
 		"iam": func(status int, raw []byte) error {
-			return iamRefusal(status, map[string]any{"error": "unauthorized"}, raw)
+			return iamRefusal(status, map[string]any{"error": "unauthorized"}, raw, true)
 		},
 	}
 	for name, refusal := range clients {
