@@ -45,6 +45,53 @@ func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
 	}
 }
 
+// AND THE DUTIES COME DOWN IN THE ORDER THE DOCS STATE: the native half's
+// embedding writer before the core's trim and identity duties, every one
+// before the node gives its duty leases back, and all of that before the
+// native half and the logs.
+//
+// The embedding duty publishes vector records into a log the trim is deciding
+// how far to purge, so it stops first; a duty still ticking after
+// [Engine.releaseDuties] runs beside the peer that has just taken its lease;
+// and a duty stopped after the logs publishes into a log nothing applies. The
+// control-plane page and the engine's row said the native half came down
+// before the core's duties, which the teardown has never done — this holds
+// the order it does, so the next sentence written about it has something to
+// be checked against.
+//
+// Mutation: move stopRetention above stopEmbedding, or any duty below
+// releaseDuties, and this fails naming the pair.
+func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
+	t.Parallel()
+	order := callsIn(t, "teardown")
+	at := func(name string) int {
+		t.Helper()
+		i := slices.Index(order, name)
+		if i < 0 {
+			t.Fatalf("the teardown calls %v and no %s", order, name)
+		}
+		return i
+	}
+	for _, core := range []string{"stopRetention", "stopIdentityDuties"} {
+		if at("stopEmbedding") > at(core) {
+			t.Errorf("the teardown ends %s before the embedding duty, which "+
+				"publishes into a log the trim is deciding how far to purge", core)
+		}
+	}
+	for _, duty := range []string{"stopEmbedding", "stopRetention", "stopIdentityDuties"} {
+		for _, later := range []string{"releaseDuties", "stopNative", "stopCore"} {
+			if at(duty) > at(later) {
+				t.Errorf("the teardown calls %s before %s, so the duty is "+
+					"still ticking after it", later, duty)
+			}
+		}
+	}
+	if at("releaseDuties") > at("stopNative") {
+		t.Error("the teardown stops the native half before it gives the duty " +
+			"leases back")
+	}
+}
+
 // AND ENDING THEM ENDS THEM: a nudge left after stopViewTriggers is one nothing
 // consumes, where a running trigger takes it within moments. The control runs
 // first, on the same node, so a nudge that sat unconsumed is the stop's doing
