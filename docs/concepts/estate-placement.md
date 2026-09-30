@@ -104,8 +104,14 @@ The `estate-map` duty runs one step per partition per tick:
 The write side follows the same states. A joining node takes the partition's
 writes from the moment its lease says `serving`, and a leaving one stops taking
 them when its lease says `draining` and then **releases** each of the
-partition's logs, so a write it still had in flight is dropped on every node
-rather than applied behind its back — see
+partition's logs. What becomes of a write it had in flight depends on how far
+the write had got. One still being decided when the node began to leave is
+refused `not_holder` before anything is appended, because the node asks again
+whether it serves the partition just before it appends. One already appended is
+placed by the log's order alone: landed before the node's release, it is in
+order and applies on every node; landed after it, it is dropped on every node
+rather than applied behind the node's back, and its writer is refused
+`released` — see
 [Replication](../guides/replication.md#a-node-that-leaves-a-partition-releases-its-logs).
 A node asked to write to a partition it does not serve refuses `not_holder`,
 and another node that serves it takes the write.
