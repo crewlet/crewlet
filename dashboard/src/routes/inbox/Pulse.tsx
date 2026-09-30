@@ -39,7 +39,6 @@ import { EmptyValue } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import {
   BlockGlyph,
-  CalendarClockGlyph,
   GroupGlyph,
   ListGlyph,
   PauseGlyph,

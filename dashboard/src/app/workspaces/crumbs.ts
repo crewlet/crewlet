@@ -82,7 +82,7 @@ function destinationLabel(workspace: string, segment: string): string | undefine
 }
 
 function workCrumbs(rest: string[], labels: Labels): Crumb[] {
-  const [first = "", second, third] = rest;
+  const [first = "", second] = rest;
 
   // A FIXED DESTINATION FIRST, from the one table, because everything below
   // reads the segment as a KEY: a project key is uppercase and an item key is

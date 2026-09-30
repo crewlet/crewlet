@@ -359,7 +359,6 @@ export function AfterSaveStrip({
 export function PreviousRevisionNote() {
   const saved = useSavedChanges();
   const settings = saved?.settings ?? null;
-  const waiting = settings !== null && settings.epoch !== null;
   // THE SHARED HEALTH READ, which the frame is already polling: this note
   // lives for as long as the node has not applied the revision — for ever,
   // when the node refuses it — and a poller of its own, however slow, was a

@@ -13,7 +13,6 @@
  * routing context being the price of drawing one.
  */
 
-import type { ReactNode } from "react";
 import { Avatar, Callout, Card, Tag, cx } from "@crewlethq/ui";
 import {
   ArrowUpwardGlyph,
@@ -535,11 +534,6 @@ export interface CoverageFacts {
  */
 export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
   if (!answer) return null;
-  const behind =
-    answer.applied_through !== undefined &&
-    answer.log_seq !== undefined &&
-    answer.applied_through < answer.log_seq;
-
   return (
     <>
       {answer.complete === false && (

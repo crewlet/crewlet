@@ -215,9 +215,7 @@ test("a task carrying no priority at all still dashes", () => {
 // person calls it and the key is what everything is addressed by, so the row
 // carries both.
 test("the rail names the project and its key, and links to its board", () => {
-  const { container } = render(
-    <ItemProps detail={detail()} chrome={{}} project={project({ name: "Engineering" })} />,
-  );
+  render(<ItemProps detail={detail()} chrome={{}} project={project({ name: "Engineering" })} />);
   const value = screen.getByText("Project").nextElementSibling!;
   expect(value.textContent).toContain("Engineering");
   expect(value.textContent).toContain("ENG");

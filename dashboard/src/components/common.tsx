@@ -9,16 +9,7 @@
  */
 
 import type { ReactNode } from "react";
-import {
-  Avatar,
-  Button,
-  Callout,
-  EmptyState,
-  InlineCode,
-  Section as UiSection,
-  Tag,
-  cx,
-} from "@crewlethq/ui";
+import { Avatar, Button, Callout, EmptyState, Section as UiSection, Tag, cx } from "@crewlethq/ui";
 import { CableGlyph, KeyGlyph, ScheduleGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays

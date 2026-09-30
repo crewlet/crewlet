@@ -84,7 +84,7 @@ import {
   useSandboxes,
   useTokens,
 } from "~/lib/store-hooks.ts";
-import { attentionQueue, SUBJECTS, WATCHED, type Attention } from "~/lib/attention.ts";
+import { attentionQueue, WATCHED, type Attention } from "~/lib/attention.ts";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { runState } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";

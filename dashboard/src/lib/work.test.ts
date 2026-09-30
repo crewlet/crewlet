@@ -14,7 +14,6 @@ import { expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   SCOPES,
-  STATUSES,
   TYPE_ICON,
   totalHint,
   anyFilter,
@@ -52,7 +51,6 @@ import {
   typeIcon,
   typeName,
   type LabelContext,
-  type Scope,
   type Shape,
   countedLabel,
   dayLabel,

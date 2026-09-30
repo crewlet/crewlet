@@ -755,11 +755,6 @@ function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number 
   );
 }
 
-/** What a reporting chart node is called, for the branch control below it. */
-function nameOfItem(chart: { items: ReadonlyMap<string, ReportingItem> }, id: string): string {
-  return id === CYCLE_GROUP ? "the reporting cycles" : (chart.items.get(id)?.name ?? "");
-}
-
 /**
  * The column down a node's right edge: what it can be expanded into, Edit, and
  * Delete.
