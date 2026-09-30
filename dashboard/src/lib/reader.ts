@@ -86,6 +86,30 @@ export function adoptReader(person: string): void {
   write(person);
 }
 
+/**
+ * Delete every per-reader key under `prefix` in the browser's `localStorage`
+ * but `keep` — every one of them, where `keep` is null.
+ *
+ * FOR A LIST KEPT PER READER (`lib/recents.ts`, `lib/starred.ts`), which is
+ * kept per browser and so outlives the tab: its key names whose it is, and
+ * this is how the browser comes to hold nobody's but the person signed in.
+ * The keys are gathered before any is removed, because removing one moves
+ * every index after it. A storage that refuses is left alone — it could keep
+ * nothing to leave behind.
+ */
+export function forgetReadersUnder(prefix: string, keep: string | null): void {
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key !== null && key.startsWith(prefix) && key !== keep) doomed.push(key);
+    }
+    for (const key of doomed) localStorage.removeItem(key);
+  } catch {
+    // Blocked site data or a private window: nothing was written to delete.
+  }
+}
+
 /** Subscribe to a change of reader. Returns the unsubscribe. */
 export function onReader(fn: () => void): () => void {
   listeners.add(fn);

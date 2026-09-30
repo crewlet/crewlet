@@ -24,9 +24,19 @@
  * — in the next person's palette and rail. So each principal the tab is read
  * by (`lib/reader.ts`) has a list of their own, under a key of its own, and a
  * tab that has not learned its reader yet draws none and records none: there
- * is nobody to show them to. Lists are not deleted on a sign-out, because a
- * person coming back to their desk expects theirs to still be there — what
- * changes on a sign-in is whose list is drawn.
+ * is nobody to show them to.
+ *
+ * # …AND GONE WHEN ITS READER IS
+ *
+ * A key of one's own keeps a list out of the next person's palette, and not
+ * out of their browser: every title in it — a colleague's review, an incident
+ * — is one read of `localStorage` away for whoever sits down next. So a
+ * sign-out deletes every reader's list, and a sign-in deletes every list but
+ * the signing-in person's own ([forgetOtherReaders], which `lib/session.ts`
+ * calls): the session cookie is the browser's, one person at a time, so a
+ * list whose reader is not the one signed in belongs to somebody who has left
+ * this browser. What it costs is a person's own list after they sign out; the
+ * same person signing in again after their session lapsed keeps theirs.
  *
  * # A SLOT IS STABLE, AND THAT IS THE ORDER THIS LIST KEEPS
  *
@@ -68,7 +78,7 @@
  */
 
 import { useMemo, useSyncExternalStore } from "react";
-import { currentReader, onReader } from "./reader.ts";
+import { currentReader, forgetReadersUnder, onReader } from "./reader.ts";
 
 /** One place the reader was. */
 export interface Recent {
@@ -89,9 +99,12 @@ export interface Recent {
   at: number;
 }
 
+/** Where every reader's recents are kept: [recentsKey]'s prefix. */
+const RECENTS_PREFIX = "crewlet_recents/";
+
 /** The storage key a reader's recents are kept under. */
 export function recentsKey(reader: string): string {
-  return `crewlet_recents/${reader}`;
+  return `${RECENTS_PREFIX}${reader}`;
 }
 
 /**
@@ -273,6 +286,16 @@ export function remember(entry: Omit<Recent, "at">, named: boolean): void {
     return;
   }
   write(reader, capped([{ ...entry, at }, ...held]));
+}
+
+/**
+ * Delete every reader's list but `keep`'s — everybody's, where `keep` is null.
+ * See "…AND GONE WHEN ITS READER IS" above.
+ */
+export function forgetOtherReaders(keep: string | null): void {
+  forgetReadersUnder(RECENTS_PREFIX, keep === null ? null : recentsKey(keep));
+  cache = null;
+  for (const fn of listeners) fn();
 }
 
 /** Drop this reader's list. For the palette's own "clear" command. */

@@ -33,7 +33,10 @@
  * # And a sign-out leaves nothing behind
  *
  * Signing out, here or everywhere, ends in a RELOAD at the sign-in — see
- * [page] — because the tab is about to be somebody else's.
+ * [page] — because the tab is about to be somebody else's. And the BROWSER is
+ * too: the recents and stars kept per reader in its `localStorage` outlive
+ * any tab, so a sign-out deletes every reader's, and a sign-in every one but
+ * the signing-in person's own (`lib/recents.ts` says why).
  *
  * # Nor does a session that ended some other way
  *
@@ -49,6 +52,8 @@ import { useCallback } from "react";
 import { buildHash, parseHash, useNavigator } from "~/app/router.tsx";
 import { framelessOf } from "~/app/nav.ts";
 import { currentReader, noteReader } from "~/lib/reader.ts";
+import { forgetOtherReaders as forgetOtherRecents } from "~/lib/recents.ts";
+import { forgetOtherReaders as forgetOtherStars } from "~/lib/starred.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import {
   auth,
@@ -159,7 +164,18 @@ export async function signOut(): Promise<void> {
  */
 function leave(): void {
   forgetTab();
+  forgetLists(null);
   page.reloadInto("#/login");
+}
+
+/**
+ * Delete every reader's recents and stars but `keep`'s — everybody's, where
+ * `keep` is null. A sign-out keeps nobody's; a sign-in keeps the person's who
+ * signed in, since the browser's session is now theirs alone.
+ */
+function forgetLists(keep: string | null): void {
+  forgetOtherRecents(keep);
+  forgetOtherStars(keep);
 }
 
 /** Empty the tab's own storage — its reader record with everything else. */
@@ -229,6 +245,10 @@ export function useSignedIn(): (answer: SignedInAs, next: string | null) => void
     ({ status, person = "" }, next) => {
       const target = safeNext(next);
       const enrol = status === "second_factor_enrolment_required";
+      // THE BROWSER IS NOW THIS PERSON'S, so no other reader's lists stay in
+      // it — whoever they were left without signing out. An answer that
+      // named nobody says nothing about whose it is, and deletes nothing.
+      if (person !== "") forgetLists(person);
       const reader = currentReader();
       if (person !== "" && reader !== null && reader !== person) {
         handOver(person, enrol ? buildHash(["enrol"], { next: target }) : target);

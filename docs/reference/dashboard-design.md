@@ -1535,8 +1535,14 @@ most recently visited first, per browser AND PER READER: recents and stars are
 kept under the principal the tab is read by (`lib/reader.ts`), because one
 browser is often several people and a single list drew the last person's
 recent and starred titles in the next person's palette and rail. A tab that has
-not learned who reads it draws and keeps neither, and a sign-out deletes
-neither — a person back at their desk finds their own. Objects only: anything the rail or a
+not learned who reads it draws and keeps neither. And a key of one's own keeps a
+list out of the next person's rail, not out of their browser, where every title
+in it is one read of `localStorage` away — so a **sign-out deletes every
+reader's recents and stars**, and a sign-in deletes every reader's but the
+signing-in person's own: the session is the browser's, one person at a time, so
+a list whose reader is not the one signed in belongs to somebody who has left.
+The same person signing in again after their session lapsed keeps theirs.
+Objects only: anything the rail or a
 sidebar already lists is left out, because a recents list repeating the
 navigation beside it costs a reader a scan and tells them nothing. The label
 stored is the one the **screen** resolved, which lands a render after the route

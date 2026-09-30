@@ -16,7 +16,9 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { IdentityMenu } from "./IdentityMenu.tsx";
 import { Router } from "~/app/router.tsx";
 import { currentReader, noteReader } from "~/lib/reader.ts";
+import { recentsKey } from "~/lib/recents.ts";
 import { page } from "~/lib/session.ts";
+import { starsKey } from "~/lib/starred.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, sessionRestored, type Viewer } from "~/protocol/index.ts";
 
@@ -126,6 +128,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   sessionRestored();
   sessionStorage.clear();
+  localStorage.clear();
   location.hash = "#/";
 });
 
@@ -223,12 +226,20 @@ describe("signing out", () => {
       "POST /auth/logout": { status: 200, body: {} },
     });
     sessionStorage.setItem("crewlet_org_draft", "{}");
+    // AND THE BROWSER'S LISTS, which outlive the tab: a key per reader kept
+    // them out of the next person's rail and not out of their browser.
+    for (const key of [recentsKey("p-1"), starsKey("p-1"), recentsKey("p-9")]) {
+      localStorage.setItem(key, "[]");
+    }
     mount(JANE);
     await openMenu("Jane Doe");
     choose("Sign out");
     await waitFor(() => expect(reloads).toHaveBeenCalledWith("#/login"));
     expect(sent).toContainEqual({ method: "POST", path: "/auth/logout" });
     expect(sessionStorage.length).toBe(0);
+    for (const key of [recentsKey("p-1"), starsKey("p-1"), recentsKey("p-9")]) {
+      expect(localStorage.getItem(key), key).toBeNull();
+    }
   });
 
   // NOTHING ANSWERED, so nothing cleared the cookie: reloading would put the
@@ -237,12 +248,14 @@ describe("signing out", () => {
   test("a sign-out the engine never answered is said, and the page stays", async () => {
     engine({ "GET /auth/session": PERSON, "POST /auth/logout": "offline" });
     sessionStorage.setItem("crewlet_org_draft", "{}");
+    localStorage.setItem(recentsKey("p-1"), "[]");
     mount(JANE);
     await openMenu("Jane Doe");
     choose("Sign out");
     expect(await screen.findByText(/Signing out did not go through/)).toBeDefined();
     expect(reloads).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
+    expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
   });
 
   test("everywhere: a revocation nobody can confirm is said, never reloaded past", async () => {

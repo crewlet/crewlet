@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
 import { currentReader, noteReader } from "~/lib/reader.ts";
+import { recentsKey } from "~/lib/recents.ts";
 import { page } from "~/lib/session.ts";
+import { starsKey } from "~/lib/starred.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { currentSessionNeed, LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
 
@@ -398,6 +400,35 @@ describe("a sign-in in a tab somebody else was reading", () => {
     expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
   });
 
+  // THE BROWSER IS THE SIGNING-IN PERSON'S, and a list kept per reader in its
+  // localStorage outlives every tab: a key of one's own kept the last person's
+  // titles out of this person's rail and not out of their browser. So every
+  // other reader's recents and stars go, and this person's own stay.
+  test("every other reader's recents and stars leave the browser, and the person's own stay", async () => {
+    engine({
+      "GET /auth/config": LOCAL,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    noteReader("p-9");
+    for (const key of [recentsKey("p-9"), starsKey("p-9"), recentsKey("p-1"), starsKey("p-1")]) {
+      localStorage.setItem(key, "[]");
+    }
+    localStorage.setItem("crewlet_rail_collapsed", "1");
+    mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => expect(reloads).toHaveBeenCalledWith(NEXT));
+    expect(localStorage.getItem(recentsKey("p-9"))).toBeNull();
+    expect(localStorage.getItem(starsKey("p-9"))).toBeNull();
+    expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
+    expect(localStorage.getItem(starsKey("p-1"))).toBe("[]");
+    // A preference of the browser's own is nobody's list.
+    expect(localStorage.getItem("crewlet_rail_collapsed")).toBe("1");
+  });
+
   // A TAB NOBODY WAS READING has nothing of anybody's in it to hand over.
   test("a first sign-in in a fresh tab records its reader and carries on", async () => {
     engine({
@@ -405,6 +436,9 @@ describe("a sign-in in a tab somebody else was reading", () => {
       "GET /auth/session": NOBODY,
       "POST /auth/login": SIGNED_IN,
     });
+    // ANOTHER TAB'S READER, whose session ended with no sign-out: the tab
+    // that knew them is gone, and their lists are still in the browser.
+    localStorage.setItem(recentsKey("p-9"), "[]");
     mount();
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
@@ -413,5 +447,6 @@ describe("a sign-in in a tab somebody else was reading", () => {
     await waitFor(() => expect(location.hash).toBe(NEXT));
     expect(reloads).not.toHaveBeenCalled();
     expect(currentReader()).toBe("p-1");
+    expect(localStorage.getItem(recentsKey("p-9"))).toBeNull();
   });
 });

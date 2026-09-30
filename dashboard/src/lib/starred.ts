@@ -24,12 +24,17 @@
  * several people, and one list per browser drew the last person's kept titles
  * in the next person's rail. Each principal the tab is read by
  * (`lib/reader.ts`) keeps their own, under a key of their own; a tab that has
- * not learned its reader draws none and keeps none, and nothing deletes a
- * list on a sign-out — a star is a decision, and its owner will be back.
+ * not learned its reader draws none and keeps none.
+ *
+ * …AND GONE WITH ITS READER, for `recents.ts`'s third reason, although a star
+ * is a decision: a key of one's own keeps a list out of the next person's
+ * rail and not out of their browser, where every title in it is one read
+ * away. So a sign-out deletes every list and a sign-in every list but the
+ * signing-in person's own ([forgetOtherReaders], called by `lib/session.ts`).
  */
 
 import { useCallback, useSyncExternalStore } from "react";
-import { currentReader, onReader } from "./reader.ts";
+import { currentReader, forgetReadersUnder, onReader } from "./reader.ts";
 
 /** One thing the reader kept. */
 export interface Star {
@@ -43,9 +48,22 @@ export interface Star {
   at: number;
 }
 
+/** Where every reader's stars are kept: [starsKey]'s prefix. */
+const STARS_PREFIX = "crewlet_starred/";
+
 /** The storage key a reader's stars are kept under. */
 export function starsKey(reader: string): string {
-  return `crewlet_starred/${reader}`;
+  return `${STARS_PREFIX}${reader}`;
+}
+
+/**
+ * Delete every reader's stars but `keep`'s — everybody's, where `keep` is
+ * null. See the module doc for why a sign-out and a sign-in do.
+ */
+export function forgetOtherReaders(keep: string | null): void {
+  forgetReadersUnder(STARS_PREFIX, keep === null ? null : starsKey(keep));
+  cache = null;
+  for (const fn of listeners) fn();
 }
 
 /**
@@ -254,8 +272,8 @@ export function useToggleStar(): (entry: Omit<Star, "at">) => StarOutcome {
  * from the product module and called by nothing but tests — both of which
  * already cleared storage themselves. Nothing in the product ever wanted it:
  * the palette can clear RECENTS because recents accumulate by accident, and a
- * star is a decision, so the only thing that drops one is the reader
- * unstarring it.
+ * star is a decision, so what drops one is the reader unstarring it — or the
+ * reader leaving the browser, which drops them all ([forgetOtherReaders]).
  */
 export function resetForTest(): void {
   cache = null;
