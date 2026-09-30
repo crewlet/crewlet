@@ -60,6 +60,79 @@
         }
       ]
     },
+    "map_out": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": true,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4410
+          }
+        }
+      ],
+      "map": {
+        "gesture": "out",
+        "landed": true
+      }
+    },
+    "map_unwritten": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4410
+          }
+        }
+      ],
+      "map": {
+        "gesture": "out",
+        "landed": false,
+        "error": "engine: the estate map could not be read or written",
+        "actions": [
+          "retry_same_op"
+        ],
+        "hint": "the estate map could not be read or written: the same gesture under the same operation id finishes it once coordination answers"
+      }
+    },
     "pending": {
       "node": "node-4",
       "evicted": true,

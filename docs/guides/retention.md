@@ -564,6 +564,37 @@ nothing — a node behind on it is a coverage figure — and gets none.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: a company on an external tracker still runs both logs.
 
+On an estate [divided into partitions](../concepts/estate-placement.md) the
+same rule reads per partition, and three things follow from it:
+
+- **An eviction is written on the logs the node is counted on** — every log
+  whose partition the estate map names it a holder of, in any state and
+  whether or not it has reported there, and every log its positions row names
+  and it has not released. Those are exactly the logs the trim waits for it
+  on, so a log outside them never counted it and gets no record. A
+  **readmission** is written on every identity-claiming log of the layout:
+  where the node is evicted is a fact each log's own rows hold — a holder
+  evicted before it first reported was counted on a log its row never named,
+  and the map lets an evicted node go — and a readmission on a log that never
+  evicted it changes no row there.
+- **Each log is written by a node that serves its partition.** The node you
+  run the gesture on writes the logs of the partitions it serves; every other
+  one is answered `not_holder`, and you finish the gesture through a node that
+  serves that partition, under the same `-op-id` (below). A log of a partition
+  the node serves and is not running at that instant says so and is finished
+  by the same gesture again.
+- **The estate map is part of the gesture.** An eviction also takes the node
+  **out** of the estate map — recorded with the reason `evicted`, so the
+  maintainer places nothing on it if it comes back, exactly as
+  [`crewlet estate out`](../concepts/estate-placement.md) would — and a
+  readmission puts it back **in**. Both are made after every log has answered,
+  and the answer carries the map's own line (`estate map: out — written`).
+  A map that could not be written leaves the gesture unfinished however the
+  logs answered, and the same `-op-id` finishes it; a map that places nothing
+  on the node already — it is no member, or one the map removed for absence —
+  is finished and says why. Under the single-file layout there is no map, and
+  no line for one.
+
 It is **judged once, before anything is written**: a node that still holds a
 live presence lease is refused, because it is still reaching the fleet and
 almost certainly running — an eviction would drop everything it writes and
@@ -578,8 +609,8 @@ could run under (the [`node.id`](../concepts/configuration.md#nodeid) rule:
 alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
 characters) is refused before anything is judged.
 
-Past the judgement the record goes to each log in turn, and each answers on
-its own line with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
+Past the judgement the record goes to every log at once, and each answers on
+its own line — the tracker's logs, then the pages logs — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
 every write has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
 the other did, and the gesture runs to its end **whatever happens to the
@@ -653,7 +684,10 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   `-op-id` through the same node.
 - `not_holder` — the node you ran it on does not serve that log's partition,
   and only a node that serves a partition writes its logs: run the gesture,
-  under the same `-op-id`, through one that does (`-url`).
+  under the same `-op-id`, through one that does (`-url`). On a divided
+  estate this is the ordinary answer for every partition the node does not
+  serve; the engine's own `statelog.gate` operation will carry each such log
+  to a serving node for you once requests are routed by partition.
 - `holding_unknown` — the node you ran it on could not tell whether it serves
   that log's partition, so it wrote nothing there: run the gesture again with
   the same `-op-id` once it can, or through a node that serves the partition

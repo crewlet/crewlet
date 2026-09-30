@@ -376,7 +376,7 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 // the refusal classifier's catch-all, as each log being full.
 func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 	t.Parallel()
-	var wrote []string
+	var wrote gateWrites
 	g, _ := fakeGate(&wrote, nil)
 	for _, node := range []string{"node*", "node 4", "-node", "node>", ""} {
 		_, err := g.Evict(t.Context(), GateRequest{Node: node, OpID: "op", By: "operator"})
@@ -384,8 +384,8 @@ func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 			t.Fatalf("evicting %q answered %v, want ErrInvalidGate", node, err)
 		}
 	}
-	if len(wrote) > 0 {
-		t.Fatalf("a refused request wrote %v", wrote)
+	if got := wrote.sorted(); len(got) > 0 {
+		t.Fatalf("a refused request wrote %v", got)
 	}
 }
 
@@ -398,7 +398,7 @@ func TestAGateOnANodeIDNoNodeCouldHaveIsRefused(t *testing.T) {
 // Unforced, the unreadable listing is still refused, and by name.
 func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 	t.Parallel()
-	var wrote []string
+	var wrote gateWrites
 	g, _ := fakeGate(&wrote, errors.New("coordination is unreachable"))
 	req := GateRequest{Node: "node-away", OpID: "op-unjudged", By: "operator"}
 
@@ -408,16 +408,16 @@ func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 		t.Fatalf("an unforced eviction past an unreadable listing answered %v, "+
 			"want *GateUnjudged", err)
 	}
-	if len(wrote) > 0 {
-		t.Fatalf("an unjudged eviction wrote %v", wrote)
+	if got := wrote.sorted(); len(got) > 0 {
+		t.Fatalf("an unjudged eviction wrote %v", got)
 	}
 	req.Force = true
 	res, err := g.Evict(t.Context(), req)
 	if err != nil || !res.Complete() {
 		t.Fatalf("a forced eviction past an unreadable listing: %v (%+v)", err, res)
 	}
-	if !slices.Equal(wrote, []string{"tracker", "pages"}) {
-		t.Fatalf("the forced eviction wrote %v, want both logs", wrote)
+	if got := wrote.sorted(); !slices.Equal(got, []string{"pages", "tracker"}) {
+		t.Fatalf("the forced eviction wrote %v, want both logs", got)
 	}
 }
 
@@ -426,21 +426,25 @@ func TestForceEvictsPastALeaseListingNobodyCouldRead(t *testing.T) {
 // Its request's context was the gesture's, so a dropped connection between the
 // two logs cancelled the second write and left the node evicted on one log and
 // counted on the other, with no answer for anybody to read the operation id
-// out of.
+// out of. The logs are written at once now, so the second write here waits for
+// the first to have dropped the caller before it looks.
 func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	var wrote []string
+	var wrote gateWrites
 	g, logs := fakeGate(&wrote, nil)
+	gone := make(chan struct{})
 	logs[0].write = func(context.Context, string, string, string, bool) (statelog.Result, error) {
-		wrote = append(wrote, "tracker")
+		wrote.add("tracker")
 		cancel()
+		close(gone)
 		return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 	}
 	second := logs[1].write
 	logs[1].write = func(ctx context.Context, by, opID, node string,
 		readmit bool) (statelog.Result, error) {
+		<-gone
 		if err := ctx.Err(); err != nil {
 			return statelog.Result{}, err
 		}
@@ -450,8 +454,8 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 	if err != nil || !res.Complete() {
 		t.Fatalf("a gesture whose caller left after the first log: %v (%+v)", err, res)
 	}
-	if !slices.Equal(wrote, []string{"tracker", "pages"}) {
-		t.Fatalf("the gesture wrote %v, want both logs", wrote)
+	if got := wrote.sorted(); !slices.Equal(got, []string{"pages", "tracker"}) {
+		t.Fatalf("the gesture wrote %v, want both logs", got)
 	}
 }
 
@@ -632,15 +636,35 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 // borrows.
 var normalMode = &stateLog{mode: statelog.ModeNormal}
 
+// gateWrites is the logs a fake gate wrote. In no order of their own: a gesture
+// writes every log at once ([NodeGate.write]), so a case reads them sorted.
+type gateWrites struct {
+	mu   sync.Mutex
+	logs []string
+}
+
+func (w *gateWrites) add(domain string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.logs = append(w.logs, domain)
+}
+
+// sorted is every log written, in name order.
+func (w *gateWrites) sorted() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Sorted(slices.Values(w.logs))
+}
+
 // fakeGate is a gate over two logs that record which were written, judging an
 // eviction against a lease listing that answers nothing held — or listErr.
 // The logs come back beside it, and the gate answers whatever they hold at each
 // gesture, so a case may replace one's write.
-func fakeGate(wrote *[]string, listErr error) (*NodeGate, []gateLog) {
+func fakeGate(wrote *gateWrites, listErr error) (*NodeGate, []gateLog) {
 	write := func(domain string) func(context.Context, string, string, string,
 		bool) (statelog.Result, error) {
 		return func(context.Context, string, string, string, bool) (statelog.Result, error) {
-			*wrote = append(*wrote, domain)
+			wrote.add(domain)
 			return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 		}
 	}

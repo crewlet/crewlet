@@ -139,7 +139,7 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 								Stream: "CREWLET_PAGES_LOG", Seq: 4410}},
 					}}
 				if n.gateResult != nil {
-					result.Domains = n.gateResult.Domains
+					result.Domains, result.Map = n.gateResult.Domains, n.gateResult.Map
 				}
 				// THE ROUTE'S OWN RENDERER, never a copy of it here: the copy
 				// this replaced claimed it "cannot drift" and already sent a
@@ -725,6 +725,55 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	if _, _, err := cli(t, "retention", "readmit", "node-4", base,
 		"-confirm", "node-4", "-force"); err == nil {
 		t.Error("readmit accepted -force, which it has no meaning for")
+	}
+}
+
+// THE ESTATE MAP IS ONE MORE PART OF THE GESTURE, AND SAYS SO.
+//
+// Under a divided layout an eviction takes the node out of the estate map and
+// a readmission puts it back. A map the gesture could not write leaves it
+// unfinished exactly as a log does — so the command prints the map's own line,
+// exits non-zero and names the operation that finishes it — while a map that
+// places nothing on the node already is finished and says why. Under layout 0
+// the route sends no map, and the command prints none.
+func TestAGateGesturePrintsTheEstateMapsPart(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	gesture := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
+	applied := engine.DomainGate{Domain: "tracker@tracker.001", Stream: "CREWLET_TRACKER_001_LOG",
+		OpID: gesture + ".evict.tracker", Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "CREWLET_TRACKER_001_LOG", Seq: 12}}
+
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied},
+		Map: &engine.MapGate{Gesture: "out", Err: engine.ErrEstateUnavailable}}
+	stdout, _, err := cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	if err == nil {
+		t.Fatalf("a gesture whose map was not written exited zero:\n%s", stdout)
+	}
+	for _, want := range []string{
+		"estate map: out not written — " + engine.ErrEstateUnavailable.Error(),
+		"Run it again with -op-id " + gesture,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the output never says %q:\n%s", want, stdout)
+		}
+	}
+
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied},
+		Map: &engine.MapGate{Gesture: "out", Landed: true}}
+	stdout, _, err = cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	if err != nil || !strings.Contains(stdout, "estate map: out — written") {
+		t.Errorf("a gesture whose map landed answered %v:\n%s", err, stdout)
+	}
+
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{applied}}
+	stdout, _, err = cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	if err != nil || strings.Contains(stdout, "estate map") {
+		t.Errorf("a gesture under a layout with no map answered %v and printed a "+
+			"map's line:\n%s", err, stdout)
 	}
 }
 

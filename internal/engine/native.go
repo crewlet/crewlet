@@ -229,8 +229,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		return err
 	}
 	n.log = sl
-	if n.gate, err = newNodeGate(sl, e.backends.Coord, e.backends.Store,
-		nodeID, e.metrics); err != nil {
+	if n.gate, err = newNodeGate(sl, e.backends.Coord, e.holdersOf(sl.layout),
+		e.gateMembership(sl.layout), e.backends.Store, nodeID, e.metrics); err != nil {
 		return err
 	}
 

@@ -391,3 +391,13 @@ every other one — and the move stays on the map, **waiting**, until a member
 returns and it takes effect. No gesture
 moves the epoch; the maintainer's next tick moves the holders toward the new
 targets.
+
+**An eviction takes the node out, and a readmission puts it back.**
+[`crewlet retention evict`](../guides/retention.md#eviction) makes the same
+out as `crewlet estate out`, recorded with the reason `evicted` — a node the
+operator judged gone, told apart from one taken out for maintenance — after
+the gesture's record is on every log the node is counted on, so the map places
+nothing on it if it comes back; `crewlet retention readmit` makes the in once
+its logs have been written. The map's answer is a line of the gesture's own:
+a map that could not be written leaves the gesture unfinished, and the same
+operation id finishes it.

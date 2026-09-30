@@ -47,7 +47,17 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		return engine.GateResult{Node: "node-4", OpID: gesture,
 			Domains: []engine.DomainGate{tracker, pages(pagesAnswer)}}
 	}
+	// THE ESTATE MAP'S PART, which a gesture under a divided layout carries
+	// beside its logs: an out that landed, and one the store did not answer.
+	withMap := func(m engine.MapGate) engine.GateResult {
+		r := result(engine.DomainGate{Outcome: statelog.OutcomeApplied, Position: at})
+		r.Map = &m
+		return r
+	}
 	return map[string]engine.GateResult{
+		"map_out": withMap(engine.MapGate{Gesture: "out", Landed: true}),
+		"map_unwritten": withMap(engine.MapGate{Gesture: "out",
+			Err: engine.ErrEstateUnavailable}),
 		"applied": result(engine.DomainGate{
 			Outcome: statelog.OutcomeApplied, Position: at}),
 		"pending": result(engine.DomainGate{
@@ -217,6 +227,39 @@ func TestTheGateAnswerOmitsWhatALogDidNotSay(t *testing.T) {
 	if len(full.Actions) != 1 || full.Actions[0] != statelog.GateSetCapacity {
 		t.Errorf("the full log offers %v, want only raising its ceiling — no "+
 			"retry refills a spent gate reserve", full.Actions)
+	}
+}
+
+// THE ESTATE MAP IS THE GESTURE'S OWN PART, AND ONLY WHERE THERE IS ONE.
+//
+// Under a divided layout an eviction takes the node out of the estate map; a
+// map the gesture could not write leaves it unfinished however every log
+// answered, with the same gesture again as the remedy — and a map that landed
+// carries no remedy at all. Under layout 0 there is no map, and no key for one:
+// every answer the routes give today is byte for byte what it was.
+func TestTheGateAnswerCarriesTheMapsPartOnlyWhereThereIsOne(t *testing.T) {
+	t.Parallel()
+	scenarios := gateAnswerScenarios()
+	unwritten := api.RenderGate(true, scenarios["map_unwritten"])
+	if unwritten.Complete || unwritten.Map == nil {
+		t.Fatalf("an unwritten map rendered complete %v, map %+v", unwritten.Complete, unwritten.Map)
+	}
+	if unwritten.Map.Landed || unwritten.Map.Error == "" ||
+		!slices.Contains(unwritten.Map.Actions, statelog.GateRetrySameOp) || unwritten.Map.Hint == "" {
+		t.Errorf("the unwritten map rendered %+v, want its error and the same gesture again",
+			*unwritten.Map)
+	}
+	out := api.RenderGate(true, scenarios["map_out"])
+	if !out.Complete || out.Map == nil || !out.Map.Landed || out.Map.Gesture != "out" ||
+		out.Map.Actions != nil || out.Map.Hint != "" {
+		t.Errorf("a landed map rendered complete %v, %+v", out.Complete, out.Map)
+	}
+	raw, err := json.Marshal(api.RenderGate(true, scenarios["applied"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"map"`) {
+		t.Errorf("an answer with no map carries a key for one: %s", raw)
 	}
 }
 

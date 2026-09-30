@@ -820,6 +820,30 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 			fmt.Fprintf(stdout, "    %s\n", line)
 		}
 	}
+	// THE ESTATE MAP'S PART, where the layout places one: its own line, and
+	// its remedy counted with the logs', because a map left unwritten
+	// leaves the gesture unfinished exactly as a log does.
+	if m := answer.Map; m != nil {
+		switch {
+		case m.Landed:
+			fmt.Fprintf(stdout, "  estate map: %s — written\n", m.Gesture)
+		case m.Error != "":
+			fmt.Fprintf(stdout, "  estate map: %s not written — %s\n", m.Gesture, m.Error)
+		default:
+			fmt.Fprintf(stdout, "  estate map: %s not written\n", m.Gesture)
+		}
+		if m.Hint != "" {
+			fmt.Fprintf(stdout, "    %s\n", m.Hint)
+		}
+		retry = retry || slices.Contains(m.Actions, string(statelog.GateRetrySameOp))
+		keep = keep || slices.ContainsFunc(m.Actions, func(a string) bool {
+			return statelog.GateAction(a).KeepsOperation()
+		})
+		for _, line := range gateAdvice(m.Actions, gateAdviceContext{
+			again: again, forced: forced, readmit: !evict, node: node, perLog: true}) {
+			fmt.Fprintf(stdout, "    %s\n", line)
+		}
+	}
 	if pending {
 		// THE THREE-VALUED OUTCOME, said plainly. A gate the operator
 		// believes has landed and which is only durable is the
@@ -887,6 +911,20 @@ type gateAnswer struct {
 	OpID     string       `json:"op_id"`
 	Complete bool         `json:"complete"`
 	Domains  []gateDomain `json:"domains"`
+
+	// Map is the estate map's part of the gesture, absent under a layout
+	// that places no map.
+	Map *gateMap `json:"map"`
+}
+
+// gateMap is the estate map's answer to a gesture: `out` or `in`, whether it
+// was written, and the node's remedy where the gesture did not finish it.
+type gateMap struct {
+	Gesture string   `json:"gesture"`
+	Landed  bool     `json:"landed"`
+	Error   string   `json:"error"`
+	Actions []string `json:"actions"`
+	Hint    string   `json:"hint"`
 }
 
 // gateDomain is one log's answer: an outcome and its position, or the reason

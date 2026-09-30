@@ -2497,9 +2497,15 @@ judged or written. A request carrying no operator identity is
 the gesture and `crewlet retention status` prints it beside the eviction.
 
 **The gesture is judged once, before any log is written**, and then its record
-goes to each identity-claiming log in turn. The trim counts nodes per log, so a
-record on one log lifts that log's pin and no other. A `200` answers **per
-log**:
+goes to every identity-claiming log it concerns at once. The trim counts nodes
+per log, so a record on one log lifts that log's pin and no other. On an estate
+[divided into partitions](../concepts/estate-placement.md) an eviction concerns
+the logs the node is counted on — whose partition the estate map names it a
+holder of, or whose key its positions row names and it has not released — and
+a readmission every identity-claiming log; each is written by a node that
+serves its partition, and one this node does not serve is answered
+`not_holder` ([the retention guide](../guides/retention.md#eviction)). A `200`
+answers **per log**:
 
 ```json
 {
@@ -2538,6 +2544,22 @@ reached it — so the node published nothing and cannot tell whether the record
 landed, and the same request through it answers the same way every time. Such
 an entry offers `other_node` rather than `retry_same_op`: send the same request,
 with the same `op_id`, through a node whose ledger reaches back that far.
+
+On a divided estate the answer also carries **`map`** — the estate map's part
+of the gesture, which an eviction takes the node out of and a readmission puts
+it back into — and has no such key at layout 0, which places no map:
+
+```json
+"map": {"gesture": "out", "landed": false,
+        "error": "engine: the estate map could not be read or written",
+        "actions": ["retry_same_op"],
+        "hint": "the estate map could not be read or written: the same gesture under the same operation id finishes it once coordination answers"}
+```
+
+`landed` says the gesture wrote the map. An unwritten map leaves `complete`
+false however every log answered, and carries `actions` and `hint` like a log;
+an `error` with neither — the map places nothing on the node, so there is
+nothing to take it off — is finished.
 
 A log the gesture did not finish also carries **`actions`** — what to do, in
 order — and **`hint`**, the sentence saying why. Both are absent on a log that

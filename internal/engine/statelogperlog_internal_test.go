@@ -572,8 +572,9 @@ func (c *consumerCounter) count(stream string) int {
 // budget on a runner that no longer applies, and never reached the log started
 // again after it. So both are asked while the log is away and after it is
 // back: away, the registration vouches for nothing and the gate writes to the
-// logs still running and reports the one it does not run as unwritten, rather
-// than leaving it out; back, both answer through the new runtime.
+// logs still running and reports the one it serves and does not run as
+// unwritten, rather than leaving it out; back, both answer through the new
+// runtime.
 func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	t.Parallel()
 	e, s, js := aPartitionedStateLog(t)
@@ -586,7 +587,13 @@ func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	if !found {
 		t.Fatalf("%s is not registered", leaving)
 	}
-	gate, err := newNodeGate(s, e.backends.Coord, e.backends.Store, s.nodeID, nil)
+	// BOTH EVICTED NODES HOLD EVERY PARTITION, so each is counted on every
+	// log and the gesture concerns all three.
+	everywhere := fixedHolders{}
+	for _, p := range s.layout.Partitions() {
+		everywhere[p] = []statelog.Presence{{NodeID: "node-gone"}, {NodeID: "node-gone-too"}}
+	}
+	gate, err := newNodeGate(s, e.backends.Coord, everywhere, nil, e.backends.Store, s.nodeID, nil)
 	if err != nil {
 		t.Fatalf("the node gate: %v", err)
 	}
