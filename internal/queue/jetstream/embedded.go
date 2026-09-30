@@ -615,22 +615,18 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 // connect opens a client connection to this server: through an in-memory
 // pipe when it listens on no socket, over its loopback client port when it
 // does.
+//
+// BOTH DIALS TAKE THE ACCEPT BUDGET as their handshake timeout, not nats's
+// two-second default — see the budgets' doc for why a handshake with a server
+// already accepting shares it. One option list for the two branches, so the
+// loopback dial a clustered member takes cannot lose a budget the in-process
+// one keeps.
 func (e *embeddedServer) connect() (*nats.Conn, error) {
-	opts := e.connectOptions()
+	opts := []nats.Option{nats.Timeout(acceptBudget(e.clustered))}
 	if e.inProcess {
 		return nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
 	}
 	return nats.Connect(e.ns.ClientURL(), opts...)
-}
-
-// connectOptions is what every connection to this server is opened with,
-// separated from the dial for [dialOptions]'s reason: a test can hold the
-// handshake budget without contriving a host slow enough to exceed nats's
-// default.
-func (e *embeddedServer) connectOptions() []nats.Option {
-	// THE ACCEPT BUDGET, not nats's two-second default — see the budgets'
-	// doc for why a handshake with a server already accepting shares it.
-	return []nats.Option{nats.Timeout(acceptBudget(e.clustered))}
 }
 
 func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }

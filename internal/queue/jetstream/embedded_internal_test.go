@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -141,21 +142,72 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 // loaded host the default failed the queue's own connection with `read pipe:
 // i/o timeout` against a broker that was up. The budget has to be the one the
 // server was given to start, solo and clustered alike, or the two drift.
+//
+// HELD ON THE CONNECTION [embeddedServer.connect] OPENS, over both of its
+// dials — the in-memory pipe and the loopback port — rather than on an option
+// list read beside them: a list a test reads certifies nothing about a dial
+// that stopped passing it. The clustered budget is asked of the same two
+// servers, since the member's flag, not its listener, is what picks it.
+//
+// Mutation: drop the budget from either dial in connect and its rows go red.
 func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) {
 	t.Parallel()
-	for _, clustered := range []bool{false, true} {
-		e := &embeddedServer{clustered: clustered}
-		applied := nats.GetDefaultOptions()
-		for _, opt := range e.connectOptions() {
-			if err := opt(&applied); err != nil {
-				t.Fatalf("applying an option: %v", err)
+	inProcess, err := startEmbedded(t.Context(), Config{})
+	if err != nil {
+		t.Fatalf("start an in-process broker: %v", err)
+	}
+	t.Cleanup(inProcess.shutdown)
+	if !inProcess.inProcess {
+		t.Fatal("a solo broker listens on a socket, so the in-memory dial goes unexercised")
+	}
+	loopback := listeningBroker(t)
+
+	for _, c := range []struct {
+		name   string
+		server *embeddedServer
+	}{
+		{"through the in-memory pipe", inProcess},
+		{"over the loopback port", loopback},
+	} {
+		for _, clustered := range []bool{false, true} {
+			e := *c.server
+			e.clustered = clustered
+			nc, err := e.connect()
+			if err != nil {
+				t.Fatalf("%s: connect: %v", c.name, err)
+			}
+			got := nc.Opts.Timeout
+			nc.Close()
+			if want := acceptBudget(clustered); got != want {
+				t.Errorf("%s, clustered=%v: the handshake budget is %v, want "+
+					"the accept budget %v — nats's own default is %v, a figure "+
+					"for a remote server rather than one in this process",
+					c.name, clustered, got, want, nats.DefaultTimeout)
 			}
 		}
-		if want := acceptBudget(clustered); applied.Timeout != want {
-			t.Errorf("clustered=%v: the handshake budget is %v, want the "+
-				"accept budget %v — nats's own default is %v, a figure for "+
-				"a remote server rather than one in this process",
-				clustered, applied.Timeout, want, nats.DefaultTimeout)
-		}
 	}
+}
+
+// listeningBroker is a solo broker that DOES listen, on a loopback client
+// port — the dial a clustered member's connections take — so
+// [embeddedServer.connect]'s socket branch is exercised without forming a
+// cluster in this package.
+func listeningBroker(t *testing.T) *embeddedServer {
+	t.Helper()
+	opts, scratch, err := embeddedOptions(Config{})
+	if err != nil {
+		t.Fatalf("broker options: %v", err)
+	}
+	opts.DontListen, opts.Host = false, "127.0.0.1"
+	ns, err := server.NewServer(opts)
+	if err != nil {
+		removeScratch(scratch)
+		t.Fatalf("configure a listening broker: %v", err)
+	}
+	go ns.Start()
+	t.Cleanup(func() { shutdownAndClean(ns, scratch) })
+	if !ns.ReadyForConnections(acceptTimeout) {
+		t.Fatalf("a listening broker was not ready within %v", acceptTimeout)
+	}
+	return &embeddedServer{ns: ns, scratch: scratch}
 }
