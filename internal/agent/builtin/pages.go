@@ -80,16 +80,17 @@ type PageDeps struct {
 	// this is a seam rather than a second copy of these five tools.
 	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
 
-	// Await blocks until this node's projection has applied a revision.
-	// See [WorkDeps.Await]: same seam, same reason, and it matters more
-	// here — a page's SavePage takes the version it read, so a turn that
-	// writes and then re-reads through a projection that has not caught
-	// up gets a stale version and its next save is refused.
+	// Await is handed the position every page write landed at, so the next
+	// read sees it. See [WorkDeps.Await]: same seam, same reason, the same
+	// two places the wait happens — and it matters more here: a page's
+	// SavePage takes the version it read, so a turn that writes and then
+	// re-reads from a copy that has not caught up gets a stale version and
+	// its next save is refused.
 	Await func(ctx context.Context, at statelog.Position) error
 }
 
-// settle waits for a write to reach this node's own applied rows. Best effort;
-// see [WorkDeps.settle].
+// settle hands a page write's position to [PageDeps.Await], so the next read
+// sees it. Best effort; see [WorkDeps.settle].
 //
 // IT TAKES A POSITION rather than a revision, which is what the log answers
 // with and what a bucket revision could never be: a place on a stream that
@@ -101,9 +102,9 @@ func (d PageDeps) settle(ctx context.Context, at statelog.Position) {
 	if err := d.Await(ctx, at); err != nil {
 		log.WarnContext(ctx, "page_write_not_applied_yet",
 			"at", at.String(), "error", err.Error(),
-			"detail", "the write landed on the fleet's log; this node's own "+
-				"copy has not caught up, so a read in this same turn may show "+
-				"the previous version")
+			"detail", "the write landed on the fleet's log; the copy this "+
+				"surface reads has not caught up, so a read in this same turn "+
+				"may show the previous version")
 	}
 }
 

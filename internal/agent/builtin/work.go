@@ -291,24 +291,32 @@ type WorkDeps struct {
 	Now  func() time.Time
 	Zone *time.Location
 
-	// Await blocks until this node's applier has consumed a write.
+	// Await is handed the position every write here landed at, so the next
+	// read sees it.
 	//
 	// THE READ-YOUR-WRITES SEAM, and it is what makes a tool loop
-	// coherent: a write goes to the fleet's LOG while every read goes to
-	// this node's own rows, so a turn that files a task and then lists its
+	// coherent: a write goes to the fleet's LOG while a read is answered
+	// from some copy's rows, so a turn that files a task and then lists its
 	// project would not see what it just filed — and a model that cannot
 	// see its own write files it again. It is applied after every write
 	// here for that reason, never before a read.
+	//
+	// WHERE THE WAIT HAPPENS is the surface's. A seat's tools hand the
+	// position to the node's session floor (the estate router's), which
+	// every later read carries to whichever copy answers it — this node's
+	// or a peer's — and that copy waits; nothing waits here. A surface
+	// that reads this node's own rows directly, as the operator's does,
+	// waits here for this node's applier instead.
 	//
 	// It takes a POSITION rather than a revision, because that is what a
 	// log write answers with: a place on a stream, comparable only against
 	// the same stream and the same generation.
 	//
-	// Nil skips the wait, which is right for a caller that has established
-	// the ordering some other way. A failure is LOGGED AND IGNORED rather
-	// than failing the tool: the write landed, and telling a model its
-	// create failed when the task exists is the one answer that produces a
-	// duplicate.
+	// Nil skips it, which is right for a caller that has established the
+	// ordering some other way. A failure — which only a surface that waits
+	// here can have — is LOGGED AND IGNORED rather than failing the tool:
+	// the write landed, and telling a model its create failed when the task
+	// exists is the one answer that produces a duplicate.
 	Await func(ctx context.Context, at statelog.Position) error
 
 	// callerOperations is whether a caller with no turn holds the id of
@@ -486,11 +494,12 @@ func (a Actor) Party() tracker.Party {
 	return tracker.Party{Handle: a.Record(), OperatorID: a.OperatorID}
 }
 
-// settle waits for a write to reach this node's projection.
+// settle hands a write's position to [WorkDeps.Await], so the next read sees
+// it.
 //
-// Best effort by design — see [WorkDeps.Await]. The wait is bounded by the
-// projector's own budget, so a wedged projection costs a tool call a couple
-// of seconds rather than the turn.
+// Best effort by design — see [WorkDeps.Await]. Where the surface waits here,
+// the wait is bounded by the applier's own budget, so a wedged copy costs a
+// tool call a couple of seconds rather than the turn.
 func (d WorkDeps) settle(ctx context.Context, at statelog.Position) {
 	if d.Await == nil || at.Seq == 0 {
 		return
@@ -498,9 +507,9 @@ func (d WorkDeps) settle(ctx context.Context, at statelog.Position) {
 	if err := d.Await(ctx, at); err != nil {
 		log.WarnContext(ctx, "work_write_not_applied_yet",
 			"position", at.String(), "error", err.Error(),
-			"detail", "the write landed on the fleet's log; this node's own "+
-				"applier has not consumed it, so a list in this same turn may "+
-				"not show it yet")
+			"detail", "the write landed on the fleet's log; the copy this "+
+				"surface reads has not applied it yet, so a list in this same "+
+				"turn may not show it")
 	}
 }
 
