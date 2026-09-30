@@ -160,16 +160,25 @@ type GateRequest struct {
 	OpID string
 
 	// By is the principal who ran it, recorded on every log's record as the
-	// author, the kind of party and the credential ([iam.ActorFor]) — what
-	// `crewlet retention status` names beside an eviction.
+	// author and the kind of party ([iam.ActorFor]) — what `crewlet
+	// retention status` names beside an eviction — and, on the tracker's,
+	// the knowledge base's and the org chart's, the credential they acted
+	// through as well.
 	//
-	// THE PRINCIPAL AND NOT ITS NAME, for two reasons. Each log's record
-	// carries all three columns, and a bare name recorded every gesture as
-	// an operator acting through a credential named after themselves — a
-	// person bound to a seat, or a machine token acting as its owner, read
-	// as a Tier A token of that name. And the org chart's and the identity
-	// estate's writers judge `fleet:operate` on the party's OWN grants at
-	// the record ([registration.NewGate]), which a name cannot carry.
+	// NOT THE CREDENTIAL ON THE IDENTITY ESTATE'S. A gate record there is
+	// pinned at its first version for ever, so a node that cannot decode it
+	// never defers it, and that version has no field for the credential
+	// (iamdomain.GateRecordVersion); what the identity log records is the
+	// author and the kind alone.
+	//
+	// THE PRINCIPAL AND NOT ITS NAME, for two reasons. The records carry
+	// the author's kind — and three of them the credential — beside the
+	// name, and a bare name recorded every gesture as an operator acting
+	// through a credential named after themselves: a person bound to a
+	// seat, or a machine token acting as its owner, read as a Tier A token
+	// of that name. And the org chart's and the identity estate's writers
+	// judge `fleet:operate` on the party's OWN grants at the record
+	// ([registration.NewGate]), which a name cannot carry.
 	By iam.Principal
 
 	// Force evicts a node that still holds a live presence lease — see
@@ -183,7 +192,17 @@ type GateRequest struct {
 // THE NODE ID IS HELD TO THE RULE A NODE'S OWN ID IS, because it becomes a
 // subject token on every identity log: an id no node could run under is a
 // typo, and one carrying a wildcard is an append the broker refuses outright.
+//
+// AND THE OPERATION ID TO THE GRAMMAR A CALLER'S IS ([statelog.CheckCallerOpID]),
+// here and not only at the route: every log's operation is derived from it,
+// and the publisher reads the instant it was minted at to decide whether this
+// node's ledger can vouch for a retry. An id that carries none reads as
+// minted at the epoch, so once any ledger has been swept the gesture is
+// answered `unknown` on every log without being published — on the first
+// attempt as on every retry, a gesture that can never run and never says why.
+// The HTTP route held that and nothing else did.
 func (r GateRequest) valid() error {
+	opID := statelog.CheckCallerOpID(r.OpID)
 	switch {
 	case r.Node == "":
 		return fmt.Errorf("%w: a node gate names no node", ErrInvalidGate)
@@ -195,6 +214,8 @@ func (r GateRequest) valid() error {
 		return fmt.Errorf("%w: the gate on %s has no operation id — a retry "+
 			"under a fresh one would be a second gesture rather than the same "+
 			"one finished", ErrInvalidGate, r.Node)
+	case opID != nil:
+		return fmt.Errorf("%w: the gate on %s: %w", ErrInvalidGate, r.Node, opID)
 	case iam.RecordOwner(r.By) == "":
 		return fmt.Errorf("%w: the gate on %s names no operator, and every "+
 			"log's record carries who ran it", ErrInvalidGate, r.Node)

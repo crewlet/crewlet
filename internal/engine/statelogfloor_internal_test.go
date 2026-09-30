@@ -566,7 +566,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 
 	const away = "node-away"
 	if res, err := gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict", By: gateOperator}); err != nil || !res.Complete() {
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator}); err != nil || !res.Complete() {
 		t.Fatalf("evict %s: %v (%+v)", away, err, res)
 	}
 	at := running.runner.Committed()
@@ -612,7 +612,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		}
 		return out
 	}
-	readmit := GateRequest{Node: away, OpID: "op-readmit", By: gateOperator}
+	readmit := GateRequest{Node: away, OpID: statelog.NewOpID(time.Now(), "readmit"), By: gateOperator}
 	refusedIn := func(domain string, seq, floorWant, firstWant uint64) {
 		t.Helper()
 		before := end()

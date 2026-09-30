@@ -58,7 +58,7 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	}
 
 	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict", By: gateOperator})
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator})
 	if err != nil || !res.Complete() {
 		t.Fatalf("evict %s: %v (%+v)", away, err, res)
 	}
@@ -201,7 +201,7 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	identity := identityLogs(t, s)
 
 	if res, err := gate.Evict(t.Context(), GateRequest{
-		Node: away, OpID: "op-evict", By: gateOperator}); err != nil || !res.Complete() {
+		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator}); err != nil || !res.Complete() {
 		t.Fatalf("evict: %v (%+v)", err, res)
 	}
 	// CAUGHT UP ON EVERY LOG, which is what a readmission is judged on.
@@ -217,7 +217,7 @@ func TestAReadmissionWritesTheInverseCommitToEveryLog(t *testing.T) {
 	}
 
 	res, err := gate.Readmit(t.Context(), GateRequest{
-		Node: away, OpID: "op-readmit", By: gateOperator})
+		Node: away, OpID: statelog.NewOpID(time.Now(), "readmit"), By: gateOperator})
 	if err != nil || !res.Complete() {
 		t.Fatalf("readmit: %v (%+v)", err, res)
 	}
@@ -269,7 +269,8 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 		return out
 	}
 	before := ends()
-	_, err := gate.Evict(t.Context(), GateRequest{Node: live, OpID: "op-live", By: gateOperator})
+	opID := statelog.NewOpID(time.Now(), "evict")
+	_, err := gate.Evict(t.Context(), GateRequest{Node: live, OpID: opID, By: gateOperator})
 	var refusal *statelog.EvictionRefusal
 	if !errors.As(err, &refusal) || refusal.NodeID != live {
 		t.Fatalf("evicting a node holding a live lease answered %v, want its refusal", err)
@@ -279,7 +280,7 @@ func TestAnEvictionOfALiveNodeIsRefusedBeforeAnyLogIsWritten(t *testing.T) {
 	}
 
 	res, err := gate.Evict(t.Context(), GateRequest{
-		Node: live, OpID: "op-live", By: gateOperator, Force: true})
+		Node: live, OpID: opID, By: gateOperator, Force: true})
 	if err != nil || !res.Complete() {
 		t.Fatalf("a forced eviction: %v (%+v)", err, res)
 	}
@@ -321,7 +322,7 @@ func containerRecord(t *testing.T, key, writer string) []byte {
 	}
 	payload, err := pages.Encode(pages.MutationRecord{
 		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.RecordVersion, OpID: "op-container-" + key,
+			V: pages.RecordVersion, OpID: statelog.NewOpID(time.Now(), "container-"+key),
 			Subject: pages.ContainerSubject(key), Op: pages.OpPatch,
 			Writer: writer, Scope: pages.ScopeSet{Subject: true},
 		},

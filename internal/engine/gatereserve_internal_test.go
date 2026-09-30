@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -117,7 +118,7 @@ func TestAnEvictionLandsOnALogFullForOrdinaryWrites(t *testing.T) {
 	}
 
 	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
-		Node: "node-gone", OpID: "op-full", By: gateOperator})
+		Node: "node-gone", OpID: statelog.NewOpID(time.Now(), "full"), By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict on full logs: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestAnEvictionPastTheReserveIsSentToSetCapacity(t *testing.T) {
 		func(_ statelog.Reservation, held uint64) uint64 { return held + 64 })
 
 	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
-		Node: "node-gone", OpID: "op-past", By: gateOperator})
+		Node: "node-gone", OpID: statelog.NewOpID(time.Now(), "past"), By: gateOperator})
 	if err != nil {
 		t.Fatalf("evict: %v", err)
 	}

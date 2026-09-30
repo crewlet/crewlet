@@ -77,7 +77,7 @@ func TestANodeWhosePeerStandsPastARestoredLogRefusesItsWrites(t *testing.T) {
 
 	// THE OPERATOR EVICTS A, from B.
 	res, err := eb.NodeGate().Evict(t.Context(), GateRequest{
-		Node: d.a.Node.ID, OpID: "op-evict-a", By: gateOperator,
+		Node: d.a.Node.ID, OpID: statelog.NewOpID(time.Now(), "evict-a"), By: gateOperator,
 	})
 	if err != nil || !res.Complete() {
 		t.Fatalf("the eviction of node A from node B = %+v, %v — it is one of the "+

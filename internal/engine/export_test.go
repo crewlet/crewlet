@@ -80,8 +80,9 @@ func ForgetPersonBlinderForTest(e *Engine) {
 // and whether this engine has read a chart at all.
 //
 // EXPORTED FOR A TEST ONLY. What it exists for is the one comparison that
-// makes the activation stamp mean something: a case asserting the recorded
-// position against a constant would pass for a stamp that wrote any number.
+// makes the chart-position stamp mean something: a case asserting the
+// recorded position against a constant would pass for a stamp that wrote any
+// number.
 func (e *Engine) ViewPosition() (org.ViewPosition, bool) { return e.epoch.viewAt() }
 
 // eachAuthoredSeat walks every seat a DOCUMENT declares, at any depth.

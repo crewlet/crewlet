@@ -126,7 +126,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 
 	// THE OPERATOR EVICTS THE PEER, from the node it stranded.
 	res, err := e.NodeGate().Evict(t.Context(), GateRequest{
-		Node: "node-x", OpID: "op-evict-x", By: gateOperator,
+		Node: "node-x", OpID: statelog.NewOpID(time.Now(), "evict-x"), By: gateOperator,
 	})
 	if err != nil || !res.Complete() {
 		t.Fatalf("the eviction of node-x from the node it stranded = %+v, %v — "+
