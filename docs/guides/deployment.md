@@ -436,7 +436,11 @@ entire point of that distinction. The coordination KV rides this same
 connection on purpose — one connection, one fate. An outage that outlasts the
 lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
 hand this node's seats to a peer, and that is the intended behaviour rather
-than something a reconnect policy should paper over.
+than something a reconnect policy should paper over. Each attempt — the dial,
+TLS and the NATS handshake — gets **2 seconds**, not the embedded member's
+accept budget: the loop tries the URLs in turn, and a member that silently
+drops packets holds every attempt at it for that long before a member that
+answers is asked, which is time the node spends not renewing its leases.
 
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams

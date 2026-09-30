@@ -211,3 +211,31 @@ func listeningBroker(t *testing.T) *embeddedServer {
 	}
 	return &embeddedServer{ns: ns, scratch: scratch}
 }
+
+// AN EXTERNAL SERVER'S HANDSHAKE IS NOT GIVEN THE EMBEDDED MEMBER'S BUDGET.
+//
+// A connection to this process's own member takes the accept budget because
+// that server has already answered; a remote one has not, and the reconnect
+// loop waits this long on every silent member of its pool before asking the
+// next, which is time a node spends not renewing its seats' leases. The two
+// option lists sit a screen apart, so this holds the one a shared list would
+// break. Mutation: dial with acceptBudget(true) and it goes red.
+func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
+	t.Parallel()
+	opts, err := dialOptions(Config{})
+	if err != nil {
+		t.Fatalf("dialOptions: %v", err)
+	}
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if err := opt(&applied); err != nil {
+			t.Fatalf("applying an option: %v", err)
+		}
+	}
+	if applied.Timeout != externalHandshake {
+		t.Errorf("an external dial's handshake budget is %v, want %v — the "+
+			"embedded member's accept budget (%v solo, %v clustered) would hold "+
+			"a reconnect on a partitioned member for that long",
+			applied.Timeout, externalHandshake, acceptBudget(false), acceptBudget(true))
+	}
+}

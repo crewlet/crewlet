@@ -697,6 +697,27 @@ func dial(cfg Config) (*nats.Conn, error) {
 	return nc, nil
 }
 
+// externalHandshake bounds each attempt to reach an EXTERNAL server: the dial,
+// the TLS handshake and INFO, CONNECT, PING, PONG.
+//
+// # Two seconds, and why the embedded member's budget does not transfer
+//
+// A connection to this process's own member takes the ACCEPT budget
+// ([acceptBudget]), because that server has already answered
+// ReadyForConnections and a slow handshake there measures only the host's
+// contention. Nothing has answered for a remote one, and here the figure is
+// also how long the reconnect loop waits on each member of the pool: it tries
+// them in turn, and a member that silently drops packets — a partition, a host
+// that went away without closing anything — holds every attempt at it for
+// exactly this long before the next member is asked. The coordination store
+// rides this connection, and an outage past the lease TTL (45 s by default)
+// hands this node's seats to a peer, so each second here is a second a node
+// with a healthy member in its pool spends not renewing them. Two seconds is
+// NATS's own figure for a remote server, and far above the handshake of a
+// reachable one; stated rather than inherited, so it is a decision a change
+// to either side has to read.
+const externalHandshake = 2 * time.Second
+
 // dialOptions is the option list, separated from the dial so a test can
 // assert what a config produces without a broker to connect to.
 //
@@ -714,6 +735,7 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 		// distinction.
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(time.Second),
+		nats.Timeout(externalHandshake),
 	}
 	if cfg.Credentials != "" {
 		opts = append(opts, nats.UserCredentials(cfg.Credentials))
