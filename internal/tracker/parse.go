@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/seatnames"
 )
 
 // The metadata keys the prompt reads back.
@@ -227,7 +228,7 @@ func (p *Parser) inbound(record MutationRecord, reg *notify.Registry) notify.Inb
 	// about a seat that answers to chief is a name the reader cannot type
 	// back.
 	if text := changedText(deltasOf(record.Notify.Fields,
-		name(registryCurrent(reg)))); text != "" {
+		seatnames.Name(registryCurrent(reg)))); text != "" {
 		metadata[MetaDeltas] = text
 	}
 	if record.Notify.Late {

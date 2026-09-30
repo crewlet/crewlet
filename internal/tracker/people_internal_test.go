@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/seatnames"
 )
 
 // fixedChart is [Identities] over one rename: `chief` was created as `cto`.
@@ -208,11 +210,11 @@ func TestEveryFieldThatNamesSomebodyIsTagged(t *testing.T) {
 				continue
 			}
 			where := typ.Name() + "." + field.Name
-			_, tagged := field.Tag.Lookup(personTag)
+			_, tagged := field.Tag.Lookup(seatnames.Tag)
 			switch {
-			case tagged && !holdsNames(field.Type):
+			case tagged && !seatnames.HoldsNames(field.Type):
 				misplaced = append(misplaced, where)
-			case !tagged && holdsNames(field.Type) && namesSomebody(field.Name):
+			case !tagged && seatnames.HoldsNames(field.Type) && namesSomebody(field.Name):
 				if _, excused := notAPerson[where]; excused {
 					excuses[where] = true
 				} else {
@@ -255,15 +257,4 @@ func namesSomebody(name string) bool {
 		}
 	}
 	return false
-}
-
-// holdsNames reports a type the walker can rewrite under a tag.
-func holdsNames(typ reflect.Type) bool {
-	if typ.Kind() == reflect.Pointer {
-		typ = typ.Elem()
-	}
-	if typ.Kind() == reflect.Slice {
-		typ = typ.Elem()
-	}
-	return typ.Kind() == reflect.String
 }

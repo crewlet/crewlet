@@ -5,7 +5,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
+
+	"github.com/crewlet/crewlet/internal/seatnames"
 )
 
 // A PERSON IS WRITTEN AND READ BY THEIR SEAT'S IDENTITY, and shown by the
@@ -48,15 +49,16 @@ import (
 // # Which fields
 //
 // A field that names somebody says so on its declaration, with the struct tag
-// `person:"seat"`, and [people] rewrites exactly those: a string, a pointer to
-// one, a list or a pointer to a list — a list deduplicated, since a set naming
-// one seat under two spellings is one member. The tag is the classification,
-// in the one place a new field is written, rather than a list somewhere beside
-// the types that the next field would not reach; `TestEveryFieldThatNamesSomebodyIsTagged`
-// holds the obvious names to it. Three shapes a tag cannot state are the
-// walker's own: a change record's text deltas ([personDeltaKeys]), a custom
-// field's value when its declared type is `people` ([FieldValue]), and a
-// grouped answer's column key when the axis is a person (the reader's own).
+// `person:"seat"` ([seatnames.Tag]), and [people] rewrites exactly those: a
+// string, a pointer to one, a list or a pointer to a list — a list
+// deduplicated, since a set naming one seat under two spellings is one member.
+// The tag is the classification, in the one place a new field is written,
+// rather than a list somewhere beside the types that the next field would not
+// reach; `TestEveryFieldThatNamesSomebodyIsTagged` holds the obvious names to
+// it. Three shapes a tag cannot state are this domain's own: a change record's
+// text deltas ([personDeltaKeys]), a custom field's value when its declared
+// type is `people` ([FieldValue]) — the walker's two arms — and a grouped
+// answer's column key when the axis is a person (the reader's own).
 
 // Identities is the chart seam a person is written and read through.
 //
@@ -73,16 +75,13 @@ type Identities interface {
 	Current(identity string) string
 }
 
-// personTag is the struct tag a field naming somebody carries.
-const personTag = "person"
-
 // identified is v with every person it names rewritten to their identity. A
 // nil seam leaves v as it is, which is a build holding no chart.
 func identified[T any](ids Identities, v T) T {
 	if ids == nil {
 		return v
 	}
-	return people(v, ids.Identity)
+	return seatnames.Rewrite(people, v, ids.Identity)
 }
 
 // shown is v with every person it names rewritten to the handle they answer
@@ -91,7 +90,7 @@ func shown[T any](ids Identities, v T) T {
 	if ids == nil {
 		return v
 	}
-	return people(v, ids.Current)
+	return seatnames.Rewrite(people, v, ids.Current)
 }
 
 // identityOf is one handle's identity, through a seam that may be nil.
@@ -110,213 +109,27 @@ func currentOf(ids Identities, identity string) string {
 	return ids.Current(identity)
 }
 
-// people rewrites every person-valued field reachable from v through f.
+// people is this domain's walker over every value that names somebody — see
+// internal/seatnames, which holds the rule for the tag and does the walking.
 //
-// IT NEVER WRITES THROUGH v. Every slice, map and pointer on the way to a
-// rewritten value is COPIED, because the value a writer is handed is also the
-// one a retried decide reads again — the rule [settleFields] states for the
-// same reason — and one a caller may go on using after the call.
-func people[T any](v T, f func(string) string) T {
-	in := reflect.ValueOf(&v).Elem()
-	if in.Kind() == reflect.Interface {
-		// A DOCUMENT HANDED IN AS `any` ([Writer.WriteDocument]) is walked
-		// as whatever it holds, and handed back as the same interface.
-		if in.IsNil() || !reaches(in.Elem().Type()) {
-			return v
-		}
-		boxed := reflect.New(in.Type()).Elem()
-		boxed.Set(walk(in.Elem(), name(f)))
-		out, ok := boxed.Interface().(T)
-		if !ok {
-			return v
-		}
-		return out
-	}
-	if !reaches(in.Type()) {
-		return v
-	}
-	out, ok := walk(in, name(f)).Interface().(T)
-	if !ok {
-		return v
-	}
-	return out
-}
-
-// name is f with the empty value passed through, so "nobody" stays nobody
-// whatever the seam does with an empty string.
-func name(f func(string) string) func(string) string {
-	return func(s string) string {
-		if s == "" {
-			return s
-		}
-		return f(s)
-	}
-}
-
-var (
-	deltaMapType  = reflect.TypeOf(map[string]Delta(nil))
-	fieldValue    = reflect.TypeOf(FieldValue{})
-	reachableMemo sync.Map // reflect.Type → bool
+// TWO SHAPES A TAG CANNOT STATE are its arms: a change record's text deltas,
+// whose field NAME says which text is a person ([personDeltaKeys]), and a
+// custom field's value, which names people only when its declared type is
+// `people` ([FieldValue.withPeople]).
+var people = seatnames.NewWalker(
+	seatnames.Arm{
+		Type: reflect.TypeFor[map[string]Delta](),
+		Rewrite: func(v reflect.Value, f func(string) string) reflect.Value {
+			return reflect.ValueOf(deltasOf(v.Interface().(map[string]Delta), f))
+		},
+	},
+	seatnames.Arm{
+		Type: reflect.TypeFor[FieldValue](),
+		Rewrite: func(v reflect.Value, f func(string) string) reflect.Value {
+			return reflect.ValueOf(v.Interface().(FieldValue).withPeople(f))
+		},
+	},
 )
-
-// reaches reports whether a value of type t can hold a person the walker
-// rewrites, so everything that cannot is passed through without a copy.
-func reaches(t reflect.Type) bool {
-	return reachesFrom(t, map[reflect.Type]bool{})
-}
-
-func reachesFrom(t reflect.Type, visiting map[reflect.Type]bool) bool {
-	if held, ok := reachableMemo.Load(t); ok {
-		return held.(bool)
-	}
-	if visiting[t] {
-		// A RECURSIVE TYPE ([Query.Any]) answers for itself once its
-		// other fields have been seen; the cycle adds nothing.
-		return false
-	}
-	visiting[t] = true
-	defer delete(visiting, t)
-	var got bool
-	switch {
-	case t == deltaMapType, t == fieldValue:
-		got = true
-	default:
-		switch t.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array:
-			got = reachesFrom(t.Elem(), visiting)
-		case reflect.Map:
-			got = reachesFrom(t.Elem(), visiting)
-		case reflect.Struct:
-			for i := range t.NumField() {
-				field := t.Field(i)
-				if !field.IsExported() {
-					continue
-				}
-				if _, tagged := field.Tag.Lookup(personTag); tagged ||
-					reachesFrom(field.Type, visiting) {
-
-					got = true
-					break
-				}
-			}
-		}
-	}
-	if len(visiting) == 1 || got {
-		// ONLY A SETTLED ANSWER IS KEPT. A false one reached while a
-		// cycle was open may be false only because the cycle was cut.
-		reachableMemo.Store(t, got)
-	}
-	return got
-}
-
-// walk returns v with f applied to every person it can reach, copying what it
-// changes and sharing everything else.
-func walk(v reflect.Value, f func(string) string) reflect.Value {
-	t := v.Type()
-	if !reaches(t) {
-		return v
-	}
-	switch {
-	case t == deltaMapType:
-		return reflect.ValueOf(deltasOf(v.Interface().(map[string]Delta), f))
-	case t == fieldValue:
-		return reflect.ValueOf(v.Interface().(FieldValue).withPeople(f))
-	}
-	switch t.Kind() {
-	case reflect.Pointer:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.New(t.Elem())
-		out.Elem().Set(walk(v.Elem(), f))
-		return out
-	case reflect.Slice:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.MakeSlice(t, v.Len(), v.Len())
-		for i := range v.Len() {
-			out.Index(i).Set(walk(v.Index(i), f))
-		}
-		return out
-	case reflect.Array:
-		out := reflect.New(t).Elem()
-		for i := range v.Len() {
-			out.Index(i).Set(walk(v.Index(i), f))
-		}
-		return out
-	case reflect.Map:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.MakeMapWithSize(t, v.Len())
-		for it := v.MapRange(); it.Next(); {
-			out.SetMapIndex(it.Key(), walk(it.Value(), f))
-		}
-		return out
-	case reflect.Struct:
-		out := reflect.New(t).Elem()
-		out.Set(v)
-		for i := range t.NumField() {
-			field := t.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			if _, tagged := field.Tag.Lookup(personTag); tagged {
-				out.Field(i).Set(personField(v.Field(i), f))
-				continue
-			}
-			out.Field(i).Set(walk(v.Field(i), f))
-		}
-		return out
-	}
-	return v
-}
-
-// personField rewrites one tagged field: a string, a list of them, or a pointer to
-// either. Anything else under the tag is a declaration mistake, and it is left
-// alone rather than guessed at — the tag test is what refuses it.
-func personField(v reflect.Value, f func(string) string) reflect.Value {
-	t := v.Type()
-	switch t.Kind() {
-	case reflect.String:
-		return reflect.ValueOf(f(v.String())).Convert(t)
-	case reflect.Pointer:
-		if v.IsNil() {
-			return v
-		}
-		out := reflect.New(t.Elem())
-		out.Elem().Set(personField(v.Elem(), f))
-		return out
-	case reflect.Slice:
-		if v.IsNil() || t.Elem().Kind() != reflect.String {
-			return v
-		}
-		names := make([]string, 0, v.Len())
-		for i := range v.Len() {
-			names = append(names, v.Index(i).String())
-		}
-		mapped := mapNames(names, f)
-		out := reflect.MakeSlice(t, len(mapped), len(mapped))
-		for i, each := range mapped {
-			out.Index(i).Set(reflect.ValueOf(each).Convert(t.Elem()))
-		}
-		return out
-	}
-	return v
-}
-
-// mapNames rewrites a set of people, keeping the first of any two that turn
-// out to be one seat.
-func mapNames(names []string, f func(string) string) []string {
-	out := make([]string, 0, len(names))
-	for _, each := range names {
-		if mapped := f(each); mapped == "" || !slices.Contains(out, mapped) {
-			out = append(out, mapped)
-		}
-	}
-	return out
-}
 
 // personDeltaKeys are the change-record fields whose TEXT names people, and
 // whether it names one or a list ([listText]).
@@ -385,7 +198,7 @@ func (v FieldValue) withPeople(f func(string) string) FieldValue {
 	case json.Unmarshal(v.Value, &handle) == nil:
 		rewritten = f(handle)
 	case json.Unmarshal(v.Value, &handles) == nil && handles != nil:
-		rewritten = mapNames(handles, f)
+		rewritten = seatnames.Names(handles, f)
 	default:
 		return v
 	}
@@ -409,7 +222,7 @@ func identifiedByType(ids Identities, q Query, fields map[string]resolvedField) 
 	if ids == nil {
 		return q
 	}
-	identity := name(ids.Identity)
+	identity := seatnames.Name(ids.Identity)
 	if len(q.Fields) > 0 {
 		filters := slices.Clone(q.Fields)
 		for i, filter := range filters {
@@ -463,7 +276,7 @@ func shownGroups(ids Identities, groups []Group, columns, lanes bool) []Group {
 	if ids == nil || (!columns && !lanes) {
 		return groups
 	}
-	current := name(ids.Current)
+	current := seatnames.Name(ids.Current)
 	out := make([]Group, len(groups))
 	for i, group := range groups {
 		if columns {
