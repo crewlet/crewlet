@@ -5659,6 +5659,28 @@ for the other reason, a request the network dropped. Try again really asks
 again: a failed load is forgotten rather than cached for the life of the page
 the way `React.lazy` caches one.
 
+**The bundle has a budget, measured as the engine sends it.** The split above is
+undone by one static import of a screen's module from the frame — the bundler
+follows it and the workspace is back in the entry with every other test green —
+so `internal/api`'s `TestTheDashboardFitsItsBudget` measures the crawl described above
+and fails a build over any of four numbers:
+
+| What | Budget | Measured as |
+|---|---|---|
+| The initial load: the entry, its static imports and the linked stylesheet | 300 KiB | gzip at the best level, which is what the engine serves |
+| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same |
+| Every font face the build embeds | 90 KB | as served — woff2 is never recompressed |
+| The whole of `static/dashboard`, which every binary and image carries | 3 MiB | raw |
+
+The initial load is the shell's scripts and stylesheet and everything they reach
+through a static `import`, derived from the modules themselves rather than from
+the order the crawl met them in, so a chunk the entry asks for lazily and a
+vendor chunk imports statically counts as the initial load it is. A failure
+lists the files largest first. The values and their reasons live beside the
+test's constants; `vite.config.ts` sets `chunkSizeWarningLimit` to the raw
+equivalent of the chunk budget (439 kB, at the most compressible ratio the build
+writes), so the bundler warns at or before the point the test fails.
+
 **The design system's stylesheet is one sheet, above ours.** A uilet component
 imports its own stylesheet as a side effect of its module, which in a
 code-split build puts a component reached only from one workspace into that

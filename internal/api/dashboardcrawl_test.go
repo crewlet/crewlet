@@ -15,14 +15,22 @@ package api_test
 // against the SERVER, never the disk: the tree on disk is not the tree the
 // binary embeds, and a type the server gets wrong is a failure the disk cannot
 // show. Its own behaviour is certified below over a stand-in bundle shaped like
-// Rolldown's real output, because the committed dashboard has no lazy chunk
-// for it to be wrong about yet — a crawler that never followed an `import()`
-// would pass over this build exactly as one that did.
+// Rolldown's real output, because the real build proves nothing about the
+// crawler: a crawler that never followed an `import()` would report every file
+// it did reach as clean, and only TestEveryFileUnderAssetsIsReachedFromTheShell
+// would notice the lazy half missing. The stand-in names what each reference
+// form must reach, exactly.
+//
+// The crawl is also what the SIZE BUDGET is measured over
+// (TestTheDashboardFitsItsBudget), through initialLoad below, which splits
+// what it reached into what a reader waits for before the first paint and
+// what a screen fetches later.
 
 import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/url"
 	"path"
@@ -484,5 +492,94 @@ func TestEveryFileUnderAssetsIsReachedFromTheShell(t *testing.T) {
 	if files < 3 {
 		t.Errorf("the embedded assets/ holds %d files; the entry, the React chunk and the "+
 			"stylesheet are three", files)
+	}
+}
+
+// initialLoad is what a reader downloads before the first screen can draw:
+// every script and stylesheet the shell names, and every module those reach
+// through a STATIC import, transitively. The rest of the crawl — each lazy
+// chunk, the stylesheet its preload list names, whatever a lazy chunk alone
+// imports — is fetched only when a screen asks for it, or in an idle moment
+// after the first one is up.
+//
+// It is derived from the bodies rather than from the route the crawl first
+// reached a file by, because that route is an accident of breadth-first order:
+// a module the entry names in an `import()` and a vendor chunk imports
+// statically is dequeued as a dynamic import, yet the browser has it before
+// the first paint all the same. The faces are not here: a woff2 is fetched when
+// text first needs it, never recompressed, and has a budget of its own.
+func initialLoad(c crawled) map[string]bool {
+	bodies := map[string][]byte{}
+	for _, f := range c.files {
+		bodies[f.url] = f.body
+	}
+	initial := map[string]bool{}
+	var queue []string
+	for _, f := range c.files {
+		if ext := path.Ext(f.url); f.how == fromShell && (ext == ".js" || ext == ".css") {
+			queue = append(queue, f.url)
+		}
+	}
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+		if initial[next] {
+			continue
+		}
+		initial[next] = true
+		if path.Ext(next) != ".js" {
+			continue
+		}
+		for _, m := range staticImport.FindAllStringSubmatch(string(bodies[next]), -1) {
+			if target, err := resolve(next, m[1]); err == nil && target != "" {
+				queue = append(queue, target)
+			}
+		}
+	}
+	return initial
+}
+
+// TestTheInitialLoadIsTheShellAndItsStaticGraph certifies the partition the
+// size budget is measured over, on the crawl's own stand-in bundle: the
+// shell's scripts and stylesheet and their static imports are the initial
+// load, and no lazy chunk, lazy stylesheet or face is.
+//
+// Plus the one case breadth-first order gets wrong: a module the entry asks
+// for lazily that a vendor chunk imports statically. The crawl reaches it as a
+// dynamic import first, and a partition that trusted that route would move a
+// file every reader downloads before the first paint out of the budget meant
+// to hold it.
+func TestTheInitialLoadIsTheShellAndItsStaticGraph(t *testing.T) {
+	t.Parallel()
+	const assets = dashboardBase + "assets/"
+	tree := crawlFixture()
+	const entry, vendor = "dashboard/assets/index-Bmgzty1J.js", "dashboard/assets/react-wiHys0m2.js"
+	tree[entry] = &fstest.MapFile{Data: append(slices.Clone(tree[entry].Data),
+		"var sc=()=>import(`./scheduler-Sc12Hd34.js`);"...)}
+	tree[vendor] = &fstest.MapFile{Data: append([]byte(`import"./scheduler-Sc12Hd34.js";`), tree[vendor].Data...)}
+	tree["dashboard/assets/scheduler-Sc12Hd34.js"] = &fstest.MapFile{Data: []byte(`export const s=1;`)}
+
+	c := crawlDashboard(t, newApp(t, api.Options{Assets: tree}))
+	for _, p := range c.problems {
+		t.Error(p)
+	}
+	if !slices.ContainsFunc(c.files, func(f reachedFile) bool {
+		return f.url == assets+"scheduler-Sc12Hd34.js" && f.how == fromDynamic
+	}) {
+		t.Fatal("the fixture no longer reaches the scheduler through its import() first, so " +
+			"this case no longer exercises the order the partition must not trust")
+	}
+
+	want := []string{
+		assets + "index-Bmgzty1J.js",
+		assets + "rolldown-runtime-hePW80VL.js",
+		assets + "react-wiHys0m2.js",
+		assets + "index-BS_xpF9S.css",
+		assets + "scheduler-Sc12Hd34.js",
+	}
+	got := slices.Sorted(maps.Keys(initialLoad(c)))
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the initial load is %q, want %q", got, want)
 	}
 }

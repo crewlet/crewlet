@@ -254,6 +254,17 @@ export default defineConfig({
     target: "es2022",
     assetsDir: "assets",
     license: { fileName: NOTICES },
+    // The build's own warning, at the RAW size of the lazy-chunk budget. The
+    // authority is internal/api's TestTheDashboardFitsItsBudget, which holds
+    // every chunk the page fetches later to 150 KiB GZIPPED, as the engine
+    // sends it; this knob can only count raw kB (1,000 bytes). The chunks
+    // this build writes compress between 2.86x (the most compressible) and
+    // 3.48x, so 150 KiB x 1.024 x 2.86 = 439 kB is the raw size at which the
+    // most compressible chunk reaches the budget: the warning fires at or
+    // before the point the test fails, for every chunk, rather than at
+    // Vite's default 500 kB, where a chunk could be 175 KiB on the wire and
+    // the build still say nothing. Change the budget there, then this.
+    chunkSizeWarningLimit: 439,
     // The faces keep the paths they have always had. They arrive from
     // @crewlethq/tokens through its stylesheet rather than from public/, and
     // Vite would otherwise content-hash them into assets/. Two things depend

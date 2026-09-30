@@ -26,7 +26,8 @@ package api_test
 // And one rule the dashboard keeps is checked here on the artefact as well as
 // on the source, because the artefact is what a browser runs: nothing it
 // serves renders a price (TestTheDashboardRendersNoPrice, rule 19 in
-// docs/reference/dashboard-design.md).
+// docs/reference/dashboard-design.md). And one property only the artefact
+// has at all: its size, held to one budget by TestTheDashboardFitsItsBudget.
 //
 // The dashboard's own assertions (its protocol, its router, its ordering
 // rules, and the measured contrast of every colour token in both themes) run
@@ -37,6 +38,8 @@ package api_test
 
 import (
 	"bytes"
+	"compress/gzip"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -843,4 +846,173 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 		t.Errorf("%s is empty", url)
 	}
 	return body
+}
+
+// The dashboard's size budget: ONE set of numbers, and this file is where
+// they live. dashboard/vite.config.ts's chunkSizeWarningLimit is derived from
+// lazyChunkBudget and names this test as its authority; the prose in
+// docs/reference/dashboard-design.md ("How it is built") quotes these values.
+//
+// Script and stylesheet sizes are GZIPPED at gzip.BestCompression, because
+// that is exactly what the engine sends a browser that asks
+// (internal/api/dashboard.go compresses each text file once, at that level) —
+// a raw byte count would measure minified whitespace and identifiers the wire
+// never carries, and a default-level count would disagree with the server by a
+// few per cent in the direction that hides a regression.
+const (
+	// initialBudget is the entry, its static import graph and the stylesheet
+	// the shell links: everything a reader downloads before the first screen
+	// can draw. 300 KiB is under two seconds on a 1.5 Mbit/s link, the slow
+	// end of what a person opening a dashboard over a phone tether gets. The
+	// single-bundle build this replaced sent 403 KB here, the org builder —
+	// about 43% of the source — among it; the frame alone (the sidebar, the
+	// header, the palette, the socket client, React and the design system's
+	// sheet) measured about 230 KB when this budget was set.
+	initialBudget = 300 << 10
+	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
+	// the org builder, a stylesheet a preload list names. A chunk is what a
+	// reader waits for on the first click into a workspace the idle prefetch
+	// has not reached yet, so it gets half the initial budget. The largest,
+	// Settings, measured about 60 KB when this was set.
+	lazyChunkBudget = 150 << 10
+	// fontBudget is every face the build embeds, counted as served: woff2 is
+	// compressed already and the engine never recompresses it. The four Geist
+	// and Geist Mono faces (latin and latin-ext) measure 83,736 bytes, so 90 KB
+	// is the four of them and room for the design system to re-cut them — and
+	// a FIFTH face, which every text-bearing screen would fetch, does not fit.
+	fontBudget = 90_000
+	// treeBudget is the whole of static/dashboard, raw, which is what every
+	// engine binary and image carries whether or not anybody opens the page.
+	// It measured about 2.3 MB when this was set; 3 MiB leaves room for the
+	// screens still to come and refuses a bundle that doubled.
+	treeBudget = 3 << 20
+)
+
+// TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
+// above, measured over what the server actually sends: the crawl
+// TestTheShellLoadsFromTheBinary makes, partitioned by initialLoad into what a
+// reader waits for before the first paint and what a screen fetches later.
+//
+// It exists because the cost of a bundle is paid by every reader on every cold
+// load, and nothing else in the build notices it growing. The split that made
+// each workspace its own chunk is undone by ONE static import of a screen's
+// module from the frame — the bundler follows it and pulls the whole workspace
+// back into the entry with every test still green — and a design-system bump
+// that doubled its sheet or added a face would ride in the same way. A failure
+// lists the files by size, largest first, because the fix is almost always in
+// the biggest one.
+func TestTheDashboardFitsItsBudget(t *testing.T) {
+	t.Parallel()
+	c := crawlDashboard(t, newApp(t, api.Options{}))
+	if len(c.problems) > 0 {
+		t.Fatalf("the crawl could not read %d of the files the shell reaches, so their "+
+			"size is unknown; TestTheShellLoadsFromTheBinary names them", len(c.problems))
+	}
+	initial := initialLoad(c)
+
+	type measured struct {
+		url  string
+		size int
+	}
+	var first []measured
+	firstTotal, lazy := 0, 0
+	for _, f := range c.files {
+		ext := path.Ext(f.url)
+		if ext != ".js" && ext != ".css" {
+			continue
+		}
+		size := gzippedSize(t, f.body)
+		if initial[f.url] {
+			first = append(first, measured{f.url, size})
+			firstTotal += size
+			continue
+		}
+		lazy++
+		if size > lazyChunkBudget {
+			t.Errorf("%s is %s gzipped, over the %s a lazy chunk may be: it is what a reader "+
+				"waits for on the first click into its screen. Split it — a section of a "+
+				"workspace can be its own chunk, as the org builder is (app/lazyScreen.ts)",
+				f.url, kib(size), kib(lazyChunkBudget))
+		}
+	}
+	// FLOORS, so the budget cannot pass by measuring nothing: the initial load
+	// is at least the entry, the React chunk and the stylesheet, and the page
+	// splits into lazy chunks at all — a build that folded every screen back
+	// into the entry would otherwise pass the chunk budget vacuously while
+	// failing only the initial one, and a crawl that lost the lazy half would
+	// pass both.
+	if len(first) < 3 {
+		t.Fatalf("the initial load is %d files; the entry, the React chunk and the "+
+			"stylesheet are three", len(first))
+	}
+	if lazy < 5 {
+		t.Errorf("the crawl reached %d lazy chunks; every workspace is one "+
+			"(app/lazyScreen.ts), so the page has stopped splitting", lazy)
+	}
+	if firstTotal > initialBudget {
+		slices.SortFunc(first, func(a, b measured) int { return b.size - a.size })
+		var list strings.Builder
+		for _, m := range first {
+			fmt.Fprintf(&list, "\n  %9s  %s", kib(m.size), m.url)
+		}
+		t.Errorf("the initial load is %s gzipped, over its %s budget — a reader downloads all "+
+			"of it before the first screen draws. The usual cause is a static import of a "+
+			"screen's module from outside routes/, which pulls its whole workspace into the "+
+			"entry (app/lazy.test.tsx refuses the ones it can see). Largest first:%s",
+			kib(firstTotal), kib(initialBudget), list.String())
+	}
+
+	fonts, faces, tree := 0, 0, 0
+	err := fs.WalkDir(static.FS(), "dashboard", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		tree += int(info.Size())
+		if path.Ext(p) == ".woff2" {
+			fonts += int(info.Size())
+			faces++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the embedded dashboard: %v", err)
+	}
+	if faces == 0 {
+		t.Error("the embedded dashboard carries no woff2 face, so the font budget measured nothing")
+	}
+	if fonts > fontBudget {
+		t.Errorf("the %d embedded faces are %d bytes, over the %d the page may fetch in faces: "+
+			"every screen with text asks for them", faces, fonts, fontBudget)
+	}
+	if tree > treeBudget {
+		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
+			"it, opened or not", kib(tree), kib(treeBudget))
+	}
+}
+
+// gzippedSize is what the engine sends for this body to a browser that asks
+// for gzip: the same format at the same level.
+func gzippedSize(t *testing.T, body []byte) int {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Len()
+}
+
+// kib renders a byte count the way the budgets are written.
+func kib(n int) string {
+	return fmt.Sprintf("%.1f KiB", float64(n)/1024)
 }
