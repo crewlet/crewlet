@@ -34,14 +34,14 @@ What it produces is two numbers for one event, and they drift in opposite
 directions. The measured case is above: an alarm whose caution threshold was
 one apply linger fired on every healthy node on every tick, so the row was
 always lit and therefore said nothing; the same alarm's critical threshold was
-`min_age`, four orders of magnitude past the grace that actually moves seats,
-so it could not fire before the thing it was warning about had already
+`min_age`, four orders of magnitude past the grace that actually acted on the
+node, so it could not fire before the thing it was warning about had already
 happened. Both numbers were defensible where they were written. Neither had any
 relationship to a decision anybody had made about the system.
 
 An alarm that borrows cannot drift, because there is nothing to drift from.
-When the grace that sheds a node changes, the alarm about it changes with it,
-in the same commit, without anybody remembering to.
+When the grace that takes a node's copy out of service changes, the alarm about
+it changes with it, in the same commit, without anybody remembering to.
 
 ## What this does not decide
 

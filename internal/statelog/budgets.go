@@ -115,7 +115,7 @@ const (
 	// slow one, and asking it more often than that adds load to the
 	// thing that is failing. Against [ApplyRetryBudget] the ceiling
 	// leaves a fault at least six attempts before it is reported, so a
-	// single failed call never sheds a seat.
+	// single failed call never takes a copy out of service.
 	ApplyRetryBeat    = ApplyLinger
 	ApplyRetryCeiling = 5 * time.Second
 

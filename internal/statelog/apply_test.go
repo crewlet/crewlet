@@ -1259,7 +1259,7 @@ func TestABrokerBlipDoesNotEndTheApplier(t *testing.T) {
 
 // THE PAUSE DOUBLES TO THE CEILING and never past it, and the ceiling leaves a
 // fault several attempts before it is reported — so one failed call never
-// sheds a seat.
+// takes a copy out of service.
 func TestTheRetryPauseIsBoundedAndTheBudgetOutlastsSeveralOfIt(t *testing.T) {
 	t.Parallel()
 	if statelog.ApplyRetryBeat != statelog.ApplyLinger {

@@ -369,9 +369,9 @@ func Catalogue() []Instrument {
 			Name: StatelogApplyLagSeconds, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: []string{"domain"},
 			Shows: "How OLD the oldest unapplied record is. Seconds are what " +
-				"a stall grace, a pending outcome and a seat move all turn " +
-				"on; sequences are not, and a lag of 4 000 says nothing about " +
-				"whether anything is wrong.",
+				"a stall grace, a pending outcome and a copy taken out of " +
+				"service all turn on; sequences are not, and a lag of 4 000 " +
+				"says nothing about whether anything is wrong.",
 		},
 		{
 			Name: StatelogAppliedThrough, Kind: KindGauge, Unit: UnitCount,

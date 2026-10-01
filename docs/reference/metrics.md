@@ -55,7 +55,7 @@ A value that goes both ways, sampled at each export.
 | `crewlet.statelog.drain.rows_per_second` | `1` | `domain` | The applier's observed drain, which every retry hint divides by. Seeded from a benchmark and then measured, so a hint on real hardware stops being an extrapolation from somebody else's. |
 | `crewlet.statelog.drain.commits_per_second` | `1` | `domain` | Commits per second, which is the fsync rate under `synchronous = FULL` and the number a device budget is spent by. |
 | `crewlet.statelog.apply.lag.seq` | `1` | `domain` | How many records this node is behind the log's head. |
-| `crewlet.statelog.apply.lag.seconds` | `s` | `domain` | How OLD the oldest unapplied record is. Seconds are what a stall grace, a pending outcome and a seat move all turn on; sequences are not, and a lag of 4 000 says nothing about whether anything is wrong. |
+| `crewlet.statelog.apply.lag.seconds` | `s` | `domain` | How OLD the oldest unapplied record is. Seconds are what a stall grace, a pending outcome and a copy taken out of service all turn on; sequences are not, and a lag of 4 000 says nothing about whether anything is wrong. |
 | `crewlet.statelog.applied_through` | `1` | `domain` | The prefix this node has actually applied, which is lower than its checkpoint whenever a record was retained. |
 | `crewlet.statelog.deferred.count` | `1` | `domain` | Records this build could not read and kept. Non-zero is a rolling upgrade in progress; non-zero and not falling is one that stopped. |
 | `crewlet.statelog.deferred.oldest_age_seconds` | `s` | `domain` | How long the oldest retained record has been retained, which is what decides whether this node still serves the partition. |
