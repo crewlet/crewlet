@@ -179,12 +179,15 @@ leases is dated when it was sent, never when its answer arrived, and a listing
 is trusted for a lease TTL from that instant. A change the map's watch delivers
 has no asking: it is dated when the node receives it, by a loop that waits on
 nothing else, so a read the store has stopped answering never holds a delivery
-back to be dated late — except the first delivery after the watch opens, which
-is the map the store read as it opened and is dated when the opening was asked
-for. So a slow answer never makes the view look fresher than anything the store
-said. At layout 0 there is no map, so only `estate_view_stale` can fire; the
-fleet's presence, which names layout 0's servers, is not judged, since it
-answers routing alone.
+back to be dated late — except the first delivery each time the watch opens,
+which is the map the store read as it opened and is dated when that opening was
+asked for. So a slow answer never makes the view look fresher than anything the
+store said. A watch the store closes is opened again, no sooner than a second
+after the one it replaces was asked for, and one the store refuses is asked for
+again fifteen seconds later, while the reads go on confirming the map. At
+layout 0 there is no map, so only `estate_view_stale` can fire; the fleet's
+presence, which names layout 0's servers, is not judged, since it answers
+routing alone.
 
 ## The gestures
 

@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -846,41 +846,196 @@ func TestAWatchsFirstDeliveryIsDatedWhenTheWatchWasAskedFor(t *testing.T) {
 	}
 }
 
-// refusedWatch is a store that refuses every opening of the watch, counting
-// them.
-type refusedWatch struct {
+// scriptedWatch is a store whose every opening of the watch is answered by the
+// test's script — the n-th opening, from 0 — and recorded at the instant it
+// was asked for. Reads go to the embedded store.
+//
+// Its cases run in a synctest bubble, where the clock the view reads and the
+// timers it waits on are one fake clock that moves only when everything in the
+// bubble is blocked: so an opening's instant is EXACT, and a loop that waits
+// out a fifteen-second retry is stepped past it rather than slept through.
+type scriptedWatch struct {
 	MapSource
-	opened atomic.Int32
+	answer func(ctx context.Context, n int) (<-chan coord.EstateMapRecord, error)
+
+	mu    sync.Mutex
+	asked []time.Time
 }
 
-func (r *refusedWatch) WatchEstateMap(context.Context) (<-chan coord.EstateMapRecord, error) {
-	r.opened.Add(1)
-	return nil, errors.New("coordination timed out")
+func (s *scriptedWatch) WatchEstateMap(ctx context.Context) (<-chan coord.EstateMapRecord, error) {
+	s.mu.Lock()
+	n := len(s.asked)
+	s.asked = append(s.asked, time.Now())
+	s.mu.Unlock()
+	return s.answer(ctx, n)
 }
 
-// A WATCH THE STORE REFUSED IS ASKED FOR AGAIN A CONFIRMATION LATER, never on
-// the next second as a watch that closed is: the reads keep the map half
-// current to within one confirmation meanwhile, so asking sooner buys nothing,
-// and every node asking a failing store each second for a watch it keeps
-// refusing is fifteen times the reads' load on it.
+// openings is every instant the watch was asked for, oldest first.
+func (s *scriptedWatch) openings() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.asked)
+}
+
+// sinceStart is each instant as its distance from start, for a failure
+// message a reader can check against the rule.
+func sinceStart(start time.Time, at []time.Time) []time.Duration {
+	out := make([]time.Duration, len(at))
+	for i, a := range at {
+		out[i] = a.Sub(start)
+	}
+	return out
+}
+
+// deliverIn hands version of state to an opened watch and waits until the
+// view has done everything it will do with it — failing the test when the
+// view is not receiving on that watch, which in a bubble is decided at once:
+// the minute passes only once everything in it is blocked.
+func deliverIn(t *testing.T, ch chan<- coord.EstateMapRecord, state MapState, version uint64) {
+	t.Helper()
+	select {
+	case ch <- coord.EstateMapRecord{Value: encoded(t, state), Version: version}:
+	case <-time.After(time.Minute):
+		t.Fatalf("the view is not receiving on the watch it was handed version %d by", version)
+	}
+	synctest.Wait()
+}
+
+// A WATCH THE STORE REFUSED IS ASKED FOR AGAIN, A CONFIRMATION LATER — never
+// sooner, never later and never not at all — and the watch it then opens is
+// followed.
+//
+// Not on the next second as a watch that closed is: the reads keep the map
+// half current to within one confirmation meanwhile, so asking sooner buys
+// nothing, and every node asking a failing store each second for a watch it
+// keeps refusing is fifteen times the reads' load on it. And not NEVER: the
+// coordination store is often unreachable at boot, and a node whose first
+// opening was refused and that gave up on the watch would learn of every map
+// change a confirmation late for the rest of its life — routers and joiners
+// included, which is what the watch is for.
 func TestARefusedWatchIsAskedForAgainAConfirmationLater(t *testing.T) {
 	t.Parallel()
-	store, _, version := storeWithMap(t)
-	watch := &refusedWatch{MapSource: store}
-	v := viewOver(t, watch, coordmemory.New(), layoutZero, &clock{now: base})
-	run(t, v)
-	eventually(t, "the view to read the map", func() bool {
-		_, held, found, err := v.Map()
-		return err == nil && found && held == version
-	})
-	eventually(t, "the view to ask for its watch", func() bool { return watch.opened.Load() > 0 })
+	synctest.Test(t, func(t *testing.T) {
+		store, state, version := storeWithMap(t)
+		reopened := make(chan coord.EstateMapRecord)
+		watch := &scriptedWatch{MapSource: refusedReads{store},
+			answer: func(_ context.Context, n int) (<-chan coord.EstateMapRecord, error) {
+				if n == 1 {
+					return reopened, nil
+				}
+				return nil, errors.New("coordination timed out")
+			}}
+		start := time.Now()
+		v := viewOver(t, watch, coordmemory.New(), layoutZero, nil)
+		run(t, v)
 
-	wait := 3 * coord.MinViewRefresh
-	time.Sleep(wait)
-	if n := watch.opened.Load(); n != 1 {
-		t.Fatalf("a watch the store refused was asked for %d times in %v, want once a "+
-			"confirmation (%v)", n, wait, watchRetry)
-	}
+		// THE RULE, not the constant that states it: a confirmation later.
+		time.Sleep(ViewConfirm + time.Second)
+		synctest.Wait()
+		want := []time.Time{start, start.Add(ViewConfirm)}
+		if got := watch.openings(); !slices.Equal(got, want) {
+			t.Fatalf("a watch the store refused was asked for at %v from the first asking, "+
+				"want %v", sinceStart(start, got), sinceStart(start, want))
+		}
+
+		// THE WATCH IT THEN OPENED IS FOLLOWED: no read answers, so what
+		// the view holds is what that watch delivered, dated when it was
+		// asked for.
+		deliverIn(t, reopened, state, version)
+		if _, held, found, err := v.Map(); err != nil || !found || held != version {
+			t.Fatalf("the reopened watch delivered version %d and the view holds (%d, %v, %v)",
+				version, held, found, err)
+		}
+		if at := confirmedAtOf(v); !at.Equal(start.Add(ViewConfirm)) {
+			t.Errorf("the reopened watch's first delivery confirmed the view %v after the first "+
+				"asking, want %v, when that watch was asked for", at.Sub(start), ViewConfirm)
+		}
+	})
+}
+
+// A WATCH THAT CLOSES IS OPENED AGAIN, never sooner than coord.MinViewRefresh
+// after the opening it replaces was ASKED FOR — so a store that closes every
+// watch at once costs a watch a second rather than a spin, while one that
+// lived longer than that is replaced at once — and the first delivery of each
+// opening is dated when THAT opening was asked for.
+//
+// The KV backend closes a watch on a lost connection or a removed key. A view
+// that stopped watching then would learn of every later map change only from
+// its confirmation reads, a quarter of a minute late, for as long as it ran.
+func TestAClosedWatchIsOpenedAgain(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		store, state, version := storeWithMap(t)
+		first, second, third := make(chan coord.EstateMapRecord),
+			make(chan coord.EstateMapRecord), make(chan coord.EstateMapRecord)
+		letGo := make(chan struct{})
+		watch := &scriptedWatch{MapSource: refusedReads{store},
+			answer: func(ctx context.Context, n int) (<-chan coord.EstateMapRecord, error) {
+				switch n {
+				case 0:
+					return first, nil
+				case 1:
+					// THE REOPENING TAKES TEN SECONDS to answer.
+					select {
+					case <-letGo:
+						return second, nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				case 2:
+					return third, nil
+				}
+				return nil, errors.New("coordination timed out")
+			}}
+		start := time.Now()
+		v := viewOver(t, watch, coordmemory.New(), layoutZero, nil)
+		run(t, v)
+		synctest.Wait()
+		deliverIn(t, first, state, version)
+
+		// THE STORE CLOSES THE WATCH AT ONCE: it is asked for again a
+		// MinViewRefresh after it was asked for, not straight away.
+		close(first)
+		synctest.Wait()
+		if got := watch.openings(); len(got) != 1 {
+			t.Fatalf("a watch closed at once was asked for again at %v from the first asking, "+
+				"want not before %v", sinceStart(start, got), coord.MinViewRefresh)
+		}
+		time.Sleep(coord.MinViewRefresh)
+		synctest.Wait()
+		reopenedAt := start.Add(coord.MinViewRefresh)
+		if got, want := watch.openings(), []time.Time{start, reopenedAt}; !slices.Equal(got, want) {
+			t.Fatalf("a watch closed at once was asked for at %v from the first asking, want %v",
+				sinceStart(start, got), sinceStart(start, want))
+		}
+
+		// ITS FIRST DELIVERY IS DATED WHEN IT WAS ASKED FOR — not when the
+		// opening answered, ten seconds later, nor when the watch it
+		// replaced was.
+		time.Sleep(10 * time.Second)
+		close(letGo)
+		deliverIn(t, second, state, version+1)
+		if _, held, found, err := v.Map(); err != nil || !found || held != version+1 {
+			t.Fatalf("the reopened watch delivered version %d and the view holds (%d, %v, %v)",
+				version+1, held, found, err)
+		}
+		if at := confirmedAtOf(v); !at.Equal(reopenedAt) {
+			t.Errorf("the reopened watch's first delivery confirmed the view %v after the first "+
+				"asking, want %v, when that watch was asked for", at.Sub(start),
+				reopenedAt.Sub(start))
+		}
+
+		// A WATCH THAT LIVED PAST THE SECOND IS REPLACED AT ONCE when it
+		// closes, since its opening was asked for long enough ago.
+		close(second)
+		synctest.Wait()
+		closedAt := start.Add(coord.MinViewRefresh + 10*time.Second)
+		want := []time.Time{start, reopenedAt, closedAt}
+		if got := watch.openings(); !slices.Equal(got, want) {
+			t.Fatalf("a watch that lived ten seconds and closed was asked for at %v from the "+
+				"first asking, want %v", sinceStart(start, got), sinceStart(start, want))
+		}
+	})
 }
 
 // THE LEASES ARE UNKNOWN AT THEIR TTL WHERE THAT IS SHORTER THAN THE STALENESS
