@@ -97,17 +97,30 @@ type InboxNotice struct {
 	// this read is an index range rather than a join.
 	SubjectKey string `json:"subject_key,omitempty"`
 
-	// SubjectKeyCollision says [InboxNotice.SubjectKey] does not open this
-	// notice's subject: the key directory names another task for it, so a
-	// link built from the key reaches THAT task and the subject is reached
-	// by [InboxNotice.SubjectID]. See [ItemAddress].
+	// Task is the id of the task this notice is about, and empty when it
+	// names none: the subject for a task commit, and the task a lead put at
+	// the top of the list for a `prioritised` notice — whose SUBJECT is the
+	// person, while [InboxNotice.SubjectKey] is the task's key. It is what
+	// a reader opens when that key opens another task.
+	Task string `json:"task,omitempty"`
+
+	// SubjectKeyCollision says [InboxNotice.SubjectKey] does not open the
+	// task this notice is about: the key directory names another task for
+	// it, so a link built from the key reaches THAT task and this notice's
+	// is reached by [InboxNotice.Task]. See [ItemAddress]. Never set on a
+	// notice that names no task, whose key is the only address it carries.
 	//
 	// ASKED OF THE STORED KEY, not read off the task's own flag, because
 	// the two can name different keys: the key here is the one the task
 	// held when the notice was written, and a task moved since answers to
 	// a new one. What a reader follows is THIS key, so the question is
-	// whether THIS key resolves to the subject — one probe of the
-	// directory's primary key per row of a bounded page.
+	// whether THIS key resolves to the task — one probe of the directory's
+	// primary key per row of a bounded page.
+	//
+	// AGAINST [InboxNotice.Task], NEVER [InboxNotice.SubjectID]: a
+	// prioritised notice's subject is a person, so asked of the subject
+	// every one of them read as a collision and was sent to the person's
+	// handle as though it were a task.
 	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
 
 	Excerpt string `json:"excerpt,omitempty"`
@@ -382,8 +395,8 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 	rows, err := tx.QueryContext(ctx, `
 		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
 		       n.created_at, n.reason, n.addressed, n.fallback_only,
-		       n.kind, n.subject_id, n.subject_key,
-		       `+keyOpensAnother("n.subject_key", "n.subject_id")+`,
+		       n.kind, n.subject_id, n.subject_key, n.task_id,
+		       `+keyOpensAnother("n.subject_key", "n.task_id")+`,
 		       n.excerpt, COALESCE(h.actor, ''), COALESCE(h.actor_kind, '')
 		  FROM tracker_notifications n
 		  LEFT JOIN tracker_history h ON h.id = n.record_id
@@ -412,7 +425,7 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		var addressed, fallback int
 		if err := rows.Scan(&notice.RecordID, &packed, &notice.LogStream,
 			&notice.LogGeneration, &at, &reason, &addressed, &fallback,
-			&kind, &notice.SubjectID, &notice.SubjectKey,
+			&kind, &notice.SubjectID, &notice.SubjectKey, &notice.Task,
 			&notice.SubjectKeyCollision, &notice.Excerpt,
 			&notice.Actor, &actorKind); err != nil {
 

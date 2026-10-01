@@ -476,20 +476,24 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 
 // keyOpensAnother is the SQL predicate "opening this key reaches a task other
 // than this id" — [resolveTaskID]'s answer to a key, asked of a row that
-// carries a key and an id side by side.
+// carries a key and a task's id side by side.
 //
 // THE DIRECTORY AND NOTHING ELSE, because the directory is what the resolver
 // asks first and every apply writes the claim in the same transaction as the
 // task row ([Applier.maintainKeys]), so a held key always has its row. An
-// empty key opens nothing and is never a collision.
+// empty key opens nothing and is never a collision — and neither is a key
+// beside an EMPTY id, which names no task the key could fail to open: asked
+// anyway, every directory row would count as "another" and the row's only
+// address would be swapped for an id it does not have.
 //
 // It exists for a key that is NOT the task's current one — a notice stores
-// the key its subject held when it was written — where the task row's own
+// the key its task held when it was written — where the task row's own
 // `key_collision` describes a different key. A row reading the task's current
 // key reads that column instead, which the applier derives from this same
 // directory.
 func keyOpensAnother(key, id string) string {
-	return `(` + key + ` <> '' AND EXISTS (SELECT 1 FROM tracker_task_keys kd
+	return `(` + key + ` <> '' AND ` + id + ` <> '' AND EXISTS (
+	          SELECT 1 FROM tracker_task_keys kd
 	          WHERE kd.key = ` + key + ` AND kd.task_id <> ` + id + `))`
 }
 

@@ -2,10 +2,15 @@ package tracker_test
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -187,6 +192,32 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		}, &tracker.Notify{Kind: tracker.ChangeComment,
 			Snapshot: tracker.Snapshot{Key: "ENG-7", Assignee: "ana"}}))
 	}
+	// A LEAD PUTS A HOLDER AT THE TOP OF SOMEBODY'S PRIORITIES — the one
+	// notice whose SUBJECT is not the task it is about: the subject is the
+	// person, and the key beside it is the task's. bo puts the duplicate at
+	// the top of ana's list and the claimant at the top of cy's.
+	prioritise := func(person, top string) tracker.MutationRecord {
+		body, err := json.Marshal(tracker.Person{V: 1, Handle: person,
+			Priorities: []string{top}})
+		if err != nil {
+			t.Fatalf("encode %s's list: %v", person, err)
+		}
+		return tracker.MutationRecord{
+			RecordEnvelope: tracker.RecordEnvelope{
+				V: tracker.RecordVersion, OpID: person + "-prioritised",
+				Subject: tracker.PersonSubject(person), Op: tracker.OpPatch,
+				CreatedAt: at, Writer: "node-a",
+				Scope: tracker.ScopeSet{Subject: true},
+			},
+			Mutation: body, Actor: "bo", ActorKind: tracker.AuthorHuman,
+			Notify: &tracker.Notify{Kind: tracker.ChangePrioritised,
+				Snapshot: tracker.Snapshot{Person: person, Task: top,
+					Key: "ENG-7", Project: "ENG", PrioritisedBy: "bo",
+					Position: 1}},
+		}
+	}
+	apply(prioritise("ana", "t-2"))
+	apply(prioritise("cy", "t-1"))
 	// t-3 MOVES, and the key it moves to is its own.
 	former := []string{"ENG-7"}
 	apply(taskRecord("t-3", tracker.OpPatch, tracker.TaskPatch{
@@ -297,30 +328,56 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 	// THE INBOX ASKS ABOUT THE KEY IT STORED: every notice here carries
 	// ENG-7, and ENG-7 opens t-1 — so the moved duplicate's notice is
 	// flagged although the task's own flag, about OPS-1, is not.
-	inbox, err := reader.Inbox(ctx, tracker.InboxQuery{
-		Handle: "ana", Level: statelog.ReadStale,
-	}, now)
-	if err != nil {
-		t.Fatalf("the inbox: %v", err)
+	//
+	// AND IT ASKS ABOUT THE TASK THE NOTICE NAMES, never the subject: a
+	// prioritised notice's subject is a PERSON, so a flag asked of the
+	// subject read every one of them as a collision and sent the reader to
+	// the person's handle as though it were a task. The answer names the
+	// task, which is what a reader opens when the key opens another.
+	inboxOf := func(handle string) []tracker.InboxNotice {
+		t.Helper()
+		inbox, err := reader.Inbox(ctx, tracker.InboxQuery{
+			Handle: handle, Level: statelog.ReadStale,
+		}, now)
+		if err != nil {
+			t.Fatalf("%s's inbox: %v", handle, err)
+		}
+		return inbox.Notices
 	}
 	noticed := map[string]bool{}
-	for _, notice := range inbox.Notices {
+	prioritised := map[string]tracker.InboxNotice{}
+	for _, notice := range append(inboxOf("ana"), inboxOf("cy")...) {
 		if notice.SubjectKey != "ENG-7" {
 			t.Fatalf("a notice about %s stored %q, want ENG-7 — the case "+
 				"depends on the key a notice was written with",
-				notice.SubjectID, notice.SubjectKey)
+				notice.Task, notice.SubjectKey)
 		}
-		opensAnother := notice.SubjectID != "t-1"
+		if notice.Kind == tracker.ChangePrioritised {
+			prioritised[notice.SubjectID] = notice
+		} else if notice.Task != notice.SubjectID {
+			t.Errorf("a %s notice on %s names the task %q — a task commit's "+
+				"notice is about its own subject", notice.Kind,
+				notice.SubjectID, notice.Task)
+		}
+		opensAnother := notice.Task != "t-1"
 		if notice.SubjectKeyCollision != opensAnother {
-			t.Errorf("the notice about %s carries subject_key_collision=%v, "+
+			t.Errorf("the %s notice about %s carries subject_key_collision=%v, "+
 				"want %v — ENG-7 opens t-1, so every other holder's notice "+
-				"must link by id, the moved task's included", notice.SubjectID,
-				notice.SubjectKeyCollision, opensAnother)
+				"must link by id, the moved task's included", notice.Kind,
+				notice.Task, notice.SubjectKeyCollision, opensAnother)
 		}
-		noticed[notice.SubjectID] = true
+		noticed[notice.Task] = true
 	}
 	if len(noticed) != 3 {
-		t.Fatalf("ana's inbox holds notices about %v, want all three holders", noticed)
+		t.Fatalf("the inboxes hold notices about %v, want all three holders", noticed)
+	}
+	for person, task := range map[string]string{"ana": "t-2", "cy": "t-1"} {
+		if got, ok := prioritised[person]; !ok || got.Task != task {
+			t.Errorf("%s's prioritised notice names the task %q, want %s — "+
+				"its subject is %s, so the task is the only thing that says "+
+				"which holder of ENG-7 reached the top of the list",
+				person, got.Task, task, person)
+		}
 	}
 
 	mine, err := reader.MyWork(ctx, tracker.MyWorkQuery{
@@ -330,13 +387,17 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 		t.Fatalf("ana's own work: %v", err)
 	}
 	if len(mine.Assigned) == 0 || len(mine.AskedOfMe) == 0 ||
-		len(mine.ChecklistItems) == 0 {
-		t.Fatalf("ana's own work carries %d assigned, %d asks and %d "+
-			"checklist items, want rows in every block", len(mine.Assigned),
-			len(mine.AskedOfMe), len(mine.ChecklistItems))
+		len(mine.ChecklistItems) == 0 || len(mine.Priorities) == 0 {
+		t.Fatalf("ana's own work carries %d assigned, %d asks, %d "+
+			"checklist items and %d priorities, want rows in every block",
+			len(mine.Assigned), len(mine.AskedOfMe), len(mine.ChecklistItems),
+			len(mine.Priorities))
 	}
 	for _, row := range mine.Assigned {
 		check("an assigned row", row.ID, row.KeyCollision)
+	}
+	for _, row := range mine.Priorities {
+		check("a priorities row", row.ID, row.KeyCollision)
 	}
 	for _, ask := range mine.AskedOfMe {
 		check("an ask", ask.ID, ask.KeyCollision)
@@ -349,5 +410,162 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 	}
 	for _, item := range mine.ChecklistItems {
 		check("a checklist item's task", item.Task, item.TaskKeyCollision)
+	}
+}
+
+// noticeTaskMigration is the replicated migration that gave a notice the id of
+// the task it is about, read from the file that ships it.
+const noticeTaskMigration = "internal/store/schema/replicated/" +
+	"0039_a_notice_names_the_task_it_is_about.sql"
+
+// A NOTICE FROM BEFORE IT NAMED ITS TASK READS AS IT DID THEN, OR BETTER.
+//
+// The migration that added the column backfills it, and the two kinds of
+// notice come out of it differently on purpose. A task commit's notice is
+// about its own subject, so it is filled from there and a duplicate's notice
+// links by id exactly as one written today does. A prioritised notice's
+// subject is a PERSON, and the task its wake named is in no row the table
+// reaches — so it stays empty, and an empty task must leave the key as the
+// notice's address: asked against nothing, every directory row reads as
+// "another task", and the reader is sent to an id the notice does not have.
+//
+// THE MIGRATION'S OWN STATEMENT, read from its file and run over rows put
+// back the way the build before it wrote them, because the backfill runs
+// exactly once on every database that has rows and a fresh one never runs it
+// against anything at all.
+func TestANoticeFromBeforeItNamedItsTaskStillOpensWhatItMeant(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	at := time.Unix(1_700_000_100, 0).UTC()
+	step := 0
+	apply := func(rec tracker.MutationRecord) {
+		t.Helper()
+		step++
+		rec.OpID = rec.OpID + "-" + itoa(step)
+		if _, err := h.apply(rec, at.Add(time.Duration(step)*time.Second)); err != nil {
+			t.Fatalf("apply %s: %v", rec.OpID, err)
+		}
+	}
+	for _, id := range []string{"t-1", "t-2"} {
+		task := newTask(id)
+		task.Key, task.Assignee = "ENG-7", "ana"
+		apply(taskRecord(id, tracker.OpCreate, task, nil))
+	}
+	// A COMMENT ON THE DUPLICATE, for ana — a task commit's notice.
+	apply(taskRecord("t-2", tracker.OpPatch, tracker.TaskPatch{
+		Comment: &tracker.Comment{ID: "c-t-2", Task: "t-2", Author: "bo",
+			AuthorKind: tracker.AuthorHuman, Body: "is this the one?",
+			CreatedAt: at},
+	}, &tracker.Notify{Kind: tracker.ChangeComment,
+		Snapshot: tracker.Snapshot{Key: "ENG-7", Assignee: "ana"}}))
+	// AND ONE ON A TASK SINCE PURGED, for di: its row is gone, so only its
+	// history says the notice was a task's.
+	gone := newTask("t-3")
+	gone.Key, gone.Assignee = "ENG-9", "di"
+	apply(taskRecord("t-3", tracker.OpCreate, gone, nil))
+	apply(taskRecord("t-3", tracker.OpPatch, tracker.TaskPatch{
+		Comment: &tracker.Comment{ID: "c-t-3", Task: "t-3", Author: "bo",
+			AuthorKind: tracker.AuthorHuman, Body: "still needed?",
+			CreatedAt: at},
+	}, &tracker.Notify{Kind: tracker.ChangeComment,
+		Snapshot: tracker.Snapshot{Key: "ENG-9", Assignee: "di"}}))
+	apply(taskRecord("t-3", tracker.OpPurge,
+		map[string]any{"reason": "filed twice"}, nil))
+	// AND THE CLAIMANT AT THE TOP OF CY'S LIST — a person's notice.
+	body, err := json.Marshal(tracker.Person{V: 1, Handle: "cy",
+		Priorities: []string{"t-1"}})
+	if err != nil {
+		t.Fatalf("encode cy's list: %v", err)
+	}
+	apply(tracker.MutationRecord{
+		RecordEnvelope: tracker.RecordEnvelope{
+			V: tracker.RecordVersion, OpID: "cy-prioritised",
+			Subject: tracker.PersonSubject("cy"), Op: tracker.OpPatch,
+			CreatedAt: at, Writer: "node-a", Scope: tracker.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "bo", ActorKind: tracker.AuthorHuman,
+		Notify: &tracker.Notify{Kind: tracker.ChangePrioritised,
+			Snapshot: tracker.Snapshot{Person: "cy", Task: "t-1", Key: "ENG-7",
+				Project: "ENG", PrioritisedBy: "bo", Position: 1}},
+	})
+
+	text, err := os.ReadFile(filepath.Join(sourcetree.Root(t), noticeTaskMigration))
+	if err != nil {
+		t.Fatalf("read the migration: %v", err)
+	}
+	at0 := strings.Index(string(text), "UPDATE tracker_notifications")
+	if at0 < 0 {
+		t.Fatalf("%s carries no backfill, so this case would assert the "+
+			"column's empty default and call it a migration", noticeTaskMigration)
+	}
+	backfill := string(text[at0:])
+	w, err := h.db.Replicated().Writer(t.Context())
+	if err != nil {
+		t.Fatalf("take the writer: %v", err)
+	}
+	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
+		// AS THE BUILD BEFORE THE COLUMN LEFT THEM — and with ana's
+		// notice's history row gone, as a reanchor leaves a notice that
+		// outlived it: only the task row it names says it was a task's.
+		if _, err := tx.ExecContext(t.Context(),
+			`UPDATE tracker_notifications SET task_id = ''`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), `DELETE FROM tracker_history
+			WHERE id IN (SELECT record_id FROM tracker_notifications
+			             WHERE recipient = 'ana')`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), backfill)
+		return err
+	}); err != nil {
+		t.Fatalf("run the backfill: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("release the writer: %v", err)
+	}
+
+	log, err := statelogtest.LocalReader(tracker.Domain{}, h.db.Replicated(),
+		statelog.Position{Stream: tracker.Domain{}.Stream().Name})
+	if err != nil {
+		t.Fatalf("local read authority: %v", err)
+	}
+	reader, err := tracker.NewReader(h.db, log)
+	if err != nil {
+		t.Fatalf("tracker reader: %v", err)
+	}
+	only := func(handle string) tracker.InboxNotice {
+		t.Helper()
+		inbox, err := reader.Inbox(t.Context(), tracker.InboxQuery{
+			Handle: handle, Level: statelog.ReadStale,
+		}, at.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("%s's inbox: %v", handle, err)
+		}
+		if len(inbox.Notices) != 1 {
+			t.Fatalf("%s's inbox holds %d notices, want the one", handle,
+				len(inbox.Notices))
+		}
+		return inbox.Notices[0]
+	}
+	if got := only("ana"); got.Task != "t-2" || !got.SubjectKeyCollision {
+		t.Errorf("the comment notice on the duplicate came out of the "+
+			"backfill naming task %q with subject_key_collision=%v, want t-2 "+
+			"and true — it is about its own subject, and ENG-7 opens t-1",
+			got.Task, got.SubjectKeyCollision)
+	}
+	if got := only("di"); got.Task != "t-3" {
+		t.Errorf("the notice on a purged task came out of the backfill "+
+			"naming task %q, want t-3 — its row is gone, and its history is "+
+			"what says the notice was a task's", got.Task)
+	}
+	if got := only("cy"); got.Task != "" || got.SubjectKeyCollision ||
+		got.SubjectKey != "ENG-7" {
+
+		t.Errorf("the prioritised notice came out of the backfill naming "+
+			"task %q under key %q with subject_key_collision=%v, want no task, "+
+			"ENG-7 and false — its subject is a person, nothing it holds names "+
+			"the task, and its key is the only address it has",
+			got.Task, got.SubjectKey, got.SubjectKeyCollision)
 	}
 }

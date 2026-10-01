@@ -429,17 +429,24 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		}
 	}
 	candidates := Candidates(notify, c.record.Batched())
+	// THE TASK THE NOTICE IS ABOUT, beside the subject it was written on.
+	// For a task commit they are one task; for a lead's priorities write
+	// the subject is the PERSON and the key stored beside it is the TASK's,
+	// so without the id a reader has a key and nothing to say whether that
+	// key opens the task the wake meant — which it does not, once another
+	// task claimed it first. See [InboxNotice.Task].
+	task := notify.Snapshot.TaskID(c.subject())
 	written := 0
 	for _, candidate := range candidates {
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO tracker_notifications
-				(record_id, recipient, subject_id, subject_key, kind, reason,
-				 addressed, fallback_only, fallback_rank, excerpt, created_at,
-				 log_seq, log_stream, log_generation)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				(record_id, recipient, subject_id, subject_key, task_id, kind,
+				 reason, addressed, fallback_only, fallback_rank, excerpt,
+				 created_at, log_seq, log_stream, log_generation)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
 			historyID(c), candidate.Handle, c.subject().ID,
-			inboxSubjectKey(subjectKey, notify),
+			inboxSubjectKey(subjectKey, notify), task,
 			string(notify.Kind), string(candidate.Reason),
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
 			candidate.FallbackRank, notify.Excerpt,
