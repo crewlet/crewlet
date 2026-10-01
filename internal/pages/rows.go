@@ -235,16 +235,19 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 		// dropped either way, so the order decides only which one is
 		// REPORTED — and [Applier.Gated]'s opposite order decides only
 		// which one a drop is COUNTED under.
-		if ObjectKind(subj.Kind) == KindPage {
+		//
+		// AND OVER THE SAME SUBJECTS, by asking the one function the
+		// applier asks ([gatedPage]).
+		if pageID, ok := gatedPage(subj); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
 				`SELECT purge_record_id FROM pages_deletions WHERE page_id = ?`,
-				subj.ID).Scan(&author)
+				pageID).Scan(&author)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 			case err != nil:
 				return fmt.Errorf("pages: read the deletion gate for page "+
-					"%s: %w", subj.ID, err)
+					"%s: %w", pageID, err)
 			case author.Valid && author.String == opID:
 				// THE RECORD THAT WROTE THE MARKER IS NOT GATED BY IT,
 				// by its own id. Without the exception a purge whose

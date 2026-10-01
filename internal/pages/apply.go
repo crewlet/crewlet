@@ -162,7 +162,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	// The deletion gate reads the page's own marker. A purge is the one
 	// operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
-	pageID, ok := gatedPage(rec)
+	pageID, ok := gatedPage(rec.Subject)
 	if !ok {
 		return "", false, nil
 	}
@@ -197,17 +197,23 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	return statelog.ReasonDeleted, true, nil
 }
 
-// gatedPage is the page a record is ABOUT, for the deletion gate.
+// gatedPage is the page whose deletion marker gates a record on subj, and
+// false for a subject no page's marker covers.
 //
 // A PAGE SUBJECT NAMES ITS OWN, and a TITLE subject names one in its payload —
-// which the gate cannot read, because a record at an unknown version reaches
-// here with an opaque payload. So a title record is not gated on the page: it
-// is gated on nothing, and its apply refuses to write a head for a page the
-// deletions table holds. That keeps the gate answerable from the envelope
+// which neither side of the gate can read: the publisher's reader is handed
+// the subject and nothing else. So a title record is not gated on the page:
+// it is gated on nothing, and its apply refuses to write a head for a page the
+// deletions table holds. That keeps the gate answerable from the subject
 // while still making a purge permanent.
-func gatedPage(rec statelog.Record) (string, bool) {
-	if ObjectKind(rec.Subject.Kind) == KindPage {
-		return rec.Subject.ID, true
+//
+// ONE FUNCTION, asked by [Applier.Gated] and [Gates.GatedAt] alike, because
+// [statelog.Gates] holds the two to one answer and the tracker's two sides
+// drifted apart over exactly this set — its reader covered the task's own
+// subject while its applier dropped the task's turns as well.
+func gatedPage(subj statelog.Subject) (string, bool) {
+	if ObjectKind(subj.Kind) == KindPage {
+		return subj.ID, true
 	}
 	return "", false
 }
