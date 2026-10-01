@@ -591,18 +591,20 @@ export function installMedia(initial: boolean): {
  * tuned. The pair is restored in a `finally`, so a case cannot leave every
  * later one measuring a box jsdom never laid out.
  *
- * `act` IS FOR A BLOCK THAT IS NOT RENDERED YET. A `lazy` disclosure mounts
+ * `open` IS FOR A BLOCK THAT IS NOT RENDERED YET. A `lazy` disclosure mounts
  * its children when a reader opens it, which is after this function would
  * otherwise have put the real dimensions back — so the block measures a box
  * jsdom reports as zero and the branch under test never runs. Anything the
  * callback does happens while the fake is still installed, which is the only
  * arrangement where the open and the measurement are the same moment they are
- * in a browser.
+ * in a browser. It was called `act`, which inside this function hid the
+ * case-bound `act` the rest of the file calls — and in a file that calls
+ * `act`, the name is the binding's alone (`test/inCase.source.test.ts`).
  */
 export function overflowing(
   ui: ReactElement,
   axis: "height" | "width" = "height",
-  act?: (container: HTMLElement) => void,
+  open?: (container: HTMLElement) => void,
 ): HTMLElement {
   const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";
   const client = axis === "height" ? "clientHeight" : "clientWidth";
@@ -614,7 +616,7 @@ export function overflowing(
   Object.defineProperty(HTMLElement.prototype, client, { configurable: true, value: 460 });
   try {
     const { container } = render(ui);
-    act?.(container);
+    open?.(container);
     return container;
   } finally {
     if (had.scroll) Object.defineProperty(HTMLElement.prototype, scroll, had.scroll);
