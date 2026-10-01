@@ -9,7 +9,7 @@
  * exchange is sent once, in the header, and kept nowhere.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
@@ -38,12 +38,23 @@ interface Sent {
 
 type Answer = { status: number; body: unknown; headers?: Record<string, string> };
 
-/** A fetch that answers each `METHOD /path` from `routes`, recording what was sent. */
+/**
+ * A fetch that answers each `METHOD /path` from `routes`, recording what was
+ * sent.
+ *
+ * AND THE COOKIE A SIGN-IN SETS. Once a sign-in route answers with a session,
+ * `GET /auth/session` answers that session, as the engine does for the cookie
+ * the browser now holds. Answering "nobody" for ever, as the routes alone did,
+ * sent every page the sign-in landed on straight back to the form — and the
+ * cases still passed, because a poll caught the address on its way through.
+ */
 function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
   const sent: Sent[] = [];
   const queues = new Map(
     Object.entries(routes).map(([k, v]) => [k, Array.isArray(v) ? [...v] : [v]] as const),
   );
+  let cookie: { person?: string; login?: string; status?: string; expires_at?: string } | null =
+    null;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -55,9 +66,30 @@ function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
         headers: (init?.headers ?? {}) as Record<string, string>,
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       });
+      if (method === "GET" && url.pathname === "/auth/session" && cookie) {
+        const login = cookie.login ?? "";
+        return new Response(
+          JSON.stringify({
+            person: cookie.person ?? "",
+            login,
+            kind: login.startsWith("token:") ? "machine" : "person",
+            status: cookie.status,
+            expires_at: cookie.expires_at,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
       const queue = queues.get(`${method} ${url.pathname}`);
       const answer = queue && (queue.length > 1 ? queue.shift()! : queue[0]!);
       if (!answer) return new Response(JSON.stringify({ error: "no_route" }), { status: 404 });
+      const body = answer.body as { status?: unknown } | null;
+      const signsIn =
+        method === "POST" &&
+        url.pathname.startsWith("/auth/") &&
+        answer.status >= 200 &&
+        answer.status < 300 &&
+        typeof body?.status === "string";
+      if (signsIn) cookie = body as typeof cookie;
       return new Response(JSON.stringify(answer.body), {
         status: answer.status,
         headers: { "Content-Type": "application/json", ...answer.headers },
@@ -109,9 +141,25 @@ function alerts(): string[] {
     .filter((text) => text !== "");
 }
 
+/**
+ * Lets the stubbed engine's answers land, and renders the page they leave.
+ *
+ * NOT A POLL, and the settled page rather than the first one that matched.
+ * A `waitFor` gave every step a second of real time, re-reading the page at
+ * every change, which a loaded machine could not always give the first
+ * sign-in of a file; and it could pass on a hash the page only went THROUGH
+ * — the enrolment case below was once green on exactly that. The engine's
+ * answers are promises, so `act` runs them and the renders they cause to the
+ * end, and what is read is where the page came to rest.
+ */
+async function answered(): Promise<void> {
+  await act(async () => {});
+}
+
 /** The one refusal the form is showing, once it shows one. */
 async function refusal(): Promise<string> {
-  await waitFor(() => expect(alerts()).toHaveLength(1));
+  await answered();
+  expect(alerts()).toHaveLength(1);
   return alerts()[0]!;
 }
 
@@ -147,7 +195,9 @@ describe("signing in with a password", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(location.hash).toBe(NEXT));
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
     expect(reconnect).toHaveBeenCalled();
     // A REPLACE, NOT A PUSH: Back from the page the reader asked for must
     // not land them on a form for a session they already hold.
@@ -195,12 +245,16 @@ describe("signing in with a password", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await screen.findByLabelText(/^code$/i);
+    await answered();
+
+    screen.getByLabelText(/^code$/i);
     expect(alerts()).toEqual([]);
     type(/^code$/i, "123456");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(location.hash).toBe(NEXT));
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
     const posts = sent.filter((s) => s.method === "POST" && s.path === "/auth/login");
     expect(posts[1]?.body).toEqual({
       login: "jane.doe",
@@ -244,17 +298,20 @@ describe("signing in with a password", () => {
     const { reconnect } = mount();
     // FROM THE REAL BROWSER'S STATE: the screen's own session read answered
     // 401, which records that nobody is signed in. Without this the case
-    // passed while the enrolment was routed straight back to this form — its
+    // passed while the enrolment was routed straight back to this form — a
     // `waitFor` caught the enrolment's hash on the way through.
-    await waitFor(() => expect(currentSessionNeed()).toBe("sign_in"));
+    await answered();
+    expect(currentSessionNeed()).toBe("sign_in");
     type(/login or email/i, "jane.doe");
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const enrol = `#/enrol?next=${encodeURIComponent(NEXT)}`;
-    await waitFor(() => expect(location.hash).toBe(enrol));
+    await answered();
+    expect(location.hash).toBe(enrol);
     // AND IT STAYS THERE once the frame has followed the need it recorded.
-    await screen.findByText("Set up two-step verification");
+    await answered();
+    screen.getByText("Set up two-step verification");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -280,7 +337,9 @@ describe("signing in with the deployment's token", () => {
     type("API token", "the-break-glass-token-value-long-enough");
     fireEvent.click(screen.getByRole("button", { name: "Sign in with the token" }));
 
-    await waitFor(() => expect(location.hash).toBe(NEXT));
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
     expect(reconnect).toHaveBeenCalled();
     const exchange = sent.find((s) => s.path === "/auth/token");
     expect(exchange?.headers.Authorization).toBe("Bearer the-break-glass-token-value-long-enough");
@@ -301,7 +360,8 @@ describe("signing in with the deployment's token", () => {
       "GET /auth/session": NOBODY,
     });
     mount();
-    await screen.findByText(/signs nobody in with a password/i);
+    await answered();
+    screen.getByText(/signs nobody in with a password/i);
     expect(screen.queryByLabelText(/^password$/i)).toBeNull();
     expect(screen.getByLabelText("API token")).toBeDefined();
   });
@@ -317,11 +377,13 @@ describe("a browser that is already signed in", () => {
       },
     });
     const { reconnect } = mount();
-    const carry = await screen.findByRole("button", { name: "Continue as jane.doe" });
+    await answered();
+    const carry = screen.getByRole("button", { name: "Continue as jane.doe" });
     // NOT SENT ON UNASKED: "sign in as somebody else" is a thing people mean.
     expect(location.hash).toBe(`#/login?next=${encodeURIComponent(NEXT)}`);
     act(() => carry.click());
-    await waitFor(() => expect(location.hash).toBe(NEXT));
+    await answered();
+    expect(location.hash).toBe(NEXT);
     expect(reconnect).toHaveBeenCalled();
   });
 });
@@ -351,7 +413,9 @@ describe("a sign-in in a tab somebody else was reading", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(reloads).toHaveBeenCalledWith(NEXT));
+    await answered();
+
+    expect(reloads).toHaveBeenCalledWith(NEXT);
     expect(sessionStorage.getItem("crewlet_org_draft")).toBeNull();
     expect(currentReader()).toBe("p-1");
     // THE RELOAD DIALS: a socket re-dialled in a page about to be dropped is
@@ -374,9 +438,8 @@ describe("a sign-in in a tab somebody else was reading", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() =>
-      expect(reloads).toHaveBeenCalledWith(`#/enrol?next=${encodeURIComponent(NEXT)}`),
-    );
+    await answered();
+    expect(reloads).toHaveBeenCalledWith(`#/enrol?next=${encodeURIComponent(NEXT)}`);
   });
 
   // THE CONTROL: the same person back after their session lapsed carries on
@@ -394,7 +457,9 @@ describe("a sign-in in a tab somebody else was reading", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(location.hash).toBe(NEXT));
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
     expect(reloads).not.toHaveBeenCalled();
     expect(reconnect).toHaveBeenCalled();
     expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
@@ -420,7 +485,9 @@ describe("a sign-in in a tab somebody else was reading", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(reloads).toHaveBeenCalledWith(NEXT));
+    await answered();
+
+    expect(reloads).toHaveBeenCalledWith(NEXT);
     expect(localStorage.getItem(recentsKey("p-9"))).toBeNull();
     expect(localStorage.getItem(starsKey("p-9"))).toBeNull();
     expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
@@ -444,7 +511,9 @@ describe("a sign-in in a tab somebody else was reading", () => {
     type(/^password$/i, "correct horse battery staple");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    await waitFor(() => expect(location.hash).toBe(NEXT));
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
     expect(reloads).not.toHaveBeenCalled();
     expect(currentReader()).toBe("p-1");
     expect(localStorage.getItem(recentsKey("p-9"))).toBeNull();
