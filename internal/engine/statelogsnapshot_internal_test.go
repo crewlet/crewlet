@@ -567,8 +567,18 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	}); err != nil {
 		t.Fatalf("publish a counted peer: %v", err)
 	}
+	// TWO RETRIES AND A TAKE, derived from the loop's own retry rather than
+	// written as the seventy-five seconds it comes to. The tick that declined
+	// as `sole_node` before the peer was counted put the next one up to
+	// [snapshotSkipRetry] away; that tick may decline once more for a reason a
+	// booting node clears by itself — `unhydrated` or `lagging` while its
+	// appliers drain — which is a second retry; and the take after it copies
+	// an estate of a few rows and checksums it, which fifteen seconds bounds
+	// with room on a loaded host. The whole adoption case, boot and park
+	// included, ran in about forty seconds beside other copies of itself.
+	within := 2*snapshotSkipRetry + 15*time.Second
 	var parked *snapshotHeld
-	waitUntil(t, 75*time.Second, "the snapshot loop to take one and park", func() bool {
+	waitUntil(t, within, "the snapshot loop to take one and park", func() bool {
 		held := s.snapshot.Load()
 		if held == nil || !held.Have || held.Skip != "" ||
 			held.Manifest.TakenAt.Before(counted) {
