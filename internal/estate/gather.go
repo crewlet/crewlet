@@ -972,7 +972,12 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 			st.again = node
 		case part.Unserved == unservedUnfinished:
 			st.tried[node] = true
-			st.note(statelog.MissingUnreachable, "%s: %s", node, part.Detail)
+			why := part.Detail
+			if why == "" {
+				// ITS DETAIL DID NOT FIT in the reply ([fitParts]).
+				why = fmt.Sprintf("had not finished %s when it had to answer the batch", st.p)
+			}
+			st.note(statelog.MissingUnreachable, "%s: %s", node, why)
 		case part.Unserved == unservedOverflow:
 			st.tried[node] = true
 			st.note(statelog.MissingUnreachable, "%s: answered %s in no reply it could send, "+
@@ -1339,16 +1344,16 @@ func isCancellation(err error) bool {
 // The asker asks again only beside a DECISIVE part ([partReply.decisive]): a
 // reply with none is a batch it would send this holder again, answered the
 // same way. So the decisive parts are fitted FIRST, beside nothing but the
-// other parts' overflow notes, and a slice that can NEVER fit — over what a
-// reply carries beside its envelope alone — is answered at once as the error
-// that says so, naming its size, rather than asked again in a batch it will
-// not fit in either: one such error a reply re-ran every other oversized
-// slice's read once a reply. When not one decisive part made it in even so —
-// each too large beside the batch's notes, or its error too large beside
-// them — the first is answered as its error regardless. Only then
-// are the notes of the partitions the holder did not finish fitted, in what
-// room is left: they decide nothing, and counted as what made a reply
-// progress they once kept an oversized slice from ever being answered.
+// other parts' notes, and a slice that can NEVER fit — over what a reply
+// carries beside its envelope alone — is answered at once as the error that
+// says so, naming its size, rather than asked again in a batch it will not fit
+// in either: one such error a reply re-ran every other oversized slice's read
+// once a reply. When not one decisive part made it in even so — each too
+// large beside the batch's notes, or its error too large beside them — the
+// first is answered as its error regardless. Only then are the notes of the
+// partitions the holder did not finish fitted, in what room is left: they
+// decide nothing, and counted as what made a reply progress they once kept an
+// oversized slice from ever being answered.
 //
 // So a reply carries a decided partition whenever the holder decided ANY — a
 // result, an error, a refusal. A batch it decided nothing of, every partition
@@ -1361,9 +1366,15 @@ func isCancellation(err error) bool {
 // of its bytes rather than of its length (see [queue.ErrTooLarge]). Neither
 // is small for every batch: a holder of a hundred and fifty partitions whose
 // floors a reanchor made obsolete names a stream for each, several kibibytes,
-// and the overflow notes are a part each. So every part starts as its note,
-// and is kept whole only where the difference fits: the notes of the parts
-// that do not fit are paid for in the reply that carries them.
+// and the notes are a part each. So every part starts as its note, and is kept
+// whole only where the difference fits: the notes of the parts that do not fit
+// are paid for in the reply that carries them.
+//
+// A PART'S NOTE IS ITS OWN REASON: [unservedOverflow] for a part the holder
+// decided, and [unservedUnfinished], without its detail, for one it did not
+// finish. One note for both once said "answered, and could not fit" of a
+// partition the holder never answered, and in a reply that decided nothing the
+// asker named it so.
 func fitParts(self string, ceiling int, envelope reply, parts []partReply) []partReply {
 	envelope.Parts = nil
 	// THE ARRAY'S OWN FRAMING beside the envelope: the key, the brackets,
@@ -1375,6 +1386,9 @@ func fitParts(self string, ceiling int, envelope reply, parts []partReply) []par
 	total := 0
 	for i, part := range parts {
 		out[i] = partReply{Partition: part.Partition, Unserved: unservedOverflow}
+		if !part.decisive() {
+			out[i].Unserved = part.Unserved
+		}
 		sizes[i] = encodedSize(out[i]) + 1
 		total += sizes[i]
 	}

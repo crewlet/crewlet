@@ -1370,6 +1370,38 @@ func TestAReadThatKeepsGoingIsNamedRatherThanItsBatch(t *testing.T) {
 	}
 }
 
+// A PARTITION THE HOLDER DID NOT FINISH IS NAMED UNFINISHED HOWEVER LITTLE ROOM
+// ITS REPLY HAS: its note without its detail where the detail does not fit,
+// never the overflow note — which says the holder answered it and could not
+// send the answer, and in a reply deciding nothing the asker named a partition
+// nobody had read so.
+func TestAnUnfinishedPartitionIsNeverReportedAnswered(t *testing.T) {
+	t.Parallel()
+	// ROOM FOR EVERY PARTITION'S BARE NOTE, and for few of their details.
+	f, node, _ := ceilingFleet(t, 400)
+	node.set(func(n *partNode) {
+		for p := range n.holds {
+			n.holds[p] = stalls
+		}
+	})
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = time.Second
+	_, cov, err := listAll(t, r, 0, "")
+	if err == nil {
+		t.Fatalf("gather answered with %+v, want the error naming every partition", cov)
+	}
+	if len(cov.Missing) != 5 {
+		t.Fatalf("missing = %+v, want all five partitions", cov.Missing)
+	}
+	for _, m := range cov.Missing {
+		if m.Reason != statelog.MissingUnreachable || !strings.Contains(m.Detail, m.Partition) ||
+			strings.Contains(m.Detail, "no reply it could send") {
+			t.Errorf("%s is missing as %q (%s), want unreachable, named as a partition its "+
+				"holder did not finish", m.Partition, m.Reason, m.Detail)
+		}
+	}
+}
+
 // A REPLY FITS ITS CEILING WITH ITS WHOLE ENVELOPE: the slices are fitted
 // beside what the envelope measures, never beside a fixed allowance for it —
 // a batch whose floors a reanchor made obsolete names a stream for each, and a

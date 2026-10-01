@@ -183,7 +183,8 @@ const (
 	// fits beside the batch's notes the first is answered as its error
 	// regardless ([fitParts]): so a reply in which the holder decided
 	// anything carries a decided partition, and the batch asked of it again
-	// is smaller.
+	// is smaller. Only ever a slice the holder answered: one it did not
+	// finish is [unservedUnfinished] however little room the reply has.
 	unservedOverflow unservedReason = "overflow"
 
 	// unservedUnfinished: a gather slice this node had not finished when
