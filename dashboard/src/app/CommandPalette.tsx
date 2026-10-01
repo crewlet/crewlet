@@ -239,7 +239,10 @@ export function CommandPalette({
       for (const [i, item] of (answers && !refusal ? (work.data?.hits ?? []) : []).entries()) {
         push(
           {
-            id: `work-${item.key}`,
+            // THE ITEM'S ID, which is what the list keys an option on: a key
+            // is an ADDRESS two items can hold at once (`key_collision`), and
+            // a search that finds both would draw two options under one key.
+            id: `work-${item.id}`,
             group: "Work",
             // THE ITEM'S OWN TYPE, from the one table that says which drawing a
             // type wears. A hardcoded tick made a bug, an epic and a milestone

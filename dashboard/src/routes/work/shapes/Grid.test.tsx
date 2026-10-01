@@ -90,7 +90,17 @@ function mount(
   removals?: Map<string, WorkActivityRecord>,
   onOpen: (row: WorkSummary) => void = () => {},
 ) {
-  return render(
+  return render(grid(shape, rows, removals, onOpen));
+}
+
+/** The grid as `mount` draws it, for a case that hands it a second answer. */
+function grid(
+  shape: "list" | "table",
+  rows: WorkSummary[],
+  removals?: Map<string, WorkActivityRecord>,
+  onOpen: (row: WorkSummary) => void = () => {},
+) {
+  return (
     <Router>
       <WorkGrid
         shape={shape}
@@ -105,7 +115,7 @@ function mount(
         overflowHref={() => "#/work"}
         removals={removals}
       />
-    </Router>,
+    </Router>
   );
 }
 
@@ -253,4 +263,39 @@ test("a human removal wears the ring in the trash column", () => {
   const removals = new Map([["t-1", removal({ actor: "iris", actor_kind: "human" })]]);
   const { container } = mount("table", [row({})], removals);
   expect(badge(container).className).toContain("dashed");
+});
+
+/** The grid's rows, in the order they are drawn. */
+const drawnRows = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll<HTMLElement>(".grid-row"));
+
+// TWO TASKS CAN HOLD ONE KEY, and they are still two rows. A key is the
+// tracker's ADDRESS, not its identity: a counter restored beside tasks minted
+// after it mints numbers those tasks already hold, the applier writes what the
+// record says rather than stall the log, and `key_collision` is the attention
+// flag that lists exactly those tasks — together, on this grid. Keyed on the
+// key, React met two children under one key and reconciled them by place, so
+// whatever a row holds that the answer does not (here the focus a reader left
+// on it) stayed where the row WAS when the next answer ordered them the other
+// way. Keyed on the id, the one thing two tasks never share, it travels with
+// its task — as it already did on the board, the calendar and the timeline.
+test("two tasks holding one key are two rows, each keeping its own state", () => {
+  const original = row({ id: "t-1", title: "the original" });
+  const restored = row({ id: "t-2", title: "minted after the restore" });
+  for (const shape of ["list", "table"] as const) {
+    const { container, rerender } = render(grid(shape, [original, restored]));
+    expect(drawnRows(container)).toHaveLength(2);
+
+    const link = drawnRows(container)[0]!.querySelector<HTMLAnchorElement>("a.row-link")!;
+    link.focus();
+    expect(document.activeElement).toBe(link);
+
+    // The next answer orders the same two tasks the other way round.
+    rerender(grid(shape, [restored, original]));
+    const [top, below] = drawnRows(container);
+    expect(top!.textContent).toContain("minted after the restore");
+    expect(below!.textContent).toContain("the original");
+    expect((document.activeElement as HTMLElement).closest(".grid-row")).toBe(below);
+    cleanup();
+  }
 });

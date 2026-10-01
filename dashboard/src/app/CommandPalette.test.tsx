@@ -11,12 +11,12 @@
  * failed rendered as an empty result are all perfectly well-typed.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -146,15 +146,21 @@ describe("the people scope", () => {
 });
 
 describe("the work scope is a server query, so it has four answers", () => {
-  const hit = {
+  // IN THE WIRE'S OWN SHAPE, typed, so a hit missing a field the engine always
+  // sends — the `id` above all, which is what the list keys a hit on — is a
+  // typecheck failure rather than a fixture that agrees only with itself.
+  const hit: WorkRanked = {
+    id: "0198f0a0-0000-7000-8000-00000000000a",
     key: "ENG-1",
     title: "Authentication rework",
+    project: "ENG",
     // A TYPE, because the palette drew a hardcoded tick for every hit — in a
     // list that also holds the DESTINATION rows from `nav.ts`, where a tick
     // legitimately names the Work workspace.
     type: "bug",
     status: "in_progress",
     assignee: "ceo",
+    rank: 1,
   };
 
   /** A socket whose `work_search` answers per term. */
@@ -218,5 +224,53 @@ describe("the work scope is a server query, so it has four answers", () => {
     expect(screen.queryByText(/ENG-1/)).toBeNull();
     expect(screen.getByText("Searching…")).toBeDefined();
     expect(screen.queryByText(/Nothing matches/)).toBeNull();
+  });
+
+  // TWO ITEMS CAN HOLD ONE KEY, and a search that finds both lists both, once
+  // each. A key is the tracker's ADDRESS rather than its identity — a counter
+  // restored beside newer work mints numbers that work already holds, and the
+  // applier writes what the record says (`key_collision`) — so a hit named by
+  // its key gave React two options under one key, which it may draw twice or
+  // drop when the next term re-orders them.
+  test("two hits holding one key are two options, each drawn once", async () => {
+    const original = { ...hit, title: "Authentication rework" };
+    const restored = {
+      ...hit,
+      id: "0198f0a0-0000-7000-8000-00000000000b",
+      title: "Authentication audit",
+    };
+    const { type } = open(
+      answering((q) =>
+        Promise.resolve({
+          hits:
+            q === "auth"
+              ? [original, { ...restored, rank: 2 }]
+              : [
+                  { ...restored, rank: 1 },
+                  { ...original, rank: 2 },
+                ],
+          available: true,
+        }),
+      ),
+    );
+    const labels = () =>
+      screen
+        .queryAllByRole("option")
+        .map((option) => option.textContent ?? "")
+        .filter((text) => text.includes("ENG-1"));
+
+    type("#auth");
+    await screen.findByText(/Authentication audit/);
+    expect(labels()).toEqual([
+      expect.stringContaining("Authentication rework"),
+      expect.stringContaining("Authentication audit"),
+    ]);
+
+    type("#authentication");
+    await waitFor(() => expect(labels()[0]).toContain("Authentication audit"));
+    expect(labels()).toEqual([
+      expect.stringContaining("Authentication audit"),
+      expect.stringContaining("Authentication rework"),
+    ]);
   });
 });

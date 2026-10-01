@@ -661,7 +661,14 @@ export function WorkGrid({
       rows={bands ? undefined : rows}
       bands={bands}
       columns={columns}
-      rowKey={(row) => row.key}
+      // A ROW IS ITS TASK'S ID, NOT ITS KEY. The key is an ADDRESS two tasks
+      // can hold at once — a counter restored beside tasks minted after it
+      // mints numbers they already hold, and `key_collision` is the attention
+      // flag that lists exactly those tasks together, on this grid. Keyed on
+      // the key, React reconciled the pair by place and a row's state stayed
+      // behind when the next answer re-ordered them. The board, the calendar
+      // and the timeline key on the id already.
+      rowKey={(row) => row.id}
       rowHref={hrefOf}
       // THROUGH `peekRow`, which is the one thing that calls `preventDefault`.
       // A bare handler beside a `rowHref` opened the peek and then let the
