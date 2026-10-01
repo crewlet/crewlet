@@ -472,7 +472,7 @@ to the connection the coordination store rides on an embedded broker, and to
 this node's own embedded broker going away under it. A snapshot donor's
 connection is the one exception: it serves *peers*, and a node whose donor is
 down still serves its own company, so that connection closing never stops the
-node.
+node — the donor [dials again](retention.md) by itself.
 
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the six engine streams

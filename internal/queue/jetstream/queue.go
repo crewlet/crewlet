@@ -945,8 +945,9 @@ func (q *Queue) Conn() *nats.Conn { return q.nc }
 // a subsystem with a lifetime of its own, the donor, which serves PEERS — a node
 // whose donor is down still serves its own company, as a donor that cannot be
 // armed at all does not gate the boot — so a donor's connection closing must
-// cost the fleet one donor, and never this node its seats. A
-// connection whose loss IS the node's is [Queue.DialWatched]'s.
+// cost the fleet one donor until it dials again (the engine's donor loop), and
+// never this node its seats. A connection whose loss IS the node's is
+// [Queue.DialWatched]'s.
 func (q *Queue) DialOwned() (*nats.Conn, error) {
 	return q.dialSecond(nil)
 }

@@ -360,6 +360,21 @@ same reason a joiner shuffles the offers that are *equally* good before ranking
 them: the best artefact still comes first, but which of several equally good
 donors it asks is that joiner's own choice rather than the same on every node.
 
+**A donor whose connection goes away dials again.** The donor serves over a
+connection of its own, and it is the one carrying the largest messages a node
+sends, so it is the first a server can close for good under it — a chunk past
+a `max_payload` lowered under the node, a credential the server stopped
+accepting. That stops the donor and nothing else: it serves peers, and a node
+whose donor is down still serves its own company, so the node does not
+[stop itself](deployment.md#an-external-nats-server) over it the way it does
+over the connections it cannot run without. The donor logs
+`statelog_donor_stopped` (`ERROR`, `component=engine`), naming why and when it
+dials again, and dials again a second later, doubling to thirty seconds while
+the dial is refused — the snapshot loop's own retry, since both ask whether
+this node can serve a peer that fell behind. A refusal repeated on every redial
+is said once; a donor that was serving and lost its connection again is said
+again.
+
 **The manifest names the position the file keeps.** The checkpoint commits with
 the rows, so the position inside the copy is the only one that describes it,
 and the donor reads it back out of the copy after the scrub rather than from

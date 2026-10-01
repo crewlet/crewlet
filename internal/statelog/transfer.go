@@ -269,13 +269,39 @@ func (d *Donor) admissionRefused(nc *nats.Conn, msg *nats.Msg) {
 // FetchSubject is where this donor streams from.
 func (d *Donor) FetchSubject() string { return SubjectFetchPrefix + d.deps.NodeID }
 
-// Serve answers offer requests and fetches until the context ends.
+// ErrDonorConnectionClosed is what [Donor.Serve] returns when the connection it
+// was serving over was closed under it, which NATS does for good — no further
+// reconnect — on an error it does not retry. The donor had been serving, so the
+// caller's answer is to dial again rather than to wait out a failure.
+var ErrDonorConnectionClosed = errors.New("statelog: the donor's connection was closed")
+
+// Serve answers offer requests and fetches until the context ends, or until
+// the connection it dialled is closed under it ([ErrDonorConnectionClosed]).
+//
+// # Why it returns rather than waiting on the context alone
+//
+// It used to block on the context and nothing else, so a connection the NATS
+// client closed for good — a server that refused a chunk past a max_payload
+// lowered under it, credentials it stopped accepting — left this donor
+// subscribed to nothing for the rest of the node's life while it went on
+// advertising an artefact through the snapshot register. The node ran on, as
+// it should: a donor serves peers, and its loss is not the node's
+// (see the engine's donor loop, which dials again). What has to happen is that
+// someone notices, and only the connection's owner can.
 func (d *Donor) Serve(ctx context.Context) error {
 	nc, err := d.deps.Dial(ctx)
 	if err != nil {
 		return fmt.Errorf("statelog: open the donor's connection: %w", err)
 	}
 	defer nc.Close()
+	// BEFORE THE SUBSCRIPTIONS, and asked once more after registering:
+	// a status listener hears only the changes after it, and a connection
+	// closed in between would otherwise be waited on for ever.
+	closed := nc.StatusChanged(nats.CLOSED)
+	defer nc.RemoveStatusListener(closed)
+	if nc.IsClosed() {
+		return donorConnectionClosed(nc)
+	}
 
 	offers, err := nc.Subscribe(SubjectOffer, func(msg *nats.Msg) {
 		d.answerOffer(ctx, msg)
@@ -305,8 +331,21 @@ func (d *Donor) Serve(ctx context.Context) error {
 	}
 	defer func() { _ = fetches.Unsubscribe() }()
 
-	<-ctx.Done()
-	return ctx.Err()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-closed:
+		return donorConnectionClosed(nc)
+	}
+}
+
+// donorConnectionClosed is [ErrDonorConnectionClosed] carrying what the client
+// last saw on the connection, which is why the server closed it.
+func donorConnectionClosed(nc *nats.Conn) error {
+	if last := nc.LastError(); last != nil {
+		return fmt.Errorf("%w: %w", ErrDonorConnectionClosed, last)
+	}
+	return ErrDonorConnectionClosed
 }
 
 // answerOffer replies with this node's artefact, or stays silent.

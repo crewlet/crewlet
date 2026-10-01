@@ -2940,11 +2940,7 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		// THE DONOR FIRST and for the node's whole life: a peer asks at
 		// ITS boot, which is any moment at all, so there is no window in
 		// which not answering is acceptable.
-		if err := donor.Serve(s.run); err != nil && s.run.Err() == nil {
-			log.ErrorContext(s.run, "statelog_donor_stopped", "error", err.Error(),
-				"detail", "a peer below the log's floor can no longer adopt from "+
-					"this node; the fleet's other members still answer")
-		}
+		keepDonorServing(s.run, donor, donorRedial)
 	}()
 	go func() {
 		defer s.done.Done()

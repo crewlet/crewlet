@@ -730,3 +730,58 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 			"already given up", first.Data)
 	}
 }
+
+// A DONOR WHOSE CONNECTION IS CLOSED UNDER IT SAYS SO.
+//
+// The NATS client closes a connection for good on an error it does not retry,
+// and the donor's is the connection carrying the largest messages a node
+// sends. Serve used to wait on its context and nothing else, so a donor whose
+// connection was gone sat subscribed to nothing for the rest of the node's
+// life, advertising an artefact it could no longer stream. It returns now,
+// naming the close, which is what lets its owner dial again — and only its
+// owner can, because a donor's loss is not the node's.
+//
+// The case closes the connection the donor dialled, from outside the donor,
+// which is what the client does when it gives up on one.
+//
+// Mutation: wait on the context alone in Serve and the donor never returns.
+func TestADonorWhoseConnectionIsClosedUnderItReturns(t *testing.T) {
+	t.Parallel()
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open a broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	dialled := make(chan *nats.Conn, 1)
+	donor, err := statelog.NewDonor(statelog.DonorDeps{
+		NodeID: "closed-under",
+		Dial: func(context.Context) (*nats.Conn, error) {
+			nc, err := q.DialOwned()
+			if err == nil {
+				dialled <- nc
+			}
+			return nc, err
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{}, true },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("NewDonor: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(t.Context()) }()
+	nc := <-dialled
+	waitForSubject(t, q.Conn(), statelog.SubjectOffer)
+
+	nc.Close()
+
+	select {
+	case err := <-served:
+		if !errors.Is(err, statelog.ErrDonorConnectionClosed) {
+			t.Errorf("Serve returned %v, want %v", err, statelog.ErrDonorConnectionClosed)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the donor's connection was closed and Serve is still waiting " +
+			"on its context: a donor subscribed to nothing, for good")
+	}
+}
