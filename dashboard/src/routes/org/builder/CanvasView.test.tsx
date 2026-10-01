@@ -21,7 +21,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } from "vitest";
 import type { AgentRow, ChartRead } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView, type Adding } from "./CanvasView.tsx";
@@ -51,14 +51,24 @@ import {
 import { focusables } from "@crewlethq/ui";
 import { menuEntryLabel } from "~/testing.tsx";
 
+// WHAT REACT SAYS IS A FAILURE HERE, not a line in the log. Installed before
+// the layout observer, because installing it is what draws the design system's
+// reference chart: measured from inside React's commit, that chart printed
+// eight "flushSync was called from inside a lifecycle method" warnings into
+// whichever case of this file ran first, and the case passed.
+let consoleError: MockInstance<typeof console.error>;
 let restore: () => void;
 beforeEach(() => {
+  consoleError = vi.spyOn(console, "error");
   restore = LayoutObserver.install();
 });
 afterEach(() => {
   cleanup();
   restore();
   location.hash = "";
+  const said = consoleError.mock.calls.map((call) => call.map(String).join(" "));
+  consoleError.mockRestore();
+  expect(said).toEqual([]);
 });
 
 interface Mounted {

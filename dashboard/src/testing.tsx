@@ -152,18 +152,24 @@ function referenceChart(outline: boolean): {
   // portals into a node it has to be able to find, and a viewport whose layout
   // effects read the element they are on. And MEASURED, so the chart has a
   // layout and therefore connectors to name: see the doc above.
-  const stop = measuring();
-  const { container: host, unmount } = render(
-    createElement(TreeCanvas, {
-      label: "Reference chart",
-      nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
-      cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
-      cardOf: (id: string) => id,
-      cardOutline: () => outline,
-      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
-    }),
-  );
-  stop();
+  const meter = measuring();
+  let drawn: ReturnType<typeof render>;
+  try {
+    drawn = render(
+      createElement(TreeCanvas, {
+        label: "Reference chart",
+        nodes: [{ id: "a", label: "A", children: [{ id: "b", label: "B" }] }],
+        cards: () => [{ id: "a", children: [{ id: "b", children: [] }] }],
+        cardOf: (id: string) => id,
+        cardOutline: () => outline,
+        renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), id),
+      }),
+    );
+    meter.layout();
+  } finally {
+    meter.stop();
+  }
+  const { container: host, unmount } = drawn;
   const item = host.querySelector("[role='treeitem']");
   const tree = host.querySelector("[role='tree']");
   // THE CONNECTORS ARE THE CHART'S OWN SVG, which is a child of the element
@@ -197,36 +203,80 @@ function referenceChart(outline: boolean): {
   return read;
 }
 
+/** How many layouts [measuring] runs before it calls the reference chart unsettled. */
+const REFERENCE_LAYOUTS = 4;
+
 /**
- * A ResizeObserver that answers at once, for the length of one render.
+ * A ResizeObserver for the reference chart, installed for the length of one
+ * render and laid out once the render has committed.
  *
  * The reference chart has to be MEASURED to draw its connectors, and it is
  * rendered before any suite's own observer is installed. Every box gets one
  * size, which is all a chart of two cards needs to have a layout at all.
+ *
+ * IT REPORTS WHEN A BROWSER WOULD: after the render, never from inside
+ * `observe()`. It used to answer at once, and `observe()` is called from the
+ * card's REF, which React attaches in the middle of its commit — so the
+ * design system's resize handler, which flushes its sizes synchronously
+ * (correct for a real observer, whose callback runs in the event loop's
+ * rendering step with React idle), ran `flushSync` inside a lifecycle, and
+ * React printed eight "flushSync was called from inside a lifecycle method"
+ * warnings into the first chart case of every builder suite. The warning was
+ * the harness's, not the chart's, and it read as a production defect in
+ * whichever case happened to build the reference first.
+ *
+ * So the observer RECORDS, and [layout] delivers inside `act` — the shape
+ * `LayoutObserver.settle` already has for the suites' own charts — round
+ * after round until a layout observes nothing new, since the cards a layout
+ * places are measured too. BOUNDED, because a reference chart that never
+ * settles is a package this harness no longer understands.
  */
-function measuring(): () => void {
+function measuring(): { layout: () => void; stop: () => void } {
   const real = globalThis.ResizeObserver;
-  class Immediate {
-    constructor(private readonly report: ResizeObserverCallback) {}
-    observe(el: Element): void {
-      const box = { width: 100, height: 40 };
-      this.report(
-        [
-          {
-            target: el,
-            contentRect: box,
-            borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
-          },
-        ] as unknown as ResizeObserverEntry[],
-        this as unknown as ResizeObserver,
-      );
+  const observers: Recorded[] = [];
+  class Recorded {
+    readonly pending = new Set<Element>();
+    constructor(private readonly report: ResizeObserverCallback) {
+      observers.push(this);
     }
-    unobserve(): void {}
-    disconnect(): void {}
+    observe(el: Element): void {
+      this.pending.add(el);
+    }
+    unobserve(el: Element): void {
+      this.pending.delete(el);
+    }
+    disconnect(): void {
+      this.pending.clear();
+    }
+    /** Reports every element observed since the last report; says whether there was one. */
+    deliver(): boolean {
+      if (this.pending.size === 0) return false;
+      const box = { width: 100, height: 40 };
+      const entries = [...this.pending].map((target) => ({
+        target,
+        contentRect: box,
+        borderBoxSize: [{ inlineSize: box.width, blockSize: box.height }],
+      }));
+      this.pending.clear();
+      this.report(entries as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
+      return true;
+    }
   }
-  globalThis.ResizeObserver = Immediate as unknown as typeof ResizeObserver;
-  return () => {
-    globalThis.ResizeObserver = real;
+  globalThis.ResizeObserver = Recorded as unknown as typeof ResizeObserver;
+  return {
+    layout: () => {
+      for (let round = 0; round < REFERENCE_LAYOUTS; round++) {
+        let reported = false;
+        act(() => {
+          for (const observer of [...observers]) if (observer.deliver()) reported = true;
+        });
+        if (!reported) return;
+      }
+      throw new Error(`the reference chart was still observing after ${REFERENCE_LAYOUTS} layouts`);
+    },
+    stop: () => {
+      globalThis.ResizeObserver = real;
+    },
   };
 }
 

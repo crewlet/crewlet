@@ -249,6 +249,18 @@ What follows are the prerequisites that legitimately vary by machine.
   refused the same way, because the next case's page does exactly what such
   a wait listens for. `testkit.test.tsx` holds each of those waits to it.
 
+  **A stand-in for the browser answers when the browser would.** jsdom has no
+  layout, so the chart suites install a ResizeObserver of their own, and one
+  that reports from inside `observe()` reports in the middle of React's
+  commit, because `observe()` is called from a ref. A real observer delivers
+  in the event loop's rendering step with React idle, which is what the design
+  system's resize handler is written for: it flushes its sizes synchronously,
+  and inside a commit that flush is a `flushSync` inside a lifecycle — eight
+  warnings about the harness that read as a defect in the chart. Both of the
+  builder's observers, `LayoutObserver` (`viewTestkit.tsx`) and the reference
+  chart's (`src/testing.tsx`), record what they observe and report it inside
+  `act` once the render has committed.
+
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
   `static/dashboard` with your source change. CI rebuilds and diffs it
