@@ -369,8 +369,11 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 // surface reads as "retry here" and which is never true of it.
 //
 // A PROPERTY OF THE REASON rather than a case in the one resolution that asks
-// it, so a gate added later is classified where its reason is declared, and
-// [TestOnlyAGateThatHoldsAWriterBlamesIt] holds every value to it.
+// it, so a gate added later is classified where its reason is declared. A
+// reason this switch does not name answers false, which is why
+// [TestOnlyAGateThatHoldsAWriterBlamesIt] carries an explicit answer for every
+// value [Reasons] names: one added without a decision fails there rather than
+// quietly blaming nobody.
 func (r Reason) BlamesWriter() bool {
 	switch r {
 	case ReasonEvicted, ReasonReleased, ReasonAbandoned, ReasonOvertaken, ReasonWrongPartition:

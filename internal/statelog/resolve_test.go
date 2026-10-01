@@ -134,18 +134,60 @@ func TestAnotherNodesCopyTheDeletionMarkerDroppedNamesNoWriter(t *testing.T) {
 // ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the five that drop a record for
 // what its writer was or did, and none of the rest. The set is what decides
 // whether a refusal of another node's copy names that node
-// ([statelog.Unavailable.CopyWriter]), so a gate reason moved across it, or a
-// reason added without deciding which side it is on, changes what every surface
-// tells an operator to do.
+// ([statelog.Unavailable.CopyWriter]), so a gate reason moved across it changes
+// what every surface tells an operator to do.
+//
+// EVERY REASON IS DECIDED HERE, NOT ONLY THE FIVE THAT BLAME.
+// [statelog.Reason.BlamesWriter] answers false for anything its switch does not
+// name, so a test listing only the blaming reasons passed a writer-blaming gate
+// added to [statelog.Reasons] and forgotten in the switch — and a collapse onto
+// another node's copy under it named no writer, which every surface reads as
+// this node's own refusal and answers by sending the write away from the node
+// that can finish it. With an explicit answer per reason, a new one fails here
+// until somebody says which side it is on.
 func TestOnlyAGateThatHoldsAWriterBlamesIt(t *testing.T) {
 	t.Parallel()
-	blames := []statelog.Reason{
-		statelog.ReasonEvicted, statelog.ReasonReleased, statelog.ReasonAbandoned,
-		statelog.ReasonOvertaken, statelog.ReasonWrongPartition,
+	decided := map[statelog.Reason]bool{
+		// What the record's WRITER was or did.
+		statelog.ReasonEvicted:        true,
+		statelog.ReasonReleased:       true,
+		statelog.ReasonAbandoned:      true,
+		statelog.ReasonOvertaken:      true,
+		statelog.ReasonWrongPartition: true,
+		// What every writer's record meets alike: the object's marker, a
+		// kind no build applies.
+		statelog.ReasonDeleted: false,
+		statelog.ReasonRetired: false,
+		// Not a gate's at all: refusals made before or instead of an
+		// append, about this node, the log or the operation.
+		statelog.ReasonNotHolder:      false,
+		statelog.ReasonHoldingUnknown: false,
+		statelog.ReasonDeferred:       false,
+		statelog.ReasonBehind:         false,
+		statelog.ReasonBelowFloor:     false,
+		statelog.ReasonFloorUnknown:   false,
+		statelog.ReasonLogFull:        false,
+		statelog.ReasonSkew:           false,
+		statelog.ReasonOpReused:       false,
+		statelog.ReasonLogTruncated:   false,
+		statelog.ReasonWrongStream:    false,
+		statelog.ReasonSuperseded:     false,
 	}
 	for _, reason := range statelog.Reasons() {
-		if got, want := reason.BlamesWriter(), slices.Contains(blames, reason); got != want {
+		want, ok := decided[reason]
+		if !ok {
+			t.Errorf("%q is a reason this build names and nothing here decides "+
+				"whether its gate blames the writer — say which side it is on, "+
+				"here and in Reason.BlamesWriter", reason)
+			continue
+		}
+		if got := reason.BlamesWriter(); got != want {
 			t.Errorf("%q.BlamesWriter() = %v, want %v", reason, got, want)
+		}
+	}
+	for reason := range decided {
+		if !slices.Contains(statelog.Reasons(), reason) {
+			t.Errorf("%q is decided here and is not a reason this build names", reason)
 		}
 	}
 	if statelog.Reason("from-a-newer-peer").BlamesWriter() {
