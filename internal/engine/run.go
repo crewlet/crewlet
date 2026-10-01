@@ -792,7 +792,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// see router.go. Built before anything publishes, because a tool is
 	// handed its facades as soon as a seat is.
 	if holdsData(opts.Bootstrap) {
-		e.local = newLocalEstate(e, opts.Bootstrap)
+		e.local = newLocalEstate(e, holdingOf(opts.Bootstrap, LayoutZero()))
 	}
 	if e.router, err = e.newRouter(backends.Queue, nodeID); err != nil {
 		if ownsBackends {

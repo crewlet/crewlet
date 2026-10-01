@@ -25,6 +25,12 @@ import (
 // log's writer. Before the router carried the operation, every one of these
 // logs answered not_holder and the gesture was unfinished everywhere.
 //
+// node-p answers through THE ENGINE'S OWN BACKENDS — the [localEstate] a data
+// node's server is handed, and the backend [Engine.partitionBackend] builds per
+// request — so the serving half is the wiring production runs, not a copy of
+// it: a partition backend that left out its gate writers, or a local estate
+// refusing a sound copy, fails here.
+//
 // Under layout 0 — what every fleet runs today, where a data node whose copy is
 // wrong serves nothing — the case also reads node-p's rows: the evicted node's
 // tombstone is on every log. (Under a divided layout the tracker's eviction
@@ -83,9 +89,27 @@ func TestAnEvictionOnALogThisNodeDoesNotServeReachesAServingHolder(t *testing.T)
 
 // evictThroughTheRouter evicts node from a node that serves nothing and runs no
 // log, over s's register, through a router whose one serving holder is s's
-// node — serving every partition from s, with its own write authority on each
-// log.
+// node — serving every partition from s through the engine's own backends.
 func evictThroughTheRouter(t *testing.T, e *Engine, s *stateLog, node string) GateResult {
+	t.Helper()
+	gate := aGateServedElsewhere(t, e, s, node)
+	res, err := gate.Evict(t.Context(), GateRequest{Node: node, By: "ops",
+		OpID: statelog.NewOpID(time.Now(), "evict-"+node)})
+	if err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	return res
+}
+
+// aGateServedElsewhere is the node gate of "node-a", a node that serves no
+// partition of s's layout and runs no log, over s's register — whose every log
+// is reached through the estate's router, at s's node, which serves every
+// partition and answers each request through THE ENGINE'S OWN BACKENDS: the
+// [localEstate] its server is handed in production ([Engine.serveEstate]), over
+// a native runtime whose state log is s. So what answers a routed gate record
+// is [localEstate.For] and [Engine.partitionBackend] as a data node runs them,
+// never a backend the test built. node is named a holder of every partition.
+func aGateServedElsewhere(t *testing.T, e *Engine, s *stateLog, node string) *NodeGate {
 	t.Helper()
 	q, ok := e.backends.Queue.(interface {
 		estate.Asker
@@ -94,9 +118,11 @@ func evictThroughTheRouter(t *testing.T, e *Engine, s *stateLog, node string) Ga
 	if !ok {
 		t.Fatalf("the queue %T neither asks nor serves", e.backends.Queue)
 	}
+	e.native.Store(&native{nodeID: s.nodeID, log: s})
+	t.Cleanup(func() { e.native.Store(nil) })
 	placement := servedBy{layout: s.layout, node: s.nodeID}
-	stop, err := estate.Serve(t.Context(), q, s.nodeID, &servesAll{e: e, s: s}, placement,
-		estate.ServerSeams{})
+	stop, err := estate.Serve(t.Context(), q, s.nodeID, newLocalEstate(e, s.holding), placement,
+		e.serverSeams())
 	if err != nil {
 		t.Fatalf("serve %s: %v", s.nodeID, err)
 	}
@@ -117,12 +143,7 @@ func evictThroughTheRouter(t *testing.T, e *Engine, s *stateLog, node string) Ga
 	if err != nil {
 		t.Fatalf("the node gate: %v", err)
 	}
-	res, err := gate.Evict(t.Context(), GateRequest{Node: node, By: "ops",
-		OpID: statelog.NewOpID(time.Now(), "evict-"+node)})
-	if err != nil {
-		t.Fatalf("evict: %v", err)
-	}
-	return res
+	return gate
 }
 
 // aLayoutZeroStateLog boots a node with no company and starts a state log at
@@ -159,20 +180,6 @@ func (p servedBy) Serving(statelog.PartitionID) ([]string, uint64, error) {
 
 func (servedBy) Refresh(context.Context) error { return nil }
 func (servedBy) Unanswered(string)             {}
-
-// servesAll is a node that serves every partition, answering only the
-// `statelog.gate` operation's half — its own write authority on each log.
-type servesAll struct {
-	e    *Engine
-	s    *stateLog
-	cpus estate.CPUs
-}
-
-func (l *servesAll) For(_ context.Context, p statelog.PartitionID) (estate.Backend, bool, error) {
-	return estate.Backend{Gates: l.e.partitionGates(l.s, p)}, true, nil
-}
-
-func (l *servesAll) CPUs() *estate.CPUs { return &l.cpus }
 
 // THE GESTURE'S BUDGET COVERS A WALK PAST EVERY HOLDER A LOG HAS BY DEFAULT.
 //

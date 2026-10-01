@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
@@ -106,9 +105,11 @@ func (e *Engine) estatePlacement() estate.Placement {
 	return partmap.Whole{Running: LayoutZero(), Roster: presenceRoster{view: e.dataView}}
 }
 
-// newLocalEstate is this node's own backends, per partition it serves.
-func newLocalEstate(e *Engine, boot *config.Bootstrap) *localEstate {
-	return &localEstate{e: e, holding: holdingOf(boot, LayoutZero()), now: time.Now,
+// newLocalEstate is this node's own backends, per partition holding says it
+// serves — [holdingOf] the layout it runs, the one rule its write authority's
+// gate 3 reads too.
+func newLocalEstate(e *Engine, holding statelog.Holding) *localEstate {
+	return &localEstate{e: e, holding: holding, now: time.Now,
 		read: func(ctx context.Context, n *native, p statelog.PartitionID) copyVerdict {
 			return n.log.partitionVerdict(ctx, p)
 		},
