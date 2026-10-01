@@ -53,6 +53,20 @@ func sound(context.Context, *native, statelog.PartitionID) copyVerdict {
 	return copyVerdict{answers: true}
 }
 
+// A DATA NODE'S GATHER QUERIES TAKE ONE CPUs: the server answering other
+// nodes' batches and the router answering this node's own gathers both read
+// it off the local estate, so the local estate must answer the same one every
+// time — two would each run a query per CPU beside the other, on the same
+// processors.
+func TestTheLocalEstateAnswersOneCPUs(t *testing.T) {
+	t.Parallel()
+	l := localWith(&Engine{}, time.Now, sound)
+	if first := l.CPUs(); first == nil || l.CPUs() != first {
+		t.Fatalf("the local estate answered CPUs %p, then %p — want one, the same every time",
+			first, l.CPUs())
+	}
+}
+
 // A DATA NODE ANSWERS ONLY WHAT IT SERVES: the partitions gate 3 says it
 // serves ([holdingOf]), never one it does not hold and never one whose holding
 // it cannot tell — the router asks another holder for those. A partition it

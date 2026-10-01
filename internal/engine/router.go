@@ -129,7 +129,17 @@ type localEstate struct {
 	// read of the broker — see [localEstate.verdict].
 	mu       sync.Mutex
 	verdicts map[statelog.PartitionID]*verdictSlot
+
+	// cpus is the places a gather's queries of this node's copies take —
+	// ONE for the node, which its server and its router both read here
+	// ([localEstate.CPUs]).
+	cpus estate.CPUs
 }
+
+// CPUs implements [estate.LocalBackends]: the node's one, so the batches it
+// answers for other nodes and its own seats' gathers share its processors
+// rather than each running a query per CPU beside the other.
+func (l *localEstate) CPUs() *estate.CPUs { return &l.cpus }
 
 // verdictSlot is one partition's verdict: the last one read, and the read in
 // flight to replace it.

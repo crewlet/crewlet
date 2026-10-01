@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -29,16 +28,17 @@ import (
 //  3. Batch the partitions by holder: ONE request per holder carrying all of
 //     its partitions ([request.Partitions], [request.Slices]). The partitions
 //     this node serves are answered in-process, concurrently, their queries
-//     at most [runtime.GOMAXPROCS] at a time ([cpuSlot]).
+//     taking this node's [CPUs] — the same places as every batch it answers
+//     for another node, at most one query per CPU across all of them.
 //     A holder answers a batch a margin before the asker stops waiting
 //     ([batchMargin]), with every partition it finished, and names the rest
 //     [unservedUnfinished] — asked of it again wherever the reply decided
 //     another partition ([partReply.decisive]): a read the holder did not
-//     finish may be one its batch started late, which a smaller batch
-//     answers in time, or one that runs long whatever its batch, and
-//     neither end can tell which. A reply deciding none is a holder that
-//     cannot answer them, and the same batch asked again would be answered
-//     the same way.
+//     finish may be one it started late, behind other queries on its CPUs,
+//     which a smaller batch answers in time, or one that runs long whatever
+//     its batch, and neither end can tell which. A reply deciding none is a
+//     holder that cannot answer them, and the same batch asked again would
+//     be answered the same way.
 //  4. A partition its holder failed is asked of its next holder, within the
 //     caller's deadline — and NEVER again of a holder that already failed it
 //     in this gather: a node that was silent, behind or not serving a moment
@@ -214,7 +214,7 @@ func defineGather[A, P, R any](name string, at address[A],
 		if at == nil && !spec.floorless {
 			at = appliedAt(b, streams)
 		}
-		release, err := cpuSlot(ctx, s.cpu)
+		release, err := s.cpus.take(ctx)
 		if err != nil {
 			return zero, at, err
 		}
@@ -817,16 +817,15 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 		mu      sync.Mutex
 		refresh bool
 	)
-	// THIS NODE'S OWN PARTITIONS, all at once, their QUERIES at most
-	// GOMAXPROCS at a time ([cpuSlot]): the floor and barrier waits before
-	// a query are not CPU work, and holding a CPU's place through them
-	// would queue every partition behind the slowest log's applier.
-	cpu := make(chan struct{}, runtime.GOMAXPROCS(0))
+	// THIS NODE'S OWN PARTITIONS, all at once, their QUERIES taking this
+	// node's [CPUs] — never a cap of the round's own, which would run a
+	// query per CPU beside every batch this node is answering, and beside
+	// every other gather of its own.
 	for _, st := range round.local {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.runLocalPart(ctx, plan, st, acceptLagging, cpu, &mu)
+			r.runLocalPart(ctx, plan, st, acceptLagging, &mu)
 		}()
 	}
 	ask := func(node string, batch []*partState) {
@@ -851,7 +850,7 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 // THE READ RUNS WITHOUT THE ROUND'S LOCK, which guards only the settlement:
 // another partition's answer must not wait on this one's file.
 func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partState,
-	acceptLagging bool, cpu chan struct{}, mu *sync.Mutex) {
+	acceptLagging bool, mu *sync.Mutex) {
 
 	b, ok, unknown := r.local.For(ctx, st.p)
 	var out partRun
@@ -860,7 +859,7 @@ func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partStat
 		ask := sliceAsk{partition: st.p, layout: plan.layout, level: plan.level,
 			floors: r.floorsFor(plan.spec, plan.layout, st.p), cursor: plan.cursors[st.p]}
 		if !plan.whole {
-			ask.cpu = cpu
+			ask.cpus = r.cpus
 		}
 		out = runPart(ctx, r.self, plan.spec, b, ask, plan.args, plan.whole, acceptLagging)
 		r.session.Forget(out.obsolete...)
@@ -959,15 +958,15 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 	// same holder again, in a batch smaller by what it decided. What the
 	// holder could not FIT is the batch's size against the reply. What it
 	// did not FINISH is one of two things, and neither end can tell which
-	// ([server.answerSlices]): a read started late, behind the batch's
-	// other queries, which a smaller batch answers in time, or a read that
-	// runs long however small its batch. Asking again is what recovers the
-	// first kind, and it costs the second an attempt for every reply that
-	// decides something beside it, until one decides nothing. A reply that
-	// decided NOTHING is a holder that could not answer one of these
-	// partitions in an attempt or a reply, and each moves on — asked again,
-	// the same batch would get the same answer, once an attempt until the
-	// caller stopped waiting.
+	// ([server.answerSlices]): a read started late, behind other queries on
+	// the holder's CPUs — the batch's own, or another's — which a smaller
+	// batch answers in time, or a read that runs long however small its
+	// batch. Asking again is what recovers the first kind, and it costs the
+	// second an attempt for every reply that decides something beside it,
+	// until one decides nothing. A reply that decided NOTHING is a holder
+	// that could not answer one of these partitions in an attempt or a
+	// reply, and each moves on — asked again, the same batch would get the
+	// same answer, once an attempt until the caller stopped waiting.
 	progress := slices.ContainsFunc(rep.Parts, partReply.decisive)
 	newer := false
 	for _, st := range batch {
@@ -1127,14 +1126,15 @@ func runPart(ctx context.Context, self string, spec *opSpec, b Backend, s sliceA
 
 // answerSlices answers a gather batch: each partition the request names, from
 // this node's copy where it serves it, each at most once and all of them at
-// once, their queries at most this node's CPUs at a time ([cpuSlot]) — and a
-// reply that fits under the broker's ceiling, with the slices that did not fit
-// answered [unservedOverflow] for the asker to ask again.
+// once, their queries taking this node's [CPUs] — and a reply that fits under
+// the broker's ceiling, with the slices that did not fit answered
+// [unservedOverflow] for the asker to ask again.
 //
 // # Answered BEFORE the asker stops waiting
 //
-// A batch's cost grows with its partitions — at a node's CPUs at a time, a
-// hundred and fifty of them need not all fit in one attempt — and a reply sent
+// A batch's cost grows with its partitions, and its queries share the node's
+// CPUs with every other batch and gather the node is running — a hundred and
+// fifty of them need not all fit in one attempt — and a reply sent
 // AT the asker's deadline arrives after it: the asker hears nothing, counts
 // the holder silent, suspects it, and loses every partition of the batch, the
 // ones answered in a millisecond with the rest. So the work on a batch STOPS
@@ -1147,8 +1147,8 @@ func runPart(ctx context.Context, self string, spec *opSpec, b Backend, s sliceA
 // is told would race that report and name a partition unfinished that was
 // merely behind. A read that has not reported even then is unfinished too, and
 // named as what it is — a read that kept going after it was told to stop, which
-// says nothing of whether it started late behind the batch's other queries, so
-// it is asked again like any other unfinished slice.
+// says nothing of whether it started late behind other queries on the node's
+// CPUs, so it is asked again like any other unfinished slice.
 func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) reply {
 	out := reply{Node: s.self}
 	layout, err := s.placement.Layout()
@@ -1178,10 +1178,9 @@ func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) rep
 	// BUFFERED FOR EVERY PARTITION, so one still running when the batch
 	// is answered finishes into it rather than blocking for ever.
 	results := make(chan answered, len(req.Partitions))
-	cpu := make(chan struct{}, s.cpuCount())
 	for i, name := range req.Partitions {
 		go func() {
-			part, gone := s.answerPart(work, spec, layout, req, name, cpu)
+			part, gone := s.answerPart(work, spec, layout, req, name)
 			results <- answered{i: i, part: part, gone: gone}
 		}()
 	}
@@ -1230,16 +1229,17 @@ collect:
 			// this read kept going is ALL this node knows, and all the
 			// detail says — never WHY. A query that takes no notice of
 			// its context may have started just before the stop,
-			// behind the batch's other queries on this node's CPUs,
-			// and would answer in good time in a smaller batch; or it
-			// may run long however small its batch. So it is
-			// unfinished rather than decided: the asker asks for it
-			// again beside a partition this reply decided, which is
-			// what recovers the first kind, and moves it on as
-			// unreachable once a reply decides nothing beside it,
-			// which is where the second kind ends ([Router.askBatch]).
-			// Answered here as a failure, every partition a CPU-bound
-			// batch started late would be lost.
+			// behind other queries on this node's CPUs — the batch's
+			// own, or another's — and would answer in good time in a
+			// smaller batch or a quieter moment; or it may run long
+			// however small its batch. So it is unfinished rather than
+			// decided: the asker asks for it again beside a partition
+			// this reply decided, which is what recovers the first
+			// kind, and moves it on as unreachable once a reply
+			// decides nothing beside it, which is where the second
+			// kind ends ([Router.askBatch]). Answered here as a
+			// failure, every partition a CPU-bound batch started late
+			// would be lost.
 			parts[i] = partReply{Partition: name, Unserved: unservedUnfinished,
 				Detail: fmt.Sprintf("%s's read of %s had not returned %s", s.self, name, cut)}
 		}
@@ -1271,41 +1271,11 @@ func batchMargin(remaining time.Duration) time.Duration {
 	return max(0, min(remaining/10, time.Second))
 }
 
-// cpuSlot takes one of cpu's places for a query, waiting for one no longer
-// than ctx — and answers how to give it back. A nil cpu bounds nothing: a
-// single-partition read is one query.
-//
-// ONLY THE QUERY HOLDS A PLACE: a slice's floor and barrier waits come before
-// it and are not CPU work, and a place held through them would queue every
-// partition of a batch behind the slowest log's applier — a hundred and fifty
-// partitions each waiting out a two-second floor, a CPU's worth at a time.
-func cpuSlot(ctx context.Context, cpu chan struct{}) (func(), error) {
-	if cpu == nil {
-		return func() {}, nil
-	}
-	select {
-	case cpu <- struct{}{}:
-		return func() { <-cpu }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-// cpuCount is how many of a batch's queries this node runs at once: its CPUs
-// now — read per batch, since the runtime may change it as the container's
-// limit does — unless a test set it.
-func (s server) cpuCount() int {
-	if s.cpus > 0 {
-		return s.cpus
-	}
-	return runtime.GOMAXPROCS(0)
-}
-
 // answerPart is one partition's slice, as this node answers it under the
 // batch's context: a read the batch's own ending cut short is answered
 // [unservedUnfinished], never as the error the cancellation made of it.
 func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.Layout,
-	req request, name string, cpu chan struct{}) (partReply, []statelog.Position) {
+	req request, name string) (partReply, []statelog.Position) {
 
 	out := partReply{Partition: name}
 	p, err := statelog.ParsePartitionID(name)
@@ -1328,7 +1298,7 @@ func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.La
 	b.ServerSeams = s.seams
 	run := runPart(ctx, s.self, spec, b, sliceAsk{
 		partition: p, layout: layout, level: req.Level, floors: req.Floors, cursor: req.Cursors[name],
-		cpu: cpu,
+		cpus: s.cpus,
 	}, req.Args, false, req.AcceptLagging)
 	switch {
 	case run.reason != "":

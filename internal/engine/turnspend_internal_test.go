@@ -437,11 +437,16 @@ func (r staticRoster) LiveDataNodes() ([]string, error) { return []string{r.node
 func (staticRoster) Invalidate()                        {}
 
 // servedEstate is a data node serving the whole estate from one backend.
-type servedEstate struct{ backend estate.Backend }
+type servedEstate struct {
+	backend estate.Backend
+	cpus    estate.CPUs
+}
 
-func (s servedEstate) For(context.Context, statelog.PartitionID) (estate.Backend, bool, error) {
+func (s *servedEstate) For(context.Context, statelog.PartitionID) (estate.Backend, bool, error) {
 	return s.backend, true, nil
 }
+
+func (s *servedEstate) CPUs() *estate.CPUs { return &s.cpus }
 
 // spendingEngine is an engine WITHOUT the data role running one seat on the
 // native tracker, whose writes are served by one data node over the estate.
@@ -458,7 +463,7 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	}
 	served := &servedWriter{}
 	placement := partmap.Whole{Running: LayoutZero(), Roster: staticRoster{node: "data-1"}}
-	stop, err := estate.Serve(t.Context(), start(), "data-1", servedEstate{backend: estate.Backend{
+	stop, err := estate.Serve(t.Context(), start(), "data-1", &servedEstate{backend: estate.Backend{
 		Writer: func(estate.Actor) estate.TrackerWriter { return served },
 	}}, placement, estate.ServerSeams{})
 	if err != nil {

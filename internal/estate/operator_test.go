@@ -18,6 +18,7 @@ import (
 // answers a value naming what it was asked, and each write records the
 // operation, its id and who wrote it.
 type desk struct {
+	cpus   CPUs
 	mu     sync.Mutex
 	wrote  []string
 	opIDs  []string
@@ -33,6 +34,8 @@ func (d *desk) note(op, opID string, a Actor) tracker.WriteResult {
 	d.actors = append(d.actors, a)
 	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}}
 }
+
+func (d *desk) CPUs() *CPUs { return &d.cpus }
 
 func (d *desk) For(context.Context, statelog.PartitionID) (Backend, bool, error) {
 	return Backend{

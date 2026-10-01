@@ -130,7 +130,21 @@ type partNode struct {
 	// deaf is how long each read takes WITHOUT A LOOK AT ITS CONTEXT — a
 	// query that keeps going after it is told to stop.
 	deaf time.Duration
+
+	// cpus is the node's own, which its server and its router share — as
+	// many places as this process has CPUs unless a case gave it a number
+	// ([partNode.placesFor]).
+	cpus CPUs
 }
+
+// placesFor gives the node places places for its queries, before any of
+// them runs.
+func (n *partNode) placesFor(places int) {
+	n.cpus.limit = func() int { return places }
+}
+
+// CPUs implements [LocalBackends]: the node's one.
+func (n *partNode) CPUs() *CPUs { return &n.cpus }
 
 func (n *partNode) set(change func(*partNode)) {
 	n.mu.Lock()
@@ -925,7 +939,8 @@ func ceilingFleet(t *testing.T, ceiling int) (*partFleet, *partNode, *server) {
 		f.servers.holders[p] = []string{"data-a"}
 	}
 	f.nodes["data-a"] = node
-	srv := &server{self: "data-a", local: node, placement: f.servers, ceiling: ceiling}
+	srv := &server{self: "data-a", local: node, placement: f.servers, ceiling: ceiling,
+		cpus: node.CPUs()}
 	stop, err := recorder{q: f.client(t), node: node}.Serve(t.Context(), Subject("data-a"),
 		func(ctx context.Context, raw []byte) ([]byte, error) { return srv.answer(ctx, raw), nil })
 	if err != nil {
@@ -941,8 +956,8 @@ func ceilingFleet(t *testing.T, ceiling int) (*partFleet, *partNode, *server) {
 // CPU, five floors waited one after another.
 func TestAHolderWaitsOutABatchsFloorsAtOnce(t *testing.T) {
 	t.Parallel()
-	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
-	srv.cpus = 1
+	f, node, _ := ceilingFleet(t, queue.MaxPayloadBytes)
+	node.placesFor(1)
 	gate := make(chan struct{})
 	node.set(func(n *partNode) { n.floorGate = gate })
 	r := f.router(t, "agent-1", nil)
@@ -1019,8 +1034,8 @@ func TestThisNodeWaitsOutItsOwnPartitionsFloorsAtOnce(t *testing.T) {
 // and every partition of the batch was lost with a healthy holder suspected.
 func TestABatchIsAnsweredBeforeTheAskerStopsWaiting(t *testing.T) {
 	t.Parallel()
-	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
-	srv.cpus = 1
+	f, node, _ := ceilingFleet(t, queue.MaxPayloadBytes)
+	node.placesFor(1)
 	node.set(func(n *partNode) {
 		for _, p := range []statelog.PartitionID{tp(1), tp(2), tp(3)} {
 			n.holds[p] = behindFloor
@@ -1064,8 +1079,8 @@ func TestABatchIsAnsweredBeforeTheAskerStopsWaiting(t *testing.T) {
 // did nothing wrong — until every partition answered.
 func TestWhatAHolderDidNotFinishIsAskedAgain(t *testing.T) {
 	t.Parallel()
-	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
-	srv.cpus = 1
+	f, node, _ := ceilingFleet(t, queue.MaxPayloadBytes)
+	node.placesFor(1)
 	node.set(func(n *partNode) { n.delay = 150 * time.Millisecond })
 	r := f.router(t, "agent-1", nil)
 	r.readBudget = 400 * time.Millisecond
@@ -1198,8 +1213,8 @@ func TestAnOversizedSliceBesideAnUnfinishedOneIsItsSizeError(t *testing.T) {
 	// EVERY TRACKER SLICE IS OVER THE CEILING (about 1.25 KiB each against
 	// 600 bytes), the company's empty one fits, and an unfinished
 	// partition's note fits too.
-	f, node, srv := ceilingFleet(t, 600)
-	srv.cpus = 2
+	f, node, _ := ceilingFleet(t, 600)
+	node.placesFor(2)
 	two := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
 		{Space: statelog.SpaceTracker, Partitions: 2, Domains: []string{"tracker"}},
 		{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
@@ -1402,14 +1417,15 @@ func TestAReadThatKeepsGoingIsNamedRatherThanItsBatch(t *testing.T) {
 // better — every partition a CPU-bound batch started late was lost.
 func TestAReadItsBatchStartedLateIsAnsweredWhenAskedAgain(t *testing.T) {
 	t.Parallel()
-	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
-	srv.cpus = 1
+	f, node, _ := ceilingFleet(t, queue.MaxPayloadBytes)
+	node.placesFor(1)
 	// A QUARTER OF THE ATTEMPT EACH, deaf to the stop, so the batch's five
 	// reads cannot all run in one: the fourth takes the CPU at three
 	// quarters of the attempt — before the stop, a tenth of it before the
 	// end — and is still running when the batch is answered, and the fifth
 	// is still waiting for the CPU when the stop comes. Asked again, the two
-	// take half an attempt.
+	// take half an attempt once the fourth's first read, still running on
+	// the node's one CPU, gives it back.
 	const attempt = 2 * time.Second
 	node.set(func(n *partNode) { n.deaf = attempt / 4 })
 	r := f.router(t, "agent-1", nil)

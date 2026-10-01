@@ -17,9 +17,12 @@ import (
 // peerCopy is a peer data node's copy of estate.000, answering what an
 // operator's surfaces ask with values that say it answered.
 type peerCopy struct {
+	cpus   estate.CPUs
 	mu     sync.Mutex
 	purged []estate.Actor
 }
+
+func (p *peerCopy) CPUs() *estate.CPUs { return &p.cpus }
 
 func (p *peerCopy) For(context.Context, statelog.PartitionID) (estate.Backend, bool, error) {
 	return estate.Backend{

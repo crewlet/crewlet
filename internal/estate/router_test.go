@@ -37,6 +37,8 @@ type fakeNode struct {
 	TrackerWriter
 	PageWriter
 
+	cpus CPUs
+
 	mu        sync.Mutex
 	name      string
 	asked     []string
@@ -222,6 +224,9 @@ func (f *fakeNode) backend() Backend {
 		},
 	}
 }
+
+// CPUs implements [LocalBackends]: the node's one.
+func (f *fakeNode) CPUs() *CPUs { return &f.cpus }
 
 // For implements [LocalBackends]: this node serves estate.000 unless it was
 // told it does not, or that it cannot tell.

@@ -143,7 +143,14 @@ least one settled partition, so a batch asked of that holder again is always
 smaller: a partition whose answer is too large for any reply is the `error`
 that names its size, and a reply in which the holder finished nothing moves
 every partition in it on rather than being asked for again. A holder waits for
-every partition's floor at once and runs at most one query per CPU at a time.
+every partition's floor at once, and a node runs at most one of these
+per-partition queries per CPU at a time across **everything** it is running
+them for — every batch it is answering for other nodes and every read across
+partitions of its own — since they all share its processors; a query waits its
+turn behind those that asked before it. The CPUs are the process's as the Go
+runtime counts them, which follows the container's CPU limit as it changes. A
+read of a single partition is one query per request and does not count against
+that bound.
 
 The answer carries what it covered: the partitions that answered, where each of
 their logs was when it was read, and every partition that did **not** answer,

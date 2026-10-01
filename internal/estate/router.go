@@ -70,6 +70,13 @@ type LocalBackends interface {
 	// log's broker ([Backend.Answers]); an implementation answers from a
 	// verdict it refreshes, never with a broker round trip per request.
 	For(ctx context.Context, p statelog.PartitionID) (Backend, bool, error)
+
+	// CPUs is the places a gather's query of these copies takes ([CPUs]):
+	// this NODE's, never nil, and the SAME on every call — the server
+	// answering other nodes' batches ([Serve]) and the router answering
+	// this node's own gathers in-process both take them, and handed two,
+	// each would run a query per CPU beside the other's.
+	CPUs() *CPUs
 }
 
 // RouterOptions are a router's dependencies.
@@ -82,7 +89,9 @@ type RouterOptions struct {
 	Placement Placement
 
 	// Local is this node's own backends, nil on a node that holds no
-	// partition at all.
+	// partition at all — and the CPUs a gather's in-process queries take
+	// ([LocalBackends.CPUs]), which are the ones this node's server
+	// answers batches under.
 	Local LocalBackends
 
 	// Session is THIS NODE's floors ([Session]): one per node, shared with
@@ -127,6 +136,10 @@ type Router struct {
 	seams     ServerSeams
 	now       func() time.Time
 
+	// cpus is local's ([LocalBackends.CPUs]), nil where local is: the
+	// places this node's in-process gather queries take.
+	cpus *CPUs
+
 	// readBudget and writeBudget are [readAttempt] and [writeAttempt], and
 	// admissionBudget [admissionAsk], held so a test can shorten them
 	// rather than wait out a dead node.
@@ -165,13 +178,21 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		return nil, errors.New("estate: a router needs this node's id — it is " +
 			"what a serving node's log names, and what the router never asks")
 	}
+	var cpus *CPUs
+	if opts.Local != nil {
+		if cpus = opts.Local.CPUs(); cpus == nil {
+			return nil, errors.New("estate: a router over this node's own copies needs " +
+				"the CPUs their queries take, and LocalBackends.CPUs answered none — " +
+				"return the node's one CPUs, the one its server answers batches under")
+		}
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
-		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
+		local: opts.Local, cpus: cpus, session: opts.Session, seams: opts.Seams, now: now,
 		readBudget: readAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
 		sticky:   map[statelog.PartitionID]string{},
 		suspect:  map[string]time.Time{},
@@ -190,7 +211,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 //
 // ONE ATTEMPT FOR A WHOLE BATCH TOO, because a batch's waits are concurrent —
 // every partition's floor and barrier at once, only the queries a CPU's worth
-// at a time ([cpuSlot]) — and its holder answers [batchMargin] before the
+// at a time ([CPUs]) — and its holder answers [batchMargin] before the
 // attempt ends with whatever it finished, naming the rest unfinished for the
 // next attempt. A budget scaled to the batch would instead wait out a holder
 // that is gone for as long as its batch was large.

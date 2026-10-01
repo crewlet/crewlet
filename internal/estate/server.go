@@ -41,8 +41,14 @@ func Serve(ctx context.Context, q Server, self string, local LocalBackends,
 	case self == "":
 		return nil, errors.New("estate: serve needs this node's id — it is the subject other nodes ask")
 	}
+	cpus := local.CPUs()
+	if cpus == nil {
+		return nil, errors.New("estate: serve needs the CPUs this node's queries take, and " +
+			"LocalBackends.CPUs answered none — return the node's one CPUs, the one its " +
+			"router's own gathers take")
+	}
 	srv := server{self: self, local: local, placement: placement, seams: seams,
-		ceiling: queue.MaxPayloadBytes}
+		ceiling: queue.MaxPayloadBytes, cpus: cpus}
 	return q.Serve(ctx, Subject(self), func(ctx context.Context, raw []byte) ([]byte, error) {
 		return srv.answer(ctx, raw), nil
 	})
@@ -60,10 +66,10 @@ type server struct {
 	// outgrow it without eight mebibytes of answers.
 	ceiling int
 
-	// cpus is how many of a gather batch's queries run at once; zero is
-	// this process's CPUs at the time of the batch ([server.cpuCount]),
-	// held so a test can make a batch longer than an attempt.
-	cpus int
+	// cpus is local's ([LocalBackends.CPUs]): the places every batch this
+	// node answers takes for its queries, and its router's own gathers
+	// beside them.
+	cpus *CPUs
 }
 
 // answer runs one request and ALWAYS answers: a node that stayed silent

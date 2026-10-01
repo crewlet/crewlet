@@ -158,6 +158,13 @@
 // that lags its logs is asked last, one at a time, as a single read's last
 // resort is.
 //
+// A slice's QUERY takes one of this node's [CPUs], and only its query — its
+// floor and barrier waits run at once. There is ONE per node, which
+// [LocalBackends] hands to both its server and its router, so every batch the
+// node answers for another and every gather it answers in-process run at most
+// a query per CPU between them: a bound per batch was multiplied by however
+// many batches the node was answering at once.
+//
 // A single-partition read whose answer a gather will one day assemble — a
 // board, a person's day, an inbox — reports its coverage too
 // ([op.covered]): one partition, at the cut its holder measured.
