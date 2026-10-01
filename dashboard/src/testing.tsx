@@ -16,8 +16,15 @@
  * `routes/` or `components/` reaches for it.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
-import { act, createElement } from "react";
+// THE LIBRARY'S `act`, NOT REACT'S. React's own warns that the environment
+// is not set up for it unless `IS_REACT_ACT_ENVIRONMENT` is on, and with
+// Vitest's globals off the library never turns it on for the file — it does
+// so only for the length of each of its own `act` calls. So a reference drawn
+// here printed "The current testing environment is not configured to support
+// act(...)" into three suites' output, which is how a warning that means
+// something gets read past.
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { ComponentProps, ElementType, ReactElement } from "react";
 import {
