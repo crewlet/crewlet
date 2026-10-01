@@ -678,8 +678,8 @@ a screen's own render drew every row of every grid on it — 169–268 ms for tw
 hundred-row grids under the development build. It pays where a caller's column
 list stays the same between renders — a `useMemo`, as the audit, the work
 grid, the projects directory and the model page hold theirs, or a module
-constant, as the org builder's table does: a list built inline is rightly a new value to every row on every
-render, and draws every row exactly as before.
+constant, as the org builder's table does: a list built inline is rightly a
+new value to every row on every render, and draws every row exactly as before.
 
 **Which grid the keyboard drives is asked at the keystroke.** `j`, `k` and
 Enter go to the grid the reader last pressed a pointer in, else the first one

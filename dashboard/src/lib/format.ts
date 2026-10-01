@@ -114,7 +114,7 @@ function dateLocale(): string | undefined {
  * produce the same handful of formatters over and over. ECMA-402 defines the
  * `toLocale*String` methods as exactly this construction followed by
  * `format`, which is what makes the output identical and what
- * `format.test.ts` holds across zones and date shapes.
+ * `format.intl.test.ts` holds across zones and date shapes.
  *
  * KEYED ON THE LOCALE AND THE OPTIONS AS GIVEN — the zone is one of the
  * options — so a reader changing their zone or their date shape is a new key

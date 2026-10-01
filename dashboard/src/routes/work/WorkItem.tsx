@@ -604,9 +604,9 @@ export function Subtasks({
  * identity was new on every render — and this screen re-rendered once a second
  * then, because it held a live clock for its relative times (they read it in
  * the row now, through `ClockText`). React reconciles on type identity, so the
- * description's rendered markdown was torn down and rebuilt every render: a reader selecting a sentence to copy lost the selection
- * within a second, along with focus and every other piece of per-node DOM
- * state. `flush` is a prop here rather than a branch at definition time for
+ * description's rendered markdown was torn down and rebuilt every render: a
+ * reader selecting a sentence to copy lost the selection within a second,
+ * along with focus and every other piece of per-node DOM state. `flush` is a prop here rather than a branch at definition time for
  * exactly that reason.
  */
 function BodySection({
