@@ -1,5 +1,6 @@
 /**
- * What jsdom does not provide, and the component suites need.
+ * What jsdom does not provide, and the component suites need — and the one
+ * thing it puts off that is better done before the first case.
  *
  * Kept to the genuine gaps. A polyfill that changes behaviour rather than
  * supplying a missing API would make the suite agree with a browser nobody
@@ -89,4 +90,18 @@ for (const area of ["localStorage", "sessionStorage"] as const) {
   if (storageMissing(area)) {
     Object.defineProperty(globalThis, area, { writable: true, value: memoryStorage() });
   }
+}
+
+// WHAT jsdom PUTS OFF UNTIL FIRST USE, done here, while the environment is
+// being set up. Not a gap and not a polyfill: the window's first computed
+// style loads the CSS parser and parses jsdom's whole user-agent stylesheet,
+// which measured 140 to 200 ms, and every test file runs in a process of its
+// own, so every file paid it — inside whichever case first asked for an
+// element by role, since a role query computes styles. That made the first
+// case of every file its slowest for work that is the environment's, and on
+// a loaded runner the one that ran out of its five seconds. It is still done
+// once per file; it is no longer billed to a case. Only where there is a
+// window: a suite of pure functions runs in node, with no document to style.
+if (typeof getComputedStyle === "function" && typeof document !== "undefined") {
+  getComputedStyle(document.documentElement);
 }
