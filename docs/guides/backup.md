@@ -49,7 +49,11 @@ Classify before you size the job:
 
 - **Rebuildable, safe to lose:** every TTL'd coordination bucket — the rate
   valve, delivery dedupe and node status regenerate, credential cooldowns
-  re-learn at the cost of some rate-limit errors — and the leases and epochs
+  re-learn at the cost of some rate-limit errors, and the
+  [rebase records](../concepts/coordination.md#what-the-fleet-shares)
+  re-form at the next attempt, at the cost that a turn whose work began more
+  than twenty-nine days ago, retried after the loss, writes again what its
+  earlier attempt wrote — and the leases and epochs
   *provided the whole fleet cold-starts together* (they re-form from nothing).
 - **Held twice:** the learning tables and the conversation ledger. Each row is
   also on the memory changelog, which is how a seat's memory follows it to a
