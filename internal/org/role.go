@@ -143,7 +143,9 @@ type HumanContact struct {
 	//
 	// Lower-cased like the code-host logins, because the guard compares
 	// what an operator typed here against what they typed in Tier A and
-	// two files are two chances to disagree about case.
+	// two files are two chances to disagree about case. Tier A's token ids
+	// are lowercase by validation, so the lowercased value names exactly
+	// one credential.
 	CrewletOperatorID string `yaml:"crewlet_operator_id,omitempty" json:"crewlet_operator_id,omitempty"`
 }
 

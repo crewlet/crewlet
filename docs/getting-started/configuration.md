@@ -861,6 +861,11 @@ Binding a person to a credential crosses the tiers the other way: an
 `api.auth.tokens[].id` is named from the company document's
 `roles[].contact.crewlet_operator_id`, never from a `seat:` field on the token,
 because Tier A holds the keys to the secret store and may never read Tier B.
+A token id is **lowercase**, and `crewlet validate` refuses anything else: the
+binding is matched case-insensitively while every write made with the token
+records its id exactly, so `Founder` would be a person bound for their writes
+and missing from their own reads, and `Founder` beside `founder` would be two
+credentials one binding admits as the same person.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure

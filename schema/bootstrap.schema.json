@@ -51,7 +51,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "description": "Short label recorded as the author of writes made with this token.",
+          "description": "Short lowercase label recorded as the author of writes made with this token.",
           "type": "string"
         },
         "token": {

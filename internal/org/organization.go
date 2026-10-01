@@ -254,7 +254,11 @@ func (o *Organization) SeatByHandle(handle string) *Role {
 //
 // COMPARED CASE-INSENSITIVELY on a trimmed value, for the reason the field's
 // own doc gives: the id is written in two files by one person and two files
-// are two chances to disagree about case.
+// are two chances to disagree about case. The leniency is the CHART'S alone:
+// Tier A refuses a token id that is not lowercase, so the fold maps every
+// accepted credential to itself — two ids differing only in case would
+// otherwise both resolve to one person, and a mixed-case id would be bound
+// here while the rows written under it never matched the person's reads.
 //
 // A seat of EITHER KIND, though in practice only a human seat carries one —
 // nothing stops a company binding a token to an agent seat, and refusing that

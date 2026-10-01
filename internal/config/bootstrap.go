@@ -1540,7 +1540,11 @@ type APIAuth struct {
 type APIToken struct {
 	// ID is a short label stamped into revision audit rows (created_by):
 	// "founder", "ops", "ci-pipeline".
-	ID string `yaml:"id" json:"id" js:"required" desc:"Short label recorded as the author of writes made with this token."`
+	//
+	// LOWERCASE, and validation refuses anything else: a seat binds it
+	// with `contact.crewlet_operator_id`, which is matched case-insensitively,
+	// so the id has exactly one spelling that both directions agree on.
+	ID string `yaml:"id" json:"id" js:"required" desc:"Short lowercase label recorded as the author of writes made with this token."`
 
 	// Token is the value, or a ${VAR} reference to it. Resolved once at
 	// startup and never stored.
@@ -1558,6 +1562,24 @@ func (a *APIAuth) validate(path Path) error {
 		}
 		if t.Token == "" {
 			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
+		}
+		if lower := strings.ToLower(t.ID); lower != t.ID {
+			// A TOKEN ID IS LOWERCASE, because the binding that names it
+			// is: `contact.crewlet_operator_id` is lowercased and matched
+			// against the lowercased id (org.SeatByOperatorID), while
+			// every write made under the token records the id EXACTLY.
+			// A mixed-case id is therefore bound for writes and never
+			// matched by its own person's reads, and two ids that differ
+			// only in case — which the duplicate check below cannot see —
+			// are two credentials one seat's binding admits as the same
+			// person. Refused in the one shape that rules out both.
+			p.add(at(tp, "id"), ErrShape,
+				"token id %q must be lowercase: contact.crewlet_operator_id "+
+					"binds a token by its lowercased id while every write "+
+					"made with it records the id as written, so a mixed-case "+
+					"id is a person bound for writes and missing from their "+
+					"own reads, and ids differing only in case are two "+
+					"credentials bound to one seat. Write %q", t.ID, lower)
 		}
 		if _, dup := seen[t.ID]; dup && t.ID != "" {
 			// Two tokens sharing a label make the audit trail unreadable:

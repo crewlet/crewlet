@@ -94,6 +94,14 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"token with no id", "api:\n  auth:\n    tokens:\n      - id: \"\"\n        token: abc\n", "api.auth.tokens[0].id", ErrMissing},
 		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
 		{"duplicate token id", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: founder, token: b}\n", "api.auth.tokens[1].id", ErrConflict},
+		// A TOKEN ID IS LOWERCASE, because `contact.crewlet_operator_id`
+		// binds it by its lowercased value while every write made under it
+		// is recorded exactly. `Founder` beside `founder` was two
+		// credentials one seat's binding admitted as the same person, and
+		// `Founder` alone was bound for writes while its own rows never
+		// matched the person's reads.
+		{"mixed-case token id", "api:\n  auth:\n    tokens:\n      - {id: Founder, token: a}\n", "api.auth.tokens[0].id", ErrShape},
+		{"token ids that differ only in case", "api:\n  auth:\n    tokens:\n      - {id: founder, token: a}\n      - {id: FOUNDER, token: b}\n", "api.auth.tokens[1].id", ErrShape},
 
 		// A CORS ALLOW-LIST IS COMPARED AGAINST THE BROWSER'S `Origin`
 		// HEADER EXACTLY, and that header is always `scheme://host[:port]`
