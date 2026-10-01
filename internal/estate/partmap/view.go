@@ -27,7 +27,11 @@ import (
 // watch that says nothing is either a map that has not changed or a watch
 // that has stopped delivering, and the two cannot be told apart from inside
 // it, so the map is also READ from the store every [ViewConfirm]: a read that
-// answers confirms the view whatever it found. The LEASES are a
+// answers confirms the view whatever it found. The watch and the reads run
+// APART, because a read the store does not answer is held for up to a
+// [ViewConfirm], and a delivery waiting behind it would be taken in only when
+// the read gave up — dated then, after the store had last said anything, and
+// routed by late. The LEASES are a
 // [coord.LeaseView] of the `estate:` class — listed on the heartbeat, trusted
 // for a TTL, three-valued (ADR-0005) — the same watched listing the fleet's
 // presence view is, not a second one.
@@ -215,8 +219,9 @@ type View struct {
 	// lastErr is the last read or watch failure.
 	lastErr error
 	// confirmedAt is the newest instant the store is known to have held what
-	// the view holds: when a delivery arrived, and when a read that answered
-	// was ASKED — never when its answer arrived ([View.confirmLocked]).
+	// the view holds: when a read that answered was ASKED, never when its
+	// answer arrived, and when a delivery was received — the first of a
+	// watch's when the watch was asked for ([View.confirmLocked]).
 	confirmedAt time.Time
 
 	// watches are every [View.Watch] reader's slot.
@@ -254,56 +259,105 @@ func NewView(opts ViewOptions) (*View, error) {
 // error; nothing else ends it. A watch that closes is opened again, and a
 // failure is recorded and retried — the view answering unknown in the
 // meantime once what it holds is older than its trust.
+//
+// THREE LOOPS, none waiting on another: the lease listing, the map's watch
+// ([View.follow]) and the map's confirmation reads ([View.confirm]). The two
+// map loops share nothing but the view's lock, and a read already weighs what
+// was taken in while it was asked ([View.answered]), since [View.Read] has
+// always raced the watch — so apart they need no ordering they lacked
+// together.
 func (v *View) Run(ctx context.Context) error {
-	var both sync.WaitGroup
-	both.Add(1)
-	go func() {
-		defer both.Done()
-		_ = v.leases.Run(ctx)
-	}()
-	v.follow(ctx)
-	both.Wait()
+	var loops sync.WaitGroup
+	loops.Go(func() { _ = v.leases.Run(ctx) })
+	loops.Go(func() { v.follow(ctx) })
+	v.confirm(ctx)
+	loops.Wait()
 	return ctx.Err()
 }
 
-// follow keeps the map half current: a watch for changes, a read every
-// [ViewConfirm] for currency, and a watch opened again whenever it closes —
-// never sooner than [coord.MinViewRefresh] after the last opening, so a store
-// that closes every watch at once costs a watch a second rather than a spin.
+// watchRetry is how long the watch waits after an opening the store refused
+// before it asks again.
+//
+// [ViewConfirm], the cadence the map is read at: while the watch cannot be
+// opened the reads keep the half current to within one confirmation, so asking
+// a store that refuses it more often buys nothing — and a fleet of nodes each
+// asking every [coord.MinViewRefresh] would put fifteen times the reads' load
+// on a store that is already failing. It is what the loop that read and
+// watched together did by accident, an opening that failed being asked again
+// on the next confirmation tick, stated rather than inherited.
+const watchRetry = ViewConfirm
+
+// follow keeps the map half current by its watch, opened again whenever it
+// closes — never sooner than [coord.MinViewRefresh] after the last opening was
+// asked for, so a store that closes every watch at once costs a watch a second
+// rather than a spin, and never sooner than [watchRetry] after one the store
+// refused.
 func (v *View) follow(ctx context.Context) {
-	confirm := time.NewTicker(ViewConfirm)
-	defer confirm.Stop()
-	var watch <-chan coord.EstateMapRecord
-	var opened time.Time
-	v.read(ctx)
+	var (
+		opened time.Time
+		apart  time.Duration
+	)
 	for ctx.Err() == nil {
-		if watch == nil {
-			if wait := coord.MinViewRefresh - v.now().Sub(opened); !opened.IsZero() && wait > 0 {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(wait):
-				}
-			}
-			opened = v.now()
-			ch, err := v.maps.WatchEstateMap(ctx)
-			if err != nil {
-				v.failed(ctx, fmt.Errorf("watch the estate map: %w", err))
-			} else {
-				watch = ch
+		if wait := apart - v.now().Sub(opened); !opened.IsZero() && wait > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
 			}
 		}
+		opened = v.now()
+		ch, err := v.maps.WatchEstateMap(ctx)
+		if err != nil {
+			v.failed(ctx, fmt.Errorf("watch the estate map: %w", err))
+			apart = watchRetry
+			continue
+		}
+		v.receive(ctx, ch, opened)
+		apart = coord.MinViewRefresh
+	}
+}
+
+// receive takes in what one opening of the watch delivers, until it closes or
+// ctx ends. opened is when that opening was asked for.
+//
+// EACH DELIVERY IS DATED THE MOMENT IT IS RECEIVED, by a loop that waits on
+// nothing else, so nothing of this node's own stands between the store handing
+// it over and the stamp. The FIRST is the exception, dated when the opening
+// was asked for: it is the version the store held when the watch was opened
+// (coord.EstateMaps.WatchEstateMap) — a read, answered as of some instant
+// after it was asked, and an opening can take far longer than its read did.
+// Where the store held no map then, the first delivery is a later write, which
+// the store also held after the opening was asked for, so that instant can
+// understate it and never overstates it.
+func (v *View) receive(ctx context.Context, ch <-chan coord.EstateMapRecord, opened time.Time) {
+	for first := true; ; first = false {
 		select {
 		case <-ctx.Done():
 			return
-		case rec, ok := <-watch:
+		case rec, ok := <-ch:
 			if !ok {
-				watch = nil
-				continue
+				return
 			}
-			v.delivered(rec)
-		case <-confirm.C:
-			v.read(ctx)
+			at := v.now()
+			if first {
+				at = opened
+			}
+			v.delivered(rec, at)
+		}
+	}
+}
+
+// confirm reads the map from the store now and every [ViewConfirm] after,
+// until ctx ends.
+func (v *View) confirm(ctx context.Context) {
+	tick := time.NewTicker(ViewConfirm)
+	defer tick.Stop()
+	for {
+		v.read(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
 		}
 	}
 }
@@ -354,17 +408,16 @@ func (v *View) failed(ctx context.Context, err error) {
 // some instant, in the order it was written — when it is newer than what the
 // view holds: ANOTHER LINEAGE whatever its version, or a later version of the
 // same one (see the file's doc). Anything else confirms the view and changes
-// nothing.
-func (v *View) delivered(rec coord.EstateMapRecord) {
+// nothing. at is the instant the delivery is dated by ([View.receive]).
+func (v *View) delivered(rec coord.EstateMapRecord, at time.Time) {
 	state, gen, err := readRecord(rec.Value)
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	now := v.now()
 	if !v.known || v.newerLocked(rec.Version, gen) {
-		v.takeLocked(rec.Version, state, gen, err, now)
+		v.takeLocked(rec.Version, state, gen, err, at)
 		return
 	}
-	v.confirmLocked(now)
+	v.confirmLocked(at)
 }
 
 // answered takes in what a read of the store answered — a version, or that
@@ -469,9 +522,13 @@ func (v *View) takeLocked(version uint64, state MapState, gen uuid.UUID, decodeE
 // than anything the store said, and a read asked just before the store stopped
 // answering confirmed the view at an instant after it had — so the view read
 // fresh, and its alarm stayed quiet, for a store that had not answered since.
-// A delivery has no asking and is stamped when it arrives. And the instant
-// only moves FORWARD: a slow read overtaken by a delivery or a quicker read
-// says nothing about the view that they did not say later.
+// A delivery has no asking and is stamped when it is RECEIVED, by a loop that
+// waits on nothing else — not when this node got round to it, which behind a
+// read the store had stopped answering was up to a [ViewConfirm] later — and
+// the first of a watch, the store's read of the map at the opening, when the
+// opening was asked for ([View.receive]). And the instant only moves FORWARD:
+// a slow read overtaken by a delivery or a quicker read says nothing about the
+// view that they did not say later.
 func (v *View) confirmLocked(at time.Time) {
 	if at.After(v.confirmedAt) {
 		v.confirmedAt = at
@@ -640,10 +697,11 @@ type Staleness struct {
 	// any is: "the estate map" or "the estate leases".
 	Half string
 
-	// Age is how long ago that half was last confirmed: the map by a
-	// delivery, or by a read the store answered as of when it was ASKED
-	// ([View.confirmLocked]), the leases by a listing — whatever its age,
-	// and from when the view was built for a half never confirmed.
+	// Age is how long ago that half was last confirmed: the map by a read
+	// the store answered, as of when it was ASKED, or by a delivery, as of
+	// when it was received ([View.confirmLocked]); the leases by a listing,
+	// as of when it was asked — whatever its age, and from when the view was
+	// built for a half never confirmed.
 	Age time.Duration
 
 	// Bound is the age past which anything deciding from the view treats

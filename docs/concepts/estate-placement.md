@@ -175,11 +175,16 @@ other three alarms are silent and `estate_view_stale` says why. The view lists
 the estate leases at least every fifteen seconds whatever the lease TTL, so a
 healthy node's view is never stale. Each half's age runs from when the store
 was **asked** for what the view holds — a read of the map or a listing of the
-leases is dated when it was sent, never when its answer arrived — so a slow
-answer never makes the view look fresher than anything the store said, and a
-listing is trusted for a lease TTL from that instant. At layout 0 there is no map, so only
-`estate_view_stale` can fire; the fleet's presence, which names layout 0's
-servers, is not judged, since it answers routing alone.
+leases is dated when it was sent, never when its answer arrived, and a listing
+is trusted for a lease TTL from that instant. A change the map's watch delivers
+has no asking: it is dated when the node receives it, by a loop that waits on
+nothing else, so a read the store has stopped answering never holds a delivery
+back to be dated late — except the first delivery after the watch opens, which
+is the map the store read as it opened and is dated when the opening was asked
+for. So a slow answer never makes the view look fresher than anything the store
+said. At layout 0 there is no map, so only `estate_view_stale` can fire; the
+fleet's presence, which names layout 0's servers, is not judged, since it
+answers routing alone.
 
 ## The gestures
 

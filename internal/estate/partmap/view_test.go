@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -369,15 +370,15 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 	v := viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
 
 	before := v.takenCount()
-	v.delivered(coord.EstateMapRecord{Value: raw, Version: 5})
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 5}, v.now())
 	v.answered(coord.EstateMapRecord{}, false, before, v.now()) // a read asked before version 5
 	if _, version, found, err := v.Map(); err != nil || !found || version != 5 {
 		t.Fatalf("a read answered before the first map, arriving after it, left (version %d, "+
 			"found %v, %v), want version 5", version, found, err)
 	}
-	v.delivered(coord.EstateMapRecord{Value: oldRaw, Version: 4})
+	v.delivered(coord.EstateMapRecord{Value: oldRaw, Version: 4}, v.now())
 	before = v.takenCount()
-	v.delivered(coord.EstateMapRecord{Value: raw, Version: 6})
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 6}, v.now())
 	v.answered(coord.EstateMapRecord{Value: raw, Version: 5}, true, before, v.now()) // raced version 6
 	m, version, found, err := v.Map()
 	if err != nil || !found || version != 6 || m.Epoch != state.Map.Epoch {
@@ -385,7 +386,7 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 			version, m.Epoch, found, err)
 	}
 
-	v.delivered(coord.EstateMapRecord{Value: unreadable(raw), Version: 7})
+	v.delivered(coord.EstateMapRecord{Value: unreadable(raw), Version: 7}, v.now())
 	if _, _, _, err := v.Map(); !errors.Is(err, coord.ErrUnavailable) {
 		t.Fatalf("a newest version this build cannot read = %v, want unknown", err)
 	}
@@ -402,7 +403,7 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 			"epoch %d, a map the fleet has replaced", m.Epoch)
 	case <-time.After(50 * time.Millisecond):
 	}
-	v.delivered(coord.EstateMapRecord{Value: raw, Version: 8})
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 8}, v.now())
 	if _, version, found, err := v.Map(); err != nil || !found || version != 8 {
 		t.Errorf("a readable version after it = (%d, %v, %v), want version 8", version, found, err)
 	}
@@ -423,7 +424,7 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 		t.Errorf("an answered absence reads as (found %v, %v)", found, err)
 	}
 	// ...and a late delivery of the lineage it lost is not taken back in.
-	v.delivered(coord.EstateMapRecord{Value: raw, Version: 8})
+	v.delivered(coord.EstateMapRecord{Value: raw, Version: 8}, v.now())
 	if _, _, found, err := v.Map(); err != nil || found {
 		t.Errorf("a late delivery of the lost map was taken back in: (found %v, %v)", found, err)
 	}
@@ -458,13 +459,13 @@ func TestAViewTakesAMapWrittenAgainAfterItsKeyWasLost(t *testing.T) {
 
 	// BY THE WATCH, over a map held at a higher version.
 	v := viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
-	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, v.now())
 	watch, err := v.Watch(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-watch
-	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 3})
+	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 3}, v.now())
 	holds(v, recreated, 3)
 	select {
 	case m := <-watch:
@@ -476,20 +477,20 @@ func TestAViewTakesAMapWrittenAgainAfterItsKeyWasLost(t *testing.T) {
 	}
 	// ...and the lost lineage delivered late is not taken back.
 	before := v.takenCount()
-	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 4})
+	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 4}, v.now())
 	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, true, before, v.now())
 	holds(v, recreated, 4)
 
 	// BY THE WATCH, after a read saw the key gone.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
-	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, v.now())
 	v.answered(coord.EstateMapRecord{}, false, v.takenCount(), v.now())
-	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 1})
+	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 1}, v.now())
 	holds(v, recreated, 1)
 
 	// BY A READ NOTHING OVERTOOK, after a read saw the key gone.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
-	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, v.now())
 	v.answered(coord.EstateMapRecord{}, false, v.takenCount(), v.now())
 	v.answered(coord.EstateMapRecord{Value: newRaw, Version: 1}, true, v.takenCount(), v.now())
 	holds(v, recreated, 1)
@@ -497,22 +498,22 @@ func TestAViewTakesAMapWrittenAgainAfterItsKeyWasLost(t *testing.T) {
 	// A STORE RESTORED TO AN EARLIER VERSION OF THE SAME LINEAGE, by a
 	// read nothing overtook: the store's value now.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
-	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, v.now())
 	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 30}, true, v.takenCount(), v.now())
 	holds(v, lost, 30)
-	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 31})
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 31}, v.now())
 	holds(v, lost, 31)
 
 	// A NEW LINEAGE THIS BUILD CANNOT READ, delivered at a lower version:
 	// unknown, never the lost map.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
-	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
+	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, v.now())
 	// A holder state this build does not know: the lineage still reads.
 	future := []byte(strings.Replace(string(newRaw), `"state":"`, `"state":"resting-`, 1))
 	if _, err := DecodeMapState(future); err == nil || bytes.Equal(future, newRaw) {
 		t.Fatal("the premise: a map this build cannot decode")
 	}
-	v.delivered(coord.EstateMapRecord{Value: future, Version: 2})
+	v.delivered(coord.EstateMapRecord{Value: future, Version: 2}, v.now())
 	if _, _, _, err := v.Map(); !errors.Is(err, coord.ErrUnavailable) {
 		t.Errorf("an unreadable map of a new lineage left the view answering %v, want unknown", err)
 	}
@@ -684,9 +685,9 @@ func TestAReadConfirmsTheViewWhenItWasAsked(t *testing.T) {
 			"an instant the store was never asked at", base, at)
 	}
 
-	// A DELIVERY IS STAMPED WHEN IT ARRIVES, and a read asked before it that
-	// answers after it says nothing newer.
-	v.delivered(coord.EstateMapRecord{Value: encoded(t, state), Version: version})
+	// A DELIVERY CONFIRMS AS OF THE INSTANT IT IS DATED BY, and a read asked
+	// before it that answers after it says nothing newer.
+	v.delivered(coord.EstateMapRecord{Value: encoded(t, state), Version: version}, c.Now())
 	if at := confirmedAtOf(v); !at.Equal(c.Now()) {
 		t.Fatalf("a delivery confirmed the view at %v, want %v", at, c.Now())
 	}
@@ -721,6 +722,164 @@ func TestTheViewsOwnReadIsDatedWhenItWasAsked(t *testing.T) {
 	if at := confirmedAtOf(v); !at.Equal(base) {
 		t.Fatalf("the view's own read, asked at %v and answered a minute later, confirmed "+
 			"the view at %v — an instant the store was never asked at", base, at)
+	}
+}
+
+// drivenWatch is a store whose watch the test drives: an opening says it was
+// asked for and waits to be let go, and the watch then delivers exactly what
+// the test sends, handed over only when the view takes it. Reads go to the
+// embedded store.
+type drivenWatch struct {
+	MapSource
+	opening chan struct{}
+	open    chan struct{}
+	deliver chan coord.EstateMapRecord
+}
+
+func newDrivenWatch(reads MapSource) *drivenWatch {
+	return &drivenWatch{MapSource: reads, opening: make(chan struct{}, 1),
+		open: make(chan struct{}), deliver: make(chan coord.EstateMapRecord)}
+}
+
+func (d *drivenWatch) WatchEstateMap(ctx context.Context) (<-chan coord.EstateMapRecord, error) {
+	select {
+	case d.opening <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-d.open:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return d.deliver, nil
+}
+
+// send hands version of state to the view's watch, failing the test when the
+// view has not received it within five seconds, and waits until the view has
+// taken it in.
+func (d *drivenWatch) send(t *testing.T, v *View, state MapState, version uint64, what string) {
+	t.Helper()
+	select {
+	case d.deliver <- coord.EstateMapRecord{Value: encoded(t, state), Version: version}:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the view never received %s", what)
+	}
+	eventually(t, what+" to be taken in", func() bool {
+		_, held, found, err := v.Map()
+		return err == nil && found && held == version
+	})
+}
+
+// refusedReads is a store that answers no read of the map.
+type refusedReads struct{ MapSource }
+
+func (refusedReads) EstateMap(context.Context) (coord.EstateMapRecord, bool, error) {
+	return coord.EstateMapRecord{}, false, errors.New("coordination timed out")
+}
+
+// A DELIVERY IS NEVER HELD BEHIND A READ: the view receives what its watch
+// hands over while a read the store has not answered is still in flight, and
+// it confirms the view as of when it was received.
+//
+// The watch and the reads shared one loop once, and a read the store had
+// stopped answering held that loop for up to a ViewConfirm: a delivery the
+// store had already handed over waited behind it, and was taken in — and
+// dated — only when the read gave up, a quarter of a minute after the store
+// had last said anything. The view read fresh that much past its bound,
+// estate_view_stale stayed quiet that much longer, and every router routed by
+// the map the delivery replaced in the meantime.
+func TestADeliveryIsNeverHeldBehindARead(t *testing.T) {
+	t.Parallel()
+	c := &clock{now: base}
+	store, state, version := storeWithMap(t)
+	held := &heldMaps{MapSource: store, asked: make(chan struct{}, 1),
+		release: make(chan struct{})}
+	watch := newDrivenWatch(held)
+	close(watch.open)
+	v := viewOver(t, watch, coordmemory.New(), layoutZero, c)
+	run(t, v)
+
+	waitFor(t, held.asked, "the view to read the map")
+	// THE READ IS NOW HELD — the store has not answered it — and the watch
+	// is opened and hands over the map the store held at the opening.
+	waitFor(t, watch.opening, "the view to open its watch while a read was held")
+	watch.send(t, v, state, version, "the map the store held at the opening")
+
+	c.advance(10 * time.Second)
+	received := c.Now()
+	watch.send(t, v, state, version+1, "a later version, while the read is held")
+	if at := confirmedAtOf(v); !at.Equal(received) {
+		t.Fatalf("a delivery received at %v, while a read was held, confirmed the view "+
+			"at %v", received, at)
+	}
+}
+
+// A WATCH'S FIRST DELIVERY IS DATED WHEN THE WATCH WAS ASKED FOR, and every
+// later one when it is received. The first is the version the store read when
+// the watch was opened — a read, answered as of some instant after the opening
+// was asked for — and an opening can take far longer than its read did: dated
+// when it was received, an opening held up across a store that stopped
+// answering confirmed the view at an instant the store had said nothing at.
+func TestAWatchsFirstDeliveryIsDatedWhenTheWatchWasAskedFor(t *testing.T) {
+	t.Parallel()
+	c := &clock{now: base}
+	store, state, version := storeWithMap(t)
+	// NO READ ANSWERS, so the watch is the only thing that confirms the view.
+	watch := newDrivenWatch(refusedReads{store})
+	v := viewOver(t, watch, coordmemory.New(), layoutZero, c)
+	run(t, v)
+
+	waitFor(t, watch.opening, "the view to ask for its watch")
+	c.advance(10 * time.Second)
+	close(watch.open)
+	watch.send(t, v, state, version, "the map the store held at the opening")
+	if at := confirmedAtOf(v); !at.Equal(base) {
+		t.Fatalf("the first delivery of a watch asked for at %v confirmed the view at %v, "+
+			"when the opening returned", base, at)
+	}
+
+	c.advance(10 * time.Second)
+	watch.send(t, v, state, version+1, "a later version")
+	if at := confirmedAtOf(v); !at.Equal(c.Now()) {
+		t.Fatalf("a later delivery, received at %v, confirmed the view at %v", c.Now(), at)
+	}
+}
+
+// refusedWatch is a store that refuses every opening of the watch, counting
+// them.
+type refusedWatch struct {
+	MapSource
+	opened atomic.Int32
+}
+
+func (r *refusedWatch) WatchEstateMap(context.Context) (<-chan coord.EstateMapRecord, error) {
+	r.opened.Add(1)
+	return nil, errors.New("coordination timed out")
+}
+
+// A WATCH THE STORE REFUSED IS ASKED FOR AGAIN A CONFIRMATION LATER, never on
+// the next second as a watch that closed is: the reads keep the map half
+// current to within one confirmation meanwhile, so asking sooner buys nothing,
+// and every node asking a failing store each second for a watch it keeps
+// refusing is fifteen times the reads' load on it.
+func TestARefusedWatchIsAskedForAgainAConfirmationLater(t *testing.T) {
+	t.Parallel()
+	store, _, version := storeWithMap(t)
+	watch := &refusedWatch{MapSource: store}
+	v := viewOver(t, watch, coordmemory.New(), layoutZero, &clock{now: base})
+	run(t, v)
+	eventually(t, "the view to read the map", func() bool {
+		_, held, found, err := v.Map()
+		return err == nil && found && held == version
+	})
+	eventually(t, "the view to ask for its watch", func() bool { return watch.opened.Load() > 0 })
+
+	wait := 3 * coord.MinViewRefresh
+	time.Sleep(wait)
+	if n := watch.opened.Load(); n != 1 {
+		t.Fatalf("a watch the store refused was asked for %d times in %v, want once a "+
+			"confirmation (%v)", n, wait, watchRetry)
 	}
 }
 
