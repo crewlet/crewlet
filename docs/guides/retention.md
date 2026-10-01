@@ -747,10 +747,11 @@ the flags it has. The dashboard renders the same actions as its own controls.
 
 ### From the dashboard
 
-The Fleet screen offers **Evict…** and **Readmit…** on every node row, and the
-dialog behind them is the same gesture as the command, answered the same way:
-one row per log with its outcome and position — no position for `unknown` —
-or the reason it was not written and what to do.
+The Fleet screen offers **Readmit…** on a node row its logs hold evicted and
+**Evict…** on every other, and the dialog behind them is the same gesture as
+the command, answered the same way: one row per log with its outcome and
+position — no position for `unknown` — or the reason it was not written and
+what to do.
 
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
@@ -805,6 +806,18 @@ or the reason it was not written and what to do.
   lease listing this node cannot read — offers **Force eviction**, behind a
   second typed confirmation, which sends `force=true` and carries it into every
   Finish of that gesture.
+- Under a divided layout, the **Estate screen** offers **Readmit…** — the same
+  dialog — for every node the estate map bars: on a barred member's row, and
+  beside the line naming a barred node the map does not hold. The Fleet screen
+  offers a readmission only for a node whose logs still hold its eviction, and
+  a readmission whose every log took the node back while the map part did not
+  land (coordination unreachable, a newer build's map, a node that does not
+  serve every partition) leaves the node barred with no eviction on any log:
+  only the map knows the bar, so its screen is where the gesture that lifts it
+  is offered. A gesture held there reads **Finish readmission…** or
+  **Readmission sent…** on its row, as on the Fleet screen, until the map no
+  longer bars the node. Never **Put back**, which the engine refuses for a
+  barred node.
 
 It prints the watermark before and after, and the instant the eviction takes
 effect. **The evicted node stays counted for about a minute** on each log after

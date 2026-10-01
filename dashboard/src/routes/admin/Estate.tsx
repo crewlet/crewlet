@@ -23,11 +23,26 @@
  * probation, out, the partitions moved off it, and what its store says. The
  * hold, the layout, the epoch and the generation sit above both.
  *
+ * # A barred node is readmitted HERE, where the bar is
+ *
+ * An eviction bars the node from the map as well as from every log it was
+ * counted on, and only its READMISSION lifts the bar — once every log has taken
+ * the node back; the engine refuses this screen's own put back of a barred node
+ * (`barred_member`). So a barred member's row, and the line naming a barred node
+ * the map does not hold, offer the readmission itself, in the retention panel's
+ * dialog ([GateDialog]) — never a link to the Fleet screen. That panel offers a
+ * readmission only for a node whose logs still hold its eviction, so a
+ * readmission that took the node back on every log while its map part did not
+ * land (coordination unreachable, a newer build's map, or a node that does not
+ * serve every partition) left a node barred here and, after a reload, offered
+ * nothing there but "Evict…": the bar is known only to the map, and the gesture
+ * that lifts it is offered where the map is read.
+ *
  * Every number is the engine's own rendering (`queries.RenderEstate`); the
  * suite reads `internal/api/testdata/estate_answer.json` for its fixtures.
  */
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import {
   Button,
@@ -53,7 +68,6 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, MeterCell, NumberCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, plural } from "~/lib/format.ts";
 import type { Tone } from "~/ui/primitives.tsx";
@@ -68,6 +82,8 @@ import type {
   WholeHolder,
 } from "~/protocol/index.ts";
 import { EstateHoldDialog, EstateMemberDialog, EstateMoveDialog } from "./EstateDialog.tsx";
+import { finishable, GateDialog } from "./GateDialog.tsx";
+import type { GateGesture } from "./GateDialog.tsx";
 
 /**
  * The map has no push behind it, so it polls — at fifteen seconds, the map
@@ -246,6 +262,35 @@ function PlacedEstateView({
   const [space, setSpace] = useState<string>(e.spaces[0]?.space ?? "");
   const panelId = useId();
   const changed = () => onChanged?.();
+  // THE READMISSIONS STILL TO BE FINISHED, by node, held HERE rather than in
+  // the dialog for the retention panel's reason ([GateGesture]): the dialog
+  // is unmounted when it closes, and a readmission reopened as a fresh one
+  // writes every log the first one reached again. A COMPLETE one is held too,
+  // until the map no longer bars the node — between the answer and the poll
+  // that shows the bar gone, the row would otherwise offer the gesture just
+  // made, under a new id.
+  const [readmits, setReadmits] = useState<Record<string, GateGesture>>({});
+  const [readmitting, setReadmitting] = useState<string | null>(null);
+  const holdReadmit = (node: string, g: GateGesture | null) => {
+    setReadmits((all) => {
+      const next = { ...all };
+      if (g) next[node] = g;
+      else delete next[node];
+      return next;
+    });
+    if (g?.answer) changed();
+  };
+  // WHAT THE MAP NO LONGER BARS IS LET GO OF, whatever its readmission's
+  // state: the bar is gone — this gesture's in, or one made elsewhere — so a
+  // later eviction's bar is readmitted by a NEW gesture rather than this one
+  // reopened.
+  const barred = useMemo(() => barredNodes(e), [e]);
+  useEffect(() => {
+    setReadmits((all) => {
+      const kept = Object.fromEntries(Object.entries(all).filter(([node]) => barred.has(node)));
+      return Object.keys(kept).length === Object.keys(all).length ? all : kept;
+    });
+  }, [barred]);
   const rows = useMemo(() => e.partitions.filter((p) => p.space === space), [e.partitions, space]);
   const total = e.partitions.length;
 
@@ -497,7 +542,7 @@ function PlacedEstateView({
               shrink: true,
               cell: (m) =>
                 m.barred ? (
-                  <ReadmitPointer node={m.node} />
+                  <ReadmitButton node={m.node} held={readmits[m.node]} onOpen={setReadmitting} />
                 ) : (
                   <span className="row gap-1">
                     {m.probation && !m.out && (
@@ -526,13 +571,15 @@ function PlacedEstateView({
             <div className="col gap-2">
               {e.barred.map((b) => (
                 <Callout key={b.node} variant="warning" role="status">
-                  <InlineCode>{b.node}</InlineCode> is barred from the estate map by {b.by}
-                  {b.reason ? ` (${b.reason})` : ""}: the map does not hold it, and should it come
-                  back it is placed on nothing until it is readmitted from the{" "}
-                  <a className="prose-link" href={href(["admin", "fleet"])}>
-                    Fleet screen
-                  </a>
-                  .
+                  <span className="row wrap gap-2 baseline">
+                    <span>
+                      <InlineCode>{b.node}</InlineCode> is barred from the estate map by {b.by}
+                      {b.reason ? ` (${b.reason})` : ""}: the map does not hold it, and should it
+                      come back it is placed on nothing until it is readmitted — which takes it back
+                      on every log, then lifts the bar.
+                    </span>
+                    <ReadmitButton node={b.node} held={readmits[b.node]} onOpen={setReadmitting} />
+                  </span>
                 </Callout>
               ))}
             </div>
@@ -565,6 +612,15 @@ function PlacedEstateView({
         )}
       </Card>
 
+      {readmitting && (
+        <GateDialog
+          node={readmitting}
+          evict={false}
+          held={readmits[readmitting]}
+          onHeld={(g) => holdReadmit(readmitting, g)}
+          onClose={() => setReadmitting(null)}
+        />
+      )}
       {open?.kind === "member" && (
         <EstateMemberDialog
           node={open.node}
@@ -709,23 +765,51 @@ function StoreCell({ lease, live }: { lease?: EstateLease; live: boolean }) {
   return <StatusCell glyph="●" label={`ok · ${fmtBytes(lease.free_bytes)} free`} tone="positive" />;
 }
 
+/** Every node the map bars: a member barred on its row, and one it does not hold. */
+function barredNodes(e: PlacedEstate): Set<string> {
+  return new Set([
+    ...e.members.filter((m) => m.barred).map((m) => m.node),
+    ...e.barred.map((b) => b.node),
+  ]);
+}
+
 /**
- * Where a barred member is put back: its READMISSION, on the Fleet screen's
- * retention panel — never this screen's "Put back", which the engine refuses
- * for a barred node (`barred_member`). The bar stands for the eviction on every
- * log the node was counted on, and only the readmission knows when those have
- * all taken it back; a button here that posted `/estate/in` would be one an
- * operator clicks and is refused by every time.
+ * What a barred node's readmission button says, from the readmission this
+ * screen holds for it — the retention panel's rule ([gateAction]) for its one
+ * sign: a gesture still to be finished reopens as itself, and so does a
+ * complete one whose bar the map has not dropped yet, rather than a fresh
+ * gesture under a new id.
  */
-function ReadmitPointer({ node }: { node: string }) {
+function readmitLabel(held?: GateGesture): string {
+  if (held && finishable(held)) return "Finish readmission…";
+  if (held?.answer?.complete) return "Readmission sent…";
+  return "Readmit…";
+}
+
+/**
+ * How a barred node is put back: its READMISSION — never this screen's "Put
+ * back", which the engine refuses for a barred node (`barred_member`). The bar
+ * stands for the eviction on every log the node was counted on, and only the
+ * readmission knows when those have all taken it back.
+ */
+function ReadmitButton({
+  node,
+  held,
+  onOpen,
+}: {
+  node: string;
+  held?: GateGesture;
+  onOpen: (node: string) => void;
+}) {
   return (
-    <a
-      className="t-link"
-      href={href(["admin", "fleet"])}
-      title={`${node} is barred by an eviction: readmit it from the Fleet screen's retention panel, which puts it back in the map once every log has taken it back`}
+    <Button
+      variant="tertiary"
+      size="small"
+      title={`${node} is barred by an eviction: its readmission takes it back on every log the eviction reached, then lifts the bar`}
+      onClick={() => onOpen(node)}
     >
-      Readmit on Fleet
-    </a>
+      {readmitLabel(held)}
+    </Button>
   );
 }
 

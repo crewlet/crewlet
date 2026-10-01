@@ -426,10 +426,9 @@ serves every partition, since a node reaches only the logs of the partitions
 it serves ([the retention guide](../guides/retention.md#eviction) says how).
 Nothing else lifts it: `crewlet estate in` refuses a barred node
 (`barred_member`) with the map unchanged — and the dashboard's estate screen
-offers a barred member no **Put back**, pointing at its readmission on the
-Fleet screen instead — because an in cannot see the logs, and lifting the bar
-before they have all taken the node back would place partitions on a node they
-still gate. On a fleet where no
+offers a barred node no **Put back** but **Readmit…**, the readmission itself
+— because an in cannot see the logs, and lifting the bar before they have all
+taken the node back would place partitions on a node they still gate. On a fleet where no
 node serves every partition, no gesture sees every log done, and the node stays
 barred: this build sends a log's gate record only to the node the operator
 asked, never on to a node that serves the log.

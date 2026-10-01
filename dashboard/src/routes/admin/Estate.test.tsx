@@ -11,9 +11,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { EstateView, estateSummary } from "./Estate.tsx";
-import { Router, href } from "~/app/router.tsx";
+import { Router } from "~/app/router.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
-import type { EstateGestureAnswer, FleetEstate, PlacedEstate } from "~/protocol/index.ts";
+import type {
+  EstateGestureAnswer,
+  FleetEstate,
+  PlacedEstate,
+  RetentionGateResult,
+} from "~/protocol/index.ts";
 
 interface EstateGolden {
   estate: Record<string, FleetEstate>;
@@ -21,6 +26,19 @@ interface EstateGolden {
   refusals: Record<string, { status: number; body: Record<string, unknown> }>;
 }
 const golden = engineFile<EstateGolden>("internal/api/testdata/estate_answer.json");
+
+/**
+ * The readmission's answers, from the gate routes' own golden: a barred node is
+ * readmitted from this screen, in the retention panel's dialog.
+ */
+const gate = engineFile<{ answers: Record<string, RetentionGateResult> }>(
+  "internal/api/testdata/gate_answer.json",
+);
+function gateAnswer(name: string): RetentionGateResult {
+  const a = gate.answers[name];
+  if (!a) throw new Error(`the gate golden has no answer named ${name}`);
+  return structuredClone(a);
+}
 
 function state(name: string): FleetEstate {
   const s = golden.estate[name];
@@ -163,11 +181,9 @@ describe("a placed map", () => {
     expect(within(d).queryByText("out")).toBeNull();
     // NO PUT-BACK FOR A BARRED MEMBER: the engine refuses an in of one
     // (`barred_member`), and only its readmission lifts the bar — so the
-    // row points there instead.
+    // row offers that instead.
     expect(within(d).queryByRole("button", { name: /Put back/ })).toBeNull();
-    expect(within(d).getByRole("link", { name: "Readmit on Fleet" }).getAttribute("href")).toBe(
-      href(["admin", "fleet"]),
-    );
+    expect(within(d).getByRole("button", { name: "Readmit…" })).toBeTruthy();
     // data-x, never held, and data-e, which the map removed: each named once,
     // as barred — data-e is not also offered a removed node's "Put back now".
     expect(screen.getAllByText(/is barred from the estate map by founder/)).toHaveLength(2);
@@ -181,6 +197,111 @@ describe("a placed map", () => {
     expect(screen.getByText("Held")).toBeTruthy();
     expect(screen.getByText(/kernel upgrade/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Release hold" })).toBeTruthy();
+  });
+});
+
+// A BARRED NODE IS READMITTED WHERE THE BAR IS. The retention panel offers a
+// readmission only for a node whose logs still hold its eviction, so a
+// readmission whose logs all took the node back while its map part did not land
+// left the node barred with nothing on the dashboard to lift it: this screen
+// pointed at that panel, and that panel offered "Evict…". Every node below has
+// no retention report at all — the bar alone is what offers the gesture.
+describe("readmitting a barred node", () => {
+  /** The member row of a node, wherever the grid drew its id. */
+  function rowOf(node: string): HTMLElement {
+    return screen
+      .getAllByText(node)
+      .map((el) => el.closest(".grid-row"))
+      .find(Boolean) as HTMLElement;
+  }
+
+  /** Types the node id and presses Readmit, in the dialog that opened. */
+  function confirmReadmit(node: string) {
+    const dialog = within(screen.getByRole("dialog"));
+    fireEvent.change(dialog.getByLabelText(`Type ${node} to confirm`), {
+      target: { value: node },
+    });
+    fireEvent.click(dialog.getByRole("button", { name: "Readmit" }));
+  }
+
+  test("a barred member's row sends its readmission, typed out, and re-reads the map", async () => {
+    const sent = engine({ status: 200, body: gateAnswer("readmit_map_in") });
+    const changed = vi.fn();
+    view(state("barred"), changed);
+    fireEvent.click(within(rowOf("data-d")).getByRole("button", { name: "Readmit…" }));
+    expect(screen.getByRole("dialog").textContent).toMatch(/Readmit data-d/);
+    confirmReadmit("data-d");
+    await waitFor(() => expect(screen.getByText(/readmitted on every log/)).toBeTruthy());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.pathname).toBe("/work/retention/readmit/data-d");
+    expect(sent[0]!.searchParams.get("confirm")).toBe("data-d");
+    expect(sent[0]!.searchParams.get("op_id")).toMatch(/\.readmit-data-d$/);
+    expect(changed).toHaveBeenCalled();
+  });
+
+  test("a barred node the map does not hold is readmitted from its line", async () => {
+    const sent = engine({ status: 200, body: gateAnswer("readmit_map_in") });
+    view(state("barred"));
+    const line = screen
+      .getByText(/data-x/, { selector: "code" })
+      .closest('[role="status"]') as HTMLElement;
+    fireEvent.click(within(line).getByRole("button", { name: "Readmit…" }));
+    confirmReadmit("data-x");
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.pathname).toBe("/work/retention/readmit/data-x");
+  });
+
+  test("a readmission whose map was not written is finished here, under its own id", async () => {
+    const sent = engine(
+      { status: 200, body: gateAnswer("readmit_map_unwritten") },
+      { status: 200, body: gateAnswer("readmit_map_in") },
+    );
+    view(state("barred"));
+    fireEvent.click(within(rowOf("data-d")).getByRole("button", { name: "Readmit…" }));
+    confirmReadmit("data-d");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Finish this gesture" })).toBeTruthy(),
+    );
+    // CLOSED, IT IS STILL THE SAME GESTURE: the row says so, and reopens it
+    // with its Finish rather than a fresh confirmation under a new id.
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+    const finish = within(rowOf("data-d")).getByRole("button", { name: "Finish readmission…" });
+    fireEvent.click(finish);
+    expect(screen.queryByLabelText("Type data-d to confirm")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]!.searchParams.get("op_id")).toBe(sent[0]!.searchParams.get("op_id"));
+  });
+
+  test("a readmission the map took is held until the map no longer bars the node", async () => {
+    engine({ status: 200, body: gateAnswer("readmit_map_in") });
+    const barred = placed("barred");
+    const r = view(barred);
+    fireEvent.click(within(rowOf("data-d")).getByRole("button", { name: "Readmit…" }));
+    confirmReadmit("data-d");
+    await waitFor(() => expect(screen.getByText(/readmitted on every log/)).toBeTruthy());
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+    // THE POLL HAS NOT SHOWN IT YET: reopened, it is the answer just given,
+    // never a second gesture.
+    expect(within(rowOf("data-d")).getByRole("button", { name: "Readmission sent…" })).toBeTruthy();
+    // THE MAP DROPS THE BAR, so the gesture is let go of: a later eviction's
+    // bar is readmitted by a new gesture rather than this one reopened.
+    const lifted = structuredClone(barred);
+    const d = lifted.members.find((m) => m.node === "data-d")!;
+    d.barred = false;
+    d.out = false;
+    r.rerender(
+      <Router>
+        <EstateView estate={lifted} />
+      </Router>,
+    );
+    expect(within(rowOf("data-d")).queryByRole("button", { name: /Readmi/ })).toBeNull();
+    r.rerender(
+      <Router>
+        <EstateView estate={structuredClone(barred)} />
+      </Router>,
+    );
+    expect(within(rowOf("data-d")).getByRole("button", { name: "Readmit…" })).toBeTruthy();
   });
 });
 
