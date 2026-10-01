@@ -3595,7 +3595,11 @@ rendered idle from the first phase to the last.
   all once the cells read the clock themselves. A screen holds `useNow` only
   for what is genuinely about the second — a live strip, a countdown — and
   where one component on it is, that component reads it rather than the
-  screen (the schedules' hour-ahead tile, a parked run's hold). A value a
+  screen (the schedules' hour-ahead tile, a parked run's hold). A stopwatch
+  is read in the element that shows it, never at the top of the card it sits
+  on: a running phase's and a running turn's count read it there, and read at
+  the card they drew it once a second — every round, tool call and prompt
+  document of the phase, and every phase card open under the turn. A value a
   screen DERIVES from the clock is a reading too, compared by value: the
   inbox's attention queue (a round goes stale at two minutes, a parked run
   counts down its pause window) is worked out on every tick and draws the

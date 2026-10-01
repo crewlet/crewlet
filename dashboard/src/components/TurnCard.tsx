@@ -21,7 +21,7 @@ import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlet
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
-import { useClockReading } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
@@ -62,12 +62,6 @@ export function TurnCard({
   const took = measured ? row!.duration_ms : group.span;
   const startedAt = row?.started_at || group.startedAt;
   const began = tsKey(startedAt);
-  // RUNNING FOR HOW LONG, or landed WHEN — read off the clock as WORDS, so the
-  // card renders when they change rather than every second: a stopwatch moves
-  // each second, "4m ago" once a minute.
-  const when = useClockReading((now) =>
-    group.live ? (began > 0 ? fmtElapsed(now - began) : "") : relTime(group.at, now),
-  );
 
   const trigger = group.trigger;
   const headline = triggerHeadline(trigger);
@@ -185,10 +179,16 @@ export function TurnCard({
           dateTime={group.live ? startedAt : group.at}
           title={fmtDateTime(group.live ? startedAt : group.at)}
         >
+          {/* THE CLOCK READ IN THE ELEMENT THAT SHOWS IT. A running turn's
+              stopwatch moves every second, and read at the top of the card it
+              drew the card and every phase card open under it once a second
+              for as long as the turn ran. */}
           {group.live && began <= 0 ? (
             <EmptyValue label="Started at an instant this build could not read" />
           ) : (
-            when
+            <ClockText
+              read={(now) => (group.live ? fmtElapsed(now - began) : relTime(group.at, now))}
+            />
           )}
         </time>
       </header>

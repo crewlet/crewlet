@@ -86,6 +86,7 @@ import {
 import { indentJSON } from "~/lib/jsontext.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useClockReading } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
@@ -375,13 +376,12 @@ export function PhaseCard({
   const [open, setOpen] = useState(!!defaultOpen);
   const { ledger, legacy } = ledgerOf(record);
   const streaming = ledger.some((r) => r.streaming);
-  // THE CLOCK AS WORDS, so the card renders when they change rather than every
-  // second: "stalled 2m" and "4m ago" move once a minute, and only a live
-  // phase's stopwatch moves each second.
+  // WHETHER A LIVE PHASE HAS GONE QUIET, read as the word: it changes at two
+  // minutes and at ten, so the card renders on those two ticks. The stopwatch
+  // beside it moves every second and reads the clock in the element that
+  // shows it (below) — read here, it drew the whole card once a second, every
+  // round, tool call and prompt document of a running phase included.
   const stale = useClockReading((now) => (record.live ? staleness(record.at, now) : ""));
-  const when = useClockReading((now) =>
-    record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now),
-  );
   const took = phaseDuration(record);
   const onOwnEventPage = useIsCurrent(["events", record.eventId]);
   // The last round is the live one while the phase runs: rounds only append,
@@ -541,7 +541,11 @@ export function PhaseCard({
           dateTime={record.live ? record.startedAt : record.at}
           title={fmtDateTime(record.live ? record.startedAt : record.at)}
         >
-          {when}
+          <ClockText
+            read={(now) =>
+              record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)
+            }
+          />
         </time>
       </header>
 
