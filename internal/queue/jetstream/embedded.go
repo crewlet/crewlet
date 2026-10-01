@@ -626,6 +626,9 @@ func (e *embeddedServer) connect(loss *connectionLoss) (*nats.Conn, error) {
 		nats.Timeout(acceptBudget(e.clustered)),
 		nats.ReconnectHandler(reconnectWatch{
 			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
+		// And the client's asynchronous errors through the engine's own
+		// logger rather than its default's raw stderr: see [clientErrors].
+		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
 	opts = append(opts, watchClose(loss, true, "")...)
 	var nc *nats.Conn
@@ -758,6 +761,9 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 		// own check a boot cannot reach. See [reconnectWatch].
 		nats.ReconnectHandler(reconnectWatch{
 			log: logging.Get("queue.jetstream")}.reconnected),
+		// And the client's asynchronous errors through the engine's own
+		// logger rather than its default's raw stderr: see [clientErrors].
+		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
 	if cfg.Credentials != "" {
 		opts = append(opts, nats.UserCredentials(cfg.Credentials))

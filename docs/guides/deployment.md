@@ -1571,6 +1571,16 @@ and the second is not. `stream.debug` is **refused** for `stream.type: nats` —
 an external cluster logs wherever its own operator configured it to, so a flag
 here would reach nothing.
 
+**The NATS client's own errors go through the same logger**, on every
+topology, embedded or external. What the client reports outside any call —
+a slow consumer, a permissions violation, a server refusing this node's
+credentials on a reconnect — is `jetstream_client_error` at `WARN` under
+`queue.jetstream`, naming the subscription where there is one. Left to the
+client's default it was a bare line written straight to stderr, outside
+`logging.file`, outside any level and in the middle of a `json` stream; the
+credentials refusal that comes before a [connection closed for
+good](#an-external-nats-server) was said only there.
+
 ### Per-Agent Token Tracking
 
 Every LLM completion records prompt, completion and total tokens plus a call
