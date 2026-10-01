@@ -137,9 +137,9 @@ type HumanContact struct {
 	// credentials, and the org chart says which of them is a person.
 	//
 	// Unbound is an ORDINARY state, not a misconfiguration. An operator
-	// who is not in the org chart, a pipeline, an automation: each acts as
-	// `operator:<id>` under the label its token carries, and is never
-	// refused for it.
+	// who is not in the org chart, a pipeline, an automation: each writes
+	// under its token's own id as the author, with author kind `operator`,
+	// and is never refused for it.
 	//
 	// Lower-cased like the code-host logins, because the guard compares
 	// what an operator typed here against what they typed in Tier A and

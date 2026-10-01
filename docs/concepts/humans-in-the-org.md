@@ -54,7 +54,7 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID. One ID covers Jira assignments, Confluence `<ri:user>` mentions and webhook sender attribution on both |
 | `contact.github_login` | one identity | GitHub username: review requests, sender attribution. Lowercased |
 | `contact.gitlab_username` | one identity | GitLab username: assignment, review and mention routing, sender attribution. Lowercased |
-| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and it acts as `operator:<id>` under its own label rather than being refused. One id can never be bound: `anonymous`, the attribution a disabled `api.auth` guard stamps on every caller. Binding it would make whoever reaches an unguarded engine this person, so the literal is refused naming this field, and a `${VAR}` that resolves to it binds nobody |
+| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`, which is always lowercase. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and its writes carry the token's own id as the author, with author kind `operator`, rather than being refused. One id can never be bound: `anonymous`, the attribution a disabled `api.auth` guard stamps on every caller. Binding it would make whoever reaches an unguarded engine this person, so the literal is refused naming this field, and a `${VAR}` that resolves to it binds nobody |
 | `email` | no | Indexed so a notification addressed to the address resolves to the seat. **Not** a delivery channel: no agent has an email tool by default |
 | `availability` | no | Free text rendered into a lead's roster (timezone, hours, response expectations) |
 
@@ -137,8 +137,8 @@ it, so work she files through her assistant wakes her colleagues and not
 her.
 
 Bind the token and your own work is on your own screen; leave it unbound and
-you are an operator outside the chart, acting as `operator:<id>`, which is an
-ordinary state and not an error.
+you are an operator outside the chart, writing under the token's own id with author kind
+`operator`, which is an ordinary state and not an error.
 
 **Your own marks and pins are the person's, and the record still names the
 token.** *Whose* state a document holds and *who wrote it* are two different
