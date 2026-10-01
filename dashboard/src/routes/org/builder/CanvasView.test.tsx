@@ -1243,6 +1243,9 @@ describe("the chart's chrome", () => {
    */
   const bar = () => screen.getByRole("button", { name: "Zoom out" }).parentElement!;
   const group = () => bar().parentElement!;
+  // THE CHART'S OWN REGION, asked of the chart's control group: the page also
+  // holds the application's live region, which the editor speaks into.
+  const hint = () => within(group()).getByRole("status");
 
   test("what the page hands in is drawn in the canvas's own control group", () => {
     const spies = builderSpies();
@@ -1276,8 +1279,8 @@ describe("the chart's chrome", () => {
     mount();
     // The bar, and the region the way out of fullscreen is said in, which is
     // empty until there is something to say and drawn as nothing while it is.
-    expect([...group().children]).toEqual([bar(), screen.getByRole("status")]);
-    expect(screen.getByRole("status").textContent).toBe("");
+    expect([...group().children]).toEqual([bar(), hint()]);
+    expect(hint().textContent).toBe("");
   });
 
   /*
@@ -1290,7 +1293,7 @@ describe("the chart's chrome", () => {
     const { container } = mount();
     // The region is there and says nothing, which is what makes what it says
     // next an announcement rather than a surface appearing.
-    expect(screen.getByRole("status").textContent).toBe("");
+    expect(hint().textContent).toBe("");
 
     const element = container.querySelector("div")!;
     Object.defineProperty(document, "fullscreenElement", {
@@ -1300,17 +1303,16 @@ describe("the chart's chrome", () => {
     act(() => {
       document.dispatchEvent(new Event("fullscreenchange"));
     });
-    const note = screen.getByRole("status");
     // The key twice, which is `Kbd`: the glyph a reader sees and the word a
-    // screen reader is given for it.
-    expect(note.textContent).toBe("PressEscEscto leave fullscreen");
-    expect(group().contains(note)).toBe(true);
+    // screen reader is given for it — said in the chart's own control group,
+    // which is where `hint` looks.
+    expect(hint().textContent).toBe("PressEscEscto leave fullscreen");
 
     Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
     act(() => {
       document.dispatchEvent(new Event("fullscreenchange"));
     });
-    expect(screen.getByRole("status").textContent).toBe("");
+    expect(hint().textContent).toBe("");
   });
 });
 

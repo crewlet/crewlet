@@ -23,7 +23,9 @@
  * transports send a browser that lost its session — `FollowSessionNeed`,
  * mounted once here beside both, is what reads that and moves. The step-up
  * ceremony (`StepUp.tsx`) is mounted beside both for the same reason: a
- * refusal that asks for a fresher proof arrives on either side.
+ * refusal that asks for a fresher proof arrives on either side. So is the
+ * live region the design system's controls speak into (`announcer.tsx`),
+ * which a region inside the frame would lose on every sign-in.
  *
  * # Keyed on the subject, every screen that has one
  *
@@ -36,6 +38,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { Shell } from "./Shell.tsx";
+import { AppAnnouncer } from "./announcer.tsx";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { framelessOf, type FramelessRoute } from "./nav.ts";
 import { StepUpHost } from "./StepUp.tsx";
@@ -372,6 +375,10 @@ export function App() {
       <LayerHost>
         <FollowSessionNeed />
         <StepUpHost />
+        {/* THE ONE LIVE REGION the design system's controls speak into,
+            beside the frame so a sign-in does not tear it down. See
+            `announcer.tsx`. */}
+        <AppAnnouncer />
         <Frame />
       </LayerHost>
     </ToastProvider>

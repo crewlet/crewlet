@@ -3654,6 +3654,17 @@ rendered idle from the first phase to the last.
   rail is eight rows that already fit. A screen's own half is its labels, its
   coverage and its controls, portalled into the bar; every list it draws is
   [one grid](#every-list-is-one-grid).
+- **What a control did is said, in one region the application mounts.** The
+  package's list, tag and notice controls announce every add, remove and move
+  through a module-level `announce()`, which says nothing unless an
+  `<Announcer>` is mounted — and this application mounted none, so the org
+  builder's editor said nothing to a screen reader and warned in the console
+  instead. `app/announcer.tsx` mounts exactly one, because the package keeps
+  one sentence for the page and a second region would repeat it; beside the
+  frame rather than in the shell, so a sign-in does not tear it down; named
+  Announcements rather than the package's default, which is also what the
+  toast outlet calls its polite region; and portalled into the fullscreen
+  element while there is one.
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
   (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the
@@ -3815,6 +3826,9 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 - **Fullscreen takes the builder container**, never the canvas: the toolbar,
   the view, the dialog host, a toast outlet of its own and the live region all
   render inside it, because a fullscreen element renders only its subtree.
+  The application's announcer, which the editor's lists and pickers speak
+  into, is portalled in beside them for as long as the container is
+  fullscreen.
   The control is not drawn where the Fullscreen API is missing. The sign-in
   is a screen outside the frame, so asking to sign in leaves fullscreen first.
 - **The selection is in the URL, by address, and the toolbar mirrors it.**

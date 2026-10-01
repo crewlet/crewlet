@@ -23,6 +23,7 @@ import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { onTestFinished, vi } from "vitest";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
 import { BuilderContext, type BuilderApi, type BuilderViewHandle } from "./BuilderContext.tsx";
@@ -141,6 +142,12 @@ export function BuilderHarness({
 
   return (
     <Router>
+      {/* WHAT THE APPLICATION MOUNTS AROUND EVERY SCREEN, beside the router:
+          the live region the design system's controls speak into. The
+          editor's lists and pickers announce every add, remove and move, and
+          a harness without it is a page in which nothing can be heard — the
+          package warns on each one, and a suite cannot ask what was said. */}
+      <AppAnnouncer />
       <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>
     </Router>
   );

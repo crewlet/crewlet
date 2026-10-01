@@ -31,6 +31,7 @@ import type { PlacedProblem } from "./model/problems.ts";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { EditorSectionName } from "./BuilderContext.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
+import { ANNOUNCER_LABEL } from "~/app/announcer.tsx";
 import { renderInBuilder, waitInCase, type HarnessOptions } from "./viewTestkit.tsx";
 import { checkedEdit, checkWith, findingOn, record } from "./testState.ts";
 import { Callout } from "@crewlethq/ui";
@@ -506,6 +507,11 @@ describe("seat fields", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Move fast earlier" }));
     expect(screen.getByText("Tried in this order: fast, then smart.")).toBeDefined();
+    // AND A READER WHO CANNOT SEE THE LIST IS TOLD, in the application's own
+    // region: nothing mounted one, so this move was said to nobody.
+    expect(screen.getByRole("status", { name: ANNOUNCER_LABEL }).textContent).toBe(
+      "Moved fast to position 1 of 2",
+    );
 
     apply();
     expect(view.state().log.ops).toHaveLength(2);

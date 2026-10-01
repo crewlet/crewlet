@@ -31,6 +31,7 @@
 import { act, fireEvent, getConfig, render, screen, within } from "@testing-library/react";
 import { onTestFinished, vi } from "vitest";
 import type { ReactNode } from "react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { REDACTED } from "~/lib/format.ts";
 import { noteReader } from "~/lib/reader.ts";
@@ -1299,6 +1300,9 @@ export function mountBuilder({
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
+        {/* The application's live region, which it mounts beside every
+            screen: the node editor's lists speak into it. */}
+        <AppAnnouncer />
         {wrap(
           <Builder
             surfaces={surfaces}
