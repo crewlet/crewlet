@@ -328,6 +328,24 @@ test("an unjudged readmission says it waits on a partition, not on the node", as
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
 
+// A GESTURE REFUSED IN A CAPACITY WINDOW WAITS ON THE WINDOW. Keyed on the
+// gesture, the dialog told an eviction refused `not_publishing` to wait for a
+// lease to lapse and a readmission to wait for a position to catch up — neither
+// of which is what the fleet's maintenance mode waits on.
+test("a gesture refused in a capacity window says it waits on the window", async () => {
+  for (const evict of [true, false]) {
+    const refusal = golden.refusals["not_publishing"]!;
+    engine(refusal);
+    render(<GateDialog node="node-4" evict={evict} onHeld={() => {}} onClose={() => {}} />);
+    confirmAndPress("node-4", evict ? "Evict" : "Readmit");
+    await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
+    expect(screen.getByText(/back in normal mode/)).toBeTruthy();
+    expect(screen.queryByText(/presence lease to lapse/)).toBeNull();
+    expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
+    cleanup();
+  }
+});
+
 // A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture its own
 // answer budget and finishes it whatever the connection does; the dialog gave
 // up at thirty seconds holding nothing, and the only way on was a second

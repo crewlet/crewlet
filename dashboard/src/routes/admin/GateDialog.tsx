@@ -761,16 +761,29 @@ function actionWords(
     case "restore":
       return "Restore the store and the stream from one backup.";
     case "wait":
-      if (evict) {
-        return "Wait for its presence lease to lapse — its row stops showing it live — then evict it again.";
+      // KEYED ON THE REFUSAL, NEVER THE GESTURE: four refusals send `wait`
+      // and each waits on something else. A readmission nobody could judge
+      // waits on a partition being served again, which is nothing about the
+      // node's own position — told to watch it catch up, an operator watched
+      // a number that had already caught up while the gesture stayed
+      // refused — and either gesture refused `not_publishing` waits on the
+      // fleet's capacity window, which neither a lease nor a position says
+      // anything about.
+      switch (code) {
+        case "eviction_refused":
+          return "Wait for its presence lease to lapse — its row stops showing it live — then evict it again.";
+        case "readmission_refused":
+          return "Wait for it to catch up — its position on this screen says when — then readmit it again.";
+        case "readmission_unjudged":
+          return "Wait until the partition the engine names above is served again, then readmit it again.";
+        case "not_publishing":
+          return `Wait until the fleet is back in normal mode — the retention screen's banner says while its capacity window is open — then ${
+            evict ? "evict" : "readmit"
+          } it again.`;
       }
-      // A READMISSION NOBODY COULD JUDGE waits on a partition being served
-      // again, which is nothing about the node's own position: told to
-      // watch it catch up, an operator watched a number that had already
-      // caught up while the gesture stayed refused.
-      return code === "readmission_unjudged"
-        ? "Wait until the partition the engine names above is served again, then readmit it again."
-        : "Wait for it to catch up — its position on this screen says when — then readmit it again.";
+      // A REFUSAL THIS BUILD HAS NO WORDS FOR: the engine's hint above says
+      // what it waits on, and a guess here would contradict it.
+      return "Wait for what the engine names above to clear, then send it again.";
   }
   return `The engine also names ${action}.`;
 }
