@@ -318,7 +318,7 @@ var wireTags = map[string][]string{
 	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_chars", "phase", "role", "system_chars", "tool_chars", "tool_count", "turn_id", "user_chars", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
-	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers"},
+	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
 }
 
 // TestPayloadTagsMatchTheWireContract pins every payload's keys, both ways: a

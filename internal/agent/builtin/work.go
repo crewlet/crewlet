@@ -3467,9 +3467,11 @@ var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
 // seatRead is [seatReadLevel] for the readers that take a whole freshness.
 //
 // NO BOUND AND NO FLOOR, deliberately: a seat reads `linearizable`, which
-// establishes the log's end itself and takes no staleness bound, and the floor
-// a wake carried was waited for before the turn opened (read-your-trigger),
-// so there is nothing left for a tool call to name.
+// establishes the log's end itself and takes no staleness bound — and the
+// position a wake carried is already in the node's floors from the turn's start
+// (the engine's runTurn), which every read the router routes carries to
+// whichever holder answers it, so there is nothing left for a tool call to
+// name.
 var seatRead = statelog.Freshness{Level: seatReadLevel}
 
 // boardEmpty reports whether a grouped answer holds no task at all — which,

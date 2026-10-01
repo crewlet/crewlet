@@ -67,6 +67,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -393,7 +394,9 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
-	ev := events.New(types.RawWebhook{Body: body.Body, Handle: body.Actor}, events.NewTrace())
+	ev := events.New(types.RawWebhook{
+		Body: body.Body, Handle: body.Actor, Trigger: triggerOf(msg.Record),
+	}, events.NewTrace())
 	ev.Source = f.translator.Source().Name
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
 		// THE CLAIM IS RELEASED BEFORE THE NAK. A claim held over a
@@ -438,6 +441,26 @@ func (f *Feed) release(ctx context.Context, id string) {
 		log.WarnContext(ctx, "changefeed_claim_release_failed", "change", id,
 			"error", err.Error())
 	}
+}
+
+// triggerOf is where the record a delivery was derived from was committed, as
+// the token a wake carries ([types.RawWebhook.Trigger]) — or nothing, for an
+// estate whose deliveries carry no log position.
+//
+// THE COMMITTING RECORD'S OWN POSITION, because that is what the woken seat
+// must read no older than: the change that woke it. A seat reading a list
+// across partitions waits for its node's floors rather than appending a
+// barrier on every log, and this is the floor that names what it was woken
+// for.
+func triggerOf(rec Record) string {
+	if rec.Stream == "" || rec.Position == 0 {
+		return ""
+	}
+	at := statelog.Position{Stream: rec.Stream, Generation: uint32(rec.Gen), Seq: rec.Position}
+	if at.Valid() != nil {
+		return ""
+	}
+	return at.String()
 }
 
 // ClaimKey is the dedupe key for one change.

@@ -318,6 +318,41 @@ func TestTheWakeEnvelopeCarriesBothKeys(t *testing.T) {
 	}
 }
 
+// A FIRST-PARTY WAKE CARRIES WHERE ITS CHANGE WAS COMMITTED, on the envelope
+// the turn reads it from and on the metadata a person reads — and a vendor's
+// delivery, which carries none, wakes a seat with none rather than a position
+// that names nothing.
+func TestAWakeCarriesItsChangesPositionOnTheEnvelope(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	native := events.New(types.RawWebhook{
+		Body: map[string]any{"issue": "ENG-42"}, Trigger: "CREWLET_TRACKER_LOG@3:42",
+	}, events.NewTrace())
+	native.Source = "tracker"
+	if got := h.svc.Handle(t.Context(), native); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("the seat was woken %d times", len(woken))
+	}
+	if got := notify.TriggerOf(woken[0]); got != "CREWLET_TRACKER_LOG@3:42" {
+		t.Errorf("the wake's envelope carries trigger %q", got)
+	}
+	n, _ := events.DataAs[*types.ExternalNotification](woken[0])
+	if n == nil || n.Metadata[notify.TriggerField] != "CREWLET_TRACKER_LOG@3:42" {
+		t.Errorf("the wake's metadata does not carry the trigger: %+v", n)
+	}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	vendor := h.settledN(t, topics.AgentInbox("engineering-lead"), 2)[1]
+	if got := notify.TriggerOf(vendor); got != "" {
+		t.Errorf("a delivery carrying no trigger woke a seat with %q", got)
+	}
+}
+
 // A DIRECT MESSAGE IS WHERE THE TWO ANSWERS DIFFER, end to end: two top-level
 // DMs land in ONE partition and ONE conversation, and the reply the agent
 // makes in a thread lands in a DIFFERENT partition and the SAME conversation.

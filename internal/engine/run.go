@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1811,6 +1812,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		attribute.Int("crewlet.delegation_depth", req.Depth))
 	defer span.End()
 
+	// WHAT WOKE THIS TURN IS WHAT ITS READS ARE NO OLDER THAN: every
+	// constituent's committing record goes into this node's floors before
+	// the first read, so a list read across partitions — at `session`,
+	// floored at those floors — shows the change the seat was woken for.
+	e.observeTriggers(ctx, req.Events)
+
 	// THE WORKING INDICATOR, up before this turn does anything slow. Here
 	// rather than beside turn.Run because everything between the two is
 	// already work a person is waiting through: the prefetch reads a chat
@@ -2129,5 +2136,36 @@ func (e *Engine) observe(ctx context.Context, ev *events.Event) {
 		log.WarnContext(ctx, "engine_observation_dropped", "event", ev.Type,
 			"error", err.Error(),
 			"detail", "the work itself is unaffected; the feed will not show it")
+	}
+}
+
+// observeTriggers hands this node's read-your-writes floors the position of
+// every record whose wake is among evs ([notify.TriggerOf]) — the position a
+// first-party change feed stamped on it.
+//
+// THE NODE'S FLOORS, not the turn's: they are what every read this node routes
+// carries ([estate.Session]), to whichever holder answers it, this node's own
+// copy included. A floor a turn raises is one every seat on the node then reads
+// past, which is conservative rather than wrong — never a read from before it.
+//
+// A token this build cannot read is logged and skipped: the turn still runs,
+// and reads exactly as one woken by an older build's wake, which carries none.
+func (e *Engine) observeTriggers(ctx context.Context, evs []*events.Event) {
+	if e.router == nil {
+		return
+	}
+	for _, ev := range evs {
+		token := notify.TriggerOf(ev)
+		if token == "" {
+			continue
+		}
+		at, err := statelog.ParsePosition(token)
+		if err != nil {
+			log.WarnContext(ctx, "turn_trigger_unreadable", "event", ev.ID.String(),
+				"trigger", token, "error", err.Error(),
+				"detail", "the turn runs, and its reads are not floored at what woke it")
+			continue
+		}
+		e.router.Observe(at)
 	}
 }

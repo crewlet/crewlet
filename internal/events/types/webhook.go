@@ -48,6 +48,19 @@ type RawWebhook struct {
 	// it once at the top level, so a transport that only read Body would
 	// attribute every Cloud event to nobody.
 	ForgeAtlassianID string `json:"forge_atlassian_id,omitempty"`
+
+	// Trigger is where on its log the record a FIRST-PARTY delivery was
+	// derived from was committed — the engine's own change feed sets it,
+	// as the position token (`<stream>@<generation>:<sequence>`), and no
+	// vendor's delivery carries one. The seat it wakes reads no older than
+	// it: the wake carries it on, and the turn hands it to its node's
+	// read-your-writes floors before its first read.
+	//
+	// A TOKEN RATHER THAN A POSITION, because this package is below the
+	// state log's and a position's three fields travel as one value.
+	// Additive: an older build drops it, and its turn reads exactly as it
+	// did before.
+	Trigger string `json:"trigger,omitempty"`
 }
 
 // EventType is the wire name every transport subscribes under.
