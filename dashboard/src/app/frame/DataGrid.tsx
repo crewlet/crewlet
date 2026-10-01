@@ -366,7 +366,11 @@ export function DataGrid<T>({
   const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
   const columnSet = colsName ?? name;
   const [colsRaw, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
-  const sort = parseSort(sortRaw);
+  // ONE VALUE PER `sort=`, so everything keyed on the order — the sorted rows,
+  // the cursor's walk — is worked out again when the order changes and at no
+  // other render. Parsed afresh it was a new object every render, and the grid
+  // sorted its whole answer on every one of them.
+  const sort = useMemo(() => parseSort(sortRaw), [sortRaw]);
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(-1);
   // UNIQUE PER MOUNTED GRID, not per `name`. A page and the peek rail over it
@@ -395,33 +399,52 @@ export function DataGrid<T>({
       const column = columns.find((c) => c.key === sort.key);
       if (!column?.sortValue) return input;
       const get = column.sortValue;
+      // EACH ROW'S VALUE READ ONCE, and the rows sorted by it: a comparator
+      // that read both values on every comparison read each row's about
+      // twice log n times, and a column's `sortValue` is free to do work.
       // A COPY, always: sorting the array a parent memoised would mutate the
-      // caller's own state and make the next render's diff a lie.
-      return [...input].sort((a, b) => {
-        const av = get(a);
-        const bv = get(b);
-        // An absent value sorts last in both directions: "nothing recorded"
-        // is not the smallest value, it is not a value.
-        if (av == null && bv == null) return 0;
-        if (av == null) return 1;
-        if (bv == null) return -1;
-        const cmp = compare(av, bv);
-        return sort.desc ? -cmp : cmp;
-      });
+      // caller's own state and make the next render's diff a lie — and the
+      // sort is stable, so equal values keep the order they arrived in.
+      return input
+        .map((row) => ({ row, value: get(row) }))
+        .sort((a, b) => {
+          const av = a.value;
+          const bv = b.value;
+          // An absent value sorts last in both directions: "nothing recorded"
+          // is not the smallest value, it is not a value.
+          if (av == null && bv == null) return 0;
+          if (av == null) return 1;
+          if (bv == null) return -1;
+          const cmp = compare(av, bv);
+          return sort.desc ? -cmp : cmp;
+        })
+        .map((keyed) => keyed.row);
     },
     [columns, sort, serverSorted],
   );
+
+  // THE ROWS IN THE ORDER THEY DRAW, SORTED ONCE — every band's own rows, or
+  // the ungrouped list — and drawn from here rather than sorted again in the
+  // render: the grid sorted its answer twice a render, once for the cursor's
+  // walk and once to draw it.
+  const ordered = useMemo(() => {
+    const order = (band: GridBand<T>): GridBand<T> =>
+      band.bands
+        ? { ...band, bands: band.bands.map(order) }
+        : { ...band, rows: sortRows(band.rows) };
+    return bands
+      ? { bands: bands.map(order), rows: [] }
+      : { bands: null, rows: sortRows(rows ?? []) };
+  }, [bands, rows, sortRows]);
 
   const flat = useMemo(() => {
     // THROUGH THE SUB-BANDS TOO, and in the order they draw: this is the list
     // `j`, `k` and `enter` walk, so a row the grid renders and this misses is a
     // row the cursor steps over — and a row counted here that is not rendered
     // puts every later `data-row-index` one place out.
-    const walk = (band: GridBand<T>): T[] =>
-      band.bands ? band.bands.flatMap(walk) : sortRows(band.rows);
-    if (bands) return bands.flatMap(walk);
-    return sortRows(rows ?? []);
-  }, [bands, rows, sortRows]);
+    const walk = (band: GridBand<T>): T[] => (band.bands ? band.bands.flatMap(walk) : band.rows);
+    return ordered.bands ? ordered.bands.flatMap(walk) : ordered.rows;
+  }, [ordered]);
 
   // `j` and `k` walk a cursor row; `enter` activates it. No selection, because
   // there is nothing to do with one.
@@ -603,7 +626,7 @@ export function DataGrid<T>({
             {band.total != null && band.total !== loaded ? `${loaded} of ${band.total}` : loaded}
           </span>
         </div>
-        {band.bands ? band.bands.map((sub) => renderBand(sub)) : sortRows(band.rows).map(renderRow)}
+        {band.bands ? band.bands.map((sub) => renderBand(sub)) : band.rows.map(renderRow)}
         {band.footer && <div className="grid-band-foot">{band.footer}</div>}
       </div>
     );
@@ -682,7 +705,9 @@ export function DataGrid<T>({
       </div>
 
       <div className="grid-body" ref={body}>
-        {bands ? bands.map((band) => renderBand(band)) : sortRows(rows ?? []).map(renderRow)}
+        {ordered.bands
+          ? ordered.bands.map((band) => renderBand(band))
+          : ordered.rows.map(renderRow)}
       </div>
 
       {(footer || onLoadMore || loadedNote) && (

@@ -622,3 +622,91 @@ test("a screen rendering with the same rows and columns draws no row", () => {
   fireEvent.click(screen.getAllByRole("button")[0]!);
   expect(seen).toEqual(["u0"]);
 });
+
+// THE ORDER IS THE COLUMN'S, AND IT IS WORKED OUT ONCE.
+//
+// The grid sorted its whole answer twice a render — once for the cursor's
+// walk, once to draw it — and read both rows' values on every comparison, and
+// it did so on every render, because the parsed `sort=` was a new object each
+// time and every memo keyed on it missed. A screen rendering for any reason
+// re-sorted its grids. These cases hold the order itself, and that a row's
+// value is read once per order and not at all by a render that changes none.
+
+interface Ranked {
+  id: string;
+  rank: string | null;
+}
+
+/** One grid sorted by `rank`, whose sort value counts its reads. */
+function rankedGrid(rows: Ranked[], sort: string, bands = false) {
+  location.hash = `#/?sort=${sort}`;
+  const reads = { count: 0 };
+  const columns = [
+    {
+      key: "rank",
+      header: "Rank",
+      sortValue: (r: Ranked) => {
+        reads.count += 1;
+        return r.rank;
+      },
+      cell: (r: Ranked) => r.id,
+    },
+  ];
+  let rerender: () => void = () => {};
+  function Screen() {
+    const [, setN] = useState(0);
+    rerender = () => setN((x) => x + 1);
+    return (
+      <DataGrid<Ranked>
+        {...(bands
+          ? {
+              bands: [
+                { key: "first", label: "First", rows: rows.slice(0, 3) },
+                { key: "rest", label: "Rest", rows: rows.slice(3) },
+              ],
+            }
+          : { rows })}
+        rowKey={(r) => r.id}
+        columns={columns}
+      />
+    );
+  }
+  const view = render(
+    <Router>
+      <Screen />
+    </Router>,
+  );
+  const order = () =>
+    [...view.container.querySelectorAll(".grid-row")].map((row) => row.textContent ?? "");
+  return { reads, order, rerender: () => act(() => rerender()) };
+}
+
+const RANKED: Ranked[] = [
+  { id: "b", rank: "b" },
+  { id: "a1", rank: "a" },
+  { id: "none", rank: null },
+  { id: "c", rank: "c" },
+  { id: "a2", rank: "a" },
+];
+
+test("a grid orders by its column, the absent last both ways and equals as they came", () => {
+  expect(rankedGrid(RANKED, "rank").order()).toEqual(["a1", "a2", "b", "c", "none"]);
+  cleanup();
+  expect(rankedGrid(RANKED, "-rank").order()).toEqual(["c", "b", "a1", "a2", "none"]);
+  cleanup();
+  // AND A BAND ORDERS ITS OWN ROWS, under its own head.
+  expect(rankedGrid(RANKED, "rank", true).order()).toEqual(["a1", "b", "none", "a2", "c"]);
+  location.hash = "#/";
+});
+
+test("a row's sort value is read once per order, and not by a render that changes none", () => {
+  const { reads, rerender } = rankedGrid(RANKED, "rank");
+  expect(reads.count).toBe(RANKED.length);
+  reads.count = 0;
+  rerender();
+  expect(reads.count).toBe(0);
+  // A NEW ORDER IS READ AGAIN, once.
+  fireEvent.click(screen.getByRole("button", { name: "Rank" }));
+  expect(reads.count).toBe(RANKED.length);
+  location.hash = "#/";
+});

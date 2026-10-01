@@ -683,6 +683,14 @@ It was a store every grid subscribed to: each grid's mount drew every row of
 every grid a second time, and every pointer press that moved the keyboard did
 the same, 143–197 ms on two hundred-row grids to change no pixel.
 
+**The order is worked out once per change.** A grid sorts when its rows, its
+columns or `sort=` change, reads each row's `sortValue` once to do it, and
+draws from that one sorted answer. It sorted twice a render — once for the
+cursor's walk, once to draw — read both values on every comparison, and did
+it on every render, because the parsed `sort=` was a new object each time:
+8,356 reads of a column's value for a three-hundred-row grid on each render,
+where it is now 300 when the order changes and none otherwise.
+
 **A `shrink` column is capped, because `max-content` is not "shrink to
 content" — it is *grow* to content, with no ceiling.** Grid resolves an
 intrinsic track before it gives anything to a flexible one, so a single long
