@@ -227,6 +227,7 @@ test("a tick of the clock draws nothing on the audit", async () => {
       </Router>
     </Profiler>,
   );
+  const answered = flushInCase();
   await answered();
   expect(screen.getByText("edit 19")).toBeTruthy();
   const settled = commits;
@@ -569,7 +570,7 @@ test("a reader's own window cuts every source at the end they named", async () =
       revision("rev-after", to + 60_000, "after the window"),
     ],
   });
-  mount();
+  const { answered } = mount();
   await answered();
   expect(asked(query, "work_activity").to).toBe(iso(to));
   expect(screen.getByText("inside the window")).toBeTruthy();
