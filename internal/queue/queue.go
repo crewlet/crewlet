@@ -8,10 +8,11 @@
 // engine is concerned, and nothing above this package may branch on which
 // backend is running. One broker carries both this stream and the fleet's
 // coordination store, and a node runs on it only while every connection it
-// holds to it is open: the queue's own, and on an embedded broker the
+// cannot run without is open: the queue's own, and on an embedded broker the
 // coordination store's second one, both watched so that either closing for
-// good stops the node — ADR-0001, and the reason a broker without
-// compare-and-set cannot be a backend here however good its messaging is.
+// good stops the node (a snapshot donor's connection is not one of them) —
+// ADR-0001, and the reason a broker without compare-and-set cannot be a
+// backend here however good its messaging is.
 //
 // The rationale a reader should not have to re-derive:
 //

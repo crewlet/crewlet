@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue`
-- **Enforced-by:** `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, the `queuetest` conformance suite every backend runs, and `internal/queue/jetstream.TestEveryConnectionANodeDependsOnIsWatched`, which holds that every connection a node runs on is watched on both topologies
+- **Enforced-by:** `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, the `queuetest` conformance suite every backend runs, `internal/queue/jetstream.TestEveryConnectionANodeDependsOnIsWatched`, which holds that the queue's own connection and every second one `DialWatched` opens are watched on both dials while a donor's `DialOwned` one is not, and `internal/engine.TestTheCoordinationConnectionIsWatched`, which holds that the embedded broker's coordination connection is one of the watched kind
 - **Measured:** creating a durable consumer with nothing attached is an ordinary API call at about 1.7 ms. The delivery budget before a message is dead-lettered is 25 rather than the ~10 a broker with a free handoff would need, because every path back to the broker — the Nak a node uses to hand a seat back included — increments the delivery count.
 - **Cost-when-tried:** the Apache Pulsar backend. It has no compare-and-set, so it could not hold the coordination state at all, and every Pulsar deployment ran a second NATS estate beside it to serve one company. And a second connection to the one broker, dialled UNWATCHED: the embedded broker's coordination connection was opened with no closed handler, so NATS closing it for good left a node consuming work over the queue's connection while every lease renewal failed, reported by nothing.
 - **Tag-status:** unreleased
@@ -23,7 +23,7 @@ lives on the same broker that carries this node's inbox** — seat leases, the
 completion ledger, the delivery dedupe, the token counter, the activation
 pointer and the company's sealed secrets all on the servers the seat's mail
 arrives from — **and that a node runs on that broker only while every
-connection it holds to it is open**.
+connection it cannot run without is open**.
 
 How many connections that is depends on the topology:
 
@@ -36,6 +36,11 @@ How many connections that is depends on the topology:
   is an ordered consumer over its whole history and a backup copies whole
   streams, and on the queue's own connection either would sit on the read loop
   every mailbox consumes through.
+
+A snapshot donor's connection (`jetstream.Queue.DialOwned`) is held to the same
+broker and is not one of them: it serves peers that fell behind, a node whose
+donor is down still serves its own company, and its loss is the donor's to
+notice and dial again.
 
 **Both connections are watched.** NATS closing either one for good — rather
 than reconnecting — stops the node: it drains, tears down and exits non-zero
@@ -61,7 +66,7 @@ are on the same servers, so reaching one is reaching the other, which is worth
 more than any broker feature the second estate would have brought.
 
 What one broker leaves is narrower: a connection to it can close on its own,
-and on the embedded broker a node holds two. That residue is closed by
+and on the embedded broker a node depends on two. That residue is closed by
 WATCHING rather than by sharing — sharing one connection would put the replay
 and the backup's bulk reads on the mailboxes' read loop, and a watched second
 connection costs the split nothing but the length of a reconnect.

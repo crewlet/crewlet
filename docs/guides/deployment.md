@@ -835,8 +835,8 @@ They are one command, and they build the **same** application: every node learns
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field). A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
-Both communicate through the stream, and through the coordination KV riding
-the same connection — never with each other. Both accept `-debug` for verbose
+Both communicate through the stream, and through the coordination KV on the
+same broker — never with each other. Both accept `-debug` for verbose
 logging.
 
 ### Replica count

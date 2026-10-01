@@ -162,6 +162,10 @@ func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 // told not to for the node's own Close at shutdown. A connection dialled the
 // way a donor's is carries neither, and its loss would be heard by nothing.
 //
+// It is the engine's half of the gate ADR-0001 names: the jetstream package
+// holds that a DialWatched connection is watched, and this holds that the
+// coordination store's connection is one.
+//
 // Mutation: open it with DialOwned and both halves go red.
 func TestTheCoordinationConnectionIsWatched(t *testing.T) {
 	t.Parallel()
