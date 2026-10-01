@@ -741,6 +741,12 @@ is its grid's and its key's (encoded, because an id list is split on
 whitespace and a key is whatever a screen's `rowKey` returns), and a cursor
 step finds the row it scrolls to by that id.
 
+**The cursor is a row, not a place.** `j` and `k` land on a row and the grid
+holds that row's key: held as an index, a poll that brought one new row slid
+the highlight onto the row above the one the reader had walked to, and Enter
+opened that one. A row that leaves the list takes the cursor with it, and the
+next step goes on from the gap it left — `j` to the row that took its place.
+
 **An answer that did not change keeps its objects.** A row's memo is on its
 OBJECT, and every answer is parsed afresh off the wire, so a poll that brought
 back exactly what the screen held handed every grid all-new rows: the turns

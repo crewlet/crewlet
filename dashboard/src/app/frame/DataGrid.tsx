@@ -371,7 +371,13 @@ export function DataGrid<T>({
   // other render. Parsed afresh it was a new object every render, and the grid
   // sorted its whole answer on every one of them.
   const sort = useMemo(() => parseSort(sortRaw), [sortRaw]);
-  const [cursor, setCursor] = useState(-1);
+  // THE CURSOR IS A ROW, NOT A PLACE: the key of the row `j` and `k` landed on,
+  // and the place it was at then. It was the place alone, and a feed is newest
+  // first — so a poll that brought one new row slid every row under the cursor
+  // down by one, the highlight moved to the row above the one the reader had
+  // walked to, and Enter opened that one. The place is kept for the one step
+  // that finds the row gone.
+  const [cursor, setCursor] = useState<{ key: string; at: number } | null>(null);
   // UNIQUE PER MOUNTED GRID, not per `name`. A page and the peek rail over it
   // both render grids at once, and `name` distinguishes the grids on ONE
   // screen — two screens' "recent" grids would mint the same row ids and an
@@ -454,13 +460,20 @@ export function DataGrid<T>({
   // once, in the handler, against the row already drawn at that index; and a
   // press at either end still brings the cursor row back into view, which is
   // what a reader who scrolled away and pressed `j` is asking for.
+  //
+  // WHERE THE CURSOR ROW IS NOW, in the walk this render draws: -1 for no
+  // cursor, and for a cursor whose row has left the list.
+  const cursorAt = cursor ? flat.findIndex((row) => rowKey(row) === cursor.key) : -1;
   const step = (by: number) => {
-    const next = Math.max(0, Math.min(flat.length - 1, cursor + by));
-    setCursor(next);
+    // A ROW THAT LEFT steps from the gap it left: `j` lands on the row that
+    // took its place, `k` on the one before it.
+    const from = cursorAt >= 0 ? cursorAt : cursor ? cursor.at - (by > 0 ? 1 : 0) : -1;
+    const next = Math.max(0, Math.min(flat.length - 1, from + by));
     const row = flat[next];
-    if (row !== undefined) {
-      document.getElementById(rowDomId(gridId, rowKey(row)))?.scrollIntoView({ block: "nearest" });
-    }
+    if (row === undefined) return;
+    const key = rowKey(row);
+    setCursor({ key, at: next });
+    document.getElementById(rowDomId(gridId, key))?.scrollIntoView({ block: "nearest" });
   };
   const canDrive = flat.length > 0;
   useEffect(() => {
@@ -488,9 +501,9 @@ export function DataGrid<T>({
     { key: "k", run: () => step(-1), when: driving },
     {
       key: "enter",
-      when: () => driving() && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
+      when: () => driving() && cursorAt >= 0 && Boolean(onRowActivate),
       run: (e) => {
-        const row = flat[cursor];
+        const row = flat[cursorAt];
         if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
       },
     },
@@ -574,23 +587,21 @@ export function DataGrid<T>({
     );
   }
 
-  let index = -1;
   function renderRow(row: T): ReactNode {
-    index += 1;
-    const at = index;
     const key = rowKey(row);
     // EVERYTHING A ROW IS HANDED IS A VALUE IT DRAWS — see [GridRow] — so a
     // render of this grid that changed nothing about a row draws nothing of it.
-    // AND NOTHING IT IS HANDED IS ITS PLACE, but for whether the cursor is on
-    // it: a feed is newest first, so one new row at the top moves every other
-    // one down a place, and a row handed its index drew again for that alone.
+    // AND NOTHING IT IS HANDED IS ITS PLACE: a feed is newest first, so one new
+    // row at the top moves every other one down a place, and a row handed its
+    // index drew again for that alone. Whether the cursor is on it is asked of
+    // its KEY for the same reason — see `cursor`.
     return (
       <GridRow<T>
         key={key}
         row={row}
         columns={shownColumns}
         id={rowDomId(gridId, key)}
-        cursor={cursor === at}
+        cursor={cursor?.key === key}
         selected={Boolean(isSelected?.(row))}
         failed={Boolean(isFailed?.(row))}
         href={rowHref?.(row)}

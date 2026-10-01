@@ -712,6 +712,47 @@ test("a row's sort value is read once per order, and not by a render that change
   location.hash = "#/";
 });
 
+// THE CURSOR IS A ROW, NOT A PLACE. A feed is newest first, so a poll that
+// brings one new row slides every row under the cursor down a place: held as an
+// index, the highlight moved onto the row above the one the reader had walked
+// to, and Enter opened that one.
+test("a row arriving above the cursor leaves the cursor on its row, and Enter opens it", () => {
+  const opened: string[] = [];
+  const columns = [{ key: "who", header: "Who", cell: (r: Row) => r.who }];
+  const grid = (rows: Row[]) => (
+    <Router>
+      <DataGrid<Row>
+        rows={rows}
+        rowKey={(r) => r.id}
+        onRowActivate={(r) => opened.push(r.id)}
+        columns={columns}
+      />
+    </Router>
+  );
+  const a = { id: "a", who: "ceo" };
+  const b = { id: "b", who: "cto" };
+  const c = { id: "c", who: "pm" };
+  const view = render(grid([a, b, c]));
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "j" });
+  const cursorRow = () => view.container.querySelector(".grid-row.cursor")?.textContent;
+  expect(cursorRow()).toBe("cto");
+
+  view.rerender(grid([{ id: "new", who: "eng" }, a, b, c]));
+  expect(cursorRow()).toBe("cto");
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(opened).toEqual(["b"]);
+  // AND THE WALK GOES ON FROM IT, not from where it used to be.
+  fireEvent.keyDown(window, { key: "j" });
+  expect(cursorRow()).toBe("pm");
+
+  // A ROW THAT LEAVES is stepped on from the gap it left.
+  view.rerender(grid([{ id: "new", who: "eng" }, a, b]));
+  expect(cursorRow()).toBeUndefined();
+  fireEvent.keyDown(window, { key: "k" });
+  expect(cursorRow()).toBe("cto");
+});
+
 // A CURSOR STEP SCROLLS TO THE ROW IT LANDS ON, found by that row's KEY. A row
 // is no longer told its place — a new row above it would draw it again for that
 // alone — so the step finds the row by its own id, which is its key, ENCODED:
