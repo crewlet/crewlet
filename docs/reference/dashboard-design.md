@@ -3114,8 +3114,8 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   hint is bounded at thirty seconds (`RETRY_AFTER_MAX_MS` in
   `protocol/retry.ts`), which cuts only the one hint the engine DERIVES — a
   backlog over a drain rate, which runs to minutes on a node that has just
-  joined a busy log; every hint it fixes (two, four, five, fifteen and thirty
-  seconds) is waited out exactly, and a Go gate in `internal/api` fails the
+  joined a busy log; every hint it fixes (two, three, four, five, fifteen and
+  thirty seconds) is waited out exactly, and a Go gate in `internal/api` fails the
   day one grows past the bound. An answer carrying no hint at all waits five
   seconds, the engine's own health tick, which is what it says when it has
   nothing better. And a `retry_after` of `0` means waiting will not change

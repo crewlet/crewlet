@@ -11,10 +11,12 @@ import { unavailableRetryMs } from "./socket.ts";
 
 describe("a retry hint", () => {
   // EVERY HINT THE ENGINE FIXES IS WAITED OUT EXACTLY: the identity estate's
-  // two seconds, an election's four, the health tick's five, the reconcile
-  // poll's fifteen and a drain's thirty. Anything shorter would ask before the
-  // node said it could answer; anything longer would hold a recovered node.
-  test.each([2, 4, 5, 15, 30])("of %i seconds is waited out exactly", (seconds) => {
+  // and an undecidable authority's two seconds, a busy surface's three, an
+  // election's four, the health tick's five, the reconcile poll's fifteen and
+  // a drain's thirty — the list internal/api's gate holds under the bound.
+  // Anything shorter would ask before the node said it could answer; anything
+  // longer would hold a recovered node.
+  test.each([2, 3, 4, 5, 15, 30])("of %i seconds is waited out exactly", (seconds) => {
     expect(retryAfterMs(seconds)).toBe(seconds * 1_000);
   });
 

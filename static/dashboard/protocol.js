@@ -272,19 +272,20 @@ var UNAVAILABLE_RETRY_MS = 5e3;
 * milliseconds.
 *
 * A BOUND ON THE ONE HINT THAT HAS NONE. Every hint the engine fixes — the
-* health tick (5 s), a quorum election (4 s), the identity estate's two
-* seconds, the reconcile poll that brings a company (15 s), a drain (30 s) —
-* is at or under thirty seconds and is waited out exactly. The one this cuts is
-* DERIVED: a node's backlog divided by the rate it has been draining at, which
-* is minutes on a node that has just joined or restarted behind a busy log,
-* and an estimate made from a rate that only rises as the node warms up. Past
-* thirty seconds a screen waiting on it says "this fills in on its own" for
-* longer than a person believes it, and the cost of asking sooner is one read
-* the node refuses again. THIRTY because it is already this dashboard's
-* ceiling on waiting for an engine to come back — the socket's reconnect
-* backoff and the builder's check backoff stop there for the same reason — and
-* `internal/api`'s `TestTheDashboardRetriesOnTheEnginesOwnHints` fails the day
-* a hint the engine fixes grows past it.
+* health tick (5 s), a quorum election (4 s), the identity estate's and an
+* undecidable authority's two seconds, a surface another writer holds (3 s),
+* the reconcile poll that brings a company and the floor's heartbeat (15 s), a
+* drain (30 s) — is at or under thirty seconds and is waited out exactly. The
+* one this cuts is DERIVED: a node's backlog divided by the rate it has been
+* draining at, which is minutes on a node that has just joined or restarted
+* behind a busy log, and an estimate made from a rate that only rises as the
+* node warms up. Past thirty seconds a screen waiting on it says "this fills
+* in on its own" for longer than a person believes it, and the cost of asking
+* sooner is one read the node refuses again. THIRTY because it is already this
+* dashboard's ceiling on waiting for an engine to come back — the socket's
+* reconnect backoff and the builder's check backoff stop there for the same
+* reason — and `internal/api`'s `TestTheDashboardRetriesOnTheEnginesOwnHints`
+* fails the day a hint the engine fixes grows past it.
 */
 var RETRY_AFTER_MAX_MS = 3e4;
 /**
