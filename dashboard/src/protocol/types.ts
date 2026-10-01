@@ -3501,7 +3501,9 @@ export interface LogRefusal {
 export interface InboxChange {
   handle: string;
   unread_delta: number;
-  /** The task the newest of those notices is about. */
+  /** The id of the object the newest of those notices was written on: the
+   *  task for a task commit, the PERSON for a `prioritised` notice — whose
+   *  task `work_inbox` names as `task`. */
   subject: string;
   /** The reason that notice was routed under — one of `work_inbox`'s. */
   reason: string;
