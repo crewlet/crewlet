@@ -22,7 +22,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Avatar,
   Button,
@@ -1863,6 +1863,42 @@ export function useSetup(): {
 }
 
 /**
+ * What a tool's HEADER carries in its status slot: the tag [rollUp] drew — or,
+ * while the setup listing that tag turns on is still being read, a placeholder
+ * of the tag's own shape that says so.
+ *
+ * THE WAIT IS SAID, not left blank. [rollUp] withholds the tag until the
+ * listing answers, which is right, and the peek then drew nothing at all in
+ * its place: a configured integration whose listing was on its way looked
+ * exactly like one with no state to report, and its tag appeared from
+ * nowhere a moment later. A connected tool always has a tag once the listing
+ * has answered, so the shape of what is coming is known, which is the one
+ * place a placeholder is honest. ONE FUNCTION for the peek and the page's
+ * header, so the two frames cannot disagree about it.
+ */
+function headerStatus(state: EntryState, listingLoading: boolean, connected: boolean): ReactNode {
+  if (state.tag !== "") {
+    return (
+      <Tag variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
+        {state.tag}
+      </Tag>
+    );
+  }
+  if (listingLoading && connected) {
+    return (
+      <Skeleton
+        variant="box"
+        width={96}
+        height={20}
+        borderRadius={10}
+        label="Reading what this integration needs"
+      />
+    );
+  }
+  return undefined;
+}
+
+/**
  * What the setup listing could not say, as a banner — ONE for both frames
  * that read it, the screen and the peek.
  *
@@ -1870,7 +1906,9 @@ export function useSetup(): {
  * waiting, its refusal or its failure, so a card whose listing was refused
  * said "Connecting" in amber with nothing on the rail to say why. Nothing
  * while it is first loading: [rollUp] draws no tag that turns on the listing
- * until it answers, and the screen's skeleton already covers the wait.
+ * until it answers, and the header's placeholder ([headerStatus]) — and on
+ * the screen, the skeleton in place of the cards — already says it is on its
+ * way.
  */
 function SetupListingState({
   setup,
@@ -2831,13 +2869,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         icon="cable"
         identifier={entry.key}
         title={entry.name}
-        status={
-          state.tag === "" ? undefined : (
-            <Tag variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
-              {state.tag}
-            </Tag>
-          )
-        }
+        status={headerStatus(state, setup.loading, present.length > 0)}
         // NO FACT LINE OVER A TOOL NOBODY HAS CONNECTED: every one of these is
         // a measurement of traffic that cannot exist yet, and five em dashes
         // under a name is a card reporting an absence rather than the absence
@@ -3147,13 +3179,7 @@ export function Integrations({ kind }: { kind?: string }) {
           icon="cable"
           identifier={focus.key}
           title={focus.name}
-          status={
-            focusState.tag === "" ? undefined : (
-              <Tag variant={focusState.tone} appearance={focusState.outline ? "outline" : "soft"}>
-                {focusState.tag}
-              </Tag>
-            )
-          }
+          status={headerStatus(focusState, setup.loading, presentSurfaces(focus, rows).length > 0)}
           facts={
             presentSurfaces(focus, rows).length > 0
               ? integrationFacts(focus, rows, now, {

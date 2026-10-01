@@ -86,8 +86,10 @@ async function settle() {
 }
 
 // WHILE THE LISTING IS LOADING the tag that turns on it is not known, so there
-// is none — and once it answers, the tag is the one the listing decides.
-test("the peek draws no Connecting tag before the listing answers, and Connected after", async () => {
+// is none — and the wait is SAID in its place, never a blank slot that reads as
+// a tool with nothing to report. Once it answers, the tag is the one the
+// listing decides.
+test("the peek says its tag is on its way before the listing answers, and Connected after", async () => {
   let answer: (response: Response) => void = () => {};
   listing = () => new Promise((resolve) => (answer = resolve));
   mount(<IntegrationPeek kind="slack" />);
@@ -95,11 +97,13 @@ test("the peek draws no Connecting tag before the listing answers, and Connected
   await settle();
   expect(screen.queryByText("Connecting")).toBeNull();
   expect(screen.queryByText("Connected")).toBeNull();
+  expect(screen.getByText("Reading what this integration needs")).toBeDefined();
 
   await act(async () => answer(new Response(JSON.stringify({ tools: [SLACK_TOOL] }))));
   await settle();
   expect(screen.getByText("Connected")).toBeDefined();
   expect(screen.queryByText("Connecting")).toBeNull();
+  expect(screen.queryByText("Reading what this integration needs")).toBeNull();
 });
 
 // A REFUSED LISTING IS SAID, with the grant it named and the door to it, as
@@ -111,6 +115,8 @@ test("the peek says a refused listing names its grant, and draws no Connecting t
   expect(await screen.findByText(/config:read/)).toBeDefined();
   expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   expect(screen.queryByText("Connecting")).toBeNull();
+  // NOR A PLACEHOLDER: the listing has answered, and no tag is on its way.
+  expect(screen.queryByText("Reading what this integration needs")).toBeNull();
 });
 
 // AND A FAILED ONE TOO, in the words a socket question's failure is drawn in.
@@ -119,6 +125,7 @@ test("the peek says a failed listing failed, and draws no Connecting tag", async
   mount(<IntegrationPeek kind="slack" />);
   expect(await screen.findByText(/tried to answer and failed/)).toBeDefined();
   expect(screen.queryByText("Connecting")).toBeNull();
+  expect(screen.queryByText("Reading what this integration needs")).toBeNull();
 });
 
 // THE SCREEN'S CARD IS THE SAME: under a refused or failed listing it draws no
