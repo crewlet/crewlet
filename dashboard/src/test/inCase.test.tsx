@@ -3,8 +3,9 @@
  *
  * Each pair below is a case that RUNS OUT OF ITS TIME with something still
  * out — a wait of its OWN that nothing in the harness can see, an `act` scope,
- * a `findBy` — and the case after it, which draws its own page, releases what
- * the first one waited for, and reads what the late case came to. The
+ * a scope inside a scope or a wait inside one, a `findBy` — and the case
+ * after it, which draws its own page, releases what the first one waited
+ * for, and reads what the late case came to. The
  * timeout is real: the first case is `test.fails` with a budget of
  * [RUNS_OUT], waiting on something that never comes inside it, so what is
  * checked is what Vitest itself does with a case it has given up on — fails
@@ -14,8 +15,11 @@
  * late `act` ran its body beside it, the open scope held React's act count
  * raised so the second case's own render never landed, the polling `findBy`
  * held the act environment set aside, and the late wait and click found and
- * pressed the second case's control. Each assertion below goes red when the
- * matching half of `inCase.ts` is taken away.
+ * pressed the second case's control. And ended in any order but innermost
+ * first, a scope inside a scope left the count raised just the same, and a
+ * wait inside a scope put back the scope's environment over the case's.
+ * Each assertion below goes red when the matching half of `inCase.ts` is
+ * taken away.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -130,6 +134,66 @@ test("finds that scope closed when it begins, so its own renders land", async ()
   expect(screen.getByRole("button").textContent).toBe("pressed 1");
   expect(await openScope).toBe(`act: ${ENDED}`);
   unhold();
+});
+
+/* An act scope inside another, opened after an await, when the case runs out. */
+
+let nestedScope: Promise<string> = Promise.resolve("never started");
+
+test.fails(
+  "a case that runs out of time inside a scope it opened inside another",
+  async () => {
+    const never = new Promise<void>(() => {});
+    nestedScope = settled(
+      act(async () => {
+        // AFTER AN AWAIT, so the inner scope begins waiting for the case's
+        // end after the outer one does: ended in that order, the outer scope
+        // was popped first and React's count was left at the inner one's.
+        await Promise.resolve();
+        await act(async () => {
+          await never;
+        });
+      }),
+    );
+    await nestedScope;
+  },
+  RUNS_OUT,
+);
+
+test("finds both scopes closed, innermost first, so its own renders land", async () => {
+  render(<Counter />);
+  fireEvent.click(screen.getByRole("button"));
+  expect(screen.getByRole("button").textContent).toBe("pressed 1");
+  expect(await nestedScope).toBe(`act: ${ENDED}`);
+});
+
+/* A wait inside an act scope when the case runs out. */
+
+let scopedWait: Promise<string> = Promise.resolve("never started");
+/** The act environment as the case found it, before its scope and its wait each set it. */
+let environmentBefore: unknown = "unread";
+
+test.fails(
+  "a case that runs out of time in a wait inside a scope of its own",
+  async () => {
+    environmentBefore = actEnvironment();
+    scopedWait = settled(
+      act(async () => {
+        await Promise.resolve();
+        // The scope set the environment on; the wait sets it off, and each
+        // puts back what it found — so only the wait put back first leaves
+        // the case's own.
+        await screen.findByText("never drawn", undefined, { timeout: 10 * RUNS_OUT });
+      }),
+    );
+    await scopedWait;
+  },
+  RUNS_OUT,
+);
+
+test("finds the act environment the late case began with", async () => {
+  expect(actEnvironment()).toBe(environmentBefore);
+  expect(await scopedWait).toBe(`findBy/waitFor: ${ENDED}`);
 });
 
 /* A findBy still polling when its case runs out of time. */

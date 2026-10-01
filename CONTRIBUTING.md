@@ -248,10 +248,13 @@ What follows are the prerequisites that legitimately vary by machine.
   (`inCase.source.test.ts` fails a file that reaches the library's), and the
   library's own waits and `fireEvent`, through the library's `asyncWrapper`
   and `eventWrapper`. When the case ends, every act scope and wait it still
-  has out is closed before the next case begins, and everything it asks for
-  after that is refused before it opens. Node carries the context through
-  the case's own awaits and timers, so a case that timed out inside a promise
-  of its own and resumes later still reads its own, ended case — which is
+  has out is closed before the next case begins — innermost first, because
+  each puts back on exit the act count or act environment it found on entry,
+  and closed in any other order a scope opened inside another left React's
+  count raised — and everything it asks for after that is refused before it
+  opens. Node carries the context through the case's own awaits and timers,
+  so a case that timed out inside a promise of its own and resumes later
+  still reads its own, ended case — which is
   what a helper every case shares (`answered()`, a suite's `settle()`) could
   not tell before, and why the flush used to be handed to each case. A case
   that holds the page's timers advances them as `answered`'s `step`, so the

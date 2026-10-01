@@ -49,9 +49,11 @@
  * Its [Case] is closed after its last hook has run, before the next case
  * begins. Every act scope and every wait it still has out is ended — each one
  * races the case's end, so a scope waiting on something that will never come
- * is closed rather than left open beside the next case — and the close waits
- * until they have unwound: React's scope count and the act environment are
- * back to what the next case expects before it starts. Every act, wait or
+ * is closed rather than left open beside the next case — INNERMOST FIRST,
+ * each unwound before the next is ended, because each puts back on exit what
+ * it found on entry and only the reverse of the order they opened puts back
+ * the case's own. So React's scope count and the act environment are back to
+ * what the next case expects before it starts. Every act, wait or
  * event the case asks for after that is REFUSED before it opens, naming why
  * ([caseEnded]). A suite therefore reaches `act` only through this module,
  * which `inCase.source.test.ts` holds it to.
@@ -75,35 +77,87 @@ function caseEnded(what: string): Error {
   );
 }
 
+/**
+ * One act scope or wait a case has out: the promise its case's end resolves,
+ * which the scope or wait races, and how it is counted out.
+ */
+interface Out {
+  /** Resolves when the case's end reaches this one — and never before. */
+  readonly ended: Promise<void>;
+  /** Counts `work` as what this is until it settles, and hands it back. */
+  track<T>(work: Promise<T>): Promise<T>;
+  /** Takes it off the case's list: it turned out not to be out at all. */
+  drop(): void;
+}
+
+/** What a case's end holds of one [Out]. */
+interface Held {
+  end: () => void;
+  settled: Promise<unknown>;
+}
+
 /** One case's lifetime, as every act, wait and event it makes sees it. */
 class Case {
   #open = true;
-  #end: () => void = () => {};
-  /** Resolves when the case ends: what every act scope and wait still out races. */
-  readonly ended = new Promise<void>((resolve) => {
-    this.#end = resolve;
-  });
-  /** The act scopes and waits this case has out, so its end can wait for them to unwind. */
-  readonly #out = new Set<Promise<unknown>>();
+  /** What the case has out, in the order it opened them. */
+  readonly #out: Held[] = [];
 
   /** Throws once the case has ended. */
   refuse(what: string): void {
     if (!this.#open) throw caseEnded(what);
   }
 
-  /** Counts `work` as out until it settles, and hands it back. */
-  hold<T>(work: Promise<T>): Promise<T> {
-    this.#out.add(work);
-    const settled = () => this.#out.delete(work);
-    work.then(settled, settled);
-    return work;
+  /**
+   * Puts one act scope or wait on the case's list, BEFORE it opens — so
+   * whatever it opens inside itself (an act inside an act, a wait inside a
+   * scope) is placed after it, and ended before it.
+   */
+  open(): Out {
+    let end: () => void = () => {};
+    const ended = new Promise<void>((resolve) => {
+      end = resolve;
+    });
+    const held: Held = { end, settled: Promise.resolve() };
+    this.#out.push(held);
+    const drop = () => {
+      const at = this.#out.indexOf(held);
+      if (at >= 0) this.#out.splice(at, 1);
+    };
+    return {
+      ended,
+      track: (work) => {
+        held.settled = work.then(drop, drop);
+        return work;
+      },
+      drop,
+    };
   }
 
-  /** Ends the case: refuses what it asks from now on, ends what it has out, and waits for that to unwind. */
+  /**
+   * Ends the case: refuses what it asks from now on, and ends what it has out
+   * INNERMOST FIRST, each unwound before the next is ended.
+   *
+   * Each of these restores on exit what it found on entry — React's act scope
+   * count, and the act environment a wait sets aside — so they unwind
+   * correctly only in the reverse of the order they opened. Ended all at once,
+   * they unwound in the order they had begun waiting for the end, which is
+   * not the order they opened: an act opened after an `await` inside another
+   * began waiting second, so the outer scope was popped first, React reported
+   * overlapping act calls and put its count back to what the INNER scope had
+   * found — raised — and the next case's renders were queued and never
+   * flushed; a wait inside a scope put back the act environment the scope had
+   * set, over the one the case began with.
+   */
   async close(): Promise<void> {
     this.#open = false;
-    this.#end();
-    await Promise.allSettled(this.#out);
+    for (let held = this.#out.at(-1); held; held = this.#out.at(-1)) {
+      held.end();
+      await held.settled;
+      // Settling drops it already; an entry whose work never settled through
+      // [Out.track] is dropped here, or the loop would end it for ever.
+      const at = this.#out.indexOf(held);
+      if (at >= 0) this.#out.splice(at, 1);
+    }
   }
 }
 
@@ -163,20 +217,31 @@ function boundAct(body: () => unknown): unknown {
   // the move — a timer advanced, an answer released — that would reach the
   // next case's page.
   life.refuse("act");
+  // ON THE LIST BEFORE IT OPENS, so an act its body opens is placed after it.
+  const out = life.open();
   let scoped = false;
-  const opened = libraryAct((() => {
-    const value = body();
-    if (!isThenable(value)) return value;
-    scoped = true;
-    // AN ASYNC SCOPE RACES ITS CASE'S END: one still waiting when the case
-    // ends would otherwise stay open beside the next case's.
-    return Promise.race([value, life.ended]);
-  }) as () => Promise<unknown>);
+  let opened: unknown;
+  try {
+    opened = libraryAct((() => {
+      const value = body();
+      if (!isThenable(value)) return value;
+      scoped = true;
+      // AN ASYNC SCOPE RACES ITS CASE'S END: one still waiting when the case
+      // ends would otherwise stay open beside the next case's.
+      return Promise.race([value, out.ended]);
+    }) as () => Promise<unknown>);
+  } catch (thrown) {
+    out.drop();
+    throw thrown;
+  }
   // A synchronous body has opened, run and closed its scope already, in one
   // turn nothing else can interleave with.
-  if (!scoped) return opened;
-  return life
-    .hold(
+  if (!scoped) {
+    out.drop();
+    return opened;
+  }
+  return out
+    .track(
       (async () => {
         return await opened;
       })(),
@@ -234,10 +299,11 @@ export function bindTestingLibrary(): void {
       } catch (refusal) {
         return Promise.reject(refusal);
       }
-      const ended = life.ended.then(() => {
+      const out = life.open();
+      const ended = out.ended.then(() => {
         throw caseEnded("findBy/waitFor");
       });
-      return life.hold(waitAsLibrary(() => Promise.race([wait(), ended])));
+      return out.track(waitAsLibrary(() => Promise.race([wait(), ended])));
     },
     eventWrapper: (dispatch) => {
       caseOf("fireEvent")?.refuse("fireEvent");
