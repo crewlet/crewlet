@@ -26,7 +26,7 @@ import {
   pressInToolbar,
   settle,
 } from "./testkit.tsx";
-import { LayoutObserver } from "./viewTestkit.tsx";
+import { chartCard, LayoutObserver } from "./viewTestkit.tsx";
 import { focusables } from "@crewlethq/ui";
 import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testing.tsx";
 
@@ -140,15 +140,23 @@ async function askToAdd(entry: string): Promise<HTMLElement> {
 }
 
 /**
- * Presses one of the chart's pointer-only controls, found INSIDE the chart.
- * They are hidden from assistive technology, so the query says so, and that
- * is also why a query of the whole document was the slowest line of these
- * cases: hidden, every button the lens draws is a candidate whose name has to
- * be computed.
+ * Presses one of the pointer-only controls on the card `node` is drawn in.
+ *
+ * FOUND IN THAT CARD. The controls are hidden from assistive technology, so
+ * the query has to include hidden elements, and hidden, every button it can
+ * see is a candidate whose accessible name jsdom computes element by element:
+ * across the whole document that was the slowest line of these cases, and
+ * across the whole chart it was still the slowest of the case that falls back
+ * to the dialog. The card is found as `CanvasView.test.tsx` finds it, from the
+ * treeitem carrying the node's name.
  */
-function pressOnTheChart(name: string): void {
+function pressOnTheChart(node: string, name: string): void {
   const chart = screen.getByRole("tree", { name: "Structure chart" });
-  fireEvent.click(within(chart).getByRole("button", { name, hidden: true }));
+  const item = within(chart)
+    .getAllByRole("treeitem", { hidden: true })
+    .find((el) => within(el).queryAllByText(node, { exact: true }).length > 0);
+  if (!item) throw new Error(`the structure chart draws no node named ${node}`);
+  fireEvent.click(within(chartCard(item)).getByRole("button", { name, hidden: true }));
 }
 
 // A dialog the lens opens is a component the model never sees, so the one
@@ -521,8 +529,8 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
   await settle();
   act(() => LayoutObserver.settle());
   // The Add on the company's own branch, which is where a pointer asks.
-  pressOnTheChart("Add to Acme");
-  pressOnTheChart("Add agent seat to Acme");
+  pressOnTheChart("Acme", "Add to Acme");
+  pressOnTheChart("Acme", "Add agent seat to Acme");
   act(() => LayoutObserver.settle());
   const form = screen.getByRole("group", { name: "Add to Acme" });
   /*
@@ -580,8 +588,8 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   // The Add on the new unit's own branch, which is where a pointer asks. It
   // is pointer-only, so it is hidden from assistive technology and the query
   // has to say so.
-  pressOnTheChart("Add to Tooling");
-  pressOnTheChart("Add agent seat to Tooling");
+  pressOnTheChart("Tooling", "Add to Tooling");
+  pressOnTheChart("Tooling", "Add agent seat to Tooling");
   // The ghost is a card of the chart, so it is drawn once it is measured.
   act(() => LayoutObserver.settle());
   // Drawn IN the chart, with no dialog over it.
