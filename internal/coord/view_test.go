@@ -220,6 +220,60 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 	awaitAnswer(t, view, "the recovered store's two leases", holding(2))
 }
 
+// heldLister is a store whose listing of one lease waits to be let go, saying
+// when it is asked.
+type heldLister struct {
+	asked   chan struct{}
+	release chan struct{}
+}
+
+func (h *heldLister) ListLive(ctx context.Context, _ coord.Class) ([]coord.Lease, error) {
+	select {
+	case h.asked <- struct{}{}:
+	default:
+	}
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return []coord.Lease{node("a")}, nil
+}
+
+// A LISTING IS DATED WHEN IT WAS ASKED, and trusted for a TTL from then — never
+// from when its answer arrived.
+//
+// A lease in the answer was live at some instant between the two, so it is
+// renewed or lapsed a TTL after that instant. Dated on arrival, a listing that
+// took half a TTL to answer was trusted half a TTL past anything the store
+// said, naming as live a node whose lease could have lapsed — and the estate
+// view, which judges this half's staleness by the same instant, read fresher
+// than the store it was built from.
+func TestAListingIsDatedWhenItWasAsked(t *testing.T) {
+	t.Parallel()
+	clock := &fakeClock{now: time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)}
+	store := &heldLister{asked: make(chan struct{}, 1), release: make(chan struct{})}
+	view, err := coord.NewLeaseView(store, coord.ClassNode, coord.ViewOptions{
+		Every: 30 * time.Second, Trust: 45 * time.Second, Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	<-store.asked
+	asked := clock.Now()
+	clock.advance(30 * time.Second)
+	close(store.release)
+	awaitAnswer(t, view, "the listing it asked for", holding(1))
+	if at := view.ListedAt(); !at.Equal(asked) {
+		t.Fatalf("a listing asked at %v and answered 30s later is dated %v", asked, at)
+	}
+	clock.advance(16 * time.Second)
+	if _, _, err := view.Leases(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Fatalf("a listing asked 46s ago under a 45s trust answered %v, want unknown", err)
+	}
+}
+
 // AN INVALIDATION LISTS AGAIN, and a stream of them is one listing per
 // [coord.MinViewRefresh].
 //

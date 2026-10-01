@@ -161,9 +161,17 @@ func (v *LeaseView) Run(ctx context.Context) error {
 
 // refresh takes one listing, bounded by the view's own cadence so a store that
 // hangs cannot stop the next one.
+//
+// DATED WHEN IT WAS ASKED, never when its answer arrived. What a listing
+// answers held at some instant between the two, and a lease in it was live
+// then — so it is renewed or lapsed a TTL after that instant, not after the
+// answer: dated on arrival, a listing that took ten seconds was trusted ten
+// seconds past anything the store said, and could name a node whose lease had
+// already lapsed as a live answer.
 func (v *LeaseView) refresh(ctx context.Context) {
 	listing, cancel := context.WithTimeout(ctx, v.every)
 	defer cancel()
+	asked := v.now()
 	leases, err := v.lister.ListLive(listing, v.class)
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -173,7 +181,7 @@ func (v *LeaseView) refresh(ctx context.Context) {
 		}
 		return
 	}
-	v.leases, v.loaded, v.listedAt, v.lastErr = slices.Clone(leases), true, v.now(), nil
+	v.leases, v.loaded, v.listedAt, v.lastErr = slices.Clone(leases), true, asked, nil
 }
 
 // Leases is the view's answer: every lease of its class live as of its last
@@ -205,7 +213,7 @@ func (v *LeaseView) Leases() ([]Lease, time.Time, error) {
 	return slices.Clone(v.leases), v.listedAt, nil
 }
 
-// ListedAt is when the last listing that answered was taken, whatever its age,
+// ListedAt is when the last listing that answered was ASKED, whatever its age,
 // and the zero time if none has — for a reader that REPORTS how stale the view
 // is, which [LeaseView.Leases] cannot tell it once the listing is past its
 // trust. Nothing may act on a listing because of this; that is Leases' job.
