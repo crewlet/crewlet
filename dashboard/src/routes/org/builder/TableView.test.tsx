@@ -25,7 +25,7 @@
  * nothing here asserts them again.
  */
 
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } from "~/testing.tsx";
@@ -252,14 +252,14 @@ describe("opening and closing the hierarchy", () => {
    * neither and still opens and closes through the handle it registers, which
    * is what the toolbar's buttons call.
    */
-  test("the table draws no controls of its own and closes through its handle", async () => {
+  test("the table draws no controls of its own and closes through its handle", () => {
     const { view } = mount();
     expect(screen.queryByRole("button", { name: "Collapse all" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Expand all" })).toBeNull();
     act(() => view()!.collapseAll());
-    await waitFor(() => expect(names()).not.toContain("SRE"));
+    expect(names()).not.toContain("SRE");
     act(() => view()!.expandAll());
-    await waitFor(() => expect(names()).toContain("SRE"));
+    expect(names()).toContain("SRE");
   });
 
   /* WHICH node to focus after an operation is the Builder's decision, and
@@ -355,14 +355,14 @@ describe("acting on a row", () => {
     expect(spies.openDelete).toHaveBeenLastCalledWith("seat:dev");
   });
 
-  test("the add pill offers every kind under a unit, and under the company too", async () => {
+  test("the add pill offers every kind under a unit, and under the company too", () => {
     const { spies } = mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Add human seat to Engineering" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add human seat to Engineering" }));
     expect(spies.openAdd).toHaveBeenLastCalledWith("unit:engineering", "human");
 
     fireEvent.click(within(row("Acme")).getByRole("button", { name: "Add to Acme" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Add unit to Acme" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add unit to Acme" }));
     expect(spies.openAdd).toHaveBeenLastCalledWith(null, "unit");
   });
 
@@ -373,10 +373,10 @@ describe("acting on a row", () => {
    * another everywhere else. Read from what is rendered: the pill's agent
    * section carries the mark every agent seat on this table already wears.
    */
-  test("the pill's marks are the chart's own, from the one add list", async () => {
+  test("the pill's marks are the chart's own, from the one add list", () => {
     mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
-    const agent = await screen.findByRole("button", { name: "Add agent seat to Engineering" });
+    const agent = screen.getByRole("button", { name: "Add agent seat to Engineering" });
     const drawing = (element: Element) => element.querySelector("svg")?.innerHTML ?? "";
     expect(drawing(agent)).not.toBe("");
     expect(drawing(agent)).toBe(drawing(drawnPart(row("Dev"), PART.icon)!));
@@ -425,7 +425,7 @@ describe("acting on a row", () => {
   /* Read-only is a draft nobody may change, so every change refuses rather
      than disappearing: a menu whose entries come and go is a menu nobody
      learns, and an operator has to be able to see that Delete exists. */
-  test("read-only refuses every change and still offers every reading", async () => {
+  test("read-only refuses every change and still offers every reading", () => {
     const { spies } = mount({ readOnly: true });
     // READ-ONLY DISABLES, IT DOES NOT HIDE.
     expect(actions("Dev")).toEqual([
@@ -441,7 +441,7 @@ describe("acting on a row", () => {
     // The plus still opens, and says the kinds are unavailable rather than
     // offering nothing at all.
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
-    const add = await screen.findByRole("button", { name: "Add unit to Engineering" });
+    const add = screen.getByRole("button", { name: "Add unit to Engineering" });
     expect(add.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(add);
     expect(spies.openAdd).not.toHaveBeenCalled();
