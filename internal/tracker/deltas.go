@@ -453,7 +453,7 @@ func containerText(c Container) string {
 }
 
 // positionText is an inbox's read mark, in the `stream@generation:seq` triple
-// [ParseLogPosition] reads back.
+// [statelog.ParsePosition] reads back.
 //
 // ONE VOCABULARY for a log position wherever a person sees one. An unset mark
 // is the empty string rather than `@0:0`, because somebody who has read

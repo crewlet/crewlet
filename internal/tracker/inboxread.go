@@ -345,7 +345,7 @@ func readInbox(ctx context.Context, tx *sql.Tx, who Party, q InboxQuery,
 	// the generation is IN the ordering rather than beside it — which is
 	// what lets a cursor span a reanchor with no gap and no repeat.
 	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
-		at, err := ParseLogPosition(cursor)
+		at, err := statelog.ParsePosition(cursor)
 		if err != nil {
 			return nil, "", err
 		}

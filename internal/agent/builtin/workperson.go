@@ -627,7 +627,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		q.Reasons = append(q.Reasons, reason)
 	}
 	if since := strings.TrimSpace(argString(args, "since")); since != "" {
-		at, err := tracker.ParseLogPosition(since)
+		at, err := statelog.ParsePosition(since)
 		if err != nil {
 			return failed(err.Error()), nil
 		}

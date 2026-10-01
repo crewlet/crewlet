@@ -775,7 +775,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	// because a position is unambiguous and a timestamp is not.
 	if since := strings.TrimSpace(p.String("since")); since != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		if at, err := tracker.ParseLogPosition(since); err == nil {
+		if at, err := statelog.ParsePosition(since); err == nil {
 			q.Since = at
 		} else {
 			when, err := time.Parse(time.RFC3339, since)

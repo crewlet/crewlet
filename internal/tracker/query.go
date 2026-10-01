@@ -1129,7 +1129,7 @@ func (q *Query) parseTotals(p Params) error {
 func ParseFreshness(p Params) (statelog.Freshness, error) {
 	var out statelog.Freshness
 	if raw := strings.TrimSpace(p.String("min_position")); raw != "" {
-		at, err := ParseLogPosition(raw)
+		at, err := statelog.ParsePosition(raw)
 		if err != nil {
 			return out, fmt.Errorf("min_position: %w", err)
 		}
