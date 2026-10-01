@@ -215,6 +215,11 @@ describe("readmitting a barred node", () => {
       .find(Boolean) as HTMLElement;
   }
 
+  /** The barred line of a node the map does not hold. */
+  function barredLineOf(node: string): HTMLElement {
+    return screen.getByText(node, { selector: "code" }).closest('[role="status"]') as HTMLElement;
+  }
+
   /** Types the node id and presses Readmit, in the dialog that opened. */
   function confirmReadmit(node: string) {
     const dialog = within(screen.getByRole("dialog"));
@@ -242,13 +247,43 @@ describe("readmitting a barred node", () => {
   test("a barred node the map does not hold is readmitted from its line", async () => {
     const sent = engine({ status: 200, body: gateAnswer("readmit_map_in") });
     view(state("barred"));
-    const line = screen
-      .getByText(/data-x/, { selector: "code" })
-      .closest('[role="status"]') as HTMLElement;
-    fireEvent.click(within(line).getByRole("button", { name: "Readmit…" }));
+    fireEvent.click(within(barredLineOf("data-x")).getByRole("button", { name: "Readmit…" }));
     confirmReadmit("data-x");
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.pathname).toBe("/work/retention/readmit/data-x");
+  });
+
+  test("a line's unfinished readmission outlives the poll, and is finished under its own id", async () => {
+    const sent = engine(
+      { status: 200, body: gateAnswer("readmit_map_unwritten") },
+      { status: 200, body: gateAnswer("readmit_map_in") },
+    );
+    const r = view(state("barred"));
+    fireEvent.click(within(barredLineOf("data-x")).getByRole("button", { name: "Readmit…" }));
+    confirmReadmit("data-x");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Finish this gesture" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
+    // THE POLL THE GESTURE ASKED FOR STILL BARS THE NODE — the map part was
+    // not written — and the map still does not hold it, so it is on no row:
+    // a gesture kept only for the nodes the rows bar is let go of here, and
+    // the line would offer a fresh readmission that writes every log again
+    // under a new id.
+    r.rerender(
+      <Router>
+        <EstateView estate={structuredClone(placed("barred"))} />
+      </Router>,
+    );
+    const finish = within(barredLineOf("data-x")).getByRole("button", {
+      name: "Finish readmission…",
+    });
+    fireEvent.click(finish);
+    expect(screen.queryByLabelText("Type data-x to confirm")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]!.pathname).toBe("/work/retention/readmit/data-x");
+    expect(sent[1]!.searchParams.get("op_id")).toBe(sent[0]!.searchParams.get("op_id"));
   });
 
   test("a readmission whose map was not written is finished here, under its own id", async () => {
