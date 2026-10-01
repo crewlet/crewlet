@@ -28,7 +28,7 @@
  * Builder rather than any one view.
  */
 
-import { act, fireEvent, getConfig, render, within } from "@testing-library/react";
+import { act, fireEvent, getConfig, render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
@@ -860,6 +860,21 @@ export function pressInView(name: string): void {
 /** Presses one of the Builder toolbar's own controls, found inside the toolbar. */
 export function pressInToolbar(name: string): void {
   fireEvent.click(within(lensToolbar()).getByRole("button", { name }));
+}
+
+/**
+ * Presses the button named `name` on the banner that says `sentence`.
+ *
+ * Asked for by role INSIDE the banner, which is found by its sentence — a text
+ * query, and cheap — and is the nearest element around that sentence holding
+ * a button: a banner draws its words and its actions side by side. The whole
+ * lens by role was the costliest lookup of the cases that answer a banner.
+ */
+export function pressOnBanner(sentence: string | RegExp, name: string): void {
+  let banner: HTMLElement | null = screen.getByText(sentence);
+  while (banner && !banner.querySelector("button")) banner = banner.parentElement;
+  if (!banner) throw new Error(`no banner saying ${String(sentence)} carries a button`);
+  fireEvent.click(within(banner).getByRole("button", { name }));
 }
 
 /**

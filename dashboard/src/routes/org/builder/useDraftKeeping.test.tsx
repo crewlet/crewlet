@@ -22,6 +22,7 @@ import {
   mountBuilder,
   navigate,
   pressInView,
+  pressOnBanner,
   rereadViewer,
   settle,
 } from "./testkit.tsx";
@@ -87,8 +88,7 @@ const liveRegion = () => document.querySelector("[data-live-region]")!;
 const OFFER = /This tab kept a draft with 1 change/;
 
 /** Presses one of the buttons the offer of a kept draft carries. */
-const answerTheOffer = (name: "Keep the draft" | "Discard it") =>
-  fireEvent.click(screen.getByRole("button", { name }));
+const answerTheOffer = (name: "Keep the draft" | "Discard it") => pressOnBanner(OFFER, name);
 
 // ONLY THE LOG. The company holds contact identities, emails and policies,
 // and kept in storage they would outlive the operator's session.
@@ -151,7 +151,7 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
 
   answerTheOffer("Keep the draft");
   await settle();
-  fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
+  pressOnBanner("Somebody changed the org chart since you started editing.", "Update my draft");
   await settle();
   const dialog = screen.getByRole("dialog", { name: "Update my draft and review" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));

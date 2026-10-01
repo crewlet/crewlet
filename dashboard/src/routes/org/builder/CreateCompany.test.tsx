@@ -13,9 +13,11 @@ import {
   checked,
   company,
   Engine,
+  lensToolbar,
   mountBuilder,
   pressInToolbar,
   pressInView,
+  pressOnBanner,
   settle,
   type SentRequest,
 } from "./testkit.tsx";
@@ -64,24 +66,42 @@ async function save() {
   await settle();
 }
 
+/**
+ * The create form: the card that holds the company's name.
+ *
+ * Its controls are asked for INSIDE it. A role query by name computes the
+ * accessible name of every candidate in its container, and across the whole
+ * lens that made this form's own presses the costliest lines of these cases.
+ */
+function createForm(): HTMLElement {
+  const form = screen.getByLabelText("Company name").closest<HTMLElement>("section");
+  if (!form) throw new Error("the company name is not in the create form");
+  return form;
+}
+
+/** Presses the create form's Start the company. */
+const pressStart = () =>
+  fireEvent.click(within(createForm()).getByRole("button", { name: "Start the company" }));
+
 /** Fills the create form and starts the company from a template. */
 async function startCompany(options: { template?: string; seat?: boolean; contact?: string } = {}) {
   await settle();
-  fireEvent.change(screen.getByLabelText("Company name"), {
+  const form = within(createForm());
+  fireEvent.change(form.getByLabelText("Company name"), {
     target: { value: "Nimbus" },
   });
-  fireEvent.change(screen.getByLabelText("Mission"), { target: { value: "Ship weather." } });
+  fireEvent.change(form.getByLabelText("Mission"), { target: { value: "Ship weather." } });
   if (options.template) {
-    fireEvent.click(screen.getByRole("radio", { name: options.template }));
+    fireEvent.click(form.getByRole("radio", { name: options.template }));
   }
   if (options.seat) {
-    fireEvent.click(screen.getByRole("checkbox", { name: "Add a seat for yourself" }));
-    fireEvent.change(screen.getByLabelText("Your seat's name"), { target: { value: "Founder" } });
-    fireEvent.change(screen.getByLabelText(/^Slack member ID/), {
+    fireEvent.click(form.getByRole("checkbox", { name: "Add a seat for yourself" }));
+    fireEvent.change(form.getByLabelText("Your seat's name"), { target: { value: "Founder" } });
+    fireEvent.change(form.getByLabelText(/^Slack member ID/), {
       target: { value: options.contact ?? "U0FOUNDER" },
     });
   }
-  fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
+  pressStart();
 }
 
 test("the form starts the company from a template, and the check is create-only", async () => {
@@ -104,7 +124,7 @@ test("the form starts the company from a template, and the check is create-only"
   // And the whole start is one operation: undone, the form is back.
   fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
   await settle();
-  expect(screen.getByRole("button", { name: "Start the company" })).toBeDefined();
+  expect(within(createForm()).getByRole("button", { name: "Start the company" })).toBeDefined();
 });
 
 // YOUR OWN SEAT NEEDS NO CONTACT IDENTITY. The engine admits a human seat with
@@ -149,7 +169,7 @@ test("the create form carries no builder toolbar until a template is recorded", 
   expect(document.querySelector(".org-builder-toolbar")).toBeNull();
   await startCompany({});
   await settle();
-  expect(screen.getByRole("toolbar", { name: "Organization builder" })).toBeDefined();
+  expect(lensToolbar()).toBeDefined();
 });
 
 test("a company with no name is refused by the form, not by the engine", async () => {
@@ -157,9 +177,9 @@ test("a company with no name is refused by the form, not by the engine", async (
   mountBuilder({ engine });
   await settle();
   const before = engine.requests.length;
-  fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
+  pressStart();
   await settle();
-  expect(screen.getByText("Enter the company name.")).toBeDefined();
+  expect(within(createForm()).getByText("Enter the company name.")).toBeDefined();
   expect(engine.requests.length).toBe(before);
 });
 
@@ -294,12 +314,10 @@ test("a create draft kept after a company appeared still offers the company", as
   pressInView("Edit Chief Executive");
   await settle();
   fireEvent.click(within(companyExists()).getByRole("button", { name: "Keep my draft" }));
-  expect(
-    screen.getByText(
-      "A company was created on this engine while this draft was being written, so this draft cannot be saved.",
-    ),
-  ).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "Discard it and open the company" }));
+  const banner =
+    "A company was created on this engine while this draft was being written, so this draft cannot be saved.";
+  expect(screen.getByText(banner)).toBeDefined();
+  pressOnBanner(banner, "Discard it and open the company");
   await checked();
   expect(screen.getByText("CEO")).toBeDefined();
   expect(engine.requests.filter(isWrite)).toHaveLength(0);

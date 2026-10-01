@@ -19,6 +19,7 @@ import {
   mountBuilder,
   pressInToolbar,
   pressInView,
+  pressOnBanner,
   settle,
 } from "./testkit.tsx";
 import { conflictCells } from "./UpdateDraftDialog.tsx";
@@ -37,6 +38,9 @@ afterEach(() => {
 });
 
 const CHART_MOVED = "Somebody changed the org chart since you started editing.";
+const SETTINGS_MOVED = "The settings changed since you started editing.";
+const NO_LONGER_ACTIVE =
+  "The configuration this draft edits is no longer active on this engine, so the draft cannot be saved.";
 
 /** The Builder's one polite live region. */
 const liveRegion = () => document.querySelector("[data-live-region]")!;
@@ -54,8 +58,8 @@ async function editAfterColleague(change: (engine: Engine) => void) {
 }
 
 /** Presses the conflict's Update my draft, and settles on the dialog it opens. */
-async function updateMyDraft(): Promise<HTMLElement> {
-  fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
+async function updateMyDraft(conflict: string = CHART_MOVED): Promise<HTMLElement> {
+  pressOnBanner(conflict, "Update my draft");
   await settle();
   return screen.getByRole("dialog", { name: "Update my draft and review" });
 }
@@ -121,7 +125,7 @@ describe("a settings revision saved by somebody else", () => {
     engine.revision = "r2";
     pressInView("Rename the company");
     await settle();
-    expect(screen.getByText("The settings changed since you started editing.")).toBeDefined();
+    expect(screen.getByText(SETTINGS_MOVED)).toBeDefined();
     return engine;
   }
 
@@ -131,7 +135,7 @@ describe("a settings revision saved by somebody else", () => {
     expect(screen.getByRole("link", { name: "Show what changed" }).getAttribute("href")).toBe(
       "#/admin/config?lens=diff&revision=r2&against=r1",
     );
-    const dialog = await updateMyDraft();
+    const dialog = await updateMyDraft(SETTINGS_MOVED);
     fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
     await settle();
     expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"');
@@ -145,7 +149,7 @@ describe("a settings revision saved by somebody else", () => {
       r.method === "GET" && r.path === "/config"
         ? json(company().settings, 200, { ETag: '"r1"' })
         : null;
-    fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
+    pressOnBanner(SETTINGS_MOVED, "Update my draft");
     await settle();
     expect(
       screen.getByText(
@@ -164,14 +168,10 @@ test("a draft of a configuration that is no longer active offers to discard and 
     r.query.get("dry_run") === "true" ? json({ error: "no_active_revision" }, 412) : null;
   pressInView("Rename the company");
   await settle();
-  expect(
-    screen.getByText(
-      "The configuration this draft edits is no longer active on this engine, so the draft cannot be saved.",
-    ),
-  ).toBeDefined();
+  expect(screen.getByText(NO_LONGER_ACTIVE)).toBeDefined();
   engine.script = () => null;
   const reads = engine.sent("GET").length;
-  fireEvent.click(screen.getByRole("button", { name: "Discard and reload" }));
+  pressOnBanner(NO_LONGER_ACTIVE, "Discard and reload");
   await checked();
   expect(engine.sent("GET").length).toBeGreaterThan(reads);
   // Discarded: nothing is left to dry-run.
