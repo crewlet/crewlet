@@ -398,7 +398,7 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 		},
 	}
 	states := r.runGather(ctx, plan, parts)
-	cov, failure := coverageOf(states)
+	cov, failure := coverageOf(spec.name, states)
 	if len(cov.Answered) == 0 {
 		return zero, cov, failure
 	}
@@ -564,16 +564,17 @@ func (s *partState) failure(op string) error {
 	return &ErrPartitionUnserved{Partition: s.p.String(), Detail: strings.Join(s.reasons, "; ")}
 }
 
-// coverageOf is what the settled partitions covered, and — when nothing
-// answered — the error the gather ends in: one partition's own, or every
-// partition's joined.
-func coverageOf(states []*partState) (statelog.Coverage, error) {
+// coverageOf is what the settled partitions of the gather op covered, and —
+// when nothing answered — the error the gather ends in: one partition's own,
+// or every partition's joined, each in the shape a single-partition read of op
+// fails in.
+func coverageOf(op string, states []*partState) (statelog.Coverage, error) {
 	cov := statelog.Coverage{Addressed: len(states), Answered: []string{}}
 	var failures []error
 	for _, st := range states {
 		if m := st.missing(); m != nil {
 			cov.Missing = append(cov.Missing, *m)
-			failures = append(failures, st.failure(""))
+			failures = append(failures, st.failure(op))
 			continue
 		}
 		cov.Answered = append(cov.Answered, st.p.String())

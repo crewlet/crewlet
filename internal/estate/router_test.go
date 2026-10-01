@@ -1040,6 +1040,27 @@ func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
 	}
 }
 
+// A GATHER THAT FAILS NAMES ITS OPERATION, as a single-partition read does:
+// a placement that cannot say who serves a partition fails a search and a
+// board alike with "estate: <operation>: read who serves <partition>", so the
+// person reading it knows which call to look at.
+func TestAGatherThatFailsNamesItsOperation(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	f.placement.set(func(p *fakePlacement) {
+		p.servingErr = errors.New("the presence view answers unknown")
+	})
+	_, err := f.client.Work().Search(t.Context(), "deploys", 5)
+	const want = "estate: tracker.search: read who serves estate.000: the presence view answers unknown"
+	if err == nil || err.Error() != want {
+		t.Errorf("a gather the placement could not route = %v, want %q", err, want)
+	}
+	_, err = f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	if err == nil || !strings.HasPrefix(err.Error(), "estate: tracker.tasks: read who serves estate.000: ") {
+		t.Errorf("a single-partition read the placement could not route = %v, want the same shape", err)
+	}
+}
+
 // A LAGGING COPY OF ITS OWN STILL ANSWERS WHEN THE PLACEMENT CANNOT SAY WHO
 // SERVES. This node knows it holds the partition without asking anybody, so a
 // view that answers unknown names no peer to prefer and takes nothing from the
