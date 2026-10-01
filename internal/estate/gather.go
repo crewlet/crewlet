@@ -1135,7 +1135,7 @@ collect:
 			out.Obsolete = append(out.Obsolete, gone.Stream)
 		}
 	}
-	out.Parts = fitParts(s.self, s.ceiling, parts)
+	out.Parts = fitParts(s.self, s.ceiling, out, parts)
 	return out
 }
 
@@ -1242,49 +1242,51 @@ func isCancellation(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
-// replyHeadroom is what a gather reply keeps free of its slices for the rest of
-// its envelope — the node's id and the obsolete floors.
+// fitParts is parts as a reply can carry them under ceiling bytes, beside the
+// rest of envelope — the reply they go in, its node and its obsolete floors:
+// every slice that fits whole, and every other one answered [unservedOverflow]
+// instead, so the asker asks again for those. When not one slice fits, the
+// first is answered as the error that says so, naming its size: every reply
+// settles at least one partition, so a batch always makes progress.
 //
-// FOUR KiB: the envelope beside the parts is a node id and at most one stream
-// name per log of the batch's partitions, a few hundred bytes for every batch a
-// layout can make; the margin is the difference between a reply measured to
-// fit and one that does.
-const replyHeadroom = 4 << 10
-
-// fitParts is parts as a reply can carry them under ceiling bytes: in order,
-// every slice that fits, and every one after the first that does not answered
-// [unservedOverflow] instead — so the asker asks again for those alone. A
-// slice too large to fit even alone is answered as the error that says so,
-// naming its size: every reply answers at least one partition, so a batch
-// always makes progress.
-//
-// MEASURED, not estimated: each part is encoded as the reply will encode it,
-// because what a body costs on the wire is a property of its bytes rather than
-// of its length — see [queue.ErrTooLarge].
-func fitParts(self string, ceiling int, parts []partReply) []partReply {
-	budget := ceiling - replyHeadroom
-	used := 0
-	for i := range parts {
-		size := encodedSize(parts[i]) + 1
-		if used+size <= budget {
-			used += size
-			continue
-		}
-		if used == 0 {
-			// THE FIRST SLICE ALONE DOES NOT FIT: nothing smaller can be
-			// sent for it, so it is answered as the error it is.
-			parts[i] = partReply{Partition: parts[i].Partition, Err: encodeError(fmt.Errorf(
-				"estate: %s's answer for %s is %d bytes, over the %d one reply carries — "+
-					"narrow the read: %w", self, parts[i].Partition, size, budget, queue.ErrTooLarge))}
-			used += encodedSize(parts[i]) + 1
-			continue
-		}
-		parts[i] = partReply{Partition: parts[i].Partition, Unserved: unservedOverflow,
-			Detail: fmt.Sprintf("%s answered %s and it did not fit beside the slices "+
-				"before it", self, parts[i].Partition)}
-		used += encodedSize(parts[i]) + 1
+// MEASURED, not estimated — the envelope as it encodes, and each part as the
+// reply will encode it — because what a body costs on the wire is a property
+// of its bytes rather than of its length (see [queue.ErrTooLarge]). Neither
+// is small for every batch: a holder of a hundred and fifty partitions whose
+// floors a reanchor made obsolete names a stream for each, several kibibytes,
+// and the overflow notes are a part each. So every part starts as its note,
+// and is kept whole only where the difference fits: the notes of the parts
+// that do not fit are paid for in the reply that carries them.
+func fitParts(self string, ceiling int, envelope reply, parts []partReply) []partReply {
+	envelope.Parts = nil
+	// THE ARRAY'S OWN FRAMING beside the envelope: the key, the brackets,
+	// and the comma before it — one byte of each part below is a separator
+	// the last part does not need.
+	budget := ceiling - len(encodeReply(envelope)) - len(`,"parts":[]`)
+	out := make([]partReply, len(parts))
+	notes := make([]int, len(parts))
+	total := 0
+	for i, part := range parts {
+		out[i] = partReply{Partition: part.Partition, Unserved: unservedOverflow}
+		notes[i] = encodedSize(out[i]) + 1
+		total += notes[i]
 	}
-	return parts
+	kept := false
+	for i, part := range parts {
+		if grown := total - notes[i] + encodedSize(part) + 1; grown <= budget {
+			out[i], total, kept = part, grown, true
+		}
+	}
+	if !kept && len(parts) > 0 {
+		// NOT EVEN THE FIRST SLICE FITS: nothing smaller can be sent for
+		// it, so it is answered as the error it is.
+		room := budget - (total - notes[0])
+		out[0] = partReply{Partition: parts[0].Partition, Err: encodeError(fmt.Errorf(
+			"estate: %s's answer for %s is %d bytes, over the %d one reply carries beside "+
+				"the batch — narrow the read: %w", self, parts[0].Partition,
+			encodedSize(parts[0])+1, room, queue.ErrTooLarge))}
+	}
+	return out
 }
 
 // encodedSize is how many bytes p encodes to.

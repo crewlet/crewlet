@@ -1061,8 +1061,8 @@ func observeEveryTrackerLog(r *Router) {
 func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
 	t.Parallel()
 	// ROOM FOR TWO OF THE FOUR FULL SLICES (about 1.25 KiB each) beside the
-	// headroom.
-	f, node, srv := ceilingFleet(t, replyHeadroom+2700)
+	// envelope.
+	f, node, srv := ceilingFleet(t, 2700)
 	r := f.router(t, "agent-1", nil)
 	answer, cov, err := listAll(t, r, 0, "")
 	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
@@ -1074,7 +1074,7 @@ func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
 
 	// A SLICE TOO LARGE EVEN ALONE: the four full partitions are each the
 	// error naming the size, and the empty one still answers.
-	srv.ceiling = replyHeadroom + 600
+	srv.ceiling = 600
 	_, cov, err = listAll(t, r, 0, "")
 	if err != nil {
 		t.Fatalf("gather: %v", err)
@@ -1099,6 +1099,47 @@ func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
 	}
 	if _, _, err := listAll(t, r, 0, ""); !errors.Is(err, queue.ErrTooLarge) {
 		t.Errorf("err = %v, want queue.ErrTooLarge naming the size", err)
+	}
+}
+
+// A REPLY FITS ITS CEILING WITH ITS WHOLE ENVELOPE: the slices are fitted
+// beside what the envelope measures, never beside a fixed allowance for it —
+// a batch whose floors a reanchor made obsolete names a stream for each, and a
+// reply over the ceiling is one the broker refuses, every partition of the
+// batch with it.
+func TestAReplyFitsItsCeilingWithItsWholeEnvelope(t *testing.T) {
+	t.Parallel()
+	// A BATCH OF TWO HUNDRED SMALL SLICES, about half of which fit: the
+	// envelope's obsolete floors are several kibibytes, and so are the
+	// notes of the slices that do not fit.
+	const ceiling = 40 << 10
+	envelope := reply{Node: "data-a"}
+	for i := range 200 {
+		envelope.Obsolete = append(envelope.Obsolete, fmt.Sprintf("CREWLET_L1_TRACKER_%03d_TRACKER", i))
+	}
+	var parts []partReply
+	for i := range 200 {
+		rows := make([]string, 0, 4)
+		for range cap(rows) {
+			rows = append(rows, strings.Repeat("r", 64))
+		}
+		raw, _ := json.Marshal(rows)
+		parts = append(parts, partReply{Partition: tp(uint16(i)).String(), Result: raw})
+	}
+	envelope.Parts = fitParts("data-a", ceiling, envelope, parts)
+	encoded := encodeReply(envelope)
+	if len(encoded) > ceiling {
+		t.Fatalf("the reply is %d bytes, over its %d ceiling", len(encoded), ceiling)
+	}
+	overflowed := 0
+	for _, part := range envelope.Parts {
+		if part.Unserved == unservedOverflow {
+			overflowed++
+		}
+	}
+	if overflowed == 0 || overflowed == len(parts) {
+		t.Errorf("%d of %d slices overflowed, want some fitted and some asked again",
+			overflowed, len(parts))
 	}
 }
 
@@ -1264,7 +1305,7 @@ func TestAPartitionIsSettledOnce(t *testing.T) {
 // overflow is lost.
 func TestALaggingCopysOverflowIsAskedAgain(t *testing.T) {
 	t.Parallel()
-	f, node, _ := ceilingFleet(t, replyHeadroom+2700)
+	f, node, _ := ceilingFleet(t, 2700)
 	for p := range node.holds {
 		node.holds[p] = lags
 	}
