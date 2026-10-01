@@ -39,7 +39,7 @@
  * is held to.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Button, Card, EmptyValue, Input, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { DescriptionGlyph, ContentCopyGlyph } from "@crewlethq/icons/glyphs";
 
@@ -54,10 +54,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
+import { needsSentence } from "~/lib/refusal.ts";
+import { useRestRead, type RestRead } from "~/lib/restRead.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useTimeRange, type Offer } from "~/lib/range.ts";
-import { rest } from "~/protocol/index.ts";
+import { rest, RestError } from "~/protocol/index.ts";
 import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
 /**
@@ -496,11 +498,7 @@ export function Audit() {
           <Card.Header
             icon={<DescriptionGlyph size="sm" />}
             count={shown.length}
-            subtitle={
-              truncated.length > 0
-                ? `${truncated.join(" and ")} answered one page, which does not reach the start of this window — those rows are the newest, not all of them.`
-                : "Every write a person or a token made, across the tracker, the knowledge base, the configuration and the credentials."
-            }
+            subtitle={auditSubtitle(truncated, secrets.withheld)}
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -523,35 +521,77 @@ export function Audit() {
 }
 
 /**
- * The credential rows, over REST.
+ * The credential rows, over REST — and, where they could not be read, a
+ * sentence saying so.
  *
  * `/secrets` IS NOT A SOCKET QUESTION and deliberately is not one: it is the
  * route that can reveal a value, so it is guarded in full, reads included, and
- * a read of it is logged. This screen asks for the listing, which carries who
- * last stored each name and when — never a value, and it does not pass
- * `?reveal`.
+ * a reveal is logged. This screen asks for the listing, which carries who last
+ * stored each name and when — never a value, and it does not pass `?reveal`.
+ *
+ * BEST EFFORT, like every other credential read on a screen that is not about
+ * credentials: a reader without the grant for `/secrets` still has an audit of
+ * everything else, and a failed read here must not take the tracker's and the
+ * wiki's rows down with it. But best effort is not SILENT. This was a loader of
+ * its own that read once, at mount, and dropped every failure on the floor: a
+ * request past its deadline, a node catching up, a refusal on authority — each
+ * left the credentials out of an audit whose header said it covered them, with
+ * nothing on the page to say they were missing, and nothing asked again while
+ * the other three sources polled. It is the shared REST read now
+ * (`~/lib/restRead.ts`), on the cadence the other three keep, asked again on
+ * its own where waiting can clear a failure, and its failure is the `withheld`
+ * sentence the card's header carries.
  */
-function useSecrets(): { rows: SecretRow[] | null } {
-  const [rows, setRows] = useState<SecretRow[] | null>(null);
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
-        if (live) setRows(body?.secrets ?? []);
-      } catch {
-        // BEST EFFORT, like every other credential read on a screen that is
-        // not about credentials: an operator without the scope for `/secrets`
-        // still has an audit of everything else, and a failed read here must
-        // not take the tracker's and the wiki's rows down with it.
-        if (live) setRows(null);
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
-  return { rows };
+function useSecrets(): { rows: SecretRow[] | null; withheld: string } {
+  const read = useRestRead(
+    "/secrets",
+    async (signal) =>
+      ((await rest.get("/secrets", signal)) as { secrets?: SecretRow[] } | null)?.secrets ?? [],
+    { cadence: () => POLL_MS },
+  );
+  return { rows: read.data, withheld: withheldSentence(read) };
+}
+
+/**
+ * Why the credentials' writes are not all in this audit, as one sentence — or
+ * "" when they are.
+ *
+ * THREE CASES, because the reader does something different about each: a
+ * refusal names the grant that would list them; a read that failed with
+ * nothing held says none of theirs are here; and one that failed while an
+ * earlier answer is still on screen says those rows may be behind.
+ */
+function withheldSentence(read: RestRead<SecretRow[]>): string {
+  if (read.failure === null) return "";
+  if (read.failure.error === "unauthorized") {
+    return needsSentence(
+      "Listing the credentials' writes",
+      read.error instanceof RestError ? read.error.grants : [],
+    );
+  }
+  return read.data === null
+    ? "The credentials could not be read, so none of their writes are listed here."
+    : "The credentials could not be read again, so their writes are as they were last read.";
+}
+
+/**
+ * The card's header line: what the rows cover, and every way they fall short.
+ *
+ * Each shortfall is its own sentence, and the claim that the rows cover all
+ * four sources is made only where nothing fell short — a header saying "across
+ * … the credentials" over an audit that read none of them was the screen
+ * claiming rows it never had.
+ */
+function auditSubtitle(truncated: string[], withheld: string): string {
+  const short = [
+    truncated.length > 0
+      ? `${truncated.join(" and ")} answered one page, which does not reach the start of this window — those rows are the newest, not all of them.`
+      : "",
+    withheld,
+  ].filter((sentence) => sentence !== "");
+  return short.length > 0
+    ? short.join(" ")
+    : "Every write a person or a token made, across the tracker, the knowledge base, the configuration and the credentials.";
 }
 
 /**

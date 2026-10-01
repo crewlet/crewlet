@@ -19,7 +19,7 @@
  *     screen silent about that is claiming those rows do not exist.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv } from "./Audit.tsx";
@@ -266,4 +266,85 @@ test("the export escapes what a spreadsheet would otherwise split", () => {
   expect(row).toContain('"turn on Slack, and say ""done"""');
   // Eight columns, whatever the detail held.
   expect(row?.match(/","/g)?.length).toBe(7);
+});
+
+/** Answers `/secrets` with `answer`, recording when each read was made. */
+function credentials(answer: (call: number) => Response | Promise<Response>): number[] {
+  const at: number[] = [];
+  Object.defineProperty(globalThis, "fetch", {
+    writable: true,
+    value: vi.fn(async () => {
+      at.push(Date.now());
+      return answer(at.length);
+    }),
+  });
+  return at;
+}
+
+const SECRET = {
+  name: "GITHUB_TOKEN",
+  key_id: "k1",
+  updated_at: RECENTLY,
+  updated_by: "founder",
+  updated_by_kind: "human",
+  source: "dashboard",
+};
+
+const listing = () =>
+  new Response(JSON.stringify({ secrets: [SECRET] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+// THE CREDENTIALS MISSING IS SAID, AND THE REST STAND. This read failed in
+// silence: the credentials dropped out of an audit whose header said it covered
+// them, so a reader refused them, or one whose request nothing answered, was
+// told every write was here.
+test("a refused credential listing names the grant, and the other sources stand", async () => {
+  credentials(
+    () =>
+      new Response(
+        JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }),
+        { status: 403, headers: { "Content-Type": "application/json" } },
+      ),
+  );
+  serving({ work_activity: { records: [commit()], complete: true } });
+  mount();
+  expect(await screen.findByText(/Listing the credentials' writes needs config:read/)).toBeTruthy();
+  expect(screen.getByText("took it off the board")).toBeTruthy();
+  expect(screen.queryByText(/across the tracker, the knowledge base/)).toBeNull();
+});
+
+// AND A READ NOBODY ANSWERED IS ASKED AGAIN ON ITS OWN — it was read once, at
+// mount, and never again while the three sources beside it polled — and then
+// on the cadence those three keep, so a credential stored after the screen
+// opened arrives with the rest.
+test("a credential listing nothing answered is said, asked again, and then polled", async () => {
+  vi.useFakeTimers();
+  try {
+    const at = credentials((call) => {
+      if (call === 1) throw new TypeError("Failed to fetch");
+      return listing();
+    });
+    serving({ work_activity: { records: [], complete: true } });
+    mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText(/none of their writes are listed here/)).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(at).toHaveLength(2);
+    expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
+    expect(screen.queryByText(/none of their writes are listed here/)).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(at).toHaveLength(3);
+  } finally {
+    vi.useRealTimers();
+  }
 });
