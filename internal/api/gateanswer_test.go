@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -120,6 +121,13 @@ func gateRefusalScenarios() map[string]error {
 			"state log, and this node runs in seal mode", engine.ErrNotPublishing),
 		"eviction_unjudged": &engine.GateUnjudged{Node: "node-4",
 			Err: errors.New("list the live nodes: coordination is unreachable")},
+		"readmission_unjudged": fmt.Errorf("engine: readmit node node-4: %w",
+			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker@tracker.007",
+				Err: fmt.Errorf("read its readmission bound: %w",
+					&estate.ErrPartitionUnserved{Partition: "tracker.007"})}),
+		"readmission_unjudged_register": fmt.Errorf("engine: readmit node node-4: %w",
+			&engine.ReadmissionUnjudged{Node: "node-4",
+				Err: errors.New("read the positions register: coordination is unreachable")}),
 		"readmission_refused": fmt.Errorf("engine: readmit node node-4: %w",
 			&statelog.ReadmissionRefusal{NodeID: "node-4", Domain: "tracker",
 				Published: true, Generation: 1, Seq: 1200,
@@ -333,6 +341,11 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		"eviction_unjudged":   {statelog.GateRetrySameOp, statelog.GateForce},
 		"readmission_refused": {statelog.GateWait},
 		"not_publishing":      {statelog.GateWait},
+		// A LOG NO NODE SERVES is waited out — no retry serves it — and
+		// anything else a judgement could not read is asked again, here
+		// or through another node.
+		"readmission_unjudged":          {statelog.GateWait},
+		"readmission_unjudged_register": {statelog.GateRetrySameOp, statelog.GateOtherNode},
 	}
 	for name, err := range gateRefusalScenarios() {
 		refusal, ok := api.RenderGateRefusal("node-4", refusalOpID(name), err)

@@ -427,7 +427,11 @@ be served again — by the node the map names in its place, adopting that copy.
 `crewlet retention readmit` lifts the bar, and only once every
 log has taken the node back: until then the map's part answers that it waits
 for the logs, and the same operation id finishes both, on any node
-([the retention guide](../guides/retention.md#eviction) says how). A gesture
+([the retention guide](../guides/retention.md#eviction) says how). A log whose
+partition no node serves cannot take the node back at all, so a readmission is
+refused before anything is written (`readmission_unjudged`) until one does —
+its holders returning, or, where its only copy is the barred machine's own, the
+node the map names in its place adopting that copy from it. A gesture
 reaches every log from whichever node it runs on: the node writes the logs of
 the partitions it serves and runs, and sends every other log's record — as
 the estate's `statelog.gate` operation — to a node that serves that

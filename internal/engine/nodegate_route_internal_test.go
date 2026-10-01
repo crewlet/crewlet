@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,6 +166,52 @@ func TestAReadmissionIsJudgedOnTheLogsItSendsElsewhere(t *testing.T) {
 	}
 }
 
+// A READMISSION ON A LOG NOBODY SERVES IS UNJUDGED, AND SAYS WHAT IT WAITS ON.
+//
+// A readmission is judged once against every log the node would be counted on,
+// so a log whose partition no node serves — its holders down, or its only copy
+// the one the barred machine kept through its eviction — refuses it whole, with
+// nothing written. That refusal used to be a bare error the API answered `500
+// gate_failed`, with nothing to say that the gesture could not finish until
+// the partition was served again, nor that a barred machine's own copy is what
+// a node the map names in its place adopts. It is a [ReadmissionUnjudged] now,
+// naming the log, whose remedy is to wait for what the sentence names.
+func TestAReadmissionOnALogNobodyServesIsUnjudged(t *testing.T) {
+	t.Parallel()
+	e, s, _ := aPartitionedStateLog(t)
+	const node = "node-barred"
+	gone := &sync.Map{}
+	gate := aGateServedElsewhereBy(t, e, s, node,
+		servedBy{layout: s.layout, node: s.nodeID, gone: gone})
+	evicted, err := gate.Evict(t.Context(), GateRequest{Node: node, By: "ops",
+		OpID: statelog.NewOpID(time.Now(), "evict-barred")})
+	if err != nil || !evicted.Complete() {
+		t.Fatalf("evict %s = %+v (%v), want complete", node, evicted, err)
+	}
+	unserved := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	gone.Store(unserved, true)
+	before := endsByKey(t, s)
+
+	res, err := gate.Readmit(t.Context(), GateRequest{Node: node, By: "ops",
+		OpID: statelog.NewOpID(time.Now(), "readmit-barred")})
+	var unjudged *ReadmissionUnjudged
+	if !errors.As(err, &unjudged) {
+		t.Fatalf("a readmission with %s unserved answered %+v (%v), want unjudged", unserved, res, err)
+	}
+	if want := (statelog.LogID{Domain: "tracker", Partition: unserved}).String(); unjudged.Log != want {
+		t.Errorf("the readmission is unjudged on %q, want the unserved log %q", unjudged.Log, want)
+	}
+	remedy := unjudged.Remedy()
+	if !slices.Equal(remedy.Actions, []statelog.GateAction{statelog.GateWait}) ||
+		!strings.Contains(remedy.Detail, "adopted that copy from "+node) {
+		t.Errorf("the remedy is %+v, want to wait for the partition to be served — "+
+			"naming the barred node's own copy as what a node in its place adopts", remedy)
+	}
+	if after := endsByKey(t, s); !maps.Equal(after, before) {
+		t.Errorf("an unjudged readmission wrote: the logs ended at %v and now at %v", before, after)
+	}
+}
+
 // endsByKey is every identity-claiming log s runs, at its last sequence on the
 // broker, by the log's key — two logs of one domain under a divided layout.
 func endsByKey(t *testing.T, s *stateLog) map[string]uint64 {
@@ -207,6 +254,15 @@ func evictThroughTheRouter(t *testing.T, e *Engine, s *stateLog, node string) Ga
 // never a backend the test built. node is named a holder of every partition.
 func aGateServedElsewhere(t *testing.T, e *Engine, s *stateLog, node string) *NodeGate {
 	t.Helper()
+	return aGateServedElsewhereBy(t, e, s, node, servedBy{layout: s.layout, node: s.nodeID})
+}
+
+// aGateServedElsewhereBy is [aGateServedElsewhere] routing by placement, whose
+// one serving holder is s's node.
+func aGateServedElsewhereBy(t *testing.T, e *Engine, s *stateLog, node string,
+	placement servedBy) *NodeGate {
+
+	t.Helper()
 	q, ok := e.backends.Queue.(interface {
 		estate.Asker
 		estate.Server
@@ -216,7 +272,6 @@ func aGateServedElsewhere(t *testing.T, e *Engine, s *stateLog, node string) *No
 	}
 	e.native.Store(&native{nodeID: s.nodeID, log: s})
 	t.Cleanup(func() { e.native.Store(nil) })
-	placement := servedBy{layout: s.layout, node: s.nodeID}
 	stop, err := estate.Serve(t.Context(), q, s.nodeID, newLocalEstate(e, s.holding), placement,
 		e.serverSeams())
 	if err != nil {
@@ -262,15 +317,22 @@ func aLayoutZeroStateLog(t *testing.T) (*Engine, *stateLog) {
 	return e, s
 }
 
-// servedBy is a placement in which one node serves every partition of layout.
+// servedBy is a placement in which one node serves every partition of layout —
+// but any partition stored in gone, which nobody serves.
 type servedBy struct {
 	layout statelog.Layout
 	node   string
+	gone   *sync.Map
 }
 
 func (p servedBy) Layout() (statelog.Layout, error) { return p.layout, nil }
 
-func (p servedBy) Serving(statelog.PartitionID) ([]string, uint64, error) {
+func (p servedBy) Serving(id statelog.PartitionID) ([]string, uint64, error) {
+	if p.gone != nil {
+		if _, gone := p.gone.Load(id); gone {
+			return nil, 1, nil
+		}
+	}
 	return []string{p.node}, 1, nil
 }
 

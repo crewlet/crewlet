@@ -449,6 +449,34 @@
         "position": 1200,
         "published": true
       }
+    },
+    "readmission_unjudged": {
+      "status": 503,
+      "body": {
+        "actions": [
+          "wait"
+        ],
+        "detail": "engine: the readmission of node-4 cannot be judged on tracker@tracker.007: read its readmission bound: estate: no node serves tracker.007 right now",
+        "error": "readmission_unjudged",
+        "hint": "no node serving tracker.007 answered, so the standing of its log tracker@tracker.007 cannot be read, and the readmission could not be written there either. Run it again once the partition is served: when a holder of it returns or answers — or, where its only copy is the one node-4 kept through its eviction, which nobody writes while the node is barred, once a node the estate map names in its place has adopted that copy from node-4, which offers it while it keeps it; if no other data node can hold tracker.007, add one",
+        "log": "tracker@tracker.007",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-79ad-8c62-c1a2d6774ed0.readmit-node-4"
+      }
+    },
+    "readmission_unjudged_register": {
+      "status": 503,
+      "body": {
+        "actions": [
+          "retry_same_op",
+          "other_node"
+        ],
+        "detail": "engine: the readmission of node-4 cannot be judged: read the positions register: coordination is unreachable",
+        "error": "readmission_unjudged",
+        "hint": "this node could not read what the readmission of node-4 is judged against, and wrote nothing: ask again once it answers, or through another node",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-7bd7-8b87-2b15a09ea0c5.readmit-node-4"
+      }
     }
   }
 }

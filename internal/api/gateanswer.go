@@ -196,6 +196,7 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 	var readmission *statelog.ReadmissionRefusal
 	var eviction *statelog.EvictionRefusal
 	var unjudged *engine.GateUnjudged
+	var readmissionUnjudged *engine.ReadmissionUnjudged
 	switch {
 	case err == nil:
 		return GateRefusal{}, false
@@ -229,6 +230,22 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 			"hint": remedy.Detail, "actions": remedy.Actions, "node": node,
 			"op_id": opID,
 		}}, true
+	case errors.As(err, &readmissionUnjudged):
+		// A READMISSION NOBODY COULD JUDGE, which is not the target's state
+		// but a read that failed — on this node, or on every holder of a
+		// log's partition — so a 503 carrying what to wait for, as an
+		// eviction's is, and never the 500 an operator reads as an engine
+		// bug. Nothing was written.
+		remedy := readmissionUnjudged.Remedy()
+		body := map[string]any{
+			"error": "readmission_unjudged", "detail": readmissionUnjudged.Error(),
+			"hint": remedy.Detail, "actions": remedy.Actions, "node": node,
+			"op_id": opID,
+		}
+		if readmissionUnjudged.Log != "" {
+			body["log"] = readmissionUnjudged.Log
+		}
+		return GateRefusal{Status: http.StatusServiceUnavailable, Body: body}, true
 	case errors.As(err, &readmission):
 		// 409 WITH THE NUMBERS, because the inequality is the reason — an
 		// operator told only "500 gate_failed" would read an engine problem
@@ -263,10 +280,14 @@ func logGateRefusal(operator, node string, err error) {
 	var readmission *statelog.ReadmissionRefusal
 	var eviction *statelog.EvictionRefusal
 	var unjudged *engine.GateUnjudged
+	var readmissionUnjudged *engine.ReadmissionUnjudged
 	switch {
 	case errors.As(err, &unjudged):
 		log.Warn("retention_eviction_unjudged", "operator", operator,
 			"node", node, "error", unjudged.Err)
+	case errors.As(err, &readmissionUnjudged):
+		log.Warn("retention_readmission_unjudged", "operator", operator,
+			"node", node, "log", readmissionUnjudged.Log, "error", readmissionUnjudged.Err)
 	case errors.As(err, &readmission):
 		log.Info("retention_readmission_refused", "operator", operator,
 			"node", node, "domain", readmission.Domain,

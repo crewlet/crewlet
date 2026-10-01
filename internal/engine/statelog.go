@@ -1991,25 +1991,26 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders partitionHolders,
 	route boundRoute) error {
 
+	unjudged := func(log string, err error) error {
+		return &ReadmissionUnjudged{Node: nodeID, Log: log, Err: err}
+	}
 	if s == nil || s.fleet == nil {
-		return fmt.Errorf("engine: this node reads no positions register, so it "+
-			"cannot judge where %s stands against the trim floor", nodeID)
+		return unjudged("", errors.New("this node reads no positions register, so it "+
+			"cannot tell where the node stands against the trim floor"))
 	}
 	// ONE READING OF THE REGISTER chooses the logs and judges them: see
 	// [stateLog.countedOn].
 	register, err := s.positions(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: read the positions register to judge %s's "+
-			"readmission: %w", nodeID, err)
+		return unjudged("", fmt.Errorf("read the positions register: %w", err))
 	}
 	counted, err := s.countedOn(ctx, holders, nodeID, register)
 	if err != nil {
-		return fmt.Errorf("engine: which logs %s would be counted on: %w", nodeID, err)
+		return unjudged("", fmt.Errorf("which logs the node would be counted on: %w", err))
 	}
 	floors, err := s.floors(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: read the published trim floors to judge %s's "+
-			"readmission: %w", nodeID, err)
+		return unjudged("", fmt.Errorf("read the published trim floors: %w", err))
 	}
 	// EVERY LOG IT WOULD BE COUNTED ON, each read where it is written: this
 	// node's own copy where it writes the log, and a holder of the log's
@@ -2024,8 +2025,8 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 			continue
 		}
 		if route == nil {
-			errs[i] = fmt.Errorf("engine: this node does not write %s and has no route "+
-				"to a node that does", id)
+			errs[i] = fmt.Errorf("this node does not write %s and has no route to a "+
+				"node that does", id)
 			continue
 		}
 		wg.Go(func() {
@@ -2039,8 +2040,8 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 	wg.Wait()
 	for i, err := range errs {
 		if err != nil {
-			return fmt.Errorf("engine: read %s's readmission bound to judge %s's "+
-				"readmission: %w", counted[i], nodeID, err)
+			return unjudged(counted[i].String(), fmt.Errorf("read its readmission "+
+				"bound: %w", err))
 		}
 	}
 	return statelog.PermitReadmission(nodeID, register, bounds)

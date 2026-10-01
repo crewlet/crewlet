@@ -595,7 +595,14 @@ same rule reads per partition, and three things follow from it:
   written: a log the node you run it on does not write has its bound — the
   floor and first surviving sequence the writing node's fence holds a node to
   — read from a node that serves its partition, and a bound no holder could
-  give refuses the readmission rather than passing it unjudged.
+  give refuses the readmission rather than passing it unjudged:
+  `readmission_unjudged`, with nothing written. Where no node serves the
+  partition at all it waits on that, and the refusal says so — including
+  the case where the partition's only copy is the one the readmitted node
+  kept through its eviction, which nobody writes while it is barred: a node
+  the estate map names in its place adopts that copy from it (a node keeps
+  offering the copies it keeps), and then serves the partition, and the
+  readmission can be judged and written there.
 - **Each log is written by a node that serves its partition.** The node you
   run the gesture on writes the logs of the partitions it serves and runs; it
   sends every other log's record to a node that serves that partition, which

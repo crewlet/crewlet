@@ -294,6 +294,71 @@ func (e *GateUnjudged) Remedy() statelog.GateRemedy {
 	}
 }
 
+// ReadmissionUnjudged is a readmission refused because something it is judged
+// against could not be read: nothing was written anywhere.
+//
+// A READMISSION IS JUDGED ONCE, against every log the node would be counted on
+// ([stateLog.Readmissible]), so one input nobody could read refuses it whole —
+// a floor nobody could read is not a low one. Its own type, beside
+// [*statelog.ReadmissionRefusal], because the remedy differs: a refusal says
+// the node is below a floor and must catch up, this says the judgement could
+// not be made, and — for a log no node serves — what has to happen before it
+// can be.
+type ReadmissionUnjudged struct {
+	Node string
+
+	// Log is the log whose bound could not be read, by its register key —
+	// empty where what failed is the fleet's (the positions register, the
+	// published floors, the partitions' holders).
+	Log string
+
+	Err error
+}
+
+func (e *ReadmissionUnjudged) Error() string {
+	if e.Log == "" {
+		return fmt.Sprintf("engine: the readmission of %s cannot be judged: %v", e.Node, e.Err)
+	}
+	return fmt.Sprintf("engine: the readmission of %s cannot be judged on %s: %v",
+		e.Node, e.Log, e.Err)
+}
+
+func (e *ReadmissionUnjudged) Unwrap() error { return e.Err }
+
+// Remedy is what the operator does about it.
+//
+// A LOG NO NODE SERVES is waited out, and the sentence says what it waits on,
+// because one case is not a holder coming back: a partition whose ONLY copy is
+// the one the readmitted machine kept through its eviction. Nobody writes that
+// copy while the machine is barred, and nobody else holds one, so the partition
+// is served again only once a node the estate map names in its place has
+// adopted the copy from the machine — which offers it for as long as it keeps
+// it ([statelog.Copies]) — or, where no other data node can hold it, once one
+// is added. Told only to ask again, an operator retried a gesture no retry
+// could finish.
+func (e *ReadmissionUnjudged) Remedy() statelog.GateRemedy {
+	var unserved *estate.ErrPartitionUnserved
+	if errors.As(e.Err, &unserved) {
+		return statelog.GateRemedy{
+			Actions: []statelog.GateAction{statelog.GateWait},
+			Detail: fmt.Sprintf("no node serving %s answered, so the standing of its log "+
+				"%s cannot be read, and the readmission could not be written there either. "+
+				"Run it again once the partition is served: when a holder of it returns or "+
+				"answers — or, where its only copy is the one %s kept through its eviction, "+
+				"which nobody writes while the node is barred, once a node the estate map "+
+				"names in its place has adopted that copy from %s, which offers it while it "+
+				"keeps it; if no other data node can hold %s, add one",
+				unserved.Partition, e.Log, e.Node, e.Node, unserved.Partition),
+		}
+	}
+	return statelog.GateRemedy{
+		Actions: []statelog.GateAction{statelog.GateRetrySameOp, statelog.GateOtherNode},
+		Detail: fmt.Sprintf("this node could not read what the readmission of %s is "+
+			"judged against, and wrote nothing: ask again once it answers, or through "+
+			"another node", e.Node),
+	}
+}
+
 // GateResult is what one gesture did to every log it had to reach.
 type GateResult struct {
 	Node string

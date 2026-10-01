@@ -314,6 +314,20 @@ test("a refused readmission renders its reason and its remedy, and no outcome", 
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
 
+// A READMISSION NOBODY COULD JUDGE renders the engine's sentence for what it
+// waits on — a partition being served again — and never the catch-up advice a
+// refusal below the floor gets: the node's position is not what is wrong.
+test("an unjudged readmission says it waits on a partition, not on the node", async () => {
+  const refusal = golden.refusals["readmission_unjudged"]!;
+  engine(refusal);
+  render(<GateDialog node="node-4" evict={false} onHeld={() => {}} onClose={() => {}} />);
+  confirmAndPress("node-4", "Readmit");
+  await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
+  expect(screen.getByText(/served again, then readmit it again/)).toBeTruthy();
+  expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
+  expect(screen.queryByText(/is readmitted/)).toBeNull();
+});
+
 // A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture its own
 // answer budget and finishes it whatever the connection does; the dialog gave
 // up at thirty seconds holding nothing, and the only way on was a second

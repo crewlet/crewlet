@@ -144,6 +144,9 @@ interface Refusal {
   detail: string;
   hint: string;
   actions: string[];
+  /** The engine's own code for the refusal (`readmission_refused`, …), or
+   *  empty for one it did not write. */
+  code: string;
 }
 
 export function GateDialog({
@@ -249,7 +252,8 @@ export function GateDialog({
         // anywhere and the next attempt may reuse it; on a FINISH the logs
         // the gesture already reached still hold its record, and the
         // judgement a Finish re-runs (`503 eviction_unjudged`, `409
-        // readmission_refused`) says nothing about them. So what the gesture
+        // readmission_refused`, `503 readmission_unjudged`) says nothing
+        // about them. So what the gesture
         // already heard is KEPT and the refusal renders beside it: dropped,
         // the dialog fell back to "Type node-4 to confirm" with the per-log
         // answer and the operation id gone from the screen.
@@ -271,8 +275,9 @@ export function GateDialog({
                 actions: Array.isArray(err.body.actions)
                   ? err.body.actions.filter((a): a is string => typeof a === "string")
                   : [],
+                code: typeof err.body.error === "string" ? err.body.error : "",
               }
-            : { detail: String(err), hint: "", actions: [] },
+            : { detail: String(err), hint: "", actions: [], code: "" },
         );
       }
     } finally {
@@ -485,7 +490,7 @@ export function GateDialog({
               .filter((a) => a !== "force")
               .map((a) => (
                 <span key={a} className="t-caption">
-                  {actionWords(a, { evict, stream: "", refused: true })}
+                  {actionWords(a, { evict, stream: "", refused: true, code: refusal.code })}
                 </span>
               ))}
           </span>
@@ -731,7 +736,8 @@ function actionWords(
     stream,
     opId,
     refused = false,
-  }: { evict: boolean; stream: string; opId?: string; refused?: boolean },
+    code = "",
+  }: { evict: boolean; stream: string; opId?: string; refused?: boolean; code?: string },
 ): string {
   switch (action) {
     case "retry_same_op":
@@ -755,8 +761,15 @@ function actionWords(
     case "restore":
       return "Restore the store and the stream from one backup.";
     case "wait":
-      return evict
-        ? "Wait for its presence lease to lapse — its row stops showing it live — then evict it again."
+      if (evict) {
+        return "Wait for its presence lease to lapse — its row stops showing it live — then evict it again.";
+      }
+      // A READMISSION NOBODY COULD JUDGE waits on a partition being served
+      // again, which is nothing about the node's own position: told to
+      // watch it catch up, an operator watched a number that had already
+      // caught up while the gesture stayed refused.
+      return code === "readmission_unjudged"
+        ? "Wait until the partition the engine names above is served again, then readmit it again."
         : "Wait for it to catch up — its position on this screen says when — then readmit it again.";
   }
   return `The engine also names ${action}.`;
