@@ -86,21 +86,23 @@ const MaxBody = 64 << 10
 // of codes the table already held (`bad_body`, and `no_public_url`, named for
 // the retired Tier B field).
 
-// RetryBusySeconds is the Retry-After on [httpjson.CodeSurfaceBusy].
+// RetryBusy is the Retry-After on [httpjson.CodeSurfaceBusy].
 //
-// THREE, the same span the request itself already waited before answering
-// busy ([disconnectRetryFor]): what holds a surface is a reconcile tick —
-// seconds — or an operator's pass, so a tick that outlived one such wait is
-// most likely a moment from ending, and asking again after another is the
-// soonest a second attempt could find it released without the waiting client
-// becoming load on the surface it waits for.
+// THE SPAN THE REQUEST ITSELF ALREADY WAITED before answering busy
+// ([disconnectRetryFor]), and that constant rather than a second spelling of
+// its value: what holds a surface is a reconcile tick — seconds — or an
+// operator's pass, so a tick that outlived one such wait is most likely a
+// moment from ending, and asking again after another is the soonest a second
+// attempt could find it released without the waiting client becoming load on
+// the surface it waits for. Written as its own `3`, it was a number justified
+// as equal to another with nothing keeping it so.
 //
 // THE DASHBOARD'S DISCONNECT DIALOG WAITS EXACTLY THIS, read off the header,
-// and has no cadence of its own: it used to, and this constant was justified
-// as matching it — two copies of one number, each citing the other. Exported
-// for internal/api's gate that holds every fixed hint the dashboard waits out
+// and has no cadence of its own: it used to, and this hint was justified as
+// matching it — two copies of one number, each citing the other. Exported for
+// internal/api's gate that holds every fixed hint the dashboard waits out
 // under the bound it waits at most.
-const RetryBusySeconds = 3
+const RetryBusy = disconnectRetryFor
 
 // Options wire the service.
 //
@@ -2187,7 +2189,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 			// caller cannot tell them apart from the status alone.
 			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
 			if errors.Is(err, errSurfaceBusy) {
-				code, after = httpjson.CodeSurfaceBusy, RetryBusySeconds
+				code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
 			}
 			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
 			return

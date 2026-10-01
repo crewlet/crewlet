@@ -53,7 +53,7 @@ func TestTheDashboardRetriesOnTheEnginesOwnHints(t *testing.T) {
 		{"a draining node", api.DrainRetryAfter},
 		{"an identity estate this node cannot read", time.Duration(auth.RetryIdentitySeconds) * time.Second},
 		{"an authority this node cannot decide", time.Duration(authz.RetryUndecidedSeconds) * time.Second},
-		{"a surface another writer holds", time.Duration(setupapi.RetryBusySeconds) * time.Second},
+		{"a surface another writer holds", setupapi.RetryBusy},
 	} {
 		if hint.after > bound {
 			t.Errorf("the engine tells a client to wait %s for %s, and the dashboard "+

@@ -418,8 +418,10 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 		t.Errorf("detail = %q, which does not say the request is worth "+
 			"repeating", detail)
 	}
-	// AND WHEN: the dialog's own cadence for this refusal, so a client that
-	// follows the header asks again as often as the screen that retries it.
+	// AND WHEN: three seconds, the span this request already waited before
+	// answering busy. The dashboard's dialog waits exactly this header and
+	// has no cadence of its own, so the header is the whole of how often a
+	// busy surface is asked again.
 	if got := out.Header().Get("Retry-After"); got != "3" {
 		t.Errorf("Retry-After = %q, want 3", got)
 	}
