@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -757,6 +758,14 @@ func reserveOn(t testing.TB, log *js.DomainLog) *statelog.Reserve {
 // decides several of the write path's branches.
 func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 	t.Helper()
+	return newHarnessLogging(t, domain, nil)
+}
+
+// newHarnessLogging is [newHarnessFor] with the publisher writing its lines to
+// logger, for a case that reads what a write logged; nil is the package's own
+// logger, as the engine's publishers have.
+func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger) *harness {
+	t.Helper()
 	// A STORE DIRECTORY, ALWAYS. An embedded broker with none keeps its
 	// streams in memory, and every property this framework rests on is
 	// about a stream that survives.
@@ -815,6 +824,7 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 		NodeID:        "node-a",
 		Generation:    h.gen.Load,
 		ResolveBudget: 250 * time.Millisecond,
+		Logger:        logger,
 	}
 	// THE REAL LOG'S OWN RESERVE, where the domain keeps one: every write
 	// through the harness is admitted against the broker's usage, as the

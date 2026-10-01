@@ -4,11 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // peerCopy lands, straight on the log, writer's record of opID on subject a —
@@ -128,6 +133,69 @@ func TestAnotherNodesCopyTheDeletionMarkerDroppedNamesNoWriter(t *testing.T) {
 	if !strings.Contains(refusal.Detail, "node-b") {
 		t.Errorf("the refusal's detail %q no longer says whose copy the record is",
 			refusal.Detail)
+	}
+}
+
+// THE REPLICATION GUIDE SAYS WHAT THE WRITE-GATED LINE CARRIES, AND WHAT IT IS.
+//
+// `statelog_write_gated` is the asking node's only per-record witness of a
+// write a gate refused, and its row in the guide read "the same, seen by the
+// write that published it" — the same as the applier's `statelog_record_gated`.
+// Neither half held. The node that logs it is often not the one that published
+// the record: a write collapsed onto another node's copy logs that node as the
+// `writer`, and a reader told the line came from the publisher took the asking
+// node for the writer, the misreading [statelog.Unavailable.CopyWriter] exists
+// to prevent. And the line is a REFUSAL, counted by reason, not a second drop:
+// read as "the same" an operator counted one record twice, which is the double
+// count the records-gated counter was rid of.
+//
+// So the row is held to the line in both of those respects: every key the line
+// carries is named there, and so are the counter the refusal is counted under
+// and the applier's line that is the drop.
+func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
+	t.Parallel()
+	logs := &lockedBuffer{}
+	h := newHarnessLogging(t, probeDomain{}, slog.New(slog.NewJSONHandler(logs, nil)))
+	peerCopy(t, h, "node-b", "op-left")
+	h.gates.holdWriter("node-b", statelog.ReasonReleased)
+	if _, err := h.write(probeSubject("a"), "op-left", "mine"); !errors.Is(err, statelog.ErrUnavailable) {
+		t.Fatalf("a write collapsed onto node-b's released copy = %v, want a refusal", err)
+	}
+	lines := logRecords(t, logs.Bytes(), "statelog_write_gated")
+	if len(lines) != 1 {
+		t.Fatalf("%d statelog_write_gated lines for one refused write, want one", len(lines))
+	}
+
+	guide, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "replication.md"))
+	if err != nil {
+		t.Fatalf("read the replication guide: %v", err)
+	}
+	var row string
+	for line := range strings.SplitSeq(string(guide), "\n") {
+		if strings.HasPrefix(line, "| `statelog_write_gated` |") {
+			row = line
+		}
+	}
+	if row == "" {
+		t.Fatal("the replication guide's table of state-log lines has no " +
+			"statelog_write_gated row")
+	}
+	for key := range lines[0] {
+		switch key {
+		case slog.TimeKey, slog.LevelKey, slog.MessageKey:
+			continue
+		}
+		if !strings.Contains(row, "`"+key+"`") {
+			t.Errorf("the guide's statelog_write_gated row never names `%s`, a key "+
+				"the line carries: %s", key, row)
+		}
+	}
+	for _, name := range []string{metrics.StatelogPublishRefusals, "statelog_record_gated"} {
+		if !strings.Contains(row, "`"+name+"`") {
+			t.Errorf("the guide's statelog_write_gated row never names `%s` — the "+
+				"line is a refusal counted there, not a second drop, and the drop "+
+				"is the applier's own line: %s", name, row)
+		}
 	}
 }
 
