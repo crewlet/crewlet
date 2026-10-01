@@ -1178,18 +1178,21 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// leaves the building for every token, so this is the one counter that
 	// fails CLOSED — a charge that cannot be made stops the round rather
 	// than silently un-capping the company.
+	//
+	// THE CAP leaves room for the turn-start prefetch's knowledge query and
+	// ONE round of the turn's own loop, and not for a second — so the cap
+	// bites partway through the turn rather than before it starts, which is
+	// the case a pre-flight check would miss.
+	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
+	limit := aux + round + round/2
 	n := startWith(t, func(doc string) string {
-		return doc + "\ntoken_budget: {day: 200}\n"
+		return doc + fmt.Sprintf("\ntoken_budget: {day: %d}\n", limit)
 	})
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
 	})
 	n.wake(t, "ceo", "How did the week go?")
 
-	// The scripted model reports 150 tokens on its first call and 130 on
-	// the next, so the cap bites partway through the turn rather than
-	// before it starts — which is the case a pre-flight check would miss.
-	//
 	// SETTLED ON THE REFUSAL, which the gate records on the scope that
 	// made it. The second charge is attempted only after the first has
 	// returned, so once the company has refused one both counters are
@@ -1219,8 +1222,42 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		t.Fatalf("used: %v", err)
 	}
 	used := orgToday.In(period.Day).Used
-	if used > 200 {
-		t.Errorf("the company spent %d against a cap of 200 a day", used)
+	// THE CAP GOVERNS WHAT THE LOOP ADMITS, and only that. The counter also
+	// holds every AUXILIARY completion — the prefetch's knowledge query
+	// here, a reflection pass after a turn — and those are RECORDED whole
+	// after they return, past the ceiling included, because their size is
+	// known only from the answer and no refusal can un-spend them
+	// (coord.Budgets.PostCharge). So `used <= limit` is not the engine's
+	// promise, and it failed a correct engine the moment the prefetch was
+	// charged. The promise is that no charge the loop's gate ADMITTED took
+	// the company past its cap: what was recorded before the loop began
+	// counts against the room its rounds had, and only what was recorded
+	// after the loop's first call can stand above the cap.
+	//
+	// Ordered by what the model ANSWERED, read after the counter: the turn
+	// is sequential, so a completion answered before the loop's first call
+	// was recorded before any of its rounds, and an auxiliary call answered
+	// after it but not yet recorded only makes the bound looser, never one
+	// a correct engine fails.
+	calls := n.model.seen()
+	loopBegan, auxAfter := false, 0
+	for _, call := range calls {
+		switch {
+		case !strings.HasPrefix(call, "aux:"):
+			loopBegan = true
+		case loopBegan:
+			auxAfter++
+		}
+	}
+	if !loopBegan {
+		t.Fatalf("the cap refused a charge but the model answered no round of "+
+			"the turn's own loop: %v", calls)
+	}
+	if atLastAdmit := used - auxAfter*aux; atLastAdmit > limit {
+		t.Errorf("the turn loop admitted charges up to %d against a cap of %d a "+
+			"day (the counter reads %d, %d of it recorded by auxiliary calls "+
+			"after the loop began); model calls %v",
+			atLastAdmit, limit, used, auxAfter*aux, calls)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	//
@@ -1236,19 +1273,28 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	// claim, and CI caught it: `seat spent 0 and the org 150`. The
 	// invariant is that the two agree once the charge is through, which is
 	// what this now says.
+	//
+	// BOTH READ ON EVERY POLL rather than the seat against the org figure
+	// read above: an auxiliary pass after the turn — a reflection — is
+	// recorded on both scopes too, and a seat chasing a frozen org figure
+	// would overshoot it and never catch it.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
-	var seatUsed int
+	var seatUsed, orgUsed int
 	waitFor(t, "the seat's counter to catch the org's", func() bool {
+		orgNow, err := budgets.Used(t.Context(), coord.OrgScope, today())
+		if err != nil {
+			return false
+		}
 		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()), today())
 		if err != nil {
 			return false
 		}
-		seatUsed = got.In(period.Day).Used
-		return seatUsed == used
+		orgUsed, seatUsed = orgNow.In(period.Day).Used, got.In(period.Day).Used
+		return seatUsed == orgUsed
 	}, func() string {
 		return fmt.Sprintf("seat spent %d and the org %d; one charge must "+
-			"move both", seatUsed, used)
+			"move both", seatUsed, orgUsed)
 	})
 }
 
