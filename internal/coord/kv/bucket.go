@@ -108,6 +108,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsinflight"
 )
 
 // clientBucket is what this package may call on the client's bucket handle:
@@ -166,24 +168,63 @@ func newLeaderBucket(js jetstream.JetStream, kv jetstream.KeyValue, facts bucket
 // Bucket names the bucket.
 func (b *leaderBucket) Bucket() string { return b.client.Bucket() }
 
-// Put writes a value unconditionally.
+// Put writes a value unconditionally. It names no revision, so the leader has
+// nothing to refuse and nothing to settle.
 func (b *leaderBucket) Put(ctx context.Context, key string, value []byte) (uint64, error) {
 	return b.client.Put(ctx, key, value)
 }
 
-// Update writes a value only if the key is still at revision.
+// Update writes a value only if the key is still at revision, and is SETTLED:
+// see [leaderBucket.settle].
 func (b *leaderBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
-	return b.client.Update(ctx, key, value, revision)
+	var rev uint64
+	err := b.settle(ctx, "update", key, func(ctx context.Context) error {
+		var err error
+		rev, err = b.client.Update(ctx, key, value, revision)
+		return err
+	})
+	return rev, err
 }
 
-// Delete leaves a delete marker.
+// Delete leaves a delete marker; one conditioned on a revision is SETTLED.
 func (b *leaderBucket) Delete(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
-	return b.client.Delete(ctx, key, opts...)
+	return b.settle(ctx, "delete", key, func(ctx context.Context) error {
+		return b.client.Delete(ctx, key, opts...)
+	})
 }
 
-// Purge leaves a purge marker and drops the key's history.
+// Purge leaves a purge marker and drops the key's history; one conditioned on
+// a revision is SETTLED.
 func (b *leaderBucket) Purge(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error {
-	return b.client.Purge(ctx, key, opts...)
+	return b.settle(ctx, "purge", key, func(ctx context.Context) error {
+		return b.client.Purge(ctx, key, opts...)
+	})
+}
+
+// settle runs one conditional write until the stream leader DECIDES it —
+// [jsinflight.Decide], within the write's own deadline or, when it has none,
+// the client's DefaultTimeout.
+//
+// The leader answers a conditional write with a third answer beside "landed"
+// and "refused": another write to the key is still in flight, which decides
+// nothing, since the write ahead may be this caller's own and already
+// acknowledged. The client reports it as the same revision mismatch as a real
+// refusal, and every caller here read that as a lost race: under load a
+// removal at the very revision its caller had just read back was refused, so a
+// create race over that record had no winner, and a charge spent all sixteen
+// of its compare-and-set rounds on refusals no other writer had caused. The
+// package doc of internal/jsinflight has the server source it rests on.
+//
+// A write still undecided at its deadline comes back as [jsinflight.Undecided],
+// which carries no mismatch, so it reaches every caller as UNKNOWN rather than
+// as a race somebody else won. The op and key name the write in the error.
+func (b *leaderBucket) settle(ctx context.Context, op, key string, write func(context.Context) error) error {
+	err := jsinflight.Decide(ctx, b.timeout, write)
+	var undecided *jsinflight.Undecided
+	if errors.As(err, &undecided) {
+		return fmt.Errorf("coord/kv: %s %s in %s: %w", op, key, b.Bucket(), err)
+	}
+	return err
 }
 
 // Get reads a key's current value from the stream leader. A key that was
@@ -226,16 +267,21 @@ const createAttempts = fleetCASRetries
 // told the key existed. The two steps here are the same; the read is the
 // leader's.
 //
-// And a lost step-over is re-read rather than reported: the client handed its
-// second publish's refusal back unmapped, and on a replicated stream that is a
-// code its "key exists" sentinel does not match (see [lostCreateRace]).
+// And every refusal it acts on is a DECIDED one: both publishes are settled
+// (see [leaderBucket.settle]), so "a write ahead of this one is still in
+// process" is waited out rather than read as a key that exists, and a lost
+// step-over is re-read rather than reported — the client handed that second
+// refusal back unmapped.
 func (b *leaderBucket) Create(ctx context.Context, key string, value []byte) (uint64, error) {
 	if !validKey(key) {
 		return 0, jetstream.ErrInvalidKey
 	}
 	revision := uint64(0)
 	for range createAttempts {
-		rev, err := b.client.Update(ctx, key, value, revision)
+		// SETTLED, so a refusal here is decided: a write ahead of this one
+		// still in process is waited out rather than read as a key that
+		// exists.
+		rev, err := b.Update(ctx, key, value, revision)
 		switch {
 		case err == nil:
 			return rev, nil

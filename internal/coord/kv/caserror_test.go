@@ -8,38 +8,43 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// A COMPARE-AND-SET REFUSAL IS MATCHED ON ITS CODE, both of them.
+// A COMPARE-AND-SET REFUSAL IS MATCHED ON ITS CODE — the DECIDED one.
 //
-// The server answers 10071 on a solo stream and 10164 on a REPLICATED one for
-// the same refusal — so a fleet, which is the only topology where this race is
-// common, matched neither code and fell through to a substring test on a
-// message the client is free to reword.
+// The leader refuses a conditional write with 10071 once it has compared the
+// revision the write named with the one the subject is at, on a solo stream
+// and a replicated one alike. 10164 says the same three words and decides
+// nothing: another write to the subject is still in process at the leader, and
+// it may be this caller's own, already acknowledged. Read as a refusal it gave
+// a create race over a just-removed record no winner, so it is NOT one here —
+// [leaderBucket.settle] waits it out instead.
 //
 // The message in each fixture below is DELIBERATELY UNRELATED: a test whose
-// error text says "wrong last sequence" passes for the substring version too,
-// and would have proved nothing about the fix.
-func TestACompareAndSetRefusalIsMatchedOnItsCode(t *testing.T) {
+// error text says "wrong last sequence" passes for a substring match too, and
+// would prove nothing about matching on the code.
+//
+// Mutation: match 10164 as well, and the in-process case fails here.
+func TestACompareAndSetRefusalIsMatchedOnItsDecidedCode(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		err  error
 		want bool
 	}{
-		"the solo code": {
+		"the decided refusal": {
 			&jetstream.APIError{
 				ErrorCode:   jetstream.JSErrCodeStreamWrongLastSequence,
 				Description: "an entirely unrelated string",
 			}, true,
 		},
-		"the replicated code": {
+		"wrapped, because callers wrap": {
+			fmt.Errorf("publish the activation: %w", &jetstream.APIError{
+				ErrorCode: jetstream.JSErrCodeStreamWrongLastSequence,
+			}), true,
+		},
+		"the leader's in-process answer is not a refusal": {
 			&jetstream.APIError{
 				ErrorCode:   jetstream.JSErrCodeStreamWrongLastSequenceConstant,
 				Description: "an entirely unrelated string",
-			}, true,
-		},
-		"wrapped, because callers wrap": {
-			fmt.Errorf("publish the activation: %w", &jetstream.APIError{
-				ErrorCode: jetstream.JSErrCodeStreamWrongLastSequenceConstant,
-			}), true,
+			}, false,
 		},
 		"another API error is not this one": {
 			&jetstream.APIError{ErrorCode: jetstream.JSErrCodeStreamNotFound}, false,

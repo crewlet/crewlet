@@ -1760,24 +1760,24 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 	}
 }
 
-// isWrongLastSequence reports a compare-and-set refusal.
+// isWrongLastSequence reports a DECIDED compare-and-set refusal: 10071, which
+// the leader answers on either topology once it has compared the revision a
+// write named with the one the subject is at, and which names the latter.
 //
-// TWO CODES, and the second is not a fallback: the server answers 10071 on a
-// solo stream and 10164 on a REPLICATED one, for the same refusal. So a fleet
-// — the only topology where a compare-and-set race is common — was matching
-// on neither code and reaching the substring test underneath, which is a
-// message this client is free to reword in any release.
+// ONE CODE, and the other "wrong last sequence" is deliberately not it. 10164
+// was read here as the same refusal on a replicated stream, and it is not a
+// refusal at all: it is the leader saying another write to the subject is
+// still in process, which decides nothing — the write ahead may be this
+// caller's own, already acknowledged. [leaderBucket.settle] waits it out on
+// every conditional write, so it never reaches a caller as a race. See there.
 //
-// The message test is gone with it. A refusal read as an outage answers 503
-// where it should answer 409, and the shape of that bug is a conflict an
-// operator retries for ever because the engine called it an unavailable store.
+// Matched on the code and never on the message, which this client is free to
+// reword in any release: a refusal read as an outage answers 503 where it
+// should answer 409, and the shape of that bug is a conflict an operator
+// retries for ever because the engine called it an unavailable store.
 func isWrongLastSequence(err error) bool {
 	var api *jetstream.APIError
-	if !errors.As(err, &api) {
-		return false
-	}
-	return api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence ||
-		api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
+	return errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence
 }
 
 // The two CAS-race classifiers.
@@ -1793,15 +1793,18 @@ func isWrongLastSequence(err error) bool {
 // Create in this package asks it rather than matching a sentinel of its own.
 //
 // THREE SHAPES FOR ONE FACT, and every one of them is somebody else's second
-// writer. ErrKeyExists is the ordinary case. A revision mismatch is what the
-// client reports when the key carried a delete or purge marker it tried to
-// step over and lost. And on a REPLICATED stream a share of those losers come
-// back as a bare API error the client wraps in neither sentinel — the client
-// steps over a marker with a second conditional publish and hands back that
-// publish's refusal unmapped, and a replicated stream refuses with 10164
-// where a solo one refuses with the 10071 the sentinel matches. Measured at
-// three replicas, a fifth of the losers of a create over a marker arrived
-// that way.
+// writer. ErrKeyExists is what [leaderBucket.Create] answers when the leader
+// holds a live value. A revision mismatch is a conditional write the leader
+// compared and refused. And the bare decided refusal is matched by its code
+// too ([isWrongLastSequence]), so a write that reaches here without the
+// client's mapping is still read as the race it is.
+//
+// WHAT IS NOT IN IT is the leader's in-process answer (10164), which this
+// classifier used to count as a loss — measured at three replicas, a fifth of
+// a create race's losers arrived that way. It decides nothing: the write it
+// waits on may already have landed and be this caller's own, so read as a
+// loss it gave a race over a just-removed record no winner. Every conditional
+// write here is settled past it ([leaderBucket.settle]) before this is asked.
 //
 // Getting this wrong is not loud, and it reaches every bucket whose records
 // are ever removed: a delivery claim answered "unknown" after its release and

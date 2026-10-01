@@ -153,8 +153,9 @@ func CheckUnnamedRecordsAreRefused(ctx context.Context, f coord.Fleet, at time.T
 // and races them.
 //
 // SIZED TO MEET THE RARE ANSWER, not to load the store. On a replicated KV
-// stream only some of a race's losers come back as the bare refusal the check
-// exists for — about a fifth, measured at three replicas — so one round's seven
+// stream only some of a race's losers are first told that a write to the
+// record is still in process at the leader — the answer the check exists for,
+// about a fifth of them, measured at three replicas — so one round's seven
 // losers all miss it about a fifth of the time, and eight rounds' fifty-six
 // about four times in a million.
 const (
@@ -173,7 +174,12 @@ const (
 // share of those losers with a refusal the client wrapped in neither of its
 // sentinels, and every create that matched a sentinel read it as an outage: a
 // delivery claim racing another to one just released answered "unknown" and
-// was processed twice, a charge to a counter just reset failed.
+// was processed twice, a charge to a counter just reset failed. That refusal
+// turned out to be the leader saying a write to the record was still IN
+// PROCESS, which decides nothing — read instead as a lost race, it refused a
+// removal at the version its caller had just read and left the race after it
+// with no winner. So each race's set-up is held to having landed ([landed]),
+// and the backend is held to waiting that answer out.
 //
 // EVERY VERB WHOSE RECORD CAN BE REMOVED, because the refusal is the
 // broker's and not any one verb's: the fix is one classifier every create
@@ -229,6 +235,39 @@ func raced(verb string, errs []error) []error {
 	return out
 }
 
+// landed is what a race's set-up step is held to: it wrote, or removed, what
+// it was asked to.
+//
+// A set-up step that answered "did nothing" for a record no other caller
+// touches means the race after it is not over a record just removed, and the
+// race then reports the wrong thing — "nobody won" is the right answer over a
+// record that is still there. Reported here, the failure names the step that
+// went wrong: a removal refused by a leader that had not finished the write
+// before it was one, and it surfaced as a create race with no winner.
+//
+// Taken as the step's own two results, so a call reads as the step it checks:
+// landed(f.Claim(ctx, key, at)).as("the first Claim").
+func landed(ok bool, err error) setUp { return setUp{ok: ok, err: err} }
+
+// setUp is one set-up step's two results, waiting for the name it is
+// reported under.
+type setUp struct {
+	ok  bool
+	err error
+}
+
+// as is every error the step produced, named.
+func (s setUp) as(step string) []error {
+	switch {
+	case s.err != nil:
+		return []error{fmt.Errorf("%s: %w", step, s.err)}
+	case !s.ok:
+		return []error{fmt.Errorf("%s answered that it did nothing, for a record "+
+			"no other caller touches", step)}
+	}
+	return nil
+}
+
 // firstOfMany is the error for a create race that did not have exactly one
 // winner.
 func firstOfMany(verb string, won int) error {
@@ -238,8 +277,8 @@ func firstOfMany(verb string, won int) error {
 
 func raceClaims(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {
 	key := fmt.Sprintf("gitlab|raced-%d", round)
-	if _, err := f.Claim(ctx, key, at); err != nil {
-		return []error{fmt.Errorf("the first Claim: %w", err)}
+	if errs := landed(f.Claim(ctx, key, at)).as("the first Claim"); len(errs) > 0 {
+		return errs
 	}
 	if err := f.Release(ctx, key); err != nil {
 		return []error{fmt.Errorf("the release: %w", err)}
@@ -264,6 +303,13 @@ func raceBudgets(ctx context.Context, f coord.Fleet, round int, _ time.Time) []e
 	if _, err := f.Reset(ctx, ""); err != nil {
 		return []error{fmt.Errorf("the reset: %w", err)}
 	}
+	// AND IT WAS: a reset whose listing missed this counter leaves it at
+	// one, and the race below would count from there and be reported as a
+	// charge counted twice.
+	if used, err := f.Used(ctx, scope); err != nil || used != 0 {
+		return []error{fmt.Errorf("the counter just reset reads back as (%d, %v), "+
+			"want 0: the reset's listing did not reach it", used, err)}
+	}
 	won, errs := race(func() (bool, error) {
 		spend, err := f.Charge(ctx, scope, 1, 0, 0)
 		return spend.OK, err
@@ -284,8 +330,9 @@ func raceBudgets(ctx context.Context, f coord.Fleet, round int, _ time.Time) []e
 
 func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []error {
 	turn := fmt.Sprintf("turn-raced-%d", round)
-	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"n":1}`)); err != nil {
-		return []error{fmt.Errorf("the first CreateSandboxRun: %w", err)}
+	created := landed(f.CreateSandboxRun(ctx, turn, []byte(`{"n":1}`)))
+	if errs := created.as("the first CreateSandboxRun"); len(errs) > 0 {
+		return errs
 	}
 	rec, found, err := f.SandboxRun(ctx, turn)
 	if err != nil {
@@ -294,8 +341,9 @@ func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []erro
 	if !found {
 		return []error{errors.New("a run just created read back as absent")}
 	}
-	if _, err := f.DeleteSandboxRun(ctx, turn, rec.Version); err != nil {
-		return []error{fmt.Errorf("the run's delete: %w", err)}
+	removed := landed(f.DeleteSandboxRun(ctx, turn, rec.Version))
+	if errs := removed.as("the run's delete"); len(errs) > 0 {
+		return errs
 	}
 	won, errs := race(func() (bool, error) {
 		return f.CreateSandboxRun(ctx, turn, []byte(`{"n":2}`))
@@ -311,12 +359,13 @@ func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []erro
 
 func raceFollows(ctx context.Context, f coord.Fleet, round int, at time.Time) []error {
 	thread := fmt.Sprintf("t-raced-%d", round)
-	if _, err := f.FollowIfAbsent(ctx, "slack", "agent-swe", "C1", thread,
-		"mention", at); err != nil {
-		return []error{fmt.Errorf("the first FollowIfAbsent: %w", err)}
+	followed := landed(f.FollowIfAbsent(ctx, "slack", "agent-swe", "C1", thread, "mention", at))
+	if errs := followed.as("the first FollowIfAbsent"); len(errs) > 0 {
+		return errs
 	}
-	if _, err := f.Unfollow(ctx, "slack", "agent-swe", "C1", thread); err != nil {
-		return []error{fmt.Errorf("the unfollow: %w", err)}
+	unfollowed := landed(f.Unfollow(ctx, "slack", "agent-swe", "C1", thread))
+	if errs := unfollowed.as("the unfollow"); len(errs) > 0 {
+		return errs
 	}
 	won, errs := race(func() (bool, error) {
 		return f.FollowIfAbsent(ctx, "slack", "agent-swe", "C1", thread, "mention", at)
@@ -333,12 +382,13 @@ func raceFollows(ctx context.Context, f coord.Fleet, round int, at time.Time) []
 func raceMailboxes(ctx context.Context, f coord.Fleet, round int, _ time.Time) []error {
 	handle := fmt.Sprintf("raced-%d", round)
 	rec := seat(handle)
-	stored, _, err := f.CreateMailbox(ctx, rec)
-	if err != nil {
-		return []error{fmt.Errorf("the first CreateMailbox: %w", err)}
+	stored, created, err := f.CreateMailbox(ctx, rec)
+	if errs := landed(created, err).as("the first CreateMailbox"); len(errs) > 0 {
+		return errs
 	}
-	if _, err := f.DeleteMailbox(ctx, rec.Seat, stored.Version); err != nil {
-		return []error{fmt.Errorf("the mailbox's delete: %w", err)}
+	removed := landed(f.DeleteMailbox(ctx, rec.Seat, stored.Version))
+	if errs := removed.as("the mailbox's delete"); len(errs) > 0 {
+		return errs
 	}
 	won, errs := race(func() (bool, error) {
 		_, created, err := f.CreateMailbox(ctx, rec)
@@ -358,11 +408,11 @@ func raceSecrets(ctx context.Context, f coord.Fleet, round int, at time.Time) []
 		Name:  fmt.Sprintf("RACED_%d", round),
 		Value: "v1:sealed", KeyID: "key-1", UpdatedAt: at,
 	}
-	if _, err := f.CreateSecret(ctx, rec); err != nil {
-		return []error{fmt.Errorf("the first CreateSecret: %w", err)}
+	if errs := landed(f.CreateSecret(ctx, rec)).as("the first CreateSecret"); len(errs) > 0 {
+		return errs
 	}
-	if _, err := f.DeleteSecret(ctx, rec.Name); err != nil {
-		return []error{fmt.Errorf("the secret's delete: %w", err)}
+	if errs := landed(f.DeleteSecret(ctx, rec.Name)).as("the secret's delete"); len(errs) > 0 {
+		return errs
 	}
 	won, errs := race(func() (bool, error) { return f.CreateSecret(ctx, rec) })
 	if len(errs) > 0 {

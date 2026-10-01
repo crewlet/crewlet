@@ -252,6 +252,9 @@ internal/
 │                         #   one policy for the streams, the consumers and the
 │                         #   coordination buckets, branching on whether this
 │                         #   node's broker has peers
+├── jsinflight/           # A compare-and-set the leader answers "another write
+│                         #   is still in flight" is waited out until the
+│                         #   leader decides it, never read as a lost race
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,

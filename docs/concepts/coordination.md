@@ -163,6 +163,29 @@ call to a vendor comes before the status it records. A reconcile that read a
 former leader's status there may repeat a provisioning step the fleet has
 already taken, once, inside that window.
 
+### A compare-and-set waits for the leader to decide
+
+A conditional write — a create, an update at a revision, a removal at a
+version — has **three** answers on a replicated bucket, not two. It lands. Or
+the leader compares the revision it named with the one the key is at and
+refuses it, naming the latter: somebody else wrote first. Or the leader
+answers that **another write to that key is still in process** — and that one
+decides nothing. The leader marks a key in process when it proposes a
+conditional write to it and clears the mark only after it has applied that
+write *and acknowledged it*, so the write still "in process" may be this
+caller's own, already confirmed. The client reports the last two as the same
+revision mismatch.
+
+Read as a lost race, the third answer did real damage under load: a removal at
+the very version its caller had just read back was refused, so a create race
+over that record had no winner, and a budget charge spent all sixteen of its
+compare-and-set rounds on refusals no other writer had caused and reported the
+store unavailable. So every conditional write waits it out — a millisecond,
+doubling to 64 ms, within the write's own deadline or the client's five-second
+default — until the leader answers with something it decided. A write still
+undecided when that runs out is **unknown**, never a race somebody else won.
+A single node has no proposal in flight and never gives the third answer.
+
 ---
 
 ## What the fleet shares
