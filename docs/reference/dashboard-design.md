@@ -3586,6 +3586,19 @@ rendered idle from the first phase to the last.
   screen only on the tick an item changes — it held the second, and drew the
   pulse strip, both bands and every notice once a second, 18–44 ms a tick
   for fifty notices.
+- **A formatter is built once and kept.** `d.toLocaleString(locale,
+  options)` builds an `Intl.DateTimeFormat` per call — that is how ECMA-402
+  defines it — and building one is the expensive half of writing a date:
+  about 200 µs a date under the development build, against 5 µs through a
+  kept one. Every date goes through `dateFormatter` in `lib/format.ts`, which
+  keeps one per locale and options (the reader's zone and date shape are
+  options, so changing either is a new key) and holds sixty-four, and the
+  browser's zone is asked once a minute rather than once a date
+  (`ZONE_REREAD_MS` in `lib/prefs.ts`), since asking builds a formatter too.
+  Numbers go through one `Intl.NumberFormat` and a grid's text order through
+  one `Intl.Collator` (`naturalCompare`), where `localeCompare` with options
+  built one per comparison. `app/source.test.ts` refuses a `toLocale…String`,
+  an `Intl` constructor or a `localeCompare` with options anywhere else.
 
 ### The components come from the design system
 

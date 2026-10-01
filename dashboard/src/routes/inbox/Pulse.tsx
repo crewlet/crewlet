@@ -36,6 +36,7 @@
 
 import type { ReactNode } from "react";
 import { EmptyValue } from "@crewlethq/ui";
+import { fmtExact } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
 import {
   BlockGlyph,
@@ -82,7 +83,7 @@ export function Pulse({ facts }: { facts: PulseFact[] }) {
               each one. A number that twitches is a number a reader stops
               trusting. */}
           <strong className="pulse-value" data-tone={f.tone}>
-            {f.value === null ? <EmptyValue label="Not counted" /> : f.value.toLocaleString()}
+            {f.value === null ? <EmptyValue label="Not counted" /> : fmtExact(f.value)}
           </strong>
           <span className="pulse-label">{f.label}</span>
         </a>

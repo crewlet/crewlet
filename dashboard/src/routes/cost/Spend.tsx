@@ -335,7 +335,7 @@ export function Spend() {
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
           color: phaseColor(p.phase),
-          sub: `${p.calls.toLocaleString()} calls · ${fmtCount(Math.round(p.total_tokens / Math.max(1, p.calls)))} per call`,
+          sub: `${fmtExact(p.calls)} calls · ${fmtCount(Math.round(p.total_tokens / Math.max(1, p.calls)))} per call`,
         }))
         .sort((a, b) => b.value - a.value),
     [tokens],
@@ -353,7 +353,7 @@ export function Spend() {
           display: fmtCount(m.total_tokens),
           // uilet publishes the data ramp, so `vizColor` goes with it.
           color: dataColor(i),
-          sub: `${m.calls.toLocaleString()} calls`,
+          sub: `${fmtExact(m.calls)} calls`,
         })),
     [tokens],
   );

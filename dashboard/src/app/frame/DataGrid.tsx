@@ -42,6 +42,7 @@ import { KeyboardArrowDownGlyph, KeyboardArrowUpGlyph } from "@crewlethq/icons/g
 // every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
 import { Mark, type MarkName } from "~/ui/glyph.tsx";
 import { useKeyChords } from "~/lib/keys.ts";
+import { naturalCompare } from "~/lib/format.ts";
 
 export interface GridColumn<T> {
   key: string;
@@ -223,7 +224,8 @@ function compare(a: string | number, b: string | number): number {
     if (Number.isNaN(b)) return -1;
     return a < b ? -1 : a > b ? 1 : 0;
   }
-  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+  // ONE COLLATOR for every comparison, rather than one built per comparison.
+  return naturalCompare(String(a), String(b));
 }
 
 /**

@@ -31,6 +31,7 @@ import type {
 } from "~/protocol/index.ts";
 import type { MarkName } from "~/ui/glyph.tsx";
 import { roundLabel, runState, staleness } from "./seats.ts";
+import { fmtExact } from "./format.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -228,7 +229,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "token",
       title: "The company token budget is spent",
-      detail: `${org.used.toLocaleString()} of ${org.max.toLocaleString()} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
+      detail: `${fmtExact(org.used)} of ${fmtExact(org.max)} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
       path: ["cost"],
     });
   } else if (org && org.max > 0 && org.used / org.max >= 0.9) {
@@ -353,7 +354,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "budget",
         icon: "token",
         title: `${agent.role}'s token budget is spent`,
-        detail: `${meter.used.toLocaleString()} of ${meter.max.toLocaleString()} tokens. This seat's turns are being declined at the gate.`,
+        detail: `${fmtExact(meter.used)} of ${fmtExact(meter.max)} tokens. This seat's turns are being declined at the gate.`,
         path: ["company", "people", String(agent.handle ?? agent.id)],
         query: { tab: "cost" },
       });

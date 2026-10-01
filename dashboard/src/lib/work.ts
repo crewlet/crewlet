@@ -21,7 +21,16 @@
 // at once. The constant rather than the component, because this module has
 // no React in it and must not acquire any.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { browserDay, fmtDate, fmtDateTime, humanize, parseUTC, plural } from "./format.ts";
+import {
+  browserDay,
+  dateFormatter,
+  fmtDate,
+  fmtDateTime,
+  fmtExact,
+  humanize,
+  parseUTC,
+  plural,
+} from "./format.ts";
 // THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
 // rule above: `plainText` is a pure string→string function that happens to live
 // beside the grammar it has to agree with. A private stripper here instead would
@@ -1749,7 +1758,7 @@ export function monthOrToday(month: string, today: string): string {
  * another's `20 (more)` read as two different facts.
  */
 export function pageCount(shown: number, more: boolean): string {
-  return more ? `${shown.toLocaleString()}+` : shown.toLocaleString();
+  return more ? `${fmtExact(shown)}+` : fmtExact(shown);
 }
 
 /**
@@ -1892,10 +1901,9 @@ export function shiftMonth(month: string, by: number): string {
 
 export function monthLabel(month: string): string {
   const [y, m] = month.split("-").map(Number);
-  return new Date(y ?? 1970, (m ?? 1) - 1, 1).toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  return dateFormatter(undefined, { month: "long", year: "numeric" }).format(
+    new Date(y ?? 1970, (m ?? 1) - 1, 1),
+  );
 }
 
 /**
@@ -1915,12 +1923,12 @@ export function monthLabel(month: string): string {
  */
 export function dayLabel(key: string): string {
   const [y, m, d] = key.split("-").map(Number);
-  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString(undefined, {
+  return dateFormatter(undefined, {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
-  });
+  }).format(new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1));
 }
 
 /** Monday first, because the engine's own relative week tokens start there. */

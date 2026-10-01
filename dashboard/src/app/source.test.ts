@@ -379,3 +379,63 @@ test("a column with no word in its head declares one", () => {
   // vacuous and still green. Well over a hundred columns today.
   expect(seen, "nothing here declares a column head any more").toBeGreaterThan(80);
 });
+
+/**
+ * EVERY `Intl` FORMATTER IS BUILT IN `lib/format.ts`, AND KEPT.
+ *
+ * `d.toLocaleString(locale, options)`, `toLocaleDateString`,
+ * `toLocaleTimeString`, `n.toLocaleString()` and `a.localeCompare(b, locale,
+ * options)` each build an `Intl` object PER CALL — ECMA-402 defines them as
+ * that construction followed by one format or compare — and building one is
+ * the expensive half. Spelled inline they were most of what formatting cost
+ * on a busy screen: a hundred-row audit built three hundred date formatters a
+ * render, and a grid sorted by a text column built a collator per comparison.
+ * `lib/format.ts` keeps one per locale and options (`dateFormatter`), one
+ * number formatter and one collator (`naturalCompare`); `lib/prefs.ts` is the
+ * other file allowed one, to ask `Intl` which zone the browser is in and
+ * whether a zone exists.
+ *
+ * A bare `a.localeCompare(b)` is allowed: with no locale and no options the
+ * engine compares through its own default collator rather than building one.
+ */
+const INTL_BUILT =
+  /\.toLocale(Date|Time)?String\(|\bnew Intl\.|\bIntl\.[A-Z]\w*\(|\.localeCompare\([^\n]*?,\s*(undefined|["'[{])/;
+
+test("every Intl formatter is built in lib/format.ts, and kept", () => {
+  const allowed = new Set(["lib/format.ts", "lib/prefs.ts"]);
+  const offenders: string[] = [];
+  let read = 0;
+  for (const { path, text } of sources([".ts", ".tsx"])) {
+    read += 1;
+    if (allowed.has(path)) continue;
+    const lines = text
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + " ".repeat(m.length - lead.length))
+      .split("\n");
+    lines.forEach((line, i) => {
+      if (INTL_BUILT.test(line)) offenders.push(`${path}:${i + 1} — ${line.trim().slice(0, 90)}`);
+    });
+  }
+  // A WALK THAT READ NOTHING passes with no offence found.
+  expect(read).toBeGreaterThan(100);
+  expect(
+    offenders,
+    "format through lib/format.ts (dateFormatter, fmtExact, plural, naturalCompare), which keeps the formatter",
+  ).toEqual([]);
+});
+
+test("the Intl gate fires on each spelling it is for", () => {
+  for (const line of [
+    "d.toLocaleString(undefined, { hour: '2-digit' })",
+    "d.toLocaleDateString(undefined, { day: 'numeric' })",
+    "d.toLocaleTimeString()",
+    "n.toLocaleString()",
+    "new Intl.NumberFormat()",
+    "Intl.DateTimeFormat().resolvedOptions()",
+    "String(a).localeCompare(String(b), undefined, { numeric: true })",
+  ]) {
+    expect(INTL_BUILT.test(line), line).toBe(true);
+  }
+  expect(INTL_BUILT.test("a.name.localeCompare(b.name)")).toBe(false);
+  expect(INTL_BUILT.test("dateFormatter(undefined, { day: 'numeric' }).format(d)")).toBe(false);
+});

@@ -63,7 +63,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { needsSentence } from "~/lib/refusal.ts";
 import { useRestRead, type RestRead } from "~/lib/restRead.ts";
-import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import { fmtDate, fmtDateTime, fmtExact, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -1053,7 +1053,7 @@ function SurfaceRow({
             <span>
               {row.skipped === 1
                 ? "1 delivery was verified and dropped"
-                : `${(row.skipped ?? 0).toLocaleString()} deliveries were verified and dropped`}
+                : `${fmtExact(row.skipped ?? 0)} deliveries were verified and dropped`}
             </span>
             <span className="int-row-note-when">
               A drop is a delivery this surface accepted and no parser turned into work, so whatever

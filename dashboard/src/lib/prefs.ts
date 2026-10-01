@@ -57,13 +57,48 @@ export const DATE_FORMATS: DateFormat[] = ["auto", "iso", "long"];
  * to answer an empty string in a locked-down environment — and a dashboard
  * that failed to render a date because it could not name a zone would be
  * trading a working screen for a label.
+ *
+ * AND REMEMBERED FOR [ZONE_REREAD_MS]. The only way to ask is to build an
+ * `Intl.DateTimeFormat`, which is the expensive half of formatting a date, and
+ * every timestamp drawn asked — `zone()` is part of every formatter's options
+ * — so a hundred-row audit built a hundred formatters to learn one zone a
+ * hundred times.
  */
 export function browserZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
+  return readBrowserZone(Date.now());
+}
+
+/**
+ * How long a reading of the browser's zone is served before it is asked again.
+ *
+ * A MINUTE, because the answer moves only when the MACHINE changes zone — a
+ * laptop that flew, an operating-system setting changed — and nothing on a
+ * screen re-renders for that anyway: a timestamp already drawn keeps the old
+ * zone until something draws it again, whatever this says. A minute is the
+ * resolution the screens' own readings of the clock run at, so a date drawn in
+ * the minute after a zone change is as stale as the "4m ago" beside it.
+ * Shorter buys nothing a reader could see; longer only delays a change that
+ * is already rare. Not a setting, because no reader has a reason to want
+ * another value.
+ */
+export const ZONE_REREAD_MS = 60_000;
+
+let zoneRead = { zone: "", at: 0 };
+
+function readBrowserZone(now: number): string {
+  // A CLOCK THAT WENT BACKWARDS reads again rather than serving a reading
+  // from the future for as long as it takes to catch up.
+  if (zoneRead.zone && now >= zoneRead.at && now - zoneRead.at < ZONE_REREAD_MS) {
+    return zoneRead.zone;
   }
+  let zone = "UTC";
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    zone = "UTC";
+  }
+  zoneRead = { zone, at: now };
+  return zone;
 }
 
 /**

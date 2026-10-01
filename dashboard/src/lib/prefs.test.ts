@@ -1,6 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { reloadForTest, setDensity, setTheme, useDensity, useTheme } from "./prefs.ts";
+import {
+  ZONE_REREAD_MS,
+  browserZone,
+  reloadForTest,
+  setDensity,
+  setTheme,
+  useDensity,
+  useTheme,
+} from "./prefs.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -67,5 +75,51 @@ describe("a stored value this build cannot use", () => {
     setTheme("light");
     setTheme("purple" as never);
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+});
+
+// THE BROWSER'S ZONE IS ASKED ONCE A MINUTE, NOT ONCE A DATE.
+//
+// Asking builds an `Intl.DateTimeFormat`, and every timestamp drawn asked —
+// the zone is one of every formatter's options — so a hundred-row audit built
+// a hundred formatters to learn one zone. Remembered for a minute it is one
+// formatter a minute, and a machine that moved zone is still followed.
+describe("the browser's zone", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("is asked once a minute however often a date is drawn", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // FAR PAST ANY EARLIER READING, so the first ask here is the one that reads.
+    vi.setSystemTime(Date.parse("2040-01-01T00:00:00Z"));
+    const built = vi.spyOn(Intl, "DateTimeFormat");
+    for (let i = 0; i < 100; i++) browserZone();
+    expect(built).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(ZONE_REREAD_MS - 1);
+    browserZone();
+    expect(built).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    browserZone();
+    expect(built).toHaveBeenCalledTimes(2);
+    // A CLOCK THAT WENT BACKWARDS asks again rather than serving a reading
+    // from what is now the future until the clock catches up with it.
+    vi.setSystemTime(Date.parse("2039-06-01T00:00:00Z"));
+    browserZone();
+    expect(built).toHaveBeenCalledTimes(3);
+  });
+
+  it("follows a machine that changed zone once the minute is up", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2041-01-01T00:00:00Z"));
+    const before = browserZone();
+    const moved = before === "Asia/Tokyo" ? "Europe/Lisbon" : "Asia/Tokyo";
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+      () => ({ resolvedOptions: () => ({ timeZone: moved }) }) as unknown as Intl.DateTimeFormat,
+    );
+    expect(browserZone()).toBe(before);
+    vi.advanceTimersByTime(ZONE_REREAD_MS);
+    expect(browserZone()).toBe(moved);
   });
 });

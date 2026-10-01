@@ -32,6 +32,7 @@
 
 import { useId, type ReactNode } from "react";
 import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
+import { dateFormatter, fmtExact } from "~/lib/format.ts";
 
 /**
  * Phase is its own fixed identity, not a slot on the data ramp.
@@ -80,7 +81,7 @@ export function TimeSeries({
   to,
   height = 120,
   label,
-  format = (n) => n.toLocaleString(),
+  format = fmtExact,
 }: {
   series: {
     name: string;
@@ -198,9 +199,17 @@ export function TimeSeries({
 function formatEdge(at: number, span: number): string {
   const date = new Date(at);
   if (span >= 24 * 60 * 60 * 1000) {
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return dateFormatter(undefined, { month: "short", day: "numeric" }).format(date);
   }
-  return date.toLocaleString();
+  // `toLocaleString()`'s own defaults, spelled out: every component numeric.
+  return dateFormatter(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  }).format(date);
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +239,7 @@ export function StackedTimeSeries({
   bands,
   ghost,
   height = 160,
-  format = (n) => n.toLocaleString(),
+  format = fmtExact,
   label,
 }: {
   buckets: { at: string; total: number; parts: { key: string; value: number }[] }[];

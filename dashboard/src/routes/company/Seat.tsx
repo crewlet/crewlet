@@ -105,7 +105,15 @@ import {
   type Seat,
   type SeatReading,
 } from "~/lib/seats.ts";
-import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import {
+  configValueKind,
+  fmtCount,
+  fmtDateTime,
+  fmtExact,
+  plural,
+  relTime,
+  tsKey,
+} from "~/lib/format.ts";
 import { spanWords } from "~/lib/range.ts";
 import {
   attempts,
@@ -1113,11 +1121,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       <EmptyValue label="Nothing recorded" />
                     )
                   }
-                  sub={
-                    seatSpend
-                      ? `${seatSpend.calls.toLocaleString()} model calls`
-                      : "nothing recorded"
-                  }
+                  sub={seatSpend ? `${fmtExact(seatSpend.calls)} model calls` : "nothing recorded"}
                 />
               )}
               {!human && (
@@ -2053,7 +2057,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     <EmptyValue label="Nothing recorded" />
                   )
                 }
-                sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
+                sub={spend.data ? `${fmtExact(spend.data.totals.calls)} model calls` : ""}
               />
               <StatCard
                 icon={<ArrowForwardGlyph size="xs" />}

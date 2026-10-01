@@ -102,35 +102,127 @@ function dateLocale(): string | undefined {
   return dates() === "iso" ? "en-CA" : undefined;
 }
 
+/**
+ * The formatter for a locale and a set of options, built once and kept.
+ *
+ * EVERY DATE IN THIS PRODUCT IS FORMATTED THROUGH HERE, because building an
+ * `Intl.DateTimeFormat` is the expensive half of formatting one — the format
+ * is a few microseconds, the construction a couple of hundred under the
+ * development build — and `toLocaleString(locale, options)` builds one per
+ * call. A hundred-row audit built three hundred of them a render (its dates,
+ * its tooltips, and a third to learn the browser's zone each time), to
+ * produce the same handful of formatters over and over. ECMA-402 defines the
+ * `toLocale*String` methods as exactly this construction followed by
+ * `format`, which is what makes the output identical and what
+ * `format.test.ts` holds across zones and date shapes.
+ *
+ * KEYED ON THE LOCALE AND THE OPTIONS AS GIVEN — the zone is one of the
+ * options — so a reader changing their zone or their date shape is a new key
+ * and the old formatters age out rather than answering for the new choice.
+ * Callers build their options in one order per call site, which is what lets
+ * the serialisation be the key.
+ */
+export function dateFormatter(
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale ?? "", options]);
+  const held = dateFormatters.get(key);
+  if (held) {
+    // MOST RECENTLY USED LAST, so the bound evicts what nothing has asked for
+    // longest — a zone the reader left, a date shape they changed.
+    dateFormatters.delete(key);
+    dateFormatters.set(key, held);
+    return held;
+  }
+  const made = new Intl.DateTimeFormat(locale, options);
+  dateFormatters.set(key, made);
+  if (dateFormatters.size > FORMATTERS_KEPT) {
+    const oldest = dateFormatters.keys().next().value;
+    if (oldest !== undefined) dateFormatters.delete(oldest);
+  }
+  return made;
+}
+
+/**
+ * How many formatters [dateFormatter] keeps.
+ *
+ * THE LIVE SET IS SMALL AND KNOWN: the six formatters below in the one zone
+ * and date shape a reader has chosen, the handful of calendar and axis labels
+ * in the browser's own, and one per zone the schedules are evaluated in
+ * ([zoneOffset]) — a few dozen at the outside. Sixty-four holds all of that
+ * with room for a reader flipping through zones and date shapes in the
+ * preferences, and bounds what a session that does so for an hour can hold.
+ * A formatter evicted while still in use is rebuilt once, which is the whole
+ * cost of the bound being too small; there is no reader-visible difference
+ * between this and any larger number, so it is a constant and not a setting.
+ */
+export const FORMATTERS_KEPT = 64;
+
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * A number grouped in the reader's locale — `12,345` — through one formatter.
+ *
+ * `n.toLocaleString()` with no arguments is this formatter's `format`, by the
+ * same ECMA-402 definition, built afresh per call.
+ */
+function grouped(n: number): string {
+  return numberFormatter().format(n);
+}
+
+const numberFormatter = (() => {
+  let made: Intl.NumberFormat | null = null;
+  return () => (made ??= new Intl.NumberFormat());
+})();
+
+/**
+ * Two strings in the order a reader expects — `seat-2` before `seat-10`, and
+ * case and accents aside — through one collator.
+ *
+ * `a.localeCompare(b, locale, options)` is `new Intl.Collator(locale,
+ * options).compare(a, b)` by definition, so a sort over it built a collator
+ * per COMPARISON: a grid sorting a hundred rows by a text column built
+ * several hundred of them to order one list.
+ */
+export function naturalCompare(a: string, b: string): number {
+  return naturalCollator().compare(a, b);
+}
+
+const naturalCollator = (() => {
+  let made: Intl.Collator | null = null;
+  return () => (made ??= new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }));
+})();
+
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return "";
-  return d.toLocaleTimeString(undefined, {
+  return dateFormatter(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
     timeZone: zone(),
-  });
+  }).format(d);
 }
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
+  return dateFormatter(dateLocale(), {
     ...dateParts(),
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
     timeZone: zone(),
-  });
+  }).format(d);
 }
 
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
+  return dateFormatter(dateLocale(), { ...dateParts(), timeZone: zone() }).format(d);
 }
 
 /**
@@ -145,13 +237,13 @@ export function fmtDate(ts: string | null | undefined): string {
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
+  return dateFormatter(dateLocale(), {
     ...dateParts(),
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
     timeZone: zone(),
-  });
+  }).format(d);
 }
 
 /**
@@ -186,12 +278,12 @@ export function fmtDateCompactIn(ts: string | null | undefined, thisYear: string
   // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
   // whose browser sat in `UTC` saw a due date one day earlier here than in the
   // tooltip beside it — and, for thirteen hours a year, a year earlier.
-  return d.toLocaleDateString(undefined, {
+  return dateFormatter(undefined, {
     month: "short",
     day: "2-digit",
     timeZone: zone(),
     ...(calendarYear(d) === thisYear ? {} : { year: "numeric" }),
-  });
+  }).format(d);
 }
 
 /**
@@ -213,7 +305,7 @@ let lastYear = { now: Number.NaN, zone: "", year: "" };
 
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
-  return at.toLocaleDateString("en-US", { year: "numeric", timeZone: zone() });
+  return dateFormatter("en-US", { year: "numeric", timeZone: zone() }).format(at);
 }
 
 /**
@@ -369,7 +461,7 @@ export function browserDay(date: Date): string {
 export function fmtCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
   const abs = Math.abs(n);
-  if (abs < 10_000) return n.toLocaleString();
+  if (abs < 10_000) return grouped(n);
   if (abs < 1_000_000) return `${(n / 1000).toFixed(abs < 100_000 ? 1 : 0)}k`;
   if (abs < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   return `${(n / 1_000_000_000).toFixed(2)}B`;
@@ -377,7 +469,7 @@ export function fmtCount(n: number | null | undefined): string {
 
 /** Always the exact figure, grouped. For a cell a reader is comparing. */
 export function fmtExact(n: number | null | undefined): string {
-  return n == null || !Number.isFinite(n) ? EMPTY_VALUE : n.toLocaleString();
+  return n == null || !Number.isFinite(n) ? EMPTY_VALUE : grouped(n);
 }
 
 export function fmtPct(part: number, whole: number, digits = 0): string {
@@ -432,7 +524,7 @@ export function splitConversationKey(key: string): { source: string; local: stri
  * screens, which is the kind of thing nobody fixes one at a time.
  */
 export function plural(n: number, one: string, many?: string): string {
-  return `${n.toLocaleString()} ${n === 1 ? one : (many ?? `${one}s`)}`;
+  return `${grouped(n)} ${n === 1 ? one : (many ?? `${one}s`)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,34 +604,28 @@ function wallParts(at: number, tz: string): Record<string, string> {
   return out;
 }
 
-// One formatter per zone. Constructing an Intl.DateTimeFormat is the expensive
-// half of this file, and a range picker rebuilds its two fields on every
-// keystroke.
-const formatters = new Map<string, Intl.DateTimeFormat>();
-
+// One formatter per zone, kept by [dateFormatter] with every other one: a range
+// picker rebuilds its two fields on every keystroke, and the cron preview works
+// out a schedule's fires through here. A zone `Intl` does not know throws at
+// construction and is never kept, which is what lets [zoneOffset] say so.
 function wallFormatter(tz: string): Intl.DateTimeFormat {
-  let f = formatters.get(tz);
-  if (!f) {
-    f = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
-      // spelling and selects h24 in some engines: midnight comes back as
-      // "24", the previous day's twenty-fourth hour, and fed to Date.UTC it
-      // rolls the day forward and lands a whole day out. `h23` is the
-      // explicit 00–23 cycle, so there is no reading to fold back — and
-      // `hour12` takes precedence over `hourCycle` where both are given, so
-      // it is absent rather than set to false.
-      hourCycle: "h23",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    formatters.set(tz, f);
-  }
-  return f;
+  return dateFormatter("en-US", {
+    timeZone: tz,
+    // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
+    // spelling and selects h24 in some engines: midnight comes back as "24",
+    // the previous day's twenty-fourth hour, and fed to Date.UTC it rolls the
+    // day forward and lands a whole day out. `h23` is the explicit 00–23
+    // cycle, so there is no reading to fold back — and `hour12` takes
+    // precedence over `hourCycle` where both are given, so it is absent
+    // rather than set to false.
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -74,7 +74,7 @@ import {
 } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { awaitingPerson, indexOrg, liveRowFor, runState } from "~/lib/seats.ts";
-import { fmtCount, plural, relTime, tsKey } from "~/lib/format.ts";
+import { fmtCount, fmtExact, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useClockReading } from "~/lib/clock.ts";
 import { ClockText } from "~/app/frame/cells.tsx";
 import { MAX_EVENTS } from "~/protocol/index.ts";
@@ -220,7 +220,7 @@ export function LiveNow() {
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
           color: phaseColor(p.phase),
-          sub: `${p.calls.toLocaleString()} calls`,
+          sub: `${fmtExact(p.calls)} calls`,
         }))
         .sort((a, b) => b.value - a.value),
     [tokens],
@@ -319,7 +319,7 @@ export function LiveNow() {
           }
           sub={
             tokens
-              ? `${tokens.totals.calls.toLocaleString()} model calls`
+              ? `${fmtExact(tokens.totals.calls)} model calls`
               : "no spend has been recorded yet"
           }
         />

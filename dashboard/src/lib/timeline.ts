@@ -20,7 +20,7 @@
  * buckets in the READER's; the screen says so, exactly as the calendar does.
  */
 
-import { browserDay } from "./format.ts";
+import { browserDay, dateFormatter } from "./format.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
 /** A local day key back to a `Date` at local midnight, or null. */
@@ -343,7 +343,7 @@ const MinTickGap = 3;
 export function monthDay(day: string): string {
   const at = dayAt(day);
   if (!at) return day;
-  return at.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return dateFormatter(undefined, { day: "numeric", month: "short" }).format(at);
 }
 
 /**
