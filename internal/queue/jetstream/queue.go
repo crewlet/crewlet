@@ -364,8 +364,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
 	if q.js, err = jetstream.New(q.nc); err != nil {
-		q.nc.Close()
-		return nil, fmt.Errorf("open jetstream: %w", err)
+		return nil, q.abandonOpen(fmt.Errorf("open jetstream: %w", err))
 	}
 	// A clustered member accepts connections long before its metadata
 	// group has a leader, and creating a replicated stream against a
@@ -375,14 +374,22 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// the first member of a fresh cluster wait for a quorum that cannot
 	// exist until the peers it is blocking have started.
 	if err := embedded.awaitClusterReady(ctx, q.cfg.Replicas); err != nil {
-		q.nc.Close()
-		return nil, err
+		return nil, q.abandonOpen(err)
 	}
 	if err := q.ensureStreams(ctx); err != nil {
-		q.nc.Close()
-		return nil, err
+		return nil, q.abandonOpen(err)
 	}
 	return q, nil
+}
+
+// abandonOpen closes the connection of a queue whose open failed after the
+// dial, and answers err as that open says it: carrying the cause where NATS had
+// closed the connection for good under it ([connectionLoss.during]). The one
+// way out once a connection exists, so no step can fail as a bare "connection
+// closed" while the sentence naming why sits on a queue nobody will hold.
+func (q *Queue) abandonOpen(err error) error {
+	q.nc.Close()
+	return q.lost.during(err)
 }
 
 // ensureStreams provisions the engine's own streams, under ONE ceiling for
@@ -1005,6 +1012,16 @@ func (q *Queue) Lost() <-chan struct{} { return q.lost.done }
 // LostCause is the sentence a node stops with once [Queue.Lost] is closed, and
 // nil before.
 func (q *Queue) LostCause() error { return q.lost.lostCause() }
+
+// LostDuring is err, from a start that failed over this queue, carrying the
+// recorded [Queue.LostCause] beside it — and err unchanged where nothing was
+// lost.
+//
+// For the step that fails BECAUSE a connection was closed for good: in its own
+// words it says the connection is closed and nothing an operator can act on,
+// while the sentence naming why and what to change is recorded here. Read it
+// after the start's own cleanup — see [connectionLoss.during] for why.
+func (q *Queue) LostDuring(err error) error { return q.lost.during(err) }
 
 // AcksLost is closed once NATS has closed THIS QUEUE'S OWN connection for good:
 // the one every delivery it made is acknowledged, nacked and deferred over.

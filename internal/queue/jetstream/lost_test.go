@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -240,6 +241,48 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	if got := q.LostCause(); got == nil || got.Error() != first.Error() {
 		t.Errorf("the queue's own close rewrote the cause:\nfirst: %v\nnow:   %v",
 			first, got)
+	}
+}
+
+// A START THAT FAILED ON A LOST CONNECTION CARRIES THE CAUSE, AND ONE THAT DID
+// NOT IS LEFT ALONE.
+//
+// The step that meets a connection NATS closed for good fails in its own words —
+// "connection closed" — while the sentence naming why and what to change is
+// recorded beside it. The composition every start reads it through (this
+// queue's own open and an engine's boot over it) has to put the cause FIRST,
+// keep the step's own error in the chain, and touch no error at all when
+// nothing was lost: a boot refused over a bad config is not a lost broker.
+//
+// Mutation: answer err unchanged with a cause recorded and the second half goes
+// red; compose a nil cause into a failure that had nothing to do with the
+// broker and the first does.
+func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
+	t.Parallel()
+	step := fmt.Errorf("ensure stream CREWLET_AGENT: %w", nats.ErrConnectionClosed)
+	l := newConnectionLoss()
+	if got := l.during(step); got == nil || got.Error() != step.Error() {
+		t.Errorf("nothing was lost and the step's error came back as %q", got)
+	}
+	if got := l.during(nil); got != nil {
+		t.Errorf("no step failed and the composition answered %q", got)
+	}
+
+	cause := lostConnection(lostServer(false, "nats://nats-1.internal:4222"),
+		nats.ErrAuthorization, false)
+	l.record(cause, true)
+	got := l.during(step)
+	if got == nil || !strings.HasPrefix(got.Error(), cause.Error()) {
+		t.Fatalf("a start that failed beside a recorded loss said %q; it should "+
+			"open with the cause, %q", got, cause)
+	}
+	if !strings.Contains(got.Error(), step.Error()) {
+		t.Errorf("%q drops the step's own error, %q", got, step)
+	}
+	for _, in := range []error{cause, nats.ErrConnectionClosed} {
+		if !errors.Is(got, in) {
+			t.Errorf("%q no longer carries %v in its chain", got, in)
+		}
 	}
 }
 

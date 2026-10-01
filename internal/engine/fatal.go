@@ -1,10 +1,15 @@
 package engine
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/queue"
+)
 
 // brokerLoss is what the engine asks of the queue it runs on about the
 // connection under it: the jetstream backend's [jetstream.Queue.Lost],
-// [jetstream.Queue.LostCause] and [jetstream.Queue.AcksLost].
+// [jetstream.Queue.LostCause], [jetstream.Queue.AcksLost] and
+// [jetstream.Queue.LostDuring].
 //
 // DECLARED HERE, by the one consumer, rather than on the queue contract: the
 // memory twin holds no connection that can be closed under it, so it has
@@ -14,6 +19,27 @@ type brokerLoss interface {
 	Lost() <-chan struct{}
 	LostCause() error
 	AcksLost() <-chan struct{}
+	LostDuring(err error) error
+}
+
+// lostDuring is err, from a boot that failed over q, carrying the cause of a
+// broker connection NATS closed for good beside it — prefixed as
+// [Engine.FatalCause] prefixes the same sentence, so a node that could not
+// start and a node that stopped itself name one cause in one way. err
+// unchanged where nothing was lost, and on a queue with no connection to lose.
+//
+// For the step that failed BECAUSE the connection closed: in its own words it
+// says "connection closed" and nothing an operator can act on, while the
+// sentence naming why — refused credentials, a max_payload lowered under the
+// node, its own embedded broker gone — and what to change is recorded on the
+// queue. Its callers read it after their own cleanup; see
+// [jetstream.Queue.LostDuring] for why that order.
+func lostDuring(q queue.EventQueue, err error) error {
+	lost, ok := q.(brokerLoss)
+	if !ok || err == nil || lost.LostCause() == nil {
+		return err
+	}
+	return fmt.Errorf("engine: stream: %w", lost.LostDuring(err))
 }
 
 // Fatal is closed once this node has lost something it cannot run without, and

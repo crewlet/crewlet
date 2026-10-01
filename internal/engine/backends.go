@@ -203,6 +203,22 @@ func (b *Backends) Close(ctx context.Context) {
 	}
 }
 
+// abandon closes a set a failed boot half-built, and answers err as that boot
+// says it: carrying the cause of a broker connection NATS closed for good, where
+// one was ([lostDuring]), beside the step's own error.
+//
+// THE ONE WAY OUT of [OpenBackends] once a queue exists, so no failing step
+// can reach the operator as a bare "connection closed" while the sentence
+// naming why it closed, and what to change, sits unread on the queue. The cause
+// is read AFTER the close, which is what gives the client's closed handler —
+// dispatched on the client's own goroutine once the call that failed has been
+// released — its moment to record it.
+func (b *Backends) abandon(ctx context.Context, err error) error {
+	q := b.Queue
+	b.Close(ctx)
+	return lostDuring(q, err)
+}
+
 // OpenBackends builds everything a node runs on.
 //
 // It does NOT re-validate the topology: config.Bootstrap.Validate already
@@ -255,8 +271,7 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	// one.
 	db, err := openStore(ctx, b, c)
 	if err != nil {
-		out.Close(ctx)
-		return nil, err
+		return nil, out.abandon(ctx, err)
 	}
 	out.Store = db
 
@@ -402,8 +417,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	}
 	out.rides = conn
 	if err = attachCoordination(ctx, b, out, conn); err != nil {
-		out.Close(ctx)
-		return nil, err
+		return nil, out.abandon(ctx, err)
 	}
 	return out, nil
 }
@@ -455,8 +469,8 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 	// one that is not — see [jetstream.Queue.DialOwned].
 	conn, err := q.DialWatched()
 	if err != nil {
-		out.Close(ctx)
-		return nil, nil, fmt.Errorf("engine: coordination connection: %w", err)
+		return nil, nil, out.abandon(ctx,
+			fmt.Errorf("engine: coordination connection: %w", err))
 	}
 	// OWNED HERE, because this is a SECOND connection to the node's own
 	// in-process server — the queue holds its own. The external branch

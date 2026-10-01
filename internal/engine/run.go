@@ -649,7 +649,10 @@ type Options struct {
 // Config errors surface HERE, before anything is dialled or claimed. A node
 // that boots on a bad config and discovers it at the first turn has already
 // told its peers it owns seats.
-func New(ctx context.Context, opts Options) (*Engine, error) {
+//
+// The error is NAMED for the one deferred failure path below, which is what
+// adds a lost broker connection's cause to whatever step failed.
+func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if opts.Bootstrap == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
 	}
@@ -661,7 +664,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// for a Bootstrap that did not come through [config.Bootstrap.Validate]
 	// — it used to be a cross-tier rule asked only of a company, which let
 	// through exactly the node started with none.
-	if err := opts.Bootstrap.Stream.Durable(); err != nil {
+	if err = opts.Bootstrap.Stream.Durable(); err != nil {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
 	// THE KEYRING FIRST, because everything below derives from it — the
@@ -825,7 +828,20 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// [context.WithoutCancel] because this is a teardown. The failure
 	// being unwound is routinely the caller's own cancellation, and a
 	// cleanup that inherited a dead context does nothing at all.
+	//
+	// AND THE ERROR IT RETURNS NAMES A LOST BROKER CONNECTION. A step that
+	// failed because NATS closed a connection for good — credentials the
+	// server stopped accepting, a max_payload lowered under the node, its
+	// own embedded broker gone — answers with its own words, which say
+	// "connection closed" and nothing an operator can act on, while the
+	// sentence naming the cause and the setting to change sits recorded on
+	// the queue. So the cause rides the error out beside the step's own
+	// ([lostDuring]), read once the teardown is done: the client's closed
+	// handler runs on its own goroutine after the failing call has been
+	// released, and the teardown is what gives it the moment to record.
+	// The queue is taken first because the teardown may close the backends.
 	booted := false
+	broker := backends.Queue
 	defer func() {
 		if booted {
 			return
@@ -836,6 +852,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 				"shared MCP children, every duty loop and this node's "+
 				"admission are stopped, and any backends this engine opened "+
 				"itself are closed")
+		err = lostDuring(broker, err)
 	}()
 
 	// THE AUDIT TRAIL BEFORE THE NATIVE BACKENDS, whose identity writer and

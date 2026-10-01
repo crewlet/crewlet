@@ -468,7 +468,12 @@ stderr what closed, why, and what to change. The one difference from a
 `SIGTERM` is the drain over a lost connection to the stream: every delivery is
 acknowledged over it, so no turn still running can be, and whichever node
 takes its seat runs it again — the drain cancels those turns rather than
-finishing them twice, and ends at once (`drain_cut`). Run it under something that
+finishing them twice, and ends at once (`drain_cut`). A node still **starting**
+when it happens fails its boot the same way, exit status 1 with the same
+sentence — `crewlet: engine: stream: jetstream: … closed this node's connection
+for good …` — followed by `; the start failed on it at:` and the step that met
+the closed connection, rather than that step's bare `nats: connection closed`.
+Run it under something that
 restarts a process which exits non-zero — a systemd unit with
 `Restart=on-failure`, a container restart policy, a Kubernetes deployment —
 and the node comes back by itself once the cause is fixed. The same applies

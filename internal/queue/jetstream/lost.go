@@ -133,6 +133,32 @@ type watched struct {
 	settles bool
 }
 
+// during is err as a start that failed beside a recorded loss says it: the
+// classified sentence first, because it names what to change, and the failing
+// step's own error after it, because it says where the start was — both in the
+// chain, for a caller that asks either. err itself, unchanged, where nothing was
+// lost: a failure that had nothing to do with the broker is not dressed as one.
+//
+// ONE COMPOSITION for every start that can meet a loss — this queue's own open
+// ([newQueueOn]) and an engine's boot over it ([Queue.LostDuring]) — so the two
+// cannot word the same fact two ways.
+//
+// RECORDED, not suspected: the closed handler runs on the client's own
+// goroutine after the call that met the close has been released, so a step can
+// return a moment before its cause is recorded. Every caller reads this after
+// its own cleanup, which is what gives the handler that moment; a step that
+// still beats it carries its own error alone, as every step did before.
+func (l *connectionLoss) during(err error) error {
+	if err == nil {
+		return nil
+	}
+	cause := l.lostCause()
+	if cause == nil {
+		return err
+	}
+	return fmt.Errorf("%w; the start failed on it at: %w", cause, err)
+}
+
 // lossWatch is the closed handler a watched connection is given: what a
 // sentence about that connection names, and where its close is recorded.
 //
