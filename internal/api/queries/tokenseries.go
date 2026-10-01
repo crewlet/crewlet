@@ -83,10 +83,12 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	// The window the STORE will serve, which is what the answer is labelled
 	// with: a request further back than the table's retention is floored,
 	// and an axis headed with the year it was asked for over a month of
-	// bars is a lie about the bars.
-	covered, coveredUntil := q.Window(s.clock())
+	// bars is a lie about the bars. Measured from ONE reading of the clock,
+	// handed to the store as well, so the axis and the bars are one window.
+	at := s.clock()
+	covered, coveredUntil := q.Window(at)
 
-	records, err := s.Events.PhaseTokens(ctx, q)
+	records, err := s.Events.PhaseTokens(ctx, q, at)
 	if err != nil {
 		return nil, err
 	}

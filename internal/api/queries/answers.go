@@ -291,6 +291,16 @@ type Sources struct {
 	// was asked, so one question asked twice, a second apart, answered
 	// twice differently. A source walk in clock_test.go holds it: nothing
 	// in this package reads the wall clock but [Sources.clock].
+	//
+	// AND THE STORE IS HANDED IT where an answer here labels what the store
+	// counts: `tokens` and `token_series` head their answer with a window
+	// measured from this clock, and [store.EventLog.PhaseTokens] measures
+	// its rows from the same instant, or the heading and the rows are two
+	// windows. What the store measures AND labels itself stays on its own
+	// clock — a listing's read floor, which has to agree with the clock the
+	// retention sweep deletes by, and `event_series`, whose axis comes back
+	// from the one evaluation its bars were counted over — so pinning this
+	// does not pin those.
 	Now func() time.Time
 }
 
@@ -768,8 +778,11 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	// LABELLED WITH WHAT THE STORE WILL ACTUALLY COVER, never with what was
 	// asked for: `since` is floored at the retention window, so a request
 	// for a year answered over thirty days and headed "a year" is a lie
-	// about the numbers beside it.
-	opts.Since, opts.Until = q.Window(s.clock())
+	// about the numbers beside it. And measured from ONE reading of the
+	// clock, which the store is handed too: read once here and again there,
+	// the heading and the rows are two windows.
+	at := s.clock()
+	opts.Since, opts.Until = q.Window(at)
 
 	// The live window, unfiltered, is the one the projection can answer —
 	// and only when the caller named no instants of their own, since the
@@ -785,7 +798,7 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		// hour's numbers.
 		return tokens.Aggregate(nil, opts), nil
 	}
-	records, err := s.Events.PhaseTokens(ctx, q)
+	records, err := s.Events.PhaseTokens(ctx, q, at)
 	if err != nil {
 		return nil, err
 	}

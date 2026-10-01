@@ -12,6 +12,12 @@ import (
 // now is the clock every store row and every time-bounded query reads. One
 // function so the read floor, the retention sweep and a row's own timestamp
 // cannot disagree about what "now" is.
+//
+// THE ONE EXCEPTION is a window its CALLER labels: [EventLog.PhaseTokens] is
+// handed the instant the caller headed its answer with, because a window
+// evaluated once here and once there is two windows. [EventLog.Histogram]
+// needs no such instant — it labels its answer itself, from the one
+// evaluation its bars are counted over.
 func now() time.Time { return time.Now().UTC() }
 
 // EncodeTime converts an instant to the storage encoding: microseconds since

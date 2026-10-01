@@ -1057,7 +1057,8 @@ func truncate(recs []EventRecord, limit int) []EventRecord {
 
 // PhaseTokenQuery selects the phase records a spend breakdown aggregates.
 type PhaseTokenQuery struct {
-	// SinceDays is the window, in whole days back from now. Zero or less
+	// SinceDays is the window, in whole days back from the instant the
+	// read is measured from (see [EventLog.PhaseTokens]). Zero or less
 	// takes DefaultPhaseTokenDays.
 	SinceDays int
 
@@ -1098,7 +1099,9 @@ type PhaseTokenQuery struct {
 // Exported because the CALLER labels the answer: a rollup headed with the
 // window that was asked for, over rows from the window that was served, is a
 // lie about the numbers beside it — and the clamp lives here, where the floor
-// is defined, rather than being re-derived at every surface.
+// is defined, rather than being re-derived at every surface. The caller hands
+// [EventLog.PhaseTokens] the same now it passes here, which is what makes the
+// heading and the rows one evaluation rather than two readings of a clock.
 //
 // TOTAL IN BOTH EDGES: an unbounded top edge means "up to now", and what this
 // reports is now rather than the zero time. It answered the zero once and
@@ -1303,8 +1306,25 @@ const MaxPhasePage = 60
 // promoting them would mean a migration and five more columns that are NULL on
 // every other row in the table. The filterable dimensions — the ones a query
 // selects ON — are the promoted ones.
-func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
-	since, until := q.Window(now())
+//
+// # The window is measured from at, which is the CALLER's instant
+//
+// Every caller labels its answer with [PhaseTokenQuery.Window] — that is why
+// the method is exported — and a label is only true of the rows beneath it if
+// both are ONE evaluation of the window. Read here off this package's own
+// clock, the rows were the window ending at a second reading of the time: in
+// production microseconds after the label's, enough for a record stamped in
+// between to be counted by a rollup headed as ending before it; and under a
+// caller's pinned clock a different window altogether, so a test that pinned
+// the API's clock read a rollup headed with June over October's rows. A zero
+// at is REFUSED rather than read as now, because "now" is exactly the second
+// reading this parameter exists to remove.
+func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery, at time.Time) ([]tokens.Record, error) {
+	if at.IsZero() {
+		return nil, errors.New("store: phase tokens: no instant to measure the " +
+			"window from — pass the one the answer is labelled with")
+	}
+	since, until := q.Window(at)
 
 	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
 	// half-open window the bucketing folds over, so a record on the

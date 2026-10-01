@@ -49,7 +49,7 @@ func TestAPhasesPriceReachesTheRollup(t *testing.T) {
 	seedPhase(t, log, "p1", base, "PM", 100, 0.25)
 	seedPhase(t, log, "p2", base.Add(time.Minute), "PM", 50, 0)
 
-	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 
 	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{
 		Since: base, Until: base.Add(time.Hour),
-	})
+	}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -95,6 +95,40 @@ func TestAnInstantWindowSelectsExactlyItsOwnRows(t *testing.T) {
 	// it or counting it twice.
 	if sum != 6 {
 		t.Errorf("tokens in [base, base+1h) = %d, want 6 — got %d rows", sum, len(got))
+	}
+}
+
+// THE READ IS MEASURED FROM THE INSTANT IT IS HANDED, never from a second
+// reading of this package's clock.
+//
+// Every caller heads its answer with [store.PhaseTokenQuery.Window] at an
+// instant of its own, and the rows beneath that heading are that window's only
+// if the read measures from the same instant. A day back from an instant two
+// days ago is a window this package's clock would never choose, so which of the
+// two records comes back says which instant the read was measured from.
+func TestAPhaseTokenReadIsMeasuredFromTheInstantItIsHanded(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	wall := time.Now().UTC()
+	at := wall.Add(-48 * time.Hour)
+	seedPhase(t, log, "then", at.Add(-time.Hour), "PM", 1, 0)
+	seedPhase(t, log, "now", wall.Add(-time.Hour), "PM", 2, 0)
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, at)
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	if len(got) != 1 || got[0].EventID != "then" {
+		t.Errorf("a day back from %s read %+v, want the one record inside it — "+
+			"the rows are not the window the caller's heading names", at, got)
+	}
+
+	// A ZERO INSTANT IS REFUSED rather than read as now: "now" is the second
+	// reading of the clock the parameter exists to remove, and a window
+	// measured from the year 1 is an empty answer that reads as a quiet
+	// company.
+	if _, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, time.Time{}); err == nil {
+		t.Error("a read with no instant answered; want it refused")
 	}
 }
 

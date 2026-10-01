@@ -238,7 +238,7 @@ func (h *slowFeed) List(ctx context.Context, _ store.ListQuery) ([]store.EventRe
 	return nil, ctx.Err()
 }
 
-func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, error) {
+func (h *slowFeed) PhaseTokens(ctx context.Context, _ store.PhaseTokenQuery, _ time.Time) ([]tokens.Record, error) {
 	h.spendAsked, h.spendCtxErr = true, ctx.Err()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -261,7 +261,7 @@ func (h halfBroken) List(_ context.Context, _ store.ListQuery) ([]store.EventRec
 	}}, nil
 }
 
-func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery) ([]tokens.Record, error) {
+func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery, _ time.Time) ([]tokens.Record, error) {
 	if h.spend != nil {
 		return nil, h.spend
 	}
@@ -297,6 +297,13 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 		t.Errorf("spend read from %v, want the live window's start around %v",
 			history.spend.Since, want)
 	}
+	// AND EXACTLY THE PROJECTION'S WINDOW, measured from the instant the
+	// store is handed: its bottom edge read off one reading of the clock
+	// and its top off another is a window that is not the projection's.
+	if got := history.spendAt.Sub(history.spend.Since); got != livestate.LiveSpendWindow {
+		t.Errorf("spend read covers %s from the instant it was measured from, "+
+			"want exactly the projection's %s", got, livestate.LiveSpendWindow)
+	}
 	if history.feed.Limit != livestate.EventFeedLimit {
 		t.Errorf("feed read limit = %d, want the ring's %d",
 			history.feed.Limit, livestate.EventFeedLimit)
@@ -305,8 +312,9 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 
 // recordingHistory answers nothing and remembers what it was asked.
 type recordingHistory struct {
-	feed  store.ListQuery
-	spend store.PhaseTokenQuery
+	feed    store.ListQuery
+	spend   store.PhaseTokenQuery
+	spendAt time.Time
 }
 
 func (r *recordingHistory) List(_ context.Context, q store.ListQuery) ([]store.EventRecord, error) {
@@ -314,7 +322,7 @@ func (r *recordingHistory) List(_ context.Context, q store.ListQuery) ([]store.E
 	return nil, nil
 }
 
-func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error) {
-	r.spend = q
+func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery, at time.Time) ([]tokens.Record, error) {
+	r.spend, r.spendAt = q, at
 	return nil, nil
 }

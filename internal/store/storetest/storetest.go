@@ -627,7 +627,7 @@ func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
 	log := db.Events()
 	ctx := t.Context()
 
-	if got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}); err != nil {
+	if got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC()); err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	} else if got == nil {
 		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
@@ -945,7 +945,7 @@ func testSpendUncapped(t *testing.T, db *store.DB) {
 		})
 	}
 
-	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1})
+	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -987,7 +987,7 @@ func testSpendLimited(t *testing.T, db *store.DB) {
 
 	spendIDs := func(q store.PhaseTokenQuery) []string {
 		t.Helper()
-		got, err := log.PhaseTokens(t.Context(), q)
+		got, err := log.PhaseTokens(t.Context(), q, now)
 		if err != nil {
 			t.Fatalf("phase tokens %+v: %v", q, err)
 		}
@@ -1023,7 +1023,7 @@ func testSpendDerived(t *testing.T, db *store.DB) {
 			`"output_tokens":5,"total_tokens":15}`),
 	})
 
-	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
