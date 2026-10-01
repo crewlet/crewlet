@@ -147,9 +147,11 @@
 // operator's at `linearizable`, whose holder appends a barrier on the
 // partition's log of the operation's own domain and answers at or after it.
 // A batch that outgrows one reply ([queue.MaxPayloadBytes]) is answered in
-// pages: what fits, then what did not, asked again of the same holder. And a
-// copy that lags its logs is asked last, one at a time, as a single read's
-// last resort is.
+// pages: what fits, then what did not, asked again of the same holder; one
+// that outgrows an attempt is answered a margin before the asker stops
+// waiting, with what finished, the rest asked again the same way. And a copy
+// that lags its logs is asked last, one at a time, as a single read's last
+// resort is.
 //
 // A single-partition read whose answer a gather will one day assemble — a
 // board, a person's day, an inbox — reports its coverage too

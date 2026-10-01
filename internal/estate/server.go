@@ -59,6 +59,11 @@ type server struct {
 	// ([queue.MaxPayloadBytes]), held so a test can make a gather batch
 	// outgrow it without eight mebibytes of answers.
 	ceiling int
+
+	// cpus is how many of a gather batch's queries run at once; zero is
+	// this process's CPUs at the time of the batch ([server.cpuCount]),
+	// held so a test can make a batch longer than an attempt.
+	cpus int
 }
 
 // answer runs one request and ALWAYS answers: a node that stayed silent

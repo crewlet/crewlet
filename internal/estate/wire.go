@@ -179,6 +179,15 @@ const (
 	// alone is answered as an error naming its size instead, so every
 	// reply answers at least one partition and the batch always shrinks.
 	unservedOverflow unservedReason = "overflow"
+
+	// unservedUnfinished: a gather slice this node had not finished when
+	// the batch had to be answered — a margin before the asker's deadline
+	// ([batchMargin]), with every slice it HAD finished. Not a failure of
+	// this node either: a batch costs more the more partitions it carries,
+	// so the asker asks it again for the rest, unless this reply finished
+	// none at all, which is a holder that cannot answer one of them within
+	// an attempt.
+	unservedUnfinished unservedReason = "unfinished"
 )
 
 // reply is what a serving node answers.
@@ -314,6 +323,10 @@ type sliceAsk struct {
 
 	// cursor is this partition's own cursor in a paged gather.
 	cursor string
+
+	// cpu bounds how many slices' QUERIES run at once on this node — a
+	// place taken after the slice's waits ([cpuSlot]). Nil bounds nothing.
+	cpu chan struct{}
 }
 
 // op is a typed handle on one registered operation: its declaration, and its

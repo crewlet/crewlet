@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -27,8 +28,12 @@ import (
 //     asks in ([Router.order]).
 //  3. Batch the partitions by holder: ONE request per holder carrying all of
 //     its partitions ([request.Partitions], [request.Slices]). The partitions
-//     this node serves are answered in-process, concurrently, at most
-//     [runtime.GOMAXPROCS] at a time.
+//     this node serves are answered in-process, concurrently, their queries
+//     at most [runtime.GOMAXPROCS] at a time ([cpuSlot]).
+//     A holder answers a batch a margin before the asker stops waiting
+//     ([batchMargin]), with every partition it finished, and names the rest
+//     [unservedUnfinished] — asked of it again, since a batch larger than an
+//     attempt is not a failure of the holder.
 //  4. A partition its holder failed is asked of its next holder, within the
 //     caller's deadline — and NEVER again of a holder that already failed it
 //     in this gather: a node that was silent, behind or not serving a moment
@@ -164,6 +169,11 @@ func defineGather[A, P, R any](name string, at address[A],
 		if at == nil && !spec.floorless {
 			at = appliedAt(b, streams)
 		}
+		release, err := cpuSlot(ctx, s.cpu)
+		if err != nil {
+			return zero, at, err
+		}
+		defer release()
 		v, err := serve(ctx, b, s.partition, args)
 		return v, at, err
 	}
@@ -736,16 +746,16 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 		mu      sync.Mutex
 		refresh bool
 	)
-	// THIS NODE'S OWN PARTITIONS, at most GOMAXPROCS at a time: each is a
-	// read of a local file, so more at once only queues on the CPU.
-	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+	// THIS NODE'S OWN PARTITIONS, all at once, their QUERIES at most
+	// GOMAXPROCS at a time ([cpuSlot]): the floor and barrier waits before
+	// a query are not CPU work, and holding a CPU's place through them
+	// would queue every partition behind the slowest log's applier.
+	cpu := make(chan struct{}, runtime.GOMAXPROCS(0))
 	for _, st := range round.local {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			r.runLocalPart(ctx, plan, st, acceptLagging, &mu)
+			r.runLocalPart(ctx, plan, st, acceptLagging, cpu, &mu)
 		}()
 	}
 	ask := func(node string, batch []*partState) {
@@ -770,14 +780,14 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 // THE READ RUNS WITHOUT THE ROUND'S LOCK, which guards only the settlement:
 // another partition's answer must not wait on this one's file.
 func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partState,
-	acceptLagging bool, mu *sync.Mutex) {
+	acceptLagging bool, cpu chan struct{}, mu *sync.Mutex) {
 
 	b, ok, unknown := r.local.For(ctx, st.p)
 	var out partRun
 	if unknown == nil && ok {
 		b.ServerSeams = r.seams
 		ask := sliceAsk{partition: st.p, layout: plan.layout, level: plan.level,
-			floors: r.floorsFor(plan.spec, plan.layout, st.p), cursor: plan.cursors[st.p]}
+			floors: r.floorsFor(plan.spec, plan.layout, st.p), cursor: plan.cursors[st.p], cpu: cpu}
 		out = runPart(ctx, r.self, plan.spec, b, ask, plan.args, plan.whole, acceptLagging)
 		r.session.Forget(out.obsolete...)
 	}
@@ -870,16 +880,29 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 		}
 		return false
 	}
+	// PROGRESS is a reply that settled anything: then what the holder did
+	// not finish is the batch's size against the attempt, and is asked of
+	// it again; a reply that finished NOTHING is a holder that cannot
+	// answer one of these partitions within an attempt, and each moves on.
+	progress := slices.ContainsFunc(rep.Parts, func(p partReply) bool {
+		return p.Unserved != unservedUnfinished
+	})
 	newer := false
 	for _, st := range batch {
 		part, found := partNamed(rep.Parts, st.p.String())
-		if !found {
+		switch {
+		case !found:
 			st.tried[node] = true
 			st.note(statelog.MissingError, "%s: answered the batch without %s", node, st.p)
-			continue
-		}
-		if r.settlePart(plan, node, st, part, acceptLagging) {
-			newer = true
+		case part.Unserved == unservedUnfinished && progress:
+			st.again = node
+		case part.Unserved == unservedUnfinished:
+			st.tried[node] = true
+			st.note(statelog.MissingUnreachable, "%s: %s", node, part.Detail)
+		default:
+			if r.settlePart(plan, node, st, part, acceptLagging) {
+				newer = true
+			}
 		}
 	}
 	return newer
@@ -1014,9 +1037,26 @@ func runPart(ctx context.Context, self string, spec *opSpec, b Backend, s sliceA
 // ---- answering a gather batch ------------------------------------------ //
 
 // answerSlices answers a gather batch: each partition the request names, from
-// this node's copy where it serves it, each at most once, at most GOMAXPROCS at
-// a time — and a reply that fits under the broker's ceiling, with the slices
-// that did not fit answered [unservedOverflow] for the asker to ask again.
+// this node's copy where it serves it, each at most once and all of them at
+// once, their queries at most this node's CPUs at a time ([cpuSlot]) — and a
+// reply that fits under the broker's ceiling, with the slices that did not fit
+// answered [unservedOverflow] for the asker to ask again.
+//
+// # Answered BEFORE the asker stops waiting
+//
+// A batch's cost grows with its partitions — at a node's CPUs at a time, a
+// hundred and fifty of them need not all fit in one attempt — and a reply sent
+// AT the asker's deadline arrives after it: the asker hears nothing, counts
+// the holder silent, suspects it, and loses every partition of the batch, the
+// ones answered in a millisecond with the rest. So the work on a batch STOPS
+// [batchMargin] before the deadline the request carries — every wait and
+// query told to give up — and the batch is ANSWERED half a margin later with
+// every partition that reported by then: a floor not reached is `behind`, as
+// ever, and a slice whose query had not finished, or had not started, is
+// [unservedUnfinished]. Two instants rather than one, because a wait told to
+// give up reports a moment after it is told, and answering at the instant it
+// is told would race that report and name a partition unfinished that was
+// merely behind.
 func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) reply {
 	out := reply{Node: s.self}
 	layout, err := s.placement.Layout()
@@ -1025,25 +1065,71 @@ func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) rep
 			req.Op, err))
 		return out
 	}
-	parts := make([]partReply, len(req.Partitions))
-	var obsolete []statelog.Position
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+	work, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var answerBy <-chan time.Time
+	if !req.Deadline.IsZero() {
+		margin := batchMargin(time.Until(req.Deadline))
+		var stop context.CancelFunc
+		work, stop = context.WithDeadline(work, req.Deadline.Add(-margin))
+		defer stop()
+		timer := time.NewTimer(time.Until(req.Deadline.Add(-margin / 2)))
+		defer timer.Stop()
+		answerBy = timer.C
+	}
+	type answered struct {
+		i    int
+		part partReply
+		gone []statelog.Position
+	}
+	// BUFFERED FOR EVERY PARTITION, so one still running when the batch
+	// is answered finishes into it rather than blocking for ever.
+	results := make(chan answered, len(req.Partitions))
+	cpu := make(chan struct{}, s.cpuCount())
 	for i, name := range req.Partitions {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			part, gone := s.answerPart(ctx, spec, layout, req, name)
-			mu.Lock()
-			parts[i] = part
-			obsolete = append(obsolete, gone...)
-			mu.Unlock()
+			part, gone := s.answerPart(work, spec, layout, req, name, cpu)
+			results <- answered{i: i, part: part, gone: gone}
 		}()
 	}
-	wg.Wait()
+	parts := make([]partReply, len(req.Partitions))
+	finished := make([]bool, len(req.Partitions))
+	var obsolete []statelog.Position
+	take := func(a answered) {
+		parts[a.i], finished[a.i] = a.part, true
+		obsolete = append(obsolete, a.gone...)
+	}
+collect:
+	for range req.Partitions {
+		select {
+		case a := <-results:
+			take(a)
+		case <-answerBy:
+			break collect
+		case <-ctx.Done():
+			// NOBODY IS LISTENING any more: the answerer itself was
+			// stopped.
+			break collect
+		}
+	}
+	// WHAT REPORTED AS THE BATCH WAS ANSWERED counts, whichever case the
+	// select happened to take first.
+	for drained := false; !drained; {
+		select {
+		case a := <-results:
+			take(a)
+		default:
+			drained = true
+		}
+	}
+	for i, name := range req.Partitions {
+		if !finished[i] {
+			parts[i] = partReply{Partition: name, Unserved: unservedUnfinished,
+				Detail: fmt.Sprintf("%s had not finished %s when the batch had to be answered "+
+					"— a batch of %d partitions is more than one attempt", s.self, name,
+					len(req.Partitions))}
+		}
+	}
 	for _, gone := range obsolete {
 		if !slices.Contains(out.Obsolete, gone.Stream) {
 			out.Obsolete = append(out.Obsolete, gone.Stream)
@@ -1053,9 +1139,59 @@ func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) rep
 	return out
 }
 
-// answerPart is one partition's slice, as this node answers it.
+// batchMargin is how long before the asker stops waiting a holder stops work
+// on a gather batch, given how long the attempt has left — the batch is then
+// answered half of it later ([server.answerSlices]).
+//
+// A TENTH OF THE ATTEMPT, AND NEVER MORE THAN A SECOND. What the second half
+// of the margin covers is the reply's own trip: building it, which copies
+// already-encoded slices into one body of at most [queue.MaxPayloadBytes]
+// (milliseconds), and one hop back through the broker (milliseconds on any
+// fleet whose leases hold); half a second is two orders of magnitude over
+// both, and that room is what the two nodes' clocks may disagree by about the
+// absolute deadline the request carries. The first half is what a wait told
+// to give up has to report in. A tenth for a shorter attempt, so a caller with
+// little deadline left does not spend all of it on margin; at the ten-second
+// [readAttempt] the two are the same second.
+func batchMargin(remaining time.Duration) time.Duration {
+	return max(0, min(remaining/10, time.Second))
+}
+
+// cpuSlot takes one of cpu's places for a query, waiting for one no longer
+// than ctx — and answers how to give it back. A nil cpu bounds nothing: a
+// single-partition read is one query.
+//
+// ONLY THE QUERY HOLDS A PLACE: a slice's floor and barrier waits come before
+// it and are not CPU work, and a place held through them would queue every
+// partition of a batch behind the slowest log's applier — a hundred and fifty
+// partitions each waiting out a two-second floor, a CPU's worth at a time.
+func cpuSlot(ctx context.Context, cpu chan struct{}) (func(), error) {
+	if cpu == nil {
+		return func() {}, nil
+	}
+	select {
+	case cpu <- struct{}{}:
+		return func() { <-cpu }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// cpuCount is how many of a batch's queries this node runs at once: its CPUs
+// now — read per batch, since the runtime may change it as the container's
+// limit does — unless a test set it.
+func (s server) cpuCount() int {
+	if s.cpus > 0 {
+		return s.cpus
+	}
+	return runtime.GOMAXPROCS(0)
+}
+
+// answerPart is one partition's slice, as this node answers it under the
+// batch's context: a read the batch's own ending cut short is answered
+// [unservedUnfinished], never as the error the cancellation made of it.
 func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.Layout,
-	req request, name string) (partReply, []statelog.Position) {
+	req request, name string, cpu chan struct{}) (partReply, []statelog.Position) {
 
 	out := partReply{Partition: name}
 	p, err := statelog.ParsePartitionID(name)
@@ -1078,10 +1214,15 @@ func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.La
 	b.ServerSeams = s.seams
 	run := runPart(ctx, s.self, spec, b, sliceAsk{
 		partition: p, layout: layout, level: req.Level, floors: req.Floors, cursor: req.Cursors[name],
+		cpu: cpu,
 	}, req.Args, false, req.AcceptLagging)
 	switch {
 	case run.reason != "":
 		out.Unserved, out.Detail = run.reason, run.detail
+	case run.err != nil && ctx.Err() != nil && isCancellation(run.err):
+		out.Unserved = unservedUnfinished
+		out.Detail = fmt.Sprintf("%s had not finished %s when the batch had to be answered: %v",
+			s.self, p, run.err)
 	case run.err != nil:
 		out.Err = encodeError(run.err)
 	default:
@@ -1094,6 +1235,11 @@ func (s server) answerPart(ctx context.Context, spec *opSpec, layout statelog.La
 		out.Result, out.At = raw, run.at
 	}
 	return out, run.obsolete
+}
+
+// isCancellation reports an error a context's ending made.
+func isCancellation(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 // replyHeadroom is what a gather reply keeps free of its slices for the rest of

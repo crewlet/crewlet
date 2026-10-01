@@ -112,6 +112,15 @@ type partNode struct {
 	// gate, when set, holds every read until it is closed — so a case can
 	// see how many run at once.
 	gate chan struct{}
+
+	// floorGate, when set, holds every floor wait until it is closed, and
+	// waiting counts the waits it holds — so a case can see how many wait
+	// at once.
+	floorGate chan struct{}
+	waiting   atomic.Int32
+
+	// delay is how long each read takes.
+	delay time.Duration
 }
 
 func (n *partNode) set(change func(*partNode)) {
@@ -152,6 +161,18 @@ func (n *partNode) backend(p statelog.PartitionID, t trouble) Backend {
 			if t == behindFloor {
 				<-ctx.Done()
 				return ctx.Err()
+			}
+			n.mu.Lock()
+			gate := n.floorGate
+			n.mu.Unlock()
+			if gate != nil {
+				n.waiting.Add(1)
+				defer n.waiting.Add(-1)
+				select {
+				case <-gate:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 			return nil
 		},
@@ -226,14 +247,22 @@ func rowsOf(p statelog.PartitionID) []tracker.TaskRow {
 	return out
 }
 
-func (r partRead) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (r partRead) Tasks(ctx context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	defer r.enter()()
 	r.node.mu.Lock()
 	if r.node.levels == nil {
 		r.node.levels = map[statelog.PartitionID][]tracker.Query{}
 	}
 	r.node.levels[r.p] = append(r.node.levels[r.p], q)
+	delay := r.node.delay
 	r.node.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return tracker.Answer{}, ctx.Err()
+		}
+	}
 	if r.t == failing || r.t == lagsFailing {
 		return tracker.Answer{}, fmt.Errorf("the read of %s failed on %s: %w", r.p, r.node.name,
 			tracker.ErrNoProject)
@@ -821,6 +850,209 @@ func ceilingFleet(t *testing.T, ceiling int) (*partFleet, *partNode, *server) {
 	}
 	t.Cleanup(func() { _ = stop(context.Background()) })
 	return f, node, srv
+}
+
+// A HOLDER WAITS OUT EVERY PARTITION'S FLOOR AT ONCE, and only the queries
+// take a CPU's place: a wait is not CPU work, and a place held through one
+// queued a batch's every partition behind the slowest log's applier — on one
+// CPU, five floors waited one after another.
+func TestAHolderWaitsOutABatchsFloorsAtOnce(t *testing.T) {
+	t.Parallel()
+	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
+	srv.cpus = 1
+	gate := make(chan struct{})
+	node.set(func(n *partNode) { n.floorGate = gate })
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = 10 * time.Second
+	observeEveryTrackerLog(r)
+	done := make(chan error, 1)
+	go func() {
+		_, cov, err := listAll(t, r, 0, "")
+		if err == nil && !cov.Complete() {
+			err = fmt.Errorf("coverage %+v", cov)
+		}
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for node.waiting.Load() < 5 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	waited := node.waiting.Load()
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if waited != 5 {
+		t.Errorf("%d of the batch's five floors were waited for at once, want all five", waited)
+	}
+}
+
+// THIS NODE WAITS OUT ITS OWN PARTITIONS' FLOORS AT ONCE TOO, more of them
+// than it has CPUs: only the in-process queries take a CPU's place.
+func TestThisNodeWaitsOutItsOwnPartitionsFloorsAtOnce(t *testing.T) {
+	t.Parallel()
+	count := min(runtime.GOMAXPROCS(0)+2, statelog.MaxPartitions)
+	wide := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: count, Domains: []string{"tracker"}},
+	}}
+	var all []statelog.PartitionID
+	for i := range count {
+		all = append(all, tp(uint16(i)))
+	}
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": all})
+	f.placement.layout, f.servers.layout = wide, wide
+	local := f.nodes["data-a"]
+	gate := make(chan struct{})
+	local.set(func(n *partNode) { n.floorGate = gate })
+	r := f.router(t, "data-a", local)
+	for _, p := range all {
+		stream, _ := wide.Stream(statelog.LogID{Domain: trackerDomain, Partition: p})
+		r.Observe(statelog.Position{Stream: stream, Generation: 1, Seq: 5})
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := listAll(t, r, 0, "")
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for local.waiting.Load() < int32(count) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	waited := local.waiting.Load()
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if waited != int32(count) {
+		t.Errorf("%d of this node's %d floors were waited for at once, want all of them",
+			waited, count)
+	}
+}
+
+// A BATCH IS ANSWERED BEFORE ITS ASKER STOPS WAITING: the partitions behind
+// the asker's floor are named behind, the ones that answered at once are in
+// the answer, and the holder — which answered — is never suspected, all in one
+// attempt. Answered at the asker's own deadline, the reply arrived after it,
+// and every partition of the batch was lost with a healthy holder suspected.
+func TestABatchIsAnsweredBeforeTheAskerStopsWaiting(t *testing.T) {
+	t.Parallel()
+	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
+	srv.cpus = 1
+	node.set(func(n *partNode) {
+		for _, p := range []statelog.PartitionID{tp(1), tp(2), tp(3)} {
+			n.holds[p] = behindFloor
+		}
+	})
+	r := f.router(t, "agent-1", nil)
+	// LONG ENOUGH FOR THE HEALTHY PARTITIONS, SHORT OF THE FLOOR WAIT: the
+	// batch can only finish two of its five within the attempt.
+	r.readBudget = statelog.ReadBudget / 2
+	observeEveryTrackerLog(r)
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if len(answer.Rows) != 6 || !slices.Equal(cov.Answered, []string{"company.000", "tracker.000"}) {
+		t.Errorf("answered %d rows from %v, want tracker.000's six and company.000",
+			len(answer.Rows), cov.Answered)
+	}
+	for _, m := range cov.Missing {
+		if m.Reason != statelog.MissingBehind {
+			t.Errorf("%s is missing as %q (%s), want behind", m.Partition, m.Reason, m.Detail)
+		}
+	}
+	if len(cov.Missing) != 3 {
+		t.Errorf("missing = %+v, want the three partitions behind the floor", cov.Missing)
+	}
+	if asked := node.asked(); len(asked) != 1 {
+		t.Errorf("the holder was asked %d times, want once", len(asked))
+	}
+	r.mu.Lock()
+	_, suspected := r.suspect["data-a"]
+	r.mu.Unlock()
+	if suspected {
+		t.Error("the holder that answered the batch was suspected")
+	}
+}
+
+// WHAT A HOLDER DID NOT FINISH IS ASKED OF IT AGAIN: a batch whose queries
+// take longer than one attempt is answered with what finished and the rest
+// named unfinished, and the rest is asked again — of the same holder, which
+// did nothing wrong — until every partition answered.
+func TestWhatAHolderDidNotFinishIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	f, node, srv := ceilingFleet(t, queue.MaxPayloadBytes)
+	srv.cpus = 1
+	node.set(func(n *partNode) { n.delay = 150 * time.Millisecond })
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = 400 * time.Millisecond
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want every partition across attempts",
+			len(answer.Rows), cov, err)
+	}
+	if asked := node.asked(); len(asked) < 2 {
+		t.Errorf("the batch was answered in %d attempt(s), want it carried over several", len(asked))
+	}
+	r.mu.Lock()
+	_, suspected := r.suspect["data-a"]
+	r.mu.Unlock()
+	if suspected {
+		t.Error("the holder that answered every attempt was suspected")
+	}
+}
+
+// A HOLDER RUNS A BATCH'S QUERIES AT MOST ITS CPUS AT A TIME: one request
+// naming more partitions than the node has CPUs never has more of their reads
+// in flight at once.
+func TestAHolderRunsABatchsQueriesWithinItsCPUs(t *testing.T) {
+	t.Parallel()
+	cpus := runtime.GOMAXPROCS(0)
+	count := min(2*cpus+2, statelog.MaxPartitions)
+	wide := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: count, Domains: []string{"tracker"}},
+	}}
+	var all []statelog.PartitionID
+	for i := range count {
+		all = append(all, tp(uint16(i)))
+	}
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": all})
+	f.placement.layout, f.servers.layout = wide, wide
+	node := f.nodes["data-a"]
+	gate := make(chan struct{})
+	node.set(func(n *partNode) { n.gate = gate })
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = 10 * time.Second
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := listAll(t, r, 0, "")
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for node.inFlight.Load() < int32(cpus) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if asked := node.asked(); len(asked) != 1 {
+		t.Fatalf("the holder was asked %d times, want one batch", len(asked))
+	}
+	if peak := node.peak.Load(); peak != int32(cpus) {
+		t.Errorf("%d of the batch's %d reads ran at once, want %d — every CPU and no more",
+			peak, count, cpus)
+	}
+}
+
+// observeEveryTrackerLog gives r a floor on every tracker log of the divided
+// layout, which is what a holder behind is behind.
+func observeEveryTrackerLog(r *Router) {
+	for _, p := range []statelog.PartitionID{tp(0), tp(1), tp(2), tp(3), company} {
+		stream, _ := dividedLayout.Stream(statelog.LogID{Domain: trackerDomain, Partition: p})
+		r.Observe(statelog.Position{Stream: stream, Generation: 1, Seq: 5})
+	}
 }
 
 // A BATCH THAT OUTGROWS ONE REPLY IS ANSWERED IN PAGES: what fits, then what

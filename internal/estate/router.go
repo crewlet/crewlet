@@ -179,13 +179,21 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	}, nil
 }
 
-// readAttempt bounds one read's wait on one node.
+// readAttempt bounds one read's wait on one node — a single-partition read's,
+// and a gather batch's however many partitions it carries.
 //
 // TEN SECONDS: a serving node may wait [statelog.ReadBudget] for the floor and
 // again for the level a read asked for, and then runs the query — so a node
 // that has not answered in several times that is one that is gone rather than
 // slow, and the next one answers sooner than it would. It is a ceiling under
 // the caller's own deadline, never over it.
+//
+// ONE ATTEMPT FOR A WHOLE BATCH TOO, because a batch's waits are concurrent —
+// every partition's floor and barrier at once, only the queries a CPU's worth
+// at a time ([cpuSlot]) — and its holder answers [batchMargin] before the
+// attempt ends with whatever it finished, naming the rest unfinished for the
+// next attempt. A budget scaled to the batch would instead wait out a holder
+// that is gone for as long as its batch was large.
 const readAttempt = 10 * time.Second
 
 // writeAttempt bounds one write's wait on one node, for a caller with no

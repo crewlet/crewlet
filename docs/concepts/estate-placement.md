@@ -135,7 +135,11 @@ serves it, and the answers are merged by the read's own order. The asking node
 asks each holder **once**, for all of that holder's partitions together, and
 answers the partitions it serves itself in-process. A partition its holder
 failed is asked of its next holder — and never again of the one that failed
-it, within that read. A batch too large for one reply is answered in pages.
+it, within that read. A batch too large for one reply is answered in pages,
+and a batch that takes longer than one attempt is answered shortly before the
+asker would stop waiting, with every partition the holder finished; the rest
+are asked of it again. A holder waits for every partition's floor at once and
+runs at most one query per CPU at a time.
 
 The answer carries what it covered: the partitions that answered, where each of
 their logs was when it was read, and every partition that did **not** answer,
