@@ -81,8 +81,15 @@ type AskRow struct {
 // block: no assignee filter over tasks reaches it, so a seat holding six
 // checklist items and no assignment reads its queue as empty.
 type ChecklistRow struct {
-	Task      string `json:"task"`
-	TaskKey   string `json:"task_key"`
+	Task    string `json:"task"`
+	TaskKey string `json:"task_key"`
+
+	// TaskKeyCollision is the task's [TaskRow.KeyCollision]: its key is
+	// one another task claimed first, so a link built from
+	// [ChecklistRow.TaskKey] opens that task and this one is reached by
+	// [ChecklistRow.Task]. See [ItemAddress].
+	TaskKeyCollision bool `json:"task_key_collision,omitempty"`
+
 	TaskTitle string `json:"task_title"`
 	Checklist string `json:"checklist"`
 	Item      string `json:"item"`
@@ -426,8 +433,13 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a
 			// round spent being refused.
+			//
+			// ON THE TASK'S ADDRESS, not its key: an ask on a task
+			// whose key another task claimed first, answered through
+			// the key, would post the answer on the claimant — where
+			// the comment it `answers` does not exist.
 			Answer: fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q)",
-				CommentOnWorkTool, row.Key, a.comment),
+				CommentOnWorkTool, row.Address(), a.comment),
 		})
 	}
 	return out, nil
@@ -440,8 +452,8 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	// THE OPEN ONES, on live tasks. A done item is not a claim, and an
 	// item on a removed task is an item nobody can act on.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT i.task_id, t.key, t.title, i.checklist_id, i.item_id, i.name,
-		       i.done
+		SELECT i.task_id, t.key, t.key_collision, t.title, i.checklist_id,
+		       i.item_id, i.name, i.done
 		FROM tracker_checklist_items i
 		JOIN tracker_tasks t ON t.id = i.task_id
 		WHERE i.assignee = ? AND i.done = 0 AND t.removed_at IS NULL
@@ -456,12 +468,13 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	out := []ChecklistRow{}
 	for rows.Next() {
 		var row ChecklistRow
-		var done int
-		if err := rows.Scan(&row.Task, &row.TaskKey, &row.TaskTitle,
+		var done, collision int
+		if err := rows.Scan(&row.Task, &row.TaskKey, &collision, &row.TaskTitle,
 			&row.Checklist, &row.Item, &row.Name, &done); err != nil {
 			return nil, fmt.Errorf("tracker: scan a checklist item: %w", err)
 		}
 		row.Done = done != 0
+		row.TaskKeyCollision = collision == 1
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {

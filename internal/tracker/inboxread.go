@@ -97,6 +97,19 @@ type InboxNotice struct {
 	// this read is an index range rather than a join.
 	SubjectKey string `json:"subject_key,omitempty"`
 
+	// SubjectKeyCollision says [InboxNotice.SubjectKey] does not open this
+	// notice's subject: the key directory names another task for it, so a
+	// link built from the key reaches THAT task and the subject is reached
+	// by [InboxNotice.SubjectID]. See [ItemAddress].
+	//
+	// ASKED OF THE STORED KEY, not read off the task's own flag, because
+	// the two can name different keys: the key here is the one the task
+	// held when the notice was written, and a task moved since answers to
+	// a new one. What a reader follows is THIS key, so the question is
+	// whether THIS key resolves to the subject — one probe of the
+	// directory's primary key per row of a bounded page.
+	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
+
 	Excerpt string `json:"excerpt,omitempty"`
 
 	// Actor is who made the change, joined from the history row. A notice
@@ -369,8 +382,9 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 	rows, err := tx.QueryContext(ctx, `
 		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
 		       n.created_at, n.reason, n.addressed, n.fallback_only,
-		       n.kind, n.subject_id, n.subject_key, n.excerpt,
-		       COALESCE(h.actor, ''), COALESCE(h.actor_kind, '')
+		       n.kind, n.subject_id, n.subject_key,
+		       `+keyOpensAnother("n.subject_key", "n.subject_id")+`,
+		       n.excerpt, COALESCE(h.actor, ''), COALESCE(h.actor_kind, '')
 		  FROM tracker_notifications n
 		  LEFT JOIN tracker_history h ON h.id = n.record_id
 		 WHERE `+strings.Join(where, " AND ")+`
@@ -398,7 +412,8 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		var addressed, fallback int
 		if err := rows.Scan(&notice.RecordID, &packed, &notice.LogStream,
 			&notice.LogGeneration, &at, &reason, &addressed, &fallback,
-			&kind, &notice.SubjectID, &notice.SubjectKey, &notice.Excerpt,
+			&kind, &notice.SubjectID, &notice.SubjectKey,
+			&notice.SubjectKeyCollision, &notice.Excerpt,
 			&notice.Actor, &actorKind); err != nil {
 
 			return nil, "", fmt.Errorf("tracker: scan %s's inbox: %w", handle, err)

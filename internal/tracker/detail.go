@@ -188,6 +188,16 @@ type TaskDetail struct {
 	// the browser would be a second definition of blocked.
 	Blocked bool `json:"blocked,omitempty"`
 
+	// KeyCollision is [TaskRow.KeyCollision] for the task this answer is
+	// about, on the ANSWER for [TaskDetail.Blocked]'s reason: it is the
+	// applier's DERIVED column rather than a field of the record, and the
+	// document is the record. A screen showing a flagged task needs it to
+	// hand anything onward — a link back to the board, a peek, a call to
+	// copy — because the task's key opens the task that claimed it first.
+	// Read in the same statement as `blocked`, so the two describe one
+	// instant.
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	// The coverage half, identical in meaning to a board's — see [Answer].
 	Level          statelog.ReadLevel `json:"read_level"`
 	LogSeq         uint64             `json:"log_seq"`
@@ -218,6 +228,12 @@ type DetailLink struct {
 	Key    string `json:"key,omitempty"`
 	Title  string `json:"title,omitempty"`
 	Status Status `json:"status,omitempty"`
+
+	// KeyCollision is the other end's [TaskRow.KeyCollision]: its key is
+	// one another task claimed first, so a link built from [DetailLink.Key]
+	// opens that task and this one is reached by [DetailLink.Other]. See
+	// [ItemAddress]. Always false on a page link, which has no task row.
+	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Note string `json:"note,omitempty"`
 
@@ -362,12 +378,16 @@ func (r *Reader) task(ctx context.Context, idOrKey string, want DetailWants,
 		}
 		// THE SAME EXISTS THE BOARD ROW USES, in this same transaction,
 		// so the badge on the item and the badge on its row cannot
-		// disagree about one task at one instant.
+		// disagree about one task at one instant — and the collision
+		// flag beside it, from the same column the row reads, for the
+		// same reason.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
-			 WHERE d.task_id = ? AND d.blocker_open = 1)`,
-			id).Scan(&out.Blocked); err != nil {
+			         WHERE d.task_id = ? AND d.blocker_open = 1),
+			        COALESCE((SELECT key_collision FROM tracker_tasks
+			                  WHERE id = ?), 0) = 1`,
+			id, id).Scan(&out.Blocked, &out.KeyCollision); err != nil {
 			return fmt.Errorf("tracker: read %s's open blockers: %w", id, err)
 		}
 
@@ -452,6 +472,25 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 		return "", fmt.Errorf("tracker: resolve %q: %w", idOrKey, err)
 	}
 	return id, nil
+}
+
+// keyOpensAnother is the SQL predicate "opening this key reaches a task other
+// than this id" — [resolveTaskID]'s answer to a key, asked of a row that
+// carries a key and an id side by side.
+//
+// THE DIRECTORY AND NOTHING ELSE, because the directory is what the resolver
+// asks first and every apply writes the claim in the same transaction as the
+// task row ([Applier.maintainKeys]), so a held key always has its row. An
+// empty key opens nothing and is never a collision.
+//
+// It exists for a key that is NOT the task's current one — a notice stores
+// the key its subject held when it was written — where the task row's own
+// `key_collision` describes a different key. A row reading the task's current
+// key reads that column instead, which the applier derives from this same
+// directory.
+func keyOpensAnother(key, id string) string {
+	return `(` + key + ` <> '' AND EXISTS (SELECT 1 FROM tracker_task_keys kd
+	          WHERE kd.key = ` + key + ` AND kd.task_id <> ` + id + `))`
 }
 
 // readTaskDocument decodes the task's own record.
@@ -712,7 +751,8 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, error) {
 	const columns = `
 		SELECT r.kind, %s, r.derived, r.one_sided, r.one_sided_final, r.note,
-		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, '')
+		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, ''),
+		       COALESCE(t.key_collision, 0)
 		FROM tracker_relations r
 		LEFT JOIN tracker_tasks t ON t.id = %s
 		WHERE %s = ?
@@ -733,12 +773,14 @@ func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, er
 		for rows.Next() {
 			var link DetailLink
 			var kind, status string
-			var derived, oneSided, oneSidedFinal int
+			var derived, oneSided, oneSidedFinal, collision int
 			if err := rows.Scan(&kind, &link.Other, &derived, &oneSided,
-				&oneSidedFinal, &link.Note, &link.Key, &link.Title, &status); err != nil {
+				&oneSidedFinal, &link.Note, &link.Key, &link.Title, &status,
+				&collision); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
+			link.KeyCollision = collision == 1
 			link.Kind = RelationKind(kind)
 			link.Status = Status(status)
 			// THE MIRROR IS DERIVED WHATEVER ITS COLUMN SAYS. The

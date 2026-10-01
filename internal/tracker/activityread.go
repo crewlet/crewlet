@@ -78,7 +78,17 @@ type ActivityRecord struct {
 	// resolved here because a feed of uuids is a feed nobody reads. Empty
 	// for a subject that has no key — a project, a view, a person.
 	SubjectKey string `json:"subject_key,omitempty"`
-	Project    string `json:"project,omitempty"`
+
+	// SubjectKeyCollision is the subject's [TaskRow.KeyCollision], read
+	// beside [ActivityRecord.SubjectKey] from the same row: the key is one
+	// another task claimed first, so a feed link built from it opens THAT
+	// task, and this row's subject is reached by [ActivityRecord.SubjectID]
+	// instead. See [ItemAddress]. A feed is where a duplicate's history
+	// is read, which is the one place opening its neighbour instead would
+	// go unnoticed longest.
+	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
+
+	Project string `json:"project,omitempty"`
 
 	Excerpt   string           `json:"excerpt,omitempty"`
 	Fields    map[string]Delta `json:"fields,omitempty"`
@@ -492,7 +502,9 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
 		       h.excerpt, h.fields_json, h.comment_id, h.batch_id, h.turn_id,
 		       h.notified, h.late,
-		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id)
+		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
+		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
+		                 WHERE k.id = h.subject_id), 0)
 		FROM tracker_history h`+clause+`
 		ORDER BY h.log_seq DESC
 		LIMIT ?`, append(args, limit+1)...)
@@ -517,12 +529,13 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var kind, actorKind, subjectKind string
 		var fields string
 		var batch, key sql.NullString
-		var notified, late int
+		var notified, late, collision int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
 			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
-			&batch, &record.TurnID, &notified, &late, &key); err != nil {
+			&batch, &record.TurnID, &notified, &late, &key,
+			&collision); err != nil {
 			return nil, "", fmt.Errorf("tracker: scan an activity row: %w", err)
 		}
 		record.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -533,6 +546,7 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		record.SubjectKind = ObjectKind(subjectKind)
 		record.BatchID = batch.String
 		record.SubjectKey = key.String
+		record.SubjectKeyCollision = collision == 1
 		record.Notified, record.Late = notified != 0, late != 0
 		if fields != "" && fields != "{}" {
 			if err := json.Unmarshal([]byte(fields), &record.Fields); err != nil {

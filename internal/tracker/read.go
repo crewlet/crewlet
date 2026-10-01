@@ -37,8 +37,21 @@ import (
 // every row of a fifty-row page. What a caller needs beyond this is a
 // single-task read, which is flat at any age.
 type TaskRow struct {
-	ID    string `json:"id"`
-	Key   string `json:"key"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
+
+	// KeyCollision marks a task holding a key ANOTHER task claimed first,
+	// and it is on the row because the key is then not this task's
+	// address: every read resolves a key through the directory to the
+	// claimant ([resolveTaskID]), so a reader that opened this row by its
+	// key would land on somebody else's task. [TaskRow.Address] is the
+	// reference that does reach it.
+	//
+	// THE COLUMN, never re-derived here: the applier derives it from the
+	// directory on every apply ([Applier.maintainKeys]), so it is the same
+	// on every node and follows the claim wherever a purge hands it.
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Title string `json:"title"`
 
 	// Type is the slug a card is drawn under. On the ROW rather than only
@@ -93,6 +106,30 @@ type TaskRow struct {
 	Rank     Rank      `json:"rank,omitempty"`
 	Updated  time.Time `json:"updated"`
 	Version  uint64    `json:"version"`
+}
+
+// Address is the reference that opens this row's task. See [ItemAddress].
+func (r TaskRow) Address() string { return ItemAddress(r.ID, r.Key, r.KeyCollision) }
+
+// ItemAddress is the one rule for what a caller hands back to open a task: its
+// key, unless the key is not this task's to answer to, and then its id.
+//
+// THE KEY BY DEFAULT, because it is what a person reads, pastes into chat and
+// types into a tool call, and every read takes either. THE ID WHEN ANOTHER TASK
+// CLAIMED THE KEY FIRST (`key_collision`), because a key resolves through the
+// directory to its claimant: a link, a peek or a composed call built from a
+// flagged task's key opens the claimant, so the flagged task could never be
+// reached by the gesture that names it. And the id when a row carries no key
+// at all, because an empty reference addresses nothing.
+//
+// The dashboard carries the same rule as `itemAddress` — a separate build in a
+// separate language, so a copy — and the two are one sentence: key, unless
+// flagged or absent.
+func ItemAddress(id, key string, collision bool) string {
+	if key == "" || collision {
+		return id
+	}
+	return key
 }
 
 // Blocker is one dependency edge as the task that waits on it sees it.
@@ -1574,7 +1611,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	// statement order.
 	joins = extraJoin + joins
 	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
-	query := `SELECT t.id, t.key, t.title, t.type, t.status, t.status_group, t.priority,
+	query := `SELECT t.id, t.key, t.key_collision, t.title, t.type, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
 	                 t.archived, t.rank, t.updated_at, t.version,
@@ -1606,11 +1643,11 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		var row TaskRow
 		var parent, start, due sql.NullInt64
 		var parentID sql.NullString
-		var archived, blocked int
+		var archived, blocked, collision int
 		var updated int64
 		var version int64
 		sortValues := make([]any, len(terms))
-		targets := []any{&row.ID, &row.Key, &row.Title, &row.Type, &row.Status,
+		targets := []any{&row.ID, &row.Key, &collision, &row.Title, &row.Type, &row.Status,
 			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
 			&parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
 			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
@@ -1635,6 +1672,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		}
 		row.Archived = archived == 1
 		row.Blocked = blocked == 1
+		row.KeyCollision = collision == 1
 		row.Updated = store.DecodeTime(updated)
 		row.Version = uint64(version)
 		out = append(out, row)

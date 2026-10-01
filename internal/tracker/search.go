@@ -35,8 +35,17 @@ import (
 
 // Ranked is one work item as a ranked search answers it.
 type Ranked struct {
-	ID       string `json:"id"`
-	Key      string `json:"key"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
+
+	// KeyCollision is [TaskRow.KeyCollision] for a hit: the key is one
+	// another task claimed first, so it opens THAT task and this hit is
+	// reached by its id. A ranked answer is the list a person opens an
+	// item FROM, which is exactly where a hit that opens its neighbour
+	// would be indistinguishable from one that does not. See
+	// [ItemAddress].
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Title    string `json:"title"`
 	Project  string `json:"project"`
 	Type     string `json:"type"`
@@ -180,7 +189,8 @@ func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]
 	out := make(map[string]Ranked, len(ids))
 	err := s.db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT id, key, project_key, type, title, status, assignee
+			SELECT id, key, key_collision, project_key, type, title, status,
+			       assignee
 			  FROM tracker_tasks
 			 WHERE removed_at IS NULL AND id IN (`+placeholders(len(ids))+`)`,
 			ids...)
@@ -190,10 +200,12 @@ func (s *Searcher) itemsByID(ctx context.Context, docs []RankedDoc) (map[string]
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var row Ranked
-			if err := rows.Scan(&row.ID, &row.Key, &row.Project, &row.Type,
-				&row.Title, &row.Status, &row.Assignee); err != nil {
+			var collision int
+			if err := rows.Scan(&row.ID, &row.Key, &collision, &row.Project,
+				&row.Type, &row.Title, &row.Status, &row.Assignee); err != nil {
 				return err
 			}
+			row.KeyCollision = collision == 1
 			out[row.ID] = row
 		}
 		return rows.Err()
