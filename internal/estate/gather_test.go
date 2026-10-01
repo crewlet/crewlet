@@ -1331,6 +1331,45 @@ func TestAReplyThatDecidedNothingMovesEveryPartitionOn(t *testing.T) {
 	}
 }
 
+// A READ THAT KEEPS GOING AFTER IT IS TOLD TO STOP IS NAMED, NOT ITS BATCH: a
+// wait or a query that gives up when told to reports before the batch is
+// answered, so a partition with no report by then is a read that ignored the
+// stop — and alone in its batch, a detail blaming the batch's size points at a
+// remedy, a smaller batch, that a batch of one has already taken.
+func TestAReadThatKeepsGoingIsNamedRatherThanItsBatch(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(2), tp(3), company},
+		"data-b": {tp(1)},
+	})
+	// THE GATE IGNORES THE READ'S CONTEXT, holding it past the batch's
+	// answer until the case ends.
+	gate := make(chan struct{})
+	t.Cleanup(func() { close(gate) })
+	f.nodes["data-b"].set(func(n *partNode) { n.gate = gate })
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = time.Second
+	_, cov, err := listAll(t, r, 0, "")
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if len(cov.Missing) != 1 || cov.Missing[0].Partition != "tracker.001" {
+		t.Fatalf("missing = %+v, want tracker.001 alone", cov.Missing)
+	}
+	m := cov.Missing[0]
+	if m.Reason != statelog.MissingUnreachable ||
+		!strings.Contains(m.Detail, "read of tracker.001 had not returned") ||
+		!strings.Contains(m.Detail, "after it was told to stop") ||
+		strings.Contains(m.Detail, "batch of") {
+		t.Errorf("tracker.001 is missing as %q (%s), want unreachable, naming the read that "+
+			"kept going after it was told to stop rather than its batch", m.Reason, m.Detail)
+	}
+	if asked := f.nodes["data-b"].asked(); len(asked) != 1 {
+		t.Errorf("data-b was asked %d times, want once — a reply deciding nothing moves "+
+			"its partition on", len(asked))
+	}
+}
+
 // A REPLY FITS ITS CEILING WITH ITS WHOLE ENVELOPE: the slices are fitted
 // beside what the envelope measures, never beside a fixed allowance for it —
 // a batch whose floors a reanchor made obsolete names a stream for each, and a

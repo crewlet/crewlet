@@ -1131,7 +1131,8 @@ func runPart(ctx context.Context, self string, spec *opSpec, b Backend, s sliceA
 // [unservedUnfinished]. Two instants rather than one, because a wait told to
 // give up reports a moment after it is told, and answering at the instant it
 // is told would race that report and name a partition unfinished that was
-// merely behind.
+// merely behind. A read that has not reported even then is unfinished too, and
+// named as what it is — a read that kept going after it was told to stop.
 func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) reply {
 	out := reply{Node: s.self}
 	layout, err := s.placement.Layout()
@@ -1143,8 +1144,9 @@ func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) rep
 	work, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var answerBy <-chan time.Time
+	var margin time.Duration
 	if !req.Deadline.IsZero() {
-		margin := batchMargin(time.Until(req.Deadline))
+		margin = batchMargin(time.Until(req.Deadline))
 		var stop context.CancelFunc
 		work, stop = context.WithDeadline(work, req.Deadline.Add(-margin))
 		defer stop()
@@ -1174,16 +1176,22 @@ func (s server) answerSlices(ctx context.Context, spec *opSpec, req request) rep
 		parts[a.i], finished[a.i] = a.part, true
 		obsolete = append(obsolete, a.gone...)
 	}
+	// cut is when the batch was answered, said of a read that had not
+	// returned by then.
+	var cut string
 collect:
 	for range req.Partitions {
 		select {
 		case a := <-results:
 			take(a)
 		case <-answerBy:
+			cut = fmt.Sprintf("%v after it was told to stop, when the batch had to be answered",
+				(margin / 2).Round(time.Millisecond))
 			break collect
 		case <-ctx.Done():
 			// NOBODY IS LISTENING any more: the answerer itself was
 			// stopped.
+			cut = fmt.Sprintf("when %s stopped answering: %v", s.self, context.Cause(ctx))
 			break collect
 		}
 	}
@@ -1199,10 +1207,14 @@ collect:
 	}
 	for i, name := range req.Partitions {
 		if !finished[i] {
+			// A READ THAT DID NOT RETURN once told to stop — never the
+			// batch's size: a wait or a query that gives up when told
+			// to reports through [server.answerPart], as unfinished or
+			// behind, before the batch is answered. So what is known
+			// is that this read kept going, and a smaller batch, down
+			// to one partition, would be answered the same way.
 			parts[i] = partReply{Partition: name, Unserved: unservedUnfinished,
-				Detail: fmt.Sprintf("%s had not finished %s when the batch had to be answered "+
-					"— a batch of %d partitions is more than one attempt", s.self, name,
-					len(req.Partitions))}
+				Detail: fmt.Sprintf("%s's read of %s had not returned %s", s.self, name, cut)}
 		}
 	}
 	for _, gone := range obsolete {
