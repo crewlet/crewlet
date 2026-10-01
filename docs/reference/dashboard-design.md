@@ -562,14 +562,16 @@ and its key opens its neighbour: it is reached by its **id**, which the item
 route takes as readily as a key. So every row the engine lists a task in says
 which it is, beside the key it qualifies — `key_collision` on a board row, a
 search hit, an item and its links; `subject_key_collision` on a feed record and
-an inbox notice; `task_key_collision` on a checklist item.
+an inbox notice; `task_key_collision` on a checklist item. A notice is addressed
+by its `task` rather than its subject, because a `prioritised` notice's subject
+is the person whose list a lead reordered.
 
 `itemAddress` in `lib/work.ts` is the one place the rule is written — the key,
 unless flagged or empty, and then the id — and every link, peek, `[`/`]` step,
 "this is the open row" check and copied tool call goes through it, with
 `itemPath` for the route and an adapter per row shape (`subjectItem`,
-`checklistTask`, `linkedItem`, `detailItem`) so no screen pairs an id with the
-wrong flag. A project's route is `projectPath` for the same reason: no route
+`noticeItem`, `checklistTask`, `linkedItem`, `detailItem`) so no screen pairs
+an id with the wrong flag. A project's route is `projectPath` for the same reason: no route
 into the tracker is spelled at the call site. `app/source.test.ts` fails a
 screen that builds an item's route, its `{ kind: "item", id }` reference, its
 selection or a tool call's `item:` out of a key field, because every one of

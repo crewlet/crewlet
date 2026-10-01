@@ -45,6 +45,7 @@ import type {
   WorkFieldDef,
   WorkFieldValue,
   WorkGroup,
+  WorkInboxNotice,
   WorkItemDetail,
   WorkLink,
   WorkProjectRow,
@@ -69,9 +70,10 @@ export type Tone = "neutral" | "positive" | "caution" | "critical" | "info";
  *
  * Every row shape the engine lists a task in carries the three, under the
  * names of the key they qualify — `key`/`key_collision` on a row, a hit and a
- * link, `subject_key`/`subject_key_collision` on a feed record and a notice,
- * `task_key`/`task_key_collision` on a checklist item. The adapters below turn
- * each into this, so a screen never pairs an id with the wrong flag by hand.
+ * link, `subject_key`/`subject_key_collision` on a feed record and a notice
+ * (whose id is its `task`, not its subject), `task_key`/`task_key_collision` on
+ * a checklist item. The adapters below turn each into this, so a screen never
+ * pairs an id with the wrong flag by hand.
  */
 export interface ItemRef {
   id: string;
@@ -123,13 +125,31 @@ export function projectPath(key: string): string[] {
   return ["work", key];
 }
 
-/** A feed record's or an inbox notice's subject, as a task to address. */
+/** A feed record's subject, as a task to address. */
 export function subjectItem(row: {
   subject_id: string;
   subject_key?: string;
   subject_key_collision?: boolean;
 }): ItemRef {
   return { id: row.subject_id, key: row.subject_key, key_collision: row.subject_key_collision };
+}
+
+/**
+ * The task an inbox notice is about, as a task to address.
+ *
+ * ITS `task`, NEVER ITS SUBJECT. A notice about a task commit is about its own
+ * subject, but a `prioritised` notice's subject is the PERSON whose list a
+ * lead reordered, and its key is the task's — read as a subject, the one
+ * notice whose key could open another task had a person's handle for an id,
+ * and its link went to `#/work/{handle}`. A notice naming no task keeps its
+ * key as its only address, and the engine never flags one.
+ */
+export function noticeItem(notice: WorkInboxNotice): ItemRef {
+  return {
+    id: notice.task ?? "",
+    key: notice.subject_key,
+    key_collision: notice.subject_key_collision,
+  };
 }
 
 /** The task a checklist item sits on. */

@@ -77,7 +77,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { plainText } from "~/lib/markdown.ts";
-import { itemPath, subjectItem } from "~/lib/work.ts";
+import { itemPath, noticeItem } from "~/lib/work.ts";
 import {
   useAgents,
   useConnection,
@@ -739,11 +739,12 @@ function Detail({ selected, viewer }: { selected: Selected; viewer?: string }) {
         )}
       </div>
       {notice.subject_key && (
-        // THE SUBJECT'S ADDRESS. A notice keeps the key its task held when it
+        // THE TASK'S ADDRESS. A notice keeps the key its task held when it
         // was written, and where that key now opens another task — one that
         // claimed it first — the engine says so beside it, so a notice about a
-        // duplicate leads to the duplicate rather than to its claimant.
-        <a className="t-link mono" href={href(itemPath(subjectItem(notice)))}>
+        // duplicate leads to the duplicate rather than to its claimant. The
+        // TASK, not the subject: a `prioritised` notice's subject is a person.
+        <a className="t-link mono" href={href(itemPath(noticeItem(notice)))}>
           {notice.subject_key} →
         </a>
       )}

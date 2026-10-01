@@ -70,6 +70,9 @@ function notice(reason: string, n: number) {
     kind: "task_updated",
     subject_id: `s-${n}`,
     subject_key: `ENG-${n}`,
+    // A TASK COMMIT'S NOTICE NAMES ITS OWN SUBJECT as its task, as the
+    // engine sends it.
+    task: `s-${n}`,
     excerpt: `something happened, ${reason} ${n}`,
     read: false,
   };
@@ -593,6 +596,7 @@ test("two notices under one key lead to their own two tasks", async () => {
           ...notice("assignee", 1),
           subject_id: DUPLICATE,
           subject_key: SHARED_KEY,
+          task: DUPLICATE,
           subject_key_collision: true,
           excerpt: "about the duplicate",
         },
@@ -600,6 +604,7 @@ test("two notices under one key lead to their own two tasks", async () => {
           ...notice("assignee", 2),
           subject_id: CLAIMANT,
           subject_key: SHARED_KEY,
+          task: CLAIMANT,
           excerpt: "about the claimant",
         },
       ],
@@ -619,6 +624,51 @@ test("two notices under one key lead to their own two tasks", async () => {
   expect(subjectLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
 
   fireEvent.click(screen.getByText("about the claimant").closest("button")!);
+  await settle();
+  expect(subjectLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
+});
+
+// A PRIORITISED NOTICE LEADS TO THE TASK, NOT TO THE PERSON WHOSE LIST IT IS.
+//
+// It is the one notice whose subject is not the task it is about: a lead
+// reordered somebody's priorities, so the subject is that PERSON and the key
+// beside it is the task's. The notice names the task as `task`, and its link
+// goes by that — read off the subject, a duplicate at the top of somebody's
+// list sent its reader to `#/work/<their handle>`.
+test("a prioritised notice leads to the task it put first, under a shared key too", async () => {
+  const prioritised = (n: number, task: string, excerpt: string, collision?: boolean) => ({
+    ...notice("prioritised", n),
+    kind: "prioritised",
+    primary: true,
+    subject_id: "ada",
+    subject_key: SHARED_KEY,
+    task,
+    subject_key_collision: collision,
+    excerpt,
+  });
+  mount({
+    work_inbox: {
+      handle: "ada",
+      notices: [
+        prioritised(1, DUPLICATE, "the duplicate is first", true),
+        prioritised(2, CLAIMANT, "the claimant is first"),
+      ],
+      primary_reasons: ["prioritised"],
+      unread: 2,
+      primary: 2,
+    },
+  });
+  await settle();
+  const subjectLink = () =>
+    [...document.querySelectorAll<HTMLAnchorElement>("a.t-link.mono")].find((a) =>
+      a.textContent?.startsWith(SHARED_KEY),
+    );
+
+  fireEvent.click(screen.getByText("the duplicate is first").closest("button")!);
+  await settle();
+  expect(subjectLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
+
+  fireEvent.click(screen.getByText("the claimant is first").closest("button")!);
   await settle();
   expect(subjectLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
 });

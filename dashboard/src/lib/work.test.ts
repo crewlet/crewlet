@@ -62,6 +62,7 @@ import {
   itemAddress,
   itemPath,
   linkedItem,
+  noticeItem,
   projectPath,
   subjectItem,
 } from "./work.ts";
@@ -1642,6 +1643,25 @@ test("each row shape's adapter pairs a task's id with its own key and flag", () 
   expect(
     subjectItem({ subject_id: "u-2", subject_key: "ENG-7", subject_key_collision: true }),
   ).toEqual(flagged);
+  // A NOTICE'S ID IS ITS TASK, never its subject — a prioritised notice's
+  // subject is the person whose list it is.
+  const notice = {
+    record_id: "r-1",
+    log_seq: 1,
+    log_stream: "CREWLET_WORK_LOG",
+    log_generation: 1,
+    at: "2031-04-16T00:00:00Z",
+    reason: "prioritised",
+    primary: true,
+    addressed: true,
+    kind: "prioritised",
+    subject_id: "ana",
+    subject_key: "ENG-7",
+    read: false,
+  };
+  expect(noticeItem({ ...notice, task: "u-2", subject_key_collision: true })).toEqual(flagged);
+  // AND ONE NAMING NO TASK KEEPS ITS KEY, the only address it carries.
+  expect(itemAddress(noticeItem(notice))).toBe("ENG-7");
   expect(
     checklistTask({
       task: "u-2",

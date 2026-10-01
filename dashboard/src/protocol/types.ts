@@ -3659,9 +3659,14 @@ export interface WorkInboxNotice {
   /** The human-readable key, resolved by the applier so the read is an index
    *  range rather than a join. */
   subject_key?: string;
-  /** The key STORED here now opens another task, so the subject is reached by
-   *  `subject_id` — asked of this key rather than read off the task, because a
-   *  task moved since answers to a new one. See `subjectItem`. */
+  /** The id of the TASK this notice is about, absent when it names none: the
+   *  subject for a task commit, and the task a lead put at the top of the list
+   *  for a `prioritised` notice — whose subject is the PERSON while
+   *  `subject_key` is the task's. See `noticeItem`. */
+  task?: string;
+  /** The key STORED here now opens a task other than `task`, so the notice is
+   *  reached by `task` — asked of this key rather than read off the task,
+   *  because a task moved since answers to a new one. See `noticeItem`. */
   subject_key_collision?: boolean;
   excerpt?: string;
   actor?: string;
