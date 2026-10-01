@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -51,6 +52,11 @@ type turnTelemetry struct {
 	// carries, and so reproduced by a re-run exactly as the key is.
 	workKey   string
 	workSince time.Time
+	// rebasedTo is the instant this attempt's operation ids carry in place
+	// of the start of the identity they are seeded from, zero where they
+	// carry that start — decided by [rebaseFor] as the telemetry is
+	// assembled, on both paths (see [turnctx.Turn.RebasedTo]).
+	rebasedTo time.Time
 	agentID   string
 	trigger   types.Trigger
 
@@ -118,7 +124,15 @@ func newRunID() string { return statelog.NewOpID(time.Now(), "") }
 // partition has several, and the first is the one whose thread the turn is
 // answering; branding the turn with the last would attribute it to whichever
 // message happened to arrive while the seat was busy.
-func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
+//
+// AND WHERE ITS WRITES ARE MINTED, decided here because this is the one frame
+// the dispatch path builds the turn its tools read from: a trigger delivered
+// longer after its work began than the operation ledger remembers — a backlog
+// a seat nobody placed was handed a month late — has its writes rebased onto
+// this attempt, or onto the one before it a re-run inherits (see
+// [rebaseFor]). An error is a turn that does not run, and the dispatcher NAKs
+// it like any other failure that acted on nothing.
+func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) (turnTelemetry, error) {
 	t := turnTelemetry{
 		handle:    req.Handle,
 		runID:     req.RunID,
@@ -159,7 +173,14 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		break
 	}
 	t.workItem = workItemOf(req.Events)
-	return t
+	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
+		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
+	}, t.startedAt)
+	if err != nil {
+		return turnTelemetry{}, err
+	}
+	t.rebasedTo = rebased
+	return t, nil
 }
 
 // runnerTurn is the identity handed to the phase runner.
@@ -183,6 +204,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			RunID:     t.runID,
 			WorkKey:   t.workKey,
 			WorkSince: t.workSince,
+			RebasedTo: t.rebasedTo,
 			// EVERY RUN STARTS ITS OWN CALL LOG, which a derived operation
 			// id reads its repeat count from (see [turnctx.CallLog]). Empty
 			// for a new run, a re-run included: it makes its calls again,
@@ -463,7 +485,15 @@ func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string
 // trace, but a clarification ANSWER does not — it is an ordinary inbound on
 // the conversation, and taking its trace would file the second half of a turn
 // under a different root from its first half.
-func (e *Engine) describeResume(ctx context.Context, company *Company, in resumeInput) turnTelemetry {
+//
+// AND WHERE ITS WRITES ARE MINTED, on the same terms as a dispatch's and by the
+// same function ([rebaseFor]): a resume that comes longer after its work began
+// than the operation ledger remembers has its resumed half's writes rebased
+// onto this attempt — or onto the one an earlier attempt, or the half before
+// this one, recorded, while that is recent enough to inherit. Judged here, at
+// every attempt, against the attempt's own clock: a failed resume retried
+// weeks later is as far past the ledger as if nobody had judged it before.
+func (e *Engine) describeResume(ctx context.Context, company *Company, in resumeInput) (turnTelemetry, error) {
 	t := turnTelemetry{
 		handle: in.Run.AgentHandle,
 		// THE SAME RUN, RESUMED — never a fresh one. A suspended executor
@@ -474,9 +504,15 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		// the resume sees no trigger and could not re-derive it — and so
 		// does the instant it began, without which the resumed half of the
 		// turn would derive different operation ids from the first half.
+		//
+		// OFF THE RESUMED TURN rather than the row, because the turn is
+		// where the row's identity was read into one shape (resumedTurn:
+		// the unit of work, and the instant it began even on a row an
+		// older build parked), and a second read of the row here is a
+		// second chance to read it differently.
 		runID:     in.Run.TurnID,
-		workKey:   in.Run.UnitOfWork(),
-		workSince: in.Run.WorkBegan(),
+		workKey:   in.Turn.WorkKey,
+		workSince: in.Turn.WorkSince,
 		// AND EACH CONVERSATION VALUE FROM ITS OWN FIELD: the resumed
 		// turn's events are tagged with the conversation it reports back
 		// to and is answered on, while the partition it was launched from
@@ -522,7 +558,14 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 			t.agentID = agentID
 		}
 	}
-	return t
+	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
+		TurnID: t.runID, WorkKey: t.workKey, WorkSince: t.workSince,
+	}, t.startedAt)
+	if err != nil {
+		return turnTelemetry{}, err
+	}
+	t.rebasedTo = rebased
+	return t, nil
 }
 
 // seatIdentity is the role name and agent id a seat's events are addressed

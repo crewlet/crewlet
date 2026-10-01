@@ -101,6 +101,31 @@ type Turn struct {
 	// SAME events the key is, for that reason (inbox.WorkSinceFor).
 	WorkSince time.Time
 
+	// RebasedTo is the instant every operation id this turn derives carries
+	// IN PLACE OF the start of the identity it is seeded from — WorkSince
+	// where there is a work key, the run's own start where there is not —
+	// and zero where the ids carry that start, which is every turn whose
+	// work began within the state log's mint horizon.
+	//
+	// Set on a turn whose work began longer ago than the operation ledger
+	// remembers: a trigger delivered a month late, a turn resumed a month
+	// after it parked. An operation minted before what a ledger swept,
+	// whose row that ledger no longer holds, is answered `unknown` and
+	// never published, on every node — so every write such a turn made
+	// would be lost for good, where the only thing keeping the start still
+	// bought is collapsing a repeat of an earlier attempt's write onto a
+	// row the sweep has taken anyway. The engine decides it for every
+	// attempt, against the attempt's own clock, and records it in the
+	// fleet's coordination store under the ids' seed, so a crash re-run, a
+	// retried resume and the next half of the turn inherit it while it is
+	// recent enough to (statelog.MintAt).
+	//
+	// A SEPARATE FIELD rather than a new WorkSince, because the choice it
+	// overrides is not always WorkSince: a turn with no work key seeds its
+	// ids from the run and mints them at the run's start, and a resumed
+	// one of those is exactly as old.
+	RebasedTo time.Time
+
 	// Seat is who is acting. THE authorization fact: a tool that speaks
 	// for a seat — asking a colleague, marking an onboarding step, writing
 	// a diary entry — reads it from here and never from its arguments,

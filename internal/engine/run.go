@@ -1827,7 +1827,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// Assembled BEFORE the runner, because the runner needs it: every phase
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
-	tel := e.describeTurn(ctx, company, req)
+	tel, err := e.describeTurn(ctx, company, req)
+	if err != nil {
+		// Nothing started, so nothing ended, exactly as for a runner that
+		// could not be built below: no phase was published, and the
+		// dispatcher hands the delivery back rather than recording a turn
+		// that never ran.
+		return turn.Result{}, err
+	}
 	// THE ASK, not the partition: a coalesced conversation reaches the model
 	// as ONE merged digest rather than as its constituents concatenated —
 	// see [Request.Trigger] and internal/engine/coalesce.go.

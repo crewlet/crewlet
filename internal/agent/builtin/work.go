@@ -379,6 +379,11 @@ type Actor struct {
 	// [Actor.OperationSince].
 	WorkSince time.Time
 
+	// RebasedTo is the instant a derived operation id carries in place of
+	// its identity's own start, zero where it carries that start — see
+	// [turnctx.Turn.RebasedTo], which is the only place it comes from.
+	RebasedTo time.Time
+
 	// Calls is the run's call log, which a derived operation id reads its
 	// repeat count from — see [opIDFor] and [turnctx.CallLog]. Nil outside
 	// a turn, where no id is derived from a run.
@@ -440,7 +445,16 @@ func (a Actor) OperationSeed() string {
 // ids carried none — which reads as older than every loss: a node whose ledger
 // ever lost a row answers such a write `unknown`, unless it holds its row,
 // rather than risking it twice.
+//
+// UNLESS THE TURN WAS REBASED ([Actor.RebasedTo]), which outranks both: a turn
+// whose identity started before what the ledger may have swept mints at the
+// instant the engine rebased it onto, for either seed, since a start that old
+// answers every write `unknown` on every node whichever identity it is the
+// start of.
 func (a Actor) OperationSince() time.Time {
+	if !a.RebasedTo.IsZero() {
+		return a.RebasedTo
+	}
 	if a.WorkKey != "" {
 		return a.WorkSince
 	}
@@ -518,6 +532,7 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 		TurnID:    turn.RunID,
 		WorkKey:   turn.WorkKey,
 		WorkSince: turn.WorkSince,
+		RebasedTo: turn.RebasedTo,
 		Chain:     turn.Chain,
 	}, nil
 }
@@ -587,7 +602,8 @@ func turnIdentity(turn *turnctx.Turn) Actor {
 	if turn == nil {
 		return Actor{}
 	}
-	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince}
+	return Actor{TurnID: turn.RunID, WorkKey: turn.WorkKey, WorkSince: turn.WorkSince,
+		RebasedTo: turn.RebasedTo}
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.

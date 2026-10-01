@@ -40,7 +40,8 @@ func TestATurnWokenAboutATaskRecordsItsSpendOnIt(t *testing.T) {
 	e, served := spendingEngine(t)
 	if _, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
-		Events: []*events.Event{taskWake("task-9", "ENG-9")},
+		WorkSince: time.Now().UTC(),
+		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}
@@ -93,6 +94,7 @@ func TestATurnNoTaskWokeRecordsNoSpend(t *testing.T) {
 	}, events.TraceContext{})
 	if _, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-2", Events: []*events.Event{chat},
+		WorkSince: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}

@@ -678,6 +678,41 @@ every copy of it — a change-feed redelivery, a delivery retried after a failed
 publish — carries the same instant as well as the same id, and a re-run woken
 by a later copy derives the first run's ids.
 
+**A unit of work older than the ledger is rebased.** The instant an id carries
+is only useful while every node's operation ledger still covers it: the ledger
+keeps its rows thirty days, and an id minted before what a node's ledger swept,
+whose row is gone, is answered `unknown` and never published. Two things put a
+turn past that point. A trigger can be **dispatched** a month after it arrived
+— a seat's mailbox keeps what is published while nothing consumes it, so a seat
+nobody placed for a month, or a fleet that was down, is handed a backlog that
+old — and a turn can be **resumed** a month after it parked (below). Minted at
+the start, every write such a turn made would be lost on every node. So an
+attempt that finds its work's start **more than twenty-nine days** behind its
+own clock is rebased: its writes are minted at the attempt instead, and that
+instant is recorded in the fleet's [coordination store](coordination.md) under
+the unit of work — or under the run, for a turn with none — and logged as
+`turn_rebased`. A later attempt at the same work — the re-run a redelivery is,
+a retried resume, the next half of a turn a coding run parked, on whichever
+node takes it — inherits the recorded instant while it lies within the same
+twenty-nine days of its own clock, so a write the attempt before it made still
+collapses onto the first copy; past that it is rebased again. Every attempt is
+judged against its **own** clock, never against a decision an earlier attempt
+took: a retry weeks later is exactly as far past the ledger as if nobody had
+judged it before. The line sits a day short of the thirty because an attempt is
+judged when it starts and goes on deciding writes while it runs, and a day is
+far more than one attempt's rounds. What the rebase costs is the collapse
+across the line: an attempt judged just short of it and a retry judged just past
+it write under two instants, so a write the first made and the second repeats
+is written twice — the cheaper failure by far against every write lost. The
+ordinary turn pays nothing for any of this: the coordination store is read only
+by an attempt whose start is past the line, since no earlier attempt can have
+rebased before it. An attempt that needs the store and cannot read it does not
+run; its delivery is handed back and retried. During a rolling upgrade a build
+from before the rebase mints every attempt at the start, so a retry that
+crosses between the two builds in the retention's last day writes the earlier
+attempt's writes a second time, and past the retention the older build's writes
+are lost as they always were on that build.
+
 **A re-run is recognised call for call, and only when its calls are the same.**
 Everything a derived id is made of — the work, the verb, the item, the
 arguments, the count — is something a re-run reproduces only by making the
@@ -696,7 +731,12 @@ changes nothing either way.
 A **resumed** turn is not a re-run. A detached coding job re-enters the run
 that parked it, carrying that run's id, its work key and when that work began
 on its own row, so a suspend/resume pair is one turn on every screen and writes
-under the same ids in both halves. A run parked by a build from before the row
+under the same ids in both halves — unless the resume comes **more than
+twenty-nine days after that work began**, when it is rebased like any other
+attempt (above): every attempt at the resume is judged against its own clock,
+and a resumed half whose earlier half was rebased inherits that instant rather
+than taking one of its own (see
+[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). A run parked by a build from before the row
 carried that instant resumes with the row's own creation instant instead —
 fixed, so every resume of it derives the same ids — rather than with no instant
 at all, which would answer every write the resumed half made `unknown` on any

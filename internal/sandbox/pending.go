@@ -228,6 +228,15 @@ func (r PendingRun) UnitOfWork() string {
 // THE ROW'S OWN work_since WHERE IT HAS ONE, which is the instant the first
 // half of the turn derived its ids with, so the resumed half derives the same.
 //
+// THE START, NOT NECESSARILY WHERE THE RESUMED HALF MINTS: a resume so long
+// after this instant that the operation ledger may have swept it mints its
+// writes at the instant the engine rebases it onto instead, because every
+// operation minted here would then be one no node can vouch for. That rule is
+// the engine's, judged at every attempt against the attempt's own clock and
+// recorded in the fleet's coordination store rather than on this row — it is
+// a rule about the ledger and about the unit of work, which outlives any one
+// run's row; this is the instant it starts from.
+//
 // A FIXED INSTANT OFF THE ROW WHERE IT HAS NOT. Nothing rewrites a parked row,
 // so a run parked by a build from before that field carries a unit of work and
 // no instant, and the zero instant reads as older than every loss the

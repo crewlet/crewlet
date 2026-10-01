@@ -345,6 +345,13 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // against the trigger the run was dispatched for. The instant is
 // [sandbox.PendingRun.WorkBegan], never the raw field, because a row an older
 // build parked has a key and no instant.
+//
+// THE START, NOT WHERE THE RESUMED HALF MINTS. That is decided afresh by every
+// attempt at the resume, against its own clock, when the telemetry that hands
+// the runner its turn is assembled ([Engine.describeResume], [rebaseFor]) — a
+// resume that comes longer after this start than the operation ledger
+// remembers mints its writes at the attempt, or at the instant an earlier
+// attempt or an earlier half of the turn recorded, never here.
 func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization) *turnctx.Turn {
 	return &turnctx.Turn{
 		RunID: run.TurnID, WorkKey: run.UnitOfWork(), WorkSince: run.WorkBegan(),
@@ -517,7 +524,13 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
-	tel := e.describeResume(ctx, company, in)
+	tel, err := e.describeResume(ctx, company, in)
+	if err != nil {
+		// A RETRY, like every early return here: nothing ran, and the
+		// coordinator hands its claim back so the next attempt judges the
+		// rebase again against its own clock.
+		return err
+	}
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	r, err := company.RunnerFor(in.Turn.Handle(),

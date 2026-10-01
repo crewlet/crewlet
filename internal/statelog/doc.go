@@ -157,7 +157,9 @@
 // late, a turn resumed a month after it parked — where every new write under it
 // would be answered `unknown` on every node for good. [MintAt] is the rule an
 // attempt applies to the instant it inherits, against its own clock, and
-// mint.go says why the line is [MintHorizon] rather than the retention.
+// mint.go says why the line is [MintHorizon] rather than the retention. That an
+// attempt past it rebases, records the instant for the fleet and is judged at
+// its own clock rather than an earlier attempt's is ADR-0023.
 //
 // # A record this build cannot decode is RETAINED, with one exception
 //

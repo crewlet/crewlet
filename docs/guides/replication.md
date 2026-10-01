@@ -186,7 +186,14 @@ time-ordered one whose leading bits are its mint time, followed by a name
 saying what the operation is (`01a0…-7…-….update-<task>`). A retry reuses the
 id, so it reuses the instant — including a turn re-run on another node, whose
 writes derive their ids from the unit of work and the instant it began rather
-than from the run. An operation id the engine did not mint carries no instant
+than from the run. The exception is a unit of work older than the ledger — a
+trigger dispatched, or a turn resumed from a coding run, more than twenty-nine
+days after the work began: an id minted at that start would be one no node's
+ledger can vouch for any more, so that attempt mints at its own instant and
+records it in the coordination store, and a later attempt at the same work
+inherits it while it is recent enough to (see
+[Turn Engine](../concepts/turn-engine.md#a-turns-two-identities)). An
+operation id the engine did not mint carries no instant
 and is read as older than everything the ledger ever lost: on a node whose
 ledger ever lost a row, a write under it answers `unknown` unless that node's
 ledger holds its row — which is why the routes that accept an operation id
