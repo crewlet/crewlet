@@ -1168,9 +1168,11 @@ because the dashboard renders the same answer; the line under it is this
 command's rendering of the node's `actions` (see
 [the gate answer](api-endpoints.md#the-three-retention-gestures-that-write)).
 
-The command mints the operation id **before** it asks, and waits
-seventy-five seconds for the answer — past the minute the node allows a
-gesture, which it finishes even if the connection drops. So a gesture that got
+The command mints the operation id **before** it asks, and waits two minutes
+for the answer — past the minute and three quarters the node takes at most to
+answer one gesture (half a minute to judge it, a minute to write every log and
+a quarter of one for the estate map's part), which it finishes even if the
+connection drops. So a gesture that got
 no answer at all still prints the `-op-id` that finishes it — and so does one
 whose answer the node did not write: a reverse proxy's 504 page, any status
 carrying no engine error code, or a 200 cut off part way through, each of

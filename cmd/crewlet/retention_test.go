@@ -957,8 +957,9 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 }
 
 // AN ANSWER THE NODE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout — a 504 with an HTML page, at a minute, which is also the budget the
-// node gives a gesture past its judgement — and a 200 cut off part way through
+// timeout — a 504 with an HTML page, at a minute, which is shorter than the
+// minute and a quarter the node gives a gesture past its judgement — and a 200
+// cut off part way through
 // both leave what the node did unknown, and the node finishes a gesture
 // whatever happens to the connection. Read as a refusal, the eviction printed
 // no -op-id, and the only way on was a second gesture over every log the first

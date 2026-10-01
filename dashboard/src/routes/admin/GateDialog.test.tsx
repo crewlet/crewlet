@@ -389,11 +389,11 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
 });
 
 // AN ANSWER THE ENGINE DID NOT WRITE IS NOT A REFUSAL. A reverse proxy's read
-// timeout is a minute by default — the node's own budget for a gesture past its
-// judgement — so a slow eviction reached the browser as a gateway's 504 with an
-// HTML page, and a 200 can be cut off part way through. Read as a refusal, the
-// dialog never held the gesture, offered no Finish, and closing it lost the id
-// of a gesture the node went on to finish.
+// timeout is a minute by default — shorter than the node's own budget for a
+// gesture past its judgement — so a slow eviction reached the browser as a
+// gateway's 504 with an HTML page, and a 200 can be cut off part way through.
+// Read as a refusal, the dialog never held the gesture, offered no Finish, and
+// closing it lost the id of a gesture the node went on to finish.
 test("a gateway's answer or a cut-off one keeps the op id and offers to finish it", async () => {
   for (const reply of [
     () =>

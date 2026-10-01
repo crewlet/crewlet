@@ -31,7 +31,7 @@
  *
  * # The operation id is minted HERE, before the first request, and kept
  *
- * The node finishes a gesture under its own one-minute budget whatever happens
+ * The node finishes a gesture under its own budget whatever happens
  * to the connection, so a request that timed out or dropped has very likely
  * done its work — and an id the route minted comes back only in the answer
  * that never arrived. So the dialog mints the id in the engine's grammar
@@ -40,9 +40,10 @@
  * request, the same id, force carried — for a request nobody answered and for
  * a log whose remedy keeps the id ([keepsOperation]). "Nobody answered"
  * includes an answer the ENGINE did not write ([RestError.unanswered]): a
- * reverse proxy's read timeout is a minute by default, which is the node's own
- * budget, so a slow gesture reaches this page as a gateway's 504 — and read as
- * a refusal it dropped the id of a gesture the node went on to finish. The
+ * reverse proxy's read timeout is a minute by default, shorter than the
+ * node's own budget for a gesture past its judgement, so a slow gesture
+ * reaches this page as a gateway's 504 — and read as a refusal it dropped the
+ * id of a gesture the node went on to finish. The
  * gesture is lifted into the screen ([GateGesture]), so closing the dialog and
  * opening it again offers Finish rather than a fresh gesture — and so does a
  * COMPLETE one, until the report behind the dialog shows it (or, from a node

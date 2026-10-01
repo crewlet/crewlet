@@ -226,9 +226,10 @@ func engineCode(body []byte) string {
 // # Why it is a noAnswer and not a refusal
 //
 // Because a refusal the node wrote means nothing was done, and this does not:
-// the gate route takes up to a minute past its judgement, a proxy's default
-// read timeout is a minute, and the node finishes a gesture whatever happens to
-// the connection. Read as a refusal, the eviction printed no -op-id, so the
+// the gate route takes up to a minute and a quarter past its judgement
+// (engine.GateBudget: a minute for the logs, a quarter of one for the estate
+// map's part), a proxy's default read timeout is a minute, and the node
+// finishes a gesture whatever happens to the connection. Read as a refusal, the eviction printed no -op-id, so the
 // only way on was a second gesture over every log the first one reached.
 func notTheNode(path string, status int, body []byte) error {
 	said := textcut.Ellipsis(strings.TrimSpace(string(body)), maxRefusalTextBytes)

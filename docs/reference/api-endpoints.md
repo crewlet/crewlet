@@ -2645,7 +2645,9 @@ id an answer carries already fits.
 **The gesture does not stop when its caller does.** The judgement runs under
 the request, so a request abandoned before it wrote nothing; once the first
 record is about to be written the node finishes the gesture under its own
-one-minute budget, so a dropped connection or a client timeout never leaves a
+budgets — a minute for the logs, then a quarter of one for the estate map's
+part, a minute and a quarter in all — so a dropped connection or a client
+timeout never leaves a
 node evicted on one log and counted on the other. A caller that sends its own
 `op_id` — `crewlet retention evict` and the dashboard both do — can ask again
 with it and read every log's answer; one that let the route mint it has lost

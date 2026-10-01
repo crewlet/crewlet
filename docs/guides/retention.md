@@ -660,8 +660,9 @@ every write has — `applied`, `pending` or `unknown` — or `not written` with 
 reason that stopped that log. A log that answered holds its record whatever
 the other did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
-gesture under its own one-minute budget, so a dropped connection or a client
-timeout does not leave the node evicted on one log and counted on the other.
+gesture under its own budgets — a minute for the logs, then a quarter of one for
+the estate map's part — so a dropped connection or a client timeout does not
+leave the node evicted on one log and counted on the other.
 
 When **not every log holds it**, the command exits non-zero, and under each
 log it did not finish prints what to do. Where running the gesture again can

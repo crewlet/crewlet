@@ -124,8 +124,8 @@ flowchart TD
   which would say the company has none of what was asked for.
 
 A read waits up to ten seconds on one holder before the next is asked, a write
-up to a minute (or the caller's own deadline); neither is ever longer than the
-caller's deadline.
+up to a minute (or the caller's own deadline) — and a node gate's record, which
+is one append, fifteen seconds; none is ever longer than the caller's deadline.
 
 ### A read across partitions
 
