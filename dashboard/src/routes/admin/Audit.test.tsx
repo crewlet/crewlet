@@ -206,6 +206,13 @@ test("the tracker is asked once a minute however often the clock ticks", async (
 // so ten ticks inside it are ten ticks in which nothing on this screen moves.
 test("a tick of the clock draws nothing on the audit", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  // THE ROWS' AGE IS SET, not inherited from when this case happens to run.
+  // They were written at RECENTLY, fixed when the file loaded; on the real
+  // clock their age was a minute plus however long the cases before this one
+  // took, and fifty seconds of that on a loaded runner put the ten ticks
+  // across "2m ago" — a render this case would then count against the screen.
+  // Sixty-five seconds old, they read "1m ago" for the next fifty-five.
+  vi.setSystemTime(Date.parse(RECENTLY) + 65_000);
   const records = Array.from({ length: 20 }, (_, i) =>
     commit({ id: `h-${i}`, subject_key: `ENG-${i}`, excerpt: `edit ${i}` }),
   );
