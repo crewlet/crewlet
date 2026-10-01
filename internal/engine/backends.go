@@ -68,6 +68,11 @@ type Backends struct {
 	// lifetime and closing the connection from underneath it would take
 	// the stream down with the leases.
 	conn *nats.Conn
+
+	// rides is the connection the coordination store rides on EVERY
+	// topology: conn above on an embedded broker, the queue's own on an
+	// external one. Not owned here — see [Backends.CoordinationConn].
+	rides *nats.Conn
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -101,11 +106,11 @@ func (b *Backends) Complete() error {
 		strings.Join(missing, ", "))
 }
 
-// Conn exposes the broker connection this node's coordination store rides.
+// Conn exposes the broker connection this node's coordination store rides
+// on an EMBEDDED broker, and nil on an external one.
 //
-// For the ONE subsystem that has to talk to the broker outside the queue
-// contract and outside coordination: the backup, which snapshots the streams
-// themselves. The estate it copies is not addressable any other way — on the
+// For the ONE subsystem whose answer differs between the two: the backup,
+// which snapshots the streams themselves. The estate it copies is not addressable any other way — on the
 // default topology the broker is embedded here and binds no socket — so a
 // backup that could not reach this connection could not exist.
 //
@@ -115,6 +120,25 @@ func (b *Backends) Complete() error {
 // closing it from underneath an embedded server would take the stream down with
 // the leases.
 func (b *Backends) Conn() *nats.Conn { return b.conn }
+
+// CoordinationConn is the broker connection this node's coordination store
+// rides, on every topology: the second connection [Backends] owns on an
+// embedded broker, the queue's own on an external one. Nil only where there is
+// no broker at all — a Backends a caller assembled around the memory twin.
+//
+// For a subsystem that talks to the broker outside the queue contract and
+// whose answer does NOT depend on who runs the broker: the seat memory
+// changelog, which a node publishes and a peer replays whichever broker the
+// fleet shares. It read [Backends.Conn] once, whose nil is the backup's
+// decision about an external cluster's streams, so every fleet on
+// `stream.type: nats` carried no seat's memory at all, and a seat placement
+// moved forgot everything it had learned, with nothing saying so.
+//
+// THE COORDINATION STORE'S CONNECTION rather than the queue's on an embedded
+// broker, so what a subsystem here does in volume (a seat's replay is an
+// ordered consumer over its whole history) never sits on the read loop every
+// mailbox consumes through. The caller takes no ownership.
+func (b *Backends) CoordinationConn() *nats.Conn { return b.rides }
 
 // Close releases both slots, in the reverse order of acquisition.
 //
@@ -376,6 +400,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if err != nil {
 		return nil, err
 	}
+	out.rides = conn
 	if err = attachCoordination(ctx, b, out, conn); err != nil {
 		out.Close(ctx)
 		return nil, err

@@ -1082,7 +1082,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// through this. A nil syncer is the honest shape for a node with no
 	// broker or no store: there is nowhere to carry memory to, and
 	// prepareSeat then skips the step rather than pretending it happened.
-	if e.memory, err = memsync.New(backends.Store, backends.Conn(),
+	if e.memory, err = memsync.New(backends.Store, backends.CoordinationConn(),
 		// BOTH OF A SEAT'S MEMORY KEYS FROM ONE LOOKUP, so the two cannot
 		// name two seats: the handle it was created under (what the
 		// handle-keyed tables hold) and the id derived from it (what the
