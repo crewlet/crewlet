@@ -778,29 +778,37 @@ func retentionGate(args []string, stdout, stderr io.Writer, evict bool) error {
 	// operation id, never a fresh one.
 	pending, retry, keep := false, false, false
 	for _, d := range answer.Domains {
+		// WHO WROTE IT, where that is not the node asked: a log of a
+		// partition it does not serve, written for it by a node that does
+		// — and the outcome and the hint below are that node's.
+		by, who := "", "this node"
+		if d.Writer != "" {
+			by, who = " (written by "+d.Writer+")", "node "+d.Writer
+		}
 		switch {
 		case d.Outcome == string(statelog.OutcomeUnknown) && d.Unvouched:
 			// NOT FOR THIS NODE TO SETTLE: its line below sends the
 			// gesture elsewhere, because asking this node again answers
 			// the same way every time.
-			fmt.Fprintf(stdout, "  %s: unknown — this node cannot tell whether "+
-				"the record is on the log\n", d.Domain)
+			fmt.Fprintf(stdout, "  %s: unknown — %s cannot tell whether "+
+				"the record is on the log\n", d.Domain, who)
 		case d.Outcome == string(statelog.OutcomeUnknown):
 			// NO POSITION, which is the whole content of unknown: printed
 			// as "at 0" it read as a record landed at the log's origin.
 			fmt.Fprintf(stdout, "  %s: unknown — the record may or may not be "+
-				"on the log\n", d.Domain)
+				"on the log%s\n", d.Domain, by)
 		case d.Outcome != "" && d.Position != nil:
-			fmt.Fprintf(stdout, "  %s: %s at %s %d\n", d.Domain, d.Outcome,
-				d.Position.Stream, d.Position.Seq)
+			fmt.Fprintf(stdout, "  %s: %s at %s %d%s\n", d.Domain, d.Outcome,
+				d.Position.Stream, d.Position.Seq, by)
 			pending = pending || d.Outcome == string(statelog.OutcomePending)
 		case d.Outcome != "":
-			fmt.Fprintf(stdout, "  %s: %s\n", d.Domain, d.Outcome)
+			fmt.Fprintf(stdout, "  %s: %s%s\n", d.Domain, d.Outcome, by)
 			pending = pending || d.Outcome == string(statelog.OutcomePending)
 		case d.Reason != "":
-			fmt.Fprintf(stdout, "  %s: not written (%s) — %s\n", d.Domain, d.Reason, d.Error)
+			fmt.Fprintf(stdout, "  %s: not written (%s)%s — %s\n", d.Domain, d.Reason,
+				by, d.Error)
 		default:
-			fmt.Fprintf(stdout, "  %s: no outcome — %s\n", d.Domain, d.Error)
+			fmt.Fprintf(stdout, "  %s: no outcome%s — %s\n", d.Domain, by, d.Error)
 		}
 		// WHAT TO DO ABOUT A LOG THE GESTURE DID NOT FINISH: the node's
 		// sentence, then its actions as this command's own flags — and
@@ -935,10 +943,15 @@ type gateDomain struct {
 	OpID    string `json:"op_id"`
 	Outcome string `json:"outcome"`
 
-	// Unvouched marks an `unknown` this node cannot settle: its operation
-	// ledger may have lost the row the operation needs, so the same
-	// gesture through it answers the same way every time.
+	// Unvouched marks an `unknown` the writing node cannot settle: its
+	// operation ledger may have lost the row the operation needs, so the
+	// same gesture through it answers the same way every time.
 	Unvouched bool `json:"unvouched"`
+
+	// Writer is the node that wrote this log's record for the gesture
+	// when it is not the node asked — one serving the log's partition —
+	// and empty where the node asked wrote it.
+	Writer string `json:"writer"`
 
 	// Position is ABSENT for an unknown outcome, and a pointer so that
 	// absence is observable rather than a zero position that reads as a

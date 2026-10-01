@@ -660,17 +660,22 @@ function holds(d: RetentionGateDomain): boolean {
  * reached the log at all.
  */
 function DomainAnswer({ d }: { d: RetentionGateDomain }) {
+  // WHO WROTE IT, where that is not this node: a log of a partition it does not
+  // serve, written for it by a node that does — whose answer this is.
+  const by = d.writer ? <> (written by {d.writer})</> : null;
   if (d.error) {
     return (
       <span className="t-caption">
-        not written{d.reason && <> ({d.reason})</>} — {d.error}
+        not written{d.reason && <> ({d.reason})</>}
+        {by} — {d.error}
       </span>
     );
   }
   if (d.outcome === "unknown" && d.unvouched) {
     return (
       <span className="t-caption">
-        <Tag variant="danger">unknown</Tag> this node cannot tell whether the record is on the log
+        <Tag variant="danger">unknown</Tag> {d.writer ? `node ${d.writer}` : "this node"} cannot
+        tell whether the record is on the log
       </span>
     );
   }
@@ -678,7 +683,7 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     return (
       <span className="t-caption">
         <Tag variant="danger">{d.outcome ?? "no outcome"}</Tag> the record may or may not be on the
-        log
+        log{by}
       </span>
     );
   }
@@ -686,6 +691,7 @@ function DomainAnswer({ d }: { d: RetentionGateDomain }) {
     <span className="t-caption">
       <Tag variant={d.outcome === "applied" ? "success" : "warning"}>{d.outcome}</Tag> at{" "}
       {d.position.stream} {d.position.seq}
+      {by}
     </span>
   );
 }

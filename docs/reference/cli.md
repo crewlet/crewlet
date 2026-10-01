@@ -1101,6 +1101,16 @@ The command prints the watermark before and after and the instant the
 eviction takes effect: **the node stays counted for about a minute**, so a live
 one is certain to have read its own tombstone before the trim passes it.
 
+On an estate [divided into partitions](../concepts/estate-placement.md) the
+node you ran it on writes the logs of the partitions it serves, and sends every
+other log's record to a node that serves that partition, which writes it under
+the same operation id — so one command reaches every log, and such a line names
+the node that wrote it, whose standing its hint is about:
+
+```
+  tracker@tracker.001: applied at CREWLET_L1_TRACKER_001_TRACKER 12 (written by node-q)
+```
+
 The gesture is **judged once, before either log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would

@@ -388,7 +388,53 @@ func (e *Engine) partitionBackend(n *native, p statelog.PartitionID) estate.Back
 	if store != nil {
 		b.PageWriter = store
 	}
+	if n.log != nil && e.backends != nil && e.backends.Store != nil {
+		b.Gates = e.partitionGates(n.log, p)
+	}
 	return b
+}
+
+// partitionGates is p's half of the `statelog.gate` operation: for each of p's
+// identity-claiming logs this node runs, a writer that publishes a node gate's
+// record through the log's own write authority — on behalf of the node an
+// operator asked, which judged the gesture once and does not write this log
+// itself ([estate.OpStatelogGate]). The record is the gate's own
+// ([gateLogFor]), the one this node publishes for a gesture it runs, so the
+// two can never differ in what they write.
+//
+// NONE WHILE THIS NODE PUBLISHES NOTHING — a capacity window, whose
+// maintenance and seal modes are evidence precisely because nothing here
+// appends — and none for a log this node does not run right now: each is "no
+// native backend here", and the request moves on to the next holder.
+func (e *Engine) partitionGates(s *stateLog, p statelog.PartitionID) func(domain string) estate.GateWriter {
+	return func(domain string) estate.GateWriter {
+		if s.appends("a gate record") != nil {
+			return nil
+		}
+		id := statelog.LogID{Domain: domain, Partition: p}
+		running := s.Log(id.String())
+		if running == nil || !running.domain.ClaimsIdentity() {
+			return nil
+		}
+		layout := s.layout
+		return func(ctx context.Context, a estate.GateArgs) (statelog.Result, error) {
+			// THE RECORD IS FOR THIS LOG OR FOR NONE: the request was
+			// sent here for p, so a record naming another partition, or
+			// a log of another layout, is one the asker resolved by a
+			// map this node does not run.
+			if a.Partition != p.String() || a.Layout != layout.Number {
+				return statelog.Result{}, fmt.Errorf("%w: it names %s@%s of layout %d, and "+
+					"was sent to %s for %s of layout %d", estate.ErrGateArgs, a.Domain,
+					a.Partition, a.Layout, s.nodeID, id, layout.Number)
+			}
+			gl, err := gateLogFor(running, running.publisher,
+				e.backends.Store.PartitionHandle(p.String()).Reader(), s.nodeID, e.metrics)
+			if err != nil {
+				return statelog.Result{}, err
+			}
+			return gl.write(ctx, a.By, a.OpID, a.Node, a.Readmit)
+		}
+	}
 }
 
 // serverSeams is what this node supplies to every operation it answers,

@@ -82,13 +82,21 @@ type GateDomainAnswer struct {
 	// whose write answered with an error.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 
-	// Unvouched is set on an `unknown` this node CANNOT settle: its
+	// Unvouched is set on an `unknown` the writing node CANNOT settle: its
 	// operation ledger may have lost the row the operation needs, so it
 	// published nothing and answers the same way to the same gesture every
 	// time. Absent otherwise. A surface says so beside the outcome — "the
 	// record may or may not be on the log" is true of both, and only this
-	// one is not finished here.
+	// one is not finished there.
 	Unvouched bool `json:"unvouched,omitempty"`
+
+	// Writer is the node that wrote this log's record when it is NOT the
+	// node that answered the route: one serving the log's partition, which
+	// the gesture sent the record to because this node does not write that
+	// log. ABSENT where this node wrote it itself, and where no node did.
+	// The outcome, the error and the hint are all about the writer, so a
+	// surface names it beside them.
+	Writer string `json:"writer,omitempty"`
 
 	// Position is where the record is durable, and NIL FOR UNKNOWN — which
 	// is the whole content of unknown: a zero position reads as a record
@@ -119,7 +127,8 @@ func RenderGate(evict bool, result engine.GateResult) GateAnswer {
 		Domains:  make([]GateDomainAnswer, 0, len(result.Domains)),
 	}
 	for _, d := range result.Domains {
-		entry := GateDomainAnswer{Domain: d.Domain, Stream: d.Stream, OpID: d.OpID}
+		entry := GateDomainAnswer{Domain: d.Domain, Stream: d.Stream, OpID: d.OpID,
+			Writer: d.Writer}
 		if d.Err != nil {
 			entry.Error = d.Err.Error()
 			var refused *statelog.Unavailable

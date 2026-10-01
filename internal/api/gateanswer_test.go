@@ -65,6 +65,13 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		"unknown": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown}),
 		"unvouched": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown,
 			Unvouched: true}),
+		// A LOG THIS NODE DOES NOT SERVE, sent to a holder of its partition
+		// that wrote it on this node's behalf: the answer names that node,
+		// and so does any refusal or unknown it gave.
+		"written_elsewhere": result(engine.DomainGate{Outcome: statelog.OutcomeApplied,
+			Position: at, Writer: "node-q"}),
+		"unvouched_elsewhere": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown,
+			Unvouched: true, Writer: "node-q"}),
 		"log_full": result(engine.DomainGate{Err: fmt.Errorf("pages: %w",
 			&statelog.Unavailable{Reason: statelog.ReasonLogFull,
 				Detail: "the broker refused to store it"})}),

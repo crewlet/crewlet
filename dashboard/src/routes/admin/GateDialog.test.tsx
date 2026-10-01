@@ -122,6 +122,25 @@ test("an unvouched log says this node cannot tell and sends the gesture elsewher
   expect(screen.queryByText(/may or may not be on the log/)).toBeNull();
 });
 
+// A LOG ANOTHER NODE WROTE NAMES IT: the node asked does not serve that log's
+// partition, so a node that does wrote the record for it — and an unknown that
+// node could not vouch for is that node's, never "this node", which wrote
+// nothing there. Every holder that answered was asked already, so the remedy
+// is the same gesture again rather than another node's dashboard.
+test("a log another node wrote names that node, and its unvouched unknown is its own", () => {
+  render(<GateOutcome result={answer("written_elsewhere")} evict />);
+  expect(screen.getByText(/CREWLET_PAGES_LOG 4410/).textContent).toContain("(written by node-q)");
+  cleanup();
+
+  const result = answer("unvouched_elsewhere");
+  render(<GateOutcome result={result} evict />);
+  expect(screen.getByText(/node node-q cannot tell whether the record is on the log/)).toBeTruthy();
+  expect(screen.queryByText(/this node cannot tell/)).toBeNull();
+  expect(screen.getByText(result.domains[1]!.hint!)).toBeTruthy();
+  expect(screen.queryByText(/Open this dashboard on a node the fleet still counts/)).toBeNull();
+  expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
+});
+
 // A FULL LOG IS NOT TOLD TO RETRY — the same request is refused the same way
 // until its ceiling moves — and it shows the engine's own sentence. But its
 // gesture is still finished under its OWN id once there is room, so it is kept.

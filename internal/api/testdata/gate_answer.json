@@ -324,6 +324,68 @@
           "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
         }
       ]
+    },
+    "unvouched_elsewhere": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "unknown",
+          "unvouched": true,
+          "writer": "node-q",
+          "actions": [
+            "retry_same_op"
+          ],
+          "hint": "node node-q, which serves the partition CREWLET_PAGES_LOG is on, cannot tell whether the record landed, and neither could any other holder of it that answered: each one's operation ledger may have lost the record of this operation, which was minted before it adopted a snapshot or swept its ledger. The same gesture under the same operation id asks every holder again, and one that did not answer this time may vouch for it"
+        }
+      ]
+    },
+    "written_elsewhere": {
+      "node": "node-4",
+      "evicted": true,
+      "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4",
+      "complete": true,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280002
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.pages:node-4",
+          "outcome": "applied",
+          "writer": "node-q",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4410
+          }
+        }
+      ]
     }
   },
   "refusals": {

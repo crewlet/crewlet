@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -572,9 +573,10 @@ func (c *consumerCounter) count(stream string) int {
 // budget on a runner that no longer applies, and never reached the log started
 // again after it. So both are asked while the log is away and after it is
 // back: away, the registration vouches for nothing and the gate writes to the
-// logs still running and reports the one it serves and does not run as
-// unwritten, rather than leaving it out; back, both answer through the new
-// runtime.
+// logs still running and sends the one it serves and does not run to the
+// partition's other holders — here, a fleet of one, where none answers, so it
+// is the gesture's unfinished part rather than one it leaves out; back, both
+// answer through the new runtime.
 func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	t.Parallel()
 	e, s, js := aPartitionedStateLog(t)
@@ -593,7 +595,9 @@ func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 	for _, p := range s.layout.Partitions() {
 		everywhere[p] = []statelog.Presence{{NodeID: "node-gone"}, {NodeID: "node-gone-too"}}
 	}
-	gate, err := newNodeGate(s, e.backends.Coord, everywhere, nil, e.backends.Store, s.nodeID, nil)
+	// A FLEET OF ONE: no other holder answers for the stopped log.
+	route := &routeRecorder{err: &estate.ErrPartitionUnserved{Partition: leaving.Partition.String()}}
+	gate, err := newNodeGate(s, e.backends.Coord, everywhere, nil, route, e.backends.Store, s.nodeID, nil)
 	if err != nil {
 		t.Fatalf("the node gate: %v", err)
 	}
@@ -615,7 +619,7 @@ func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 		switch {
 		case d.Err == nil && d.Outcome == statelog.OutcomeApplied:
 			wrote = append(wrote, d.Domain)
-		case d.Err != nil && strings.Contains(d.Err.Error(), "does not run its log"):
+		case errors.As(d.Err, new(*estate.ErrPartitionUnserved)) && d.Retry():
 			unwritten = append(unwritten, d.Domain)
 		default:
 			t.Errorf("with %s stopped the gate's write to %s answered %s (%v)",
@@ -631,6 +635,11 @@ func TestTheFrameworkSurfacesFollowALogThatRestarts(t *testing.T) {
 		t.Errorf("with %s stopped the gate reported %v unwritten, want %v: a log the "+
 			"node is counted on and this node cannot write right now is the gesture's "+
 			"unfinished part, never one it leaves out", leaving, unwritten, want)
+	}
+	if sent := route.sent(); len(sent) != 1 || sent[0].Partition != leaving.Partition.String() ||
+		sent[0].Domain != leaving.Domain {
+		t.Errorf("with %s stopped the router was sent %+v, want that log's record alone",
+			leaving, sent)
 	}
 	if away.Complete() {
 		t.Error("a gesture that could not write a log the node is counted on reports itself complete")

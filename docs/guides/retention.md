@@ -589,11 +589,15 @@ same rule reads per partition, and three things follow from it:
   nothing is refused nowhere, since it returns to a partition only by adopting
   a copy.
 - **Each log is written by a node that serves its partition.** The node you
-  run the gesture on writes the logs of the partitions it serves; every other
-  one is answered `not_holder`, and you finish the gesture through a node that
-  serves that partition, under the same `-op-id` (below). A log of a partition
-  the node serves and is not running at that instant says so and is finished
-  by the same gesture again.
+  run the gesture on writes the logs of the partitions it serves and runs; it
+  sends every other log's record to a node that serves that partition, which
+  writes it under the same operation id on its behalf — so one gesture on any
+  node reaches every log. Such a log's line names the node that wrote it
+  (`written by node-q`), and its hint is about that node: a refusal it gave —
+  evicted, behind, a log rebuilt under it — is its standing, never the
+  standing of the node you ran the gesture on. Each holder is given fifteen
+  seconds before the next is asked; where none of them wrote the record the
+  line says so, and the same `-op-id` finishes it once one does.
 - **The estate map is part of the gesture.** An eviction also takes the node
   **out** of the estate map — recorded with the reason `evicted` — and, unlike
   [`crewlet estate out`](../concepts/estate-placement.md), the eviction is a
@@ -605,15 +609,11 @@ same rule reads per partition, and three things follow from it:
   the copies it comes back with are never routed to: the map lists them
   `leaving`, and the node releases them. A
   readmission puts it back **in**, and only once **every** log has taken it
-  back — by a gesture that itself finds every log done, and a node reaches only
-  the logs of the partitions it serves. So on a node that serves every
-  partition the same `-op-id` makes the in once the logs are finished; on one
-  that does not, the line says it waits for the logs and names those on
-  partitions the node does not serve: finish them through nodes that serve
-  them, then run the same `-op-id` on a node that serves every partition,
-  where each finished log answers from its own ledger and the in is made — and
-  on a fleet where no node serves every partition the node stays barred, since
-  no gesture there sees every log done. `crewlet estate in` never lifts the
+  back — by a gesture that itself finds every log done. Every log is reached
+  from whichever node you run it on, so until the last log is finished the
+  line says the map waits for the logs, and the same `-op-id` — on any node —
+  finishes them, each finished log answering from its own ledger, and then
+  makes the in. `crewlet estate in` never lifts the
   bar: it refuses a barred node and names this command. The
   answer carries the map's own line (`estate map: out — written`). A map that could not be written leaves the gesture unfinished
   however the logs answered, and the same `-op-id` finishes it; a readmission
@@ -708,23 +708,25 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   served the partition when it tried: once the duplicate window (two minutes
   from when the record landed) has passed, run the gesture again with the same
   `-op-id` through the same node.
-- `not_holder` — the node you ran it on does not serve that log's partition,
-  and only a node that serves a partition writes its logs: run the gesture,
-  under the same `-op-id`, through one that does (`-url`). On a divided
-  estate this is the ordinary answer for every partition the node does not
-  serve; the engine's own `statelog.gate` operation will carry each such log
-  to a serving node for you once requests are routed by partition.
-- `holding_unknown` — the node you ran it on could not tell whether it serves
-  that log's partition, so it wrote nothing there: run the gesture again with
-  the same `-op-id` once it can, or through a node that serves the partition
-  (`-url`).
+- `not_holder` or `holding_unknown` — the node you ran it on stopped serving
+  that log's partition, or could not tell whether it serves it, between
+  choosing to write the log itself and writing it, so it wrote nothing there:
+  run the gesture again with the same `-op-id`, which sends the record to a
+  node that serves the partition now.
+- **No node that serves the partition wrote it** — every holder the record
+  was sent to did not serve it, could not run it, or did not answer: run the
+  gesture again with the same `-op-id` once one does.
 - `unknown` that **this node cannot tell** — its operation ledger may have
   lost the row the operation needs, because the id was minted before the node
   adopted a peer's snapshot or before the ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
   whose ledger reaches back that far (`-url`). The dashboard says the same and
-  sends you to another node's dashboard.
+  sends you to another node's dashboard. Where the line names **another node**
+  as the writer, every holder of the partition that answered could not tell,
+  and another node would send the record to the same holders: run the same
+  gesture again, which asks them all again — one that did not answer this
+  time may vouch for it.
 - `wrong_stream` — the log was rebuilt under this node:
   [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
   gesture again with the same `-op-id`.

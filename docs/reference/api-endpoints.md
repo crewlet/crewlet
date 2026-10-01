@@ -2537,13 +2537,26 @@ written**, and `reason` names why in the vocabulary every write refusal uses
 (`log_full`, `evicted`, …). A log that answered holds its record whatever the
 other did.
 
-An `unknown` entry may also carry **`"unvouched": true`**: this node's
+An entry carries **`writer`** where a node other than this one wrote it: a
+log of a partition this node does not serve (or serves and does not run right
+now) is sent to a node that serves it, which writes the record under the same
+`op_id` on this node's behalf — so one request reaches every log. Its
+`outcome`, `error` and `hint` are that node's, and `writer` is absent where this
+node wrote the log itself. Each such node is given fifteen seconds before the
+next holder of the partition is asked; where no holder wrote the record, the
+entry's `error` says no node that serves the partition did, and offers
+`retry_same_op`.
+
+An `unknown` entry may also carry **`"unvouched": true`**: the writing node's
 operation ledger may have lost the row the operation needs — it was minted
 before the node adopted a peer's snapshot, or before the ledger's own sweep
 reached it — so the node published nothing and cannot tell whether the record
 landed, and the same request through it answers the same way every time. Such
 an entry offers `other_node` rather than `retry_same_op`: send the same request,
-with the same `op_id`, through a node whose ledger reaches back that far.
+with the same `op_id`, through a node whose ledger reaches back that far. With
+a `writer`, every holder of the partition that answered was asked already and
+none could tell, and another node would ask the same holders: it offers
+`retry_same_op`, which asks them all again.
 
 On a divided estate the answer also carries **`map`** — the estate map's part
 of the gesture, which an eviction takes the node out of and a readmission puts
@@ -2575,10 +2588,10 @@ a fresh one is equally safe.
 
 | Action | What the operator does | Where the gate answers it |
 |---|---|---|
-| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched`), a lost race, a failure before the write answered, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `holding_unknown`); a gate refusal — `evicted`, `released`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged` |
+| `retry_same_op` | Send the same request again with the answer's `op_id` | An `unknown` outcome (unless it is `unvouched` by this node itself), a lost race, a failure before the write answered, a log no node that serves its partition wrote, and a refusal that clears on its own (`behind`, `deferred`, `floor_unknown`, `below_floor`, `not_holder`, `holding_unknown` — the last two a partition this node stopped serving, or could not tell it serves, as it wrote, which the same request sends to a node that serves it); a gate refusal — `evicted`, `released`, `overtaken`, `abandoned` — of **another node's copy** of the operation, which this node's append was collapsed onto (`hint` names that node): the reason is that node's standing, not this one's, so this node finishes it once the log's duplicate window (two minutes from when the copy landed) has passed; `503 eviction_unjudged` |
 | `new_gesture` | Start a new gesture, without `op_id` | `superseded` — the operation's record landed and a later gate record on the same node has undone it since (an eviction retried after a readmission) — and `op_reused`, an operation id that already names a record on another object |
 | `force` | Send the eviction again with `force=true` | `409 eviction_refused`, `503 eviction_unjudged` |
-| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `released` (this node released the log when it left the log's partition — send it through a node that serves the partition), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), `not_holder` (this node does not serve the log's partition — send it through one that does), an `unvouched` unknown (this node's ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred`, `below_floor` and `holding_unknown`. A `released`, `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
+| `other_node` | Send it, with the same `op_id`, through another node the fleet still counts | Of this node's own standing or its own record: `evicted` (this node is evicted itself), `released` (this node released the log when it left the log's partition — send it through a node that serves the partition), `overtaken` and `abandoned` (this node wrote the record from rows a reanchor left behind — send it through a node on the log's current generation), an `unvouched` unknown this node gave (its ledger cannot say whether the record landed), and beside `retry_same_op` on `deferred` and `below_floor`. With a `writer`, each of these is that node's standing rather than this one's, and `hint` names it. A `released`, `overtaken` or `abandoned` refusal, and an `evicted` one that names a `position`, is a record that landed and applies nowhere: it holds the `op_id` on that log for the log's duplicate window (two minutes) from when it landed, and the same `op_id` sent sooner — through any node — is answered the same way again, so `hint` says to wait that out first |
 | `reanchor` | [Re-anchor the log](../guides/retention.md#re-anchoring-a-recreated-or-restored-log) first, then send the same request with the same `op_id` | `wrong_stream` |
 | `set_capacity` | [Raise the log's ceiling](../guides/retention.md#changing-a-logs-ceiling), then send the same request with the same `op_id` | `log_full` — a gate record is admitted into the log's [gate reserve](../guides/retention.md#the-gate-reserve), so this is a log full to its broker ceiling past even that |
 | `wait` | Wait for what `hint` names to clear on its own, then run it again | `409 eviction_refused` (the lease to lapse), `409 readmission_refused` (the node to catch up), `409 not_publishing` (the fleet to leave its capacity window) |

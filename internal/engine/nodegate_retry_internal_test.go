@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -581,12 +582,39 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
 			actions: []statelog.GateAction{retry},
 			detail:  "applies nowhere because a gate dropped it (a_later_gate) — a fact about node node-x"},
-		// A NODE THAT DOES NOT SERVE THE LOG'S PARTITION never writes it,
-		// whichever id it retries under; one that cannot tell may again.
-		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{other},
-			detail: "one that does"},
+		// THIS NODE'S OWN WRITE REFUSED BY GATE 3 — the partition moved off
+		// it, or its holding could not be read, between the gesture choosing
+		// to write here and the write — is the same gesture's again: run
+		// again, it sends the record to a node that serves the partition.
+		"not holder": {gate: refused(statelog.ReasonNotHolder), actions: []statelog.GateAction{retry},
+			detail: "sends the record to one that does"},
 		"holding unknown": {gate: refused(statelog.ReasonHoldingUnknown),
-			actions: []statelog.GateAction{retry, other}, detail: "could not tell"},
+			actions: []statelog.GateAction{retry}, detail: "could not tell"},
+		// NO HOLDER WROTE IT: every node the router sent the record to ran
+		// nothing or did not answer, so nothing landed under the id.
+		"unserved": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Err: fmt.Errorf("estate: statelog.gate: %w",
+				&estate.ErrPartitionUnserved{Partition: "pages.000"})},
+			actions: []statelog.GateAction{retry}, detail: "no node that serves the partition"},
+		// A REFUSAL ANOTHER NODE'S AUTHORITY GAVE, for a log this node sent
+		// it: the remedy is about that node, and never calls it this one.
+		"evicted, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Writer: "node-q", Err: &statelog.Unavailable{Reason: statelog.ReasonEvicted}},
+			actions: []statelog.GateAction{other},
+			detail:  "node node-q, which serves the partition and wrote this log for the gesture, is evicted itself"},
+		"behind, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Writer: "node-q", Err: &statelog.Unavailable{Reason: statelog.ReasonBehind}},
+			actions: []statelog.GateAction{retry}, detail: "node node-q, which serves"},
+		"wrong stream, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Writer: "node-q", Err: &statelog.Unavailable{Reason: statelog.ReasonWrongStream}},
+			actions: []statelog.GateAction{statelog.GateReanchor},
+			detail:  "is not the one node node-q's rows were derived from"},
+		"evicted, another node's copy, written by another node": {gate: DomainGate{
+			Stream: "CREWLET_PAGES_LOG", Duplicates: 2 * time.Minute, Writer: "node-q",
+			Err: &statelog.Unavailable{Reason: statelog.ReasonEvicted, CopyWriter: "node-x",
+				Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 7}}},
+			actions: []statelog.GateAction{retry},
+			detail:  "which node node-q's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about node node-q"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),
@@ -606,6 +634,12 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// node whose ledger reaches back that far — never round the loop.
 		"unvouched": {gate: DomainGate{Outcome: statelog.OutcomeUnknown, Unvouched: true},
 			actions: []statelog.GateAction{other}, detail: "cannot tell"},
+		// ONE ANOTHER NODE COULD NOT VOUCH FOR, after the router asked every
+		// holder that answered: another node sends the record to the same
+		// holders, so the remedy is the same gesture, which asks them again.
+		"unvouched, written by another node": {gate: DomainGate{Stream: "CREWLET_PAGES_LOG",
+			Outcome: statelog.OutcomeUnknown, Unvouched: true, Writer: "node-q"},
+			actions: []statelog.GateAction{retry}, detail: "node node-q, which serves the partition"},
 	} {
 		remedy := tc.gate.Remedy()
 		if !slices.Equal(remedy.Actions, tc.actions) {
@@ -617,6 +651,9 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		if (remedy.Detail == "") != (tc.detail == "") ||
 			!strings.Contains(remedy.Detail, tc.detail) {
 			t.Errorf("%s: detail = %q, want it to name %q", name, remedy.Detail, tc.detail)
+		}
+		if tc.gate.Writer != "" && strings.Contains(remedy.Detail, "this node") {
+			t.Errorf("%s: detail %q calls the node that wrote it this one", name, remedy.Detail)
 		}
 		for _, flag := range []string{"-op-id", "-url", "-force", "crewlet "} {
 			if strings.Contains(remedy.Detail, flag) {

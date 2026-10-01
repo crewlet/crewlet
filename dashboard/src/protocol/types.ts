@@ -1721,12 +1721,22 @@ export interface RetentionGateDomain {
    */
   outcome?: "applied" | "pending" | "unknown";
   /**
-   * Set on an `unknown` THIS node cannot settle: its operation ledger may
-   * have lost the row the operation needs, so it published nothing and
+   * Set on an `unknown` the WRITING node cannot settle: its operation ledger
+   * may have lost the row the operation needs, so it published nothing and
    * answers the same gesture the same way every time. Its remedy is another
-   * node (`other_node`), never Finish here.
+   * node (`other_node`), never Finish here — unless another node wrote it
+   * (`writer`), when every holder that answered was asked already and the
+   * remedy is the same gesture again.
    */
   unvouched?: boolean;
+  /**
+   * The node that wrote this log's record when it is NOT the node answering —
+   * one serving the log's partition, to which the gesture sent the record
+   * because the node asked does not write that log. ABSENT where the node
+   * asked wrote it, and where no node did. The outcome, the error and the
+   * hint are all about the writer.
+   */
+  writer?: string;
   /** Where the record is durable — ABSENT for `unknown`, which has none: a
    *  zero position would read as a record at the log's origin. */
   position?: { stream: string; generation: number; seq: number };

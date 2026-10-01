@@ -777,6 +777,38 @@ func TestAGateGesturePrintsTheEstateMapsPart(t *testing.T) {
 	}
 }
 
+// A LOG ANOTHER NODE WROTE SAYS WHICH NODE.
+//
+// A log of a partition the node asked does not serve is written for it by a
+// node that does, and the line names that node — and an unknown it could not
+// vouch for is that node's, never "this node", which wrote nothing there.
+func TestAGateGestureNamesTheNodeThatWroteALog(t *testing.T) {
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	gesture := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
+	node.gateResult = &engine.GateResult{Domains: []engine.DomainGate{
+		{Domain: "tracker@tracker.001", Stream: "CREWLET_TRACKER_001_LOG",
+			OpID: gesture + ".evict.tracker", Outcome: statelog.OutcomeApplied, Writer: "node-q",
+			Position: statelog.Position{Stream: "CREWLET_TRACKER_001_LOG", Seq: 12}},
+		{Domain: "pages@pages.000", Stream: "CREWLET_PAGES_000_LOG",
+			OpID: gesture + ".evict.pages", Outcome: statelog.OutcomeUnknown, Unvouched: true,
+			Writer: "node-q"},
+	}}
+	stdout, _, _ := cli(t, "retention", "evict", "node-4", base,
+		"-confirm", "node-4", "-op-id", gesture)
+	for _, want := range []string{
+		"tracker@tracker.001: applied at CREWLET_TRACKER_001_LOG 12 (written by node-q)",
+		"pages@pages.000: unknown — node node-q cannot tell whether the record is on the log",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the output never says %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "this node cannot tell") {
+		t.Errorf("an unknown another node gave is printed as this node's:\n%s", stdout)
+	}
+}
+
 // A REFUSED EVICTION SAYS HOW TO GET PAST IT IN THIS COMMAND'S OWN FLAGS.
 //
 // The node names what to do as actions and a sentence spelling no flag, since

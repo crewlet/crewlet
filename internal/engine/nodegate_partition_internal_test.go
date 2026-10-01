@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/membership"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -114,7 +115,7 @@ func TestAReadmissionIsWrittenOnEveryIdentityLog(t *testing.T) {
 	t.Parallel()
 	const away = "node-away"
 	s := aGateStateLog(t, statelog.ServesOnly())
-	logs, err := countedGateLogs(t.Context(), s, fixedHolders{}, nil, "node-p", nil, away, true)
+	logs, err := countedGateLogs(t.Context(), s, fixedHolders{}, &routeRecorder{}, nil, "node-p", nil, away, true)
 	if err != nil {
 		t.Fatalf("the readmission's logs: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestAReadmissionIsWrittenOnEveryIdentityLog(t *testing.T) {
 		t.Errorf("a readmission of a node counted nowhere concerns %v, want every "+
 			"identity-claiming log %v", got, want)
 	}
-	logs, err = countedGateLogs(t.Context(), s, fixedHolders{}, nil, "node-p", nil, away, false)
+	logs, err = countedGateLogs(t.Context(), s, fixedHolders{}, &routeRecorder{}, nil, "node-p", nil, away, false)
 	if err != nil {
 		t.Fatalf("the eviction's logs: %v", err)
 	}
@@ -138,78 +139,108 @@ func TestAReadmissionIsWrittenOnEveryIdentityLog(t *testing.T) {
 	}
 }
 
-// A LOG THIS NODE DOES NOT SERVE IS LEFT TO A NODE THAT DOES, AND SAYS SO.
+// A LOG THIS NODE CANNOT WRITE IS SENT TO A NODE THAT CAN, AND SAYS WHO WROTE IT.
 //
 // Only a node serving a log's partition writes that log — the write
-// authority's gate 3 refuses anybody else — so a gesture reaching a log it
-// cannot write reports it unwritten with the reason and a remedy naming
-// another node, rather than dropping it from the answer or trying the write:
-// dropped, the gesture reported itself complete while the node went on
-// pinning that log. A node that cannot tell whether it serves the partition
-// says that instead, and one that serves it and does not run its log right
-// now says that — each a remedy of its own.
-func TestALogThisNodeDoesNotServeIsLeftToANodeThatDoes(t *testing.T) {
+// authority's gate 3 refuses anybody else — so every log the gesture concerns
+// that this node does not serve, cannot tell whether it serves, or serves and
+// does not run right now is sent through the estate's router as
+// `statelog.gate` to a node that does, naming the log by its layout, domain
+// and partition, with the gesture's node, operator and operation id. Left
+// unwritten here, as it once was, the gesture was unfinished on every log of
+// every partition this node does not serve, and a readmission's map part —
+// which waits for every log — never landed on a fleet where no node serves
+// them all. The answer names the node whose write authority gave it, and an
+// answer this node gave itself names none.
+func TestALogThisNodeCannotWriteIsSentToANodeThatCan(t *testing.T) {
 	t.Parallel()
 	const away = "node-away"
 	everywhere := fixedHolders{
 		gateTracker0: {{NodeID: away}}, gateTracker1: {{NodeID: away}}, gatePages0: {{NodeID: away}},
 	}
+	// SERVING tracker.000 AND RUNNING NO LOG: the one it serves is not
+	// running, and the other two are not its partitions.
 	s := aGateStateLog(t, statelog.ServesOnly(gateTracker0))
-	logs, err := countedGateLogs(t.Context(), s, everywhere, nil, "node-p", nil, away, false)
+	route := &routeRecorder{writer: "node-q"}
+	logs, err := countedGateLogs(t.Context(), s, everywhere, route, nil, "node-p", nil, away, false)
 	if err != nil {
 		t.Fatalf("the eviction's logs: %v", err)
-	}
-	reasons := map[string]statelog.Reason{}
-	for _, l := range logs {
-		if l.write != nil || l.unwritten == nil {
-			t.Errorf("%s has a writer on a node that runs no log", l.domain)
-			continue
-		}
-		var refusal *statelog.Unavailable
-		if errors.As(l.unwritten, &refusal) {
-			reasons[l.domain] = refusal.Reason
-		}
-		remedy := DomainGate{Domain: l.domain, Stream: l.stream, Err: l.unwritten}.Remedy()
-		switch l.domain {
-		case "tracker@tracker.000":
-			if !strings.Contains(l.unwritten.Error(), "does not run its log") {
-				t.Errorf("the served log it does not run answered %v", l.unwritten)
-			}
-			if !remedy.Offers(statelog.GateRetrySameOp) {
-				t.Errorf("a served log not running right now offers %v, want the same "+
-					"gesture again once it runs", remedy.Actions)
-			}
-		default:
-			if !errors.Is(l.unwritten, statelog.ErrNotHolder) {
-				t.Errorf("%s, whose partition this node does not serve, answered %v, "+
-					"want %v", l.domain, l.unwritten, statelog.ErrNotHolder)
-			}
-			if !slices.Equal(remedy.Actions, []statelog.GateAction{statelog.GateOtherNode}) {
-				t.Errorf("%s's remedy is %v, want a node that serves its partition",
-					l.domain, remedy.Actions)
-			}
-		}
 	}
 	if got := len(logs); got != 3 {
-		t.Errorf("the gesture concerns %d log(s), want all three the node is counted on", got)
+		t.Fatalf("the gesture concerns %d log(s), want all three the node is counted on", got)
 	}
-	if reasons["tracker@tracker.001"] != statelog.ReasonNotHolder ||
-		reasons["pages@pages.000"] != statelog.ReasonNotHolder {
-		t.Errorf("the logs of partitions this node does not serve answered %v", reasons)
+	for _, l := range logs {
+		if l.write != nil || l.route == nil {
+			t.Errorf("%s is written here (%v) or not sent anywhere (%v)", l.domain,
+				l.write != nil, l.route == nil)
+			continue
+		}
+		res, writer, err := l.publish(t.Context(), "ops", "op-"+l.domain, away, false)
+		if err != nil || res.Outcome != statelog.OutcomeApplied || writer != "node-q" {
+			t.Errorf("%s answered (%+v, %q, %v), want applied by node-q", l.domain, res, writer, err)
+		}
+	}
+	want := []estate.GateArgs{
+		{Layout: 1, Domain: "tracker", Partition: "tracker.000", Node: away, By: "ops",
+			OpID: "op-tracker@tracker.000"},
+		{Layout: 1, Domain: "tracker", Partition: "tracker.001", Node: away, By: "ops",
+			OpID: "op-tracker@tracker.001"},
+		{Layout: 1, Domain: "pages", Partition: "pages.000", Node: away, By: "ops",
+			OpID: "op-pages@pages.000"},
+	}
+	if got := route.sent(); !slices.Equal(got, want) {
+		t.Errorf("the router was sent\n%+v\nwant\n%+v", got, want)
 	}
 
+	// A NODE THAT CANNOT TELL WHAT IT SERVES sends every log too.
 	blind := aGateStateLog(t, unknownHolding{err: coord.ErrUnavailable})
-	logs, err = countedGateLogs(t.Context(), blind, everywhere, nil, "node-p", nil, away, false)
+	logs, err = countedGateLogs(t.Context(), blind, everywhere, route, nil, "node-p", nil, away, false)
 	if err != nil {
 		t.Fatalf("the eviction's logs: %v", err)
 	}
 	for _, l := range logs {
-		var refusal *statelog.Unavailable
-		if !errors.As(l.unwritten, &refusal) || refusal.Reason != statelog.ReasonHoldingUnknown {
-			t.Errorf("%s on a node that cannot tell what it serves answered %v, want %s",
-				l.domain, l.unwritten, statelog.ReasonHoldingUnknown)
+		if l.route == nil {
+			t.Errorf("%s on a node that cannot tell what it serves is not sent to a holder", l.domain)
 		}
 	}
+
+	// AN ANSWER THIS NODE GAVE ITSELF — the router asks it first where it
+	// serves the partition — names no other writer.
+	self := &routeRecorder{writer: "node-p"}
+	logs, err = countedGateLogs(t.Context(), s, everywhere, self, nil, "node-p", nil, away, false)
+	if err != nil {
+		t.Fatalf("the eviction's logs: %v", err)
+	}
+	if _, writer, _ := logs[0].publish(t.Context(), "ops", "op", away, false); writer != "" {
+		t.Errorf("an answer this node gave names the writer %q, want none", writer)
+	}
+}
+
+// routeRecorder is the estate's router as the gate sees it: it records every
+// gate record sent, and answers each applied by writer — or with err.
+type routeRecorder struct {
+	writer string
+	err    error
+
+	mu      sync.Mutex
+	records []estate.GateArgs
+}
+
+func (r *routeRecorder) Gate(_ context.Context, a estate.GateArgs) (statelog.Result, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, a)
+	if r.err != nil {
+		return statelog.Result{}, "", r.err
+	}
+	return statelog.Result{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "s", Generation: 1, Seq: 4}}, r.writer, nil
+}
+
+func (r *routeRecorder) sent() []estate.GateArgs {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.records)
 }
 
 // unknownHolders cannot tell who holds anything.
@@ -347,16 +378,14 @@ func TestAnEvictionBarsTheNodeFromTheMapAndAReadmissionPutsItBack(t *testing.T) 
 // A READMISSION PUTS THE NODE BACK IN THE MAP ONLY ONCE EVERY LOG HAS TAKEN IT
 // BACK.
 //
-// A log this node does not serve answers not_holder and holds the node's
-// eviction still: an in made then lets the maintainer place that log's
-// partition on the node, every write it decides there gated and the trim
-// passing a holder it counts by its tombstone. So the map part waits and says
-// why — and where it is finished. A log this node could not write for a reason
-// of its own is finished, and the in made, by the same gesture here; one on a
-// partition this node does not serve answers not_holder here however often it
-// is asked, so the gesture is sent to a node that serves every partition,
-// never round the same one again. Once every log has answered, the in is
-// made.
+// A log that has not taken the node back holds its eviction still: an in made
+// then lets the maintainer place that log's partition on the node, every write
+// it decides there gated and the trim passing a holder it counts by its
+// tombstone. So the map part waits, and says the same gesture under the same
+// operation id finishes it — on any node, since every log is reached from any
+// node: a log this node does not serve is sent to one that does, and one no
+// holder answered for is the same gesture's to finish once one does. Once every
+// log has answered, the in is made.
 func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 	t.Parallel()
 	written := 0
@@ -366,11 +395,14 @@ func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 				return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 			}}
 	}
-	elsewhere := gateLog{domain: "tracker@tracker.001", stream: "tracker@tracker.001",
-		unwritten: &statelog.Unavailable{Reason: statelog.ReasonNotHolder, Cause: statelog.ErrNotHolder}}
+	partition := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
+	unserved := routedGateLog(&routeRecorder{err: &estate.ErrPartitionUnserved{
+		Partition: partition.String(), Detail: "node-q: no answer"}},
+		partitionedTestLayout(), statelog.LogID{Domain: "tracker", Partition: partition},
+		statelog.StreamSpec{Name: "tracker@tracker.001"}, "node-p")
 	recorder := &mapRecorder{logsWritten: &written}
 	g := &NodeGate{
-		logs:         gateLogs(done("tracker@tracker.000"), elsewhere),
+		logs:         gateLogs(done("tracker@tracker.000"), unserved),
 		estate:       recorder,
 		live:         func(context.Context) ([]statelog.Presence, error) { return nil, nil },
 		readmissible: func(context.Context, string) error { return nil },
@@ -384,40 +416,34 @@ func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 	if len(recorder.calls) != 0 {
 		t.Fatalf("the map was changed %v with a log still holding the node's eviction", recorder.calls)
 	}
-	var awaits *MapAwaitsLogs
-	if res.Complete() || res.Map == nil || !errors.As(res.Map.Err, &awaits) ||
-		!errors.Is(res.Map.Err, ErrMapAwaitsLogs) ||
-		!slices.Equal(awaits.Elsewhere, []string{"tracker@tracker.001"}) {
-		t.Fatalf("the map part answered %+v, complete %v: want it waiting on the logs, "+
-			"naming the one on a partition this node does not serve", res.Map, res.Complete())
+	if res.Complete() || res.Map == nil || !errors.Is(res.Map.Err, ErrMapAwaitsLogs) {
+		t.Fatalf("the map part answered %+v, complete %v: want it waiting on the logs",
+			res.Map, res.Complete())
 	}
 	if remedy := res.Map.Remedy(); !slices.Equal(remedy.Actions,
-		[]statelog.GateAction{statelog.GateOtherNode}) ||
-		!strings.Contains(remedy.Detail, "serves every partition") {
-		t.Errorf("a map part waiting on a log this node does not serve offers %+v: the "+
-			"same gesture here answers not_holder for ever, so it must send the operator "+
-			"to a node that serves every partition", remedy)
+		[]statelog.GateAction{statelog.GateRetrySameOp}) {
+		t.Errorf("a map part waiting on a log offers %+v, want the same gesture again", remedy)
+	}
+	unfinished := res.Domains[1]
+	if remedy := unfinished.Remedy(); !errors.As(unfinished.Err, new(*estate.ErrPartitionUnserved)) ||
+		!slices.Equal(remedy.Actions, []statelog.GateAction{statelog.GateRetrySameOp}) {
+		t.Errorf("a log no holder answered for answered %v with remedy %+v, want the same "+
+			"gesture again", unfinished.Err, remedy)
 	}
 
-	// A LOG THIS NODE COULD NOT FINISH FOR A REASON OF ITS OWN is the same
-	// gesture's here: an outcome it could not tell, and a partition it could
-	// not tell whether it serves — which it may well.
+	// A LOG WHOSE OUTCOME NOBODY COULD TELL is the same gesture's too.
 	unknownHere := gateLog{domain: "tracker@tracker.001", stream: "tracker@tracker.001",
 		write: func(context.Context, string, string, string, bool) (statelog.Result, error) {
 			return statelog.Result{Outcome: statelog.OutcomeUnknown}, nil
 		}}
-	untold := gateLog{domain: "pages@pages.000", stream: "pages@pages.000",
-		unwritten: &statelog.Unavailable{Reason: statelog.ReasonHoldingUnknown,
-			Cause: errors.New("the estate view is stale")}}
-	g.logs = gateLogs(done("tracker@tracker.000"), unknownHere, untold)
+	g.logs = gateLogs(done("tracker@tracker.000"), unknownHere)
 	if res, err = g.Readmit(t.Context(), req); err != nil {
 		t.Fatalf("readmit: %v", err)
 	}
-	awaits = nil
-	if !errors.As(res.Map.Err, &awaits) || len(awaits.Elsewhere) != 0 ||
+	if !errors.Is(res.Map.Err, ErrMapAwaitsLogs) ||
 		!slices.Equal(res.Map.Remedy().Actions, []statelog.GateAction{statelog.GateRetrySameOp}) {
-		t.Errorf("a map part waiting only on this node's own log answered %+v, remedy %+v: "+
-			"want the same gesture again, here", res.Map, res.Map.Remedy())
+		t.Errorf("a map part waiting on an unknown log answered %+v, remedy %+v: want the "+
+			"same gesture again", res.Map, res.Map.Remedy())
 	}
 	if len(recorder.calls) != 0 {
 		t.Fatalf("the map was changed %v with a log still unfinished", recorder.calls)
@@ -435,12 +461,12 @@ func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 
 	// AN EVICTION'S BAR DOES NOT WAIT: it errs in the safe direction whatever
 	// the logs answered.
-	g.logs = gateLogs(done("tracker@tracker.000"), elsewhere)
+	g.logs = gateLogs(done("tracker@tracker.000"), unserved)
 	if _, err := g.Evict(t.Context(), req); err != nil {
 		t.Fatalf("evict: %v", err)
 	}
 	if n := len(recorder.calls); n != 2 || !strings.HasPrefix(recorder.calls[1], "bar ") {
-		t.Errorf("an eviction with a log unwritten made %v on the map, want the bar", recorder.calls)
+		t.Errorf("an eviction with a log unfinished made %v on the map, want the bar", recorder.calls)
 	}
 }
 
@@ -561,11 +587,8 @@ func TestEveryWayTheMapsPartEndsSaysWhatFinishesIt(t *testing.T) {
 			"keeps nothing of the node"},
 		{"an out the map refused", MapGate{Gesture: "out", Err: membership.ErrUnknownMember}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "could not be read or written"},
-		{"logs unfinished", MapGate{Gesture: "in", Err: &MapAwaitsLogs{}}, false,
+		{"logs unfinished", MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "every log has taken it back"},
-		{"logs unfinished elsewhere", MapGate{Gesture: "in",
-			Err: &MapAwaitsLogs{Elsewhere: []string{"pages@pages.000"}}}, false,
-			[]statelog.GateAction{statelog.GateOtherNode}, "serves every partition"},
 		{"nowhere else", MapGate{Gesture: "out", Err: membership.ErrNothingPlaceable}, false,
 			[]statelog.GateAction{statelog.GateRetrySameOp}, "add a data node"},
 		{"no map yet", MapGate{Gesture: "out", Err: partmap.ErrNoMap}, false,

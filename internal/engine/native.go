@@ -229,8 +229,15 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		return err
 	}
 	n.log = sl
+	// THE ROUTER CARRIES every log this node does not write to a node that
+	// does — an untyped nil where there is none, which the gate refuses
+	// rather than taking a nil router for a route.
+	var route gateRoute
+	if e.router != nil {
+		route = e.router
+	}
 	if n.gate, err = newNodeGate(sl, e.backends.Coord, e.holdersOf(sl.layout),
-		e.gateMembership(sl.layout), e.backends.Store, nodeID, e.metrics); err != nil {
+		e.gateMembership(sl.layout), route, e.backends.Store, nodeID, e.metrics); err != nil {
 		return err
 	}
 
