@@ -290,25 +290,31 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
   },
 };
 
-test("every key homed in the Display menu is one the Display menu writes", async () => {
-  const homed = Object.entries(URL_HOMES)
-    .filter(([, home]) => home === "menu")
-    .map(([key]) => key);
-  expect(Object.keys(MENU).sort()).toEqual(homed.sort());
+const MENU_HOMED = Object.entries(URL_HOMES)
+  .filter(([, home]) => home === "menu")
+  .map(([key]) => key);
 
-  for (const key of homed) {
-    const entry = MENU[key] as (typeof MENU)[string];
-    await listAt(entry.at);
-    await entry.press();
-    await waitFor(() =>
-      expect(location.hash, `${key} was not written by the Display menu`).toContain(entry.writes),
-    );
-    // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
-    // one would offer to remove a drawing.
-    const chips = document.querySelector(".work-chips")?.textContent ?? "";
-    expect(chips, `${key} drew a chip`).not.toContain(key);
-    cleanup();
-  }
+test("every key homed in the Display menu is one this suite presses", () => {
+  expect(Object.keys(MENU).sort()).toEqual([...MENU_HOMED].sort());
+});
+
+// ONE CASE PER KEY, not one case pressing them all. Each press is a whole list
+// screen mounted and a menu opened — 100 to 380 ms a key, measured — and the
+// single case that pressed all five took 1.1 s alone and ran past the
+// five-second budget whenever the suite shared its cores: a budget that holds
+// one screen was being spent on every key the grammar homes there. Apart, each
+// case is one screen, and a key the menu stopped writing names itself.
+test.each(MENU_HOMED)("the Display menu writes %s", async (key) => {
+  const entry = MENU[key] as (typeof MENU)[string];
+  await listAt(entry.at);
+  await entry.press();
+  await waitFor(() =>
+    expect(location.hash, `${key} was not written by the Display menu`).toContain(entry.writes),
+  );
+  // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
+  // one would offer to remove a drawing.
+  const chips = document.querySelector(".work-chips")?.textContent ?? "";
+  expect(chips, `${key} drew a chip`).not.toContain(key);
 });
 
 // AND THE COLUMN FAMILY IS ONE KEY PER GRID SHAPE, so a third grid shape

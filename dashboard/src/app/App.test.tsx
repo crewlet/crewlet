@@ -91,20 +91,26 @@ describe("routing", () => {
   // was one, and a hand-written one covers exactly the screens somebody
   // remembered to add to it — so a new destination that renders a blank ships
   // green, which is the one failure this test exists to catch.
-  test("every destination renders a screen rather than a blank", () => {
-    const visited = DESTINATIONS.map((item) => buildHash(item.path));
-    // The two-level routes are the reason the list is derived: a hand-written
-    // one would not have them.
-    expect(visited).toContain(buildHash(["work", "views"]));
-    expect(visited).toContain(buildHash(["activity", "turns"]));
-    for (const hash of visited) {
-      location.hash = hash;
-      const { view } = mount();
-      expect(view.container.querySelector(".screen-inner")?.children.length, hash).toBeGreaterThan(
-        0,
-      );
-      view.unmount();
-    }
+  const VISITED = DESTINATIONS.map((item) => buildHash(item.path));
+
+  // The two-level routes are the reason the list is derived: a hand-written
+  // one would not have them.
+  test("the destinations visited include the two-level routes", () => {
+    expect(VISITED).toContain(buildHash(["work", "views"]));
+    expect(VISITED).toContain(buildHash(["activity", "turns"]));
+  });
+
+  // ONE CASE PER DESTINATION, not one case visiting them all. Each visit mounts
+  // the whole shell around a screen — 35 to 130 ms apiece, measured — and the
+  // single case that made all two dozen of them took 1.4 s alone and past the
+  // five-second budget whenever the suite shared its cores with anything else:
+  // a budget that holds one mount was being spent on every destination the
+  // table grows to. Apart, each case is one mount, and a blank screen names
+  // its own destination in the report.
+  test.each(VISITED)("%s renders a screen rather than a blank", (hash) => {
+    location.hash = hash;
+    const { view } = mount();
+    expect(view.container.querySelector(".screen-inner")?.children.length, hash).toBeGreaterThan(0);
   });
 
   // THE OTHER HALF OF `source.test.ts`'s link gate. That one proves every
@@ -113,8 +119,11 @@ describe("routing", () => {
   // `activity` while `#/activity/traces/{id}` still falls through to Not
   // Found, which is exactly what shipped: `traces` had a screen, four buttons
   // pointing at it, and no case in the switch.
-  test("every object route a link builds resolves to a screen", () => {
-    const routes = [
+  //
+  // One case per route, for the reason the destinations above are: each is a
+  // whole shell mounted, and a single case's budget is one mount's.
+  test.each(
+    [
       ["activity", "turns", "11111111-1111-4111-8111-111111111111"],
       ["activity", "traces", "22222222-2222-4222-8222-222222222222"],
       ["activity", "runs", "33333333-3333-4333-8333-333333333333"],
@@ -129,16 +138,13 @@ describe("routing", () => {
       ["admin", "integrations", "slack"],
       ["admin", "credentials", "SLACK_SIGNING_SECRET"],
       ["admin", "config", "revisions", "77777777-7777-4777-8777-777777777777"],
-    ];
-    for (const path of routes) {
-      const hash = buildHash(path);
-      location.hash = hash;
-      const { view } = mount();
-      expect(view.container.textContent, hash).not.toMatch(
-        /there is no such screen|under (Activity|Company|Admin)/,
-      );
-      view.unmount();
-    }
+    ].map((path) => buildHash(path)),
+  )("the object route %s a link builds resolves to a screen", (hash) => {
+    location.hash = hash;
+    const { view } = mount();
+    expect(view.container.textContent, hash).not.toMatch(
+      /there is no such screen|under (Activity|Company|Admin)/,
+    );
   });
 
   test("an unknown screen says so instead of rendering nothing", () => {

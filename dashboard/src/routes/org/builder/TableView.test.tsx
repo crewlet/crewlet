@@ -74,6 +74,25 @@ function names(): string[] {
     .map((name) => name.textContent?.trim() ?? "");
 }
 
+/**
+ * Every row the fixture draws, in the chart's own order — the company first.
+ * Named once, because the cases that walk every row are one case PER row and
+ * a list cannot come out of a mount that has not happened yet; the first case
+ * below holds it to what the table actually draws.
+ */
+const ROWS = [
+  "Acme",
+  "CEO",
+  "Engineering",
+  "Dev",
+  "VP Engineering",
+  "Platform",
+  "Designer",
+  "SRE",
+  "Sales",
+  "Account Executive",
+];
+
 /*
  * What the design system calls the parts of a row, asked of the design system
  * rather than spelled here: a suite that names a package class is a test of
@@ -128,18 +147,7 @@ describe("the rows", () => {
    */
   test("every seat and unit is a row, in the order the chart draws them", () => {
     mount();
-    expect(names()).toEqual([
-      "Acme",
-      "CEO",
-      "Engineering",
-      "Dev",
-      "VP Engineering",
-      "Platform",
-      "Designer",
-      "SRE",
-      "Sales",
-      "Account Executive",
-    ]);
+    expect(names()).toEqual(ROWS);
   });
 
   /*
@@ -286,20 +294,28 @@ describe("acting on a row", () => {
    * over one, because the duplication was per node kind: the seat's row
    * repeated Edit and Delete and the company's repeated Edit and all three
    * adds.
+   *
+   * ONE CASE PER ROW. Every row is a menu opened and read, each a re-render
+   * and a handful of role queries over the whole table — about 150 ms a row,
+   * measured — and the one case that walked all nine took 1.1 s alone and ran
+   * past the five-second budget whenever the suite shared its cores. Apart,
+   * a case is one mount and one menu, and a duplicate names its row. The
+   * company's row draws no menu at all, and the case after this one says so.
    */
-  test("no label is both a control the row draws and an entry of its own menu", () => {
-    mount();
-    for (const name of names()) {
-      if (menuTrigger(name) === null) continue;
+  test.each(ROWS.slice(1))(
+    "on the %s row, no label is both a control and an entry of its own menu",
+    (name) => {
+      mount();
       const drawn = strip(name).map((label) => label.replace(` ${name}`, "").replace(/ to .*/, ""));
-      for (const [entry] of actions(name)) {
+      const entries = actions(name).map(([entry]) => entry);
+      // A ROW THAT LOST ITS MENU is the next case's claim for the company and
+      // nobody else's, so an empty list here would be a case asserting nothing.
+      expect(entries.length, name).toBeGreaterThan(0);
+      for (const entry of entries) {
         expect(drawn, `${name}: ${entry}`).not.toContain(entry);
       }
-      fireEvent.keyDown(screen.getByRole("menu", { name: `Actions for ${name}` }), {
-        key: "Escape",
-      });
-    }
-  });
+    },
+  );
 
   /*
    * AND A ROW WHOSE MENU WOULD BE EMPTY DRAWS NONE. Everything the company can
