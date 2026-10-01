@@ -287,11 +287,11 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 		},
 	}
 	var answer any
-	if o.partitions == nil {
+	if o.addr.partitions == nil {
 		answer, err = r.anyNode(ctx, spec, actor, x)
 	} else {
 		x.resolve = func(l statelog.Layout) (statelog.PartitionID, error) {
-			parts, resolveErr := o.partitions(ctx, l, layoutResolver{layout: l}, args)
+			parts, resolveErr := o.addr.partitions(ctx, l, layoutResolver{layout: l}, args)
 			switch {
 			case resolveErr != nil:
 				return statelog.PartitionID{}, resolveErr
@@ -674,7 +674,7 @@ func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, layout s
 	value any, at []statelog.Position, refusal unservedReason, why string, err error) {
 
 	floors := r.floorsFor(spec, layout, p)
-	reason, detail, obsolete := ready(ctx, r.self, spec, b, p, floors, streamsOf(layout, p),
+	reason, detail, obsolete := ready(ctx, r.self, spec, b, p, floors, spec.floorStreams(layout, p),
 		acceptLagging)
 	r.session.Forget(obsolete...)
 	if reason != "" {
@@ -697,12 +697,10 @@ func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, layout s
 }
 
 // floorsFor is the floors a request for spec on p carries: this node's
-// session on p's logs, or none for an operation that reads no log position.
+// session on the logs of the operation's own domain in p ([address]), or none
+// for an operation that reads no log position.
 func (r *Router) floorsFor(spec *opSpec, layout statelog.Layout, p statelog.PartitionID) []statelog.Position {
-	if spec.floorless {
-		return nil
-	}
-	return r.session.Floors(streamsOf(layout, p))
+	return r.session.Floors(spec.floorStreams(layout, p))
 }
 
 // ask sends one request to one node. answered is false for a node that said

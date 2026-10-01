@@ -50,9 +50,12 @@ type fakeNode struct {
 	notReady  bool
 	behind    bool
 	abandoned bool
-	silent    bool
-	failWith  error
-	written   statelog.Position
+	// behindOn is a node whose applier of one log is stuck: a floor on
+	// that stream is never reached, every other is.
+	behindOn string
+	silent   bool
+	failWith error
+	written  statelog.Position
 
 	// notHolder is a node that does not serve the partition right now,
 	// and holdingUnknown one that cannot tell whether it does.
@@ -181,6 +184,7 @@ func (f *fakeNode) backend() Backend {
 			f.mu.Lock()
 			f.floors = append(f.floors, at)
 			behind, abandoned, release := f.behind, f.abandoned, f.release
+			behind = behind || (f.behindOn != "" && at.Stream == f.behindOn)
 			f.mu.Unlock()
 			switch {
 			case abandoned:
@@ -569,13 +573,15 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 	if len(node.floors) != 1 || node.floors[0] != node.written {
 		t.Fatalf("the read waited for %v, want the write's %v", node.floors, node.written)
 	}
+	// ANOTHER DOMAIN'S LOG IN THE SAME PARTITION: a page write does not
+	// depend on the tracker's rows, so it carries no floor on its log.
 	node.set(func(n *fakeNode) { n.floors = nil })
 	if _, _, err := f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{}); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
-	if len(node.floors) != 1 || node.floors[0] != node.written {
-		t.Errorf("a write to the partition's pages log waited on %v, want the "+
-			"tracker log's floor on the same partition", node.floors)
+	if len(node.floors) != 0 {
+		t.Errorf("a write to the partition's pages log waited on %v, the tracker "+
+			"log's floor — a log it does not depend on", node.floors)
 	}
 	// ANOTHER PARTITION'S LOG: a position on a stream estate.000 does not
 	// carry is not a floor any holder of it could reach.
@@ -588,6 +594,59 @@ func TestAWritesPositionIsTheNextReadsFloor(t *testing.T) {
 		if at.Stream != trackerStream {
 			t.Errorf("a read of estate.000 waited on %v, a log it does not carry", at)
 		}
+	}
+}
+
+// A FLOOR ON ANOTHER DOMAIN'S LOG NEVER HOLDS AN OPERATION, though one
+// partition carries both logs: no operation reads another domain's rows, so a
+// seat a page change woke — its trigger a floor on the pages log — reads and
+// writes the tracker on a node whose pages applier is stuck exactly as before
+// it was woken, and only the knowledge base's own operations wait for that
+// applier.
+func TestAFloorOnAnotherDomainsLogNeverHoldsAnOperation(t *testing.T) {
+	t.Parallel()
+	pagesStream, _ := layoutZero.Stream(statelog.LogID{Domain: pagesDomain,
+		Partition: statelog.EstatePartition})
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	node.set(func(n *fakeNode) { n.behindOn = pagesStream })
+	f.client.Observe(statelog.Position{Stream: pagesStream, Generation: 1, Seq: 9})
+
+	if _, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("a tracker read behind a pages floor = %v, want it answered", err)
+	}
+	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-1",
+		tracker.Task{Project: "ENG"}, nil); err != nil {
+		t.Fatalf("a tracker write behind a pages floor = %v, want it written", err)
+	}
+	node.mu.Lock()
+	carried := slices.Clone(node.floors)
+	node.mu.Unlock()
+	if len(carried) != 0 {
+		t.Errorf("the tracker's operations waited on %v, the pages log's floor", carried)
+	}
+	// AND THE HOLDER HOLDS TO IT TOO: an older asker sends its floors on
+	// every log of the partition, and the one on another domain's log is
+	// not waited for.
+	raw, _ := json.Marshal(request{Op: opTasks.spec.name, Partitions: []string{"estate.000"},
+		Floors: []statelog.Position{{Stream: pagesStream, Generation: 1, Seq: 9}}})
+	replies, err := f.start(t).Ask(t.Context(), Subject("data-a"), raw, 1)
+	var rep reply
+	if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil ||
+		rep.Unserved != "" || rep.Err != nil {
+		t.Fatalf("an older asker's tracker read with a pages floor = (%+v, %v), want it answered",
+			rep, err)
+	}
+
+	// LONGER THAN THE HOLDER'S FLOOR WAIT, so it says it is behind before
+	// the asker stops listening.
+	f.client.writeBudget = statelog.ReadBudget + time.Second
+	_, _, err = f.client.Pages().Comment(t.Context(), pages.Actor{}, "p", pages.NewComment{})
+	var unserved *ErrPartitionUnserved
+	if !errors.As(err, &unserved) || !strings.Contains(err.Error(), "has not applied") ||
+		node.askedFor("comment") {
+		t.Fatalf("a page write behind its own log's floor = %v, want the partition "+
+			"unserved as behind, and nothing written", err)
 	}
 }
 

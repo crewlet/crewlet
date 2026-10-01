@@ -893,13 +893,13 @@ var opContainers = define("pages.containers", opRead, wholeDomain[containersArgs
 // A PAGE'S ACTIVITY is that page's partition's; a container's, or the whole
 // knowledge base's, addresses the domain as one.
 var opPageActivity = define("pages.activity", opRead,
-	func(ctx context.Context, l statelog.Layout, r Resolver, q pages.PageActivityQuery) (
-		[]statelog.PartitionID, error) {
+	address[pages.PageActivityQuery]{domain: pagesDomain, partitions: func(ctx context.Context,
+		l statelog.Layout, r Resolver, q pages.PageActivityQuery) ([]statelog.PartitionID, error) {
 		if q.Page != "" {
-			return byPage(func(q pages.PageActivityQuery) string { return q.Page })(ctx, l, r, q)
+			return byPage(func(q pages.PageActivityQuery) string { return q.Page }).partitions(ctx, l, r, q)
 		}
-		return wholeDomain[pages.PageActivityQuery](pagesDomain)(ctx, l, r, q)
-	}, false,
+		return wholeDomain[pages.PageActivityQuery](pagesDomain).partitions(ctx, l, r, q)
+	}}, false,
 	func(ctx context.Context, b Backend, _ *Actor, q pages.PageActivityQuery) (pages.PageActivity, error) {
 		if b.Pages == nil {
 			return pages.PageActivity{}, errNoHalf
@@ -1109,6 +1109,29 @@ type pingArgs struct {
 	Partition string
 }
 
+// pingPartitions is the partition admission asks about: the one it names, or
+// the whole estate's one partition for an older asker, which names none.
+func pingPartitions(_ context.Context, l statelog.Layout, _ Resolver, a pingArgs) (
+	[]statelog.PartitionID, error) {
+
+	if a.Partition == "" {
+		if parts := l.Partitions(); len(parts) == 1 {
+			return parts, nil
+		}
+		return nil, fmt.Errorf("%w: an admission question that names no partition "+
+			"asks about the whole estate, and layout %d divides it into %d partitions",
+			ErrUnaddressed, l.Number, len(l.Partitions()))
+	}
+	p, err := statelog.ParsePartitionID(a.Partition)
+	if err != nil {
+		return nil, fmt.Errorf("admission names %q: %w", a.Partition, err)
+	}
+	if len(l.Logs(p)) == 0 {
+		return nil, fmt.Errorf("%w: layout %d has no partition %s", ErrUnaddressed, l.Number, p)
+	}
+	return []statelog.PartitionID{p}, nil
+}
+
 // opPing is ADMISSION's question, asked of a holder of the partition a seat
 // needs: whether its copy admits a seat now ([Backend.Admits]), and which
 // halves it runs natively. A copy that does not is passed over, like a node
@@ -1117,25 +1140,7 @@ type pingArgs struct {
 // NO FLOOR, and past the serving gate on purpose: it asks whether the copy is
 // ready for a seat, which is its own stricter gate, not whether it has
 // reached this node's writes.
-var opPing = define("estate.ping", opRead,
-	func(_ context.Context, l statelog.Layout, _ Resolver, a pingArgs) ([]statelog.PartitionID, error) {
-		if a.Partition == "" {
-			if parts := l.Partitions(); len(parts) == 1 {
-				return parts, nil
-			}
-			return nil, fmt.Errorf("%w: an admission question that names no partition "+
-				"asks about the whole estate, and layout %d divides it into %d partitions",
-				ErrUnaddressed, l.Number, len(l.Partitions()))
-		}
-		p, err := statelog.ParsePartitionID(a.Partition)
-		if err != nil {
-			return nil, fmt.Errorf("admission names %q: %w", a.Partition, err)
-		}
-		if len(l.Logs(p)) == 0 {
-			return nil, fmt.Errorf("%w: layout %d has no partition %s", ErrUnaddressed, l.Number, p)
-		}
-		return []statelog.PartitionID{p}, nil
-	}, false,
+var opPing = define("estate.ping", opRead, address[pingArgs]{partitions: pingPartitions}, false,
 	func(ctx context.Context, b Backend, _ *Actor, _ pingArgs) (served, error) {
 		if b.Admits != nil && !b.Admits(ctx) {
 			return served{}, errNotAdmitting
@@ -1162,7 +1167,7 @@ type appendEventsArgs struct {
 // unanswered batch safe: the log's append does nothing for a (time, id) pair
 // it already holds. And UNGATED, because a node's own event log is not the
 // replicated estate and does not wait for it.
-var opAppendEvents = define("events.append", opIdempotentWrite, nil, false,
+var opAppendEvents = define("events.append", opIdempotentWrite, address[appendEventsArgs]{}, false,
 	func(ctx context.Context, b Backend, _ *Actor, a appendEventsArgs) (int, error) {
 		if b.Events == nil {
 			return 0, errNoHalf

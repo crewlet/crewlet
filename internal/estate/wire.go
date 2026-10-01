@@ -71,9 +71,9 @@ const (
 	// that already failed it in this gather. See gather.go.
 	//
 	// A slice asked at `linearizable` is the BARRIER half of a gather: its
-	// holder appends a barrier on each of the partition's logs, applies
-	// through them, and answers at or after them — the cut they
-	// established. It fails over exactly as any slice does, so it is the
+	// holder appends a barrier on the partition's log of the operation's
+	// own domain, applies through it, and answers at or after it — the cut
+	// it established. It fails over exactly as any slice does, so it is the
 	// same class asked at a level ([request.Level]), not a class of its
 	// own: a class is what a failover may do, and nothing differs.
 	opGatherRead
@@ -249,13 +249,18 @@ type opSpec struct {
 	result reflect.Type
 
 	// partitions resolves a request's arguments, decoded, to the partitions
-	// it addresses under a layout — exactly one for every operation this
-	// build declares — or is nil for an operation that addresses none (the
-	// node's own event log), which any data node answers. A floor's
-	// streams are derived from the partition's logs, so an operation names
-	// no stream of its own.
+	// it addresses under a layout — one for a single-partition operation,
+	// every one a gather reads for a gather — or is nil for an operation
+	// that addresses none (the node's own event log), which any data node
+	// answers. A floor's stream is derived from the partition's log of the
+	// operation's domain, so an operation names no stream of its own.
 	partitions func(ctx context.Context, l statelog.Layout, r Resolver,
 		raw json.RawMessage) ([]statelog.PartitionID, error)
+
+	// domain is the domain whose log the operation depends on in each
+	// partition it addresses: the only log its floors are on
+	// ([opSpec.floorStreams], [address]).
+	domain string
 
 	// actor says whether the operation acts AS somebody, which a request
 	// then has to name.
@@ -316,9 +321,9 @@ type sliceAsk struct {
 // where this node serves the partition — no encoding, and an error keeps its
 // own identity rather than the wire's rebuilt one.
 type op[A, R any] struct {
-	spec       *opSpec
-	serve      func(ctx context.Context, b Backend, actor *Actor, args A) (R, error)
-	partitions partitionsFunc[A]
+	spec  *opSpec
+	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error)
+	addr  address[A]
 
 	// cover sets what the answer covered on it, for an operation declared
 	// [op.covered]; nil otherwise.
@@ -340,18 +345,20 @@ type partitionsFunc[A any] func(ctx context.Context, l statelog.Layout, r Resolv
 var registry = map[string]*opSpec{}
 
 // define declares an operation. Package-level, at init: a duplicate name is a
-// build that cannot serve, so it panics rather than silently shadowing. A nil
-// partitions is an operation that addresses no partition ([opSpec.partitions]).
-func define[A, R any](name string, class opClass, partitions partitionsFunc[A], actor bool,
+// build that cannot serve, so it panics rather than silently shadowing. The
+// zero address is an operation that addresses no partition
+// ([opSpec.partitions]).
+func define[A, R any](name string, class opClass, at address[A], actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {
 	if _, dup := registry[name]; dup {
 		panic(fmt.Sprintf("estate: operation %q declared twice", name))
 	}
 	spec := &opSpec{
-		name: name, class: class, actor: actor,
+		name: name, class: class, actor: actor, domain: at.domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
+	partitions := at.partitions
 	decode := func(raw json.RawMessage) (A, error) {
 		var args A
 		if len(raw) > 0 {
@@ -389,7 +396,7 @@ func define[A, R any](name string, class opClass, partitions partitionsFunc[A], 
 		return checked(ctx, b, who, args)
 	}
 	registry[name] = spec
-	return op[A, R]{spec: spec, serve: checked, partitions: partitions}
+	return op[A, R]{spec: spec, serve: checked, addr: at}
 }
 
 // ungated declares that the establishment gate does not hold this operation

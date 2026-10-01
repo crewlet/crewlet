@@ -146,23 +146,28 @@ answered is refused naming the partitions, as a single partition is.
 
 **What each partition is read at.** A seat's read of one partition is
 `linearizable`, as it always was. Across several it is `session`: each holder
-first reaches the asking node's own writes on that partition's logs **and the
-record whose notification started the turn** — a native notification carries
-its record's position, and the turn hands it to the node's floors before its
-first read. That is "no older than what I wrote and what woke me" without a
+first reaches the asking node's own writes on the read's own log in that
+partition **and the record whose notification started the turn** — a native
+notification carries its record's position, and the turn hands it to the
+node's floors before its first read. That is "no older than what I wrote and what woke me" without a
 barrier on every log per read. An operator's read stays `linearizable`: each
-holder appends a barrier on each of the partition's logs and answers at or
-after it. A gather of one partition is a single-partition read, so at layout 0
+holder appends a barrier on the partition's log of the read's own domain and
+answers at or after it. A gather of one partition is a single-partition read, so at layout 0
 every read is answered exactly as before.
 
 **Read-your-writes, on every node.** Each node keeps one table of the furthest
 position its writes reached on each log. Every request for a partition carries
-this node's floors on that partition's logs, and whichever holder answers —
-this node included — first waits up to two seconds to have applied them, or
-says it is behind and the next holder is asked. A data node's own copy is held
-to the same floors, because its seats may have written a partition through
-another holder while it was not serving it. Floors on another partition's logs
-are never carried: a lag there is not one this partition's holders could close.
+this node's floors on the logs of the request's own domain in that partition —
+a tracker read the tracker log's, a knowledge-base read the knowledge base's —
+and whichever holder answers — this node included — first waits up to two
+seconds to have applied them, or says it is behind and the next holder is
+asked. A data node's own copy is held to the same floors, because its seats may
+have written a partition through another holder while it was not serving it.
+Floors on another partition's logs are never carried: a lag there is not one
+this partition's holders could close. Nor are floors on another domain's log in
+the same partition: no read depends on another domain's rows, so a knowledge
+base whose applier is behind never holds up a tracker read, even at layout 0,
+where one partition carries every log.
 
 **Which copy answers.** A copy answers requests once it is level with its logs,
 or has drained them since it started and stays within a thousand records of

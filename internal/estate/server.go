@@ -129,8 +129,8 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 				req.Op, err))
 			return encodeReply(out)
 		}
-		reason, detail, obsolete := ready(ctx, s.self, spec, b, p, req.Floors, streamsOf(layout, p),
-			req.AcceptLagging)
+		reason, detail, obsolete := ready(ctx, s.self, spec, b, p, req.Floors,
+			spec.floorStreams(layout, p), req.AcceptLagging)
 		for _, gone := range obsolete {
 			out.Obsolete = append(out.Obsolete, gone.Stream)
 		}
@@ -208,17 +208,18 @@ func (s server) partitionOf(ctx context.Context, spec *opSpec, req request) (sta
 }
 
 // ready is the two gates a node that serves p puts in front of an operation —
-// its copy answering requests, and the asker's floors on p's logs reached — and
-// the same two whether the asker is another node or this one's own router.
-// reason is empty when the operation may run; obsolete is every floor on a
-// generation the log has abandoned, which the asker stops carrying.
+// its copy answering requests, and the asker's floors on the operation's own
+// logs in p reached (floorsOn, [opSpec.floorStreams]) — and the same two
+// whether the asker is another node or this one's own router. reason is empty
+// when the operation may run; obsolete is every floor on a generation the log
+// has abandoned, which the asker stops carrying.
 //
 // THE FIRST GATE IS A PREFERENCE, and acceptLagging is the asker saying it has
 // no better holder: a copy that lags its logs is a worse choice than one that
 // does not, never a wrong one — the floors below and the read's own level hold
 // what it answers to what the caller must see. See [Router.route].
 func ready(ctx context.Context, self string, spec *opSpec, b Backend, p statelog.PartitionID,
-	floors []statelog.Position, streams []string, acceptLagging bool) (reason unservedReason,
+	floors []statelog.Position, floorsOn []string, acceptLagging bool) (reason unservedReason,
 	detail string, obsolete []statelog.Position) {
 
 	if !spec.ungated && !acceptLagging && b.Answers != nil && !b.Answers(ctx) {
@@ -232,8 +233,10 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, p statelog
 	}
 	for _, floor := range floors {
 		// A FLOOR ON ANOTHER PARTITION'S LOG is one this node cannot
-		// reach by applying p, and is never waited for here.
-		if floor.Seq == 0 || !slices.Contains(streams, floor.Stream) {
+		// reach by applying p, and one on another DOMAIN's log in p is
+		// one the operation does not depend on ([address]) — an older
+		// asker sends both, and neither is waited for here.
+		if floor.Seq == 0 || !slices.Contains(floorsOn, floor.Stream) {
 			continue
 		}
 		behind, gone := waitFloor(ctx, b, floor)

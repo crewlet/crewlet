@@ -73,10 +73,10 @@ type PartResult[P any] struct {
 // gatherOp is a typed handle on one registered gather: its declaration, and
 // the halves the router calls in the caller's own types.
 type gatherOp[A, P, R any] struct {
-	spec       *opSpec
-	partitions partitionsFunc[A]
-	merge      func(args A, parts []PartResult[P]) (R, error)
-	hooks      *gatherHooks[A]
+	spec  *opSpec
+	addr  address[A]
+	merge func(args A, parts []PartResult[P]) (R, error)
+	hooks *gatherHooks[A]
 }
 
 // gatherHooks are what a gather declares beyond its halves, held where the
@@ -88,12 +88,10 @@ type gatherHooks[A any] struct {
 
 // gatherLevel is how a gather's per-partition level reaches its arguments, for
 // an operation that reads its domain's log at a level ([gatherOp.leveled]).
+// The log is the operation's own domain's in each partition ([address]): the
+// floor a `session` slice waits for, the barrier a `linearizable` one is read
+// after.
 type gatherLevel[A any] struct {
-	// domain is the domain whose log in each partition the level's
-	// position is on — the floor a `session` slice waits for, the barrier
-	// a `linearizable` one is read after.
-	domain string
-
 	of func(A) statelog.ReadLevel
 	at func(args A, level statelog.ReadLevel, floor statelog.Position) A
 }
@@ -108,7 +106,7 @@ type gatherPaging[A any] struct {
 // defineGather declares a gather: an operation that addresses several
 // partitions, serves each partition's P, and merges them into R. Package-level,
 // at init, like [define].
-func defineGather[A, P, R any](name string, partitions partitionsFunc[A],
+func defineGather[A, P, R any](name string, at address[A],
 	serve func(ctx context.Context, b Backend, p statelog.PartitionID, args A) (P, error),
 	merge func(args A, parts []PartResult[P]) (R, error),
 ) gatherOp[A, P, R] {
@@ -116,7 +114,7 @@ func defineGather[A, P, R any](name string, partitions partitionsFunc[A],
 		panic(fmt.Sprintf("estate: operation %q declared twice", name))
 	}
 	spec := &opSpec{
-		name: name, class: opGatherRead, covered: true,
+		name: name, class: opGatherRead, covered: true, domain: at.domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](), part: reflect.TypeFor[P](),
 	}
 	hooks := &gatherHooks[A]{}
@@ -135,7 +133,7 @@ func defineGather[A, P, R any](name string, partitions partitionsFunc[A],
 		if err != nil {
 			return nil, err
 		}
-		return partitions(ctx, l, r, args)
+		return at.partitions(ctx, l, r, args)
 	}
 	slice := func(ctx context.Context, b Backend, s sliceAsk, args A) (P, []statelog.Position, error) {
 		var zero P
@@ -145,7 +143,7 @@ func defineGather[A, P, R any](name string, partitions partitionsFunc[A],
 		streams := streamsOf(s.layout, s.partition)
 		var at []statelog.Position
 		if level := hooks.level; level != nil && s.level != "" {
-			own, _ := s.layout.Stream(statelog.LogID{Domain: level.domain, Partition: s.partition})
+			own, _ := s.layout.Stream(statelog.LogID{Domain: spec.domain, Partition: s.partition})
 			switch s.level {
 			case statelog.ReadLinearizable:
 				var through statelog.Position
@@ -193,15 +191,15 @@ func defineGather[A, P, R any](name string, partitions partitionsFunc[A],
 		return out, at, err
 	}
 	registry[name] = spec
-	return gatherOp[A, P, R]{spec: spec, partitions: partitions, merge: merge, hooks: hooks}
+	return gatherOp[A, P, R]{spec: spec, addr: at, merge: merge, hooks: hooks}
 }
 
 // leveled declares that this gather reads its domain's log at a level its
 // arguments carry: of reads it, at sets the level each partition is read at
 // and the position it is floored at ([statelog.GatherLevel]).
-func (g gatherOp[A, P, R]) leveled(domain string, of func(A) statelog.ReadLevel,
+func (g gatherOp[A, P, R]) leveled(of func(A) statelog.ReadLevel,
 	at func(A, statelog.ReadLevel, statelog.Position) A) gatherOp[A, P, R] {
-	g.hooks.level = &gatherLevel[A]{domain: domain, of: of, at: at}
+	g.hooks.level = &gatherLevel[A]{of: of, at: at}
 	return g
 }
 
@@ -219,10 +217,16 @@ func (g gatherOp[A, P, R]) floorless() gatherOp[A, P, R] {
 	return g
 }
 
-// barriers establishes a barrier on each of a partition's logs that keeps a
-// read index and waits for this copy to apply through it: the cut a
-// `linearizable` slice is answered at, and the barrier on own — the log the
-// read itself reads.
+// barriers establishes the cut a `linearizable` slice is answered at: a
+// barrier on the partition's log of the operation's own domain (own), which
+// this copy applies through — through, the position the read is then floored
+// at — and, for every other log the partition carries, where this copy has
+// applied it.
+//
+// ONE BARRIER, ON THE LOG THE READ READS: one on another domain's log would be
+// an append, and a wait, on an applier the read does not depend on
+// ([address]). A log that keeps no read index makes no freshness claim either,
+// so where this copy has applied it is all the cut can say of it.
 func barriers(ctx context.Context, b Backend, streams []string, own string) (
 	at []statelog.Position, through statelog.Position, err error) {
 
@@ -231,16 +235,15 @@ func barriers(ctx context.Context, b Backend, streams []string, own string) (
 			"barrier, so it cannot answer a linearizable gather")
 	}
 	for _, stream := range streams {
-		pos, kept, err := b.Barrier(ctx, stream)
-		switch {
-		case err != nil:
-			return nil, statelog.Position{}, err
-		case !kept:
-			// A LOG WITH NO READ INDEX makes no freshness claim: where
-			// this copy has applied it is all the cut can say of it.
-			if b.Applied != nil {
-				pos = b.Applied(stream)
+		var pos statelog.Position
+		kept := false
+		if stream == own {
+			if pos, kept, err = b.Barrier(ctx, stream); err != nil {
+				return nil, statelog.Position{}, err
 			}
+		}
+		if !kept && b.Applied != nil {
+			pos = b.Applied(stream)
 		}
 		if pos.Stream == "" {
 			continue
@@ -286,8 +289,9 @@ func floorOn(floors []statelog.Position, stream string) statelog.Position {
 // THE VECTORS DECIDE IT because they are co-located with their source: a
 // partition carrying a domain's log and no vectors (the company space's
 // catalogue) holds nothing a search ranks.
-func corpusOf[A any](domain string) partitionsFunc[A] {
-	return func(_ context.Context, l statelog.Layout, _ Resolver, _ A) ([]statelog.PartitionID, error) {
+func corpusOf[A any](domain string) address[A] {
+	return address[A]{domain: domain, partitions: func(_ context.Context, l statelog.Layout, _ Resolver,
+		_ A) ([]statelog.PartitionID, error) {
 		var out []statelog.PartitionID
 		for _, log := range l.LogsOf(domain) {
 			for _, other := range l.Logs(log.Partition) {
@@ -302,7 +306,7 @@ func corpusOf[A any](domain string) partitionsFunc[A] {
 				ErrUnaddressed, l.Number, domain)
 		}
 		return out, nil
-	}
+	}}
 }
 
 // gather runs a gather from this node: every partition it addresses, each
@@ -409,7 +413,7 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 func (o gatherOp[A, P, R]) resolve(ctx context.Context, l statelog.Layout, args A) (
 	[]statelog.PartitionID, error) {
 
-	parts, err := o.partitions(ctx, l, layoutResolver{layout: l}, args)
+	parts, err := o.addr.partitions(ctx, l, layoutResolver{layout: l}, args)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +953,7 @@ func runPart(ctx context.Context, self string, spec *opSpec, b Backend, s sliceA
 	raw json.RawMessage, whole, acceptLagging bool) partRun {
 
 	reason, detail, obsolete := ready(ctx, self, spec, b, s.partition, s.floors,
-		streamsOf(s.layout, s.partition), acceptLagging)
+		spec.floorStreams(s.layout, s.partition), acceptLagging)
 	out := partRun{reason: reason, detail: detail, obsolete: obsolete}
 	if reason != "" {
 		return out

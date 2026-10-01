@@ -181,3 +181,28 @@ func TestEveryOperationResolvesAnOlderAskersRequest(t *testing.T) {
 		}
 	}
 }
+
+// EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that
+// addresses a partition and carries a floor names its domain, and the domain
+// is one a partition's logs belong to. One that named none would carry no
+// floor at all — reading from before the asker's own writes with nothing to
+// show for it — and one that named another domain's would wait on an applier
+// it does not depend on ([address]).
+func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
+	t.Parallel()
+	domains := []string{trackerDomain, pagesDomain, vectorsDomain}
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		if spec.partitions == nil || spec.floorless {
+			continue
+		}
+		if !slices.Contains(domains, spec.domain) {
+			t.Errorf("%s carries a floor and names the domain %q, want one of %v",
+				name, spec.domain, domains)
+			continue
+		}
+		if streams := spec.floorStreams(layoutZero, statelog.EstatePartition); len(streams) != 1 {
+			t.Errorf("%s's floors at layout 0 are on %v, want its own domain's one log", name, streams)
+		}
+	}
+}

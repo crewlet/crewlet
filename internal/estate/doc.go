@@ -112,14 +112,17 @@
 // different holder than the one that took the write — or by this node, which
 // may not have applied it yet. So each node keeps ONE [Session]: a HIGH-WATER per
 // stream of the furthest position any write it made (or any wait it was asked
-// for) reached. Every request for a partition carries the floors of that
-// partition's logs, and whichever holder answers — this node's own copy
-// included — waits for its applier to reach them, bounded by
-// [statelog.ReadBudget], and says it is behind rather than answer from before a
-// write this node has already been told landed. A data node's own copy is held
-// to its floors like any other because its seats may have written the partition
-// through another holder while it was not serving it. Floors on another
-// partition's logs are never carried: no holder of this one could reach them.
+// for) reached. Every request for a partition carries the floors of the
+// partition's log of the operation's own domain ([address]), and whichever
+// holder answers — this node's own copy included — waits for its applier to
+// reach them, bounded by [statelog.ReadBudget], and says it is behind rather
+// than answer from before a write this node has already been told landed. A
+// data node's own copy is held to its floors like any other because its seats
+// may have written the partition through another holder while it was not
+// serving it. Floors on another partition's logs are never carried: no holder
+// of this one could reach them. Nor are floors on another DOMAIN's log in the
+// partition: no operation reads another domain's rows, so that applier's lag
+// is not one the operation should wait out.
 //
 // # A read across partitions is a GATHER, answered at a cut
 //
@@ -141,8 +144,8 @@
 //
 // A slice reads at [statelog.GatherLevel]: a seat's at `session`, floored at
 // this node's writes and at the record whose wake started the turn, and an
-// operator's at `linearizable`, whose holder appends a barrier on each of the
-// partition's logs and answers at or after them. A batch that outgrows one
+// operator's at `linearizable`, whose holder appends a barrier on the
+// partition's log of the operation's own domain and answers at or after it. A batch that outgrows one
 // reply ([queue.MaxPayloadBytes]) is answered in pages: what fits, then what
 // did not, asked again alone.
 //

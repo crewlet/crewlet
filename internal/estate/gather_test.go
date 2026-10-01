@@ -34,7 +34,7 @@ import (
 // log, read at a level: the shape the tracker's own lists take when they are
 // gathered, declared here so the framework's level and paging rules are held
 // to a real gather of the real wire.
-var opTestList = defineGather("test.list", everyTrackerPartition,
+var opTestList = defineGather("test.list", address[listArgs]{domain: trackerDomain, partitions: everyTrackerPartition},
 	func(ctx context.Context, b Backend, _ statelog.PartitionID, a listArgs) (tracker.Answer, error) {
 		if b.Tracker == nil {
 			return tracker.Answer{}, errNoHalf
@@ -52,7 +52,7 @@ var opTestList = defineGather("test.list", everyTrackerPartition,
 			func(r tracker.TaskRow) string { return r.Key }, a.Limit)
 		return tracker.Answer{Rows: rows, NextCursor: encodeGatherCursor(next)}, nil
 	}).
-	leveled(trackerDomain, func(a listArgs) statelog.ReadLevel { return a.Level },
+	leveled(func(a listArgs) statelog.ReadLevel { return a.Level },
 		func(a listArgs, level statelog.ReadLevel, floor statelog.Position) listArgs {
 			a.Level, a.Session = level, floor
 			return a
