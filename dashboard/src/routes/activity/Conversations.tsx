@@ -30,7 +30,7 @@ import { useCallback, useMemo } from "react";
 import { QueryState, Section } from "~/components/common.tsx";
 import { Callout, Card, EmptyState, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
+import { ClockText, DateCell, NumberCell, TextCell } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -42,7 +42,6 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { elapsedMs, fmtDateTime, fmtDuration, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -100,11 +99,7 @@ function ChannelState({ channel }: { channel: A2AChannel }) {
  * not among them — it is the header's own pill, and a state spelled in colour
  * and again in a list reads as two facts about one channel.
  */
-function channelFacts(
-  channel: A2AChannel,
-  seatName: (handle: string) => string,
-  now: number,
-): Fact[] {
+function channelFacts(channel: A2AChannel, seatName: (handle: string) => string): Fact[] {
   return [
     {
       label: "Asked by",
@@ -117,8 +112,8 @@ function channelFacts(
       path: ["company", "people", channel.target],
     },
     { label: "Messages", value: <NumberCell value={channel.messages} /> },
-    { label: "Opened", value: <DateCell at={channel.opened_at} now={now} /> },
-    { label: "Last message", value: <DateCell at={channel.last_at} now={now} /> },
+    { label: "Opened", value: <DateCell at={channel.opened_at} /> },
+    { label: "Last message", value: <DateCell at={channel.last_at} /> },
   ];
 }
 
@@ -141,11 +136,9 @@ function channelFacts(
 function Exchange({
   channel,
   seatName,
-  now,
 }: {
   channel: A2AChannel;
   seatName: (handle: string) => string;
-  now: number;
 }) {
   const answered = channel.messages > 1;
   return (
@@ -156,7 +149,9 @@ function Exchange({
           {seatName(channel.requester)} asked {seatName(channel.target)}
         </span>
         <span className="spacer" />
-        <span className="t-caption nowrap">{relTime(channel.opened_at, now)}</span>
+        <span className="t-caption nowrap">
+          <ClockText read={(now) => relTime(channel.opened_at, now)} />
+        </span>
       </div>
       <div className="row gap-2">
         <Tag appearance="outline">answer</Tag>
@@ -166,7 +161,11 @@ function Exchange({
             : "nothing has come back on this channel yet"}
         </span>
         <span className="spacer" />
-        {answered && <span className="t-caption nowrap">{relTime(channel.last_at, now)}</span>}
+        {answered && (
+          <span className="t-caption nowrap">
+            <ClockText read={(now) => relTime(channel.last_at, now)} />
+          </span>
+        )}
       </div>
       <span className="t-caption">
         The words themselves are not in the channel record: both halves travel over the seat inbox
@@ -189,7 +188,7 @@ function Exchange({
  * component defined inside a render body is a NEW function on every render, so
  * `<Wrap>` is a different element type each time and React unmounts the whole
  * subtree and builds it again rather than reconciling it. Both callers of
- * [ChannelBody] pass a `now` that ticks once a second, so the body's DOM was
+ * [ChannelBody] passed a `now` that ticked once a second, so the body's DOM was
  * replaced sixty times a minute — and a reader dragging over the channel id to
  * copy it lost the selection within the second, because the node it anchored
  * to no longer existed.
@@ -231,12 +230,10 @@ function Wrap({
 function ChannelBody({
   channel,
   seatName,
-  now,
   flush,
 }: {
   channel: A2AChannel;
   seatName: (handle: string) => string;
-  now: number;
   flush?: boolean;
 }) {
   // OPEN FOR HOW LONG, measured to the close where there is one and to the
@@ -247,7 +244,7 @@ function ChannelBody({
   return (
     <>
       <Wrap flush={flush} title="The exchange">
-        <Exchange channel={channel} seatName={seatName} now={now} />
+        <Exchange channel={channel} seatName={seatName} />
       </Wrap>
       <Wrap flush={flush} title="The record">
         <PropertiesRail
@@ -296,7 +293,6 @@ function ChannelBody({
  * tells them apart — see `queries.a2aChannels`.
  */
 export function ChannelPeek({ id }: { id: string }) {
-  const now = useNow();
   const seatName = useSeatName();
   const { data, loading, error, refusal } = useQuery("a2a_channels", WHOLE_RECORD, {
     enabled: id !== "",
@@ -331,10 +327,10 @@ export function ChannelPeek({ id }: { id: string }) {
               identifier={channel.id}
               title={channelTitle(channel, seatName)}
               status={<ChannelState channel={channel} />}
-              facts={channelFacts(channel, seatName, now)}
+              facts={channelFacts(channel, seatName)}
             />
             <div className="col gap-3">
-              <ChannelBody channel={channel} seatName={seatName} now={now} flush />
+              <ChannelBody channel={channel} seatName={seatName} flush />
             </div>
           </>
         )}
@@ -344,7 +340,6 @@ export function ChannelPeek({ id }: { id: string }) {
 }
 
 export function Conversations({ channelId }: { channelId?: string }) {
-  const now = useNow();
   const seatName = useSeatName();
   const channels = useQuery("a2a_channels", WHOLE_RECORD, { pollMs: POLL_MS });
   const rows = useMemo(() => channels.data?.channels ?? [], [channels.data]);
@@ -487,14 +482,14 @@ export function Conversations({ channelId }: { channelId?: string }) {
                   header: "Opened",
                   shrink: true,
                   sortValue: (c) => tsKey(c.opened_at),
-                  cell: (c) => <DateCell at={c.opened_at} now={now} />,
+                  cell: (c) => <DateCell at={c.opened_at} />,
                 },
                 {
                   key: "last",
                   header: "Last message",
                   shrink: true,
                   sortValue: (c) => tsKey(c.last_at),
-                  cell: (c) => <DateCell at={c.last_at} now={now} />,
+                  cell: (c) => <DateCell at={c.last_at} />,
                 },
               ]}
             />
@@ -515,9 +510,9 @@ export function Conversations({ channelId }: { channelId?: string }) {
             identifier={addressedChannel.id}
             title={channelName}
             status={<ChannelState channel={addressedChannel} />}
-            facts={channelFacts(addressedChannel, seatName, now)}
+            facts={channelFacts(addressedChannel, seatName)}
           />
-          <ChannelBody channel={addressedChannel} seatName={seatName} now={now} />
+          <ChannelBody channel={addressedChannel} seatName={seatName} />
         </>
       )}
       {/* ONLY OVER A RECORD THAT WAS ACTUALLY READ. "This node cannot reach the

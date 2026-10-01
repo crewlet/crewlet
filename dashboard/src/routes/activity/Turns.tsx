@@ -309,7 +309,6 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
             // holding rather than counted by the engine over the window.
             over="loaded"
             axis
-            now={now}
             onPick={range.set}
             label="Turns over the window"
           />
@@ -407,7 +406,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               header: "Started",
               shrink: true,
               sortValue: (t) => tsKey(t.started_at),
-              cell: (t) => <DateCell at={t.started_at} now={now} />,
+              cell: (t) => <DateCell at={t.started_at} />,
             },
             {
               key: "seat",

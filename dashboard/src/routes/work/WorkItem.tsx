@@ -70,7 +70,7 @@ import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { Mark } from "~/ui/glyph.tsx";
 import { plainText } from "~/lib/markdown.ts";
 import { fmtDate, fmtDateTime, fmtCount, fmtDuration, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { reasonAbout } from "~/lib/reasons.ts";
 import {
   changeMark,
@@ -180,12 +180,13 @@ export function itemFlags(detail: WorkItemDetail): ReactNode {
  * what a reader does next: there is no window and nothing is destroyed, so
  * this is a state rather than the end of the record.
  */
-export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number }) {
+export function RemovedNote({ tomb }: { tomb: WorkTombstone }) {
   return (
     <Callout variant="warning" icon={<DeleteGlyph size="md" />}>
       <span>
         <strong>This is in the trash.</strong> {tomb.by || "somebody"}
-        {tomb.kind ? ` (${tomb.kind})` : ""} removed it {relTime(tomb.at, now)}
+        {tomb.kind ? ` (${tomb.kind})` : ""} removed it{" "}
+        <ClockText read={(now) => relTime(tomb.at, now)} />
         {tomb.removed_with ? (
           <>
             {" "}
@@ -236,15 +237,7 @@ export function RemovedNote({ tomb, now }: { tomb: WorkTombstone; now: number })
  * The assignee is the exception and is always drawn: nobody holding a task is
  * an answer a reader comes to this line for, stated in the rail's own words.
  */
-function itemFacts({
-  detail,
-  chrome,
-  now,
-}: {
-  detail: WorkItemDetail;
-  chrome: RowChrome;
-  now: number;
-}): Fact[] {
+function itemFacts({ detail, chrome }: { detail: WorkItemDetail; chrome: RowChrome }): Fact[] {
   const item = detail.task;
   const seatName = chrome.seatName ?? ((handle: string) => handle);
   // AND THE KIND BESIDE IT, because a chip draws the dashed ring off it. An
@@ -296,7 +289,7 @@ function itemFacts({
       // row and lives on the row that carries it, precisely so no renderer
       // re-derives it differently and one screen calls a task overdue where
       // the next does not.
-      value: item.due_at ? <DueMark due={item.due_at} now={now} /> : undefined,
+      value: item.due_at ? <DueMark due={item.due_at} /> : undefined,
     },
   ];
 }
@@ -308,7 +301,6 @@ function itemFacts({
 export function WorkItem({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
   const state = useQuery("work_item", { id }, { enabled: id !== "", pollMs: 15_000 });
   const item = state.data?.task;
 
@@ -391,13 +383,13 @@ export function WorkItem({ id }: { id: string }) {
               identifier={item.key}
               title={item.title}
               status={itemFlags(state.data)}
-              facts={itemFacts({ detail: state.data, chrome, now })}
+              facts={itemFacts({ detail: state.data, chrome })}
             />
-            {item.removed && <RemovedNote tomb={item.removed} now={now} />}
+            {item.removed && <RemovedNote tomb={item.removed} />}
             <Coverage answer={state.data} />
             <div className="work-item">
               <div className="work-item-main">
-                <ItemBody detail={state.data} chrome={chrome} now={now} />
+                <ItemBody detail={state.data} chrome={chrome} />
               </div>
               <div className="work-item-side">
                 <Card>
@@ -455,7 +447,6 @@ export function WorkItem({ id }: { id: string }) {
 export function ItemPeek({ itemKey }: { itemKey: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
   const state = useQuery("work_item", { id: itemKey }, { enabled: itemKey !== "", pollMs: 15_000 });
   const item = state.data?.task;
   // GUARDED LIKE THE FULL SCREEN'S, and for the same reason: the peek mounts
@@ -500,11 +491,11 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 status={itemFlags(state.data)}
               />
               <div className="col gap-3">
-                {item.removed && <RemovedNote tomb={item.removed} now={now} />}
+                {item.removed && <RemovedNote tomb={item.removed} />}
                 <Coverage answer={state.data} />
                 <ItemProps detail={state.data} chrome={inner} project={project.data} compact />
                 <ItemLinks detail={state.data} chrome={inner} flush />
-                <ItemBody detail={state.data} chrome={inner} now={now} flush />
+                <ItemBody detail={state.data} chrome={inner} flush />
               </div>
             </>
           ) : (
@@ -548,7 +539,6 @@ export function Subtasks({
   rows,
   error,
   refusal,
-  now,
   chrome,
   peek,
 }: {
@@ -556,7 +546,6 @@ export function Subtasks({
   error?: string | null;
   /** Why the subtree read was refused, beside `error` — see `QueryState`. */
   refusal?: QueryRefusal | LogRefusal | null;
-  now: number;
   chrome: RowChrome;
   /**
    * Open a child in the rail instead of navigating to it.
@@ -598,7 +587,6 @@ export function Subtasks({
       </Card.Header>
       <RowList
         rows={rows}
-        now={now}
         chrome={chrome}
         hrefOf={(row) => href(["work", row.key])}
         onOpen={peek}
@@ -613,10 +601,10 @@ export function Subtasks({
  *
  * AT MODULE SCOPE, AND THAT IS THE WHOLE POINT. It was two arrow components
  * built inside [ItemBody]'s render and chosen with `flush`, so its type
- * identity was new on every render — and this screen re-renders once a second,
- * because it holds a live clock for its relative times. React reconciles on
- * type identity, so the description's rendered markdown was torn down and
- * rebuilt every tick: a reader selecting a sentence to copy lost the selection
+ * identity was new on every render — and this screen re-rendered once a second
+ * then, because it held a live clock for its relative times (they read it in
+ * the row now, through `ClockText`). React reconciles on type identity, so the
+ * description's rendered markdown was torn down and rebuilt every render: a reader selecting a sentence to copy lost the selection
  * within a second, along with focus and every other piece of per-node DOM
  * state. `flush` is a prop here rather than a branch at definition time for
  * exactly that reason.
@@ -652,12 +640,10 @@ function BodySection({
 export function ItemBody({
   detail,
   chrome,
-  now,
   flush,
 }: {
   detail: WorkItemDetail;
   chrome: RowChrome;
-  now: number;
   /** Inside the peek, where the panels are the page's own chrome already. */
   flush?: boolean;
 }) {
@@ -737,7 +723,6 @@ export function ItemBody({
         rows={subtasks}
         error={children.error}
         refusal={children.refusal}
-        now={now}
         chrome={chrome}
         peek={flush ? undefined : (row) => openPeek({ kind: "item", id: row.key })}
       />
@@ -800,11 +785,11 @@ export function ItemBody({
           ]}
         />
         {tab === "comments" ? (
-          <Thread comments={comments} chrome={chrome} now={now} more={detail.comments_cursor} />
+          <Thread comments={comments} chrome={chrome} more={detail.comments_cursor} />
         ) : tab === "woke" ? (
-          <Woke history={history} chrome={labels} now={now} record={record} onPick={setRecord} />
+          <Woke history={history} chrome={labels} record={record} onPick={setRecord} />
         ) : (
-          <History detail={detail} chrome={labels} now={now} />
+          <History detail={detail} chrome={labels} />
         )}
       </Card>
       {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
@@ -821,12 +806,10 @@ export function ItemBody({
 function Thread({
   comments,
   chrome,
-  now,
   more,
 }: {
   comments: WorkComment[];
   chrome: RowChrome;
-  now: number;
   more?: string;
 }) {
   if (comments.length === 0) {
@@ -852,7 +835,7 @@ function Thread({
               kind={chrome.seatKind?.(comment.author)}
             />
             <span className="muted" title={fmtDateTime(comment.created_at)}>
-              {relTime(comment.created_at, now)}
+              <ClockText read={(now) => relTime(comment.created_at, now)} />
             </span>
             {comment.updated_at && <span className="muted">(edited)</span>}
             {/* AN ASK IS THE ONE STATE IN A THREAD THAT IS ABOUT THE READER:
@@ -887,12 +870,10 @@ function Thread({
 function History({
   detail,
   chrome,
-  now,
 }: {
   detail: WorkItemDetail;
   /** The chart's resolvers AND the answer's own key map — see [ItemBody]. */
   chrome: RowChrome & LabelContext;
-  now: number;
 }) {
   const history = detail.history ?? [];
   if (history.length === 0) {
@@ -936,7 +917,7 @@ function History({
             )}
           </span>
           <span className="work-hist-when" title={fmtDateTime(entry.at)}>
-            {relTime(entry.at, now)}
+            <ClockText read={(now) => relTime(entry.at, now)} />
           </span>
         </div>
       ))}
@@ -969,14 +950,12 @@ function History({
 function Woke({
   history,
   chrome,
-  now,
   record,
   onPick,
 }: {
   history: WorkChange[];
   /** The chart's resolvers AND the answer's own key map — see [ItemBody]. */
   chrome: RowChrome & LabelContext;
-  now: number;
   record: string;
   onPick: (id: string) => void;
 }) {
@@ -1020,7 +999,7 @@ function Woke({
                 {describeHistory(entry, chrome)}
               </span>
               <span className="t-caption" title={fmtDateTime(entry.at)}>
-                {relTime(entry.at, now)}
+                <ClockText read={(now) => relTime(entry.at, now)} />
               </span>
             </span>
           </button>
@@ -1187,7 +1166,6 @@ export function ItemProps({
   // [attribution]: the keys are the tracker's own field names, and a property
   // whose last change fell outside the history window carries no line rather
   // than borrowing the oldest one still visible.
-  const now = useNow();
   const setBy = useMemo(() => attribution(detail.history), [detail.history]);
   // NAMED THE WAY THE ROWS BESIDE IT NAME PEOPLE. The change log carries a
   // handle, and the line rendered it raw — `agent-ceo · 21h ago` under a
@@ -1196,9 +1174,9 @@ export function ItemProps({
   // names, on one screen.
   const by = (field: ChangeField): SetBy | undefined => {
     const who = setBy.get(field);
-    return who
-      ? { ...who, actor: seatName(who.actor), ago: who.at ? relTime(who.at, now) : undefined }
-      : undefined;
+    // THE INSTANT, NOT ITS WORDS: the line reads "2h ago" off the clock itself,
+    // so this rail is not drawn again every second to move it.
+    return who ? { ...who, actor: seatName(who.actor) } : undefined;
   };
 
   // EVERY ROW SAYS WHICH KIND OF ABSENCE IT HAS. A property left out of the

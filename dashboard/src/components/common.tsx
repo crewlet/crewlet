@@ -19,7 +19,8 @@ import { Mark } from "~/ui/glyph.tsx";
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useClockReading } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { isLogRefusal } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
 import {
@@ -134,7 +135,6 @@ export function SeatCard({
   agent: AgentRow | undefined;
   sandboxes: SandboxEntry[];
 }) {
-  const now = useNow();
   const sandbox = sandboxFor(sandboxes, agent);
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
@@ -191,7 +191,9 @@ export function SeatCard({
             {round?.text}
           </span>
           <span className="spacer" />
-          <span className="t-caption">{relTime(call.updated_at, now)}</span>
+          <span className="t-caption">
+            <ClockText read={(now) => relTime(call.updated_at, now)} />
+          </span>
         </div>
       )}
       {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
@@ -207,7 +209,8 @@ export function SeatCard({
  * a reader decide whether to act now.
  */
 export function AttentionRow({ item }: { item: Attention }) {
-  const now = useNow();
+  // THE WORDS, NOT THE SECOND: a row renders when "4m ago" becomes "5m ago".
+  const ago = useClockReading((now) => relTime(item.at, now));
   const inner = (
     <>
       <span className="attention-icon">
@@ -221,7 +224,7 @@ export function AttentionRow({ item }: { item: Attention }) {
       </span>
       {item.at && (
         <time className="t-caption nowrap" dateTime={item.at} title={fmtDateTime(item.at)}>
-          {relTime(item.at, now)}
+          {ago}
         </time>
       )}
     </>
@@ -253,13 +256,17 @@ export function AttentionRow({ item }: { item: Attention }) {
  * made the old feed unreadable.
  */
 export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => void }) {
-  const now = useNow();
+  // THE ONLY THING ON THE ROW THE CLOCK MOVES is the relative half of its
+  // title, and the row reads it as WORDS: subscribed to the second, every row
+  // of a four-hundred-row log rendered once a second for a tooltip, where now
+  // a row renders when "4m ago" becomes "5m ago".
+  const ago = useClockReading((now) => relTime(event.timestamp, now));
   const body = (
     <>
       <time
         className="feed-time"
         dateTime={event.timestamp}
-        title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
+        title={`${fmtDateTime(event.timestamp)} · ${ago}`}
       >
         {/* A WALL CLOCK, AND THE TRACK IS SIZED FOR ONE. The full instant is
             in the title; which DAY a row belongs to is a heading between days

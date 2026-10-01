@@ -3517,6 +3517,21 @@ rendered idle from the first phase to the last.
   fresh snapshot. Nothing else closes this socket for a fault.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
+- **The clock reaches the words, not the screen.** It ticks once a second, and
+  whatever subscribes to the second renders once a second — so the element
+  that shows a time reads the clock itself, as a READING that changes less
+  often than the clock does: a cell's "4m ago" (`DateCell`, `ClockText`), a due
+  date's year, a calendar's today, a chart's column in progress
+  (`useClockReading`, `useToday` in `lib/clock.ts`). React renders a reader
+  when its reading changes, so "3h ago" is drawn once an hour and a due date
+  once a year. Nothing hands `now` down to rows: a grid's column definitions
+  never take it, because a screen that held the second and built its columns
+  from it drew every row again on every tick — measured at 58–69 ms a second
+  for a hundred-row grid under the development build, against no render at
+  all once the cells read the clock themselves. A screen holds `useNow` only
+  for what is genuinely about the second — a live strip, a countdown — and
+  where one component on it is, that component reads it rather than the
+  screen (the schedules' hour-ahead tile, a parked run's hold).
 
 ### The components come from the design system
 

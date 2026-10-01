@@ -392,7 +392,6 @@ export function HistoryView({
             noun="change"
             over="loaded"
             axis
-            now={now}
             label="Changes over this window"
           />
         ) : (

@@ -12,6 +12,7 @@ import { expect, test } from "vitest";
 // THE ONE MARK, from the design system rather than re-spelled here: a test
 // carrying its own copy of the glyph goes green on whatever is written.
 import { EMPTY_VALUE } from "@crewlethq/ui";
+import { browserDay } from "./format.ts";
 import {
   SCOPES,
   TYPE_ICON,
@@ -39,7 +40,6 @@ import {
   fmtMinutes,
   gridRange,
   groupLabel,
-  monthOf,
   NO_FILTERS,
   projectKeys,
   scopeOf,
@@ -54,7 +54,7 @@ import {
   type Shape,
   countedLabel,
   dayLabel,
-  monthOrNow,
+  monthOrToday,
   pageCount,
   pageNote,
 } from "./work.ts";
@@ -1148,9 +1148,9 @@ test("only dated rows reach a day, ordered by when they are due", () => {
   expect([...buckets.values()].flat()).toHaveLength(2);
 });
 
-test("the current month comes from the reader's own clock", () => {
-  const now = new Date(2031, 6, 4, 12, 0, 0);
-  expect(monthOf(now.getTime())).toBe("2031-07");
+test("the current month comes from the reader's own calendar", () => {
+  const today = browserDay(new Date(2031, 6, 4, 12, 0, 0));
+  expect(monthOrToday("", today)).toBe("2031-07");
 });
 
 // A COUNT SAID TWICE IS A COUNT THAT READS AS TWO FACTS. The hint exists to
@@ -1261,11 +1261,11 @@ test("the calendar's window wins the one due key, and never leaves it unset", ()
 // catch `NaN`, the cell count is `NaN` and the loop never runs — which takes
 // `buildItemsParams` down the calendar branch with no range at all.
 test("a month the address bar mangled falls back to the reader's own", () => {
-  const now = Date.parse("2031-04-16T12:00:00Z");
-  expect(monthOrNow("2031-04", now)).toBe("2031-04");
-  expect(monthOrNow("oops", now)).toBe(monthOf(now));
-  expect(monthOrNow("2031-13", now)).toBe(monthOf(now));
-  expect(monthOrNow("", now)).toBe(monthOf(now));
+  const today = "2031-05-16";
+  expect(monthOrToday("2031-04", today)).toBe("2031-04");
+  expect(monthOrToday("oops", today)).toBe("2031-05");
+  expect(monthOrToday("2031-13", today)).toBe("2031-05");
+  expect(monthOrToday("", today)).toBe("2031-05");
   // WHY the guard exists, rather than tidiness.
   expect(calendarWeeks("oops", "")).toHaveLength(0);
 });

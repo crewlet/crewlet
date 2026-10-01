@@ -36,7 +36,6 @@ import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { indexOrg, seatLookup, unitPath, type OrgIndex } from "~/lib/seats.ts";
 import { useChartRead } from "~/lib/chartReads.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { useMemo } from "react";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -379,7 +378,6 @@ function containerFacts({
   unread,
   units,
   unitsWithheld,
-  now,
 }: {
   container: PageContainer;
   /** The newest `updated_at` among the pages this node returned, if any. */
@@ -396,7 +394,6 @@ function containerFacts({
   units: { name: string; key: string }[] | null;
   /** Why [units] is null, as the sentence the fact shows in its place. */
   unitsWithheld: string;
-  now: number;
 }): Fact[] {
   const only = units?.length === 1 ? units[0] : undefined;
   return [
@@ -416,7 +413,7 @@ function containerFacts({
       value: unread ? (
         <EmptyValue label="The container's page list has not answered, so nothing here says when it last moved" />
       ) : (
-        <DateCell at={newest} now={now} />
+        <DateCell at={newest} />
       ),
       // WHAT THE VALUE COVERS, which is what a note is for. The engine orders
       // a page list by container and TITLE, so a read that came back at its
@@ -446,7 +443,7 @@ function containerFacts({
       // declares an id has no page under its name at all.
       path: only ? unitPath({ id: only.key }) : undefined,
     },
-    { label: "Created", value: <DateCell at={container.created_at} now={now} /> },
+    { label: "Created", value: <DateCell at={container.created_at} /> },
   ];
 }
 
@@ -476,7 +473,6 @@ function containerFacts({
  */
 export function ContainerPeek({ id }: { id: string }) {
   const org = useOrg();
-  const now = useNow();
   const index = useMemo(() => indexOrg(org), [org]);
   const containers = useQuery("containers", undefined, { enabled: id !== "", pollMs: 60_000 });
   // THE SAME SET THE COUNT COUNTS. `containers` excludes trashed pages from
@@ -563,7 +559,6 @@ export function ContainerPeek({ id }: { id: string }) {
                   unread: !list.data,
                   units,
                   unitsWithheld,
-                  now,
                 })}
               />
               <div className="col gap-3">
@@ -582,7 +577,7 @@ export function ContainerPeek({ id }: { id: string }) {
                   )}
                 </Card>
 
-                <ContainerPages container={found} recent={recent} list={list} now={now} />
+                <ContainerPages container={found} recent={recent} list={list} />
                 <ContainerWriters recent={recent} index={index} />
               </div>
             </>
@@ -616,7 +611,6 @@ function ContainerPages({
   container,
   recent,
   list,
-  now,
 }: {
   container: PageContainer;
   recent: PageSummary[];
@@ -627,7 +621,6 @@ function ContainerPages({
    * that there was a refusal.
    */
   list: Pick<QueryResult<unknown>, "error" | "loading" | "refusal">;
-  now: number;
 }) {
   return (
     <Card>
@@ -652,7 +645,7 @@ function ContainerPages({
             <span key={page.id} className="row gap-2">
               <PageLink page={page} />
               <span className="spacer" />
-              <DateCell at={page.updated_at} now={now} />
+              <DateCell at={page.updated_at} />
             </span>
           ))}
           {recent.length > PEEK_PAGES && (

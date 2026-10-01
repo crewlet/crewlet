@@ -378,7 +378,7 @@ export function Audit() {
         header: "When",
         shrink: true,
         sortValue: (row) => row.at,
-        cell: (row) => <DateCell at={row.at} now={now} />,
+        cell: (row) => <DateCell at={row.at} />,
       },
       {
         key: "source",
@@ -444,7 +444,7 @@ export function Audit() {
           ),
       },
     ],
-    [now, who],
+    [who],
   );
 
   const loading = work.loading || knowledge.loading || config.loading;

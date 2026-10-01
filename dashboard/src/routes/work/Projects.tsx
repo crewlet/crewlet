@@ -63,7 +63,6 @@ import { DashboardGlyph, ViewColumnGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
 import { Segmented } from "~/ui/primitives.tsx";
 import { filed, ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
@@ -183,7 +182,6 @@ export function Projects() {
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE, from one lookup: the lead's badge
   // draws the dashed ring off the KIND, and the last change prints the NAME.
   const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
-  const now = useNow();
   const [shownRaw, setShown] = useParam("shown", "active", "section");
   const shown: Shown = (SHOWN as readonly string[]).includes(shownRaw)
     ? (shownRaw as Shown)
@@ -438,10 +436,10 @@ export function Projects() {
         // SORTED BY WHEN, which is the question this column is for: a
         // directory read to find what has gone quiet is read newest-last.
         sortValue: (row) => row.last_change?.at ?? "",
-        cell: (row) => <LastChange row={row} now={now} seatName={(handle) => who(handle).name} />,
+        cell: (row) => <LastChange row={row} seatName={(handle) => who(handle).name} />,
       },
     ],
-    [who, now],
+    [who],
   );
 
   // WHAT THE CHOOSER OFFERS, DERIVED FROM THE COLUMNS ABOVE rather than listed
@@ -598,11 +596,9 @@ export function Projects() {
  */
 function LastChange({
   row,
-  now,
   seatName,
 }: {
   row: WorkProjectRow;
-  now: number;
   seatName: (handle: string) => string;
 }) {
   const change = row.last_change;
@@ -619,7 +615,7 @@ function LastChange({
     // are single values, so the rhythm a reader scans down was set by the one
     // column they scan last.
     <span className="work-lastchange">
-      <DateCell at={change.at} now={now} />
+      <DateCell at={change.at} />
       {/* A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor
           out — the engine did it. A handle is resolved through the chart like
           everywhere else, so this column says what the Lead column one cell

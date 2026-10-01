@@ -10,14 +10,24 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { FactLine, ObjectHeader, SetByLine, type SetBy } from "./ObjectHeader.tsx";
 import { PropertiesRail } from "./PropertiesRail.tsx";
 
-afterEach(cleanup);
+// THE LINE READS ITS "2h ago" OFF THE SHARED CLOCK, so the clock is held two
+// hours after [SET]: the system time is what the clock reads when it starts.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2031-04-16T11:00:00Z"));
+});
 
-const SET: SetBy = { actor: "ada", at: "2031-04-16T09:00:00Z", ago: "2h ago", turnId: "t-1" };
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+const SET: SetBy = { actor: "ada", at: "2031-04-16T09:00:00Z", turnId: "t-1" };
 
 // ONE WORDING, IN BOTH FRAMES. The fact line said "set by ada" and the rail
 // said a bare "ada" — the same provenance phrased two ways on one screen,

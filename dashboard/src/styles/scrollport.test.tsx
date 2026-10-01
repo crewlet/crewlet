@@ -205,7 +205,6 @@ function grouped() {
         groups={[group("todo", ["1", "2"]), group("in_progress", ["3"])]}
         axis="status"
         chrome={{}}
-        now={Date.parse("2031-04-16T00:00:00Z")}
         workspace
         hrefOf={(r) => `#/work/${r.key}`}
         onOpen={() => {}}

@@ -23,14 +23,85 @@
  * columns in this product did, makes the SECOND invisible instead.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { Profiler } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 
-import { DurationCell, NumberCell, SeatCell, TokenCell } from "./cells.tsx";
+import { DateCell, DurationCell, NumberCell, SeatCell, TokenCell } from "./cells.tsx";
+import { DataGrid, type GridColumn } from "./DataGrid.tsx";
+import { Router } from "../router.tsx";
 import { fmtCount, fmtDuration } from "~/lib/format.ts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+/** Holds the clock at `at`, and moves it one tick at a time as a tab sees it. */
+function clockAt(at: number): (times: number) => void {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(at);
+  return (times) => {
+    for (let i = 0; i < times; i++) {
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+    }
+  };
+}
+
+const T0 = Date.parse("2031-04-16T12:00:00Z");
+
+// A DATE CELL READS THE CLOCK ITSELF, AS WORDS. It took a `now` from the
+// screen above it, so every column that drew one made the screen's columns a
+// function of the clock and the grid drew every row once a second. Read here,
+// it follows the clock with nothing above it ticking — and it draws again
+// when its WORDS change, so "1m ago" costs nothing for the minute it holds.
+test("a date cell follows the clock by itself, and draws only when its words change", () => {
+  const tick = clockAt(T0);
+  let commits = 0;
+  render(
+    <Profiler id="cell" onRender={() => (commits += 1)}>
+      <DateCell at={new Date(T0 - 61_000).toISOString()} />
+    </Profiler>,
+  );
+  expect(screen.getByText("1m ago")).toBeTruthy();
+  const mounted = commits;
+
+  tick(58);
+  expect(commits).toBe(mounted);
+
+  tick(1);
+  expect(screen.getByText("2m ago")).toBeTruthy();
+  expect(commits).toBe(mounted + 1);
+});
+
+// AND A GRID HOLDING ONE DRAWS NO ROW ON A TICK. The column's cells are the
+// rows' own, so a cell renderer that runs again is a row that drew again —
+// which is what every tick cost every grid with a "When" column.
+test("a grid with a date column draws no row when the clock ticks", () => {
+  const tick = clockAt(T0);
+  const drawn = vi.fn((row: { id: string }) => row.id);
+  const rows = ["a", "b", "c"].map((id, i) => ({
+    id,
+    at: new Date(T0 - (61 + i) * 1_000).toISOString(),
+  }));
+  const columns: GridColumn<(typeof rows)[number]>[] = [
+    { key: "id", header: "Id", cell: drawn },
+    { key: "at", header: "When", cell: (row) => <DateCell at={row.at} /> },
+  ];
+  render(
+    <Router>
+      <DataGrid rows={rows} columns={columns} rowKey={(row) => row.id} />
+    </Router>,
+  );
+  const mounted = drawn.mock.calls.length;
+
+  tick(60);
+  expect(screen.getAllByText("2m ago")).toHaveLength(3);
+  expect(drawn.mock.calls.length).toBe(mounted);
+});
 
 test("a count is spelled the way fmtCount spells it", () => {
   for (const n of [0, 7, 999, 5_000, 12_345, 1_250_000]) {

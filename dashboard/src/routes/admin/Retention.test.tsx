@@ -188,7 +188,6 @@ test("an open capacity operation is rendered as an outage in progress", () => {
         by: "sre@example.com",
         participants_missing: ["node-b", "node-c"],
       }}
-      now={Date.now()}
     />,
   );
   expect(screen.getByRole("alert").className).toContain("danger");
@@ -210,7 +209,6 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
         original_max_bytes: 1_000_000_000,
         since: new Date(Date.now() - 60_000).toISOString(),
       }}
-      now={Date.now()}
     />,
   );
   expect(screen.getByText(/waiting on its operator/)).toBeTruthy();

@@ -48,13 +48,15 @@ const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
   ...over,
 });
 
-// ONE CLOCK for every case here, so a date's rendering is a function of the
-// row alone — a suite that read the real clock would change its own expected
-// text on New Year's Day.
+// ONE INSTANT for every case that reads a date's year, so its rendering is a
+// function of the row alone — a suite that read the real clock would change
+// its own expected text on New Year's Day. The marks read the shared clock
+// themselves (`useClockReading`), so a case holds the clock HERE, through the
+// system time the clock reads when it starts.
 const NOW = Date.parse("2031-04-16T00:00:00Z");
 
 const card = (over: Partial<WorkSummary> = {}) =>
-  render(<BoardCard row={row("1", over)} href="#/work/ENG-1" now={NOW} />);
+  render(<BoardCard row={row("1", over)} href="#/work/ENG-1" />);
 
 // ---------------------------------------------------------------------------
 // The card
@@ -84,7 +86,7 @@ test("an overdue due date is marked and an on-time one is not", () => {
   expect(container.querySelector(".work-due.overdue")).toBeTruthy();
   cleanup();
   const plain = render(
-    <BoardCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/work/ENG-2" now={NOW} />,
+    <BoardCard row={row("2", { due: "2031-09-01T00:00:00Z" })} href="#/work/ENG-2" />,
   );
   expect(plain.container.querySelector(".work-due")).toBeTruthy();
   expect(plain.container.querySelector(".work-due.overdue")).toBeNull();
@@ -103,7 +105,7 @@ test("an unassigned card draws the empty seat rather than a blank", () => {
     <BoardCard
       row={row("3", { assignee: "ada" })}
       href="#/work/ENG-3"
-      now={NOW}
+
       chrome={{ seatName: () => "Ada Lovelace" }}
     />,
   );
@@ -123,7 +125,7 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
   expect(bare.querySelector(".work-card-foot")).toBeNull();
   expect(bare.querySelector(".work-nobody")).toBeNull();
   cleanup();
-  const asRow = render(<WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} chrome={{}} />);
+  const asRow = render(<WorkRow row={row("1")} href="#/work/ENG-1" chrome={{}} />);
   expect(asRow.container.querySelector(".work-nobody")).toBeTruthy();
   cleanup();
   // ONE MARK IS ENOUGH, and the ghost comes back with it: "nobody holds this,
@@ -143,9 +145,7 @@ test("a card with nothing set draws no foot, while the same task as a row keeps 
 // the affordance is a lie.
 test("a plain click peeks and a modified click follows the link", () => {
   const onOpen = vi.fn();
-  const { container } = render(
-    <BoardCard row={row("4")} href="#/work/ENG-4" onOpen={onOpen} now={NOW} />,
-  );
+  const { container } = render(<BoardCard row={row("4")} href="#/work/ENG-4" onOpen={onOpen} />);
   const anchor = container.querySelector("a.work-card");
   expect(anchor?.getAttribute("href")).toBe("#/work/ENG-4");
 
@@ -187,7 +187,6 @@ const overflowHref = (axis: string, key: string) =>
 const board = (groups: WorkGroup[], axis = "status") =>
   render(
     <Board
-      now={NOW}
       groups={groups}
       axis={axis}
       chrome={{}}
@@ -246,7 +245,6 @@ test("an overflow link hands the axis and the column back to the screen", () => 
   const onOverflow = vi.fn();
   render(
     <Board
-      now={NOW}
       groups={[group("ada", { count: 9, rows: [row("a")] })]}
       axis="assignee"
       chrome={{}}
@@ -385,7 +383,6 @@ test("a list row carries the same facts a card does", () => {
         overdue: true,
       })}
       href="#/work/ENG-1"
-      now={Date.parse("2031-04-16T00:00:00Z")}
       chrome={{ seatName: () => "Ada Lovelace" }}
     />,
   );
@@ -402,14 +399,12 @@ test("a list row carries the same facts a card does", () => {
 // at forty different places. This is the assertion that the cells are the
 // row's and not the marks'.
 test("a row with nothing to say in a column still keeps the column", () => {
-  const bare = render(
-    <WorkRow row={row("1")} href="#/work/ENG-1" now={NOW} chrome={{}} />,
-  ).container;
+  const bare = render(<WorkRow row={row("1")} href="#/work/ENG-1" chrome={{}} />).container;
   const full = render(
     <WorkRow
       row={row("2", { priority: "urgent", due: "2031-04-01T00:00:00Z", assignee: "ada" })}
       href="#/work/ENG-2"
-      now={NOW}
+
       chrome={{ seatName: () => "Ada Lovelace" }}
     />,
   ).container;
@@ -426,12 +421,18 @@ test("a row with nothing to say in a column still keeps the column", () => {
 // down forty rows is how the one row due in 2032 goes unnoticed — and the
 // full instant is still on the title, so nothing is lost.
 test("a due date in this year is drawn without it, and another year keeps it", () => {
-  const drawn = (due: string) =>
-    render(
-      <WorkRow row={row("1", { due })} href="#/work/ENG-1" now={NOW} chrome={{}} />,
-    ).container.querySelector(".work-due")?.textContent ?? "";
-  expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
-  expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+  try {
+    const drawn = (due: string) =>
+      render(
+        <WorkRow row={row("1", { due })} href="#/work/ENG-1" chrome={{}} />,
+      ).container.querySelector(".work-due")?.textContent ?? "";
+    expect(drawn("2031-09-01T00:00:00Z")).not.toContain("2031");
+    expect(drawn("2032-09-01T00:00:00Z")).toContain("2032");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // THE DEFAULT IS DRAWN AS NOTHING. `normal` is what a task gets when nobody
@@ -442,12 +443,7 @@ test("a due date in this year is drawn without it, and another year keeps it", (
 test("an ordinary priority draws no mark at all", () => {
   const marks = (priority?: string) =>
     render(
-      <WorkRow
-        row={row("1", { priority })}
-        href="#/work/ENG-1"
-        now={Date.parse("2031-04-16T00:00:00Z")}
-        chrome={{}}
-      />,
+      <WorkRow row={row("1", { priority })} href="#/work/ENG-1" chrome={{}} />,
     ).container.querySelectorAll(".work-prio").length;
   expect(marks("normal")).toBe(0);
   expect(marks(undefined)).toBe(0);

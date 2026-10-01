@@ -108,7 +108,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
-import { useNow } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { pageCount, type Scope } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
@@ -173,7 +173,6 @@ type Tab = (typeof TABS)[number];
 
 export function MyWork() {
   const org = useOrg();
-  const now = useNow();
   const [handle, setHandle] = useParam("handle", "");
   const [tab, setTab] = useTab("tab", TABS);
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be reached
@@ -374,7 +373,6 @@ export function MyWork() {
           they={they}
           stamp={person.data ?? undefined}
           onPriorities={tab === "priorities" ? undefined : () => setTab("priorities")}
-          now={now}
           chrome={chrome}
         />
       )}
@@ -423,13 +421,10 @@ export function MyWork() {
                   five shapes; what this screen supplies is the one narrowing
                   the tab IS and what it opens on. */}
               {tab === "assigned" && <ItemsView host={host} />}
-              {tab === "priorities" && (
-                <Priorities mine={mine} now={now} chrome={chrome} they={they} />
-              )}
+              {tab === "priorities" && <Priorities mine={mine} chrome={chrome} they={they} />}
               {tab === "asks" && (
                 <Asks
                   rows={mine.asked_of_me}
-                  now={now}
                   chrome={chrome}
                   ownDay={ownDay}
                   whenEmpty={
@@ -444,7 +439,6 @@ export function MyWork() {
               {tab === "unblocked" && (
                 <Block
                   rows={mine.unblocked_recent}
-                  now={now}
                   chrome={chrome}
                   hint="Work whose blockers have all finished — the one tab about a change rather than a state."
                   empty={`Nothing that was waiting on something else has become workable for ${they}.`}
@@ -453,7 +447,6 @@ export function MyWork() {
               {tab === "collaborating" && (
                 <Block
                   rows={mine.collaborating}
-                  now={now}
                   chrome={chrome}
                   hint="Brought on without owning."
                   empty={`Nobody has brought ${they} onto a task they do not own.`}
@@ -462,7 +455,6 @@ export function MyWork() {
               {tab === "watching" && (
                 <Block
                   rows={mine.watching_recent}
-                  now={now}
                   chrome={chrome}
                   hint="Followed, and changed recently."
                   empty={`Nothing ${ownDay ? "you follow" : "they follow"} has moved lately.`}
@@ -528,7 +520,6 @@ function WhoseDay({
   they,
   stamp,
   onPriorities,
-  now,
   chrome,
 }: {
   handle: string;
@@ -546,7 +537,6 @@ function WhoseDay({
   stamp?: WorkPersonState;
   /** Opens the Priorities tab, or absent where that tab is already open. */
   onPriorities?: () => void;
-  now: number;
   chrome: RowChrome;
 }) {
   const setBy = stamp?.priorities_set_by;
@@ -567,8 +557,13 @@ function WhoseDay({
       {setBy && (
         <Callout variant="info">
           {chrome.seatName?.(setBy) ?? setBy} put this order in place
-          {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}. The next
-          change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
+          {stamp?.priorities_set_at && (
+            <>
+              {" "}
+              <ClockText read={(now) => relTime(stamp.priorities_set_at, now)} />
+            </>
+          )}
+          . The next change {they === "you" ? "you make" : "they make"} to it clears the stamp.{" "}
           {onPriorities && (
             <button type="button" className="t-link" onClick={onPriorities}>
               Priorities →
@@ -779,17 +774,7 @@ function assignedEmpty(scope: Scope, they: string): { title: string; description
  * would be the dashboard deciding a team's order. `set_priorities` is the
  * gesture, and it is somebody's own.
  */
-function Priorities({
-  mine,
-  now,
-  chrome,
-  they,
-}: {
-  mine: WorkMyWork;
-  now: number;
-  chrome: RowChrome;
-  they: string;
-}) {
+function Priorities({ mine, chrome, they }: { mine: WorkMyWork; chrome: RowChrome; they: string }) {
   // THE STAMP IS NOT DRAWN HERE. It is the banner above the strip, on every
   // tab, because it is the one thing on this screen that asks to be
   // acknowledged and a reader who has already opened this tab has answered it
@@ -812,7 +797,6 @@ function Priorities({
               the tab is about, invisible. */}
           <RowList
             rows={mine.priorities}
-            now={now}
             chrome={chrome}
             hrefOf={(row) => href(["work", row.key])}
             ordinals
@@ -826,13 +810,11 @@ function Priorities({
 /** One of the six bounded blocks, drawn as the same list as everything else. */
 function Block({
   rows,
-  now,
   chrome,
   hint,
   empty,
 }: {
   rows: WorkSummary[];
-  now: number;
   chrome: RowChrome;
   hint: string;
   empty: string;
@@ -848,7 +830,7 @@ function Block({
     <>
       <p className="t-caption">{hint}</p>
       <div className="work-list">
-        <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+        <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
       </div>
     </>
   );
@@ -869,7 +851,6 @@ function Block({
  */
 export function Asks({
   rows,
-  now,
   chrome,
   // WHOSE QUESTIONS THESE ARE, and the DEFAULT IS SOMEBODY ELSE'S. This block
   // is rendered on a report's day here and on every seat page, which is written
@@ -884,7 +865,6 @@ export function Asks({
   whenEmpty,
 }: {
   rows: WorkAskRow[];
-  now: number;
   chrome?: RowChrome;
   ownDay?: boolean;
   whenEmpty?: ReactNode;
@@ -906,7 +886,9 @@ export function Asks({
               handle={ask.asked_by}
               kind={chrome?.seatKind?.(ask.asked_by)}
             />
-            <span className="muted">{relTime(ask.asked_at, now)}</span>
+            <span className="muted">
+              <ClockText read={(now) => relTime(ask.asked_at, now)} />
+            </span>
           </div>
           <div className="prose md">{renderMarkdown(ask.body)}</div>
           {/* THE CALL THAT ANSWERS IT, pre-filled. The dashboard writes

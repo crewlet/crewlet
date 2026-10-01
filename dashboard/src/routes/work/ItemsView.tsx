@@ -76,7 +76,7 @@ import { Segmented } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useToday } from "~/lib/clock.ts";
 import {
   anyFilter,
   asScope,
@@ -84,7 +84,6 @@ import {
   buildItemsParams,
   calendarWeeks,
   countedLabel,
-  dayKey,
   defaultView,
   effectiveArrangement,
   endNote,
@@ -92,7 +91,7 @@ import {
   filterChips,
   filterPatchForGroup,
   gridRange,
-  monthOrNow,
+  monthOrToday,
   seededScope,
   shapeOf,
   shownRows,
@@ -192,10 +191,14 @@ export function ItemsView({
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  // ONE CLOCK for the screen, ticking on its own: a relative time computed
-  // from Date.now() at render is frozen until something else re-renders, so
-  // "2 minutes ago" stays that for an hour on a screen nobody touches.
-  const now = useNow();
+  // THE DAY, NOT THE SECOND. Which day it is — the calendar's today cell and
+  // the month it opens on — is all this screen reads off the clock itself.
+  // It held the second, and every shape it draws re-rendered with it: two
+  // hundred grid rows, every board card and the timeline's whole layout, once
+  // a second, to arrive at the same day. A relative time or a due date on a
+  // row reads the clock in the row (`ClockText`, `DueMark`), and only when its
+  // words change.
+  const today = useToday();
 
   // THE SECTIONS — a place the reader called, so each pushes history. The
   // shape is one of them: switching a list to a board is a screen somebody
@@ -362,11 +365,10 @@ export function ItemsView({
     fields,
   };
 
-  const thisMonth = monthOrNow(month, now);
-  const todayKey = dayKey(new Date(now).toISOString());
+  const thisMonth = monthOrToday(month, today);
   const weeks = useMemo(
-    () => (shape === "calendar" ? calendarWeeks(thisMonth, todayKey) : []),
-    [shape, thisMonth, todayKey],
+    () => (shape === "calendar" ? calendarWeeks(thisMonth, today) : []),
+    [shape, thisMonth, today],
   );
 
   const params = useMemo(
@@ -768,7 +770,6 @@ export function ItemsView({
                 does. */}
             {!nothingShown && shape === "board" && (
               <Board
-                now={now}
                 groups={groups}
                 axis={String(params.group_by ?? "status")}
                 chrome={chrome}
@@ -797,7 +798,6 @@ export function ItemsView({
                 subAxis={String(params.group_by2 ?? "")}
                 chrome={chrome}
                 detail={detail}
-                now={now}
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
@@ -819,7 +819,6 @@ export function ItemsView({
                 groups={bands}
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
-                now={now}
                 hrefOf={itemHref}
                 onOpen={(row) => openPeek({ kind: "item", id: row.key })}
               />
@@ -838,9 +837,7 @@ export function ItemsView({
             )}
           </QueryState>
 
-          {inTrash && (
-            <PurgeBand records={purges} answer={tombstones.data ?? undefined} now={now} />
-          )}
+          {inTrash && <PurgeBand records={purges} answer={tombstones.data ?? undefined} />}
         </div>
       </div>
     </>

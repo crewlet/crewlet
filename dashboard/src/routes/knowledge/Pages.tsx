@@ -35,7 +35,14 @@ import { Card, cx, EmptyState, FilterChip, Input, Select, Skeleton, Tag } from "
 // `activate="manual"` exists for. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, NumberCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import {
+  ClockText,
+  DateCell,
+  KeyCell,
+  NumberCell,
+  SeatCell,
+  TextCell,
+} from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -51,7 +58,6 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { Page, PageRevision, PageSummary } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -108,13 +114,11 @@ export function pageAddress(page: { container: string; title: string }): string 
 function pageFacts({
   page,
   history,
-  now,
   seatName,
 }: {
   page: Page;
   /** Newest first, as the `page` answer orders it. */
   history: PageRevision[];
-  now: number;
   seatName: (handle: string) => string;
 }): Fact[] {
   const last = history[0];
@@ -136,7 +140,6 @@ function pageFacts({
         ? {
             actor: last.author ? seatName(last.author) : "the engine",
             at: last.created_at,
-            ago: relTime(last.created_at, now),
           }
         : undefined,
     },
@@ -150,7 +153,7 @@ function pageFacts({
     },
     {
       label: "Updated",
-      value: <DateCell at={page.updated_at} now={now} />,
+      value: <DateCell at={page.updated_at} />,
       // WHY THIS IS NOT THE SAVE ABOVE IT. Ten kinds of change stamp a page —
       // `internal/pages` writes a history entry for a comment, a rename, a
       // move and a label edit as well as a save — so these two instants
@@ -226,7 +229,6 @@ export function Pages({ container: fromPath }: { container?: string }) {
   const org = useOrg();
   const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
 
   // THE CONTAINER IS THE PATH (`#/knowledge/ENG`), because a container is an
   // object — it has an owning unit, a page tree and a purpose — and a filter
@@ -483,7 +485,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 shrink: true,
                 align: "right",
                 sortValue: (r) => tsKey(r.updated_at),
-                cell: (r) => <DateCell at={r.updated_at} now={now} />,
+                cell: (r) => <DateCell at={r.updated_at} />,
               },
             ]}
           />
@@ -507,7 +509,6 @@ export function PageView({ container, title }: { container: string; title: strin
   const org = useOrg();
   const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
   const id = `${container}/${title}`;
   const { data, loading, error, refusal } = useQuery(
     "page",
@@ -603,7 +604,7 @@ export function PageView({ container, title }: { container: string; title: strin
               // id it has is the uuid nobody types.
               title={page.title}
               status={pageFlags(page)}
-              facts={pageFacts({ page, history, now, seatName })}
+              facts={pageFacts({ page, history, seatName })}
             />
 
             <Card>
@@ -653,7 +654,7 @@ export function PageView({ container, title }: { container: string; title: strin
                       <div className="row" style={{ gap: "var(--space-2)" }}>
                         <SeatChip handle={c.author} {...who(c.author)} />
                         <span className="muted" title={fmtDateTime(c.created_at)}>
-                          {relTime(c.created_at, now)}
+                          <ClockText read={(now) => relTime(c.created_at, now)} />
                         </span>
                         {c.edited_at && <span className="muted">(edited)</span>}
                       </div>
@@ -666,9 +667,9 @@ export function PageView({ container, title }: { container: string; title: strin
               )}
             </Card>
 
-            <PageHistory pageID={page.id} history={history} seatName={seatName} now={now} />
+            <PageHistory pageID={page.id} history={history} seatName={seatName} />
 
-            <PageChanges pageID={page.id} seatName={seatName} now={now} />
+            <PageChanges pageID={page.id} seatName={seatName} />
             {/* WHAT IT WOULD TAKE TO EDIT THIS, since the dashboard does not.
                 The save states the version it edited, because a page has no
                 per-field merge that makes overwriting prose safe. */}
@@ -744,7 +745,6 @@ function firstLines(body: string, max: number): { head: string; more: number } {
 export function PagePeek({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery(
     "page",
     { id },
@@ -786,7 +786,7 @@ export function PagePeek({ id }: { id: string }) {
               icon="description"
               title={page.title}
               status={pageFlags(page)}
-              facts={pageFacts({ page, history, now, seatName })}
+              facts={pageFacts({ page, history, seatName })}
             />
             <div className="col gap-3">
               <Card>
@@ -856,7 +856,7 @@ export function PagePeek({ id }: { id: string }) {
                         </span>
                         {rev.message && <span className="muted truncate">{rev.message}</span>}
                         <span className="spacer" />
-                        <DateCell at={rev.created_at} now={now} />
+                        <DateCell at={rev.created_at} />
                       </span>
                     ))}
                     {history.length > PEEK_SAVES && (
@@ -946,12 +946,10 @@ function PageHistory({
   pageID,
   history,
   seatName,
-  now,
 }: {
   pageID: string;
   history: PageRevision[];
   seatName: (handle: string) => string;
-  now: number;
 }) {
   // WHICH VERSION IS OPEN, as a FILTER: stepping through a page's versions
   // must not fill the back stack with every one the reader glanced at.
@@ -1006,7 +1004,7 @@ function PageHistory({
                 {rev.message && <span className="muted truncate">{rev.message}</span>}
                 <span className="spacer" />
                 <span className="muted" title={fmtDateTime(rev.created_at)}>
-                  {relTime(rev.created_at, now)}
+                  <ClockText read={(now) => relTime(rev.created_at, now)} />
                 </span>
               </span>
             </button>
@@ -1115,11 +1113,9 @@ function PageHistory({
 function PageChanges({
   pageID,
   seatName,
-  now,
 }: {
   pageID: string;
   seatName: (handle: string) => string;
-  now: number;
 }) {
   const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
   const changes = feed.data?.changes ?? [];
@@ -1162,7 +1158,7 @@ function PageChanges({
                   </a>
                 )}
                 <span className="muted" title={fmtDateTime(change.at)}>
-                  {relTime(change.at, now)}
+                  <ClockText read={(now) => relTime(change.at, now)} />
                 </span>
               </span>
               {change.excerpt && <p className="t-caption">{plainText(change.excerpt)}</p>}

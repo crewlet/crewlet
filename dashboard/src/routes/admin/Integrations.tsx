@@ -50,6 +50,7 @@ import {
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import {
+  ClockText,
   DateCell,
   DurationCell,
   KeyCell,
@@ -60,7 +61,6 @@ import {
 } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
-import { useNow } from "~/lib/clock.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { useRestRead, type RestRead } from "~/lib/restRead.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
@@ -563,7 +563,6 @@ function soonestOf(
 export function integrationFacts(
   entry: Entry,
   rows: Map<string, IntegrationRow>,
-  now: number,
   traffic: { known: boolean; since?: string | null },
 ): Fact[] {
   const present = presentSurfaces(entry, rows);
@@ -613,11 +612,11 @@ export function integrationFacts(
       // surface checked a moment ago and one nothing has looked at in an hour
       // read identically.
       label: "Last pass",
-      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />,
+      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} />,
     },
     {
       label: "Next pass",
-      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />,
+      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} />,
     },
   ];
 }
@@ -1980,7 +1979,6 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
  */
 function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
-  const now = useNow();
   const org = useOrg();
   // WHO A DELIVERY REACHED. The tag carries a HANDLE, which is an address
   // rather than a label: passed straight through as the name it put
@@ -2051,7 +2049,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Arrived",
                 shrink: true,
                 sortValue: (e) => tsKey(e.timestamp),
-                cell: (e) => <DateCell at={e.timestamp} now={now} />,
+                cell: (e) => <DateCell at={e.timestamp} />,
               },
               {
                 key: "event",
@@ -2453,7 +2451,6 @@ function concludedLine(run: SetupRun): string {
  * rather than expanding the row's own copy — see [useSetupRun].
  */
 export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
-  const now = useNow();
   const { runs, scope, guarded, needs, failure, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
@@ -2497,7 +2494,7 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
       header: "Ran",
       shrink: true,
       sortValue: (run) => tsKey(run.started_at),
-      cell: (run) => <DateCell at={run.started_at} now={now} />,
+      cell: (run) => <DateCell at={run.started_at} />,
     },
     // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
     // value is the tool's own name is a column that says nothing.
@@ -2625,7 +2622,6 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
             kind={open.kind}
             id={open.id}
             name={named.get(open.kind) ?? open.kind}
-            now={now}
           />
         </Card.Footer>
       )}
@@ -2646,13 +2642,11 @@ function PassDetail({
   kind,
   id,
   name,
-  now,
 }: {
   kind: string;
   id: string;
   /** The surface in the reader's words, from the catalogue. */
   name: string;
-  now: number;
 }) {
   const { run, missing, guarded, needs, failure, loading } = useSetupRun(kind, id);
 
@@ -2696,7 +2690,8 @@ function PassDetail({
           {name} · {state.label}
         </p>
         <span className="int-row-note-when">
-          started {fmtDateTime(run.started_at)} ({relTime(run.started_at, now)})
+          started {fmtDateTime(run.started_at)} (
+          <ClockText read={(now) => relTime(run.started_at, now)} />)
           {run.ended_at ? `, ended ${fmtDateTime(run.ended_at)}` : ""}
         </span>
         {/* THE FAULT, WHERE THERE IS ONE. A pass that could not run has no
@@ -2762,7 +2757,7 @@ function openFindings(present: Present[]): { surface: string; finding: Reconcile
  * which on the panel that exists to say whether anything is arriving is the
  * one wrong answer.
  */
-function LastDelivery({ surface, name, now }: { surface: string; name: string; now: number }) {
+function LastDelivery({ surface, name }: { surface: string; name: string }) {
   // A minute, the cadence "is anything arriving at all" is asked at — the same
   // one the deliveries panel and the traffic counters use. A delivery arrives
   // on the provider's schedule rather than this panel's.
@@ -2791,7 +2786,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
         </span>
       </div>
       {row ? (
-        <DateCell at={row.timestamp} now={now} />
+        <DateCell at={row.timestamp} />
       ) : (
         <EmptyValue label="No delivery is recorded for this surface" />
       )}
@@ -2818,7 +2813,6 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
  * else.
  */
 export function IntegrationPeek({ kind }: { kind: string }) {
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery("integrations", undefined, {
     enabled: kind !== "",
     // The same slow cadence the screen uses at rest: traffic counters move
@@ -2876,7 +2870,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         // itself. The panel below says the one true thing instead.
         facts={
           present.length > 0
-            ? integrationFacts(entry, rows, now, {
+            ? integrationFacts(entry, rows, {
                 known: data?.traffic_known ?? false,
                 since: data?.traffic_since,
               })
@@ -3000,12 +2994,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                   {entry.surfaces
                     .filter((surface) => surface.key !== "forge")
                     .map((surface) => (
-                      <LastDelivery
-                        key={surface.key}
-                        surface={surface.key}
-                        name={surface.name}
-                        now={now}
-                      />
+                      <LastDelivery key={surface.key} surface={surface.key} name={surface.name} />
                     ))}
                 </ul>
               </Card>
@@ -3059,10 +3048,6 @@ export function Integrations({ kind }: { kind?: string }) {
     refetchOnFocus: true,
   });
   const setup = useSetup();
-  // ONE CLOCK for every relative time on the screen, the header's facts
-  // included — two components reading their own is how "4m ago" comes to sit
-  // beside "3m ago" for one instant.
-  const now = useNow();
   // READ AGAIN AFTER A WRITE, because the first read can land before the
   // engine has applied the revision it just stored. See [useRecheck].
   const { watching, watch } = useRecheck(
@@ -3182,7 +3167,7 @@ export function Integrations({ kind }: { kind?: string }) {
           status={headerStatus(focusState, setup.loading, presentSurfaces(focus, rows).length > 0)}
           facts={
             presentSurfaces(focus, rows).length > 0
-              ? integrationFacts(focus, rows, now, {
+              ? integrationFacts(focus, rows, {
                   known: data?.traffic_known ?? false,
                   since: data?.traffic_since,
                 })

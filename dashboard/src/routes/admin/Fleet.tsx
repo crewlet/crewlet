@@ -73,7 +73,6 @@ import { href } from "~/app/router.tsx";
 import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plural } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { RetentionPanels } from "./Retention.tsx";
 
@@ -105,7 +104,6 @@ export function Fleet({ node }: { node?: string }) {
 // ---------------------------------------------------------------------------
 
 function FleetScreen() {
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, { pollMs: POLL_MS });
   const { open: openPeek } = usePeekControls();
 
@@ -332,7 +330,7 @@ function FleetScreen() {
                 header: "Up since",
                 shrink: true,
                 sortValue: (n) => n.started_at ?? "",
-                cell: (n) => <DateCell at={n.started_at} now={now} />,
+                cell: (n) => <DateCell at={n.started_at} />,
               },
             ]}
           />
@@ -522,7 +520,6 @@ function nodeFlags(node: FleetNode, thisNode?: string): React.ReactNode {
  * describe a different node on every refresh.
  */
 export function NodeScreen({ id }: { id: string }) {
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
@@ -555,7 +552,7 @@ export function NodeScreen({ id }: { id: string }) {
                 status={nodeFlags(node, data.this_node)}
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
               />
-              <NodePanels node={node} answer={data} now={now} />
+              <NodePanels node={node} answer={data} />
               <Card>
                 <Card.Header icon={<TuneGlyph size="sm" />}>Placement</Card.Header>
                 <div className="col gap-2">
@@ -606,7 +603,6 @@ export function NodeScreen({ id }: { id: string }) {
  * load balancer picked. Finding one row in that answer is the whole lookup.
  */
 export function NodePeek({ id }: { id: string }) {
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
@@ -630,7 +626,7 @@ export function NodePeek({ id }: { id: string }) {
                 facts={nodeFacts({ node, target: data.target_epoch, version })}
               />
               <div className="col gap-3">
-                <NodePanels node={node} answer={data} now={now} />
+                <NodePanels node={node} answer={data} />
               </div>
             </>
           ) : (
@@ -749,7 +745,7 @@ export function nodeFacts({
  * applied the revision the fleet activated, the leases it holds, and the
  * fleet-wide duties that landed on it.
  */
-function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswer; now: number }) {
+function NodePanels({ node, answer }: { node: FleetNode; answer: FleetAnswer }) {
   const { open: openPeek } = usePeekControls();
   const seats = answer.seats.filter((s) => s.node === node.id);
   const duties = answer.duties.filter((d) => d.node === node.id);
@@ -794,7 +790,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             </Tag>
             <span className="spacer" />
             <span className="t-caption">reported</span>
-            <DateCell at={node.config_reported_at} now={now} />
+            <DateCell at={node.config_reported_at} />
           </div>
           {node.config_error && (
             <Callout variant="danger" role="alert">
@@ -807,7 +803,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
                 a node that publishes none is not a node running no turns. */}
             <NumberCell value={node.in_flight} />
             <span className="t-label">Up since</span>
-            <DateCell at={node.started_at} now={now} />
+            <DateCell at={node.started_at} />
           </div>
           <p className="t-caption">
             A node reports the epoch it has applied; the activation pointer names the one the fleet

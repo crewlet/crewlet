@@ -106,7 +106,6 @@ import {
   type SeatReading,
 } from "~/lib/seats.ts";
 import { configValueKind, fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { spanWords } from "~/lib/range.ts";
 import {
   attempts,
@@ -131,6 +130,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import {
+  ClockText,
   DateCell,
   DurationCell,
   KeyCell,
@@ -511,7 +511,6 @@ export function SeatScreen({ handle }: { handle: string }) {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const tokens = useTokens();
-  const now = useNow();
 
   // WHICH THREAD IS OPEN, as a filter rather than a section: opening one
   // replaces the history entry, so Back leaves the seat rather than walking
@@ -902,7 +901,12 @@ export function SeatScreen({ handle }: { handle: string }) {
         >
           <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
           {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
-          {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
+          {agent.last_error.at && (
+            <>
+              {" · "}
+              <ClockText read={(now) => relTime(agent?.last_error?.at, now)} />
+            </>
+          )}
         </Callout>
       )}
       {state === "afk" && (
@@ -1045,13 +1049,19 @@ export function SeatScreen({ handle }: { handle: string }) {
                 // what carrying the instant the whole way and rendering
                 // nothing amounted to.
                 sub={
-                  person.data.priorities_set_by
-                    ? `set by ${person.data.priorities_set_by}${
-                        person.data.priorities_set_at
-                          ? ` ${relTime(person.data.priorities_set_at, now)}`
-                          : ""
-                      }`
-                    : "their own order"
+                  person.data.priorities_set_by ? (
+                    <>
+                      set by {person.data.priorities_set_by}
+                      {person.data.priorities_set_at && (
+                        <>
+                          {" "}
+                          <ClockText read={(now) => relTime(person.data?.priorities_set_at, now)} />
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    "their own order"
+                  )
                 }
               />
               <StatCard
@@ -1441,7 +1451,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                         ) : !row.enabled ? (
                           <Tag appearance="outline">disabled</Tag>
                         ) : row.next_run ? (
-                          <DateCell at={row.next_run} now={now} />
+                          <DateCell at={row.next_run} />
                         ) : (
                           <EmptyValue label="Not recorded" />
                         ),
@@ -1492,7 +1502,6 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </Card.Header>
                 <RowList
                   rows={items.data?.items ?? []}
-                  now={now}
                   chrome={chrome}
                   hrefOf={(row) => href(["work", row.key])}
                 />
@@ -1504,12 +1513,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                 they are reading somebody else's queue. */}
             {mayReadPerson ? (
               <>
-                <Asks rows={mine.data?.asked_of_me ?? []} now={now} chrome={chrome} />
+                <Asks rows={mine.data?.asked_of_me ?? []} chrome={chrome} />
                 <TaskBlock
                   title="What they mean to do first"
                   hint="Their own order, as they set it."
                   rows={mine.data?.priorities ?? []}
-                  now={now}
                   chrome={chrome}
                   hrefOf={(row) => href(["work", row.key])}
                 />
@@ -1517,7 +1525,6 @@ export function SeatScreen({ handle }: { handle: string }) {
                   title="Collaborating"
                   hint="Tasks they are named on without owning."
                   rows={mine.data?.collaborating ?? []}
-                  now={now}
                   chrome={chrome}
                   hrefOf={(row) => href(["work", row.key])}
                 />
@@ -1567,7 +1574,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       header: "Started",
                       shrink: true,
                       sortValue: (t) => tsKey(t.started_at),
-                      cell: (t) => <DateCell at={t.started_at} now={now} />,
+                      cell: (t) => <DateCell at={t.started_at} />,
                     },
                     {
                       key: "summary",
@@ -1900,7 +1907,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                         // `:07.42Z` — the later episode first, in a list read
                         // newest-first.
                         sortValue: (e) => tsKey(e.created_at),
-                        cell: (e) => <DateCell at={e.created_at} now={now} />,
+                        cell: (e) => <DateCell at={e.created_at} />,
                       },
                       {
                         key: "task",
@@ -2198,7 +2205,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       shrink: true,
                       // `tsKey`, for the reason the episodes grid above gives.
                       sortValue: (t) => tsKey(t.started_at),
-                      cell: (t) => <DateCell at={t.started_at} now={now} />,
+                      cell: (t) => <DateCell at={t.started_at} />,
                     },
                     {
                       // NO PATH ON THE CELL: the whole row already activates
@@ -2375,7 +2382,6 @@ export function SeatPeek({ handle }: { handle: string }) {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const phaseEvents = usePhaseEvents();
-  const now = useNow();
 
   const index = useMemo(() => indexOrg(org), [org]);
   const seat = findSeat(index, handle);
@@ -2471,7 +2477,12 @@ export function SeatPeek({ handle }: { handle: string }) {
           {agent?.last_error && (
             <Callout variant="danger">
               <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
-              {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
+              {agent.last_error.at && (
+                <>
+                  {" · "}
+                  <ClockText read={(now) => relTime(agent?.last_error?.at, now)} />
+                </>
+              )}
             </Callout>
           )}
           {sandbox && awaitingPerson(sandbox.status) && (
@@ -2504,7 +2515,9 @@ export function SeatPeek({ handle }: { handle: string }) {
                     {lastTurn.trigger?.summary || lastTurn.trigger?.type || "turn"}
                   </span>
                   <span className="spacer" />
-                  <span className="t-caption">{relTime(lastTurn.at, now)}</span>
+                  <span className="t-caption">
+                    <ClockText read={(now) => relTime(lastTurn.at, now)} />
+                  </span>
                 </div>
                 <div className="row gap-1 wrap">
                   {lastTurn.phases.map((p) => (

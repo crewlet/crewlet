@@ -42,14 +42,20 @@ import { cx } from "@crewlethq/ui";
 // screen and every peek fills in — so the name→drawing lookup stays in
 // `~/ui/Icon.tsx` and moves all of them onto uilet's glyphs in one place.
 import { Mark, type MarkName } from "~/ui/glyph.tsx";
+import { relTime } from "~/lib/format.ts";
+import { ClockText } from "./cells.tsx";
 
 export interface SetBy {
   actor: string;
   actorKind?: "agent" | "human" | "operator" | "system";
   turnId?: string;
+  /**
+   * When, drawn as the relative time — which the line reads off the clock
+   * itself (`ClockText`). It was an `ago` string the caller formatted from a
+   * `now` it held, so every page with provenance on it held the second and
+   * drew itself again once a second to move one "2h ago".
+   */
   at?: string;
-  /** Rendered as the relative time; the caller formats it. */
-  ago?: string;
   /**
    * The change this names EMPTIED the field rather than filling it.
    *
@@ -95,7 +101,12 @@ export function SetByLine({
       {fields && fields.length > 1 && <>{listOf(fields)} · </>}
       {setBy.cleared ? "cleared by " : "set by "}
       {setBy.actor}
-      {setBy.ago ? ` · ${setBy.ago}` : ""}
+      {setBy.at && (
+        <>
+          {" · "}
+          <ClockText read={(now) => relTime(setBy.at, now)} />
+        </>
+      )}
       {setBy.turnId && (
         <>
           {" · "}

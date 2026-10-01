@@ -21,7 +21,7 @@ import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlet
 import { PhaseTag } from "~/ui/primitives.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useClockReading } from "~/lib/clock.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
@@ -43,7 +43,6 @@ export function TurnCard({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
-  const now = useNow();
   const nav = useNavigator();
 
   // THE ENGINE'S OWN FIGURES WHERE A RECORD CARRIES THEM, the window across this
@@ -63,6 +62,12 @@ export function TurnCard({
   const took = measured ? row!.duration_ms : group.span;
   const startedAt = row?.started_at || group.startedAt;
   const began = tsKey(startedAt);
+  // RUNNING FOR HOW LONG, or landed WHEN — read off the clock as WORDS, so the
+  // card renders when they change rather than every second: a stopwatch moves
+  // each second, "4m ago" once a minute.
+  const when = useClockReading((now) =>
+    group.live ? (began > 0 ? fmtElapsed(now - began) : "") : relTime(group.at, now),
+  );
 
   const trigger = group.trigger;
   const headline = triggerHeadline(trigger);
@@ -180,14 +185,10 @@ export function TurnCard({
           dateTime={group.live ? startedAt : group.at}
           title={fmtDateTime(group.live ? startedAt : group.at)}
         >
-          {group.live ? (
-            began > 0 ? (
-              fmtElapsed(now - began)
-            ) : (
-              <EmptyValue label="Started at an instant this build could not read" />
-            )
+          {group.live && began <= 0 ? (
+            <EmptyValue label="Started at an instant this build could not read" />
           ) : (
-            relTime(group.at, now)
+            when
           )}
         </time>
       </header>

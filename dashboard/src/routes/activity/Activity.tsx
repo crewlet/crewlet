@@ -388,7 +388,6 @@ export function Activity() {
               // who has learnt one log in this product has learnt the other,
               // and an axis on one of them only is two frames again.
               axis
-              now={now}
               onPick={range.set}
             />
           )}

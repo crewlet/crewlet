@@ -1718,9 +1718,14 @@ export function endNote(args: {
  * never runs. An empty grid then takes [buildItemsParams] down the calendar
  * branch with no range, which is the one state that branch must never be in. A
  * mangled month is a bad address, not a company whose work has no dates.
+ *
+ * The fallback is the month of `today` — a browser day, `2031-04-16`, from
+ * `useToday` — rather than of an instant, because the month is all of the
+ * clock a calendar reads, and a screen holding the second re-rendered every
+ * shape it draws once a second to arrive at the same month.
  */
-export function monthOrNow(month: string, now: number): string {
-  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : monthOf(now);
+export function monthOrToday(month: string, today: string): string {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : today.slice(0, 7);
 }
 
 /**
@@ -1877,11 +1882,6 @@ export interface CalendarCell {
   day: number;
   inMonth: boolean;
   today: boolean;
-}
-
-/** The month an instant falls in, locally, as `YYYY-MM`. */
-export function monthOf(now: number): string {
-  return browserDay(new Date(now)).slice(0, 7);
 }
 
 export function shiftMonth(month: string, by: number): string {

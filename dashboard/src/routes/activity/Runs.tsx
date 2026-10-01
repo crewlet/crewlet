@@ -235,7 +235,10 @@ function pauseDeadline(run: SandboxRun): string | null {
  * what a reader can DO about a paused run, and two spellings of them is how
  * one of them comes to describe a chat reply path the run does not have.
  */
-function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
+function AwaitingBanner({ run }: { run: SandboxRun }) {
+  // THE BANNER HOLDS THE SECOND, because its hold counts down and expires; the
+  // screens around it do not, so their run grids are not drawn again with it.
+  const now = useNow();
   const deadline = pauseDeadline(run);
   const expired = deadline !== null && tsKey(deadline) <= now;
   return (
@@ -325,7 +328,6 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
  * screen exists at all.
  */
 export function RunPeek({ turnId }: { turnId: string }) {
-  const now = useNow();
   const live = useSandboxes();
   const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
     enabled: turnId !== "",
@@ -369,7 +371,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
                   {AWAITING.includes(run.status) ? "Waiting on a person" : "Doing now"}
                 </div>
                 {AWAITING.includes(run.status) ? (
-                  <AwaitingBanner run={run} now={now} />
+                  <AwaitingBanner run={run} />
                 ) : (
                   <p className="t-body">{doingLine(run)}</p>
                 )}
@@ -416,7 +418,6 @@ export function RunPeek({ turnId }: { turnId: string }) {
 export function Runs({ runId }: { runId?: string }) {
   const nav = useNavigator();
   const live = useSandboxes();
-  const now = useNow();
   // THE OPEN RUN IS A PATH (`#/activity/runs/{turn_id}`), not a query key: a
   // detached run is an object with a life of its own — it outlives the turn
   // that started it and is resumed by another process on another node — so it
@@ -641,7 +642,7 @@ export function Runs({ runId }: { runId?: string }) {
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => <DateCell at={r.updated_at || r.started_at} now={now} />,
+                cell: (r) => <DateCell at={r.updated_at || r.started_at} />,
               },
             ]}
           />
@@ -692,7 +693,7 @@ export function Runs({ runId }: { runId?: string }) {
           <Card>
             {AWAITING.includes(detail.status) && (
               <div style={{ marginBottom: "var(--space-3)" }}>
-                <AwaitingBanner run={detail} now={now} />
+                <AwaitingBanner run={detail} />
               </div>
             )}
             <PropertiesRail

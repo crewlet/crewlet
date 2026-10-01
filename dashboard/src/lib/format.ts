@@ -167,6 +167,18 @@ export function fmtMinute(ts: string | null | undefined): string {
  * that read the clock itself would decide that separately per render.
  */
 export function fmtDateCompact(ts: string | null | undefined, now: number): string {
+  return fmtDateCompactIn(ts, currentYear(now));
+}
+
+/**
+ * [fmtDateCompact], given the current year rather than the instant.
+ *
+ * FOR A MARK DRAWN ON EVERY ROW. The only thing a compact date reads off the
+ * clock is which year it is, and that changes once a year — so a row's due
+ * date subscribes to the YEAR (`useClockReading(currentYear)`) and renders when
+ * it turns, rather than taking the second and rendering with it.
+ */
+export function fmtDateCompactIn(ts: string | null | undefined, thisYear: string): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
   // BOTH YEARS READ IN THE VIEWER'S ZONE, and the date rendered in it. This
@@ -174,7 +186,6 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
   // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
   // whose browser sat in `UTC` saw a due date one day earlier here than in the
   // tooltip beside it — and, for thirteen hours a year, a year earlier.
-  const thisYear = calendarYear(new Date(now));
   return d.toLocaleDateString(undefined, {
     month: "short",
     day: "2-digit",
@@ -182,6 +193,23 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
     ...(calendarYear(d) === thisYear ? {} : { year: "numeric" }),
   });
 }
+
+/**
+ * Which calendar year `now` falls in, IN THE VIEWER'S ZONE.
+ *
+ * REMEMBERED FOR THE LAST INSTANT ASKED, because every due date on a screen
+ * asks it of the same instant in the same tick of the clock: a board of two
+ * hundred cards is one reading per second rather than two hundred.
+ */
+export function currentYear(now: number): string {
+  const tz = zone();
+  if (lastYear.now !== now || lastYear.zone !== tz) {
+    lastYear = { now, zone: tz, year: calendarYear(new Date(now)) };
+  }
+  return lastYear.year;
+}
+
+let lastYear = { now: Number.NaN, zone: "", year: "" };
 
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {

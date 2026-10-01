@@ -30,7 +30,7 @@ import {
   ScheduleGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { ClockText, DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -349,8 +349,35 @@ const NO_SCHEDULE_HINT =
 const UNDECLARED_HINT =
   "The company configuration no longer declares this schedule. Its history is kept until the retention sweep takes it.";
 
-export function Schedules({ scope = [] }: { scope?: string[] }) {
+/**
+ * How many schedules fire within the hour, and the soonest of them.
+ *
+ * ITS OWN COMPONENT BECAUSE IT IS THE ONE THING ON THE LIST THAT READS THE
+ * SECOND — which schedules are inside the hour is a comparison against now —
+ * and the screen that held the clock for it rendered its whole grid once a
+ * second to redraw one tile.
+ */
+function DueSoon({ schedules }: { schedules: ScheduleRow[] }) {
   const now = useNow();
+  const due = schedules.filter((s) => tsKey(s.next_run) > 0 && tsKey(s.next_run) - now < 3_600_000);
+  // THE SOONEST OF THEM, which is what a one-line caption has room for: a
+  // schedule's name is founder prose, so joining them was cut mid-word and named
+  // a schedule nobody declared. WHICH schedules is the table below's question —
+  // every row carries its own Next cell.
+  const soonest = due.length
+    ? due.reduce((best, s) => (tsKey(s.next_run) < tsKey(best.next_run) ? s : best))
+    : undefined;
+  return (
+    <StatCard
+      icon={<ScheduleGlyph size="xs" />}
+      label="Firing within the hour"
+      value={due.length}
+      sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
+    />
+  );
+}
+
+export function Schedules({ scope = [] }: { scope?: string[] }) {
   const org = useOrg();
   // WHO A HANDLE IS. A schedule's scope and every fire's target are handles,
   // and a handle is an address rather than a label: drawn bare, this grid put
@@ -379,19 +406,11 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   const schedules = data?.schedules ?? [];
   const runs = data?.recent_runs ?? [];
-  const due = schedules.filter((s) => tsKey(s.next_run) > 0 && tsKey(s.next_run) - now < 3_600_000);
   // A schedule that cannot fire at all, which is a defect rather than a
   // choice: a cron nobody can parse, a timezone that no longer exists. The
   // row says so in its own `problem` field and a blank Next cell was the
   // only symptom.
   const broken = schedules.filter((s) => s.problem);
-  // THE SOONEST OF THEM, which is what a one-line caption has room for: a
-  // schedule's name is founder prose, so joining them was cut mid-word and named
-  // a schedule nobody declared. WHICH schedules is the table below's question —
-  // every row carries its own Next cell.
-  const soonest = due.length
-    ? due.reduce((best, s) => (tsKey(s.next_run) < tsKey(best.next_run) ? s : best))
-    : undefined;
 
   // THE ORDER `[` AND `]` WALK, published only from the LIST. On the detail
   // route this same component renders one schedule, and a stepper walking
@@ -452,7 +471,6 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         loading={one.loading}
         error={one.error}
         refusal={one.refusal}
-        now={now}
       />
     );
   }
@@ -475,12 +493,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
           value={schedules.length}
           sub="across every seat and unit"
         />
-        <StatCard
-          icon={<ScheduleGlyph size="xs" />}
-          label="Firing within the hour"
-          value={due.length}
-          sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
-        />
+        <DueSoon schedules={schedules} />
         <StatCard
           icon={<ErrorGlyph size="xs" />}
           label="Cannot fire"
@@ -625,7 +638,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 cell: (s) =>
                   s.next_run ? (
                     <span className="t-caption" title={fmtDateTime(s.next_run)}>
-                      {inTime(s.next_run, now)}
+                      <ClockText read={(now) => inTime(s.next_run, now)} />
                     </span>
                   ) : s.problem ? (
                     // THE REASON, not a blank. A schedule whose timezone was
@@ -647,7 +660,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   if (!run) return <EmptyValue label="This schedule has never fired" />;
                   return (
                     <span className="row gap-1">
-                      <DateCell at={run.fired_at} now={now} />
+                      <DateCell at={run.fired_at} />
                       {run.outcome && (
                         <Tag variant={OUTCOME_TONE[run.outcome] ?? "neutral"}>{run.outcome}</Tag>
                       )}
@@ -686,7 +699,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <DateCell at={r.fired_at} now={now} />,
+                cell: (r) => <DateCell at={r.fired_at} />,
               },
               {
                 key: "name",
@@ -793,7 +806,6 @@ function OneSchedule({
   loading,
   error,
   refusal,
-  now,
 }: {
   scopeType: string;
   scopeId: string;
@@ -811,8 +823,10 @@ function OneSchedule({
    * asking again will not change it.
    */
   refusal: QueryResult<unknown>["refusal"];
-  now: number;
 }) {
+  // ONE SCHEDULE'S CLOCK, for its facts and the fires it is about to make:
+  // the page is one object, so the second reaches only what draws it.
+  const now = useNow();
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
   const org = useOrg();
   // WHO A HANDLE IS — see the same lookup on the screen this page came from.
@@ -889,7 +903,7 @@ function OneSchedule({
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <DateCell at={r.fired_at} now={now} />,
+                cell: (r) => <DateCell at={r.fired_at} />,
               },
               {
                 key: "target",
@@ -1049,7 +1063,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
                           )}
                           <span className="spacer" />
                           <span className="t-caption" title={fmtDateTime(r.fired_at)}>
-                            {relTime(r.fired_at, now)}
+                            <ClockText read={(now) => relTime(r.fired_at, now)} />
                           </span>
                         </div>
                         <div className="row gap-1">

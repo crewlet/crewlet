@@ -221,7 +221,6 @@ export function removalsOf(records: WorkActivityRecord[], kind = "removed"): Rem
 interface ColumnContext {
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   /** The company's own list rather than one project's — so project is a column. */
   workspace: boolean;
   removals?: Removals;
@@ -245,7 +244,7 @@ interface ColumnContext {
  * the seat, so the timestamp stays the row's last column either way.
  */
 function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
-  const { chrome, detail, now, workspace } = ctx;
+  const { chrome, detail, workspace } = ctx;
   const out: GridColumn<WorkSummary>[] = [
     {
       key: "priority",
@@ -309,13 +308,9 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       shrink: true,
       sortValue: (row) => row.due ?? "",
       cell: (row) =>
-        row.due ? (
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
-        ) : (
-          <EmptyValue label="No date" />
-        ),
+        row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
     }),
-    startColumn(now),
+    startColumn(),
     pointsColumn(),
     estimateColumn(),
     {
@@ -341,7 +336,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
         <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
       ),
     },
-    updatedColumn(now),
+    updatedColumn(),
   );
   return out;
 }
@@ -356,7 +351,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
  * position depends on how long the title above it was.
  */
 function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
-  const { chrome, detail, now, workspace } = ctx;
+  const { chrome, detail, workspace } = ctx;
   const out: GridColumn<WorkSummary>[] = [
     {
       key: "key",
@@ -421,16 +416,12 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // overdue tint is `DueMark`'s and two spellings of it is two rules
       // as soon as one screen's changes.
       cell: (row) =>
-        row.due ? (
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
-        ) : (
-          <EmptyValue label="No date" />
-        ),
+        row.due ? <DueMark due={row.due} overdue={row.overdue} /> : <EmptyValue label="No date" />,
     }),
-    startColumn(now),
+    startColumn(),
     pointsColumn(),
     estimateColumn(),
-    updatedColumn(now),
+    updatedColumn(),
   );
   return out;
 }
@@ -461,14 +452,13 @@ function projectColumn(optional: boolean): GridColumn<WorkSummary> {
   };
 }
 
-function startColumn(now: number): GridColumn<WorkSummary> {
+function startColumn(): GridColumn<WorkSummary> {
   return sorted("start", {
     header: "Start",
     shrink: true,
     optional: true,
     sortValue: (row) => row.start ?? "",
-    cell: (row) =>
-      row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
+    cell: (row) => (row.start ? <DateCell at={row.start} /> : <EmptyValue label="No date" />),
   });
 }
 
@@ -507,12 +497,12 @@ function estimateColumn(): GridColumn<WorkSummary> {
 // RELATIVE, WITH THE INSTANT ON THE TITLE — [DateCell]'s own rendering, which
 // is what the compact row spelled by hand. One value, one drawing, wherever it
 // appears: that is the rule `app/frame/cells.tsx` exists for.
-function updatedColumn(now: number): GridColumn<WorkSummary> {
+function updatedColumn(): GridColumn<WorkSummary> {
   return sorted("updated", {
     header: "Updated",
     shrink: true,
     sortValue: (row) => row.updated ?? "",
-    cell: (row) => <DateCell at={row.updated} now={now} />,
+    cell: (row) => <DateCell at={row.updated} />,
   });
 }
 
@@ -528,7 +518,7 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
 function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSummary>[] {
   const out = shape === "table" ? tableColumns(ctx) : listColumns(ctx);
   if (!ctx.removals) return out;
-  return out.concat(trashColumns(ctx.removals, ctx.chrome, ctx.now));
+  return out.concat(trashColumns(ctx.removals, ctx.chrome));
 }
 
 /**
@@ -549,7 +539,7 @@ function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSumm
  * column the grid never draws.
  */
 export function columnChoices(shape: GridShape, workspace: boolean): ColumnChoice[] {
-  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, now: 0, workspace }));
+  return columnChoicesOf(buildColumns(shape, { chrome: {}, detail: null, workspace }));
 }
 
 export function WorkGrid({
@@ -560,7 +550,6 @@ export function WorkGrid({
   subAxis,
   chrome,
   detail,
-  now,
   selected,
   workspace,
   hrefOf,
@@ -579,7 +568,6 @@ export function WorkGrid({
   subAxis?: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
-  now: number;
   selected?: string;
   /** The company's own list rather than one project's. */
   workspace: boolean;
@@ -624,12 +612,11 @@ export function WorkGrid({
     return {
       chrome,
       detail,
-      now,
       workspace,
       removals,
       keyOf: (id: string) => keys.get(id),
     };
-  }, [rows, groups, chrome, detail, now, workspace, removals]);
+  }, [rows, groups, chrome, detail, workspace, removals]);
 
   const columns = useMemo(() => buildColumns(shape, ctx), [shape, ctx]);
 
@@ -753,11 +740,7 @@ function bandFoot({
 }
 
 /** The two facts a trash listing adds, plus the way back. */
-function trashColumns(
-  removals: Removals,
-  chrome: RowChrome,
-  now: number,
-): GridColumn<WorkSummary>[] {
+function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSummary>[] {
   return [
     sorted("removed", {
       header: "Removed",
@@ -773,7 +756,7 @@ function trashColumns(
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
         if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
-        return <DateCell at={record.at} now={now} />;
+        return <DateCell at={record.at} />;
       },
     }),
     {

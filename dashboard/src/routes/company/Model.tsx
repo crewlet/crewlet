@@ -44,7 +44,6 @@ import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtElapsed, plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
   decisionLabel,
@@ -58,7 +57,7 @@ import {
 import { queryFailure, type EventRecord, type QueryFailure } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
+import { ClockText, DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 // THE ONE PHASE MARK. This file carried a private copy of the variant table
 // until `PhaseTag` was rebuilt on uilet's `Tag`; two tables spelling one
@@ -209,7 +208,6 @@ export function ModelActivity() {
   );
 
   const nav = useNavigator();
-  const now = useNow();
 
   const { open: openPeek } = usePeekControls();
 
@@ -392,14 +390,16 @@ export function ModelActivity() {
         // flight look like one that took that long.
         cell: (r) =>
           r.live ? (
-            <span className="t-num">{fmtElapsed(now - tsKey(r.startedAt))}</span>
+            <span className="t-num">
+              <ClockText read={(now) => fmtElapsed(now - tsKey(r.startedAt))} />
+            </span>
           ) : (
-            <DateCell at={r.at} now={now} />
+            <DateCell at={r.at} />
           ),
         sortValue: (r) => Date.parse(r.at) || 0,
       },
     ],
-    [now],
+    [],
   );
 
   const liveCount = live.filter((r) => r.live).length;

@@ -648,7 +648,7 @@ export function Spend() {
               // turn log makes for the same column. A spend table is scanned for
               // what ran recently, and a wall-clock stamp is what somebody wants
               // only once they have found the row.
-              cell: (t) => <DateCell at={t.started_at} now={now} />,
+              cell: (t) => <DateCell at={t.started_at} />,
             },
             {
               key: "seat",

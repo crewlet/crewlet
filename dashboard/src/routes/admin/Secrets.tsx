@@ -58,7 +58,6 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { useRestRead } from "~/lib/restRead.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import { rest, RestError, restFailure } from "~/protocol/index.ts";
@@ -255,7 +254,7 @@ function useCredentials(enabled = true): Credentials {
  * the header's own pill — and neither is the value, which this surface does
  * not hold at all.
  */
-function credentialFacts(row: SecretRow, paths: string[] | null, now: number): Fact[] {
+function credentialFacts(row: SecretRow, paths: string[] | null): Fact[] {
   return [
     { label: "Read by", value: <Readers paths={paths} /> },
     { label: "Key id", value: <span className="mono">{row.key_id}</span> },
@@ -263,7 +262,7 @@ function credentialFacts(row: SecretRow, paths: string[] | null, now: number): F
       label: "Set by",
       value: authorLabel(row.updated_by, row.operator_id) || "nobody recorded",
     },
-    { label: "Updated", value: <DateCell at={row.updated_at} now={now} /> },
+    { label: "Updated", value: <DateCell at={row.updated_at} /> },
   ];
 }
 
@@ -391,7 +390,6 @@ function CredentialBody({
  * is what somebody deciding about a name actually reads.
  */
 export function CredentialPeek({ name }: { name: string }) {
-  const now = useNow();
   const { rows, loading, failure, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
@@ -422,7 +420,7 @@ export function CredentialPeek({ name }: { name: string }) {
               icon="key"
               title={row.name}
               status={<Tag appearance="outline">{row.source}</Tag>}
-              facts={credentialFacts(row, readersOf(row.name), now)}
+              facts={credentialFacts(row, readersOf(row.name))}
             />
             <div className="col gap-3">
               <CredentialBody row={row} paths={readersOf(row.name)} unknown={unknown} flush />
@@ -435,7 +433,6 @@ export function CredentialPeek({ name }: { name: string }) {
 }
 
 export function Secrets({ name }: { name?: string }) {
-  const now = useNow();
   const toast = useToast();
   const { rows, loading, failure, unknown, readersOf, reload } = useCredentials();
 
@@ -631,7 +628,7 @@ export function Secrets({ name }: { name?: string }) {
                 header: "Updated",
                 shrink: true,
                 sortValue: (s) => tsKey(s.updated_at),
-                cell: (s) => <DateCell at={s.updated_at} now={now} />,
+                cell: (s) => <DateCell at={s.updated_at} />,
               },
               {
                 key: "act",
@@ -676,7 +673,7 @@ export function Secrets({ name }: { name?: string }) {
             icon="key"
             title={addressedRow.name}
             status={<Tag appearance="outline">{addressedRow.source}</Tag>}
-            facts={credentialFacts(addressedRow, readersOf(addressedRow.name), now)}
+            facts={credentialFacts(addressedRow, readersOf(addressedRow.name))}
           />
           <CredentialBody
             row={addressedRow}

@@ -57,7 +57,6 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import type { FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -140,9 +139,9 @@ const NO_REVISION = {
  * is not among them — that is the header's own pill, and a state spelled in
  * colour and again in a list reads as two facts about one revision.
  */
-function revisionFacts(revision: RevisionMeta, now: number): Fact[] {
+function revisionFacts(revision: RevisionMeta): Fact[] {
   return [
-    { label: "Created", value: <DateCell at={revision.created_at} now={now} /> },
+    { label: "Created", value: <DateCell at={revision.created_at} /> },
     {
       label: "By",
       value: authorLabel(revision.created_by, revision.operator_id) || "nobody recorded",
@@ -153,7 +152,7 @@ function revisionFacts(revision: RevisionMeta, now: number): Fact[] {
       // ABSENT IS NOT A DATE. A revision that was stored and never activated
       // has no activation, and the fact line drops a fact with no value
       // rather than claiming one.
-      value: revision.activated_at ? <DateCell at={revision.activated_at} now={now} /> : "",
+      value: revision.activated_at ? <DateCell at={revision.activated_at} /> : "",
     },
   ];
 }
@@ -379,7 +378,6 @@ function RevisionBody({
  * to be active and each node writes its own apply status beside it.
  */
 export function RevisionPeek({ id }: { id: string }) {
-  const now = useNow();
   const audit = useQuery("config_audit", { limit: HISTORY_LIMIT }, { enabled: id !== "" });
   const fleet = useQuery("fleet", undefined, { enabled: id !== "", pollMs: FLEET_POLL_MS });
 
@@ -413,7 +411,7 @@ export function RevisionPeek({ id }: { id: string }) {
               identifier={revision.revision_id.slice(0, 10)}
               title={revision.summary || "No summary was written"}
               status={<RevisionState revision={revision} />}
-              facts={revisionFacts(revision, now)}
+              facts={revisionFacts(revision)}
             />
             <div className="col gap-3">
               <RevisionBody
@@ -432,7 +430,6 @@ export function RevisionPeek({ id }: { id: string }) {
 }
 
 export function ConfigScreen({ revision: revisionPath }: { revision?: string }) {
-  const now = useNow();
   const [lens, setLens] = useTab("lens", LENSES);
   const [chosen, setRevision] = useParam("revision", "");
   // THE SIDE A DIFF IS READ AGAINST. Empty is the active revision, which is
@@ -595,7 +592,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                   identifier={addressed.revision_id.slice(0, 10)}
                   title={addressed.summary || "No summary was written"}
                   status={<RevisionState revision={addressed} />}
-                  facts={revisionFacts(addressed, now)}
+                  facts={revisionFacts(addressed)}
                   actions={
                     <Button
                       size="small"
@@ -809,7 +806,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
                     header: "When",
                     shrink: true,
                     sortValue: (r) => tsKey(r.created_at),
-                    cell: (r) => <DateCell at={r.created_at} now={now} />,
+                    cell: (r) => <DateCell at={r.created_at} />,
                   },
                   {
                     key: "id",

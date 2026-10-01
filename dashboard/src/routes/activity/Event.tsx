@@ -29,7 +29,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { eventHistoryLabel, fmtDateTime, humanize, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { useEngineHealth } from "~/lib/engineHealth.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -70,7 +70,7 @@ function eventTitle(event: EventRecord): string {
  * the category and a rail that led with the actor would make a reader
  * re-learn the same record every time it changed frame.
  */
-function eventFacts(event: EventRecord, now: number): Fact[] {
+function eventFacts(event: EventRecord): Fact[] {
   return [
     { label: "Type", value: <code className="inline">{event.type}</code> },
     { label: "Category", value: humanize(event.category) || "system" },
@@ -87,7 +87,11 @@ function eventFacts(event: EventRecord, now: number): Fact[] {
       // Relative in the line and absolute on hover, the way `DateCell` reads
       // in every grid: a reader who has the record open asks "how long ago"
       // first and "at what instant" only once they are writing it down.
-      value: <span title={fmtDateTime(event.timestamp)}>{relTime(event.timestamp, now)}</span>,
+      value: (
+        <span title={fmtDateTime(event.timestamp)}>
+          <ClockText read={(now) => relTime(event.timestamp, now)} />
+        </span>
+      ),
     },
     {
       label: "Trace",
@@ -151,7 +155,6 @@ function eventStatus(event: EventRecord) {
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery("event", { id: eventId });
   const { data: engine } = useEngineHealth();
 
@@ -224,7 +227,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
           identifier={data.id}
           title={name}
           status={eventStatus(data)}
-          facts={eventFacts(data, now)}
+          facts={eventFacts(data)}
         />
       )}
 
@@ -349,7 +352,6 @@ export function EventScreen({ eventId }: { eventId: string }) {
  * is one click to the frame that can draw it.
  */
 export function EventPeek({ eventId }: { eventId: string }) {
-  const now = useNow();
   const { data, loading, error, refusal } = useQuery(
     "event",
     { id: eventId },
@@ -373,7 +375,7 @@ export function EventPeek({ eventId }: { eventId: string }) {
           identifier={data.id}
           title={eventTitle(data)}
           status={eventStatus(data)}
-          facts={eventFacts(data, now)}
+          facts={eventFacts(data)}
         />
       )}
       <div className="col gap-3">

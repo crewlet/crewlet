@@ -54,7 +54,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { pageCount, pageNote, statusLabel, STATUSES, typeName } from "~/lib/work.ts";
 import { describeChange } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
@@ -278,7 +278,6 @@ function ProjectOverview({ detail, chrome }: { detail: WorkProjectDetail; chrome
 
 /** The last few changes, as a companion to the container's own facts. */
 function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: RowChrome }) {
-  const now = useNow();
   const feed = useQuery(
     "work_activity",
     { container: `project:${detail.key}`, limit: FEED_PAGE.rail },
@@ -310,7 +309,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                     )}
                     <span className="spacer" />
                     <span className="t-caption" title={fmtDateTime(record.at)}>
-                      {relTime(record.at, now)}
+                      <ClockText read={(now) => relTime(record.at, now)} />
                     </span>
                   </div>
                   <span className="t-caption truncate">

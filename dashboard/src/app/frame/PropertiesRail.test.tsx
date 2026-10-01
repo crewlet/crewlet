@@ -14,7 +14,7 @@
  */
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 
 import { PropertiesRail } from "./PropertiesRail.tsx";
@@ -240,7 +240,19 @@ describe("the rail's shape", () => {
 });
 
 describe("who set it", () => {
-  const CREATE = { actor: "agent-ceo", at: "2031-04-16T09:00:00Z", turnId: "t-1", ago: "21h ago" };
+  // THE LINE READS ITS "21h ago" OFF THE SHARED CLOCK, so the clock is held
+  // twenty-one hours after [CREATE]: the system time is what the clock reads
+  // when it starts.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2031-04-17T06:00:00Z"));
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const CREATE = { actor: "agent-ceo", at: "2031-04-16T09:00:00Z", turnId: "t-1" };
 
   test("says one create once, naming every property it set", () => {
     // ONE LINE PER CHANGE, NOT PER ROW. A create sets status, priority and
@@ -285,7 +297,7 @@ describe("who set it", () => {
               {
                 label: "Status",
                 value: "in_progress",
-                setBy: { ...CREATE, at: "2031-04-16T10:00:00Z", ago: "20h ago" },
+                setBy: { ...CREATE, at: "2031-04-16T10:00:00Z" },
               },
               { label: "Type", value: "Task", setBy: CREATE },
             ],
@@ -338,7 +350,14 @@ describe("who set it", () => {
     const { container } = render(
       <PropertiesRail
         groups={[
-          { properties: [{ label: "Due", setBy: { actor: "ada", ago: "2h ago", cleared: true } }] },
+          {
+            properties: [
+              {
+                label: "Due",
+                setBy: { actor: "ada", at: "2031-04-17T04:00:00Z", cleared: true },
+              },
+            ],
+          },
         ]}
       />,
     );

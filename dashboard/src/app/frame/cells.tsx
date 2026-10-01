@@ -54,6 +54,7 @@ import { Avatar, cx, EmptyValue, Tag } from "@crewlethq/ui";
 // caller onto uilet's glyphs at once.
 import { Mark, type MarkName } from "~/ui/glyph.tsx";
 import { type Tone } from "~/ui/primitives.tsx";
+import { useClockReading } from "~/lib/clock.ts";
 import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 import type { SeatKind } from "~/lib/seats.ts";
 
@@ -100,14 +101,34 @@ export function NumberCell({
  * Absolute in the title, relative in the cell: a grid scanned for "what moved
  * today" is read in relative time, and the exact instant is what somebody
  * needs once they have found the row.
+ *
+ * IT READS THE CLOCK ITSELF, and takes no `now`. A `now` handed in from the
+ * screen made every column that drew one a function of the clock, so the
+ * screen rebuilt its columns once a second and the grid rendered every row
+ * again — the audit's hundred rows, every second, to move the few that read
+ * "12s ago". Subscribed here, a tick reaches this span alone, and only when
+ * its words change.
  */
-export function DateCell({ at, now }: { at?: string | null; now: number }) {
+export function DateCell({ at }: { at?: string | null }) {
+  const text = useClockReading((now) => relTime(at, now));
   if (!at) return <EmptyValue label="Never" />;
   return (
     <span title={fmtDateTime(at)} className="cell-date">
-      {relTime(at, now)}
+      {text}
     </span>
   );
+}
+
+/**
+ * Any time-relative words a cell shows, read off the clock by the cell itself.
+ *
+ * [DateCell]'s reason, for the readings that are not "how long ago": "in 4m"
+ * to a schedule's next run, a due date that drops its year when it is this
+ * year's. The words are the caller's; that the clock reaches them here rather
+ * than through the column above is this component's.
+ */
+export function ClockText({ read }: { read: (now: number) => string }) {
+  return <>{useClockReading(read)}</>;
 }
 
 /**

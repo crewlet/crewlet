@@ -147,9 +147,7 @@ function attributions(properties: Property[]): (Attribution | undefined)[] {
     // "yesterday" are visibly two changes whatever the line sorted them by.
     // One line is drawn from the FIRST row of its run, so a key that let them
     // merge would put one row's time under both.
-    const next = [line.actor, line.actorKind, line.at, line.ago, line.turnId, line.cleared].join(
-      "\u0000",
-    );
+    const next = [line.actor, line.actorKind, line.at, line.turnId, line.cleared].join("\u0000");
     if (start >= 0 && next === key) return;
     close(i - 1);
     start = i;

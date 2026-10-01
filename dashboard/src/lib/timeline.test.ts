@@ -29,11 +29,13 @@ function task(id: string, start?: string, due?: string, extra: Partial<WorkSumma
   } as WorkSummary;
 }
 
-const NOW = new Date("2026-06-15T09:00:00").getTime();
+// THE READER'S TODAY, as the browser's calendar names it — which is all of
+// the clock a timeline reads.
+const TODAY = "2026-06-15";
 
 describe("where a bar sits", () => {
   it("spans the days between the two dates, inclusive at both ends", () => {
-    const line = timelineOf([task("a", "2026-06-15", "2026-06-17")], { now: NOW });
+    const line = timelineOf([task("a", "2026-06-15", "2026-06-17")], { today: TODAY });
     const bar = line.bars[0]!;
     // `to` is ONE PAST, so a width is always to - from: three days here.
     expect(bar.to - bar.from).toBe(3);
@@ -45,10 +47,10 @@ describe("where a bar sits", () => {
   it("gives a task with one date a single day, and says which end is missing", () => {
     // Rendering these identically to a span is what makes a timeline look
     // like it knows more than it does.
-    const [deadline] = timelineOf([task("a", undefined, "2026-06-20")], { now: NOW }).bars;
+    const [deadline] = timelineOf([task("a", undefined, "2026-06-20")], { today: TODAY }).bars;
     expect(deadline?.kind).toBe("deadline");
     expect(deadline!.to - deadline!.from).toBe(1);
-    const [began] = timelineOf([task("b", "2026-06-20")], { now: NOW }).bars;
+    const [began] = timelineOf([task("b", "2026-06-20")], { today: TODAY }).bars;
     expect(began?.kind).toBe("began");
     expect(began!.to - began!.from).toBe(1);
   });
@@ -56,7 +58,7 @@ describe("where a bar sits", () => {
   it("does not swap dates that are the wrong way round", () => {
     // Swapping renders a coherent plan out of incoherent data, and the person
     // who typed it never finds out.
-    const line = timelineOf([task("a", "2026-06-20", "2026-06-10")], { now: NOW });
+    const line = timelineOf([task("a", "2026-06-20", "2026-06-10")], { today: TODAY });
     const bar = line.bars[0]!;
     expect(bar.kind).toBe("inverted");
     expect(bar.fromDay).toBe("2026-06-10");
@@ -66,7 +68,7 @@ describe("where a bar sits", () => {
 
   it("leaves a row with neither date off the axis rather than placing it", () => {
     // Bucketing it under today would invent a deadline nobody set.
-    const line = timelineOf([task("a", "2026-06-15", "2026-06-16"), task("b")], { now: NOW });
+    const line = timelineOf([task("a", "2026-06-15", "2026-06-16"), task("b")], { today: TODAY });
     expect(line.bars).toHaveLength(1);
     expect(line.unscheduled.map((r) => r.id)).toEqual(["b"]);
   });
@@ -76,7 +78,7 @@ describe("where a bar sits", () => {
     // happened to hold.
     const line = timelineOf(
       [task("c", "2026-06-20"), task("a", "2026-06-10"), task("b", "2026-06-15")],
-      { now: NOW },
+      { today: TODAY },
     );
     expect(line.bars.map((b) => b.row.id)).toEqual(["c", "a", "b"]);
   });
@@ -86,7 +88,7 @@ describe("the window the data defines", () => {
   it("covers the earliest start through the latest due", () => {
     const line = timelineOf(
       [task("a", "2026-06-01", "2026-06-05"), task("b", "2026-06-20", "2026-06-30")],
-      { now: NOW },
+      { today: TODAY },
     );
     expect(line.from).toBe("2026-06-01");
     expect(line.to).toBe("2026-06-30");
@@ -95,7 +97,7 @@ describe("the window the data defines", () => {
 
   it("pads a narrow one around the data rather than against a wall", () => {
     // A bar in a one-day window has nothing to be read against.
-    const line = timelineOf([task("a", "2026-06-15", "2026-06-15")], { now: NOW });
+    const line = timelineOf([task("a", "2026-06-15", "2026-06-15")], { today: TODAY });
     expect(line.days).toBe(MinTimelineDays);
     const bar = line.bars[0]!;
     expect(bar.from).toBeGreaterThan(0);
@@ -107,7 +109,7 @@ describe("the window the data defines", () => {
     // point is where today is.
     const line = timelineOf(
       [task("near", "2026-06-15", "2026-06-16"), task("far", "2031-01-01", "2031-01-02")],
-      { now: NOW },
+      { today: TODAY },
     );
     expect(line.days).toBe(MaxTimelineDays);
     expect(line.from).toBe("2026-06-15");
@@ -121,7 +123,7 @@ describe("the window the data defines", () => {
   });
 
   it("answers an empty window for rows that carry no dates at all", () => {
-    const line = timelineOf([task("a"), task("b")], { now: NOW });
+    const line = timelineOf([task("a"), task("b")], { today: TODAY });
     expect(line.days).toBe(0);
     expect(line.today).toBe(-1);
     expect(line.unscheduled).toHaveLength(2);
@@ -131,10 +133,10 @@ describe("the window the data defines", () => {
   it("marks today only when today is inside the window", () => {
     // The 11-day span pads to the 14-day minimum, one day of it before the
     // data, so the origin is the 9th and today is its seventh column.
-    const inside = timelineOf([task("a", "2026-06-10", "2026-06-20")], { now: NOW });
+    const inside = timelineOf([task("a", "2026-06-10", "2026-06-20")], { today: TODAY });
     expect(inside.from).toBe("2026-06-09");
     expect(inside.today).toBe(6);
-    const past = timelineOf([task("a", "2025-01-10", "2025-01-20")], { now: NOW });
+    const past = timelineOf([task("a", "2025-01-10", "2025-01-20")], { today: TODAY });
     expect(past.today).toBe(-1);
   });
 });
@@ -146,7 +148,7 @@ describe("the arrows", () => {
   const blocker = task("blk", "2026-06-15", "2026-06-17");
 
   it("joins two rows that are both on the axis", () => {
-    const line = timelineOf([blocker, blocked], { now: NOW });
+    const line = timelineOf([blocker, blocked], { today: TODAY });
     expect(line.edges).toEqual([{ from: "blk", to: "dep", open: true, oneSided: false }]);
     expect(line.edgesOffAxis).toBe(0);
   });
@@ -154,14 +156,14 @@ describe("the arrows", () => {
   it("counts an edge whose blocker is not on the axis rather than dropping it", () => {
     // A reader who cannot see the omission reads the arrows as every
     // dependency there is.
-    const line = timelineOf([blocked], { now: NOW });
+    const line = timelineOf([blocked], { today: TODAY });
     expect(line.edges).toEqual([]);
     expect(line.edgesOffAxis).toBe(1);
   });
 
   it("counts an edge whose blocker is on the page but unscheduled", () => {
     // It has a row and no bar, so there is no end to draw the arrow at.
-    const line = timelineOf([task("blk"), blocked], { now: NOW });
+    const line = timelineOf([task("blk"), blocked], { today: TODAY });
     expect(line.edges).toEqual([]);
     expect(line.edgesOffAxis).toBe(1);
   });
@@ -174,7 +176,7 @@ describe("the arrows", () => {
           waiting_on: [{ id: "blk", open: false, one_sided: true }],
         }),
       ],
-      { now: NOW },
+      { today: TODAY },
     );
     expect(line.edges[0]).toEqual({ from: "blk", to: "dep", open: false, oneSided: true });
   });
@@ -185,7 +187,7 @@ describe("the axis rules", () => {
     // Monday because `internal/tracker/dates.go` pins the week's start there.
     // A ruled axis whose leftmost column has no label reads as a column that
     // is not there.
-    const line = timelineOf([task("a", "2026-06-03", "2026-06-24")], { now: NOW });
+    const line = timelineOf([task("a", "2026-06-03", "2026-06-24")], { today: TODAY });
     const ticks = weekTicks(line);
     expect(ticks[0]?.day).toBe("2026-06-03");
     expect(ticks.slice(1).map((t) => t.day)).toEqual(["2026-06-08", "2026-06-15", "2026-06-22"]);
@@ -197,7 +199,7 @@ describe("the axis rules", () => {
   it("drops its own first label when a Monday would overprint it", () => {
     // A window starting on a Sunday rendered "Sep 2Sep 28", which is not a
     // date at all. The Monday wins: a week rule is what the axis is ruled by.
-    const line = timelineOf([task("a", "2026-09-27", "2026-10-10")], { now: NOW });
+    const line = timelineOf([task("a", "2026-09-27", "2026-10-10")], { today: TODAY });
     expect(line.from).toBe("2026-09-27");
     const ticks = weekTicks(line);
     expect(ticks[0]?.day).toBe("2026-09-28");
@@ -207,7 +209,7 @@ describe("the axis rules", () => {
   it("keeps its first label when the next Monday is far enough away", () => {
     // Wednesday the 23rd: the Monday is five columns off, so both fit and the
     // leftmost column is labelled rather than looking like it is not there.
-    const line = timelineOf([task("a", "2026-09-23", "2026-10-10")], { now: NOW });
+    const line = timelineOf([task("a", "2026-09-23", "2026-10-10")], { today: TODAY });
     const ticks = weekTicks(line);
     expect(ticks[0]?.day).toBe("2026-09-23");
     expect(ticks[1]?.day).toBe("2026-09-28");

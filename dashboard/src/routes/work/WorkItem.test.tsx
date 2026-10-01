@@ -40,7 +40,6 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-const NOW = Date.parse("2031-04-16T12:00:00Z");
 const NOW_ISO = "2031-04-16T12:00:00Z";
 
 const task = (over: Partial<WorkItem> = {}): WorkItem => ({
@@ -457,7 +456,7 @@ test("a task with no links draws no panel at all", () => {
 // that the task is a leaf. The panel took the rows and never the error, so
 // every failure rendered as the fact that a task has no subtasks.
 test("a refused subtree read says so rather than looking like a leaf", () => {
-  render(<Subtasks rows={[]} error="bad_params" now={NOW} chrome={{}} />);
+  render(<Subtasks rows={[]} error="bad_params" chrome={{}} />);
   expect(screen.getByText("Subtasks")).toBeTruthy();
   expect(screen.getByText(/The engine refused this request/)).toBeTruthy();
 });
@@ -466,7 +465,7 @@ test("a refused subtree read says so rather than looking like a leaf", () => {
 // fact about the task, so the panel stays away and the screen does not carry
 // a heading over nothing.
 test("a task that answered with no children draws no panel", () => {
-  const { container } = render(<Subtasks rows={[]} error={null} now={NOW} chrome={{}} />);
+  const { container } = render(<Subtasks rows={[]} error={null} chrome={{}} />);
   expect(container.textContent).toBe("");
 });
 
@@ -488,7 +487,6 @@ test("a refused poll says so even when children were listed before", () => {
         },
       ]}
       error="query_failed"
-      now={NOW}
       chrome={{}}
     />,
   );
@@ -712,29 +710,26 @@ test("the page heads itself with the facts the peek leaves to the rail", async (
   expect(line.textContent).toContain("Assignee");
 });
 
-// THE BODY IS NOT REBUILT ON EVERY TICK OF THE SCREEN'S CLOCK. Both frames of
-// a task hold a live `now` for their relative times, so this component
-// re-renders once a second — and the wrapper around the description used to be
-// a component DEFINED INSIDE the render, so its type identity was new each
-// time and React tore the subtree down and built it again. A reader selecting
-// a sentence to copy lost the selection within a second. Asserted on DOM node
+// THE BODY IS NOT REBUILT ON A RE-RENDER. Both frames of a task re-render it
+// on every poll of the item — and, while they held the clock for its relative
+// times, once a second — and the wrapper around the description used to be a
+// component DEFINED INSIDE the render, so its type identity was new each time
+// and React tore the subtree down and built it again. A reader selecting a
+// sentence to copy lost the selection within a second. Asserted on DOM node
 // identity, which is the only thing that distinguishes a re-render from a
-// remount.
-test("the description keeps its own DOM across a clock tick", async () => {
+// remount, across a fresh answer for the same task, which is what a poll hands
+// it.
+test("the description keeps its own DOM across a re-render", async () => {
   serving({ work_items: { items: [], complete: true } });
-  const body = (now: number) => (
+  const body = () => (
     <Router>
-      <ItemBody
-        detail={detail({ task: task({ body: "the runbook is **here**" }) })}
-        chrome={{}}
-        now={now}
-      />
+      <ItemBody detail={detail({ task: task({ body: "the runbook is **here**" }) })} chrome={{}} />
     </Router>
   );
-  const { container, rerender } = render(body(NOW));
+  const { container, rerender } = render(body());
   await waitFor(() => expect(container.querySelector(".prose")).toBeTruthy());
   const before = container.querySelector(".prose");
-  rerender(body(NOW + 1000));
+  rerender(body());
   expect(container.querySelector(".prose")).toBe(before);
 });
 
@@ -767,7 +762,7 @@ test("a removed task is marked, and a live one carries no such mark", () => {
 // age and nothing is destroyed, so this is a state rather than the end of the
 // record.
 test("the removal note names its author and says it is reversible", () => {
-  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
+  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} />);
   expect(screen.getByText(/ada/)).toBeTruthy();
   expect(screen.getByText(/reversible at any age/)).toBeTruthy();
 });
@@ -780,7 +775,6 @@ test("a task removed alongside its parent names the parent", () => {
   render(
     <RemovedNote
       tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z", removed_with: "ENG-1" }}
-      now={NOW}
     />,
   );
   expect(screen.getByText("ENG-1")).toBeTruthy();
@@ -865,7 +859,6 @@ test("the history draws a mark per kind and never reprints the thread", async ()
           ],
         })}
         chrome={{}}
-        now={NOW}
       />
     </Router>,
   );
@@ -926,7 +919,6 @@ test("a re-parent names the parent, and an unresolved id stays an id", async () 
           ],
         })}
         chrome={{}}
-        now={NOW}
       />
     </Router>,
   );

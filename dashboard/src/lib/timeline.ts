@@ -140,9 +140,14 @@ export const MinTimelineDays = 14;
 
 /** What `timelineOf` is given beyond the rows. */
 export interface TimelineOptions {
-  /** The reader's now, as epoch ms. Passed rather than read, so the layout is
-   *  a pure function and "today" is testable. */
-  now: number;
+  /**
+   * The reader's today, as the browser's calendar names it (`2026-06-15`).
+   * Passed rather than read, so the layout is a pure function and "today" is
+   * testable — and a DAY rather than an instant, because a day is all of the
+   * clock the layout reads: handed the second, the screen re-laid every band
+   * out once a second to draw the same today line (`useToday`).
+   */
+  today: string;
 }
 
 /** The two dates a row carries, as local days, either possibly empty. */
@@ -273,8 +278,7 @@ export function timelineOf(rows: WorkSummary[], opts: TimelineOptions): Timeline
     }
   }
 
-  const todayKey = browserDay(new Date(opts.now));
-  const todayColumn = daysBetween(earliest, todayKey);
+  const todayColumn = daysBetween(earliest, opts.today);
   return {
     from: earliest,
     to: latest,

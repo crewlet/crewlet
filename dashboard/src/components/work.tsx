@@ -28,7 +28,9 @@ import {
 import { Mark } from "~/ui/glyph.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
-import { fmtDateCompact, fmtDateTime, relTime } from "~/lib/format.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
+import { useClockReading } from "~/lib/clock.ts";
+import { currentYear, fmtDateCompactIn, fmtDateTime, relTime } from "~/lib/format.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
 import type { SeatKind } from "~/lib/seats.ts";
@@ -193,8 +195,15 @@ export function Assignee({
  * derives it against the company's day start, and a browser re-deriving it
  * from its own midnight is how one screen shows a task as overdue and another
  * does not.
+ *
+ * IT READS THE YEAR, NOT THE SECOND. Whether the year is drawn is the only
+ * thing the mark asks of the clock, so it subscribes to that and renders when
+ * the year turns — handed the screen's `now`, every row of every list and
+ * board that draws one rendered once a second for a value that moves once a
+ * year.
  */
-export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean; now: number }) {
+export function DueMark({ due, overdue }: { due?: string; overdue?: boolean }) {
+  const thisYear = useClockReading(currentYear);
   if (!due) return null;
   return (
     // THE FULL INSTANT IS ON THE TITLE, always. What is DRAWN is the
@@ -202,7 +211,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
     // row is how the one date not in this year goes unnoticed.
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
       <CalendarTodayGlyph size="xs" />
-      {fmtDateCompact(due, now)}
+      {fmtDateCompactIn(due, thisYear)}
       {overdue && <span className="sr-only">— overdue</span>}
     </span>
   );
@@ -293,14 +302,12 @@ export function BoardCard({
   href,
   onOpen,
   selected,
-  now,
   chrome = {},
 }: {
   row: WorkSummary;
   href: string;
   onOpen?: () => void;
   selected?: boolean;
-  now: number;
   chrome?: RowChrome;
 }) {
   return (
@@ -324,7 +331,7 @@ export function BoardCard({
               Blocked
             </Tag>
           )}
-          <DueMark due={row.due} overdue={row.overdue} now={now} />
+          <DueMark due={row.due} overdue={row.overdue} />
           <SizeMark points={row.points} minutes={row.estimate_min} />
           <span className="spacer" />
           <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
@@ -347,7 +354,6 @@ export function WorkRow({
   href,
   onOpen,
   selected,
-  now,
   chrome = {},
   keyOf,
   ordinal,
@@ -356,7 +362,6 @@ export function WorkRow({
   href: string;
   onOpen?: () => void;
   selected?: boolean;
-  now: number;
   chrome?: RowChrome;
   /** A blocker's KEY from its id, where this list holds its row — see
    *  [blockedBy]. */
@@ -408,7 +413,7 @@ export function WorkRow({
         )}
       </span>
       <span className="work-cell work-cell-due">
-        <DueMark due={row.due} overdue={row.overdue} now={now} />
+        <DueMark due={row.due} overdue={row.overdue} />
       </span>
       <span className="work-cell work-cell-type">
         <TypeIcon type={row.type} types={chrome.types} />
@@ -417,7 +422,7 @@ export function WorkRow({
         <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
       </span>
       <span className="work-row-when" title={fmtDateTime(row.updated)}>
-        {relTime(row.updated, now)}
+        <ClockText read={(now) => relTime(row.updated, now)} />
       </span>
     </a>
   );
@@ -466,7 +471,6 @@ export function blockedBy(row: WorkSummary, keyOf?: (id: string) => string | und
  */
 export function RowList({
   rows,
-  now,
   chrome,
   hrefOf,
   onOpen,
@@ -474,7 +478,6 @@ export function RowList({
   ordinals,
 }: {
   rows: WorkSummary[];
-  now: number;
   chrome?: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen?: (row: WorkSummary) => void;
@@ -494,7 +497,6 @@ export function RowList({
         <WorkRow
           key={row.id}
           row={row}
-          now={now}
           chrome={chrome}
           href={hrefOf(row)}
           selected={selected === row.key}
@@ -655,14 +657,12 @@ export function TaskBlock({
   title,
   hint,
   rows,
-  now,
   chrome,
   hrefOf,
 }: {
   title: string;
   hint?: string;
   rows: WorkSummary[];
-  now: number;
   chrome?: RowChrome;
   /** Where a row goes. The screen owns the address. */
   hrefOf: (row: WorkSummary) => string;
@@ -673,7 +673,7 @@ export function TaskBlock({
       <Card.Header subtitle={hint} count={rows.length}>
         <Card.Title>{title}</Card.Title>
       </Card.Header>
-      <RowList rows={rows} now={now} chrome={chrome} hrefOf={hrefOf} />
+      <RowList rows={rows} chrome={chrome} hrefOf={hrefOf} />
     </Card>
   );
 }

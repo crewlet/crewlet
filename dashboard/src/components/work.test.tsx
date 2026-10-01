@@ -21,8 +21,6 @@ import type { WorkSummary } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
-const NOW = Date.parse("2031-04-16T12:00:00Z");
-
 /** The chart: `iris` is the human seat, `ada` the agent, `departed` neither. */
 const chrome: RowChrome = {
   seatName: (handle) =>
@@ -97,12 +95,12 @@ test("no kind resolver draws the neutral disc", () => {
 // and it drew the badge through the same [Assignee] with the kind dropped.
 test("the board card draws a human seat's ring and an agent's plain disc", () => {
   const human = render(
-    <BoardCard row={row({ assignee: "iris" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
+    <BoardCard row={row({ assignee: "iris" })} href="#/work/ENG-9" chrome={chrome} />,
   );
   expect(badge(human.container).className).toContain("dashed");
   cleanup();
   const agent = render(
-    <BoardCard row={row({ assignee: "ada" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
+    <BoardCard row={row({ assignee: "ada" })} href="#/work/ENG-9" chrome={chrome} />,
   );
   expect(badge(agent.container).className).not.toContain("dashed");
 });

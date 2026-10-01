@@ -56,10 +56,9 @@ import {
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
+import { ClockText, DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type {
   RetentionDomain,
@@ -82,7 +81,6 @@ const POLL_MS = 60_000;
 const SNAPSHOT_DONORS_REQUIRED = 2;
 
 export function RetentionPanels({ thisNode }: { thisNode?: string }) {
-  const now = useNow();
   // OPERATOR-GATED, so the panel renders only for a reader who holds
   // `fleet:operate`, the grant the engine asks of the `retention` question.
   // Asking without it would refuse on every poll and paint the screen red for
@@ -161,7 +159,13 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
           <span>
             Nothing is being trimmed on <InlineCode>{d.domain}</InlineCode>:{" "}
             {d.prose || `the ${d.blocked_by} term is holding it`}
-            {d.blocked_since && <> — since {relTime(d.blocked_since, now)}</>}.{" "}
+            {d.blocked_since && (
+              <>
+                {" "}
+                — since <ClockText read={(now) => relTime(d.blocked_since, now)} />
+              </>
+            )}
+            .{" "}
             <a
               className="prose-link"
               href="https://docs.crewlet.ai/guides/retention"
@@ -174,7 +178,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         </Callout>
       ))}
 
-      {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
+      {data?.maintenance && <MaintenanceBanner op={data.maintenance} />}
 
       {data?.register_readable === false && (
         <Callout variant="warning">
@@ -256,7 +260,10 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                         n.evicted.effective_at,
                       )}`}
                     >
-                      evicted in {fmtDuration(Date.parse(n.evicted.effective_at) - now)}
+                      evicted in{" "}
+                      <ClockText
+                        read={(now) => fmtDuration(Date.parse(n.evicted?.effective_at ?? "") - now)}
+                      />
                     </Tag>
                   )}
                   {n.evicted?.effective && (
@@ -301,7 +308,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sortValue: (n) => n.at ?? "",
               cell: (n) =>
                 n.at ? (
-                  <DateCell at={n.at} now={now} />
+                  <DateCell at={n.at} />
                 ) : (
                   // NOT A ZERO AND NOT AN EM-DASH. A live node that has
                   // never published a position is COUNTED — the trim waits
@@ -385,7 +392,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sortValue: (s) => s.at ?? "",
               cell: (s) =>
                 s.at ? (
-                  <DateCell at={s.at} now={now} />
+                  <DateCell at={s.at} />
                 ) : (
                   // THE LOOP'S OWN REASON, never an empty cell: "node-4
                   // none" is not an answer, and `lagging`, `unhydrated`,
@@ -513,7 +520,7 @@ export function ServedLevelBanner({ level }: { level?: string }) {
  * an operation with nobody outstanding is one waiting on its operator, and
  * that is the state that otherwise looks identical to one waiting on a node.
  */
-export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
+export function MaintenanceBanner({ op }: { op: RetentionMaintenance }) {
   const missing = op.participants_missing ?? [];
   return (
     <Callout variant="danger" role="alert">
@@ -521,7 +528,7 @@ export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: 
         <span>
           <strong>Maintenance is open on {op.stream}</strong> — no publisher is running anywhere in
           this fleet. Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
-          {relTime(op.since, now)}
+          <ClockText read={(now) => relTime(op.since, now)} />
           {op.by && <> ({op.by})</>}. Resizing from {fmtBytes(op.original_max_bytes)} to{" "}
           {fmtBytes(op.target_max_bytes)}.
         </span>

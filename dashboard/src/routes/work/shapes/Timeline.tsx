@@ -27,6 +27,7 @@ import {
 import { Assignee, PriorityMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { EmptyState, Tag, cx } from "@crewlethq/ui";
 import { TimelineGlyph } from "@crewlethq/icons/glyphs";
+import { useToday } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 
 /** How wide one day is, in pixels. */
@@ -124,7 +125,7 @@ function Band({
   hrefOf,
   onOpen,
   selected,
-  now,
+  today,
 }: {
   title?: string;
   count?: number;
@@ -133,9 +134,10 @@ function Band({
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
   selected: string;
-  now: number;
+  /** The browser's day, from the view's one [useToday]. */
+  today: string;
 }) {
-  const line = useMemo(() => timelineOf(rows, { now }), [rows, now]);
+  const line = useMemo(() => timelineOf(rows, { today }), [rows, today]);
   const ticks = useMemo(() => weekTicks(line), [line]);
   const height = line.bars.length * ROW_PX;
 
@@ -306,7 +308,6 @@ export function TimelineView({
   hrefOf,
   onOpen,
   selected,
-  now,
 }: {
   rows: WorkSummary[];
   groups: { key: string; label?: string; count: number; rows: WorkSummary[] }[];
@@ -314,8 +315,10 @@ export function TimelineView({
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
   selected: string;
-  now: number;
 }) {
+  // THE DAY, NOT THE SECOND: the today line is the only thing here the clock
+  // moves, and it moves at midnight.
+  const today = useToday();
   if (groups.length === 0 && rows.length === 0) {
     return (
       // THE MARK SAYS WHICH SCREEN IS EMPTY. uilet's EmptyState draws an inbox
@@ -341,7 +344,7 @@ export function TimelineView({
               hrefOf={hrefOf}
               onOpen={onOpen}
               selected={selected}
-              now={now}
+              today={today}
             />
           </Fragment>
         ))}
@@ -356,7 +359,7 @@ export function TimelineView({
         hrefOf={hrefOf}
         onOpen={onOpen}
         selected={selected}
-        now={now}
+        today={today}
       />
     </div>
   );
