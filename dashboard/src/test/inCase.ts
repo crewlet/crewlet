@@ -53,7 +53,8 @@
  * until they have unwound: React's scope count and the act environment are
  * back to what the next case expects before it starts. Every act, wait or
  * event the case asks for after that is REFUSED before it opens, naming why
- * ([caseEnded]). A suite therefore reaches `act` only through this module.
+ * ([caseEnded]). A suite therefore reaches `act` only through this module,
+ * which `inCase.source.test.ts` holds it to.
  *
  * What is not ended: the library's poll behind a wait that was refused goes
  * on to its own one-second deadline, but its answer goes nowhere and it opens

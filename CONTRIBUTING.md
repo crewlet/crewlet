@@ -244,7 +244,8 @@ What follows are the prerequisites that legitimately vary by machine.
   `findBy` or `waitFor` it still has out polls the next case's page, where it
   can find what that case drew. So every case runs in an async context of
   its own (`aroundEach` in `src/test/setup.ts`), and `src/test/inCase.ts`
-  binds to it: its `act`, which is the only one a suite imports, and the
+  binds to it: its `act`, which is the only one a suite imports
+  (`inCase.source.test.ts` fails a file that reaches the library's), and the
   library's own waits and `fireEvent`, through the library's `asyncWrapper`
   and `eventWrapper`. When the case ends, every act scope and wait it still
   has out is closed before the next case begins, and everything it asks for
