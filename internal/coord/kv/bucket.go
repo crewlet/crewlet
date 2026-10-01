@@ -33,12 +33,12 @@
 //
 //   - THE CLIENT'S CREATE READS TOO. It steps over a removal's marker by
 //     reading the subject through that same direct get (jetstream/kv.go,
-//     Create), so a replica still holding the removed record told every racer
-//     the key existed, and a create race over a released claim had no winner.
+//     Create), so a replica still holding the removed record told the racer
+//     that asked it that the key existed, though nobody had created it.
 //
 // Each of those surfaced as a wrong answer rather than an error — a charge
 // counted short, a run just created read back as absent, a reset that missed
-// the counter it was resetting, a create race nobody won — which is the worst
+// the counter it was resetting — which is the worst
 // shape under this package's three-valued rule: a definite answer that is
 // false. And they are not confined to one bucket. A lease read that misses
 // this node's own acquire answers "definitively not held"; a completion that

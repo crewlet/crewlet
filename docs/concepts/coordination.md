@@ -101,13 +101,12 @@ measured on a three-member cluster under load:
 |---|---|---|
 | A key | A *direct get*, which the server hands to a random replica — the reader's own member or another (the bucket is created with `allow_direct` on) | The revision before an acknowledged write, 5–8 times in 100; a member cut off from the cluster went on answering from its own copy indefinitely |
 | A listing | An ordered pass over a consumer the server places on a random member of the stream | The bucket without its newest write, up to 3 passes in 100 hosted on a follower; never on the leader |
-| A create over a removed key | Reads the removal's marker with the same direct get before stepping over it | "Already exists" for a key a replica had not yet seen removed, to every racer at once |
+| A create over a removed key | Reads the removal's marker with the same direct get before stepping over it | "Already exists", from a replica that had not yet seen the key removed, for a key nobody had created |
 
 None of those was an error. A charge was counted short, a sandbox run just
-written read back as absent, a budget reset missed the counter it was clearing,
-a create race had no winner — and the trim floor, a *minimum* over the position
-rows, would rise over a row it could not see and delete records a node still
-needed. So:
+written read back as absent, a budget reset missed the counter it was clearing
+— and the trim floor, a *minimum* over the position rows, would rise over a row
+it could not see and delete records a node still needed. So:
 
 - **A key is read with `STREAM.MSG.GET`**, which only the stream leader answers.
   A member that cannot see a leader answers an error or nothing, which is the
