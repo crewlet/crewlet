@@ -1,11 +1,36 @@
 /**
- * What jsdom does not provide, and the component suites need — and the one
- * thing it puts off that is better done before the first case.
+ * What jsdom does not provide, and the component suites need — the one thing
+ * it puts off that is better done before the first case — and the one rule
+ * every case is held to: it says nothing to the console it did not expect.
  *
  * Kept to the genuine gaps. A polyfill that changes behaviour rather than
  * supplying a missing API would make the suite agree with a browser nobody
  * runs.
  */
+
+import { afterEach, beforeEach } from "vitest";
+import { watchConsole } from "./console.ts";
+
+// A WARNING IS A FAILURE OF THE CASE THAT PRINTED IT — see `console.ts` for
+// the defects that printed theirs into passing cases. Checked in an
+// `afterEach` registered here, before any suite's own, and hooks unwind in
+// reverse: so it runs after the suite's own teardown, and what an unmount
+// says counts too.
+let stopWatching: (() => string[]) | null = null;
+
+beforeEach(() => {
+  stopWatching = watchConsole();
+});
+
+afterEach(() => {
+  const said = stopWatching?.() ?? [];
+  stopWatching = null;
+  if (said.length > 0) {
+    throw new Error(
+      `this case wrote to the console, which is a defect until shown otherwise — silence one it expects with vi.spyOn(console, …).mockImplementation:\n${said.join("\n")}`,
+    );
+  }
+});
 
 // jsdom implements neither. Both are read at module scope by layout-aware
 // components, so their absence is a throw rather than a wrong answer.

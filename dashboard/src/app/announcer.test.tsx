@@ -11,7 +11,7 @@
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { announce } from "@crewlethq/ui";
-import { afterEach, beforeEach, expect, test, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import { App } from "./App.tsx";
 import { ANNOUNCER_LABEL } from "./announcer.tsx";
 import { Router } from "./router.tsx";
@@ -62,11 +62,13 @@ function fullscreen(element: Element | null): void {
   });
 }
 
-let warn: MockInstance<typeof console.warn>;
+// THE PACKAGE'S OWN WITNESS is the console: it warns on every announcement
+// nothing hears, and a case that writes to the console fails
+// (`src/test/setup.ts`), so each case below also holds that nothing went
+// unheard.
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = "#/";
-  warn = vi.spyOn(console, "warn");
 });
 
 afterEach(() => {
@@ -74,10 +76,6 @@ afterEach(() => {
   Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
   sessionStorage.clear();
   location.hash = "#/";
-  const said = warn.mock.calls.map((call) => call.map(String).join(" "));
-  warn.mockRestore();
-  // THE PACKAGE'S OWN WITNESS: it warns on every announcement nothing hears.
-  expect(said).toEqual([]);
 });
 
 test("a control's announcement is said, in the one region the application mounts", () => {

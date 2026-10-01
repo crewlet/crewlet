@@ -261,6 +261,18 @@ What follows are the prerequisites that legitimately vary by machine.
   to be module-level, and a late `settle()` settled the NEXT case's lens.
   `src/test/inCase.test.ts` and `testkit.test.tsx` each hold one such pair.
 
+  **A warning fails the case that printed it.** `src/test/setup.ts` watches
+  `console.error` and `console.warn` around every case and fails one that
+  wrote to either, after the suite's own teardown so what an unmount says
+  counts too. Vitest shows nothing a passing case prints, so every warning the
+  suite used to print was a defect nobody saw: a list keyed on a field its
+  fixture lacked, a stand-in observer reporting mid-commit, an announcement
+  with no live region mounted — the application had none — and the audit
+  asking the engine once a second. A case that expects a warning silences that
+  one itself, `vi.spyOn(console, "error").mockImplementation(...)` for the call
+  it is about, and puts it back; the watcher (`src/test/console.ts`) restores
+  both methods when the case ends whatever the case did.
+
   **A stand-in for the browser answers when the browser would.** jsdom has no
   layout, so the chart suites install a ResizeObserver of their own, and one
   that reports from inside `observe()` reports in the middle of React's
