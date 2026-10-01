@@ -3469,9 +3469,10 @@ var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
 // NO BOUND AND NO FLOOR, deliberately: a seat reads `linearizable`, which
 // establishes the log's end itself and takes no staleness bound — and the
 // position a wake carried is already in the node's floors from the turn's start
-// (the engine's runTurn), which every read the router routes carries to
-// whichever holder answers it, so there is nothing left for a tool call to
-// name.
+// (the engine's runTurn), which every read of that change's domain the router
+// routes carries to whichever holder answers it, so there is nothing left for a
+// tool call to name. (The ranked searches carry no floor at all: they read an
+// index, which no log position describes.)
 var seatRead = statelog.Freshness{Level: seatReadLevel}
 
 // boardEmpty reports whether a grouped answer holds no task at all — which,
