@@ -170,6 +170,27 @@ func (s *Server) RoutePeers() []string {
 	return s.embedded.routePeers()
 }
 
+// LeadsStream reports whether this member believes, right now, that it leads
+// stream — the very predicate the server asks before it answers a request only
+// a stream's leader may answer, `$JS.API.STREAM.MSG.GET` among them
+// (server/jetstream_api.go, jsMsgGetRequest).
+//
+// Test-facing, for the case in jetstreamtest that holds a coordination read to
+// never being answered by a member that is behind. That case has to know, of a
+// member cut off from its cluster, whether it still believes it leads — a cut
+// leader goes on answering until it notices it lost its quorum, and is waited
+// out — and asked over the network the question has no "no": a member that
+// does not lead a stream answers a request about it with silence, so "no" was
+// a timeout, and a leader slow to answer on a loaded machine read as one that
+// did not lead and failed the case over a read it was entitled to answer.
+// Asked here, in process, it is the server's own answer and nothing else.
+func (s *Server) LeadsStream(stream string) bool {
+	if s.embedded == nil {
+		return false
+	}
+	return s.embedded.ns.GlobalAccount().JetStreamIsStreamLeader(stream)
+}
+
 // routePeers is the derivation itself, shared with [embeddedServer.awaitClusterReady]
 // — which gates a boot on the same number a partition harness asserts about.
 // Two readings of "who can this member reach" would be two answers.

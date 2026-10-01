@@ -2,6 +2,7 @@ package jetstreamtest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -46,6 +47,14 @@ import (
 // answer, which is the failure. One that still believes it leads is waited
 // out, and the case holds it to stopping.
 //
+// THE MEMBER IS ASKED IN PROCESS ([js.Server.LeadsStream]), never over the
+// network. A member that does not lead a stream answers a request about it
+// with silence, so over the network "no" could only be read off a timeout —
+// and a leader slow to answer on a loaded machine then read as a member that
+// did not lead, and failed the case over a read it was entitled to answer.
+// In process the answer is the predicate the server itself asks before it
+// answers a leader-only read, so a "no" is a no.
+//
 // Mutation: answer [coordkv.FleetStore]'s point reads through the client's
 // own Get rather than the leader's, and the cut member answers both from what
 // it had.
@@ -86,20 +95,13 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	}
 
 	// CUT A MEMBER THAT LEADS NEITHER BUCKET: two streams have at most two
-	// leaders among three members.
-	leaders := make([]string, 0, len(streams))
-	for _, stream := range streams {
-		leaders = append(leaders, leaderOf(ctx, t, conns[0], stream))
-	}
-	cut := -1
-	for i := range c.Servers {
-		if !slices.Contains(leaders, c.Configs[i].ServerName) {
-			cut = i
-			break
-		}
-	}
+	// leaders among three members. Leadership may still move before the cut
+	// lands — [refused] waits out a member that believes it leads.
+	cut := slices.IndexFunc(c.Servers, func(s *js.Server) bool {
+		return !slices.ContainsFunc(streams, s.LeadsStream)
+	})
 	if cut < 0 {
-		t.Fatalf("every member leads one of %v (%v), which two streams cannot do", streams, leaders)
+		t.Fatalf("every member leads one of %v, which two streams cannot do", streams)
 	}
 	near, far := stores[(cut+1)%len(stores)], stores[cut]
 
@@ -113,6 +115,12 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		t.Fatalf("SandboxRun through member %d before the cut = (found=%t, %v), want it found",
 			cut, found, err)
 	}
+	// AND THE CLIENT'S OWN HANDLES ON BOTH BUCKETS, bound through the same
+	// member while it can still reach a leader: binding reads the stream's
+	// configuration, and the handle keeps the allow_direct it read — which
+	// is what makes its Get the direct get the control below asks.
+	budgets, runs := clientBucket(ctx, t, conns[cut], "behind_budgets"),
+		clientBucket(ctx, t, conns[cut], "behind_sandbox_runs")
 
 	c.Partition(t, cut)
 	awaitRoutes(t, c, cut, 0)
@@ -139,11 +147,30 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		return err
 	})
 
+	// THE CONTROL: the client's own read through the cut member answers, and
+	// answers from before the majority's writes. Without it this case
+	// would pass for a reason that has nothing to do with whose copy a read
+	// asks — a follower joins the direct-get group only on a two-second
+	// check of how far it has caught up, so a member cut early enough
+	// refuses EVERY read with "no responders", the client's own included,
+	// and a store reading through the client would pass here too.
+	var counter struct {
+		Used int `json:"used"`
+	}
+	if v := staleThrough(t, budgets, coord.DocumentKey(scope)); json.Unmarshal(v, &counter) != nil ||
+		counter.Used != 1 {
+		t.Fatalf("the client's own read of the counter through the cut member answered %s, "+
+			"want the count of 1 it held before the majority's charge", v)
+	}
+	// The run is gone on the majority, so ANY answer is from before that.
+	staleThrough(t, runs, coord.DocumentKey(turn))
+
+	member := c.Servers[cut]
 	name := c.Configs[cut].ServerName
-	refused(t, conns[cut], name, streams[0], "Used", func(ctx context.Context) (any, error) {
+	refused(t, member, name, streams[0], "Used", func(ctx context.Context) (any, error) {
 		return far.Used(ctx, scope)
 	})
-	refused(t, conns[cut], name, streams[1], "SandboxRun", func(ctx context.Context) (any, error) {
+	refused(t, member, name, streams[1], "SandboxRun", func(ctx context.Context) (any, error) {
 		_, found, err := far.SandboxRun(ctx, turn)
 		return found, err
 	})
@@ -155,7 +182,7 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 //
 // See [TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind] for why a
 // member that believes it leads is waited out rather than failed.
-func refused(t *testing.T, nc *nats.Conn, member, stream, what string,
+func refused(t *testing.T, srv *js.Server, member, stream, what string,
 	read func(context.Context) (any, error)) {
 
 	t.Helper()
@@ -165,7 +192,7 @@ func refused(t *testing.T, nc *nats.Conn, member, stream, what string,
 	for {
 		// ASKED FIRST: a member cut off can only stop leading, never
 		// start, so "does not lead" here holds for the read after it.
-		leads := believesItLeads(t, nc, member, stream)
+		leads := srv.LeadsStream(stream)
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		answer, err := read(ctx)
 		cancel()
@@ -189,39 +216,46 @@ func refused(t *testing.T, nc *nats.Conn, member, stream, what string,
 	}
 }
 
-// leaderOf is the member a stream's leader is, as the cluster reports it.
-func leaderOf(ctx context.Context, t *testing.T, nc *nats.Conn, stream string) string {
+// clientBucket binds the client's own handle on a bucket through nc.
+func clientBucket(ctx context.Context, t *testing.T, nc *nats.Conn, bucket string) jetstream.KeyValue {
 	t.Helper()
 	jsc, err := jetstream.New(nc)
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	s, err := jsc.Stream(ctx, stream)
+	kv, err := jsc.KeyValue(ctx, bucket)
 	if err != nil {
-		t.Fatalf("read %s: %v", stream, err)
+		t.Fatalf("bind %s: %v", bucket, err)
 	}
-	if s.CachedInfo().Cluster == nil || s.CachedInfo().Cluster.Leader == "" {
-		t.Fatalf("%s reports no leader", stream)
-	}
-	return s.CachedInfo().Cluster.Leader
+	return kv
 }
 
-// believesItLeads reports whether member answers for stream as its leader.
-// Only the member that believes it leads answers a stream's state, so any
-// other outcome — a refusal, or nothing before the deadline — is "no".
-func believesItLeads(t *testing.T, nc *nats.Conn, member, stream string) bool {
+// staleThrough waits until the client's own read of key through kv — a direct
+// get, which on a member cut off from its cluster only that member can serve —
+// is answered, and returns what it said.
+//
+// THE WAIT IS THE SERVER'S. A follower joins the direct-get group once a
+// two-second check finds it within 90% of the leader's commit
+// (server/jetstream_cluster.go, monitorStream), and a member cut off has
+// nothing left to apply, so it joins on its next check and is never dropped.
+// Thirty seconds is fifteen of those checks.
+func staleThrough(t *testing.T, kv jetstream.KeyValue, key string) []byte {
 	t.Helper()
-	jsc, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		e, err := kv.Get(ctx, key)
+		cancel()
+		switch {
+		case err == nil:
+			return e.Value()
+		case time.Now().After(deadline):
+			t.Fatalf("the client's own read of %s in %s through the cut member never "+
+				"answered (%v), so this case cannot tell a read the leader answers from "+
+				"one nobody does", key, kv.Bucket(), err)
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	s, err := jsc.Stream(ctx, stream)
-	if err != nil {
-		return false
-	}
-	return s.CachedInfo().Cluster != nil && s.CachedInfo().Cluster.Leader == member
 }
 
 // retry runs op until it succeeds, for as long as a majority takes to elect.
