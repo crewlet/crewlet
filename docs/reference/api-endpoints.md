@@ -1791,6 +1791,31 @@ rows that should have gone may still be present, and the totals were computed
 over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 
+**A list across the estate's partitions also says which partitions it
+covered.** `work_items`, `work_my_work`, `work_inbox`, `work_projects`,
+`work_activity`, `work_search`, `pages` and `knowledge` (their REST twins
+included) carry `coverage`, one object of the same shape on every one of them:
+
+| Field | What it holds |
+|---|---|
+| `addressed` | How many [partitions](../concepts/estate-placement.md) the read addressed — `answered` and `missing` together |
+| `answered` | The partitions that answered, by id (`tracker.007`); absent when none did |
+| `missing` | Every partition that did not, each `{partition, reason, detail}`: `reason` is `unserved` (no node serves it), `unreachable` (holders are named and none answered), `behind` (a holder could not reach the caller's own writes on it in time), `not_holder` (every holder asked had stopped serving it — the estate map is moving) or `error` (the read ran there and failed), and `detail` is who was asked and what each said. A reason this build does not know is still a missing partition. Absent when nothing is missing |
+| `at` | Where each log of an answering partition was when its read began, by stream, as position objects — a lower bound on what the answer holds. Absent for a search, which reads an index each node builds behind its own rows |
+
+A non-empty `missing` means **the list may be incomplete**: render it as *N of M
+partitions did not answer; this list may be incomplete* — the one sentence a
+seat's tools and the operator's assistant show — never as the shorter list,
+which would say the company has less in it than it does. A partition missing
+from one page of a list is not one out of rows: the cursor resumes it where it
+was asked from. `coverage` is **absent** where the reader states none — the
+Jira and Confluence backends, and a reader handed rows directly — rather than
+a coverage claiming the read addressed nothing. At layout 0, which every fleet
+on this build runs, every read addresses the one partition `estate.000`, so
+`addressed` is `1`, and a read nothing answered is an error rather than a
+list — except `knowledge`, which is best effort and answers no hits with that
+partition named missing.
+
 ### Whose record a personal question answers for
 
 Four questions answer about **one person** rather than about the company:

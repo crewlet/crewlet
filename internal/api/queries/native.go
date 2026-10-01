@@ -222,6 +222,13 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		"applied_through": answer.AppliedThrough,
 		"complete":        answer.Complete,
 	}
+	if answer.Coverage.Addressed > 0 {
+		// WHAT THE BOARD DID NOT REACH, beside its rows: a partition that
+		// did not answer is work this page never listed, and the same
+		// object every gathered answer carries says which. Absent where
+		// the reader states none, as on every answer type that carries one.
+		out["coverage"] = answer.Coverage
+	}
 	if answer.LogLag != nil {
 		// ABSENT RATHER THAN ZERO when the broker could not be reached.
 		// A read asks how far behind an answer may be, and an
@@ -508,11 +515,16 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"pages": list.Pages, "limit": f.Limit, "offset": f.Offset,
 		"read_level": list.Level, "complete": list.Complete,
 		"position": list.Position, "log_lag": list.LogLag,
-	}, nil
+	}
+	if list.Coverage.Addressed > 0 {
+		// WHAT THE LISTING DID NOT REACH — see [Sources.workItems].
+		out["coverage"] = list.Coverage
+	}
+	return out, nil
 }
 
 func (s Sources) page(ctx context.Context, p Params) (any, error) {

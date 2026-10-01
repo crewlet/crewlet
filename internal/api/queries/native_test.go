@@ -162,9 +162,10 @@ func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 }
 
 type stubPages struct {
-	filter pages.Filter
-	list   []pages.Summary
-	err    error
+	filter   pages.Filter
+	list     []pages.Summary
+	err      error
+	coverage statelog.Coverage
 
 	// level is what the surface asked for, so a route that stopped naming
 	// one is visible: an unset level is what made every page read on this
@@ -190,7 +191,7 @@ func (s *stubPages) List(_ context.Context, f pages.Filter,
 	fresh statelog.Freshness,
 ) (pages.Listing, error) {
 	s.filter, s.level, s.fresh = f, fresh.Level, fresh
-	return pages.Listing{Pages: s.list, Level: fresh.Level, Complete: true}, s.err
+	return pages.Listing{Pages: s.list, Level: fresh.Level, Complete: true, Coverage: s.coverage}, s.err
 }
 
 func (s *stubPages) Get(_ context.Context, _ string,
@@ -469,6 +470,45 @@ func TestTheBoardCarriesItsOwnTotalAndReadLevel(t *testing.T) {
 	}
 	if payload["complete"] != true {
 		t.Errorf("the board carried complete=%v", payload["complete"])
+	}
+}
+
+// THE BOARD AND THE PAGES LISTING SAY WHAT THEY DID NOT REACH, as every
+// gathered answer does: a partition that did not answer rides beside the rows
+// as `coverage` rather than reading as a shorter list — and a reader stating
+// no coverage sends none, rather than one claiming nothing was addressed.
+func TestTheBoardAndThePagesListingCarryTheirCoverage(t *testing.T) {
+	missing := statelog.Coverage{
+		Addressed: 2, Answered: []string{"tracker.000"},
+		Missing: []statelog.MissingPartition{{Partition: "tracker.001", Reason: statelog.MissingBehind}},
+	}
+	for _, tc := range []struct {
+		route   string
+		sources func(statelog.Coverage) queries.Sources
+	}{
+		{"work_items", func(c statelog.Coverage) queries.Sources {
+			return queries.Sources{Work: &stubWork{answer: tracker.Answer{Coverage: c}}}
+		}},
+		{"pages", func(c statelog.Coverage) queries.Sources {
+			return queries.Sources{Pages: &stubPages{coverage: c}}
+		}},
+	} {
+		got, err := askNative(t, tc.sources(missing), tc.route, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.route, err)
+		}
+		payload, _ := got.(map[string]any)
+		if cov, _ := payload["coverage"].(statelog.Coverage); len(cov.Missing) != 1 {
+			t.Errorf("%s carried coverage %#v, want the partition that did not answer",
+				tc.route, payload["coverage"])
+		}
+		got, err = askNative(t, tc.sources(statelog.Coverage{}), tc.route, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.route, err)
+		}
+		if cov, present := got.(map[string]any)["coverage"]; present {
+			t.Errorf("%s stating no coverage sent %#v", tc.route, cov)
+		}
 	}
 }
 
