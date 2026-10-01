@@ -245,18 +245,23 @@ What follows are the prerequisites that legitimately vary by machine.
   can find what that case drew. So every case runs in an async context of
   its own (`aroundEach` in `src/test/setup.ts`), and `src/test/inCase.ts`
   binds to it: its `act`, which is the only one a suite imports
-  (`inCase.source.test.ts` fails a file that reaches the library's), and the
-  library's own waits and `fireEvent`, through the library's `asyncWrapper`
-  and `eventWrapper`. When the case ends, every act scope and wait it still
-  has out is closed before the next case begins — innermost first, because
-  each puts back on exit the act count or act environment it found on entry,
-  and closed in any other order a scope opened inside another left React's
-  count raised — and everything it asks for after that is refused before it
-  opens. Node carries the context through the case's own awaits and timers,
-  so a case that timed out inside a promise of its own and resumes later
-  still reads its own, ended case — which is
-  what a helper every case shares (`answered()`, a suite's `settle()`) could
-  not tell before, and why the flush used to be handed to each case. A case
+  (`inCase.source.test.ts` fails a file that reaches the library's); its
+  `poll`, which a suite uses in place of Vitest's `vi.waitFor` — that one
+  cannot be bound, goes on looking after its case has ended, and advances
+  whatever fake clock is installed before every look, which by then is the
+  next case's, so the same gate refuses it and `vi.waitUntil` and
+  `expect.poll` with it; and the library's own waits and `fireEvent`, through
+  the library's `asyncWrapper` and `eventWrapper`. When the case ends, every
+  act scope, wait and poll it still has out is closed before the next case
+  begins — innermost first, because each puts back on exit the act count or
+  act environment it found on entry, and closed in any other order a scope
+  opened inside another left React's count raised — and everything it asks
+  for after that is refused before it opens. Node carries the context
+  through the case's own awaits and timers, so a case that timed out inside
+  a promise of its own and resumes later still reads its own, ended case —
+  which is what a helper every case shares (`answered()`, a suite's
+  `settle()`) could not tell before, and why the flush used to be handed to
+  each case. A case
   that holds the page's timers advances them as `answered`'s `step`, so the
   refusal comes before the timers move. `src/test/inCase.test.tsx` holds each
   of these to a pair: a case that really runs out of its time with something

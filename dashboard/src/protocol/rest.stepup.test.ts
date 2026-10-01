@@ -10,6 +10,7 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { poll } from "~/test/inCase.ts";
 
 import { rest, RestError, setStepUpConfirmer, type StepUpWindow } from "./index.ts";
 
@@ -98,7 +99,7 @@ describe("a refused gesture, confirmed", () => {
     const asked = confirming(new Promise<boolean>((resolve) => (release = resolve)));
 
     const both = Promise.all([rest.post("/secrets/A", {}), rest.post("/secrets/B", {})]);
-    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await poll(() => expect(sent).toHaveLength(2));
     release(true);
     await both;
 
@@ -163,7 +164,7 @@ describe("a refused gesture, not confirmed", () => {
     const pending = rest
       .request("POST", "/secrets/A", { body: {}, signal: controller.signal })
       .catch((e: unknown) => e);
-    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+    await poll(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
     controller.abort();
     expect(((await pending) as Error).name).toBe("AbortError");
   });

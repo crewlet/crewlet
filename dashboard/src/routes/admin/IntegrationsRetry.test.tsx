@@ -12,7 +12,7 @@
  */
 
 import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, poll } from "~/test/inCase.ts";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CATALOG, SetupPasses, useSetup, useSetupRun, useSetupRuns } from "./Integrations.tsx";
@@ -141,9 +141,7 @@ function Listing() {
 test("a listing the node could not read is read again when it says", async () => {
   answering({ [LISTING]: [unavailable(12), () => json({ tools: [] }, 200)] });
   render(<Listing />);
-  await vi.waitFor(() =>
-    expect(screen.getByTestId("listing").textContent).toBe("unavailable:12:?"),
-  );
+  await poll(() => expect(screen.getByTestId("listing").textContent).toBe("unavailable:12:?"));
   await wait(20_000);
   expect(gaps(LISTING)).toEqual([12]);
   expect(screen.getByTestId("listing").textContent).toBe("ok:-:0");
@@ -152,7 +150,7 @@ test("a listing the node could not read is read again when it says", async () =>
 test("a listing the engine said waiting will not clear is not read again on a timer", async () => {
   answering({ [LISTING]: [unavailable()] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unavailable:0:?"));
+  await poll(() => expect(screen.getByTestId("listing").textContent).toBe("unavailable:0:?"));
   await wait(600_000);
   expect(reads(LISTING)).toBe(1);
 });
@@ -173,7 +171,7 @@ function History() {
 test("the pass history waits the engine's hint in place of its own tick", async () => {
   answering({ [RUNS]: [listed("running"), unavailable(12), unavailable(2), listed("done")] });
   render(<History />);
-  await vi.waitFor(() => expect(screen.getByTestId("history").textContent).toBe("running|-"));
+  await poll(() => expect(screen.getByTestId("history").textContent).toBe("running|-"));
   await wait(20_000);
   // 4 s after the running pass, 12 s after the first refusal, 2 s after the
   // second — and the history it had stays through both.
@@ -186,7 +184,7 @@ test("the pass history waits the engine's hint in place of its own tick", async 
 test("the pass history stops polling a refusal no wait clears, until the tab comes back", async () => {
   answering({ [RUNS]: [listed("done"), unavailable(), listed("done")] });
   render(<History />);
-  await vi.waitFor(() => expect(reads(RUNS)).toBe(1));
+  await poll(() => expect(reads(RUNS)).toBe(1));
   await wait(60_000);
   expect(reads(RUNS)).toBe(2);
   // KEPT, not blanked into "no pass has run": one failed read is no claim
@@ -209,7 +207,7 @@ test("a failure with no hint keeps the poll's cadence", async () => {
     [RUNS]: [listed("running"), () => json({ error: "internal_error" }, 500), listed("done")],
   });
   render(<History />);
-  await vi.waitFor(() => expect(reads(RUNS)).toBe(1));
+  await poll(() => expect(reads(RUNS)).toBe(1));
   await wait(10_000);
   expect(gaps(RUNS)).toEqual([4, 4]);
 });
@@ -230,7 +228,7 @@ test("one pass is asked again when the engine says, and kept meanwhile", async (
     [ONE]: [() => json(run("running"), 200), unavailable(9), () => json(run("done"), 200)],
   });
   render(<Pass />);
-  await vi.waitFor(() => expect(screen.getByTestId("pass").textContent).toBe("running|-"));
+  await poll(() => expect(screen.getByTestId("pass").textContent).toBe("running|-"));
   await wait(4_000);
   expect(screen.getByTestId("pass").textContent).toBe("running|9");
   await wait(20_000);
@@ -244,7 +242,7 @@ test("the pass panel draws a node that could not answer, not an empty history", 
   answering({ [RUNS]: [unavailable(12)] });
   const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
   render(<SetupPasses entry={entry} kinds={["jira"]} />);
-  await vi.waitFor(() => expect(screen.getByText(/cannot answer yet/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/cannot answer yet/)).toBeTruthy());
   expect(screen.queryByText(/No pass has run/)).toBeNull();
 });
 
@@ -269,13 +267,13 @@ test("opening another pass never shows the last one's reading under it", async (
   render(<SetupPasses entry={entry} kinds={["jira"]} />);
   // NEWEST FIRST, the grid's own order: the first pass, then the second.
   const rows = () => [...document.querySelectorAll<HTMLElement>(".grid-row")];
-  await vi.waitFor(() => expect(rows()).toHaveLength(2));
+  await poll(() => expect(rows()).toHaveLength(2));
 
   fireEvent.click(rows()[0]!);
-  await vi.waitFor(() => expect(screen.getByText("what the first pass found")).toBeTruthy());
+  await poll(() => expect(screen.getByText("what the first pass found")).toBeTruthy());
 
   fireEvent.click(rows()[1]!);
-  await vi.waitFor(() => expect(reads(`${RUNS}/r2`)).toBe(1));
+  await poll(() => expect(reads(`${RUNS}/r2`)).toBe(1));
   await wait(0);
   expect(screen.queryByText("what the first pass found")).toBeNull();
   // AND WHAT HAPPENED TO ITS OWN READ IS SAID, where it drew nothing at all.
@@ -291,7 +289,7 @@ test("a first read of the history that failed is said, never drawn as no passes"
   answering({ [RUNS]: [() => json({ error: "internal_error" }, 500)] });
   const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
   render(<SetupPasses entry={entry} kinds={["jira"]} />);
-  await vi.waitFor(() => expect(screen.getByText(/tried to answer and failed/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/tried to answer and failed/)).toBeTruthy());
   expect(screen.queryByText(/No pass has run/)).toBeNull();
 });
 
@@ -313,7 +311,7 @@ test.each([
 ])("a listing that failed with %s says so", async (_, answer, code) => {
   answering({ [LISTING]: [answer] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe(`${code}:-:?`));
+  await poll(() => expect(screen.getByTestId("listing").textContent).toBe(`${code}:-:?`));
 });
 
 // A READ NO ANSWER CAME BACK TO IS ASKED AGAIN ON ITS OWN, with the live socket
@@ -325,7 +323,7 @@ test("a read that never arrived is asked again on its own while the socket stays
   act(() => store.setConnected(true));
   answering({ [LISTING]: [dropped, dropped, dropped, () => json({ tools: [] }, 200)] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unanswered:-:?"));
+  await poll(() => expect(screen.getByTestId("listing").textContent).toBe("unanswered:-:?"));
   await wait(600_000);
   expect(gaps(LISTING)).toEqual([1, 2, 4]);
   expect(screen.getByTestId("listing").textContent).toBe("ok:-:0");
@@ -342,7 +340,7 @@ test.each([
   const [, path, mount, answer] = args;
   answering({ [path]: [dropped, answer] });
   mount();
-  await vi.waitFor(() => expect(reads(path)).toBe(1));
+  await poll(() => expect(reads(path)).toBe(1));
   await wait(500);
   expect(reads(path)).toBe(1);
 

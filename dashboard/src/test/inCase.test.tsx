@@ -24,8 +24,8 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, expect, test } from "vitest";
-import { act, answered } from "./inCase.ts";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { act, answered, poll } from "./inCase.ts";
 
 afterEach(cleanup);
 
@@ -269,6 +269,51 @@ test("is refused both, rather than finding and pressing this case's control", as
   // And this case's own wait and click are its to make.
   fireEvent.click(await screen.findByRole("button", { name: "the next case's" }));
   expect(presses).toBe(1);
+});
+
+/* A poll still out, on a fake clock, when its case runs out of time. */
+
+/** The host's timers, taken as the file loads, before any case fakes them. */
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+/** How often the late poll looks — and how far it moved the fake clock each time. */
+const LOOKS_EVERY = 10;
+let latePoll: Promise<string> = Promise.resolve("never started");
+
+test.fails(
+  "a case that runs out of time while a poll of its own looks, on a fake clock",
+  async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    latePoll = settled(
+      poll(
+        () => {
+          throw new Error("not yet");
+        },
+        { timeout: 10 * RUNS_OUT, interval: LOOKS_EVERY },
+      ),
+    );
+    await latePoll;
+  },
+  RUNS_OUT,
+);
+
+test("finds that poll refused, and its own fake clock where it left it", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const fired = vi.fn();
+  setTimeout(fired, 5 * LOOKS_EVERY);
+  // REAL TIME, ten of the late poll's looks: Vitest's `vi.waitFor` moved
+  // whatever clock was installed one interval before each, so this case's
+  // timer went off with nothing in this case touching its clock.
+  await new Promise<void>((resolve) => {
+    realSetTimeout(resolve, 10 * LOOKS_EVERY);
+  });
+  expect(fired).not.toHaveBeenCalled();
+  expect(await latePoll).toBe(`poll: ${ENDED}`);
 });
 
 /* A call that runs while a case does, from no case's context. */

@@ -18,6 +18,12 @@
  * that calls it imports it from `inCase.ts`, and nothing but `inCase.ts`
  * reaches the library's.
  *
+ * And nothing polls through Vitest's own `vi.waitFor`, `vi.waitUntil` or
+ * `expect.poll`, which nothing can bind: each goes on looking on real timers
+ * after its case has ended, and the first two advance whatever fake clock is
+ * installed — by then the next case's — before every look. A suite polls
+ * through `inCase.ts`'s `poll`, which ends with its case.
+ *
  * READ WITH A PARSER, NOT A PATTERN. There is no ESLint in this tree, and
  * this gate first read the source the way `app/source.test.ts` does: comments
  * blanked by a regular expression, imports matched by another. That blanker
@@ -55,6 +61,11 @@ const CONFIGURES = new Set([
   "@testing-library/react",
   "@testing-library/react/pure",
   "@testing-library/dom",
+]);
+/** Vitest's own polls, by the export that carries them: none ends with its case. */
+const POLLS = new Map([
+  ["vi", new Set(["waitFor", "waitUntil"])],
+  ["expect", new Set(["poll"])],
 ]);
 
 /** One node of the parsed tree: a `type`, and whatever that type carries. */
@@ -114,9 +125,20 @@ function bound(pattern: unknown): string[] {
   }
 }
 
+/**
+ * The name a member expression reaches: `X.act`, or `X["act"]` — a computed
+ * member spelled by a variable is the variable's value, which no reading of
+ * the source can know.
+ */
+function memberName(node: Node): string | null {
+  return !node.computed || (isNode(node.property) && node.property.type === "Literal")
+    ? nameOf(node.property)
+    : null;
+}
+
 /** What one file does with `act`, as its parsed tree says. */
 interface Reading {
-  /** What it reaches of the library's that only the binding may. */
+  /** What it reaches that only the binding may — the library's `act` and `configure` — or nothing may: Vitest's polls. */
   reaches: string[];
   /** Whether it calls an identifier named `act`. */
   callsAct: boolean;
@@ -147,8 +169,10 @@ function read(file: string, text: string): Reading {
     throw new Error(`${file} does not parse`, { cause });
   }
   const reaches: string[] = [];
-  /** Default and namespace bindings of a library module, whose members are reached by `.`. */
+  /** Default and namespace bindings of a module, whose members are reached by `.`. */
   const wholes = new Map<string, string>();
+  /** Local names of vitest's poll carriers (`vi`, `expect`), to the export each is. */
+  const vitest = new Map<string, string>();
   /** Every name bound in the file, and how many times. */
   const bindings = new Map<string, number>();
   const bind = (name: string) => bindings.set(name, (bindings.get(name) ?? 0) + 1);
@@ -171,6 +195,8 @@ function read(file: string, text: string): Reading {
       }
       if (spec.type !== "ImportSpecifier" || imported === "default") {
         wholes.set(local, from);
+      } else if (from === "vitest" && imported !== null && POLLS.has(imported)) {
+        vitest.set(local, imported);
       } else if (imported === "act" && ACTS.has(from)) {
         reaches.push(`act from "${from}"`);
       } else if (imported === "configure" && CONFIGURES.has(from)) {
@@ -210,21 +236,33 @@ function read(file: string, text: string): Reading {
         break;
       }
       case "MemberExpression": {
-        if (!isNode(node.object) || node.object.type !== "Identifier") break;
-        const object = node.object.name as string;
-        const from = wholes.get(object);
-        if (from === undefined) break;
-        // `X.act`, or `X["act"]` — a computed member spelled by a variable is
-        // the variable's value, which no reading of the source can know.
-        const member =
-          !node.computed || (isNode(node.property) && node.property.type === "Literal")
-            ? nameOf(node.property)
-            : null;
-        if (
-          (member === "act" && ACTS.has(from)) ||
-          (member === "configure" && CONFIGURES.has(from))
+        const member = memberName(node);
+        if (member === null || !isNode(node.object)) break;
+        if (node.object.type === "Identifier") {
+          const object = node.object.name as string;
+          const from = wholes.get(object);
+          if (
+            from !== undefined &&
+            ((member === "act" && ACTS.has(from)) ||
+              (member === "configure" && CONFIGURES.has(from)))
+          ) {
+            reaches.push(`${object}.${member}`);
+          }
+          const carrier = vitest.get(object);
+          if (carrier !== undefined && POLLS.get(carrier)!.has(member)) {
+            reaches.push(`${carrier}.${member}`);
+          }
+        } else if (
+          node.object.type === "MemberExpression" &&
+          isNode(node.object.object) &&
+          node.object.object.type === "Identifier" &&
+          wholes.get(node.object.object.name as string) === "vitest"
         ) {
-          reaches.push(`${object}.${member}`);
+          // `V.vi.waitFor`, through a namespace import of vitest.
+          const carrier = memberName(node.object);
+          if (carrier !== null && POLLS.get(carrier)?.has(member)) {
+            reaches.push(`${carrier}.${member}`);
+          }
         }
         break;
       }
@@ -237,9 +275,22 @@ function read(file: string, text: string): Reading {
           callsAct = true;
         }
         break;
-      case "VariableDeclarator":
+      case "VariableDeclarator": {
         bound(node.id).forEach(bind);
+        // `const { waitFor } = vi`, which takes the poll off its carrier.
+        const carrier =
+          isNode(node.init) && node.init.type === "Identifier"
+            ? vitest.get(node.init.name as string)
+            : undefined;
+        if (carrier === undefined || !isNode(node.id) || node.id.type !== "ObjectPattern") break;
+        for (const property of node.id.properties as Node[]) {
+          const taken = property.type === "Property" ? nameOf(property.key) : null;
+          if (taken !== null && POLLS.get(carrier)!.has(taken)) {
+            reaches.push(`${carrier}.${taken}`);
+          }
+        }
         break;
+      }
       case "FunctionDeclaration":
       case "FunctionExpression":
       case "ArrowFunctionExpression":
@@ -364,6 +415,36 @@ const SHAPES: { shape: string; file?: string; source: string; reading: Partial<R
     source: `import { act } from "~/test/inCase.ts"; function settle() { const act = (f: () => void) => f(); act(() => {}); }`,
     reading: { callsAct: true, actIsBinding: false },
   },
+  {
+    shape: "Vitest's waitFor",
+    source: `import { vi } from "vitest"; await vi.waitFor(() => {});`,
+    reading: { reaches: ["vi.waitFor"] },
+  },
+  {
+    shape: "Vitest's waitUntil, through an alias",
+    source: `import { vi as v } from "vitest"; await v.waitUntil(() => true);`,
+    reading: { reaches: ["vi.waitUntil"] },
+  },
+  {
+    shape: "Vitest's expect.poll",
+    source: `import { expect } from "vitest"; await expect.poll(() => 1).toBe(1);`,
+    reading: { reaches: ["expect.poll"] },
+  },
+  {
+    shape: "Vitest's waitFor through a namespace",
+    source: `import * as V from "vitest"; await V.vi["waitFor"](() => {});`,
+    reading: { reaches: ["vi.waitFor"] },
+  },
+  {
+    shape: "Vitest's waitFor taken off vi",
+    source: `import { vi } from "vitest"; const { waitFor } = vi; await waitFor(() => {});`,
+    reading: { reaches: ["vi.waitFor"] },
+  },
+  {
+    shape: "the rest of vi, which is not a poll",
+    source: `import { vi } from "vitest"; vi.useFakeTimers(); vi.advanceTimersByTime(50);`,
+    reading: { reaches: [] },
+  },
 ];
 
 test.each(SHAPES)("the reading sees $shape", ({ file = "x.test.tsx", source, reading }) => {
@@ -407,13 +488,13 @@ test("the walk reads the suites, and finds the binding reaching the library itse
   ]);
 });
 
-test("nothing but the binding reaches the library's act or configures the library", () => {
+test("nothing but the binding reaches the library's act or configures the library, and nothing polls through Vitest", () => {
   const offenders = files
     .filter((f) => f.path !== BINDING)
     .flatMap((f) => f.reading.reaches.map((what) => `${f.path} — ${what}`));
   expect(
     offenders,
-    `import \`act\` from "~/test/inCase.ts", whose \`act\` ends with the case that called it; the library's is opened beside the next case by a case that timed out, and a second \`configure\` unbinds every wait and event:\n${offenders.join("\n")}`,
+    `import \`act\` and \`poll\` from "~/test/inCase.ts", which end with the case that called them; the library's \`act\` is opened beside the next case by a case that timed out, a second \`configure\` unbinds every wait and event, and Vitest's polls go on looking — and moving the fake clock — in the next case:\n${offenders.join("\n")}`,
   ).toEqual([]);
 });
 

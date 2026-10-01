@@ -9,6 +9,7 @@
 
 import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { poll } from "~/test/inCase.ts";
 
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
@@ -53,11 +54,11 @@ afterEach(() => {
 test("a query that watches focus re-asks when the tab comes back", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations", undefined, { refetchOnFocus: true }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await poll(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   visible(true);
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  await poll(() => expect(query).toHaveBeenCalledTimes(2));
 });
 
 // AND A HIDDEN TAB DOES NOT.
@@ -67,7 +68,7 @@ test("a query that watches focus re-asks when the tab comes back", async () => {
 test("going away does not ask", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations", undefined, { refetchOnFocus: true }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await poll(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   await new Promise((r) => setTimeout(r, 10));
@@ -81,7 +82,7 @@ test("going away does not ask", async () => {
 test("focus is opt-in", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations"));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await poll(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   visible(true);

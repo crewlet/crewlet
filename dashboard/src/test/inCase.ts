@@ -6,7 +6,7 @@
  *
  * Its function is a promise nothing can cancel. Vitest fails it and starts
  * the next case, and the function goes on running beside the cases after it,
- * waking at whatever it was waiting for — and three things it does then reach
+ * waking at whatever it was waiting for — and four things it does then reach
  * the next case:
  *
  * - AN `act`. React keeps ONE act scope count for the process and restores on
@@ -22,6 +22,10 @@
  *   which is the act scope's restore-on-exit hazard again.
  * - AN EVENT (`fireEvent`), dispatched inside the library's `act` onto
  *   whatever the late case found — the next case's controls.
+ * - A POLL (`vi.waitFor`), which before every look advances whatever fake
+ *   clock is installed — by then the next case's, whose timers it fires — and
+ *   looks at the next case's page. Vitest's own cannot be bound, so a suite
+ *   polls through [poll] instead.
  *
  * # Which case is asking is the async context the call runs in
  *
@@ -66,6 +70,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { act as libraryAct, configure, getConfig } from "@testing-library/react";
+import { vi } from "vitest";
 
 /**
  * The refusal a late case meets: it names what was asked and why, because a
@@ -277,6 +282,104 @@ export const act = boundAct as typeof libraryAct;
 export async function answered(step?: () => void): Promise<void> {
   if (step) act(step);
   await act(async () => {});
+}
+
+/**
+ * The host's own timers, taken as this module loads — before any case can
+ * fake them — because a [poll] runs on real time whatever clock the case
+ * holds, as Vitest's own does.
+ */
+const real = {
+  setTimeout: globalThis.setTimeout.bind(globalThis),
+  clearTimeout: globalThis.clearTimeout.bind(globalThis),
+  setInterval: globalThis.setInterval.bind(globalThis),
+  clearInterval: globalThis.clearInterval.bind(globalThis),
+};
+
+/** How long a [poll] goes on asking, and how often: `vi.waitFor`'s own options and defaults. */
+export type PollOptions = number | { timeout?: number; interval?: number };
+
+/**
+ * Vitest's `vi.waitFor`, for the case whose async context calls it: asks
+ * `check` at once and every `interval` until it returns — or resolves —
+ * without throwing, and fails with its last error once `timeout` has passed.
+ * Refused once that case has ended, and ended with it.
+ *
+ * `vi.waitFor` CANNOT BE BOUND FROM OUTSIDE, which is why this is a poll of
+ * its own rather than a wrapper. Before every look it advances whatever fake
+ * clock is installed by one interval, and it goes on looking on real timers
+ * after its case has ended — so a case that timed out while one was out
+ * moved the NEXT case's clock, every interval, firing the timers that case
+ * had armed outside anything it did, and looked at that case's page. Nothing
+ * reaches its timers to stop it, and refusing inside `check` comes after the
+ * clock has moved. This one moves the clock the same way, so a case that
+ * holds the timers reads exactly as it did — and stops before its next move
+ * when its case ends.
+ */
+export function poll<T>(check: () => T | PromiseLike<T>, options: PollOptions = {}): Promise<T> {
+  const { timeout = 1000, interval = 50 } =
+    typeof options === "number" ? { timeout: options } : options;
+  let life: Case | null;
+  try {
+    life = caseOf("poll");
+    life?.refuse("poll");
+  } catch (refusal) {
+    return Promise.reject(refusal);
+  }
+  const out = life?.open();
+  const work = new Promise<T>((resolve, reject) => {
+    let done = false;
+    /** Whether an answer `check` gave as a promise is still out: one at a time, as Vitest asks. */
+    let asking = false;
+    let lastError: unknown;
+    const finish = (settle: () => void): void => {
+      if (done) return;
+      done = true;
+      real.clearInterval(ticker);
+      real.clearTimeout(deadline);
+      settle();
+    };
+    const look = (): void => {
+      if (done) return;
+      try {
+        // Ended already, though its end has not reached this poll yet — the
+        // case is unwinding what it opened after it. It looks no more.
+        life?.refuse("poll");
+      } catch (refusal) {
+        finish(() => reject(refusal));
+        return;
+      }
+      // VITEST'S ORDER: the clock moves before each look, so a case that holds
+      // the timers sees what they were holding back.
+      if (vi.isFakeTimers()) vi.advanceTimersByTime(interval);
+      if (asking) return;
+      try {
+        const value = check();
+        if (!isThenable(value)) {
+          finish(() => resolve(value));
+          return;
+        }
+        asking = true;
+        value.then(
+          (answer) => finish(() => resolve(answer as T)),
+          (error: unknown) => {
+            asking = false;
+            lastError = error;
+          },
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    };
+    void out?.ended.then(() => finish(() => reject(caseEnded("poll"))));
+    const ticker = real.setInterval(look, interval);
+    const deadline = real.setTimeout(
+      () => finish(() => reject(lastError ?? new Error(`poll: nothing answered in ${timeout} ms`))),
+      timeout,
+    );
+    look();
+  });
+  return out ? out.track(work) : work;
 }
 
 /**

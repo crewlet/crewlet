@@ -16,7 +16,7 @@
  */
 
 import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, poll } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CredentialPeek, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
@@ -213,7 +213,7 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
 function unavailableOnce(headers: Record<string, string>, asked: number[] = []) {
   let refused = false;
   return stubFetch((path) => {
-    // WHEN each listing read went out, on the fake clock: `vi.waitFor` moves
+    // WHEN each listing read went out, on the fake clock: `poll` moves
     // that clock while it polls, so a wait is held as the gap between two
     // reads, never as a count at an absolute instant.
     if (path === "/secrets") asked.push(Date.now());
@@ -243,7 +243,7 @@ test("a 503 is a node that cannot answer yet, read again when its Retry-After sa
     const asked: number[] = [];
     const spy = unavailableOnce({ "Retry-After": "12" }, asked);
     render(<Secrets />);
-    await vi.waitFor(() => expect(screen.getByText(/cannot answer yet/)).toBeDefined());
+    await poll(() => expect(screen.getByText(/cannot answer yet/)).toBeDefined());
     expect(screen.queryByText(/tried to answer and failed/)).toBeNull();
     expect(listReads(spy)).toBe(1);
 
@@ -254,9 +254,9 @@ test("a 503 is a node that cannot answer yet, read again when its Retry-After sa
     // WHEN IT SAID: a node twelve seconds behind is asked at twelve, never at
     // any cadence of this screen's own, sooner or later. In whole seconds,
     // because the gap is measured from the request and the wait starts when
-    // its answer lands, which `vi.waitFor`'s own clock steps can follow.
+    // its answer lands, which `poll`'s own clock steps can follow.
     expect(Math.floor((asked[1]! - asked[0]!) / 1_000)).toBe(12);
-    await vi.waitFor(() => expect(screen.getByText("GITHUB_TOKEN")).toBeDefined());
+    await poll(() => expect(screen.getByText("GITHUB_TOKEN")).toBeDefined());
   } finally {
     vi.useRealTimers();
   }
@@ -267,7 +267,7 @@ test("a 503 with no Retry-After says the node refused, and is not read again", a
   try {
     const spy = unavailableOnce({});
     render(<Secrets />);
-    await vi.waitFor(() =>
+    await poll(() =>
       expect(screen.getByText(/asking it again will not change that/)).toBeDefined(),
     );
     await act(async () => {
@@ -421,7 +421,7 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: 'glpat-"quoted"' } });
   fireEvent.click(screen.getByRole("button", { name: "Store" }));
 
-  await vi.waitFor(() => {
+  await poll(() => {
     const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(write).toBeDefined();
     expect(String(write?.[0])).toContain("/secrets/NEW_TOKEN");
@@ -498,7 +498,7 @@ test("a secret nothing reads is removed without a second gesture", async () => {
   expect(screen.queryByRole("checkbox")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 
-  await vi.waitFor(() => {
+  await poll(() => {
     const gone = spy.mock.calls.find(([, init]) => init?.method === "DELETE");
     expect(gone).toBeDefined();
     expect(String(gone?.[0])).toContain("/secrets/DATADOG_WEBHOOK_TOKEN");
@@ -546,11 +546,11 @@ test("a reference check that fails after one that answered is unknown, not the o
   });
   render(<Secrets />);
   expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
-  await vi.waitFor(() => expect(checks).toBe(1));
+  await poll(() => expect(checks).toBe(1));
 
   // THE SOCKET COMING BACK reads both again, and this time the check fails.
   act(() => store.setConnected(true));
-  await vi.waitFor(() => expect(checks).toBe(2));
+  await poll(() => expect(checks).toBe(2));
   await openRemove("DATADOG_WEBHOOK_TOKEN");
   expect(await screen.findByText(/could not be read/)).toBeDefined();
   expect(screen.queryByText(/No field in the active configuration names this/)).toBeNull();
@@ -612,7 +612,7 @@ test("editing a secret asks for a new value and never receives the old one", asy
   fireEvent.change(screen.getByLabelText("New value"), { target: { value: "ghp-rotated" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-  await vi.waitFor(() => {
+  await poll(() => {
     const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(String(write?.[0])).toContain("/secrets/GITHUB_TOKEN");
   });

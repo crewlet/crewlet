@@ -10,6 +10,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { poll } from "~/test/inCase.ts";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 
 type Sent = { method: string; path: string; body: unknown };
@@ -391,10 +392,10 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
 
   // THE WAIT IS SAID, and not as an error: the disconnect has not failed, it
   // has not started.
-  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
   await vi.advanceTimersByTimeAsync(10_000);
 
-  await vi.waitFor(() => expect(done).toHaveBeenCalled());
+  await poll(() => expect(done).toHaveBeenCalled());
   const asked = sent.filter((s) => s.method === "DELETE").map((s) => s.path);
   for (const kind of ["jira", "confluence", "atlassian"]) {
     expect(asked.some((p) => p.endsWith(`/${kind}`))).toBe(true);
@@ -446,7 +447,7 @@ test("a refusal that is not a race stops and offers the force", async () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await vi.waitFor(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
   await vi.advanceTimersByTimeAsync(10_000);
   expect(screen.queryByText(/has to wait its turn/)).toBeNull();
   expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
@@ -469,7 +470,7 @@ function busyThen(headers: Record<string, string>, refusals: number, asked: numb
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      // WHEN each DELETE went out, on the fake clock: `vi.waitFor` moves that
+      // WHEN each DELETE went out, on the fake clock: `poll` moves that
       // clock as it polls, so the gaps between asks are what can be held,
       // never a count at an absolute instant.
       if ((init?.method ?? "GET") === "DELETE") asked.push(Date.now());
@@ -492,7 +493,7 @@ function busyThen(headers: Record<string, string>, refusals: number, asked: numb
 }
 
 /**
- * The gaps between consecutive asks, in whole seconds, rounded DOWN: `vi.waitFor`
+ * The gaps between consecutive asks, in whole seconds, rounded DOWN: `poll`
  * moves the fake clock in 50 ms steps while it polls for the refusal to land,
  * which the first wait can start behind. A wait of the dialog's old three
  * seconds against a hint of seven reads as 3, never 7.
@@ -508,9 +509,9 @@ test("a busy surface is asked again when its Retry-After says", async () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={done} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
   await vi.advanceTimersByTimeAsync(10_000);
-  await vi.waitFor(() => expect(done).toHaveBeenCalled());
+  await poll(() => expect(done).toHaveBeenCalled());
   expect(gaps(asked)).toEqual([7]);
 });
 
@@ -521,7 +522,7 @@ test("a busy answer with no Retry-After is not waited out", async () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await vi.waitFor(() => expect(screen.getByText(/being written at/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/being written at/)).toBeTruthy());
   await vi.advanceTimersByTimeAsync(60_000);
   expect(screen.queryByText(/has to wait its turn/)).toBeNull();
   expect(asked).toHaveLength(1);
@@ -536,10 +537,10 @@ test("a busy surface is given up on once the next wait would end past the window
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await vi.waitFor(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/has to wait its turn/)).toBeTruthy());
   await vi.advanceTimersByTimeAsync(120_000);
   // Asked at 0, 20 and 40 seconds; a fourth wait would end at 60, past the
   // 45-second window, so the third refusal is the answer.
   expect(gaps(asked)).toEqual([20, 20]);
-  await vi.waitFor(() => expect(screen.getByText(/being written at/)).toBeTruthy());
+  await poll(() => expect(screen.getByText(/being written at/)).toBeTruthy());
 });
