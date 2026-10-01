@@ -182,9 +182,13 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
  * reloaded. The `503`'s `Retry-After` is when; with none, the engine is saying
  * waiting will not change it, so the screen says so and asks nothing.
  */
-function unavailableOnce(headers: Record<string, string>) {
+function unavailableOnce(headers: Record<string, string>, asked: number[] = []) {
   let refused = false;
   return stubFetch((path) => {
+    // WHEN each listing read went out, on the fake clock: `vi.waitFor` moves
+    // that clock while it polls, so a wait is held as the gap between two
+    // reads, never as a count at an absolute instant.
+    if (path === "/secrets") asked.push(Date.now());
     if (path === "/secrets" && !refused) {
       refused = true;
       return new Response(
@@ -208,7 +212,8 @@ const listReads = (spy: ReturnType<typeof stubFetch>) =>
 test("a 503 is a node that cannot answer yet, read again when its Retry-After says", async () => {
   vi.useFakeTimers();
   try {
-    const spy = unavailableOnce({ "Retry-After": "12" });
+    const asked: number[] = [];
+    const spy = unavailableOnce({ "Retry-After": "12" }, asked);
     render(<Secrets />);
     await vi.waitFor(() => expect(screen.getByText(/cannot answer yet/)).toBeDefined());
     expect(screen.queryByText(/tried to answer and failed/)).toBeNull();
@@ -218,6 +223,11 @@ test("a 503 is a node that cannot answer yet, read again when its Retry-After sa
       await vi.advanceTimersByTimeAsync(12_000);
     });
     expect(listReads(spy)).toBe(2);
+    // WHEN IT SAID: a node twelve seconds behind is asked at twelve, never at
+    // any cadence of this screen's own, sooner or later. In whole seconds,
+    // because the gap is measured from the request and the wait starts when
+    // its answer lands, which `vi.waitFor`'s own clock steps can follow.
+    expect(Math.floor((asked[1]! - asked[0]!) / 1_000)).toBe(12);
     await vi.waitFor(() => expect(screen.getByText("GITHUB_TOKEN")).toBeDefined());
   } finally {
     vi.useRealTimers();
