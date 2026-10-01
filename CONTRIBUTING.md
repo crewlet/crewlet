@@ -243,8 +243,11 @@ What follows are the prerequisites that legitimately vary by machine.
   never flushed — one timeout read as the rest of the file failing — and a
   `findBy` or `waitFor` it still has out polls the next case's page, where it
   can find what that case drew. So every case runs in an async context of
-  its own (`aroundEach` in `src/test/setup.ts`), and `src/test/inCase.ts`
-  binds to it: its `act`, which is the only one a suite imports
+  its own (`aroundEach` in `src/test/setup.ts`, over `src/test/cases.ts`,
+  which loads no testing library so a file with no document pays for none),
+  and `src/test/inCase.ts` binds to it — loaded by `setup.ts` wherever there
+  is a document, so a suite that never imports it is bound all the same
+  (`libraryBound.test.tsx`): its `act`, which is the only one a suite imports
   (`inCase.source.test.ts` fails a file that reaches the library's); its
   `poll`, which a suite uses in place of Vitest's `vi.waitFor` — that one
   cannot be bound, goes on looking after its case has ended, and advances

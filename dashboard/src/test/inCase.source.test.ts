@@ -22,7 +22,8 @@
  * `expect.poll`, which nothing can bind: each goes on looking on real timers
  * after its case has ended, and the first two advance whatever fake clock is
  * installed — by then the next case's — before every look. A suite polls
- * through `inCase.ts`'s `poll`, which ends with its case.
+ * through the `poll` `inCase.ts` hands out (`cases.ts` holds it), which ends
+ * with its case.
  *
  * READ WITH A PARSER, NOT A PATTERN. There is no ESLint in this tree, and
  * this gate first read the source the way `app/source.test.ts` does: comments

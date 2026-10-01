@@ -10,19 +10,26 @@
  */
 
 import { afterAll, afterEach, aroundEach, beforeEach } from "vitest";
+import { runCase } from "./cases.ts";
 import { watchFile } from "./console.ts";
-import { bindTestingLibrary, runCase } from "./inCase.ts";
 
-// A CASE ENDS WITH ITSELF — see `inCase.ts` for the late case that timed out
-// and acted, waited and clicked on the next case's page. Every case runs in
-// a context of its own, from its first `beforeEach` to its last
-// `onTestFinished`, and the library's waits and events read which case they
-// belong to from it; when the case ends, what it still has out is ended and
-// what it asks for after is refused, before the next case begins.
-bindTestingLibrary();
+// A CASE ENDS WITH ITSELF — see `cases.ts` for the late case that timed out
+// and acted, waited, clicked and polled on the next case's page. Every case
+// runs in a context of its own, from its first `beforeEach` to its last
+// `onTestFinished`, and what it does reads which case it belongs to from it;
+// when the case ends, what it still has out is ended and what it asks for
+// after is refused, before the next case begins.
 aroundEach(async (runTest) => {
   await runCase(runTest);
 });
+
+// THE LIBRARY IS BOUND WHERE THERE IS A PAGE: loading `inCase.ts` wraps the
+// testing library's waits and events, so a suite that renders and waits
+// without ever importing it is bound all the same. A file with no document
+// has nothing for the library to wait on, and loading it there — with
+// `react-dom` behind it — cost each such file about 200 ms of setup for
+// nothing; one that imports the library anyway loads the binding with it.
+if (typeof document !== "undefined") await import("./inCase.ts");
 
 // A WARNING IS A FAILURE OF THE CASE THAT PRINTED IT — see `console.ts` for
 // the defects that printed theirs into passing cases. Checked in an

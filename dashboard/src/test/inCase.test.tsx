@@ -20,7 +20,8 @@
  * a scope inside a scope left the count raised just the same, and a wait
  * inside a scope put back the scope's environment over the case's. And
  * Vitest's own `vi.waitFor` moved the next case's fake clock. Each assertion
- * below goes red when the matching half of `inCase.ts` is taken away.
+ * below goes red when the matching half of `inCase.ts` or `cases.ts` is taken
+ * away.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
