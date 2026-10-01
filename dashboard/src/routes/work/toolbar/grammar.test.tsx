@@ -24,7 +24,7 @@
  * later with nowhere to live fails here rather than shipping invisible.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ItemsView } from "../ItemsView.tsx";
@@ -206,25 +206,48 @@ const mountList = () =>
   );
 
 /**
+ * Lets the stubbed socket's answers land, and renders what they leave.
+ *
+ * NOT A POLL. A `findBy` or a `waitFor` re-ran its query on every change to
+ * the page and every fifty milliseconds against a one-second deadline, each
+ * time a query by role over the whole list, which computes the name of every
+ * button on it — and on a loaded machine the deadline passed before the list
+ * had drawn. The answers are promises, so `act` runs them, and the renders
+ * they cause, to the end, however long that takes.
+ */
+async function answered(): Promise<void> {
+  await act(async () => {});
+}
+
+/** The list's own bar, where the Display menu's trigger is drawn. */
+function workBar(): HTMLElement {
+  const bar = document.querySelector<HTMLElement>(".work-bar");
+  if (!bar) throw new Error("the list draws no bar");
+  return bar;
+}
+
+/**
  * The list at one address, with one item on it.
  *
- * IT WAITS FOR THE BAR rather than for the row, because the row is not on
- * every shape: a calendar draws the month it is in, and an item due in another
- * one is not on the grid at all — where the toolbar these cases are about is
- * drawn whatever the answer holds.
+ * IT HOLDS THE BAR rather than the row, because the row is not on every
+ * shape: a calendar draws the month it is in, and an item due in another one
+ * is not on the grid at all — where the toolbar these cases are about is drawn
+ * whatever the answer holds.
  */
 async function listAt(hash: string) {
   location.hash = hash;
   serving(rows);
-  const { container } = mountList();
-  await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+  mountList();
+  await answered();
+  expect(workBar()).toBeTruthy();
 }
 
-/** The Display menu, opened. */
+/** The Display menu, opened from the list's own bar. */
 async function openDisplay() {
   fireEvent.click(
-    await screen.findByRole("button", { name: /^(List|Board|Table|Calendar|Timeline)/ }),
+    within(workBar()).getByRole("button", { name: /^(List|Board|Table|Calendar|Timeline)/ }),
   );
+  await answered();
 }
 
 /** An optional column of the list's set — the one a tick can turn on. */
@@ -257,7 +280,7 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
     at: "#/work",
     press: async () => {
       await openDisplay();
-      pick(await screen.findByRole("combobox", { name: "Group by" }), "Assignee");
+      pick(screen.getByRole("combobox", { name: "Group by" }), "Assignee");
     },
     writes: "group_by=assignee",
   },
@@ -267,7 +290,7 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
     at: "#/work?group_by=status",
     press: async () => {
       await openDisplay();
-      pick(await screen.findByRole("combobox", { name: "Then by" }), "Priority");
+      pick(screen.getByRole("combobox", { name: "Then by" }), "Priority");
     },
     writes: "group_by2=priority",
   },
@@ -275,7 +298,7 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
     at: "#/work",
     press: async () => {
       await openDisplay();
-      pick(await screen.findByRole("combobox", { name: "Order by" }), "Recently updated");
+      pick(screen.getByRole("combobox", { name: "Order by" }), "Recently updated");
     },
     writes: "sort=-updated",
   },
@@ -283,7 +306,7 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
     at: "#/work",
     press: async () => {
       await openDisplay();
-      fireEvent.click(await screen.findByLabelText(optionalColumn()));
+      fireEvent.click(screen.getByLabelText(optionalColumn()));
     },
     // THE ACTIVE SHAPE'S OWN KEY, which is the family's whole point.
     writes: `${colsParam("list")}=`,
@@ -308,9 +331,8 @@ test.each(MENU_HOMED)("the Display menu writes %s", async (key) => {
   const entry = MENU[key] as (typeof MENU)[string];
   await listAt(entry.at);
   await entry.press();
-  await waitFor(() =>
-    expect(location.hash, `${key} was not written by the Display menu`).toContain(entry.writes),
-  );
+  await answered();
+  expect(location.hash, `${key} was not written by the Display menu`).toContain(entry.writes);
   // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
   // one would offer to remove a drawing.
   const chips = document.querySelector(".work-chips")?.textContent ?? "";
@@ -351,12 +373,14 @@ test("exactly three keys are neither a chip nor a menu", () => {
 test("the scope is the bar's own switch, with no chip and no row in the Filter menu", async () => {
   await listAt("#/work");
   fireEvent.click(screen.getByText("Closed"));
-  await waitFor(() => expect(location.hash).toContain("scope=closed"));
+  await answered();
+  expect(location.hash).toContain("scope=closed");
   // NO CHIP FOR IT, on a list where it is the only thing that moved.
   expect(document.querySelector(".work-chips")).toBeNull();
   // AND NO SECOND CONTROL FOR IT in the menu that owns the narrowings.
-  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
-  await screen.findByText("status=");
+  fireEvent.click(within(workBar()).getByRole("button", { name: "Filter" }));
+  await answered();
+  expect(screen.getByText("status=")).toBeTruthy();
   expect(screen.queryByText("scope=")).toBeNull();
 });
 
@@ -383,8 +407,10 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
     },
   });
   mountList();
-  fireEvent.click(await screen.findByRole("tab", { name: "Arranged" }));
-  await waitFor(() => expect(location.hash).toContain("view=arranged"));
+  await answered();
+  fireEvent.click(screen.getByRole("tab", { name: "Arranged" }));
+  await answered();
+  expect(location.hash).toContain("view=arranged");
   expect(document.querySelector(".work-chips")).toBeNull();
 });
 
@@ -395,6 +421,7 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
 test("the month is the calendar's own control", async () => {
   await listAt("#/work?shape=calendar");
   fireEvent.click(screen.getByRole("button", { name: "The month after" }));
-  await waitFor(() => expect(location.hash).toContain("month="));
+  await answered();
+  expect(location.hash).toContain("month=");
   expect(document.querySelector(".work-chips")).toBeNull();
 });
