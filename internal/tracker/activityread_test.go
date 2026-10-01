@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -449,5 +450,94 @@ func TestAnActivityFilterOnAKindThisBuildDoesNotHaveIsRefused(t *testing.T) {
 		Kinds: []tracker.ChangeKind{tracker.ChangeCreated}}); len(got.Records) != 1 {
 		t.Errorf("a kind the feed has answered %d records, want the one create",
 			len(got.Records))
+	}
+}
+
+// THE FEED SAYS WHERE ITS NODE IS ON THE LOG, and how much of it produced its
+// rows. The audit names a tracker answer whose node is behind by these two
+// numbers alone, so they are the whole of what it can say: a node holding a
+// record it cannot decode moves its checkpoint past that record, reads exactly
+// like one at the head of the log by its position, and only the applied prefix
+// stopping below the record says otherwise. A retained record ABOVE the
+// checkpoint holds nothing back that the checkpoint has passed, so the prefix
+// is the checkpoint — never a position beyond it, which an applied prefix
+// cannot be. It is the framework's one rule ([statelog.PrefixIn]), which
+// this package once kept a copy of, and the copy answered that last case with
+// a prefix past the checkpoint.
+func TestTheFeedReportsItsPositionAndAppliedPrefix(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	filedTask(t, r, "t-2")
+
+	caught := r.activity(tracker.ActivityQuery{})
+	if len(caught.Records) < 2 {
+		t.Fatalf("the feed carries %d records, want both tasks' — this case "+
+			"tests nothing without them", len(caught.Records))
+	}
+	at := func(record tracker.ActivityRecord) uint64 {
+		return uint64(statelog.Position{
+			Generation: record.LogGeneration, Seq: record.LogSeq,
+		}.Packed())
+	}
+	newest, oldest := at(caught.Records[0]), at(caught.Records[len(caught.Records)-1])
+	if caught.LogSeq < newest {
+		t.Errorf("the feed is at %d, below its own newest record at %d",
+			caught.LogSeq, newest)
+	}
+	if caught.AppliedThrough != caught.LogSeq {
+		t.Errorf("a node that retains nothing applied through %d of %d",
+			caught.AppliedThrough, caught.LogSeq)
+	}
+
+	// A RECORD RETAINED AT THE OLDEST RECORD'S POSITION: the checkpoint is
+	// past it, and the applied prefix stops just below it.
+	r.retainAt(oldest)
+	behind := r.activity(tracker.ActivityQuery{})
+	if behind.LogSeq != caught.LogSeq {
+		t.Errorf("retaining a record moved the position from %d to %d",
+			caught.LogSeq, behind.LogSeq)
+	}
+	if behind.AppliedThrough != oldest-1 {
+		t.Errorf("a node retaining the record at %d applied through %d, want %d",
+			oldest, behind.AppliedThrough, oldest-1)
+	}
+
+	// AND ONE ABOVE THE CHECKPOINT holds back nothing the checkpoint passed.
+	r.clearRetained()
+	r.retainAt(caught.LogSeq + 1_000)
+	ahead := r.activity(tracker.ActivityQuery{})
+	if ahead.AppliedThrough != ahead.LogSeq {
+		t.Errorf("a record retained above the checkpoint put the applied "+
+			"prefix at %d against a checkpoint of %d — an applied prefix "+
+			"past the checkpoint is a position no record reached",
+			ahead.AppliedThrough, ahead.LogSeq)
+	}
+}
+
+// retainAt files a record this node "could not decode" at a packed position,
+// the rows the framework's own loop writes when it retains one.
+func (r *roundTrip) retainAt(position uint64) {
+	r.t.Helper()
+	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(r.t.Context(), `
+			INSERT INTO tracker_log_deferred
+				(position, subject, subject_kind, subject_id, version, payload, stored_at)
+			VALUES (?, 'task.x', 'task', 'x', ?, x'00', 0)`,
+			int64(position), tracker.RecordVersion+1)
+		return err
+	}); err != nil {
+		r.t.Fatalf("retain a record: %v", err)
+	}
+}
+
+// clearRetained forgets every record [roundTrip.retainAt] filed.
+func (r *roundTrip) clearRetained() {
+	r.t.Helper()
+	if err := r.db.Replicated().Tx(r.t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(r.t.Context(), `DELETE FROM tracker_log_deferred`)
+		return err
+	}); err != nil {
+		r.t.Fatalf("clear the retained records: %v", err)
 	}
 }

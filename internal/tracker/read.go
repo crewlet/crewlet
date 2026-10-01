@@ -1803,33 +1803,26 @@ func capHint(counted int) (int, bool) {
 	return counted, false
 }
 
-// readCheckpoint reads this node's own position and applied prefix.
+// readCheckpoint reads this node's own position and applied prefix, both
+// packed, inside the caller's snapshot.
+//
+// TWO NUMBERS, because a node applying nothing while its position advances
+// looks identical to one that is caught up: the checkpoint moves past a
+// record this node RETAINS, and only the applied prefix stops below it.
+//
+// THE FRAMEWORK'S RULE ([statelog.PrefixIn]), never a copy of it. This read
+// kept its own — the cursor row, then the lowest retained position minus
+// one — which answered a record retained above the checkpoint with a prefix
+// past the checkpoint, a position no record reached, while the knowledge
+// base's feed, asked the same question through the framework, answered the
+// checkpoint. The audit says both feeds' shortfalls in one set of words, so
+// the two numbers have to mean one thing.
 func readCheckpoint(ctx context.Context, tx *sql.Tx) (position, applied uint64, err error) {
-	var generation, seq int64
-	err = tx.QueryRowContext(ctx,
-		`SELECT generation, seq FROM statelog_cursor WHERE stream = ?`,
-		trackerStream).Scan(&generation, &seq)
-	switch {
-	case err == sql.ErrNoRows:
-		return 0, 0, nil
-	case err != nil:
+	prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+	if err != nil {
 		return 0, 0, fmt.Errorf("tracker: read the checkpoint: %w", err)
 	}
-	packed := uint64(generation)*uint64(statelog.GenerationStride) + uint64(seq)
-
-	// APPLIED THROUGH is the lowest deferred position minus one, or the
-	// checkpoint when this node holds none. Two numbers, because a node
-	// applying nothing while its position advances looks identical to one
-	// that is caught up.
-	var lowest sql.NullInt64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT MIN(position) FROM tracker_log_deferred`).Scan(&lowest); err != nil {
-		return 0, 0, fmt.Errorf("tracker: read the deferred floor: %w", err)
-	}
-	if lowest.Valid && uint64(lowest.Int64) > 0 {
-		return packed, uint64(lowest.Int64) - 1, nil
-	}
-	return packed, packed, nil
+	return uint64(prefix.Settled.Packed()), uint64(prefix.Applied().Packed()), nil
 }
 
 // coverageOf probes whether this node holds a record it cannot decode whose
