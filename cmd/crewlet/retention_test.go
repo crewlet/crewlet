@@ -877,9 +877,9 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 
 	// AND THE NODE'S OWN BOUND IS INSIDE THE WAIT, so its answer — not a
 	// client timeout that knows none of it — is what reaches the operator.
-	if gateRequestTimeout <= engine.GateBudget {
-		t.Fatalf("the command waits %s for a gesture the node bounds at %s",
-			gateRequestTimeout, engine.GateBudget)
+	if gateRequestTimeout <= engine.GateAnswerBudget {
+		t.Fatalf("the command waits %s for a gesture the node answers within %s",
+			gateRequestTimeout, engine.GateAnswerBudget)
 	}
 }
 

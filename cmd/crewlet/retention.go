@@ -1045,15 +1045,15 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 // gateRequestTimeout is how long `retention evict` and `readmit` wait for the
 // node's answer.
 //
-// SEVENTY-FIVE SECONDS: the node bounds a gesture at a minute from its first
-// record to its last answer (engine.GateBudget), and the judgement before it
-// and the round trip around it are a coordination read and a request. Waiting
-// past the node's own bound is what makes its answer — every log's outcome and
-// what to do about the ones it could not finish — reach the operator rather
-// than a client timeout that knows none of it. The ten seconds every other
-// verb waits was two of the five-second resolutions a gesture legitimately
-// makes, back to back.
-const gateRequestTimeout = 75 * time.Second
+// TWO MINUTES: the node answers one gesture within engine.GateAnswerBudget — a
+// minute and three quarters: half a minute to judge it, a minute to write
+// every log, a quarter of one for the estate map's part — and the rest is the
+// request's round trip. Waiting past the node's own bound is what makes its
+// answer — every log's outcome and what to do about the ones it could not
+// finish — reach the operator rather than a client timeout that knows none of
+// it. The ten seconds every other verb waits was two of the five-second
+// resolutions a gesture legitimately makes, back to back.
+const gateRequestTimeout = 2 * time.Minute
 
 // evictionFenceWindow is how long an evicted node stays counted, as this
 // command says it.

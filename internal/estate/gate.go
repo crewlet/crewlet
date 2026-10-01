@@ -180,15 +180,22 @@ type GateWriter func(ctx context.Context, a GateArgs) (statelog.Result, error)
 // APPEND on one log ([opSpec.oneAppend]) — `statelog.gate` — whatever the
 // caller's own deadline.
 //
-// FIFTEEN SECONDS, from what the holder does. Its waits are the write
-// authority's own, each bounded by [statelog.DefaultResolveBudget] (five
-// seconds): one for its applier to reach a peer's record the decision has to
-// see, and one for the resolution of its own append — ten seconds of work at
-// most, and five more for the request's own transit and the snapshot the
-// decision reads. A holder that has not answered in that is silent rather than
-// slow, and the next serving holder is asked under the same operation id.
-// Bounded by the caller's deadline alone, as a seat's longer writes are
-// ([writeAttempt]), one silent holder took the whole gesture with it.
+// A SILENCE THRESHOLD, NOT A BOUND ON THE HOLDER'S WORK. What a holder
+// ordinarily does for one append is the write authority's two waits, each
+// bounded by [statelog.DefaultResolveBudget] (five seconds) — its applier
+// reaching a peer's record the decision must see, and the resolution of its
+// own append — plus the request's transit and the snapshot the decision reads:
+// fifteen seconds. A write CAN take longer — a decision that loses its
+// compare-and-set is taken again, up to the publisher's sixteen rounds, and a
+// round may wait behind a peer again — but a holder still working past fifteen
+// seconds is one racing a write storm on the node's own gate subject, and the
+// next serving holder is asked under the SAME operation id. That is safe
+// because of the class, not the clock: the record carries the id the gesture
+// derived for the log, so an append the slow holder does land is collapsed
+// onto by the broker inside the log's duplicate window and answered from the
+// ledger after it, and applies once. Bounded by the caller's deadline alone,
+// as a seat's longer writes are ([writeAttempt]), one silent holder took the
+// whole gesture with it.
 const AppendAttempt = 2*statelog.DefaultResolveBudget + 5*time.Second
 
 // opStatelogGate is the operation — see the file's doc.

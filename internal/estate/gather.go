@@ -1273,7 +1273,7 @@ collect:
 // absolute deadline the request carries. The first half is what a wait told
 // to give up has to report in. A tenth for a shorter attempt, so a caller with
 // little deadline left does not spend all of it on margin; at the ten-second
-// [readAttempt] the two are the same second.
+// [ReadAttempt] the two are the same second.
 func batchMargin(remaining time.Duration) time.Duration {
 	return max(0, min(remaining/10, time.Second))
 }

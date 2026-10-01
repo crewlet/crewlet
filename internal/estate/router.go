@@ -140,7 +140,7 @@ type Router struct {
 	// places this node's in-process gather queries take.
 	cpus *CPUs
 
-	// readBudget and writeBudget are [readAttempt] and [writeAttempt],
+	// readBudget and writeBudget are [ReadAttempt] and [writeAttempt],
 	// appendBudget [AppendAttempt], and admissionBudget [admissionAsk],
 	// held so a test can shorten them rather than wait out a dead node.
 	readBudget, writeBudget, appendBudget, admissionBudget time.Duration
@@ -193,7 +193,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, cpus: cpus, session: opts.Session, seams: opts.Seams, now: now,
-		readBudget: readAttempt, writeBudget: writeAttempt, appendBudget: AppendAttempt,
+		readBudget: ReadAttempt, writeBudget: writeAttempt, appendBudget: AppendAttempt,
 		admissionBudget: admissionAsk,
 		sticky:          map[statelog.PartitionID]string{},
 		suspect:         map[string]time.Time{},
@@ -201,7 +201,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	}, nil
 }
 
-// readAttempt bounds one read's wait on one node — a single-partition read's,
+// ReadAttempt bounds one read's wait on one node — a single-partition read's,
 // and a gather batch's however many partitions it carries.
 //
 // TEN SECONDS: a serving node may wait [statelog.ReadBudget] for the floor and
@@ -216,7 +216,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 // attempt ends with whatever it finished, naming the rest unfinished for the
 // next attempt. A budget scaled to the batch would instead wait out a holder
 // that is gone for as long as its batch was large.
-const readAttempt = 10 * time.Second
+const ReadAttempt = 10 * time.Second
 
 // writeAttempt bounds one write's wait on one node, for a caller with no
 // deadline of its own.
@@ -247,7 +247,7 @@ const suspectFor = 30 * time.Second
 const admissionTrust = 5 * time.Second
 
 // admissionAsk bounds the REMOTE half of the admission question as a whole —
-// every holder it asks, together — where [readAttempt] bounds only each one.
+// every holder it asks, together — where [ReadAttempt] bounds only each one.
 //
 // FIVE SECONDS, what a node holding no data waited before the router, and for
 // its reason: admission is asked on every placement sweep, synchronously — the
@@ -700,7 +700,7 @@ func (x exchange) kept(h *held) (any, error) {
 	return h.value, h.err
 }
 
-// budgetFor is one attempt's budget on one holder: [readAttempt] for a read,
+// budgetFor is one attempt's budget on one holder: [ReadAttempt] for a read,
 // and for a write [writeAttempt] — or, where the caller has a deadline, that
 // deadline, since a gesture the caller gave five minutes must not be
 // abandoned after one.

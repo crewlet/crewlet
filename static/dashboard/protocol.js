@@ -1086,15 +1086,16 @@ function keepsOperation(action) {
 /**
 * How long one gesture's request may take before the dialog gives up on it.
 *
-* SEVENTY-FIVE SECONDS, the command line's own `gateRequestTimeout` and for its
-* reason: the engine bounds a gesture at a minute from its first record to its
-* last answer (`engine.GateBudget`), and the judgement before it and the round
-* trip around it are a coordination read and a request. Waiting past the
-* node's own bound is what makes its answer — every log's outcome — reach the
-* operator rather than a client timeout that knows none of it. The default
-* thirty seconds gave up on a gesture the node went on to finish.
+* TWO MINUTES, the command line's own `gateRequestTimeout` and for its
+* reason: the engine answers one gesture within `engine.GateAnswerBudget` — a
+* minute and three quarters: half a minute to judge it, a minute to write
+* every log, a quarter of one for the estate map's part — and the rest is the
+* request's round trip. Waiting past the node's own bound is what makes its
+* answer — every log's outcome — reach the operator rather than a client
+* timeout that knows none of it. The default thirty seconds gave up on a
+* gesture the node went on to finish.
 */
-var GATE_REQUEST_TIMEOUT_MS = 75e3;
+var GATE_REQUEST_TIMEOUT_MS = 12e4;
 /**
 * An operation id in the engine's grammar (`statelog.NewOpID`), from its parts.
 *

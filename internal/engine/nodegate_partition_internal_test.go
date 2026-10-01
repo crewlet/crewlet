@@ -274,11 +274,18 @@ type mapRecorder struct {
 	atGesture   []int
 }
 
-func (m *mapRecorder) Bar(_ context.Context, node, by, reason string) (EstateGesture, error) {
+func (m *mapRecorder) Bar(ctx context.Context, node, by, reason string) (EstateGesture, error) {
+	if err := ctx.Err(); err != nil {
+		// A COORDINATION STORE ASKED ON A DEAD CONTEXT answers nothing.
+		return EstateGesture{}, err
+	}
 	return m.record("bar " + node + " by " + by + " as " + reason)
 }
 
-func (m *mapRecorder) Readmit(_ context.Context, node, by string) (EstateGesture, error) {
+func (m *mapRecorder) Readmit(ctx context.Context, node, by string) (EstateGesture, error) {
+	if err := ctx.Err(); err != nil {
+		return EstateGesture{}, err
+	}
 	return m.record("readmit " + node + " by " + by)
 }
 

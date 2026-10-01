@@ -113,9 +113,9 @@ import (
 // the gesture gets as far as it can, and
 // the result says exactly how far. And it gets there whatever its CALLER does
 // meanwhile: once the first record is about to be written the gesture runs
-// under its own budget ([GateBudget]) rather than the request's, because a
-// dropped connection is not a request to leave a node evicted on one log and
-// counted on the other.
+// under its own budgets ([GateLogBudget] for the logs, then [GateMapBudget]
+// for the map) rather than the request's, because a dropped connection is not
+// a request to leave a node evicted on one log and counted on the other.
 //
 // # And a retry finishes it, idempotently
 //
@@ -133,35 +133,82 @@ import (
 // operator finishes by running the same command again rather than something to
 // repair.
 
-// GateBudget bounds one gesture from its first record to its last answer.
+// The gesture's budgets: what bounds each of its three phases, and so how long
+// a node takes to answer one gesture at most ([GateAnswerBudget]).
 //
-// ONE MINUTE, from what a gesture waits on. It is one write per log it
-// concerns, every log written at once ([NodeGate.write]), so the gesture waits
-// as long as its SLOWEST log, whether it writes layout 0's two logs or a
-// divided layout's every partition's — written one log after another, as it
-// was while a gesture wrote two, the bound would have had to grow with the
-// partitions a node serves.
-//
-// The slowest log is one this node does not write itself. A log it writes is
-// the publisher's own waits, each bounded by [statelog.DefaultResolveBudget]
-// — its applier reaching a peer's record, and the resolution of its own: ten
-// seconds. A log it sends to the partition's holders ([estate.Router.Gate]) is
-// asked of one holder at a time, each for at most one [estate.AppendAttempt]
-// (fifteen seconds: those same ten, and the request's transit), the next asked
-// only once one has gone silent. At the company's default copies
-// ([config.DefaultEstateReplicas], three) a partition has at most three
-// holders this node is not, and the walk past two silent ones to the third's
-// answer, with a holder whose copy lags asked again last, is four attempts —
-// a minute. A company that keeps more copies, with more of them silent, has
-// that log answer that its holders did not, and the same gesture under the
-// same operation id asks the silent ones last ([estate.Router]'s suspicion,
-// thirty seconds) and finishes it. Bounded by the request's own deadline
-// instead, a wedged broker would hold the gesture for the life of the process.
-//
-// `crewlet retention evict` and the dashboard wait a little longer than this,
-// so the node's own answer — every log's outcome and the operation id —
-// reaches the operator before the client gives up.
-const GateBudget = time.Minute
+// THREE BUDGETS, ONE PER PHASE, because each phase waits on something different
+// and one shared deadline let the slowest starve the next. The map's part ran
+// on whatever the logs' walk left of a single minute, and a walk that legitimately
+// spent it — a partition mid-move, its holders silent — handed the map a context
+// already expired: the eviction's bar went unwritten, and a retry walked the same
+// silent holders first and missed it again.
+const (
+	// GateJudgeBudget bounds the JUDGEMENT, everything before the first
+	// record: the coordination reads an eviction is judged on and the logs
+	// it concerns are chosen from (the presence leases, the positions
+	// register, the estate map's holders, the published floors), and for a
+	// readmission the bound of every log it writes elsewhere, read on a
+	// holder of that log's partition, all at once ([stateLog.Readmissible]).
+	//
+	// THIRTY SECONDS: one complete election of the coordination store's
+	// group, which may stall those reads once — jsprovision's clustered ask
+	// term, fifteen seconds, is sized to span exactly that — then a bound
+	// read that walks past one silent holder ([estate.ReadAttempt], ten
+	// seconds), and five for the next holder's answer, which reads one
+	// floor and one stream's bounds. SIZED FOR ONE SILENT HOLDER, NOT FOR
+	// EVERY ONE as the logs' budget is, because what a phase cut short
+	// leaves differs: logs cut short are a gesture half-written, a
+	// judgement cut short has written nothing. It answers why, and the
+	// same gesture again asks a holder that went silent last
+	// ([estate.Router]'s suspicion, thirty seconds).
+	GateJudgeBudget = 30 * time.Second
+
+	// GateLogBudget bounds the LOGS, from the first record to the last log's
+	// answer. They are written at once ([NodeGate.write]), so it waits as long
+	// as the SLOWEST log, whether the gesture writes layout 0's two logs or a
+	// divided layout's every partition's — written one after another, as they
+	// were while a gesture wrote two, the bound would have grown with the
+	// partitions a node serves.
+	//
+	// ONE MINUTE, from the slowest log: one this node sends to its
+	// partition's holders ([estate.Router.Gate]), asked one at a time, each
+	// given at most one [estate.AppendAttempt] (fifteen seconds) before the
+	// next is asked. At the company's default copies
+	// ([config.DefaultEstateReplicas], three) a partition MID-MOVE has one
+	// more serving holder than that — a move makes before it breaks, so the
+	// joiner serves before the leaver stops — and a walk past every one of
+	// the four is four attempts: a minute. A holder whose copy lags answers
+	// that at once and is asked again last, so it costs one attempt, not two.
+	// A log this node writes itself waits only on its own publisher. A company
+	// keeping more copies, with more of them silent, has that log answer that
+	// its holders did not, and the same gesture under the same operation id
+	// asks the silent ones last ([estate.Router]'s suspicion, thirty seconds)
+	// and finishes it.
+	GateLogBudget = time.Minute
+
+	// GateMapBudget bounds the estate MAP's part, after the logs, on a context
+	// of its own: the eviction's bar or the readmission's lift, a
+	// compare-and-set loop of at most [mapGestureAttempts] reads and writes of
+	// one coordination record and a read after the last.
+	//
+	// FIFTEEN SECONDS: jsprovision's clustered ask term, sized to span one
+	// complete election of a replicated group (the vendored server's
+	// maxElectionTimeout, 9s, and lostQuorumInterval, 10s) — the one thing
+	// that stalls those round trips, each a few milliseconds otherwise, and
+	// once, since an election settles the group for all of them.
+	GateMapBudget = 15 * time.Second
+
+	// GateBudget bounds one gesture from its first record to its last answer:
+	// the logs, then the map.
+	GateBudget = GateLogBudget + GateMapBudget
+
+	// GateAnswerBudget is the longest a node takes to answer one gesture
+	// request: its judgement, then the gesture. `crewlet retention evict`
+	// and the dashboard wait a little longer than this, so the node's own
+	// answer — every log's outcome, the map's, and the operation id —
+	// reaches the operator before the client gives up.
+	GateAnswerBudget = GateJudgeBudget + GateBudget
+)
 
 // ErrInvalidGate is what a gate request that could not be carried out as given
 // wraps: no node, a node id no node could run under, no operation id, or no
@@ -762,6 +809,31 @@ type NodeGate struct {
 	// ([ErrNotPublishing]) — asked FIRST, before anything is judged, since
 	// no judgement could make the write allowed.
 	publishing func(gesture string) error
+
+	// budgets are the gesture's three budgets: the zero value is the
+	// package's own ([GateJudgeBudget], [GateLogBudget], [GateMapBudget]),
+	// and a test sets shorter ones to spend a phase whole.
+	budgets gateBudgets
+}
+
+// gateBudgets is one gesture's budget per phase; a zero one is the package's
+// constant for that phase.
+type gateBudgets struct {
+	judge, logs, mapPart time.Duration
+}
+
+// orDefault is b with every phase it leaves zero set to the package's budget.
+func (b gateBudgets) orDefault() gateBudgets {
+	if b.judge == 0 {
+		b.judge = GateJudgeBudget
+	}
+	if b.logs == 0 {
+		b.logs = GateLogBudget
+	}
+	if b.mapPart == 0 {
+		b.mapPart = GateMapBudget
+	}
+	return b
 }
 
 // estateMembership is the estate map's two membership gestures, as the node
@@ -1318,7 +1390,9 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 	if err := g.publishing("an eviction"); err != nil {
 		return GateResult{}, err
 	}
-	live, err := g.live(ctx)
+	judge, cancel := context.WithTimeout(ctx, g.budgets.orDefault().judge)
+	defer cancel()
+	live, err := g.live(judge)
 	switch {
 	case err != nil && !req.Force:
 		return GateResult{}, &GateUnjudged{Node: req.Node, Err: err}
@@ -1341,7 +1415,7 @@ func (g *NodeGate) Evict(ctx context.Context, req GateRequest) (GateResult, erro
 					"operator forced its eviction past it")
 		}
 	}
-	return g.write(ctx, req, false)
+	return g.write(judge, req, false)
 }
 
 // Readmit is the inverse commit on every identity-claiming log.
@@ -1357,30 +1431,40 @@ func (g *NodeGate) Readmit(ctx context.Context, req GateRequest) (GateResult, er
 	if err := g.publishing("a readmission"); err != nil {
 		return GateResult{}, err
 	}
-	if err := g.readmissible(ctx, req.Node); err != nil {
+	judge, cancel := context.WithTimeout(ctx, g.budgets.orDefault().judge)
+	defer cancel()
+	if err := g.readmissible(judge, req.Node); err != nil {
 		return GateResult{}, fmt.Errorf("engine: readmit node %s: %w", req.Node, err)
 	}
-	return g.write(ctx, req, true)
+	return g.write(judge, req, true)
 }
 
 // write publishes the gate record to every identity-claiming log the gesture
 // concerns, all at once, and then makes the estate map's part of it.
 //
-// UNDER ITS OWN BUDGET, NOT THE CALLER'S. The judgement above ran under the
-// caller's context, so a request abandoned before it wrote nothing; from here
-// on the gesture is half-done the moment it stops, and the caller going away —
-// a closed connection, a client's own timeout — is not a request to leave a
-// node evicted on one log and counted on the other. The values travel, so each
-// write keeps the trace and the operator it was asked under.
+// UNDER ITS OWN BUDGETS, NOT THE CALLER'S. The judgement ran under the
+// caller's context — judge, bounded by [GateJudgeBudget] — and so does the
+// choice of logs, so a request abandoned before the first record wrote
+// nothing; from there on the gesture is half-done the moment it stops, and the
+// caller going away — a closed connection, a client's own timeout — is not a
+// request to leave a node evicted on one log and counted on the other. The
+// values travel, so each write keeps the trace and the operator it was asked
+// under.
+//
+// AND THE MAP ITS OWN, AFTER THE LOGS ([GateMapBudget]): bounded by what the
+// logs' walk left, the map's part of a gesture whose walk legitimately took
+// [GateLogBudget] was handed an expired context and never written.
 //
 // The only error is that the logs to write cannot be told: nothing was
 // written.
-func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (GateResult, error) {
-	logs, err := g.logs(ctx, req.Node, readmit)
+func (g *NodeGate) write(judge context.Context, req GateRequest, readmit bool) (GateResult, error) {
+	logs, err := g.logs(judge, req.Node, readmit)
 	if err != nil {
 		return GateResult{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), GateBudget)
+	budgets := g.budgets.orDefault()
+	detached := context.WithoutCancel(judge)
+	ctx, cancel := context.WithTimeout(detached, budgets.logs)
 	defer cancel()
 	out := GateResult{Node: req.Node, OpID: req.OpID, Domains: make([]DomainGate, len(logs))}
 	var wg sync.WaitGroup
@@ -1409,7 +1493,9 @@ func (g *NodeGate) write(ctx context.Context, req GateRequest, readmit bool) (Ga
 	case readmit && !out.logsDone():
 		out.Map = &MapGate{Gesture: "in", Err: ErrMapAwaitsLogs}
 	default:
-		out.Map = g.mapGesture(ctx, req, readmit)
+		mapCtx, cancelMap := context.WithTimeout(detached, budgets.mapPart)
+		defer cancelMap()
+		out.Map = g.mapGesture(mapCtx, req, readmit)
 	}
 	return out, nil
 }

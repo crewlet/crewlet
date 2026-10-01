@@ -40,11 +40,12 @@ crewlet run -config crewlet.yaml -company company.yaml
 That is the deployment. Point a reverse proxy at the API port for inbound
 webhooks and the dashboard, and there is nothing else to operate.
 
-Give that proxy a **read timeout above 75 seconds** on the API port. Nearly
+Give that proxy a **read timeout above two minutes** on the API port. Nearly
 every request is answered in well under a second, but a node eviction or
-readmission ([Retention](retention.md#eviction)) may take up to a minute
-past its judgement to write every log, and `crewlet retention evict` and the
-dashboard's evict dialog both wait seventy-five seconds for its answer.
+readmission ([Retention](retention.md#eviction)) may take up to a minute and
+three quarters — half a minute to judge it, a minute to write every log, and a
+quarter of one for the estate map's part — and `crewlet retention evict` and
+the dashboard's evict dialog both wait two minutes for its answer.
 nginx's `proxy_read_timeout` defaults to sixty, which cuts exactly those off
 with a 504. Nothing is lost when it does — the node finishes the gesture
 whatever happens to the connection, and both clients read an answer the engine

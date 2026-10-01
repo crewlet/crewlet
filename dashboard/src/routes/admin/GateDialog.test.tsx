@@ -13,6 +13,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
+import { GATE_REQUEST_TIMEOUT_MS } from "~/protocol/index.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 import { finishable, GateDialog, GateOutcome } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
@@ -313,9 +314,10 @@ test("a refused readmission renders its reason and its remedy, and no outcome", 
   expect(screen.queryByText(/is readmitted/)).toBeNull();
 });
 
-// A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture a minute
-// and finishes it whatever the connection does; the dialog gave up at thirty
-// seconds holding nothing, and the only way on was a second gesture.
+// A REQUEST NOBODY ANSWERED KEEPS ITS ID. The engine allows a gesture its own
+// answer budget and finishes it whatever the connection does; the dialog gave
+// up at thirty seconds holding nothing, and the only way on was a second
+// gesture.
 test("a gesture that times out keeps its op id and offers to finish it", async () => {
   vi.useFakeTimers();
   const sent: Sent[] = [];
@@ -342,7 +344,7 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   expect(screen.queryByText(/No answer/)).toBeNull();
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(45_000);
+    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 + 1_000);
   });
   expect(screen.getByText(/No answer/)).toBeTruthy();
   const opId = sent[0]!.query.get("op_id")!;

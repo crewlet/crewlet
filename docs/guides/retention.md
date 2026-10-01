@@ -761,10 +761,12 @@ what to do.
 
 - The dialog **mints the operation id in the browser before its first
   request**, in the engine's grammar and on the browser's clock, and keeps it
-  for the whole gesture. So a request that timed out or dropped — the dialog
-  waits seventy-five seconds, past the minute the node allows a gesture — still
-  holds the id, and the dialog offers **Finish this gesture**, which sends the
-  same request under the same id and reads every log's answer. So does an
+  for the whole gesture. So a request that timed out or dropped still holds
+  the id — the dialog waits two minutes, past the minute and three quarters
+  the node takes at most to answer one: half a minute to judge it, a minute to
+  write every log and a quarter of one for the estate map — and the dialog
+  offers **Finish this gesture**, which sends the same request under the same
+  id and reads every log's answer. So does an
   answer the node did not write: a reverse proxy's 504 page, any status with no
   engine error code in it, or a 200 cut off part way through. Only a refusal
   carrying the engine's own code is read as one.
