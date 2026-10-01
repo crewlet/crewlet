@@ -68,8 +68,8 @@ happened to omit the key. There are four:
 
 | Surface | Default | May the caller choose? |
 |---|---|---|
-| A seat's own tools, inside a turn | `linearizable` | No |
-| The operator MCP, about tracker content | `linearizable` | No |
+| A seat's own tools, inside a turn | `linearizable` for a read of one [partition](../concepts/estate-placement.md); `session` for a list read across several, floored at its node's own writes and at the change that woke the turn ([below](#read-your-trigger-is-a-floor-not-the-mechanism)) | No |
+| The operator MCP, about tracker content | `linearizable`, across partitions too | No |
 | The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, the Fleet screen's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
@@ -239,15 +239,44 @@ level does not touch them:
 
 ## Read-your-trigger is a floor, not the mechanism
 
-An agent woken by a change sees that change. That is guaranteed, and it is
-guaranteed by the *wake* carrying the record's own position — the turn waits
-for its own applier to reach it — rather than by the level the turn's tools
-then read at.
+An agent woken by a change to the engine's own tracker or knowledge base sees
+that change. That is guaranteed by the *wake* carrying the record's own
+position — `trigger_position`, where on its log the change was committed (see
+[the event system](../concepts/event-system.md)) — and not by the level the
+turn's tools then read at:
 
-So a seat's `linearizable` reads are not what makes it see its own trigger; the
-floor was already established before the turn opened. What they buy is the
-other half: that an answer the turn *decides* on is not one from before the
-read arrived.
+1. Before the turn's first read, the node hands that position to its
+   **read-your-writes floors**: one table per node, the same one every write
+   the node makes raises.
+2. Every tracker or knowledge-base read the turn makes carries the floor on its
+   own domain's log to whichever node answers it — a tracker read the tracker
+   log's, a page read the knowledge base's — this node's own copy included.
+3. That holder waits up to two seconds to have applied it, or answers `behind`
+   and the next holder is asked.
+
+The floor travels with the request rather than being waited for before the
+turn opens, because the node running the turn may hold no data at all and have
+no applier of its own to wait on. A floor on one domain's log never holds up a
+read of the other: a tracker read does not depend on the knowledge base's rows.
+
+**What the floor does not reach.** The ranked searches — `search_knowledge`,
+`search_work_items` and the turn-start knowledge block — read an index each
+node builds behind its own rows, so no log position describes them and they
+carry no floor: a seat woken by a page created a moment ago may not find it by
+search yet, and finds it by listing or by its id. A vendor's wake — a Slack
+message, a Jira issue — carries no position at all, because what changed is in
+another company's system.
+
+So a seat's `linearizable` reads are not what makes it see its own trigger.
+What they buy is the other half: that an answer the turn *decides* on is not
+one from before the read arrived. A list read across several partitions reads
+at `session` instead, floored at the node's own writes and at the trigger,
+because `linearizable` there would append a barrier on every partition's log
+for every read — and what a seat needs from a list is to see what it wrote and
+what woke it. A gather of one partition is a single-partition read and stays
+`linearizable`, which is every seat read at layout 0. The operator's reads stay
+`linearizable` across partitions and are not settable: the person asking is
+deciding something about their own company, and operators are few.
 
 ## See also
 
