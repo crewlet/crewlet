@@ -488,6 +488,20 @@
 // before layouts wrote, and nothing releases a log: they are the rules the
 // partitioned layout's writes are held to from its first record.
 //
+// # A read across partitions is answered at a CUT
+//
+// The four read levels are per LOG and stay so: a read of one partition is
+// answered at its level exactly as it always was. A read that addresses
+// several — a GATHER — is answered partition by partition, each by a node
+// that serves it, and reports where each log was as a [Cut] and what it could
+// not answer as a [Coverage], whose [Coverage.Notice] is the one sentence
+// every surface renders a missing partition as. What each partition is read at
+// is [GatherLevel]'s: a seat's gather at `session`, floored at its own writes
+// and at the record whose wake started its turn, because `linearizable` there
+// is a barrier on every log per read; an operator's at `linearizable`, whose
+// holder appends one barrier on each of the partition's logs and answers at or
+// after them ([Reader.Barrier], single-flighted per log like every barrier).
+//
 // # Which log a coordination record is about
 //
 // ONE RULE, for every record the fleet shares about a log — a node's row in

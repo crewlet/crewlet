@@ -661,6 +661,49 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	return answer, nil
 }
 
+// Barrier establishes where this log's end is NOW and waits for this node to
+// apply through it, answering the barrier's position: the `linearizable` half
+// of a read answered at a CUT rather than by one reader — a gather's partition,
+// whose holder appends one barrier on each of the partition's logs and then
+// answers at or after them ([Coverage.At]).
+//
+// THE SAME LADDER A LINEARIZABLE READ CLIMBS, without the rows: this node's own
+// refusals first (an evicted copy, a floor nobody could read, a stall — none
+// of which a barrier would make right), then the mode's (a node that publishes
+// nothing appends no barrier), then the single-flighted append and the wait.
+// Each refusal is the [Refused] a read would give, so a caller tells "this copy
+// cannot" from "the broker would not" exactly as a read's caller does.
+func (r *Reader) Barrier(ctx context.Context) (Position, error) {
+	started := time.Now()
+	q := Query{Level: ReadLinearizable}
+	h := r.health()
+	if code := h.Refusal(started); code != "" {
+		_, err := r.refuse(h, q, code, r.refusalDetail(h, code, started), started)
+		return Position{}, err
+	}
+	target, err := r.target(ctx, q, h)
+	if err != nil {
+		var refusal *Refused
+		if errors.As(err, &refusal) {
+			_, err = r.refuse(h, q, refusal.Code, refusal.Detail, started)
+		}
+		return Position{}, err
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, ReadBudget)
+	err = r.waiter.WaitCommitted(waitCtx, target)
+	cancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return Position{}, ctx.Err()
+		}
+		_, err = r.refuse(h, q, RefuseBehind,
+			fmt.Sprintf("this node has not reached %s within %s", target, ReadBudget), started)
+		return Position{}, err
+	}
+	r.observeServed(q.Level, started)
+	return target, nil
+}
+
 // gap is what a coverage probe found.
 type gap struct {
 	records uint64

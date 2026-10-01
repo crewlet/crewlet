@@ -244,3 +244,43 @@ func LevelFor(s Surface, asked ReadLevel) ReadLevel {
 	}
 	return asked
 }
+
+// GatherLevel is the level each partition of a read is answered at, given the
+// surface asking, the level that surface's own rule resolved ([LevelFor]), and
+// how many partitions the read addresses.
+//
+// # One partition is a single-partition read, whatever the surface
+//
+// A read that addresses one partition is answered exactly as it always was,
+// at the level its surface resolved — a seat's at `linearizable`, which costs
+// one barrier on one log and is what makes a seat's every read decide on the
+// company as it is.
+//
+// # A SEAT's read across several is `session`, floored at its own writes and
+// at what woke it
+//
+// `linearizable` across a gather is a barrier on EVERY log it addresses, per
+// read: at ten thousand seats, three or so gathers a turn and sixty-four
+// tracker partitions, about 670 barrier appends a second and gigabytes a day of
+// records that every holder applies — to establish a freshness a seat does not
+// need. What a seat needs from a list is to see what it wrote and what woke
+// it. Both are positions this node already holds: every write's own, and the
+// position of the record whose wake started the turn, which the turn hands the
+// node's floors before its first read. A `session` read waits for exactly
+// those, per partition — "no older than P", with P made precise. A
+// single-partition read stays `linearizable`; only the gather changes.
+//
+// # Every other surface keeps the level it resolved
+//
+// The OPERATOR's stays `linearizable`, and is not settable — the person asking
+// is deciding something about their own company, and operators are few, so
+// the barrier per log is a cost worth paying there. A SCREEN keeps the level
+// it chose, which is `stale` unless it asked otherwise and is labelled on the
+// answer. So does an answer about replication, whose level is derived rather
+// than chosen ([ResolveReplicationLevel]).
+func GatherLevel(s Surface, resolved ReadLevel, partitions int) ReadLevel {
+	if partitions > 1 && s == SurfaceSeat {
+		return ReadSession
+	}
+	return resolved
+}
