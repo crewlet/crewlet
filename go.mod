@@ -28,7 +28,7 @@ require (
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
-	turso.tech/database/tursogo v0.8.0-pre.13
+	turso.tech/database/tursogo v0.8.0-pre.14
 )
 
 require (
