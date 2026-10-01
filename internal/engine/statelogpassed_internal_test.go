@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -382,12 +383,33 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	donor, err := statelog.NewDonor(statelog.DonorDeps{
+	serveDonor(t, q.Conn(), statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func() (statelog.Manifest, bool) { return manifest, true },
 		Path:   func(m statelog.Manifest) string { return filepath.Join(snapDir, m.Artifact) },
 	})
+}
+
+// serveDonor serves deps as a donor until the test ends, and returns once it
+// answers an offer request on nc's broker: see [awaitDonor].
+func serveDonor(t *testing.T, nc *nats.Conn, deps statelog.DonorDeps) {
+	t.Helper()
+	// up is closed once the donor's own connection is open, which is where
+	// awaitDonor's clock starts. Once, because how often Serve dials is that
+	// package's business and a second close would panic.
+	up := make(chan struct{})
+	opened := sync.OnceFunc(func() { close(up) })
+	if dial := deps.Dial; dial != nil {
+		deps.Dial = func(ctx context.Context) (*nats.Conn, error) {
+			conn, err := dial(ctx)
+			if err == nil {
+				opened()
+			}
+			return conn, err
+		}
+	}
+	donor, err := statelog.NewDonor(deps)
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
 	}
@@ -397,7 +419,39 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	served := make(chan error, 1)
 	go func() { served <- donor.Serve(ctx); close(served) }()
 	t.Cleanup(func() { stop(); <-served })
-	awaitDonor(t, q.Conn(), "donor", served)
+	awaitDonor(t, nc, deps.NodeID, up, served)
+}
+
+// A DONOR IS AWAITED ON ITS DIAL'S OWN BUDGET, and only its answer on the offer
+// window.
+//
+// [awaitDonor] once bounded its whole wait by one [statelog.OfferWindow] from
+// the moment Serve was started, so a donor whose handshake ran longer than that
+// — which the embedded broker's accept budget exists to allow on a loaded host
+// — failed every case standing it up, as a donor no join would hear, while
+// every join asked once its connection was open would have been answered. This
+// donor's dial takes a second longer than the window and has to be awaited.
+func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
+	t.Parallel()
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open the broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	slow := statelog.OfferWindow + time.Second
+	serveDonor(t, q.Conn(), statelog.DonorDeps{
+		NodeID: "slow",
+		Dial: func(ctx context.Context) (*nats.Conn, error) {
+			select {
+			case <-time.After(slow):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return q.DialOwned()
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{NodeID: "slow"}, true },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
 }
 
 // awaitDonor returns once the donor named node answers an offer request on
@@ -427,14 +481,35 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 // rather than delivered late, and every answer is read from one inbox, so an
 // answer arriving after the next ask went out still counts.
 //
-// # The bound
+// # The bounds, one per half
 //
-// One [statelog.OfferWindow]: the time the framework gives a donor to answer
-// a joiner. A donor that cannot answer within it would not be heard by a real
-// join either, so the case fails here, naming the donor, rather than in the
-// adoption with an error that names nothing.
-func awaitDonor(t *testing.T, nc *nats.Conn, node string, served <-chan error) {
+// THE CONNECTION is waited for on the dial's own budget, and on no clock of
+// this function's: up is closed once the donor's dial hands back a connection
+// ([serveDonor]), and a dial that fails or runs out its handshake timeout ends
+// Serve, which served reports by name. For [jetstream.Queue.DialOwned], which
+// every donor here dials through, that timeout is the embedded broker's accept
+// budget — thirty seconds, because nats's own two seconds failed boots on a
+// loaded host against a server that was up — so a clock here would be a
+// second, shorter opinion about the same handshake. It was one: the whole wait
+// was once bounded by a single offer window, and a donor whose dial took six
+// seconds, well inside the budget it is actually given, failed this helper
+// while every join asked after it would have been answered.
+//
+// THE ANSWER is waited for one [statelog.OfferWindow] from the moment the
+// connection is open: subscribing and answering is the same local work a
+// connected donor does for a joiner's ask, and that window is what the
+// framework gives a donor to do it. One that cannot fails the case here,
+// naming the donor, rather than in the adoption with an error that names
+// nothing.
+func awaitDonor(t *testing.T, nc *nats.Conn, node string, up <-chan struct{},
+	served <-chan error) {
+
 	t.Helper()
+	select {
+	case <-up:
+	case err := <-served:
+		t.Fatalf("donor %q stopped before its connection was open: %v", node, err)
+	}
 	inbox := nats.NewInbox()
 	answers, err := nc.SubscribeSync(inbox)
 	if err != nil {
@@ -450,11 +525,11 @@ func awaitDonor(t *testing.T, nc *nats.Conn, node string, served <-chan error) {
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-served:
-			t.Fatalf("donor %s stopped serving before it answered: %v", node, err)
+			t.Fatalf("donor %q stopped serving before it answered: %v", node, err)
 		default:
 		}
 		if err := nc.PublishRequest(statelog.SubjectOffer, inbox, ask); err != nil {
-			t.Fatalf("ask donor %s: %v", node, err)
+			t.Fatalf("ask donor %q: %v", node, err)
 		}
 		for {
 			msg, err := answers.NextMsg(between)
@@ -468,7 +543,7 @@ func awaitDonor(t *testing.T, nc *nats.Conn, node string, served <-chan error) {
 				break
 			}
 			if err != nil {
-				t.Fatalf("read donor %s's answer: %v", node, err)
+				t.Fatalf("read donor %q's answer: %v", node, err)
 			}
 			var offer statelog.Offer
 			if json.Unmarshal(msg.Data, &offer) == nil && offer.Manifest.NodeID == node {
@@ -476,6 +551,7 @@ func awaitDonor(t *testing.T, nc *nats.Conn, node string, served <-chan error) {
 			}
 		}
 	}
-	t.Fatalf("donor %s did not answer an offer request within %s, so no join "+
-		"would have heard it", node, statelog.OfferWindow)
+	t.Fatalf("donor %q did not answer an offer request within %s of its "+
+		"connection opening, which is the window a join would have given it",
+		node, statelog.OfferWindow)
 }
