@@ -14,17 +14,14 @@ import { templateIntent } from "./model/templates.ts";
 import { countingKeys } from "./model/testkit.ts";
 import {
   asReader,
-  checked,
   company,
   Engine,
   json,
   lensToolbar,
   mountBuilder,
-  navigate,
   pressInView,
   pressOnBanner,
   rereadViewer,
-  settle,
 } from "./testkit.tsx";
 import { noteReader } from "~/lib/reader.ts";
 
@@ -94,7 +91,7 @@ const answerTheOffer = (name: "Keep the draft" | "Discard it") => pressOnBanner(
 // and kept in storage they would outlive the operator's session.
 test("an edit is kept as its operation log and nothing of the document", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle, checked } = mountBuilder({ engine });
   await checked();
   pressInView("Edit CEO");
   await settle();
@@ -113,7 +110,7 @@ test("an edit is kept as its operation log and nothing of the document", async (
 test("a kept draft of the same revision waits for Keep or Discard, and Keep restores it", async () => {
   keep({});
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   expect(screen.getByText(OFFER)).toBeDefined();
   // Nothing is recorded, and nothing is cleared, while the offer stands.
@@ -135,7 +132,7 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
 test("a kept draft offered as a colleague saves is kept, then offered as an update", async () => {
   keep({});
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine });
+  const { store, settle, checked } = mountBuilder({ engine });
   await checked();
   expect(screen.getByText(OFFER)).toBeDefined();
   engine.seats.find((s) => s.handle === "designer")!.goal = "Design things";
@@ -165,7 +162,7 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
 test("discarding a kept draft removes it and starts from the saved configuration", async () => {
   keep({});
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   answerTheOffer("Discard it");
   await settle();
@@ -183,7 +180,7 @@ test.each([
 ] as const)("a kept draft of an older %s is restored through the update flow", async (_, older) => {
   keep(older);
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   const dialog = screen.getByRole("dialog", { name: "Restore the kept draft" });
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
@@ -198,7 +195,7 @@ test.each([
 test("declining to restore a kept draft onto a newer company discards it", async () => {
   keep({ baseRevision: "r0" });
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   const dialog = screen.getByRole("dialog", { name: "Restore the kept draft" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Discard the kept draft" }));
@@ -219,7 +216,7 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
     ops: [op.op],
   });
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   expect(
     screen.getByText(
@@ -235,7 +232,7 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
 test("a change of reader forgets the kept draft and keeps the one on screen", async () => {
   let who = "jane.doe";
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine, query: asReader(() => who) });
+  const { store, settle, checked } = mountBuilder({ engine, query: asReader(() => who) });
   await checked();
   pressInView("Edit CEO");
   await settle();
@@ -254,7 +251,7 @@ test("a change of reader while a kept draft is offered withdraws the offer", asy
   keep({});
   let who = "jane.doe";
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine, query: asReader(() => who) });
+  const { store, settle } = mountBuilder({ engine, query: asReader(() => who) });
   await settle();
   expect(screen.getByText(OFFER)).toBeDefined();
   who = "sam.lee";
@@ -270,7 +267,7 @@ test("a change of reader while a kept draft is offered withdraws the offer", asy
 test("the same reader read again keeps the offer standing", async () => {
   keep({});
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
+  const { store, settle } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
   await settle();
   expect(screen.getByText(OFFER)).toBeDefined();
   rereadViewer(store);
@@ -283,7 +280,7 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   keep({});
   const engine = new Engine(company());
   engine.script = () => json({ error: "unauthorized" }, 401);
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   // SETTLED, NOT READ ON THE SPOT. The refusal is rendered from state and the
   // draft is dropped by the EFFECT that state schedules, so the message is in
   // the DOM one commit before the storage is cleared; a settled lens has run
@@ -305,7 +302,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
     removeItem: () => {},
   };
   const engine = new Engine(company());
-  mountBuilder({ engine, storage: refusing });
+  const { checked } = mountBuilder({ engine, storage: refusing });
   await checked();
   pressInView("Edit CEO");
   // The work goes on.
@@ -323,7 +320,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
 // draft on a reload exactly as a refusing one does, so it says so too.
 test("no storage at all says the draft will not survive a reload", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine, storage: null });
+  const { checked } = mountBuilder({ engine, storage: null });
   await checked();
   pressInView("Edit CEO");
   await checked();
@@ -345,7 +342,7 @@ test("a draft with changes asks before the tab goes, and one without does not", 
     window.dispatchEvent(event);
     return event.defaultPrevented;
   };
-  mountBuilder({ engine: new Engine(company()) });
+  const { settle, checked } = mountBuilder({ engine: new Engine(company()) });
   await checked();
   expect(unload()).toBe(false);
   pressInView("Edit CEO");
@@ -364,7 +361,10 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
     },
     removeItem: () => {},
   };
-  mountBuilder({ engine: new Engine(company()), storage: refusing });
+  const { settle, checked, navigate } = mountBuilder({
+    engine: new Engine(company()),
+    storage: refusing,
+  });
   await checked();
   pressInView("Edit CEO");
   await settle();
@@ -399,14 +399,14 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
 test("coming back to the lens restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });
-  await checked();
+  await first.checked();
   pressInView("Edit CEO");
-  await settle();
+  await first.settle();
   expect(kept()).not.toBeNull();
   first.view.unmount();
 
-  mountBuilder({ engine });
-  await checked();
+  const second = mountBuilder({ engine });
+  await second.checked();
   expect(holdsChanges()).toBe(true);
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
@@ -420,7 +420,7 @@ test("coming back to the lens restores this page's own draft without asking", as
 test("a draft kept for another reader is discarded and never offered", async () => {
   keep({ reader: "p-2" });
   const engine = new Engine(company());
-  mountBuilder({ engine, reader: "p-1" });
+  const { checked } = mountBuilder({ engine, reader: "p-1" });
   await checked();
   expect(kept()).toBeNull();
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
@@ -432,7 +432,7 @@ test("a draft kept for another reader is discarded and never offered", async () 
 test("a kept draft waits for the tab's reader before it is offered or cleared", async () => {
   keep({});
   const engine = new Engine(company());
-  mountBuilder({ engine, reader: null });
+  const { settle, checked } = mountBuilder({ engine, reader: null });
   await checked();
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(kept()).not.toBeNull();

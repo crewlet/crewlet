@@ -21,14 +21,13 @@ import { CompanyScreen } from "~/routes/company/Company.tsx";
 import { applyState, chartApplyState } from "./AfterSaveStrip.tsx";
 import { clearSavedChanges, recordSavedChanges } from "./savedChanges.ts";
 import {
-  checked,
   company,
   Engine,
   InertWebSocket,
   mountBuilder,
+  type MountedLens,
   pressInToolbar,
   pressInView,
-  settle,
 } from "./testkit.tsx";
 import { SETTLE_MS } from "~/routes/admin/recheck.ts";
 import { toastText } from "~/testing.tsx";
@@ -223,8 +222,9 @@ describe("in the builder", () => {
     engine: Engine,
     query: (what: string) => unknown,
     { settings = false }: { settings?: boolean } = {},
-  ) {
-    mountBuilder({ engine, query });
+  ): Promise<MountedLens> {
+    const lens = mountBuilder({ engine, query });
+    const { settle, checked } = lens;
     await checked();
     pressInView("Edit CEO");
     if (settings) {
@@ -239,6 +239,7 @@ describe("in the builder", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await settle();
     expect(toastText()).toContain("Saved. The engine is applying it.");
+    return lens;
   }
 
   /*
@@ -324,7 +325,7 @@ describe("in the builder", () => {
             },
           )
         : null;
-    await save(engine, () => null);
+    const { settle } = await save(engine, () => null);
     fireEvent.click(screen.getByRole("button", { name: "Copy the chart" }));
     await settle();
     const dialog = screen.getByRole("dialog", { name: "The org chart" });
@@ -341,7 +342,7 @@ describe("in the builder", () => {
             headers: { "Content-Type": "application/yaml", ETag: '"r-saved"' },
           })
         : null;
-    await save(engine, () => null, { settings: true });
+    const { settle } = await save(engine, () => null, { settings: true });
     fireEvent.click(screen.getByRole("button", { name: "Copy settings as YAML" }));
     await settle();
     const dialog = screen.getByRole("dialog", { name: "The settings as YAML" });
@@ -361,7 +362,7 @@ describe("in the builder", () => {
             headers: { "Content-Type": "application/yaml", ETag: '"r-later"' },
           })
         : null;
-    await save(engine, () => null, { settings: true });
+    const { settle } = await save(engine, () => null, { settings: true });
     fireEvent.click(screen.getByRole("button", { name: "Copy settings as YAML" }));
     await settle();
     const dialog = screen.getByRole("dialog", { name: "The settings as YAML" });

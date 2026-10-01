@@ -249,6 +249,18 @@ What follows are the prerequisites that legitimately vary by machine.
   refused the same way, because the next case's page does exactly what such
   a wait listens for. `testkit.test.tsx` holds each of those waits to it.
 
+  **And a case waits only on what it mounted.** A wait the harness cannot see
+  — a promise of the case's own — is not woken by any of the above, so a case
+  that timed out inside one resumes whenever it ends, possibly after the next
+  case has mounted. So nothing a case waits through is found in a variable
+  every case shares: `mountBuilder` hands the case its lens's `settle`,
+  `checked` and `navigate`, and a suite's own helper takes them as arguments;
+  a suite that only lets a stubbed engine's answers land takes its
+  `answered()` from its own mount, built by `flushInCase`
+  (`src/test/inCase.ts`), which refuses once its case has finished. Both used
+  to be module-level, and a late `settle()` settled the NEXT case's lens.
+  `src/test/inCase.test.ts` and `testkit.test.tsx` each hold one such pair.
+
   **A stand-in for the browser answers when the browser would.** jsdom has no
   layout, so the chart suites install a ResizeObserver of their own, and one
   that reports from inside `observe()` reports in the middle of React's

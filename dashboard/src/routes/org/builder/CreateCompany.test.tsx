@@ -10,15 +10,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { clearSavedChanges } from "./savedChanges.ts";
 import {
-  checked,
   company,
   Engine,
   lensToolbar,
   mountBuilder,
+  type Settle,
   pressInToolbar,
   pressInView,
   pressOnBanner,
-  settle,
   type SentRequest,
 } from "./testkit.tsx";
 
@@ -59,7 +58,7 @@ const companyExists = () =>
   screen.getByRole("dialog", { name: "A company already exists on this engine" });
 
 /** Opens the review, creates the company, and settles on everything the save set in motion. */
-async function save() {
+async function save(settle: Settle) {
   pressInToolbar("Review and save");
   const dialog = screen.getByRole("dialog", { name: "Review and create the company" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Create the company" }));
@@ -84,7 +83,10 @@ const pressStart = () =>
   fireEvent.click(within(createForm()).getByRole("button", { name: "Start the company" }));
 
 /** Fills the create form and starts the company from a template. */
-async function startCompany(options: { template?: string; seat?: boolean; contact?: string } = {}) {
+async function startCompany(
+  settle: Settle,
+  options: { template?: string; seat?: boolean; contact?: string } = {},
+) {
   await settle();
   const form = within(createForm());
   fireEvent.change(form.getByLabelText("Company name"), {
@@ -106,8 +108,8 @@ async function startCompany(options: { template?: string; seat?: boolean; contac
 
 test("the form starts the company from a template, and the check is create-only", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({ seat: true });
+  const { settle } = mountBuilder({ engine });
+  await startCompany(settle, { seat: true });
 
   await settle();
   expect(engine.checks().length).toBeGreaterThan(1);
@@ -133,10 +135,10 @@ test("the form starts the company from a template, and the check is create-only"
 // no contact block rather than an empty one.
 test("your own seat starts the company with no contact identity", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({ seat: true, contact: "" });
+  const { checked, settle } = mountBuilder({ engine });
+  await startCompany(settle, { seat: true, contact: "" });
   await checked();
-  await save();
+  await save(settle);
 
   const founder = engine.seats.find((s) => s.handle === "founder")!;
   expect(founder).toMatchObject({ name: "Founder", kind: "human" });
@@ -147,10 +149,10 @@ test("your own seat starts the company with no contact identity", async () => {
 // the chart keeps a seat's contact identities.
 test("your own seat carries the contact identity you gave", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({ seat: true });
+  const { checked, settle } = mountBuilder({ engine });
+  await startCompany(settle, { seat: true });
   await checked();
-  await save();
+  await save(settle);
 
   expect(engine.seats.find((s) => s.handle === "founder")!.runtime).toEqual({
     contact: { slack_user_id: "U0FOUNDER" },
@@ -162,19 +164,19 @@ test("your own seat carries the contact identity you gave", async () => {
 // `display: flex` outranks the user agent's rule for the attribute.
 test("the create form carries no builder toolbar until a template is recorded", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   expect(screen.getByLabelText("Company name")).toBeDefined();
   expect(screen.queryByRole("toolbar", { name: "Organization builder" })).toBeNull();
   expect(document.querySelector(".org-builder-toolbar")).toBeNull();
-  await startCompany({});
+  await startCompany(settle);
   await settle();
   expect(lensToolbar()).toBeDefined();
 });
 
 test("a company with no name is refused by the form, not by the engine", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   const before = engine.requests.length;
   pressStart();
@@ -185,10 +187,10 @@ test("a company with no name is refused by the form, not by the engine", async (
 
 test("the save creates the settings create-only, then the chart, and says what is left to do", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checked, settle } = mountBuilder({ engine });
+  await startCompany(settle);
   await checked();
-  await save();
+  await save(settle);
 
   expect(engine.requests.filter(isWrite)).toHaveLength(1);
   const write = engine.requests.filter(isWrite)[0]!;
@@ -237,8 +239,8 @@ test("the save creates the settings create-only, then the chart, and says what i
 
 test("a company created while the draft is open is found by the check, before any save", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { settle, checked } = mountBuilder({ engine });
+  await startCompany(settle);
   await checked();
   createdElsewhere(engine);
   // The next check of the draft is refused as already configured.
@@ -252,8 +254,8 @@ test("a company created while the draft is open is found by the check, before an
 // create draft hears of it at once rather than when its next check runs.
 test("a company another node creates is reported by the org push, with no edit", async () => {
   const engine = new Engine(null);
-  const { store } = mountBuilder({ engine });
-  await startCompany({});
+  const { store, settle, checked } = mountBuilder({ engine });
+  await startCompany(settle);
   await checked();
   createdElsewhere(engine);
   act(() => store.applyOrg(engine.orgPush()));
@@ -266,11 +268,11 @@ test("a company another node creates is reported by the org push, with no edit",
 // company somebody else created, and never replayed onto it.
 test("a company created meanwhile is offered instead of the draft, never written over", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checked, settle } = mountBuilder({ engine });
+  await startCompany(settle);
   await checked();
   createdElsewhere(engine);
-  await save();
+  await save(settle);
 
   const refused = companyExists();
   // The company is untouched: the chart read before the first write found it,
@@ -292,11 +294,11 @@ test("a company created meanwhile is offered instead of the draft, never written
 // fleet-wide, so its 412 stops the save before a single chart write.
 test("a settings revision created meanwhile refuses the create before the chart is written", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { checked, settle } = mountBuilder({ engine });
+  await startCompany(settle);
   await checked();
   engine.settings = company().settings;
-  await save();
+  await save(settle);
 
   expect(companyExists()).toBeDefined();
   expect(engine.chartWrites()).toHaveLength(0);
@@ -307,8 +309,8 @@ test("a settings revision created meanwhile refuses the create before the chart 
 // the dialog is closed: without it the only way out was a reload.
 test("a create draft kept after a company appeared still offers the company", async () => {
   const engine = new Engine(null);
-  mountBuilder({ engine });
-  await startCompany({});
+  const { settle, checked } = mountBuilder({ engine });
+  await startCompany(settle);
   await checked();
   createdElsewhere(engine);
   pressInView("Edit Chief Executive");

@@ -19,16 +19,7 @@
 
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import {
-  checked,
-  company,
-  Engine,
-  mountBuilder,
-  navigate,
-  pressInToolbar,
-  pressInView,
-  settle,
-} from "./testkit.tsx";
+import { company, Engine, mountBuilder, pressInToolbar, pressInView } from "./testkit.tsx";
 import { waitInCase } from "./viewTestkit.tsx";
 
 afterEach(() => {
@@ -53,7 +44,7 @@ const ended = (what: string) => new RegExp(`^${what}: the case that mounted this
 
 /** Mounts a fresh lens, and holds it to drawing and settling. */
 async function nextLensDraws(hash?: string): Promise<void> {
-  mountBuilder({ engine: new Engine(company()), ...(hash ? { hash } : {}) });
+  const { checked } = mountBuilder({ engine: new Engine(company()), ...(hash ? { hash } : {}) });
   await checked();
 }
 
@@ -63,7 +54,7 @@ async function nextLensDraws(hash?: string): Promise<void> {
 test("a case that ends while it settles on a read", () => {
   const engine = new Engine(company());
   engine.script = (r) => (r.method === "GET" && r.path === "/chart" ? new Promise(() => {}) : null);
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   left.read = outcome(settle());
 });
 
@@ -76,7 +67,7 @@ test("stops at that settle, and the next case's lens draws", async () => {
 // so nothing but the case's end can close the act scope that waits for it.
 test("a case that ends while it settles on a save", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { settle, checked } = mountBuilder({ engine });
   await checked();
   pressInView("Edit CEO");
   await checked();
@@ -101,7 +92,7 @@ const ON_THE_TABLE = "#/company?lens=builder&view=table";
 // wait still out would take for the landing it wanted and settle the next
 // case's lens.
 test("a case that ends while it waits for a move to land", async () => {
-  mountBuilder({ engine: new Engine(company()) });
+  const { checked, navigate } = mountBuilder({ engine: new Engine(company()) });
   await checked();
   left.move = outcome(navigate(() => {}, ON_THE_TABLE));
 });
@@ -115,7 +106,7 @@ test("stops at that move, whatever the next mount writes", async () => {
 // act environment off until its wait ends, so one left waiting kept it off.
 test("a case that ends while it waits for a request", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { checked } = mountBuilder({ engine });
   await checked();
   left.request = outcome(engine.reached(() => false));
 });
@@ -123,6 +114,35 @@ test("a case that ends while it waits for a request", async () => {
 test("stops at that wait for a request", async () => {
   expect(await left.request).toMatch(ended("reached"));
   await nextLensDraws();
+});
+
+// A WAIT OF THE CASE'S OWN, and then a settle. The harness cannot wake a wait
+// it does not own, so a case that timed out inside one resumes whenever that
+// wait ends — after the next case has mounted — and its next settle has to be
+// refused there rather than settle whichever lens is mounted by then.
+let release: () => void = () => {};
+
+test("a case that ends while it waits for something of its own", async () => {
+  const { settle, checked } = mountBuilder({ engine: new Engine(company()) });
+  await checked();
+  const own = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  left.own = outcome(
+    (async () => {
+      await own;
+      await settle();
+    })(),
+  );
+});
+
+test("stops at its next settle, and never settles the next case's lens", async () => {
+  // THE NEXT CASE'S LENS IS MOUNTED FIRST: this is the lens a settle that
+  // found its lens anywhere but in its own case would take.
+  const { checked } = mountBuilder({ engine: new Engine(company()) });
+  release();
+  expect(await left.own).toMatch(ended("settle"));
+  await checked();
 });
 
 // A WAIT OUTSIDE THE LENS. A suite that mounts no lens through this harness —

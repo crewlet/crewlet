@@ -17,7 +17,6 @@ import { seatPath } from "~/lib/seats.ts";
 import { FillRequest } from "~/app/fill.tsx";
 import {
   asReader,
-  checked,
   company,
   Engine,
   fakeSurfaces,
@@ -29,7 +28,6 @@ import {
   pressInView,
   refusal,
   rereadViewer,
-  settle,
 } from "./testkit.tsx";
 
 beforeEach(() => {
@@ -72,7 +70,7 @@ function toolbarMenu(node: string): HTMLElement {
 describe("the posture table", () => {
   test("a served configuration and chart open edit mode", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checked } = mountBuilder({ engine });
     await checked();
     expect(screen.getByText("CEO")).toBeDefined();
     // The chart is read with its runtime half asked for, and the first check
@@ -85,7 +83,7 @@ describe("the posture table", () => {
 
   test("a settings edit is checked as the merge patch a save would send", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Rename the company");
     await settle();
@@ -100,7 +98,7 @@ describe("the posture table", () => {
 
   test("no active revision and no company in the org opens create mode", async () => {
     const engine = new Engine(null);
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(engine.checks()).toHaveLength(1);
     const check = engine.checks()[0]!;
@@ -111,7 +109,7 @@ describe("the posture table", () => {
 
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
-    mountBuilder({ engine, org: named });
+    const { settle } = mountBuilder({ engine, org: named });
     await settle();
     expect(
       screen.getByText("This node has not caught up with the fleet's configuration yet."),
@@ -123,7 +121,7 @@ describe("the posture table", () => {
 
   test("create mode waits for the org snapshot before deciding", async () => {
     const engine = new Engine(null);
-    const { store } = mountBuilder({ engine, connected: false });
+    const { store, settle } = mountBuilder({ engine, connected: false });
     await settle();
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
@@ -136,7 +134,7 @@ describe("the posture table", () => {
   test("a refusal with nobody signed in asks for a sign-in", async () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine, query: asReader(() => "") });
+    const { settle } = mountBuilder({ engine, query: asReader(() => "") });
     await settle();
     expect(
       screen.getByText(/^Editing the organization needs a credential the engine accepts\./),
@@ -151,7 +149,7 @@ describe("the posture table", () => {
     let who = "";
     const engine = new Engine(company());
     engine.script = () => (who === "" ? json({ error: "unauthorized" }, 401) : null);
-    const { store } = mountBuilder({ engine, query: asReader(() => who) });
+    const { store, settle, checked } = mountBuilder({ engine, query: asReader(() => who) });
     await settle();
     expect(
       screen.getByText(/^Editing the organization needs a credential the engine accepts\./),
@@ -171,7 +169,7 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () =>
       json({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }, 403);
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(
       screen.getByText(
@@ -184,7 +182,7 @@ describe("the posture table", () => {
   test("a refusal of a signed-in reader says the session was refused", async () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine, query: asReader(() => "jane.doe") });
+    const { settle } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
     await settle();
     expect(screen.getByText("The engine refused this browser's session.")).toBeDefined();
   });
@@ -192,7 +190,7 @@ describe("the posture table", () => {
   test("a plain 404 is a process that does not serve the configuration", async () => {
     const engine = new Engine(company());
     engine.script = () => new Response("404 page not found", { status: 404 });
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(screen.getByText("This process does not serve the configuration")).toBeDefined();
   });
@@ -200,7 +198,7 @@ describe("the posture table", () => {
   test("a body that is not JSON is a process that does not serve the configuration", async () => {
     const engine = new Engine(company());
     engine.script = () => new Response("<html></html>", { status: 200 });
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(screen.getByText("This process does not serve the configuration")).toBeDefined();
   });
@@ -208,7 +206,7 @@ describe("the posture table", () => {
   test("an engine that never answers is unreachable", async () => {
     const engine = new Engine(company());
     engine.script = () => Promise.reject(new TypeError("Failed to fetch"));
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(screen.getByText("The engine could not be reached")).toBeDefined();
   });
@@ -229,7 +227,7 @@ describe("the posture table", () => {
       r.method === "GET" && r.path === "/chart" && ++reads > 1
         ? json({ error: "forbidden" }, 403)
         : null;
-    mountBuilder({ engine, query: asReader(() => "reader.only") });
+    const { settle } = mountBuilder({ engine, query: asReader(() => "reader.only") });
     await settle();
     expect(toolbarSays("The engine refused the session")).toBeDefined();
 
@@ -268,7 +266,10 @@ describe("the views the lens hosts", () => {
     const handle = { focusNode: vi.fn(), expandAll: vi.fn(), collapseAll: vi.fn() };
     const count = { n: 0 };
     const engine = new Engine(company());
-    mountBuilder({ engine, surfaces: { ...fakeSurfaces, canvas: registering(handle, count) } });
+    const { checked } = mountBuilder({
+      engine,
+      surfaces: { ...fakeSurfaces, canvas: registering(handle, count) },
+    });
     await checked();
     const registered = count.n;
 
@@ -295,7 +296,7 @@ describe("the views the lens hosts", () => {
    */
   test("the canvas is handed the chart the toolbar chooses, and the switch that chooses it", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     // Inside what the lens hands the canvas, not in the toolbar beside it.
@@ -316,7 +317,7 @@ describe("the views the lens hosts", () => {
    * empty for it.
    */
   test("an add is handed to the structure chart rather than opened over it", async () => {
-    mountBuilder({ engine: new Engine(company()) });
+    const { settle } = mountBuilder({ engine: new Engine(company()) });
     await settle();
     expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     addFromTheToolbar("Add agent seat");
@@ -336,7 +337,10 @@ describe("the views the lens hosts", () => {
    * second, quieter add.
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
-    mountBuilder({ engine: new Engine(company()), hash: "#/company?lens=builder&view=table" });
+    const { settle, checked } = mountBuilder({
+      engine: new Engine(company()),
+      hash: "#/company?lens=builder&view=table",
+    });
     await checked();
     addFromTheToolbar("Add agent seat");
     await settle();
@@ -362,7 +366,7 @@ describe("the views the lens hosts", () => {
    * dialog rather than leaving the reader with a form they can no longer see.
    */
   test("an add open in the chart becomes a dialog when the reader leaves the chart", async () => {
-    mountBuilder({ engine: new Engine(company()) });
+    const { settle } = mountBuilder({ engine: new Engine(company()) });
     await settle();
     addFromTheToolbar("Add unit");
     await settle();
@@ -388,7 +392,7 @@ describe("the views the lens hosts", () => {
     });
     Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     const toggle = () => screen.getByRole("button", { name: "Fullscreen" });
@@ -409,7 +413,7 @@ describe("the views the lens hosts", () => {
    */
   test("discarding the draft is asked as a prompt, not a framed dialog", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Edit CEO");
     await checked();
@@ -435,7 +439,7 @@ describe("the views the lens hosts", () => {
    */
   test("the chart is told which node an open surface is about", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     expect(screen.queryByText(/^About /)).toBeNull();
     pressInView("Select CEO");
@@ -451,7 +455,7 @@ describe("checking the draft", () => {
   // no settings write to validate.
   test("an edit of a seat is checked against the chart, with no dry run", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checked } = mountBuilder({ engine });
     await checked();
     const reads = engine.chartReads().length;
     pressInView("Edit CEO");
@@ -465,7 +469,7 @@ describe("checking the draft", () => {
   // asks about the last of the burst.
   test("an edit is checked once the debounce has passed, and not before", async () => {
     const engine = new Engine(company());
-    const { clock } = mountBuilder({ engine });
+    const { clock, settle, checked } = mountBuilder({ engine });
     await checked();
     const reads = engine.chartReads().length;
     pressInView("Rename the company");
@@ -494,7 +498,7 @@ describe("checking the draft", () => {
             { path: "name", segments: ["name"], kind: "invalid", message: "name: too long" },
           ])
         : null;
-    mountBuilder({ engine });
+    const { settle } = mountBuilder({ engine });
     await settle();
     expect(toolbarSays("1 problem")).toBeDefined();
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
@@ -511,7 +515,7 @@ describe("checking the draft", () => {
 
   test("the live region says what an edit did, and undo from the keyboard reverts it", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Edit CEO");
     await settle();
@@ -537,7 +541,7 @@ describe("checking the draft", () => {
   // same sentence twice in a row would otherwise be said once.
   test("the live region is emptied, then says the sentence once the pause has passed", async () => {
     const engine = new Engine(company());
-    const { clock } = mountBuilder({ engine });
+    const { clock, settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Edit CEO");
     await settle();
@@ -552,7 +556,7 @@ describe("checking the draft", () => {
 
   test("undo is left to a text field that has focus", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Edit CEO");
     await checked();
@@ -576,7 +580,7 @@ test("a company with no model provider is told so, and one with a provider is no
   const without = company();
   delete without.settings.providers;
   const engine = new Engine(without);
-  mountBuilder({ engine });
+  const { settle } = mountBuilder({ engine });
   await settle();
   // The engine applies the company and holds its agents' work, so the
   // caution says what waits rather than claiming nothing is applied.
@@ -586,7 +590,7 @@ test("a company with no model provider is told so, and one with a provider is no
   cleanup();
 
   const engineWith = new Engine(company());
-  mountBuilder({ engine: engineWith });
+  const { checked } = mountBuilder({ engine: engineWith });
   await checked();
   expect(screen.queryByText(/No model provider is configured/)).toBeNull();
 });
@@ -596,7 +600,7 @@ describe("the selection in the URL", () => {
   // teams may share, and a link naming one by it opened whichever came first.
   test("a selected unit is named in the URL by its key, which a new address rewrites", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Select Engineering");
     await settle();
@@ -614,16 +618,19 @@ describe("the selection in the URL", () => {
 
   test("a link naming a unit by its key selects it, and one naming it by its name does not", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&unit=engineering" });
-    await checked();
+    const byKey = mountBuilder({
+      engine,
+      hash: "#/company?lens=builder&view=visualization&unit=engineering",
+    });
+    await byKey.checked();
     expect(within(lensToolbar()).getByRole("button", { name: "Engineering" })).toBeDefined();
     cleanup();
 
-    mountBuilder({
+    const byName = mountBuilder({
       engine: new Engine(company()),
       hash: "#/company?lens=builder&view=visualization&unit=Engineering",
     });
-    await checked();
+    await byName.checked();
     expect(within(lensToolbar()).queryByRole("button", { name: "Engineering" })).toBeNull();
   });
 
@@ -633,7 +640,7 @@ describe("the selection in the URL", () => {
   // and the charter's Edit was unreachable from the toolbar.
   test("the company stays selected, and the toolbar offers the charter's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { checked } = mountBuilder({ engine });
     await checked();
     pressInView("Select the company");
     const menu = toolbarMenu("Acme");
@@ -652,7 +659,10 @@ describe("the selection in the URL", () => {
 
   test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&seat=ceo" });
+    const { settle, checked } = mountBuilder({
+      engine,
+      hash: "#/company?lens=builder&view=visualization&seat=ceo",
+    });
     await checked();
     const actions = within(lensToolbar()).getByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
@@ -682,7 +692,7 @@ describe("the selection in the URL", () => {
   // still be changed.
   test("a seat added in the draft is offered no screen, and can change kind", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Add an analyst");
     await settle();
@@ -714,7 +724,7 @@ describe("a company saved by somebody else", () => {
   // comes with it, are for a draft that holds work.
   test("an untouched draft is stood on the chart the org push reports", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store, checked } = mountBuilder({ engine });
     await checked();
     colleagueSaves(engine);
     act(() => store.applyOrg(engine.orgPush()));
@@ -730,7 +740,7 @@ describe("a company saved by somebody else", () => {
   // and so has no dry run to be refused: the check reads the settings too.
   test("an untouched draft is stood on the settings revision a colleague saved", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store, settle, checked } = mountBuilder({ engine });
     await checked();
     engine.settings = { ...engine.settings, mission: "Make better things" };
     engine.revision = "r2";
@@ -749,7 +759,7 @@ describe("a company saved by somebody else", () => {
 
   test("a draft with work is not moved: the change is offered as an update", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store, settle, checked } = mountBuilder({ engine });
     await checked();
     pressInView("Edit CEO");
     await checked();
@@ -772,7 +782,7 @@ describe("a new reader mid-edit", () => {
   test("keeps the draft, reads the company again and checks as the new reader", async () => {
     let who = "jane.doe";
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, query: asReader(() => who) });
+    const { store, settle, checked } = mountBuilder({ engine, query: asReader(() => who) });
     await checked();
     pressInView("Rename the company");
     await settle();
@@ -794,7 +804,7 @@ describe("a new reader mid-edit", () => {
   // every blip of the socket.
   test("the same reader read again changes nothing", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
+    const { store, settle, checked } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
     await checked();
     const reads = engine.chartReads().length;
     rereadViewer(store);
@@ -805,7 +815,7 @@ describe("a new reader mid-edit", () => {
   test("a dry run refused for the new reader pauses editing while the company still reads", async () => {
     let who = "jane.doe";
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, query: asReader(() => who) });
+    const { store, settle, checked } = mountBuilder({ engine, query: asReader(() => who) });
     await checked();
     pressInView("Rename the company");
     await settle();
@@ -828,7 +838,7 @@ describe("a new reader mid-edit", () => {
   test("a reader signed out elsewhere pauses editing without discarding the draft", async () => {
     let who = "jane.doe";
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, query: asReader(() => who) });
+    const { store, settle, checked } = mountBuilder({ engine, query: asReader(() => who) });
     await checked();
     pressInView("Edit CEO");
     await settle();
@@ -867,20 +877,20 @@ describe("a new reader mid-edit", () => {
  * does, and still stops saying it on the outline.
  */
 describe("the lens that fills the window", () => {
-  function asked(hash: string): boolean[] {
+  function asked(hash: string): { calls: boolean[]; settle: () => Promise<void> } {
     const calls: boolean[] = [];
-    mountBuilder({
+    const { settle } = mountBuilder({
       engine: new Engine(company()),
       hash,
       wrap: (tree) => (
         <FillRequest.Provider value={(on) => calls.push(on)}>{tree}</FillRequest.Provider>
       ),
     });
-    return calls;
+    return { calls, settle };
   }
 
   test("the chart lens asks the frame for the window's height", async () => {
-    const calls = asked("#/company?lens=builder&view=visualization");
+    const { calls, settle } = asked("#/company?lens=builder&view=visualization");
     // Not before the engine has answered: until then the lens draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
@@ -889,7 +899,7 @@ describe("the lens that fills the window", () => {
   });
 
   test("the outline lens asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/company?lens=builder&view=table");
+    const { calls, settle } = asked("#/company?lens=builder&view=table");
     // The toolbar is what both lenses draw once the engine has answered, so
     // settling on it is settling on the same moment the case above measures.
     await settle();

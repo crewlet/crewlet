@@ -7,11 +7,12 @@
  * answer.
  *
  * AND THE LENS'S TIME IS THE SUITE'S ([SuiteClock]). A suite waits for the
- * lens with [settle] — every answer it has out, every timer due within the
- * check's debounce — rather than polling the page for a sentence with a
- * deadline: the first check after a mount is a read, a render and a second
- * read, and on a loaded runner that took longer than the second a `findBy`
- * gives it, so the same case passed or failed on how busy the machine was.
+ * lens with the `settle` [mountBuilder] hands it — every answer it has out,
+ * every timer due within the check's debounce — rather than polling the page
+ * for a sentence with a deadline: the first check after a mount is a read, a
+ * render and a second read, and on a loaded runner that took longer than the
+ * second a `findBy` gives it, so the same case passed or failed on how busy
+ * the machine was.
  *
  * TWO SURFACES, AS THE ENGINE HAS: the settings revision `/config` serves and
  * validates whole, and the org chart `/chart` serves and writes per object.
@@ -295,9 +296,9 @@ export class Engine {
    * Resolves once `holds` is true of what has reached the engine — at once if
    * it already is, and otherwise as the request that makes it true arrives.
    *
-   * FOR AN ANSWER THE SUITE IS HOLDING, where [settle] cannot be used: settle
-   * waits for every request the lens has out, and one a script holds is out
-   * until the suite releases it. This waits for the REQUEST instead, which is
+   * FOR AN ANSWER THE SUITE IS HOLDING, where [MountedLens.settle] cannot be
+   * used: settle waits for every request the lens has out, and one a script
+   * holds is out until the suite releases it. This waits for the REQUEST instead, which is
    * an event rather than a deadline.
    *
    * NOT INSIDE `act`, and through the library's own wrapper for waiting
@@ -1024,8 +1025,9 @@ class CountingTransport implements EngineTransport {
 }
 
 /**
- * How many rounds [settle] takes before it calls the lens restless. A round is
- * one batch of answers or one timer, and the longest sequence any case drives
+ * How many rounds [MountedLens.settle] takes before it calls the lens
+ * restless. A round is one batch of answers or one timer, and the longest
+ * sequence any case drives
  * — a save's read, its writes, the read-back and the check after it — is a
  * dozen; a lens still busy after a hundred is re-arming something for ever,
  * which is a defect to report rather than to wait out.
@@ -1058,11 +1060,17 @@ function caseEnded(what: string): Error {
  * So the lens ENDS WITH ITS CASE ([retire], registered by [mountBuilder]),
  * before the next case begins: every wait through it — a settle, a move, a
  * wait for a request — is woken and refuses with [caseEnded], the act scope a
- * settle round holds is closed, and a wait asked for after that finds no lens
- * mounted. What this cannot reach is a case that resumes from a wait of its
- * OWN only once the next case has mounted: [mounted] would hand it that
- * case's lens. Every wait in the builder suites is the harness's, or an `act`
- * that ends within a few turns, long before the next case mounts.
+ * settle round holds is closed, and every wait asked of it after that is
+ * refused at once.
+ *
+ * AND A CASE WAITS ONLY ON THE LENS IT MOUNTED, which [mountBuilder] hands it
+ * ([MountedLens]). The waits used to find their lens in a variable the last
+ * mount wrote, which is the one thing the retirement above cannot reach: a
+ * case that timed out inside a wait of its OWN — a promise the harness never
+ * sees — resumes whenever that wait ends, which may be after the next case has
+ * mounted, and its next `settle()` read the variable and settled the NEXT
+ * case's lens, acting beside that case. Held by the case, the lens it waits on
+ * is the one it mounted, retired or not.
  */
 class Lens {
   retired = false;
@@ -1109,24 +1117,10 @@ class Lens {
    */
   async retire(): Promise<void> {
     this.retired = true;
-    if (mounted === this) mounted = null;
     this.finish();
     this.engine.retire();
     await this.round?.catch(() => {});
   }
-}
-
-/** The lens a suite mounted last: what [settle] waits for. */
-let mounted: Lens | null = null;
-
-/** The lens a wait is for, or a refusal naming why there is none. */
-function current(what: string): Lens {
-  if (!mounted) {
-    throw new Error(
-      `${what}: no lens is mounted — mount one with mountBuilder, or this is a case still running after its time ran out`,
-    );
-  }
-  return mounted;
 }
 
 /**
@@ -1156,10 +1150,6 @@ function current(what: string): Lens {
  *
  * AND NOT ONCE ITS CASE HAS ENDED: see [Lens].
  */
-export async function settle(): Promise<void> {
-  await settleLens(current("settle"));
-}
-
 async function settleLens(lens: Lens): Promise<void> {
   for (let round = 0; round < SETTLE_ROUNDS; round++) {
     lens.refuseIfEnded("settle");
@@ -1207,8 +1197,8 @@ async function settleLens(lens: Lens): Promise<void> {
  * refused, since the next case's mount writes a hash of its own and could
  * otherwise be the landing this one was waiting for.
  */
-export async function navigate(go: () => void, landsOn: string): Promise<void> {
-  const lens = current("navigate");
+async function navigateLens(lens: Lens, go: () => void, landsOn: string): Promise<void> {
+  lens.refuseIfEnded("navigate");
   let stop = () => {};
   const landed = new Promise<void>((resolve) => {
     const moved = () => {
@@ -1244,12 +1234,37 @@ export function lensToolbar(): HTMLElement {
  * problems. Read in the toolbar alone, because a query of the whole document
  * walks every card and row the views draw.
  */
-export async function checked(): Promise<void> {
-  await settle();
+async function checkedLens(lens: Lens): Promise<void> {
+  await settleLens(lens);
   within(lensToolbar()).getByText("No problems");
 }
 
-/** Mounts the Builder lens against the scripted engine. */
+/**
+ * What a case holds once it has mounted the lens: the page's parts, and the
+ * waits ON THIS LENS — see [Lens] for why a wait is never asked of anything
+ * but the lens its own case mounted. Closures rather than methods, so a case
+ * destructures the waits it uses (`const { checked } = mountBuilder(...)`).
+ */
+export interface MountedLens {
+  store: Store;
+  socket: LiveSocket;
+  view: ReturnType<typeof render>;
+  clock: SuiteClock;
+  /** [settleLens], on this lens. */
+  settle: () => Promise<void>;
+  /** [checkedLens], on this lens. */
+  checked: () => Promise<void>;
+  /** [navigateLens], on this lens. */
+  navigate: (go: () => void, landsOn: string) => Promise<void>;
+}
+
+/**
+ * One case's settle, as a suite's own helper takes it: handed down from the
+ * case that mounted the lens, for the reason [Lens] gives.
+ */
+export type Settle = MountedLens["settle"];
+
+/** Mounts the Builder lens against the scripted engine, and hands the case its waits. */
 export function mountBuilder({
   engine,
   org = null,
@@ -1281,7 +1296,7 @@ export function mountBuilder({
    * has neither, so it is recorded here as they would.
    */
   reader?: string | null;
-}) {
+}): MountedLens {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
   if (reader !== null) noteReader(reader);
@@ -1295,7 +1310,6 @@ export function mountBuilder({
   const clock = new SuiteClock();
   const transport = new CountingTransport(restTransport);
   const lens = new Lens(clock, transport, engine);
-  mounted = lens;
   onTestFinished(() => lens.retire());
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
@@ -1315,5 +1329,13 @@ export function mountBuilder({
       </Router>
     </ClientContext.Provider>,
   );
-  return { store, socket, view, clock };
+  return {
+    store,
+    socket,
+    view,
+    clock,
+    settle: () => settleLens(lens),
+    checked: () => checkedLens(lens),
+    navigate: (go, landsOn) => navigateLens(lens, go, landsOn),
+  };
 }

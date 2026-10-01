@@ -24,9 +24,10 @@
  * query, which `act` runs to the end.
  */
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
+import { flushInCase } from "~/test/inCase.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CompanyScreen } from "~/routes/company/Company.tsx";
@@ -49,7 +50,10 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-/** The company screen at `hash`, against a scripted engine. */
+/**
+ * The company screen at `hash`, against a scripted engine, and the case's
+ * flush that lets the stubbed socket's answers land ([flushInCase]).
+ */
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
@@ -60,13 +64,14 @@ function mount(hash: string) {
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
     Promise.resolve(null);
-  return render(
+  const page = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
         <CompanyScreen />
       </Router>
     </ClientContext.Provider>,
   );
+  return { ...page, answered: flushInCase() };
 }
 
 /** The lens strip's options, in the order it draws them. */
@@ -109,11 +114,6 @@ async function builderDrawn(): Promise<void> {
   expect(screen.getByRole("toolbar", { name: "Organization builder" })).toBe(drawn);
 }
 
-/** Lets the stubbed socket's answers land, and renders what they leave. */
-async function answered(): Promise<void> {
-  await act(async () => {});
-}
-
 test("the company screen offers three lenses, and the builder is one of them", () => {
   mount("#/company");
   expect(lenses()).toEqual(["Chart", "Charter", "Builder"]);
@@ -148,7 +148,7 @@ test("the builder lens mounts the builder, and the read lenses do not", async ()
 test("the read lenses say they still draw the company before the save; the builder does not", async () => {
   const settings = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
   recordSavedChanges({ settings, chart: null });
-  mount("#/company?lens=chart");
+  const { answered } = mount("#/company?lens=chart");
   await answered();
   expect(screen.getByText(/still applying settings revision/)).toBeDefined();
   cleanup();

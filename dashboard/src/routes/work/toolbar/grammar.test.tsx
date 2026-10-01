@@ -24,7 +24,7 @@
  * later with nowhere to live fails here rather than shipping invisible.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ItemsView } from "../ItemsView.tsx";
@@ -34,6 +34,7 @@ import SOURCE from "../ItemsView.tsx?raw";
 import { colsParam, columnChoices, GRID_SHAPES } from "../shapes/Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import { pick } from "~/testing.tsx";
+import { flushInCase, type Answered } from "~/test/inCase.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { filterChips, NO_FILTERS, URL_HOMES, type TrackerFilters } from "~/lib/work.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
@@ -198,25 +199,26 @@ const task: WorkSummary = {
 
 const rows = { work_items: { items: [task], groups: [], total_hint: 1, complete: true } };
 
-const mountList = () =>
-  render(
-    <Router>
-      <ItemsView />
-    </Router>,
-  );
-
 /**
- * Lets the stubbed socket's answers land, and renders what they leave.
+ * The list, and the case's flush that lets the stubbed socket's answers land
+ * and renders what they leave ([flushInCase]).
  *
  * NOT A POLL. A `findBy` or a `waitFor` re-ran its query on every change to
  * the page and every fifty milliseconds against a one-second deadline, each
  * time a query by role over the whole list, which computes the name of every
  * button on it — and on a loaded machine the deadline passed before the list
  * had drawn. The answers are promises, so `act` runs them, and the renders
- * they cause, to the end, however long that takes.
+ * they cause, to the end, however long that takes; and the flush is refused
+ * once its case has ended, so a case still running after its time ran out
+ * opens no `act` beside the next one.
  */
-async function answered(): Promise<void> {
-  await act(async () => {});
+function mountList() {
+  const page = render(
+    <Router>
+      <ItemsView />
+    </Router>,
+  );
+  return { ...page, answered: flushInCase() };
 }
 
 /** The list's own bar, where the Display menu's trigger is drawn. */
@@ -234,16 +236,17 @@ function workBar(): HTMLElement {
  * is not on the grid at all — where the toolbar these cases are about is drawn
  * whatever the answer holds.
  */
-async function listAt(hash: string) {
+async function listAt(hash: string): Promise<Answered> {
   location.hash = hash;
   serving(rows);
-  mountList();
+  const { answered } = mountList();
   await answered();
   expect(workBar()).toBeTruthy();
+  return answered;
 }
 
 /** The Display menu, opened from the list's own bar. */
-async function openDisplay() {
+async function openDisplay(answered: Answered) {
   fireEvent.click(
     within(workBar()).getByRole("button", { name: /^(List|Board|Table|Calendar|Timeline)/ }),
   );
@@ -264,11 +267,14 @@ function optionalColumn(): string {
  * a key that gains the Display menu as its home and has no way of being
  * pressed here fails, rather than being claimed by a control nobody drove.
  */
-const MENU: Record<string, { at: string; press: () => Promise<void>; writes: string }> = {
+const MENU: Record<
+  string,
+  { at: string; press: (answered: Answered) => Promise<void>; writes: string }
+> = {
   shape: {
     at: "#/work",
-    press: async () => {
-      await openDisplay();
+    press: async (answered) => {
+      await openDisplay(answered);
       const board = [...document.querySelectorAll<HTMLElement>(".work-display-shape")].find(
         (el) => el.textContent === "Board",
       );
@@ -278,8 +284,8 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
   },
   group_by: {
     at: "#/work",
-    press: async () => {
-      await openDisplay();
+    press: async (answered) => {
+      await openDisplay(answered);
       pick(screen.getByRole("combobox", { name: "Group by" }), "Assignee");
     },
     writes: "group_by=assignee",
@@ -288,24 +294,24 @@ const MENU: Record<string, { at: string; press: () => Promise<void>; writes: str
     // A SECOND AXIS IS OFFERED ONLY BESIDE A FIRST, which is the engine's own
     // refusal rather than a rule of the menu's.
     at: "#/work?group_by=status",
-    press: async () => {
-      await openDisplay();
+    press: async (answered) => {
+      await openDisplay(answered);
       pick(screen.getByRole("combobox", { name: "Then by" }), "Priority");
     },
     writes: "group_by2=priority",
   },
   sort: {
     at: "#/work",
-    press: async () => {
-      await openDisplay();
+    press: async (answered) => {
+      await openDisplay(answered);
       pick(screen.getByRole("combobox", { name: "Order by" }), "Recently updated");
     },
     writes: "sort=-updated",
   },
   "cols.": {
     at: "#/work",
-    press: async () => {
-      await openDisplay();
+    press: async (answered) => {
+      await openDisplay(answered);
       fireEvent.click(screen.getByLabelText(optionalColumn()));
     },
     // THE ACTIVE SHAPE'S OWN KEY, which is the family's whole point.
@@ -329,8 +335,8 @@ test("every key homed in the Display menu is one this suite presses", () => {
 // case is one screen, and a key the menu stopped writing names itself.
 test.each(MENU_HOMED)("the Display menu writes %s", async (key) => {
   const entry = MENU[key] as (typeof MENU)[string];
-  await listAt(entry.at);
-  await entry.press();
+  const answered = await listAt(entry.at);
+  await entry.press(answered);
   await answered();
   expect(location.hash, `${key} was not written by the Display menu`).toContain(entry.writes);
   // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
@@ -371,7 +377,7 @@ test("exactly three keys are neither a chip nor a menu", () => {
 // on its default, which hides the one segment that decides whether finished
 // work is on screen at all.
 test("the scope is the bar's own switch, with no chip and no row in the Filter menu", async () => {
-  await listAt("#/work");
+  const answered = await listAt("#/work");
   fireEvent.click(screen.getByText("Closed"));
   await answered();
   expect(location.hash).toContain("scope=closed");
@@ -406,7 +412,7 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
       complete: true,
     },
   });
-  mountList();
+  const { answered } = mountList();
   await answered();
   fireEvent.click(screen.getByRole("tab", { name: "Arranged" }));
   await answered();
@@ -419,7 +425,7 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
 // answer — it is WHICH answer the shape asks for, which is why it belongs to
 // neither control.
 test("the month is the calendar's own control", async () => {
-  await listAt("#/work?shape=calendar");
+  const answered = await listAt("#/work?shape=calendar");
   fireEvent.click(screen.getByRole("button", { name: "The month after" }));
   await answered();
   expect(location.hash).toContain("month=");

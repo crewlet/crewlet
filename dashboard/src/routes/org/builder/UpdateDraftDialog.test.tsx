@@ -11,16 +11,15 @@ import { COMPANY_KEY } from "./model/keys.ts";
 import type { Conflict } from "./model/operations.ts";
 import { clearSavedChanges } from "./savedChanges.ts";
 import {
-  checked,
   company,
   Engine,
   json,
   lensToolbar,
   mountBuilder,
+  type MountedLens,
   pressInToolbar,
   pressInView,
   pressOnBanner,
-  settle,
 } from "./testkit.tsx";
 import { conflictCells } from "./UpdateDraftDialog.tsx";
 
@@ -46,21 +45,26 @@ const NO_LONGER_ACTIVE =
 const liveRegion = () => document.querySelector("[data-live-region]")!;
 
 /** Opens the builder, lets a colleague change the chart, and edits the CEO. */
-async function editAfterColleague(change: (engine: Engine) => void) {
+async function editAfterColleague(
+  change: (engine: Engine) => void,
+): Promise<{ engine: Engine; lens: MountedLens }> {
   const engine = new Engine(company());
-  mountBuilder({ engine });
-  await checked();
+  const lens = mountBuilder({ engine });
+  await lens.checked();
   change(engine);
   pressInView("Edit CEO");
-  await settle();
+  await lens.settle();
   expect(screen.getByText(CHART_MOVED)).toBeDefined();
-  return engine;
+  return { engine, lens };
 }
 
 /** Presses the conflict's Update my draft, and settles on the dialog it opens. */
-async function updateMyDraft(conflict: string = CHART_MOVED): Promise<HTMLElement> {
+async function updateMyDraft(
+  lens: MountedLens,
+  conflict: string = CHART_MOVED,
+): Promise<HTMLElement> {
   pressOnBanner(conflict, "Update my draft");
-  await settle();
+  await lens.settle();
   return screen.getByRole("dialog", { name: "Update my draft and review" });
 }
 
@@ -72,15 +76,15 @@ const reviewOpens = () =>
     .disabled;
 
 test("an edit that still applies is replayed onto the newer chart, and saving keeps the colleague's change", async () => {
-  const engine = await editAfterColleague((e) => {
+  const { engine, lens } = await editAfterColleague((e) => {
     seat(e, "designer").goal = "Design things";
   });
   // A chart has no revision to diff against, so no link to one is offered.
   expect(screen.queryByRole("link", { name: "Show what changed" })).toBeNull();
-  const dialog = await updateMyDraft();
+  const dialog = await updateMyDraft(lens);
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
-  await checked();
+  await lens.checked();
 
   pressInToolbar("Review and save");
   const review = screen.getByRole("dialog", { name: "Review and save" });
@@ -88,16 +92,16 @@ test("an edit that still applies is replayed onto the newer chart, and saving ke
   // The colleague's change is part of the base now, and not a change of this draft's.
   expect(within(review).queryByText(/Designer/)).toBeNull();
   fireEvent.click(within(review).getByRole("button", { name: "Save" }));
-  await settle();
+  await lens.settle();
   expect(seat(engine, "ceo").goal).toBe("Lead and more");
   expect(seat(engine, "designer").goal).toBe("Design things");
 });
 
 test("a value somebody else changed waits for a choice, and keeping theirs drops mine", async () => {
-  const engine = await editAfterColleague((e) => {
+  const { engine, lens } = await editAfterColleague((e) => {
     seat(e, "ceo").goal = "Lead well";
   });
-  const dialog = await updateMyDraft();
+  const dialog = await updateMyDraft(lens);
   const row = within(dialog).getByRole("row", { name: /goal/ });
   expect(within(row).getByText("Lead")).toBeDefined();
   expect(within(row).getByText("Lead well")).toBeDefined();
@@ -110,47 +114,47 @@ test("a value somebody else changed waits for a choice, and keeping theirs drops
   fireEvent.click(confirm);
 
   // Nothing of the draft is left: the chart's value is the one kept.
-  await checked();
+  await lens.checked();
   expect(reviewOpens()).toBe(false);
   expect(engine.chartWrites()).toHaveLength(0);
 });
 
 describe("a settings revision saved by somebody else", () => {
   /** Opens the builder, renames the company, and lets a colleague save r2 first. */
-  async function renameAfterColleague() {
+  async function renameAfterColleague(): Promise<{ engine: Engine; lens: MountedLens }> {
     const engine = new Engine(company());
-    mountBuilder({ engine });
-    await checked();
+    const lens = mountBuilder({ engine });
+    await lens.checked();
     engine.settings = { ...engine.settings, mission: "Make better things" };
     engine.revision = "r2";
     pressInView("Rename the company");
-    await settle();
+    await lens.settle();
     expect(screen.getByText(SETTINGS_MOVED)).toBeDefined();
-    return engine;
+    return { engine, lens };
   }
 
   test("is offered with a link to what changed, and replayed onto that revision", async () => {
-    const engine = await renameAfterColleague();
+    const { engine, lens } = await renameAfterColleague();
     // The newer revision against the draft's base, read forwards.
     expect(screen.getByRole("link", { name: "Show what changed" }).getAttribute("href")).toBe(
       "#/admin/config?lens=diff&revision=r2&against=r1",
     );
-    const dialog = await updateMyDraft(SETTINGS_MOVED);
+    const dialog = await updateMyDraft(lens, SETTINGS_MOVED);
     fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
-    await settle();
+    await lens.settle();
     expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"');
     expect(engine.checks().at(-1)!.body).toEqual({ name: "Acme Labs" });
   });
 
   test("a node still serving the draft's base is not updated onto", async () => {
-    const engine = await renameAfterColleague();
+    const { engine, lens } = await renameAfterColleague();
     // This node answers reads with the old revision while the conflict named r2.
     engine.script = (r) =>
       r.method === "GET" && r.path === "/config"
         ? json(company().settings, 200, { ETag: '"r1"' })
         : null;
     pressOnBanner(SETTINGS_MOVED, "Update my draft");
-    await settle();
+    await lens.settle();
     expect(
       screen.getByText(
         "This node has not caught up with the newer settings revision yet. Try again in a moment.",
@@ -162,17 +166,17 @@ describe("a settings revision saved by somebody else", () => {
 
 test("a draft of a configuration that is no longer active offers to discard and reload", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine });
-  await checked();
+  const lens = mountBuilder({ engine });
+  await lens.checked();
   engine.script = (r) =>
     r.query.get("dry_run") === "true" ? json({ error: "no_active_revision" }, 412) : null;
   pressInView("Rename the company");
-  await settle();
+  await lens.settle();
   expect(screen.getByText(NO_LONGER_ACTIVE)).toBeDefined();
   engine.script = () => null;
   const reads = engine.sent("GET").length;
   pressOnBanner(NO_LONGER_ACTIVE, "Discard and reload");
-  await checked();
+  await lens.checked();
   expect(engine.sent("GET").length).toBeGreaterThan(reads);
   // Discarded: nothing is left to dry-run.
   expect(engine.checks()).toHaveLength(1);
@@ -281,15 +285,15 @@ describe("a conflict's values", () => {
 
 test("a removal somebody else edited first names what they changed", async () => {
   const engine = new Engine(company());
-  const { store } = mountBuilder({ engine });
-  await checked();
+  const lens = mountBuilder({ engine });
+  await lens.checked();
   pressInView("Remove Designer");
-  await checked();
+  await lens.checked();
   expect(liveRegion().textContent).toContain("Designer");
   seat(engine, "designer").goal = "Design things";
-  act(() => store.applyOrg(engine.orgPush()));
-  await settle();
-  const dialog = await updateMyDraft();
+  act(() => lens.store.applyOrg(engine.orgPush()));
+  await lens.settle();
+  const dialog = await updateMyDraft(lens);
   const row = within(dialog).getByRole("row", { name: /the whole seat/ });
   expect(within(row).getByText("As it was")).toBeDefined();
   expect(within(row).getByText("Changed: goal")).toBeDefined();
