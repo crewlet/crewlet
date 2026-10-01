@@ -623,6 +623,11 @@ const embeddedReconnectWait = time.Second
 // budget is how long a node whose own broker has stopped stays up, dark, before
 // it exits for its supervisor to restart the two together.
 //
+// Only because every attempt is at THIS member: a cluster member's peers are
+// in its INFO, and a pool that took them would land the reconnect on one of
+// them and never run out at all — which is why [embeddedServer.connect]
+// ignores what a member discovers.
+//
 // # The accept budget, spent one wait at a time
 //
 // It is the decision [acceptBudget] already made about this server — how long
@@ -659,6 +664,17 @@ func (e *embeddedServer) connect(loss *connectionLoss) (*nats.Conn, error) {
 		nats.Timeout(acceptBudget(e.clustered)),
 		nats.MaxReconnects(embeddedReconnects(e.clustered)),
 		nats.ReconnectWait(embeddedReconnectWait),
+		// THIS MEMBER AND NO OTHER. A clustered member advertises every
+		// peer's client URL in the INFO it sends, and the client adds each
+		// to its reconnect pool unless told not to: a connection that
+		// dropped — a slow consumer is enough — reconnected to a random
+		// member and carried this node's traffic to a peer for the rest of
+		// its life, and one whose own member had STOPPED was carried on a
+		// peer's broker instead of running its reconnects out, so the node
+		// ran on with its member dead, the cluster a replica short, and
+		// nothing saying so. The member is in this process; a connection to
+		// any other is not what this dial is for.
+		nats.IgnoreDiscoveredServers(),
 		nats.ReconnectHandler(reconnectWatch{
 			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
 		// And the client's asynchronous errors through the engine's own

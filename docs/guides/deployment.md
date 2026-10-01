@@ -472,7 +472,11 @@ to the connection the coordination store rides on an embedded broker, and to
 this node's own embedded broker going away under it: a connection to it tries
 again once a second for as long as a boot gives that broker to accept one —
 30 seconds solo, 2 minutes on a cluster member — and nothing but a restart
-brings a broker in this process back. A snapshot donor's
+brings a broker in this process back. It tries that member and no other: a
+cluster member advertises its peers' client addresses, and a node's
+connections ignore them, so a node whose own member has stopped exits for its
+supervisor to restart the two together rather than running on through a peer
+with its member gone and the cluster a replica short. A snapshot donor's
 connection is the one exception: it serves *peers*, and a node whose donor is
 down still serves its own company, so that connection closing never stops the
 node — the donor [dials again](retention.md) by itself.

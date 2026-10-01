@@ -150,11 +150,16 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 // servers, since the member's flag, not its listener, is what picks it.
 //
 // AND ITS RECONNECTS SPAN THAT SAME BUDGET, since running them out is how a
-// node whose own broker has stopped stops itself ([embeddedReconnects]).
+// node whose own broker has stopped stops itself ([embeddedReconnects]) — and
+// they are made to THIS server alone, ignoring the peers a cluster member
+// advertises, or a reconnect lands on a peer and never runs out. That half is
+// asserted on the option here, on both dials, and as behaviour against a real
+// cluster in jetstreamtest, which is where a cluster may be formed.
 //
 // Mutation: drop the budget from either dial in connect and its rows go red;
 // drop the reconnect options and the solo rows do (nats's own sixty attempts
-// two seconds apart happen to span exactly the clustered budget).
+// two seconds apart happen to span exactly the clustered budget); drop
+// IgnoreDiscoveredServers and every row does.
 func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) {
 	t.Parallel()
 	inProcess, err := startEmbedded(t.Context(), Config{})
@@ -183,7 +188,14 @@ func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) 
 			}
 			got := nc.Opts.Timeout
 			reconnects, wait := nc.Opts.MaxReconnect, nc.Opts.ReconnectWait
+			ownOnly := nc.Opts.IgnoreDiscoveredServers
 			nc.Close()
+			if !ownOnly {
+				t.Errorf("%s, clustered=%v: the connection takes the peers a "+
+					"member advertises into its reconnect pool, so a reconnect "+
+					"lands on a peer and a node whose own member stopped runs on "+
+					"without it", c.name, clustered)
+			}
 			if want := acceptBudget(clustered); got != want {
 				t.Errorf("%s, clustered=%v: the handshake budget is %v, want "+
 					"the accept budget %v — nats's own default is %v, a figure "+
