@@ -41,7 +41,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import { fmtDateTime, fmtDuration, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useClockReading, useNow } from "~/lib/clock.ts";
 import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -106,7 +106,7 @@ function scopeLabel(row: { scope_name?: string; scope_id: string }): string {
  * led with one and a rail that led with the other would make a reader
  * re-derive the schedule every time it changed frame.
  */
-function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
+function scheduleFacts(row: ScheduleRow): Fact[] {
   const said = describeCron(row.cron);
   return [
     {
@@ -131,7 +131,9 @@ function scheduleFacts(row: ScheduleRow, now: number): Fact[] {
       // merely idle — the row says so in its own `problem` field and this is
       // the only place a reader sees it.
       value: row.next_run ? (
-        <span title={fmtDateTime(row.next_run)}>{inTime(row.next_run, now)}</span>
+        <span title={fmtDateTime(row.next_run)}>
+          <ClockText read={(now) => inTime(row.next_run, now)} />
+        </span>
       ) : row.problem ? (
         <Tag variant="danger" title={row.problem}>
           {row.problem}
@@ -287,11 +289,12 @@ const PEEK_RUNS = 3;
  * expression is worked out in, and the screen around it needs an org, a
  * roster and three queries before this panel draws at all.
  */
-export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; count: number }) {
+export function NextFires({ row, count }: { row: ScheduleRow; count: number }) {
   // ANCHORED TO THE MINUTE, not to the ticking clock: the list changes when a
   // fire passes, and recomputing it every second would rebuild the panel
-  // sixty times for an answer that moves once.
-  const minute = Math.floor(now / 60_000);
+  // sixty times for an answer that moves once. READ as the minute, so the
+  // panel renders when the minute turns and the page around it never does.
+  const minute = useClockReading((now) => Math.floor(now / 60_000));
   // IN THE ROW'S OWN ZONE, which `nextFires` requires and refuses to default —
   // the engine resolves the row's timezone and evaluates the expression there,
   // so a list worked out in UTC was wrong by the zone's STANDING offset on
@@ -321,7 +324,9 @@ export function NextFires({ row, now, count }: { row: ScheduleRow; now: number; 
           <li key={at.toISOString()} className="row gap-2">
             <span className="mono t-caption">{fmtDateTime(at.toISOString())}</span>
             <span className="spacer" />
-            <span className="t-caption">{inTime(at.toISOString(), now)}</span>
+            <span className="t-caption">
+              <ClockText read={(now) => inTime(at.toISOString(), now)} />
+            </span>
           </li>
         ))}
       </ol>
@@ -824,9 +829,9 @@ function OneSchedule({
    */
   refusal: QueryResult<unknown>["refusal"];
 }) {
-  // ONE SCHEDULE'S CLOCK, for its facts and the fires it is about to make:
-  // the page is one object, so the second reaches only what draws it.
-  const now = useNow();
+  // NO CLOCK HERE. The page is one schedule over a grid of every fire it has
+  // made, and holding the second for its "in 4m" drew that grid once a second;
+  // the Next fact and the fires panel read the clock themselves.
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
   const org = useOrg();
   // WHO A HANDLE IS — see the same lookup on the screen this page came from.
@@ -858,14 +863,14 @@ function OneSchedule({
         // DOES. "No longer declared" is a statement about the company
         // configuration, and a read still in flight has not seen one.
         status={known ? scheduleStatus(row) : undefined}
-        facts={row ? scheduleFacts(row, now) : undefined}
+        facts={row ? scheduleFacts(row) : undefined}
       />
       <PageNote>
         {row ? row.task : known ? UNDECLARED_HINT : "One schedule, and every fire it has left."}
       </PageNote>
 
       {row && <ScheduleDefinition row={row} />}
-      {row && <NextFires row={row} now={now} count={UPCOMING_FIRES} />}
+      {row && <NextFires row={row} count={UPCOMING_FIRES} />}
 
       <QueryState
         error={error}
@@ -969,7 +974,6 @@ function OneSchedule({
  * with neither a definition nor a fire is "no such schedule".
  */
 export function SchedulePeek({ scope }: { scope: string }) {
-  const now = useNow();
   const org = useOrg();
   // WHO A HANDLE IS. A schedule's scope and every fire's target are handles,
   // and a handle is an address rather than a label: drawn bare, this grid put
@@ -1009,7 +1013,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
         // real fires.
         title={name || scope}
         status={answered ? scheduleStatus(row) : undefined}
-        facts={row ? scheduleFacts(row, now) : undefined}
+        facts={row ? scheduleFacts(row) : undefined}
       />
       <div className="col gap-3">
         {loading && !answered && <Skeleton variant="text" rows={6} label="Loading the schedule" />}
@@ -1034,7 +1038,7 @@ export function SchedulePeek({ scope }: { scope: string }) {
               {!row && runs.length > 0 && <p className="t-caption">{UNDECLARED_HINT}</p>}
 
               {row && <ScheduleDefinition row={row} />}
-              {row && <NextFires row={row} now={now} count={PEEK_FIRES} />}
+              {row && <NextFires row={row} count={PEEK_FIRES} />}
 
               <Card padding="none">
                 <Card.Header

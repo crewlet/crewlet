@@ -84,11 +84,12 @@ import {
   useSandboxes,
   useTokens,
 } from "~/lib/store-hooks.ts";
-import { attentionQueue, WATCHED, type Attention } from "~/lib/attention.ts";
+import { attentionQueue, WATCHED, type Attention, type AttentionInput } from "~/lib/attention.ts";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { runState } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useClockReading } from "~/lib/clock.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import type {
   AgentRow,
   Rollup,
@@ -127,9 +128,34 @@ function isScope(value: string): value is Scope {
 type Selected =
   { band: "alarm"; item: Attention } | { band: "notice"; item: WorkInboxNotice } | null;
 
+/**
+ * The engine's conditions as of the clock, re-rendering the screen when the
+ * QUEUE changes rather than when a second passes.
+ *
+ * THE QUEUE READS THE CLOCK — a live call goes stale at two minutes and
+ * stalled at ten, and a parked run counts down its pause window in minutes —
+ * so this screen held the second for it, and drew itself whole once a second:
+ * the pulse strip, both bands and every notice row, to change nothing on all
+ * but the handful of ticks a threshold is crossed on.
+ *
+ * SO THE QUEUE IS THE READING. It is worked out on every tick against the
+ * shared instant, which is a loop over the seats and the runs, and compared
+ * BY VALUE: its serialisation is the primitive `useClockReading` compares, so
+ * a tick that changes no item renders nothing and the tick that crosses a
+ * threshold renders exactly once. Every field of an item is plain data — a
+ * string, a list of path segments, a record of query parameters — so the
+ * serialisation is the queue, and parsing it back is the queue the tick
+ * produced. Comparing anything narrower (the staleness words, the countdown)
+ * would be a second copy of which fields the clock reaches, and the copy
+ * would drift the day a condition starts reading it somewhere else.
+ */
+function useAttention(input: Omit<AttentionInput, "now">): Attention[] {
+  const reading = useClockReading((now) => JSON.stringify(attentionQueue({ ...input, now })));
+  return useMemo(() => JSON.parse(reading) as Attention[], [reading]);
+}
+
 export function Inbox() {
   const viewer = useViewer();
-  const now = useNow();
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const budget = useOrgBudget();
@@ -195,20 +221,15 @@ export function Inbox() {
   // THE ENGINE'S OWN CONDITIONS. An alarm the engine raised is a claim on a
   // person exactly as a notice is, and it used to live in a popover behind a
   // pill in the sidebar's foot.
-  const attention = useMemo(
-    () =>
-      attentionQueue({
-        agents,
-        sandboxes,
-        runs: runs?.runs ?? [],
-        budget,
-        engine: engine ?? null,
-        connected,
-        authRejected,
-        now,
-      }),
-    [agents, sandboxes, runs, budget, engine, connected, authRejected, now],
-  );
+  const attention = useAttention({
+    agents,
+    sandboxes,
+    runs: runs?.runs ?? [],
+    budget,
+    engine: engine ?? null,
+    connected,
+    authRejected,
+  });
 
   // EVERY REASON THAT IS ACTUALLY ON THE PAGE, so the filter offers what the
   // person has rather than the whole vocabulary of eighteen.
@@ -300,7 +321,6 @@ export function Inbox() {
               <AttentionRow
                 key={item.id}
                 item={item}
-                now={now}
                 selected={open === item.id}
                 onOpen={() => setOpen(item.id)}
               />
@@ -383,7 +403,6 @@ export function Inbox() {
                   <NoticeRow
                     key={notice.record_id}
                     notice={notice}
-                    now={now}
                     selected={open === notice.record_id}
                     onOpen={() => setOpen(notice.record_id)}
                   />
@@ -407,7 +426,7 @@ export function Inbox() {
             first click reflows the list under the pointer, so the row a reader
             clicked is no longer the row they are looking at. */}
         <aside className="inbox-detail" aria-label="The selected row">
-          <Detail selected={selected} viewer={viewer.name} now={now} />
+          <Detail selected={selected} viewer={viewer.name} />
         </aside>
       </div>
     </>
@@ -571,15 +590,25 @@ function Band({
   );
 }
 
+/**
+ * A row's "4m ago", reading the clock itself so nothing above it has to: the
+ * row renders when its words change, and the list it sits in does not.
+ */
+function When({ at }: { at: string }) {
+  return (
+    <span className="t-caption">
+      <ClockText read={(now) => relTime(at, now)} />
+    </span>
+  );
+}
+
 /** One engine condition. */
 function AttentionRow({
   item,
-  now,
   selected,
   onOpen,
 }: {
   item: Attention;
-  now: number;
   selected: boolean;
   onOpen: () => void;
 }) {
@@ -598,7 +627,7 @@ function AttentionRow({
         <span className="t-caption truncate">{item.detail}</span>
       </span>
       {item.who && <Tag appearance="outline">{item.who}</Tag>}
-      {item.at && <span className="t-caption">{relTime(item.at, now)}</span>}
+      {item.at && <When at={item.at} />}
     </button>
   );
 }
@@ -606,12 +635,10 @@ function AttentionRow({
 /** One notice: the reason first, then what changed. */
 function NoticeRow({
   notice,
-  now,
   selected,
   onOpen,
 }: {
   notice: WorkInboxNotice;
-  now: number;
   selected: boolean;
   onOpen: () => void;
 }) {
@@ -649,13 +676,13 @@ function NoticeRow({
           {plainText(notice.excerpt ?? "") || notice.kind.replace(/_/g, " ")}
         </span>
       </span>
-      {notice.at && <span className="t-caption">{relTime(notice.at, now)}</span>}
+      {notice.at && <When at={notice.at} />}
     </button>
   );
 }
 
 /** The right-hand pane: one row, in full. */
-function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string; now: number }) {
+function Detail({ selected, viewer }: { selected: Selected; viewer?: string }) {
   if (!selected) {
     return (
       <EmptyState
@@ -727,7 +754,7 @@ function Detail({ selected, viewer, now }: { selected: Selected; viewer?: string
       )}
       <p className="t-caption">
         {notice.actor ? `${notice.actor} · ` : ""}
-        {fmtDateTime(notice.at)} · {relTime(notice.at, now)}
+        {fmtDateTime(notice.at)} · <ClockText read={(now) => relTime(notice.at, now)} />
       </p>
       {/* THE CALL THAT WOULD MARK IT, rather than a control that pretends to.
           This screen only reads — every write here is attributed to somebody,

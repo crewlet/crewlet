@@ -10,11 +10,15 @@
  * engine already computed, so it is the only place that can be wrong this way.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { Profiler } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { NextFires } from "./Schedules.tsx";
+import { NextFires, SchedulePeek } from "./Schedules.tsx";
+import { Router } from "~/app/router.tsx";
 import { setZone } from "~/lib/prefs.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 
 beforeEach(() => {
@@ -22,10 +26,15 @@ beforeEach(() => {
   // different question from the one under test. Pinned so the assertions are
   // about the schedule's zone alone.
   setZone("UTC");
+  // THE CLOCK THE PANEL READS, faked rather than handed in: the panel reads
+  // the shared clock itself, so the instant under test is the system's.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(NOW);
 });
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   setZone("");
 });
 
@@ -59,7 +68,7 @@ function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
 // ever, on a screen whose header carries the engine's own answer right above
 // it.
 test("the fires are worked out in the schedule's zone, not in UTC", () => {
-  render(<NextFires row={row()} now={NOW} count={3} />);
+  render(<NextFires row={row()} count={3} />);
   expect(screen.getAllByText(/00:00:00/).length).toBe(3);
   expect(screen.queryByText(/09:00:00/)).toBeNull();
   expect(screen.getByText(/evaluated in Asia\/Tokyo/)).toBeTruthy();
@@ -69,7 +78,67 @@ test("the fires are worked out in the schedule's zone, not in UTC", () => {
 // `nextFires` refuses to default one itself, so the default is stated here and
 // stated in the subtitle, rather than yielding no fires at all.
 test("a row naming no zone is worked out in UTC and says so", () => {
-  render(<NextFires row={row({ timezone: "" })} now={NOW} count={3} />);
+  render(<NextFires row={row({ timezone: "" })} count={3} />);
   expect(screen.getAllByText(/09:00:00/).length).toBe(3);
   expect(screen.getByText(/evaluated in UTC/)).toBeTruthy();
+});
+
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+// ONE SCHEDULE IS NOT DRAWN ONCE A SECOND.
+//
+// Its page and its peek held the one-second clock for the "in 23h" of the Next
+// fact and the fires panel, and drew the whole object — the header, the
+// definition, the panel and every fire under it — on each tick to change words
+// that move once an hour. Those read the clock themselves now, so ten seconds
+// in which no word turns over commit nothing, and the words are still the
+// clock's.
+test("one schedule's peek draws nothing on a tick", async () => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  const store = new Store();
+  store.applyHealth({ status: "healthy" });
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    if (what === "schedules") return Promise.resolve({ schedules: [row()] });
+    if (what === "schedule_runs") return Promise.resolve({ runs: [] });
+    return Promise.resolve({});
+  };
+  let commits = 0;
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Profiler
+          id="peek"
+          onRender={() => {
+            commits += 1;
+          }}
+        >
+          <SchedulePeek scope={`role/${row().scope_id}/standup`} />
+        </Profiler>
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  // 00:30Z AGAINST A FIRE AT 00:00Z TOMORROW, which the Next fact and the
+  // panel both read as twenty-three hours off.
+  expect(screen.getAllByText("in 23h").length).toBeGreaterThan(0);
+
+  const settled = commits;
+  for (let i = 0; i < 10; i++) {
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+  }
+  expect(commits).toBe(settled);
 });

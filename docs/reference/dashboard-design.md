@@ -3555,7 +3555,13 @@ rendered idle from the first phase to the last.
   all once the cells read the clock themselves. A screen holds `useNow` only
   for what is genuinely about the second — a live strip, a countdown — and
   where one component on it is, that component reads it rather than the
-  screen (the schedules' hour-ahead tile, a parked run's hold).
+  screen (the schedules' hour-ahead tile, a parked run's hold). A value a
+  screen DERIVES from the clock is a reading too, compared by value: the
+  inbox's attention queue (a round goes stale at two minutes, a parked run
+  counts down its pause window) is worked out on every tick and draws the
+  screen only on the tick an item changes — it held the second, and drew the
+  pulse strip, both bands and every notice once a second, 18–44 ms a tick
+  for fifty notices.
 
 ### The components come from the design system
 

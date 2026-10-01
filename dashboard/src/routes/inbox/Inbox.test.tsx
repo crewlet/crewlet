@@ -18,6 +18,7 @@
  *     the others without hunting for a clear button somewhere else.
  */
 
+import { Profiler } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
@@ -44,6 +45,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -73,7 +75,7 @@ function notice(reason: string, n: number) {
  * well-formed answer, because a screen that has to be fed eleven fixtures to
  * render at all is a screen no case will keep up to date.
  */
-function mount(answers: Record<string, unknown> = {}) {
+function mount(answers: Record<string, unknown> = {}, onCommit: () => void = () => {}) {
   const store = new Store();
   // CONNECTED, because an inert socket is a condition in its own right: the
   // attention queue raises "the dashboard is not connected" and band 1 is then
@@ -122,7 +124,9 @@ function mount(answers: Record<string, unknown> = {}) {
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <Inbox />
+        <Profiler id="inbox" onRender={onCommit}>
+          <Inbox />
+        </Profiler>
       </Router>
     </ClientContext.Provider>,
   );
@@ -462,4 +466,107 @@ test("the quiet band names every subject the engine's queue watches", async () =
   for (const phrase of Object.values(SUBJECTS)) {
     expect(quiet?.textContent, phrase).toContain(phrase);
   }
+});
+
+/** A seat on one round, last heard from `updated`. */
+function onOneRound(updated: string) {
+  return {
+    id: "a",
+    agent_id: "id-a",
+    role: "Dev A",
+    handle: "dev-a",
+    kind: "agent",
+    live_call: {
+      turn_id: "t1",
+      phase: "execute",
+      iteration: 1,
+      model: "",
+      trigger: null,
+      prompt: "",
+      prompt_messages: null,
+      response: "",
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      tool_executions: null,
+      round_num: 3,
+      rounds: 3,
+      in_progress: true,
+      updated_at: updated,
+    },
+  };
+}
+
+/** Seconds of the shared clock, one tick at a time, as the browser runs it. */
+function tick(times: number) {
+  for (let i = 0; i < times; i++) {
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+  }
+}
+
+// THE LANDING SCREEN IS NOT DRAWN ONCE A SECOND.
+//
+// It held the one-second clock for the attention queue, and handed it to every
+// notice row for its "5m ago": a tick drew the pulse strip, both bands and
+// every row again, on the screen every person opens first and leaves open.
+// The queue is read as a value now and each row reads its own words, so ten
+// seconds in which nothing crosses a threshold commit nothing at all.
+test("a tick of the clock draws nothing on the inbox", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  const now = Date.parse("2031-04-16T12:00:00Z");
+  vi.setSystemTime(now);
+  let commits = 0;
+  const { store } = mount(
+    {
+      work_inbox: {
+        handle: "ada",
+        // FIVE MINUTES AGO AND MORE, so ten seconds cannot change a row's
+        // words: a row whose "4m ago" turned over would commit honestly, and
+        // this case is about the ones that did not.
+        notices: [notice("assignee", 5), notice("watcher", 6)],
+        primary_reasons: ["assignee"],
+        unread: 2,
+        primary: 1,
+      },
+    },
+    () => {
+      commits += 1;
+    },
+  );
+  // A LIVE ROUND HEARD FROM JUST NOW, so the queue has a condition that reads
+  // the clock on every tick and finds nothing to raise.
+  act(() => {
+    store.applySeats([onOneRound(new Date(now - 1_000).toISOString())]);
+  });
+  await settle();
+  expect(screen.getByText("something happened, assignee 5")).toBeTruthy();
+  expect(screen.getByText("5m ago")).toBeTruthy();
+
+  const settled = commits;
+  tick(10);
+  expect(commits).toBe(settled);
+});
+
+// AND THE QUEUE STILL MOVES WITH THE CLOCK. A round goes stale at two minutes
+// whether or not anything else on the screen changed, so the tick that crosses
+// the threshold is the one that raises the row — not the next poll, and not
+// never, which is what a queue computed once from its inputs would do.
+test("a round that stops moving is raised on the tick that crosses two minutes", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  const now = Date.parse("2031-04-16T12:00:00Z");
+  vi.setSystemTime(now);
+  const { store } = mount();
+  act(() => {
+    store.applySeats([onOneRound(new Date(now - 115_000).toISOString())]);
+  });
+  await settle();
+  expect(screen.queryByText(/has been on one round/)).toBeNull();
+
+  tick(4);
+  expect(screen.queryByText(/has been on one round/)).toBeNull();
+
+  tick(1);
+  expect(screen.getByText("Dev A has been on one round for over 2 minutes")).toBeTruthy();
 });
