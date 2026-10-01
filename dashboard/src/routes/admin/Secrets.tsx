@@ -289,9 +289,19 @@ function useCredentials(enabled = true): Credentials {
     reread.after(waits.length > 0 ? Math.min(...waits) : null, () => void reload());
   }, [load, loadReferences, reread]);
 
-  // A PEEK CLOSED asks nothing more, whatever an answer armed while it was open.
+  // A PEEK CLOSED asks nothing more: not what an answer armed while it was
+  // open, and not what an answer still IN FLIGHT would arm when it lands. So
+  // closing supersedes the read as a newer one would — the generation moves,
+  // and an answer from before it writes nothing and arms nothing. Cancelling
+  // the armed timer alone left the second half open: a `503` landing after the
+  // rail closed armed its re-read, which was refused and armed the next, for
+  // as long as the node refused, with nothing on screen to read into. Nothing
+  // is waited on any more either, so nothing is loading.
   useEffect(() => {
-    if (!enabled) reread.cancel();
+    if (enabled) return;
+    generation.current++;
+    reread.cancel();
+    setLoading(false);
   }, [enabled, reread]);
 
   // A SIGN-IN FROM THIS SCREEN'S REFUSAL is a screen of its own that comes

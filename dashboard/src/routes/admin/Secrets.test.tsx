@@ -17,7 +17,7 @@
 
 import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { Secrets } from "./Secrets.tsx";
+import { CredentialPeek, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
 
@@ -246,6 +246,54 @@ test("a 503 with no Retry-After says the node refused, and is not read again", a
       await vi.advanceTimersByTimeAsync(120_000);
     });
     expect(listReads(spy)).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+/**
+ * A CLOSED PEEK ASKS NOTHING MORE, an answer still in flight when it closed
+ * included.
+ *
+ * The rail's read is armed by its answer: a `503` that lands says when to read
+ * again. Closing the rail cancelled what was already armed, but an answer that
+ * landed AFTER it closed still armed its re-read — and that re-read, refused
+ * again, armed the next — so a rail nobody had open went on reading `/secrets`
+ * every few seconds for as long as the node refused, rendering into nothing.
+ */
+test("a peek closed while its read is in flight is not read again", async () => {
+  vi.useFakeTimers();
+  try {
+    let reads = 0;
+    Object.defineProperty(globalThis, "fetch", {
+      writable: true,
+      value: vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(String(input), "http://engine.test").pathname;
+        if (path !== "/secrets") return ok(references);
+        reads++;
+        // ANSWERED A SECOND LATER, by which time the rail has closed.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        return new Response(JSON.stringify({ error: "identity_unavailable" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Retry-After": "2" },
+        });
+      }),
+    });
+    const view = render(<CredentialPeek name="GITHUB_TOKEN" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(reads).toBe(1);
+
+    view.rerender(
+      <Router>
+        <CredentialPeek name="" />
+      </Router>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(reads).toBe(1);
   } finally {
     vi.useRealTimers();
   }
