@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -785,9 +787,9 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndServes(t *testing.T) {
 	if !slices.Equal(scope.served, []statelog.PartitionID{served}) {
 		t.Errorf("the loop takes %v, want the one partition this node serves %v", scope.served, served)
 	}
-	if !slices.Equal(scope.unknown, []statelog.PartitionID{unknown}) {
+	if want := []holdingUnknown{{partition: unknown, err: stale}}; !slices.Equal(scope.unknown, want) {
 		t.Errorf("the loop names %v unknown, want the one whose holding could not be "+
-			"told %v", scope.unknown, unknown)
+			"told, with why: %v", scope.unknown, want)
 	}
 	if !scope.unsettled {
 		t.Error("a pass with a partition joining and one unknown is settled: the loop " +
@@ -811,6 +813,69 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndServes(t *testing.T) {
 	}
 }
 
+// AN UNKNOWN HOLDING IS SAID WHEN IT BEGINS AND WHEN IT ENDS, NOT ON EVERY PASS.
+//
+// The loop asks again every thirty seconds while a partition's holding is
+// withheld, and a stale estate view withholds every partition at once: a
+// warning per pass was a line per held partition every thirty seconds for the
+// whole outage. So two passes that cannot tell about the same partition warn
+// once, the pass that can again says so once at info — whether it serves it or
+// not — a pass after that says nothing, and the partition withheld again later
+// is a new warning.
+func TestAnUnknownHoldingIsSaidWhenItChangesNotEveryPass(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 3}
+	q := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 5}
+	stale := errors.New("the estate view is stale")
+	both := snapshotScope{unknown: []holdingUnknown{{p, stale}, {q, stale}}, unsettled: true}
+	recovered := snapshotScope{served: []statelog.PartitionID{p}, unsettled: true}
+
+	lines := func() []map[string]any {
+		var got []map[string]any
+		for line := range strings.Lines(out.String()) {
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				t.Fatalf("a log line that is not JSON: %q", line)
+			}
+			got = append(got, rec)
+		}
+		out.Reset()
+		return got
+	}
+	said := func(pass string, want ...string) {
+		t.Helper()
+		var got []string
+		for _, rec := range lines() {
+			got = append(got, fmt.Sprintf("%s %s %s", rec["level"], rec["msg"], rec["partition"]))
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s said %q, want %q", pass, got, want)
+		}
+	}
+
+	var was map[statelog.PartitionID]struct{}
+	was = reportHolding(t.Context(), logger, was, both)
+	said("the first pass that cannot tell",
+		"WARN statelog_snapshot_holding_unknown tracker.003",
+		"WARN statelog_snapshot_holding_unknown tracker.005")
+	for range 3 {
+		was = reportHolding(t.Context(), logger, was, both)
+	}
+	said("three more passes that cannot tell")
+	was = reportHolding(t.Context(), logger, was, recovered)
+	said("the pass that can tell again",
+		"INFO statelog_snapshot_holding_known tracker.003",
+		"INFO statelog_snapshot_holding_known tracker.005")
+	was = reportHolding(t.Context(), logger, was, recovered)
+	said("a settled pass after it")
+	reportHolding(t.Context(), logger, was, both)
+	said("the holding withheld again",
+		"WARN statelog_snapshot_holding_unknown tracker.003",
+		"WARN statelog_snapshot_holding_unknown tracker.005")
+}
+
 // partitionAnswers is a holding that answers each partition as it is told to,
 // and a partition it was told nothing of as not served.
 type partitionAnswers map[statelog.PartitionID]struct {
@@ -832,7 +897,8 @@ func TestAPartitionOfUnknownHoldingKeepsItsReport(t *testing.T) {
 	p := statelog.PartitionID{Space: statelog.SpaceTracker}
 	s := &stateLog{}
 	s.holdSnapshot(p, snapshotHeld{Have: true})
-	s.keepSnapshotsOf(snapshotScope{unknown: []statelog.PartitionID{p}, unsettled: true})
+	s.keepSnapshotsOf(snapshotScope{unknown: []holdingUnknown{{partition: p, err: coord.ErrUnavailable}},
+		unsettled: true})
 	if _, held := s.snapshotOf(p); !held {
 		t.Fatal("a partition whose holding is unknown for a pass lost its report")
 	}

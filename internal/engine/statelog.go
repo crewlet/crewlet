@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -718,7 +720,7 @@ func (s *stateLog) keepSnapshotsOf(scope snapshotScope) {
 	}
 	next := heldSnapshots{}
 	for p, h := range *held {
-		if slices.Contains(scope.served, p) || slices.Contains(scope.unknown, p) {
+		if slices.Contains(scope.served, p) || scope.isUnknown(p) {
 			next[p] = h
 		}
 	}
@@ -3579,8 +3581,9 @@ func (e *Engine) snapshotterOf(s *stateLog, p statelog.PartitionID, dir string,
 type snapshotScope struct {
 	served []statelog.PartitionID
 
-	// unknown is every partition whose holding could not be told this pass.
-	unknown []statelog.PartitionID
+	// unknown is every partition whose holding could not be told this pass,
+	// in the layout's order, each with why.
+	unknown []holdingUnknown
 
 	// unsettled reports a partition this node runs a log of and does not
 	// serve, or cannot tell about: one it is joining or leaving, or whose
@@ -3589,10 +3592,24 @@ type snapshotScope struct {
 	unsettled bool
 }
 
+// holdingUnknown is a partition whose holding one pass could not tell, and the
+// holding's answer.
+type holdingUnknown struct {
+	partition statelog.PartitionID
+	err       error
+}
+
+// isUnknown reports whether p's holding could not be told this pass.
+func (s snapshotScope) isUnknown(p statelog.PartitionID) bool {
+	return slices.ContainsFunc(s.unknown, func(u holdingUnknown) bool { return u.partition == p })
+}
+
 // servedPartitions is what this node runs a log of and whether it SERVES each —
 // the partitions its snapshot loop takes artefacts of are the served ones. A
-// partition whose holding cannot be told is not taken and said: a copy nobody
-// can vouch this node serves is not one to offer a joiner.
+// partition whose holding cannot be told is not taken, and named with why: a
+// copy nobody can vouch this node serves is not one to offer a joiner. It says
+// nothing itself — the loop says what CHANGED ([reportHolding]), since it asks
+// again every [snapshotSkipRetry] for as long as the answer is withheld.
 func (s *stateLog) servedPartitions() snapshotScope {
 	var out snapshotScope
 	var seen []statelog.PartitionID
@@ -3605,11 +3622,7 @@ func (s *stateLog) servedPartitions() snapshotScope {
 		serving, err := s.holding.Serving(p)
 		switch {
 		case err != nil:
-			log.WarnContext(s.run, "statelog_snapshot_holding_unknown", "partition", p.String(),
-				"error", err.Error(), "detail", "whether this node serves the partition "+
-					"is unknown, so no artefact of it is taken this round; the loop "+
-					"looks again soon")
-			out.unknown = append(out.unknown, p)
+			out.unknown = append(out.unknown, holdingUnknown{partition: p, err: err})
 			out.unsettled = true
 		case serving:
 			out.served = append(out.served, p)
@@ -3723,10 +3736,16 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 	// nothing; the register is still stamped, so the fleet screen and the
 	// trim see every tick whether or not the log does.
 	reported := map[statelog.PartitionID]statelog.SkipReason{}
+	// AND THE PARTITIONS WHOSE HOLDING THE LAST PASS COULD NOT TELL, by the
+	// same rule: an unknown holding keeps the loop asking every retry, and
+	// said on every pass it was a warning per partition per thirty seconds
+	// for as long as a coordination outage lasted.
+	var unknown map[statelog.PartitionID]struct{}
 	due := map[statelog.PartitionID]time.Time{}
 	for {
 		scope := plan.served()
 		served := scope.served
+		unknown = reportHolding(ctx, log, unknown, scope)
 		s.keepSnapshotsOf(scope)
 		for p := range due {
 			if !slices.Contains(served, p) {
@@ -3759,6 +3778,44 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 			clear(due)
 		}
 	}
+}
+
+// reportHolding says what changed about the partitions whose holding the
+// snapshot loop cannot tell, against was — the ones the previous pass could not
+// — and answers the ones this pass could not, for the next.
+//
+// ON THE TRANSITION, NEVER THE STATE: a partition becoming unknown is a warning
+// once, and one known again is said once at info; a pass that finds what the
+// last one found says nothing. The loop asks every [snapshotSkipRetry] while a
+// holding is withheld, and a stale estate view withholds every partition at
+// once — so a warning per pass was one line per held partition every thirty
+// seconds, hundreds at a time, for as long as the outage lasted, burying the
+// one line that said it began.
+func reportHolding(ctx context.Context, logger *slog.Logger, was map[statelog.PartitionID]struct{},
+	scope snapshotScope) map[statelog.PartitionID]struct{} {
+
+	now := make(map[statelog.PartitionID]struct{}, len(scope.unknown))
+	for _, u := range scope.unknown {
+		now[u.partition] = struct{}{}
+		if _, already := was[u.partition]; already {
+			continue
+		}
+		logger.WarnContext(ctx, "statelog_snapshot_holding_unknown",
+			"partition", u.partition.String(), "error", u.err.Error(),
+			"detail", "whether this node serves the partition is unknown, so no "+
+				"artefact of it is taken until it can be told; the loop asks again "+
+				"every "+snapshotSkipRetry.String()+" and says so once it can")
+	}
+	for _, p := range slices.SortedFunc(maps.Keys(was), func(a, b statelog.PartitionID) int {
+		return cmp.Or(cmp.Compare(a.Space, b.Space), cmp.Compare(a.Index, b.Index))
+	}) {
+		if _, still := now[p]; still {
+			continue
+		}
+		logger.InfoContext(ctx, "statelog_snapshot_holding_known",
+			"partition", p.String(), "serving", slices.Contains(scope.served, p))
+	}
+	return now
 }
 
 // snapshotOne takes one artefact of partition p, or records why not, and
