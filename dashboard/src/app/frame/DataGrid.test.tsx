@@ -790,3 +790,40 @@ test("a cursor step scrolls the row it lands on into view, whatever its key", ()
     Element.prototype.scrollIntoView = original;
   }
 });
+
+// ONE ROW MAY STAND IN TWO BANDS. A label board groups by a multi-valued axis —
+// a task with two tags is on both tags' columns — so a grid's key names a row
+// and not a place in the walk: the cursor, Enter and an element id are each
+// about the row WHERE IT STANDS. Asked of the key alone, both copies lit
+// together, two elements carried one id, and `j` from the second copy went
+// back to the first — the cursor could never pass it.
+test("a row standing in two bands is two stops for the cursor, each with its own id", () => {
+  const opened: string[] = [];
+  const shared = { id: "t-1", who: "ceo" };
+  const { container } = render(
+    <Router>
+      <DataGrid<Row>
+        bands={[
+          { key: "infra", label: "infra", rows: [shared, { id: "t-2", who: "cto" }] },
+          { key: "ui", label: "ui", rows: [shared, { id: "t-3", who: "pm" }] },
+        ]}
+        rowKey={(r) => r.id}
+        onRowActivate={(r) => opened.push(r.id)}
+        columns={[{ key: "who", header: "Who", cell: (r) => r.who }]}
+      />
+    </Router>,
+  );
+  const drawn = () => [...container.querySelectorAll(".grid-row")];
+  const lit = () => drawn().flatMap((row, at) => (row.classList.contains("cursor") ? [at] : []));
+  const visited: number[][] = [];
+  for (let i = 0; i < 4; i++) {
+    fireEvent.keyDown(window, { key: "j" });
+    visited.push(lit());
+  }
+  expect(visited).toEqual([[0], [1], [2], [3]]);
+  fireEvent.keyDown(window, { key: "k" });
+  expect(lit()).toEqual([2]);
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(opened).toEqual(["t-1"]);
+  expect(new Set(drawn().map((row) => row.id)).size).toBe(4);
+});

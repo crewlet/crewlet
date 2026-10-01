@@ -737,15 +737,21 @@ and work list suites catch by counting the rows a poll draws.
 the top moves every other row down a place — and a row handed its index, as
 this one was for a `data-row-index` attribute and an element id, was drawn
 again for that alone, every row of the list for the one that arrived. Its id
-is its grid's and its key's (encoded, because an id list is split on
-whitespace and a key is whatever a screen's `rowKey` returns), and a cursor
-step finds the row it scrolls to by that id.
+is its grid's and its SLOT's — the keys of the bands it stands in and its own,
+each encoded, because an id list is split on whitespace and a key is whatever
+a screen's `rowKey` returns — and a cursor step finds the row it scrolls to by
+that id. The bands are part of it because one row may stand in two: a label
+board groups on a multi-valued axis, so a task with two tags is under both,
+and keyed on the row's key alone the two copies carried one id.
 
 **The cursor is a row, not a place.** `j` and `k` land on a row and the grid
-holds that row's key: held as an index, a poll that brought one new row slid
+holds that row's slot: held as an index, a poll that brought one new row slid
 the highlight onto the row above the one the reader had walked to, and Enter
-opened that one. A row that leaves the list takes the cursor with it, and the
-next step goes on from the gap it left — `j` to the row that took its place.
+opened that one. Held as the key alone, a row standing in two bands lit in
+both, and a step from the second copy went on from the first, so the cursor
+could never pass it. A row that leaves the list takes the cursor with it, and
+the next step goes on from the gap it left — `j` to the row that took its
+place.
 
 **An answer that did not change keeps its objects.** A row's memo is on its
 OBJECT, and every answer is parsed afresh off the wire, so a poll that brought

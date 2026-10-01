@@ -371,13 +371,13 @@ export function DataGrid<T>({
   // other render. Parsed afresh it was a new object every render, and the grid
   // sorted its whole answer on every one of them.
   const sort = useMemo(() => parseSort(sortRaw), [sortRaw]);
-  // THE CURSOR IS A ROW, NOT A PLACE: the key of the row `j` and `k` landed on,
-  // and the place it was at then. It was the place alone, and a feed is newest
-  // first — so a poll that brought one new row slid every row under the cursor
-  // down by one, the highlight moved to the row above the one the reader had
-  // walked to, and Enter opened that one. The place is kept for the one step
-  // that finds the row gone.
-  const [cursor, setCursor] = useState<{ key: string; at: number } | null>(null);
+  // THE CURSOR IS A ROW, NOT A PLACE: the slot ([slotOf]) of the row `j` and
+  // `k` landed on, and the place it was at then. It was the place alone, and a
+  // feed is newest first — so a poll that brought one new row slid every row
+  // under the cursor down by one, the highlight moved to the row above the one
+  // the reader had walked to, and Enter opened that one. The place is kept for
+  // the one step that finds the row gone.
+  const [cursor, setCursor] = useState<{ slot: string; at: number } | null>(null);
   // UNIQUE PER MOUNTED GRID, not per `name`. A page and the peek rail over it
   // both render grids at once, and `name` distinguishes the grids on ONE
   // screen — two screens' "recent" grids would mint the same row ids and an
@@ -446,9 +446,17 @@ export function DataGrid<T>({
     // THROUGH THE SUB-BANDS TOO, and in the order they draw: this is the list
     // `j`, `k` and `enter` walk, so a row the grid renders and this misses is a
     // row the cursor steps over — and a row counted here that is not rendered
-    // puts the cursor one place out from every row after it.
-    const walk = (band: GridBand<T>): T[] => (band.bands ? band.bands.flatMap(walk) : band.rows);
-    return ordered.bands ? ordered.bands.flatMap(walk) : ordered.rows;
+    // puts the cursor one place out from every row after it. Each row carries
+    // the bands it stands in, which with its key is its slot ([slotOf]).
+    const out: Stop<T>[] = [];
+    const walk = (band: GridBand<T>, path: string) => {
+      const here = bandPath(path, band.key);
+      if (band.bands) for (const sub of band.bands) walk(sub, here);
+      else for (const row of band.rows) out.push({ row, path: here });
+    };
+    if (ordered.bands) for (const band of ordered.bands) walk(band, "");
+    else for (const row of ordered.rows) out.push({ row, path: "" });
+    return out;
   }, [ordered]);
 
   // `j` and `k` walk a cursor row; `enter` activates it. No selection, because
@@ -463,17 +471,19 @@ export function DataGrid<T>({
   //
   // WHERE THE CURSOR ROW IS NOW, in the walk this render draws: -1 for no
   // cursor, and for a cursor whose row has left the list.
-  const cursorAt = cursor ? flat.findIndex((row) => rowKey(row) === cursor.key) : -1;
+  const cursorAt = cursor
+    ? flat.findIndex((stop) => slotOf(stop.path, rowKey(stop.row)) === cursor.slot)
+    : -1;
   const step = (by: number) => {
     // A ROW THAT LEFT steps from the gap it left: `j` lands on the row that
     // took its place, `k` on the one before it.
     const from = cursorAt >= 0 ? cursorAt : cursor ? cursor.at - (by > 0 ? 1 : 0) : -1;
     const next = Math.max(0, Math.min(flat.length - 1, from + by));
-    const row = flat[next];
-    if (row === undefined) return;
-    const key = rowKey(row);
-    setCursor({ key, at: next });
-    document.getElementById(rowDomId(gridId, key))?.scrollIntoView({ block: "nearest" });
+    const stop = flat[next];
+    if (stop === undefined) return;
+    const slot = slotOf(stop.path, rowKey(stop.row));
+    setCursor({ slot, at: next });
+    document.getElementById(rowDomId(gridId, slot))?.scrollIntoView({ block: "nearest" });
   };
   const canDrive = flat.length > 0;
   useEffect(() => {
@@ -503,8 +513,8 @@ export function DataGrid<T>({
       key: "enter",
       when: () => driving() && cursorAt >= 0 && Boolean(onRowActivate),
       run: (e) => {
-        const row = flat[cursorAt];
-        if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
+        const stop = flat[cursorAt];
+        if (stop && onRowActivate) onRowActivate(stop.row, e as unknown as React.KeyboardEvent);
       },
     },
   ]);
@@ -587,21 +597,22 @@ export function DataGrid<T>({
     );
   }
 
-  function renderRow(row: T): ReactNode {
+  function renderRow(row: T, path: string): ReactNode {
     const key = rowKey(row);
+    const slot = slotOf(path, key);
     // EVERYTHING A ROW IS HANDED IS A VALUE IT DRAWS — see [GridRow] — so a
     // render of this grid that changed nothing about a row draws nothing of it.
     // AND NOTHING IT IS HANDED IS ITS PLACE: a feed is newest first, so one new
     // row at the top moves every other one down a place, and a row handed its
     // index drew again for that alone. Whether the cursor is on it is asked of
-    // its KEY for the same reason — see `cursor`.
+    // its SLOT for the same reason — see `cursor`.
     return (
       <GridRow<T>
         key={key}
         row={row}
         columns={shownColumns}
-        id={rowDomId(gridId, key)}
-        cursor={cursor?.key === key}
+        id={rowDomId(gridId, slot)}
+        cursor={cursor?.slot === slot}
         selected={Boolean(isSelected?.(row))}
         failed={Boolean(isFailed?.(row))}
         href={rowHref?.(row)}
@@ -623,7 +634,7 @@ export function DataGrid<T>({
    * with `.grid-band .grid-band > .grid-band-head` — the nesting IS the fact,
    * and a class spelling it out is a second copy of what the DOM already says.
    */
-  function renderBand(band: GridBand<T>): ReactNode {
+  function renderBand(band: GridBand<T>, path: string): ReactNode {
     // THE LOADED COUNT IS THIS BAND'S OWN ROWS, its sub-bands' included — a
     // band that carries sub-bands carries no rows of its own, so counting
     // `rows` alone reported every twice-grouped band as holding nothing.
@@ -640,7 +651,9 @@ export function DataGrid<T>({
             {band.total != null && band.total !== loaded ? `${loaded} of ${band.total}` : loaded}
           </span>
         </div>
-        {band.bands ? band.bands.map((sub) => renderBand(sub)) : band.rows.map(renderRow)}
+        {band.bands
+          ? band.bands.map((sub) => renderBand(sub, bandPath(path, band.key)))
+          : band.rows.map((row) => renderRow(row, bandPath(path, band.key)))}
         {band.footer && <div className="grid-band-foot">{band.footer}</div>}
       </div>
     );
@@ -720,8 +733,8 @@ export function DataGrid<T>({
 
       <div className="grid-body">
         {ordered.bands
-          ? ordered.bands.map((band) => renderBand(band))
-          : ordered.rows.map(renderRow)}
+          ? ordered.bands.map((band) => renderBand(band, ""))
+          : ordered.rows.map((row) => renderRow(row, ""))}
       </div>
 
       {(footer || onLoadMore || loadedNote) && (
@@ -747,17 +760,47 @@ export function DataGrid<T>({
   );
 }
 
+/** One row of the walk `j` and `k` take, and the bands it stands in ([bandPath]). */
+interface Stop<T> {
+  row: T;
+  path: string;
+}
+
 /**
- * A row's element id: its grid's, and its own KEY rather than its place.
+ * The bands a row stands in, outermost first, each key ENCODED and ended by a
+ * `/` — which encoding never leaves in a key, so no two paths run together.
+ */
+function bandPath(path: string, band: string): string {
+  return `${path}${encodeURIComponent(band)}/`;
+}
+
+/**
+ * A row WHERE IT STANDS: the bands it is in, and its own key, encoded.
  *
- * What the overlay link is named by and what a cursor step scrolls to. Keyed
- * on the row's identity because a place is not one — see `renderRow` — and
+ * NOT THE KEY ALONE, because a grouped answer may put one row in two bands — a
+ * label board groups on a multi-valued axis, so a task with two tags stands
+ * under both — and the cursor, Enter and an element id are each about one of
+ * those, not the row in the abstract. Keyed on the key alone, both copies lit
+ * together, carried one id between them, and a step from the second resumed
+ * from the first, so the cursor could never pass it. A band's key is unique
+ * among its siblings (it is the band's React key), and a row's within its band.
+ *
  * ENCODED because a key is whatever a screen's `rowKey` returns, while an id
  * list (`aria-labelledby`) is split on whitespace: a key with a space in it
  * would name two elements, neither of them this row.
  */
-function rowDomId(gridId: string, key: string): string {
-  return `${gridId}-row-${encodeURIComponent(key)}`;
+function slotOf(path: string, key: string): string {
+  return `${path}${encodeURIComponent(key)}`;
+}
+
+/**
+ * A row's element id: its grid's, and its SLOT ([slotOf]) rather than its
+ * place — what the overlay link is named by and what a cursor step scrolls to.
+ * Keyed on where the row stands because a place in the walk is not that — see
+ * `renderRow`.
+ */
+function rowDomId(gridId: string, slot: string): string {
+  return `${gridId}-row-${slot}`;
 }
 
 interface GridRowProps<T> {
