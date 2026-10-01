@@ -229,6 +229,12 @@ What follows are the prerequisites that legitimately vary by machine.
   or chart it is about: asked by name, it computes the accessible name of
   every candidate in its container, and in jsdom each element of each name
   costs a computed style matched against the whole user-agent stylesheet.
+  Not every suite holds to this: the org builder's suites, and the screens
+  that ran out of time under load (the audit, the retention gesture, a seat's
+  settings, the work list's Display menu, the sign-in form), wait for the
+  work, while more than forty others still poll with `findBy*` and
+  `waitFor`. Those are not a pattern to copy — a suite you write, or a case
+  you change, waits for the work.
 
   **A wait the harness owns ends with its case.** A case that times out is
   failed, not stopped: its function goes on running beside the cases after
