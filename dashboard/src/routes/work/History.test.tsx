@@ -23,6 +23,13 @@ import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkActivityRecord } from "~/protocol/index.ts";
+import {
+  CLAIMANT,
+  CLAIMANT_HREF,
+  DUPLICATE,
+  DUPLICATE_HREF,
+  SHARED_KEY,
+} from "~/test/keyCollision.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -442,4 +449,38 @@ test("an unbound reader's own queue, kept under their login, is addressed to the
   await waitFor(() =>
     expect(container.querySelector(".work-log-what")?.textContent).toContain("your priorities"),
   );
+});
+
+// A DUPLICATE'S HISTORY LEADS TO THE DUPLICATE.
+//
+// A change is drawn under its task's key, and a key two tasks hold opens the
+// one that claimed it first — so every row of the duplicate's history linked
+// to its claimant, and the log is the one place a reader goes to find out what
+// happened to it. The engine says which key opens another task beside the key,
+// and the flagged one's row goes by the task's id.
+test("two tasks under one key each link their own history rows", async () => {
+  serving({
+    work_activity: {
+      records: [
+        record({
+          id: "r2",
+          subject_id: DUPLICATE,
+          subject_key: SHARED_KEY,
+          subject_key_collision: true,
+        }),
+        record({ id: "r1", subject_id: CLAIMANT, subject_key: SHARED_KEY }),
+      ],
+      complete: true,
+    },
+  });
+  const { container } = mount();
+  await waitFor(() => expect(container.querySelectorAll(".work-log-key a").length).toBe(2));
+  const links = [...container.querySelectorAll(".work-log-key a")].map((a) => [
+    a.textContent,
+    a.getAttribute("href"),
+  ]);
+  expect(links).toEqual([
+    [SHARED_KEY, DUPLICATE_HREF],
+    [SHARED_KEY, CLAIMANT_HREF],
+  ]);
 });

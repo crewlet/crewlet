@@ -56,7 +56,7 @@ import { indexOrg, seatResolvers } from "~/lib/seats.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { ClockText } from "~/app/frame/cells.tsx";
 import { pageCount, pageNote, statusLabel, STATUSES, typeName } from "~/lib/work.ts";
-import { describeChange } from "~/lib/work.ts";
+import { describeChange, itemPath, subjectItem } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
 import { ItemsView } from "./ItemsView.tsx";
 import { HistoryView } from "./History.tsx";
@@ -301,7 +301,9 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                 <div className="col gap-1" key={record.id}>
                   <div className="row gap-2">
                     {record.subject_key ? (
-                      <a className="mono t-link" href={href(["work", record.subject_key])}>
+                      // BY ADDRESS — see `HistoryRow`: a duplicate's changes
+                      // carry the key its claimant answers to.
+                      <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
                         {record.subject_key}
                       </a>
                     ) : (

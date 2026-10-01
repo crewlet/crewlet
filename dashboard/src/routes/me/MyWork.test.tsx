@@ -30,6 +30,16 @@ import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { Store, type QueryName, type WorkSummary } from "~/protocol/index.ts";
+import {
+  CLAIMANT,
+  CLAIMANT_HREF,
+  CLAIMANT_TITLE,
+  DUPLICATE,
+  DUPLICATE_HREF,
+  DUPLICATE_TITLE,
+  SHARED_KEY,
+  collidingRows,
+} from "~/test/keyCollision.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
@@ -880,4 +890,62 @@ test("what reached somebody is the Inbox, and is not drawn here", async () => {
   expect(query.mock.calls.map((c) => c[0])).not.toContain("work_inbox");
   // And the way to it is a link rather than a copy.
   expect(screen.getByText("Inbox →")).toBeTruthy();
+});
+
+// TWO TASKS UNDER ONE KEY ARE TWO LINKS ON EVERY TAB.
+//
+// A key two tasks hold opens the one that claimed it first, so a queue, an ask
+// and a checklist item about the other one — linked by the key — all led to its
+// claimant: the duplicate was on somebody's day and could not be opened from
+// it. Each claim carries the flag beside the key it qualifies, and the flagged
+// one goes by its id.
+test("two tasks under one key open as two from every claim", async () => {
+  const [claimant, duplicate] = collidingRows();
+  const ask = (row: WorkSummary, comment: string) => ({
+    ...row,
+    comment,
+    asked_by: "rui",
+    asked_at: "2031-04-16T09:00:00Z",
+    body: "which one?",
+    answer_with: "",
+  });
+  const day = {
+    ...emptyDay,
+    priorities: [claimant, duplicate],
+    watching_recent: [claimant, duplicate],
+    asked_of_me: [ask(claimant, "c1"), ask(duplicate, "c2")],
+    checklist_items: [
+      {
+        task: CLAIMANT,
+        task_key: SHARED_KEY,
+        task_title: CLAIMANT_TITLE,
+        checklist: "l",
+        item: "i1",
+        name: "check one",
+        done: false,
+      },
+      {
+        task: DUPLICATE,
+        task_key: SHARED_KEY,
+        task_key_collision: true,
+        task_title: DUPLICATE_TITLE,
+        checklist: "l",
+        item: "i2",
+        name: "check two",
+        done: false,
+      },
+    ],
+  };
+  const hrefs = () =>
+    [...document.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => h === CLAIMANT_HREF || h === DUPLICATE_HREF);
+  for (const tab of ["priorities", "watching", "asks", "checklist"]) {
+    location.hash = `#/me?tab=${tab}`;
+    serving({ viewer: ada, work_items: noWork, work_my_work: day });
+    mount();
+    await waitFor(() => expect(hrefs().length, tab).toBeGreaterThanOrEqual(2));
+    expect(new Set(hrefs()), tab).toEqual(new Set([CLAIMANT_HREF, DUPLICATE_HREF]));
+    cleanup();
+  }
 });

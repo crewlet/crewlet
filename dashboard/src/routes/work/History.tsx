@@ -66,7 +66,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { ClockText } from "~/app/frame/cells.tsx";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
-import { describeChange, type LabelContext } from "~/lib/work.ts";
+import { describeChange, itemPath, subjectItem, type LabelContext } from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
 import {
   queryFailure,
@@ -501,7 +501,13 @@ function HistoryRow({ record, chrome }: { record: WorkActivityRecord; chrome: La
       </span>
       <span className="work-log-key">
         {record.subject_key ? (
-          <a className="mono t-link" href={href(["work", record.subject_key])}>
+          // THE SUBJECT'S ADDRESS, NOT ITS KEY. A change to a task whose key
+          // another task claimed first is drawn under that shared key, and the
+          // key opens the claimant — so every row of a duplicate's history
+          // led to somebody else's task. `subjectItem` reads the flag the
+          // engine sends beside the key, and the label stays the key a reader
+          // recognises.
+          <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
             {record.subject_key}
           </a>
         ) : (

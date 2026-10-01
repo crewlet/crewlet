@@ -21,6 +21,14 @@ import { WorkGrid } from "./Grid.tsx";
 import { Router } from "~/app/router.tsx";
 import type { RowChrome } from "~/components/work.tsx";
 import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
+import {
+  CLAIMANT,
+  CLAIMANT_TITLE,
+  DUPLICATE,
+  DUPLICATE_TITLE,
+  SHARED_KEY,
+  collidingRows,
+} from "~/test/keyCollision.ts";
 
 afterEach(() => {
   cleanup();
@@ -298,4 +306,25 @@ test("two tasks holding one key are two rows, each keeping its own state", () =>
     expect((document.activeElement as HTMLElement).closest(".grid-row")).toBe(below);
     cleanup();
   }
+});
+
+// AND IN THE TRASH, THE CALL THAT BRINGS ONE BACK NAMES THAT ONE. The copy
+// button carried `restore_work_item` on the row's key, and a key two tasks
+// hold opens the one that claimed it first — so the call copied off the
+// duplicate's row would restore the claimant, which is not in the trash, and
+// leave the task a reader meant where it was.
+test("the restore call for a removed duplicate names it by its id", () => {
+  const [claimant, duplicate] = collidingRows();
+  const removals = new Map([
+    [CLAIMANT, removal({ subject_id: CLAIMANT, subject_key: SHARED_KEY })],
+    [DUPLICATE, removal({ subject_id: DUPLICATE, subject_key: SHARED_KEY })],
+  ]);
+  const { container } = mount("table", [claimant, duplicate], removals);
+  const call = (title: string) =>
+    drawnRows(container)
+      .find((el) => el.textContent?.includes(title))
+      ?.querySelector("button")
+      ?.getAttribute("title");
+  expect(call(DUPLICATE_TITLE)).toBe(`restore_work_item {"item":"${DUPLICATE}"}`);
+  expect(call(CLAIMANT_TITLE)).toBe(`restore_work_item {"item":"${SHARED_KEY}"}`);
 });

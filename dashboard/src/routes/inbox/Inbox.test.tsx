@@ -28,6 +28,13 @@ import { SUBJECTS } from "~/lib/attention.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import {
+  CLAIMANT,
+  CLAIMANT_HREF,
+  DUPLICATE,
+  DUPLICATE_HREF,
+  SHARED_KEY,
+} from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -569,4 +576,49 @@ test("a round that stops moving is raised on the tick that crosses two minutes",
 
   tick(1);
   expect(screen.getByText("Dev A has been on one round for over 2 minutes")).toBeTruthy();
+});
+
+// A NOTICE LEADS TO THE TASK IT IS ABOUT, even under a key another task holds.
+//
+// A notice keeps the key its task held when it was written, and a key two
+// tasks hold opens the one that claimed it first — so a notice about the
+// duplicate sent its reader to the claimant. The engine says beside the stored
+// key when it opens another task, and that notice's link goes by the task's id.
+test("two notices under one key lead to their own two tasks", async () => {
+  mount({
+    work_inbox: {
+      handle: "ada",
+      notices: [
+        {
+          ...notice("assignee", 1),
+          subject_id: DUPLICATE,
+          subject_key: SHARED_KEY,
+          subject_key_collision: true,
+          excerpt: "about the duplicate",
+        },
+        {
+          ...notice("assignee", 2),
+          subject_id: CLAIMANT,
+          subject_key: SHARED_KEY,
+          excerpt: "about the claimant",
+        },
+      ],
+      primary_reasons: ["assignee"],
+      unread: 2,
+      primary: 2,
+    },
+  });
+  await settle();
+  const subjectLink = () =>
+    [...document.querySelectorAll<HTMLAnchorElement>("a.t-link.mono")].find((a) =>
+      a.textContent?.startsWith(SHARED_KEY),
+    );
+
+  fireEvent.click(screen.getByText("about the duplicate").closest("button")!);
+  await settle();
+  expect(subjectLink()?.getAttribute("href")).toBe(DUPLICATE_HREF);
+
+  fireEvent.click(screen.getByText("about the claimant").closest("button")!);
+  await settle();
+  expect(subjectLink()?.getAttribute("href")).toBe(CLAIMANT_HREF);
 });

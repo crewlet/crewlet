@@ -109,7 +109,7 @@ import { indexOrg, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.t
 import { plural, relTime } from "~/lib/format.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { ClockText } from "~/app/frame/cells.tsx";
-import { pageCount, type Scope } from "~/lib/work.ts";
+import { checklistTask, itemPath, pageCount, type Scope } from "~/lib/work.ts";
 import { ItemsView, type ItemsHost } from "~/routes/work/ItemsView.tsx";
 import type {
   WorkAskRow,
@@ -797,7 +797,7 @@ function Priorities({ mine, chrome, they }: { mine: WorkMyWork; chrome: RowChrom
           <RowList
             rows={mine.priorities}
             chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
+            hrefOf={(row) => href(itemPath(row))}
             ordinals
           />
         </div>
@@ -829,7 +829,7 @@ function Block({
     <>
       <p className="t-caption">{hint}</p>
       <div className="work-list">
-        <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+        <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
       </div>
     </>
   );
@@ -869,7 +869,7 @@ export function Asks({
         // THE CAUTION RAIL, the same mark a question wears in a thread.
         <div key={ask.comment} className="comment work-ask">
           <div className="row gap-2 wrap">
-            <a className="mono t-link" href={href(["work", ask.key])}>
+            <a className="mono t-link" href={href(itemPath(ask))}>
               {ask.key}
             </a>
             <span className="truncate">{ask.title}</span>
@@ -913,7 +913,7 @@ export function Checklist({
     <div className="col">
       {rows.map((item) => (
         <div key={`${item.task}:${item.item}`} className={`work-check${item.done ? " done" : ""}`}>
-          <a className="mono t-link" href={href(["work", item.task_key])}>
+          <a className="mono t-link" href={href(itemPath(checklistTask(item)))}>
             {item.task_key}
           </a>
           <span className="work-check-name">{item.name}</span>

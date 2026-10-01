@@ -17,6 +17,13 @@ import { CommandPalette } from "./CommandPalette.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
+import {
+  CLAIMANT_HREF,
+  CLAIMANT_TITLE,
+  DUPLICATE_HREF,
+  DUPLICATE_TITLE,
+  collidingHits,
+} from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -272,5 +279,23 @@ describe("the work scope is a server query, so it has four answers", () => {
       expect.stringContaining("Authentication audit"),
       expect.stringContaining("Authentication rework"),
     ]);
+  });
+
+  // AND THE TWO OPTIONS GO TO TWO TASKS. Drawn once each, they still both went
+  // to `#/work/ENG-7` — and a key two tasks hold opens the one that claimed it
+  // first, so choosing the other one opened its neighbour. The flagged hit goes
+  // by its id.
+  test("two hits holding one key open two different tasks", async () => {
+    const { type } = open(
+      answering(() => Promise.resolve({ hits: collidingHits(), available: true })),
+    );
+    type("#claim");
+    const option = async (title: string) =>
+      (await screen.findAllByRole("option")).find((el) => el.textContent?.includes(title))!;
+
+    fireEvent.click(await option(DUPLICATE_TITLE));
+    await waitFor(() => expect(location.hash).toBe(DUPLICATE_HREF));
+    fireEvent.click(await option(CLAIMANT_TITLE));
+    await waitFor(() => expect(location.hash).toBe(CLAIMANT_HREF));
   });
 });

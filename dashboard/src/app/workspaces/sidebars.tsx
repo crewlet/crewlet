@@ -40,6 +40,7 @@ import {
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useRecents } from "~/lib/recents.ts";
+import { projectPath } from "~/lib/work.ts";
 
 /** The fixed rows of a workspace, from the one destinations table. */
 function fixed(workspace: Parameters<typeof destinationsOf>[0]): SidebarRow[] {
@@ -66,7 +67,7 @@ export function useWorkSidebar(): SidebarSection[] {
     const projectRows: SidebarRow[] = (projects.data?.projects ?? []).map((p) => ({
       key: p.key,
       label: p.name || p.key,
-      path: ["work", p.key],
+      path: projectPath(p.key),
       sub: p.lead?.handle || undefined,
       // THE MAINTAINED COLUMN, not a count over the page: the engine keeps
       // open/done/closed on the project row itself precisely so a sidebar

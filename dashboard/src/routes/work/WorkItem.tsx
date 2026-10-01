@@ -75,10 +75,15 @@ import { reasonAbout } from "~/lib/reasons.ts";
 import {
   changeMark,
   describeHistory,
+  detailItem,
   fieldValueState,
   fieldValueText,
   fmtMinutes,
+  itemAddress,
+  itemPath,
   type LabelContext,
+  linkedItem,
+  projectPath,
   typeIcon,
   typeName,
 } from "~/lib/work.ts";
@@ -148,7 +153,9 @@ function linkHeading(link: WorkLink): string {
  */
 export function itemFlags(detail: WorkItemDetail): ReactNode {
   const item = detail.task;
-  if (!detail.blocked && !item.archived && !item.removed) return undefined;
+  if (!detail.blocked && !item.archived && !item.removed && !detail.key_collision) {
+    return undefined;
+  }
   return (
     <span className="row gap-1">
       {/* IN THE TRASH, AND SAID FIRST. The detail read does not filter removed
@@ -164,6 +171,21 @@ export function itemFlags(detail: WorkItemDetail): ReactNode {
         </Tag>
       )}
       {item.archived && <Tag appearance="outline">Archived</Tag>}
+      {/* A KEY THIS TASK SHARES, said where its key is shown. Another task
+          claimed it first and the key opens that one, so this task's own page
+          is addressed by its id — and the header, the board and every list
+          draw the same key on both. Without the word a reader holding two
+          tabs headed `ENG-7` has no way to tell which is which, or why the
+          address bar of one of them is a uuid. */}
+      {detail.key_collision && (
+        <Tag
+          variant="warning"
+          appearance="outline"
+          title={`Another task claimed ${item.key} first, and the key opens that one — this task is reached by its id`}
+        >
+          Key shared
+        </Tag>
+      )}
     </span>
   );
 }
@@ -349,17 +371,21 @@ export function WorkItem({ id }: { id: string }) {
           [ObjectHeader] per object exists to end. What stays here is the way
           OUT, which the header has no room for and the bar is for. */}
       <PageActions>
-        {item ? (
+        {state.data && item ? (
           // THE PROJECT IS A PATH AND THE TASK IS THE FRAME'S `peek=` TOKEN.
           // This carried `?project=&item=`, which are the two spellings the
           // screen retired when a project became an object with a page and
           // the rail moved into the frame — nothing reads either key any
           // more, so the one control that promised "this task, on its own
           // board" landed on the company-wide board with the rail shut.
+          //
+          // AND THE TASK IS NAMED BY ITS ADDRESS, never its key: a task whose
+          // key another task claimed first would otherwise reopen the
+          // claimant in the rail of the board it was sent to.
           <a
             className="t-link"
-            href={href(["work", item.project], {
-              peek: refToken({ kind: "item", id: item.key }),
+            href={href(projectPath(item.project), {
+              peek: refToken({ kind: "item", id: itemAddress(detailItem(state.data)) }),
             })}
           >
             Open on the board →
@@ -444,10 +470,10 @@ export function WorkItem({ id }: { id: string }) {
  * the page for the same task named them. The chart is a store read, not
  * something a list has to thread through.
  */
-export function ItemPeek({ itemKey }: { itemKey: string }) {
+export function ItemPeek({ address }: { address: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const state = useQuery("work_item", { id: itemKey }, { enabled: itemKey !== "", pollMs: 15_000 });
+  const state = useQuery("work_item", { id: address }, { enabled: address !== "", pollMs: 15_000 });
   const item = state.data?.task;
   // GUARDED LIKE THE FULL SCREEN'S, and for the same reason: the peek mounts
   // before its item is read, so an unguarded call asks for a project with no
@@ -508,7 +534,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
             <EmptyState
               size="compact"
               icon={<Package2Glyph size="xl" />}
-              title={`Nothing answers to “${itemKey}”`}
+              title={`Nothing answers to “${address}”`}
               description="A task is addressed by its key or by its uuid, and both resolve. This node holds neither — it may have been removed, or its log may not have reached this far."
             />
           ))}
@@ -585,12 +611,7 @@ export function Subtasks({
       <Card.Header count={rows.length}>
         <Card.Title>Subtasks</Card.Title>
       </Card.Header>
-      <RowList
-        rows={rows}
-        chrome={chrome}
-        hrefOf={(row) => href(["work", row.key])}
-        onOpen={peek}
-      />
+      <RowList rows={rows} chrome={chrome} hrefOf={(row) => href(itemPath(row))} onOpen={peek} />
     </Card>
   );
 }
@@ -724,7 +745,7 @@ export function ItemBody({
         error={children.error}
         refusal={children.refusal}
         chrome={chrome}
-        peek={flush ? undefined : (row) => openPeek({ kind: "item", id: row.key })}
+        peek={flush ? undefined : (row) => openPeek({ kind: "item", id: itemAddress(row) })}
       />
 
       {(item.checklists ?? []).map((list) => (
@@ -796,7 +817,14 @@ export function ItemBody({
           it is what to do when somebody wants to change this, not what the
           screen is about. */}
       <ToolCallBlock
-        subject={{ kind: "item", id: detail.task.key, removed: Boolean(detail.task.removed) }}
+        // THE TASK'S ADDRESS, because a copied call is a reference handed to
+        // somebody else's assistant: named by a key another task claimed
+        // first, "take it off the board" would take the claimant off it.
+        subject={{
+          kind: "item",
+          id: itemAddress(detailItem(detail)),
+          removed: Boolean(detail.task.removed),
+        }}
         viewer={viewer.handle}
       />
     </>
@@ -1210,7 +1238,7 @@ export function ItemProps({
               {project?.name && <span className="mono">{item.project}</span>}
             </span>
           ),
-          path: ["work", item.project],
+          path: projectPath(item.project),
           setBy: by("project"),
         },
       ],
@@ -1573,7 +1601,7 @@ export function ItemLinks({
                 href={href(
                   link.kind === "page"
                     ? pathOf({ kind: "page", id: link.key || link.other })
-                    : ["work", link.key || link.other],
+                    : itemPath(linkedItem(link)),
                 )}
               >
                 {link.key || link.other}

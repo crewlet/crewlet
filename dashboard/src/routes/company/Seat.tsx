@@ -115,6 +115,7 @@ import {
   tsKey,
 } from "~/lib/format.ts";
 import { spanWords } from "~/lib/range.ts";
+import { itemPath } from "~/lib/work.ts";
 import {
   attempts,
   fromLiveCall,
@@ -1507,7 +1508,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <RowList
                   rows={items.data?.items ?? []}
                   chrome={chrome}
-                  hrefOf={(row) => href(["work", row.key])}
+                  hrefOf={(row) => href(itemPath(row))}
                 />
               </Card>
             </QueryState>
@@ -1523,14 +1524,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                   hint="Their own order, as they set it."
                   rows={mine.data?.priorities ?? []}
                   chrome={chrome}
-                  hrefOf={(row) => href(["work", row.key])}
+                  hrefOf={(row) => href(itemPath(row))}
                 />
                 <TaskBlock
                   title="Collaborating"
                   hint="Tasks they are named on without owning."
                   rows={mine.data?.collaborating ?? []}
                   chrome={chrome}
-                  hrefOf={(row) => href(["work", row.key])}
+                  hrefOf={(row) => href(itemPath(row))}
                 />
                 <Checklist rows={mine.data?.checklist_items ?? []} />
               </>

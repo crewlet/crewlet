@@ -22,6 +22,16 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
 import { LOCAL_DRAWINGS } from "~/ui/glyph.tsx";
+import {
+  CLAIMANT_HREF,
+  CLAIMANT_TITLE,
+  DUPLICATE,
+  DUPLICATE_HREF,
+  DUPLICATE_TITLE,
+  SHARED_KEY,
+  collidingHits,
+  peekNow,
+} from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -186,4 +196,30 @@ test("a re-ranked answer keeps each row's own state with its own hit", async () 
   // THE FOCUS IS STILL ON THE AUTHENTICATION HIT, which is second now.
   expect((document.activeElement as HTMLElement).closest(".grid-row")).toBe(rowAt(1));
   expect(within(rowAt(1)).getByText("Authentication rework")).toBeTruthy();
+});
+
+// TWO HITS UNDER ONE KEY ARE TWO TASKS.
+//
+// A search that finds both holders of a key — a restored counter's duplicate
+// beside the task that claimed the key first — drew two rows that opened one
+// task: this screen addressed a hit by its key wherever it had one, and the
+// key opens the claimant. The flagged hit goes by its id, in its link, in the
+// peek a plain click opens, and in which row is drawn as the open one.
+test("two hits under one key open two different tasks", async () => {
+  mount(collidingHits());
+  await waitFor(() => expect(screen.getByText(DUPLICATE_TITLE)).toBeTruthy());
+
+  const link = (title: string) => rowOf(title).querySelector<HTMLAnchorElement>("a.row-link")!;
+  expect(link(CLAIMANT_TITLE).getAttribute("href")).toBe(CLAIMANT_HREF);
+  expect(link(DUPLICATE_TITLE).getAttribute("href")).toBe(DUPLICATE_HREF);
+
+  fireEvent.click(link(DUPLICATE_TITLE));
+  await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
+  await waitFor(() => expect(rowOf(DUPLICATE_TITLE).classList.contains("selected")).toBe(true));
+  expect(rowOf(CLAIMANT_TITLE).classList.contains("selected")).toBe(false);
+
+  fireEvent.click(link(CLAIMANT_TITLE));
+  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+  await waitFor(() => expect(rowOf(CLAIMANT_TITLE).classList.contains("selected")).toBe(true));
+  expect(rowOf(DUPLICATE_TITLE).classList.contains("selected")).toBe(false);
 });

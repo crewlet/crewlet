@@ -60,22 +60,17 @@ import { ScheduleGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
+import { itemAddress, projectPath } from "~/lib/work.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 
-/**
- * HOW A HIT IS ADDRESSED, in the one spelling every consumer of it uses.
- *
- * A hit carries both an id and a key, and the key is what the tracker addresses
- * an item by — so the key where there is one and the id where there is not,
- * which is the rule this screen's row link already followed alone. It is a
- * function now because FOUR things have to agree on it: the row's link, the
- * peek a plain click opens, the order `[` and `]` step through, and which row
- * is drawn as the open one. Four spellings of "which item is this" is how the
- * rail comes to highlight a different row from the one it is showing.
- */
-function itemId(hit: WorkRanked): string {
-  return hit.key || hit.id;
-}
+// HOW A HIT IS ADDRESSED is `itemAddress`, and FOUR things here agree on it:
+// the row's link, the peek a plain click opens, the order `[` and `]` step
+// through, and which row is drawn as the open one. Four spellings of "which
+// item is this" is how the rail comes to highlight a different row from the
+// one it is showing. This screen had its own — the key where there was one —
+// which is the rule that opened the claimant from a hit flagged
+// `key_collision`: a search that found both holders of a key drew two rows
+// that opened one task.
 
 export function WorkSearch() {
   // THE QUERY IS IN THE URL, which is what makes a search shareable and what
@@ -100,7 +95,7 @@ export function WorkSearch() {
   // it and nothing here re-sorts. Stepping the rail is therefore stepping DOWN
   // THE RANKING, which is the gesture a reader working through hits makes.
   usePeekNeighbours(
-    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemId(r) })), [rows]),
+    useMemo(() => rows.map((r) => ({ kind: "item" as const, id: itemAddress(r) })), [rows]),
   );
 
   return (
@@ -177,12 +172,12 @@ export function WorkSearch() {
             // second copy of the route: the rail's `Open ↗` is built from the
             // same reference, so the link a row carries and the way out of the
             // panel it opens can never name different pages.
-            rowHref={(r) => peekHref({ kind: "item", id: itemId(r) })}
+            rowHref={(r) => peekHref({ kind: "item", id: itemAddress(r) })}
             // A PLAIN CLICK PEEKS, because a ranked list is read by working
             // DOWN it: a reader checking whether the third hit is the one they
             // meant should not lose the other nine to find out.
             onRowActivate={(r, e) => {
-              const go = () => openPeek({ kind: "item", id: itemId(r) });
+              const go = () => openPeek({ kind: "item", id: itemAddress(r) });
               // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the
               // frame's one copy of "which clicks mean elsewhere" and reads a
               // mouse event; the `enter` chord carries no button at all and is
@@ -193,7 +188,7 @@ export function WorkSearch() {
               }
               rowPeekHandler(go)?.(e);
             }}
-            isSelected={(r) => peek?.kind === "item" && peek.id === itemId(r)}
+            isSelected={(r) => peek?.kind === "item" && peek.id === itemAddress(r)}
             // NO DEFAULT SORT. The answer's own order IS the result, and a
             // grid that re-sorted it by title would throw away the only
             // thing this question produces.
@@ -255,7 +250,7 @@ export function WorkSearch() {
                 // every other key in the product wears and links to the
                 // project rather than sitting in a chip. Colour is spent on
                 // state here, and which project an item is in is identity.
-                cell: (r) => <KeyCell value={r.project} path={["work", r.project]} />,
+                cell: (r) => <KeyCell value={r.project} path={projectPath(r.project)} />,
               },
               {
                 key: "status",

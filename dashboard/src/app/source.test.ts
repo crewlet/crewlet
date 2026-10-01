@@ -439,3 +439,159 @@ test("the Intl gate fires on each spelling it is for", () => {
   expect(INTL_BUILT.test("a.name.localeCompare(b.name)")).toBe(false);
   expect(INTL_BUILT.test("dateFormatter(undefined, { day: 'numeric' }).format(d)")).toBe(false);
 });
+
+/**
+ * AN ITEM IS OPENED BY ITS ADDRESS, NEVER BY ITS KEY.
+ *
+ * A key two tasks hold opens the one that claimed it first — the engine
+ * resolves a key through its directory before it reads a row — and the other
+ * is flagged `key_collision` and reached only by its id. Every screen that
+ * opened an item built the link, the peek, the stepper's list, the "is this
+ * the open one" check and the copied call out of `row.key`: the board, the
+ * list, the table, the timeline, the calendar, the search, the palette, the
+ * feeds, the inbox and My work all drew two `ENG-7`s that opened one task,
+ * with no error anywhere, because a key is a perfectly good address for every
+ * row but the flagged one.
+ *
+ * `itemAddress` (in `lib/work.ts`) is the one place the rule is written, and
+ * this is what keeps a NEW screen from writing it again by hand. Four shapes
+ * are refused anywhere in the source, each a way the key leaks into an
+ * address:
+ *
+ * - a `["work", …]` route whose segment reads a key field — `row.key`,
+ *   `record.subject_key`, `item.task_key`, `link.key || link.other`. An item's
+ *   route is `itemPath(row)`, and a project's is `projectPath(key)` precisely
+ *   so that no route into the tracker is spelled with a key at the call site;
+ * - an `{ kind: "item", id: … }` reference — a peek, a stepper entry, a copied
+ *   call's subject — whose id is anything but `itemAddress(…)`, in either
+ *   order of its two properties;
+ * - a comparison of a key field against `selected` or `peek.id`, which is how
+ *   a list draws the open row — the peek holds an ADDRESS, so a row matched
+ *   on its key lit up both holders of a shared one;
+ * - a tool call naming its `item:` by a key field.
+ *
+ * Comments are blanked first, so a comment quoting the wrong shape to explain
+ * the right one is not an offence.
+ */
+const KEY_READ = String.raw`[\w$\])?]\.(?:key|subject_key|task_key)\b`;
+const ADDRESS_RULES: { rule: RegExp; says: string }[] = [
+  {
+    rule: new RegExp(String.raw`\[\s*"work"\s*,[^\]]*?` + KEY_READ),
+    says: "routes to an item by its key — use itemPath(row)",
+  },
+  {
+    // THE LOOKAHEAD SITS ON THE COLON, not after the spaces: placed after
+    // them, the engine backtracks the spaces away and the lookahead then sees
+    // " itemAddress(", which is not `itemAddress(`, so every right answer was
+    // refused as well.
+    rule: /\bkind:\s*"item"(?:\s+as\s+const)?\s*,\s*id:(?!\s*itemAddress\()/,
+    says: "names an item by something other than itemAddress(row)",
+  },
+  {
+    rule: /\bid:(?!\s*itemAddress\()[^,{}]*,\s*kind:\s*"item"(?!\s*\|)/,
+    says: "names an item by something other than itemAddress(row)",
+  },
+  {
+    rule: new RegExp(
+      String.raw`(?:\bselected|\bpeek\??\.id)\s*[!=]==\s*[\w$?.\[\]]*` +
+        KEY_READ +
+        String.raw`|[\w$?.\[\]]*` +
+        KEY_READ +
+        String.raw`\s*[!=]==\s*(?:\bselected\b|\bpeek\??\.id\b)`,
+    ),
+    says: "matches the open item on its key — compare itemAddress(row)",
+  },
+  {
+    rule: new RegExp(String.raw`\bitem:\s*[\w$?.\[\]]*` + KEY_READ),
+    says: "names a tool call's item by its key — use itemAddress(row)",
+  },
+];
+
+/** A file's code with its comments blanked and every offset kept. */
+function codeOf(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|[^:])\/\/[^\n]*/g, (m, lead) => lead + " ".repeat(m.length - lead.length));
+}
+
+/** Every place one file's code addresses an item by hand. */
+function addressOffences(code: string): { line: number; says: string; text: string }[] {
+  const out: { line: number; says: string; text: string }[] = [];
+  const lines = code.split("\n");
+  for (const { rule, says } of ADDRESS_RULES) {
+    // ACROSS LINES, because the shapes are written across lines: a
+    // multi-line `{ kind: "item", id: … }` is how a copied call's subject is
+    // spelled, and a per-line scan reads its `id:` as an unrelated line.
+    const global = new RegExp(rule.source, "g");
+    let m: RegExpExecArray | null;
+    while ((m = global.exec(code))) {
+      const line = code.slice(0, m.index).split("\n").length;
+      out.push({ line, says, text: (lines[line - 1] ?? "").trim().slice(0, 90) });
+      global.lastIndex = m.index + Math.max(1, m[0].length);
+    }
+  }
+  return out;
+}
+
+test("no screen opens an item by its key", () => {
+  const offenders: string[] = [];
+  let read = 0;
+  let addressed = 0;
+  for (const { path, text } of sources([".ts", ".tsx"])) {
+    read += 1;
+    const code = codeOf(text);
+    addressed += (code.match(/\bitem(?:Address|Path)\(/g) ?? []).length;
+    for (const o of addressOffences(code)) {
+      offenders.push(`${path}:${o.line} ${o.says} — ${o.text}`);
+    }
+  }
+  // A WALK THAT READ NOTHING passes with no offence found.
+  expect(read).toBeGreaterThan(100);
+  expect(
+    offenders,
+    "a key another task claimed first opens that task: address an item with itemAddress / itemPath from lib/work.ts",
+  ).toEqual([]);
+  // AND SO DOES A TREE IN WHICH NOTHING ADDRESSES AN ITEM AT ALL — which is
+  // what a rename of the function would leave behind, every rule above then
+  // refusing the new spelling's absence rather than anything a screen does.
+  expect(addressed, "nothing in the tree calls itemAddress or itemPath").toBeGreaterThan(20);
+});
+
+test("the address gate fires on each way a key leaks into an address, and on nothing else", () => {
+  for (const bad of [
+    'href(["work", row.key])',
+    'nav.to(["work", item.key])',
+    'path: ["work", record.subject_key],',
+    'href(["work", item.task_key])',
+    ': ["work", link.key || link.other],',
+    'openPeek({ kind: "item", id: row.key })',
+    'rows.map((r) => ({ kind: "item" as const, id: r.key }))',
+    'peekHref({ kind: "item", id: hit.key || hit.id })',
+    '{\n  kind: "item",\n  id: detail.task.key,\n}',
+    '({ id: r.key, kind: "item" })',
+    "selected={selected === row.key}",
+    "isSelected={(row) => row.key === selected}",
+    "isSelected={(r) => peek?.id === r.key}",
+    'cx("tl-bar", selected === bar.row.key && "selected")',
+    "args: { item: row.key },",
+  ]) {
+    expect(addressOffences(bad).length, bad).toBeGreaterThan(0);
+  }
+  for (const good of [
+    "href(itemPath(row))",
+    'href(["work", itemAddress(row)])',
+    "href(projectPath(p.key))",
+    'path: ["work", projectKey]',
+    'openPeek({ kind: "item", id: itemAddress(row) })',
+    '({ kind: "item" as const, id: itemAddress(r) })',
+    '{\n  kind: "item",\n  id: itemAddress(detailItem(detail)),\n}',
+    'kind: "item" | "page" | "seat";',
+    "isSelected={(row) => itemAddress(row) === selected}",
+    'selected === itemAddress(bar.row) && "selected"',
+    "group.key === key",
+    'openPeek({ kind: "project", id: row.key })',
+    "args: { item: itemAddress(row) },",
+  ]) {
+    expect(addressOffences(good), good).toEqual([]);
+  }
+});

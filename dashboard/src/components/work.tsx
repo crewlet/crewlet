@@ -34,7 +34,14 @@ import { currentYear, fmtDateCompactIn, fmtDateTime, relTime } from "~/lib/forma
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
 import type { SeatKind } from "~/lib/seats.ts";
-import { fmtMinutes, statusLabel, STATUS_TONE, typeIcon, typeName } from "~/lib/work.ts";
+import {
+  fmtMinutes,
+  itemAddress,
+  statusLabel,
+  STATUS_TONE,
+  typeIcon,
+  typeName,
+} from "~/lib/work.ts";
 import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
 
 export interface RowChrome {
@@ -481,6 +488,7 @@ export function RowList({
   chrome?: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen?: (row: WorkSummary) => void;
+  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
   selected?: string;
   /** Number each row by its place in `rows`, from 1. */
   ordinals?: boolean;
@@ -499,7 +507,7 @@ export function RowList({
           row={row}
           chrome={chrome}
           href={hrefOf(row)}
-          selected={selected === row.key}
+          selected={selected === itemAddress(row)}
           onOpen={onOpen ? () => onOpen(row) : undefined}
           keyOf={(id) => keys.get(id)}
           ordinal={ordinals ? at + 1 : undefined}

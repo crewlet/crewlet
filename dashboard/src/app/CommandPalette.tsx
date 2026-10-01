@@ -23,7 +23,7 @@ import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, liveRowFor, unitPath } from "~/lib/seats.ts";
 // PURE VALUES, no React and no DOM — so no cycle, and `Hit.icon` is already the
 // `MarkName` `typeIcon` returns.
-import { statusLabel, typeIcon, typeName } from "~/lib/work.ts";
+import { itemPath, statusLabel, typeIcon, typeName } from "~/lib/work.ts";
 import { QueryState } from "~/components/common.tsx";
 import { markByName, type MarkName } from "~/ui/glyph.tsx";
 
@@ -267,7 +267,10 @@ export function CommandPalette({
             ]
               .filter(Boolean)
               .join(" · "),
-            go: () => nav.to(["work", item.key]),
+            // AND IT GOES TO THE ITEM'S ADDRESS for the same reason: a key
+            // two items hold opens the one that claimed it first, so the
+            // option drawn for the other one opened its neighbour.
+            go: () => nav.to(itemPath(item)),
           },
           i,
         );

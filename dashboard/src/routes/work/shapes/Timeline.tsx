@@ -29,6 +29,7 @@ import { EmptyState, Tag, cx } from "@crewlethq/ui";
 import { TimelineGlyph } from "@crewlethq/icons/glyphs";
 import { useToday } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /** How wide one day is, in pixels. */
 const DAY_PX = 26;
@@ -133,6 +134,7 @@ function Band({
   chrome: RowChrome;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
+  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
   selected: string;
   /** The browser's day, from the view's one [useToday]. */
   today: string;
@@ -180,7 +182,7 @@ function Band({
               {line.bars.map((bar, i) => (
                 <a
                   key={bar.row.id}
-                  className={cx("tl-bar", selected === bar.row.key && "selected")}
+                  className={cx("tl-bar", selected === itemAddress(bar.row) && "selected")}
                   data-tone={barTone(bar)}
                   data-kind={bar.kind}
                   href={hrefOf(bar.row)}
@@ -224,7 +226,7 @@ function Band({
             {line.bars.map((bar) => (
               <a
                 key={bar.row.id}
-                className={cx("tl-name", selected === bar.row.key && "selected")}
+                className={cx("tl-name", selected === itemAddress(bar.row) && "selected")}
                 href={hrefOf(bar.row)}
                 title={`${bar.row.key} · ${bar.row.title}`}
                 onClick={(e) => {

@@ -2023,6 +2023,10 @@ export type ReadLevel = "linearizable" | "session" | "stale" | "consistent_prefi
 export interface WorkSummary {
   id: string;
   key: string;
+  /** The key is one ANOTHER task claimed first, so it opens that task and this
+   *  one is reached by its id. Never open a row by `key` directly: hand it to
+   *  `itemAddress`, which is the one place that rule is written. */
+  key_collision?: boolean;
   project: string;
   title: string;
   /** The slug a card is drawn under. On the ROW rather than only on the
@@ -2571,6 +2575,9 @@ export interface WorkLink {
   kind: string;
   other: string;
   key?: string;
+  /** The other end's `key_collision`: its key opens another task, so this end
+   *  is reached by `other`. See `linkedItem`. */
+  key_collision?: boolean;
   title?: string;
   status?: WorkStatus;
   note?: string;
@@ -2771,6 +2778,11 @@ export interface WorkItemDetail {
    *  ANSWER rather than on the task because it is derived rather than stored:
    *  `links` say what the relations are, not whether any blocker is open. */
   blocked?: boolean;
+  /** The task's `key_collision`, on the ANSWER for `blocked`'s reason: it is
+   *  derived rather than stored. The task's key opens the task that claimed
+   *  it first, so everything this screen hands onward — the board link, a
+   *  peek, a call to copy — goes by `detailItem`'s address. */
+  key_collision?: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -3524,6 +3536,9 @@ export interface WorkActivityRecord {
   subject_kind: string;
   subject_id: string;
   subject_key?: string;
+  /** `subject_key` opens ANOTHER task — one that claimed it first — so the
+   *  subject is reached by `subject_id`. See `subjectItem`. */
+  subject_key_collision?: boolean;
   project?: string;
   excerpt?: string;
   fields?: Record<string, WorkDelta>;
@@ -3584,6 +3599,9 @@ export interface WorkAskRow extends WorkSummary {
 export interface WorkChecklistRow {
   task: string;
   task_key: string;
+  /** `task_key` opens another task, so the task is reached by `task`. See
+   *  `checklistTask`. */
+  task_key_collision?: boolean;
   task_title: string;
   checklist: string;
   item: string;
@@ -3641,6 +3659,10 @@ export interface WorkInboxNotice {
   /** The human-readable key, resolved by the applier so the read is an index
    *  range rather than a join. */
   subject_key?: string;
+  /** The key STORED here now opens another task, so the subject is reached by
+   *  `subject_id` — asked of this key rather than read off the task, because a
+   *  task moved since answers to a new one. See `subjectItem`. */
+  subject_key_collision?: boolean;
   excerpt?: string;
   actor?: string;
   actor_kind?: string;
@@ -3677,6 +3699,8 @@ export interface WorkInboxAnswer {
 export interface WorkRanked {
   id: string;
   key: string;
+  /** As `WorkSummary.key_collision`: the key opens another task. */
+  key_collision?: boolean;
   title: string;
   project: string;
   type: string;

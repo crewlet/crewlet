@@ -29,6 +29,13 @@ import { Router } from "~/app/router.tsx";
 import { flushInCase } from "~/test/inCase.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName } from "~/protocol/index.ts";
+import {
+  CLAIMANT,
+  CLAIMANT_HREF,
+  DUPLICATE,
+  DUPLICATE_HREF,
+  SHARED_KEY,
+} from "~/test/keyCollision.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -319,6 +326,42 @@ test("a purge names its key and does not link to a page that is gone", async () 
   await answered();
   expect(screen.getByText("took it off the board")).toBeTruthy();
   expect(screen.getByRole("link", { name: "ENG-9" })).toBeTruthy();
+});
+
+// TWO TASKS UNDER ONE KEY ARE TWO LINKS.
+//
+// A commit is named by its task's key, and a key two tasks hold opens the one
+// that claimed it first — so the audit row for a change to the duplicate led
+// to its claimant, which is the one place a reader goes to check what was done
+// to which task. The engine says beside the key when it opens another task,
+// and that row goes by the task's id.
+test("changes to two tasks under one key link to their own two tasks", async () => {
+  serving({
+    work_activity: {
+      records: [
+        commit({
+          id: "h-2",
+          subject_id: DUPLICATE,
+          subject_key: SHARED_KEY,
+          subject_key_collision: true,
+          excerpt: "edited the duplicate",
+        }),
+        commit({
+          id: "h-1",
+          subject_id: CLAIMANT,
+          subject_key: SHARED_KEY,
+          excerpt: "edited the claimant",
+        }),
+      ],
+      complete: true,
+    },
+  });
+  const { answered } = mount();
+  await answered();
+  const hrefs = screen
+    .getAllByRole("link", { name: SHARED_KEY })
+    .map((a) => a.getAttribute("href"));
+  expect(new Set(hrefs)).toEqual(new Set([CLAIMANT_HREF, DUPLICATE_HREF]));
 });
 
 // A SHORT PAGE IS REPORTED, NOT SWALLOWED.

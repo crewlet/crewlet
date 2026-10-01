@@ -12,6 +12,7 @@
  */
 
 import { BoardCard, type RowChrome } from "~/components/work.tsx";
+import { itemAddress } from "~/lib/work.ts";
 import { GroupMark, headingOf } from "./group.tsx";
 import type { WorkGroup, WorkProjectDetail, WorkSummary } from "~/protocol/index.ts";
 
@@ -30,6 +31,7 @@ export function Board({
   axis: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
+  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
   selected?: string;
   hrefOf: (row: WorkSummary) => string;
   onOpen: (row: WorkSummary) => void;
@@ -62,7 +64,7 @@ export function Board({
                 row={row}
                 chrome={chrome}
                 href={hrefOf(row)}
-                selected={selected === row.key}
+                selected={selected === itemAddress(row)}
                 onOpen={() => onOpen(row)}
               />
             ))}

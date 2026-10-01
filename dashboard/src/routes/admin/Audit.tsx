@@ -58,6 +58,7 @@ import { useRestRead, type RestRead } from "~/lib/restRead.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { isRange, useWindow, type Offer } from "~/lib/range.ts";
+import { itemPath, projectPath, subjectItem } from "~/lib/work.ts";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
@@ -161,7 +162,11 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       // A PURGED TASK HAS NO PAGE. Its rows are destroyed and this entry is
       // the only evidence it existed, so a link here would be a NotFound on
       // the one row a reader most wants to follow.
-      path: record.kind === "purged" ? undefined : ["work", record.subject_key],
+      //
+      // AND A LIVE ONE IS REACHED BY ITS ADDRESS, never its key: a task whose
+      // key another task claimed first is named by that key here, and the key
+      // opens the claimant. See [itemAddress].
+      path: record.kind === "purged" ? undefined : itemPath(subjectItem(record)),
     };
   }
   switch (kind) {
@@ -170,7 +175,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
     case "person":
       return { subject: id, path: ["company", "people", id] };
     case "project":
-      return { subject: id, path: ["work", id] };
+      return { subject: id, path: projectPath(id) };
     default:
       // EVERY OTHER SUBJECT KIND HAS NO PAGE — a counter, a catalogue, a
       // tag set, an alias. Named by its kind rather than linked,

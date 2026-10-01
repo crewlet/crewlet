@@ -504,7 +504,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** — the header says what the container is, its lede says what it is for, and **Items** carries the open count | `lens=items\|overview\|history` · the same view strip and filter grammar, scoped to the project |
-| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties. Addressed by its key, and by its id where another task claimed that key first — see [An item's address](#an-items-address) | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/company` | **Company** — the charter, the chart, and editing them | `lens=chart\|charter\|builder` (builder is *(operator)*) · `unit=` · `seat=` |
 | `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · work · turns · conversations · memory · cost · access · schedules; human: overview · work · access. `conversation=` opens one thread |
@@ -550,6 +550,34 @@ say why. And a seat's **Conversations** tab is its own thread ledger — the onl
 account of what a seat said on a surface this engine does not own. Every one of
 those readers was written, tested and swept on a retention horizon before any
 of them reached a screen.
+
+### An item's address
+
+**An item is opened by its KEY, unless another task claimed that key first.**
+Two tasks can hold one key — a key counter restored beside work minted after it
+hands out numbers that work already holds — and the engine opens the key on the
+task that claimed it, on every node, so every link and chat message written
+against that task keeps reaching it. The other one is flagged `key_collision`,
+and its key opens its neighbour: it is reached by its **id**, which the item
+route takes as readily as a key. So every row the engine lists a task in says
+which it is, beside the key it qualifies — `key_collision` on a board row, a
+search hit, an item and its links; `subject_key_collision` on a feed record and
+an inbox notice; `task_key_collision` on a checklist item.
+
+`itemAddress` in `lib/work.ts` is the one place the rule is written — the key,
+unless flagged or empty, and then the id — and every link, peek, `[`/`]` step,
+"this is the open row" check and copied tool call goes through it, with
+`itemPath` for the route and an adapter per row shape (`subjectItem`,
+`checklistTask`, `linkedItem`, `detailItem`) so no screen pairs an id with the
+wrong flag. A project's route is `projectPath` for the same reason: no route
+into the tracker is spelled at the call site. `app/source.test.ts` fails a
+screen that builds an item's route, its `{ kind: "item", id }` reference, its
+selection or a tool call's `item:` out of a key field, because every one of
+those was written that way on every tracker screen and each opened the claimant
+from both of a pair. The key is still what a row SHOWS — the address decides
+where it goes, never what it is called — and the item page marks a flagged task
+**Key shared**, so a reader holding two tabs headed `ENG-7` can tell which is
+which and why one of their addresses is a uuid.
 
 ### `window=` — one vocabulary for every time range
 
@@ -1092,7 +1120,10 @@ closes rather than opening empty.
 **Each peek asks its own question.** It takes an id and fetches, rather than
 being handed the row that opened it: the row carries what its list needed, a
 peek answers "what is this thing", and the two differ on every kind. It is
-also what lets a pasted `peek=` open on arrival, where no row exists.
+also what lets a pasted `peek=` open on arrival, where no row exists. For a
+work item the id is its ADDRESS — see [An item's address](#an-items-address) —
+so the rail, the row it was opened from and the row drawn as open all name
+the same task when two of them share a key.
 
 **A peek is one column, so it says everything once.** Its header carries the
 object's identity and its state marks; where a properties rail follows below,

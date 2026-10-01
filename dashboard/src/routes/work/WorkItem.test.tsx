@@ -27,6 +27,17 @@ import { pathOf, refToken } from "~/app/frame/objects.ts";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
+import {
+  CLAIMANT,
+  CLAIMANT_HREF,
+  CLAIMANT_TITLE,
+  DUPLICATE,
+  DUPLICATE_HREF,
+  DUPLICATE_TITLE,
+  SHARED_KEY,
+  collidingRows,
+  peekNow,
+} from "~/test/keyCollision.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -624,7 +635,7 @@ test("the rail names a person, exactly as the page does", async () => {
   });
   const { container } = render(
     <Router>
-      <ItemPeek itemKey="ENG-42" />
+      <ItemPeek address="ENG-42" />
     </Router>,
   );
   await waitFor(() => expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0));
@@ -677,7 +688,7 @@ test("the peek states each property once", async () => {
   });
   const { container } = render(
     <Router>
-      <ItemPeek itemKey="ENG-42" />
+      <ItemPeek address="ENG-42" />
     </Router>,
   );
   await waitFor(() => expect(screen.getByText("Fix the login race")).toBeTruthy());
@@ -927,4 +938,95 @@ test("a re-parent names the parent, and an unresolved id stays an id", async () 
   expect(screen.getByText(new RegExp(`Parent: ${EMPTY_VALUE} → ENG-1`))).toBeTruthy();
   expect(screen.queryByText(/t-parent/)).toBeNull();
   expect(screen.getByText(new RegExp(`Waiting on: ${EMPTY_VALUE} → t-unapplied`))).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// Two tasks under one key
+// ---------------------------------------------------------------------------
+
+// A DUPLICATE'S OWN PAGE HANDS ITSELF ON BY ITS ID.
+//
+// The page is reached by the id — the key opens the task that claimed it
+// first — and everything it hands onward was built from the key: the way out
+// to the board reopened the claimant in the rail, and the copied calls would
+// have changed, commented on or removed the claimant. It also says why its
+// address is a uuid while its header says ENG-7, which nothing did.
+test("a task whose key another claimed first hands itself on by its id", async () => {
+  serving({
+    work_item: {
+      task: task({ id: DUPLICATE, key: SHARED_KEY, title: DUPLICATE_TITLE }),
+      key_collision: true,
+      complete: true,
+    },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <WorkItemPage id={DUPLICATE} />
+    </Router>,
+  );
+  await waitFor(() => expect(screen.getByText("Open on the board →")).toBeTruthy());
+  const out = [...container.querySelectorAll("a")].find(
+    (a) => a.textContent === "Open on the board →",
+  );
+  expect(out?.getAttribute("href")).toBe(
+    href(["work", "ENG"], { peek: refToken({ kind: "item", id: DUPLICATE }) }),
+  );
+  expect(screen.getByText("Key shared")).toBeTruthy();
+
+  fireEvent.click(screen.getByText("Change this with your assistant"));
+  const calls = container.querySelector(".toolcall-body")?.textContent ?? "";
+  expect(calls).toContain(`"item":"${DUPLICATE}"`);
+  expect(calls).not.toContain(`"item":"${SHARED_KEY}"`);
+});
+
+// AND THE CLAIMANT'S PAGE SAYS NOTHING OF IT: the key is its own.
+test("the task that claimed the key carries no shared-key mark", () => {
+  const { container } = render(<>{itemFlags(detail({ task: task({ key: SHARED_KEY }) }))}</>);
+  expect(container.textContent ?? "").not.toContain("Key shared");
+});
+
+// A TASK'S LINKS AND SUBTASKS OPEN TWO TASKS UNDER ONE KEY AS TWO. A link was
+// built from the other end's key and a subtask row from its own, so a task
+// linked to — or parent of — both holders of a key led to the claimant twice.
+test("links and subtasks to two tasks under one key open each as itself", async () => {
+  const [claimant, duplicate] = collidingRows();
+  serving({
+    work_item: {
+      task: task({ id: "t-9", key: "ENG-9" }),
+      links: [
+        { kind: "linked", other: CLAIMANT, key: SHARED_KEY, title: CLAIMANT_TITLE },
+        {
+          kind: "linked",
+          other: DUPLICATE,
+          key: SHARED_KEY,
+          key_collision: true,
+          title: DUPLICATE_TITLE,
+        },
+      ],
+      complete: true,
+    },
+    work_project: { key: "ENG", name: "Engineering", complete: true },
+    work_items: { items: [claimant, duplicate], groups: [], complete: true },
+  });
+  const { container } = render(
+    <Router>
+      <WorkItemPage id="ENG-9" />
+    </Router>,
+  );
+  const hrefs = () =>
+    [...container.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => h === CLAIMANT_HREF || h === DUPLICATE_HREF);
+  // TWO OF EACH: one from the Links panel, one from the Subtasks panel.
+  await waitFor(() => expect(hrefs().length).toBe(4));
+  expect(hrefs().filter((h) => h === DUPLICATE_HREF).length).toBe(2);
+  expect(hrefs().filter((h) => h === CLAIMANT_HREF).length).toBe(2);
+
+  // AND A SUBTASK PEEKS BY THE SAME ADDRESS IT LINKS TO.
+  const subtask = [...container.querySelectorAll<HTMLAnchorElement>(".work-subtasks a")].find((a) =>
+    a.textContent?.includes(DUPLICATE_TITLE),
+  )!;
+  fireEvent.click(subtask);
+  await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
 });

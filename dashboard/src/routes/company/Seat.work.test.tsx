@@ -27,6 +27,7 @@ import { SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { CLAIMANT_HREF, DUPLICATE_HREF, collidingRows } from "~/test/keyCollision.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -74,4 +75,29 @@ test("the seat's work list asks for every row to be filtered on its own", async 
     params.subtasks,
     "without it the filter is a predicate on the root and a subtree rides along unfiltered",
   ).toBe("separate");
+});
+
+// TWO TASKS UNDER ONE KEY ARE TWO LINKS ON A SEAT'S WORK. A key two tasks hold
+// opens the one that claimed it first, so a seat holding both — the duplicate
+// a restored counter minted beside its claimant — listed two rows that led to
+// one task. The flagged row goes by its id.
+test("a seat holding two tasks under one key lists each as its own link", async () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(what === "work_items" ? { items: collidingRows({ assignee: "ceo" }) } : {});
+  store.applyOrg({ roles: [{ name: "CEO", handle: "ceo" }] });
+  const { container } = render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <SeatScreen handle="ceo" />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  const hrefs = () =>
+    [...container.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => h === CLAIMANT_HREF || h === DUPLICATE_HREF);
+  await waitFor(() => expect(hrefs().length).toBe(2));
+  expect(new Set(hrefs())).toEqual(new Set([CLAIMANT_HREF, DUPLICATE_HREF]));
 });

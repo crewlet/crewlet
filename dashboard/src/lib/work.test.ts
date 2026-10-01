@@ -57,6 +57,13 @@ import {
   monthOrToday,
   pageCount,
   pageNote,
+  checklistTask,
+  detailItem,
+  itemAddress,
+  itemPath,
+  linkedItem,
+  projectPath,
+  subjectItem,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -1610,4 +1617,51 @@ test("the grouping picker offers each axis once, and project at workspace scope 
   // AND THE SECOND AXIS NEVER OFFERS THE FIRST, which the engine refuses.
   expect(secondAxisOptions("status", true).some((o) => o.value === "status")).toBe(false);
   expect(secondAxisOptions("status", true)[0]?.value).toBe("");
+});
+
+// AN ITEM IS ITS KEY UNLESS THE KEY OPENS ANOTHER ONE.
+//
+// A key two tasks hold resolves to the one that claimed it first, so the other
+// — flagged `key_collision` — is reached by its id alone, and an empty key
+// addresses nothing. Every other task keeps the key a person reads and pastes.
+test("an item is addressed by its key, unless the key is another's or absent", () => {
+  expect(itemAddress({ id: "u-1", key: "ENG-7" })).toBe("ENG-7");
+  expect(itemAddress({ id: "u-2", key: "ENG-7", key_collision: true })).toBe("u-2");
+  expect(itemAddress({ id: "u-3", key: "" })).toBe("u-3");
+  expect(itemAddress({ id: "u-4" })).toBe("u-4");
+  expect(itemPath({ id: "u-2", key: "ENG-7", key_collision: true })).toEqual(["work", "u-2"]);
+  expect(projectPath("ENG")).toEqual(["work", "ENG"]);
+});
+
+// AND EVERY SHAPE THE ENGINE LISTS A TASK IN PAIRS THE FLAG WITH ITS OWN KEY.
+// The flag is named after the key it qualifies, so an adapter that read the
+// row's other key — or no flag — would address the duplicate by a key that
+// opens its claimant.
+test("each row shape's adapter pairs a task's id with its own key and flag", () => {
+  const flagged = { id: "u-2", key: "ENG-7", key_collision: true };
+  expect(
+    subjectItem({ subject_id: "u-2", subject_key: "ENG-7", subject_key_collision: true }),
+  ).toEqual(flagged);
+  expect(
+    checklistTask({
+      task: "u-2",
+      task_key: "ENG-7",
+      task_key_collision: true,
+      task_title: "",
+      checklist: "",
+      item: "",
+      name: "",
+      done: false,
+    }),
+  ).toEqual(flagged);
+  expect(linkedItem({ kind: "linked", other: "u-2", key: "ENG-7", key_collision: true })).toEqual(
+    flagged,
+  );
+  expect(
+    detailItem({
+      task: { id: "u-2", key: "ENG-7", project: "ENG", title: "", status: "todo", version: 1 },
+      key_collision: true,
+      complete: true,
+    }),
+  ).toEqual(flagged);
 });

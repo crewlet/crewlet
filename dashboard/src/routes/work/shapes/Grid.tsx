@@ -108,7 +108,7 @@ import {
   type RowChrome,
 } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
-import { type Shape } from "~/lib/work.ts";
+import { itemAddress, type Shape } from "~/lib/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { callText } from "~/lib/toolcall.ts";
 import type {
@@ -568,6 +568,7 @@ export function WorkGrid({
   subAxis?: string;
   chrome: RowChrome;
   detail?: WorkProjectDetail | null;
+  /** The ADDRESS of the task the rail holds — see `itemAddress`. */
   selected?: string;
   /** The company's own list rather than one project's. */
   workspace: boolean;
@@ -679,7 +680,9 @@ export function WorkGrid({
       // card, the embedded compact row and the Projects directory all go
       // through it; the collapsed grid was the one that did not.
       onRowActivate={peekRow<WorkSummary>((row) => onOpen(row))}
-      isSelected={(row) => row.key === selected}
+      // BY ADDRESS, the same value the peek was opened with: a row matched on
+      // its key drew both holders of a shared key as the open one.
+      isSelected={(row) => itemAddress(row) === selected}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
       serverSorted
@@ -806,7 +809,7 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
       header: "",
       label: "Restore",
       shrink: true,
-      cell: (row) => <RestoreCall id={row.key} />,
+      cell: (row) => <RestoreCall row={row} />,
     },
   ];
 }
@@ -821,12 +824,15 @@ function trashColumns(removals: Removals, chrome: RowChrome): GridColumn<WorkSum
  * carries the one call a reader on this tab wants and the peek carries the
  * rest.
  */
-function RestoreCall({ id }: { id: string }) {
+function RestoreCall({ row }: { row: WorkSummary }) {
   const clip = useClipboard({ resetMs: COPIED_MS });
+  // THE TASK'S ADDRESS, not its key: a removed task whose key another task
+  // claimed first would otherwise be restored as the claimant — which is not
+  // in the trash, so the call fails, and the task a reader meant stays there.
   const text = callText({
     tool: "restore_work_item",
     label: "Bring it back from the trash",
-    args: { item: id },
+    args: { item: itemAddress(row) },
   });
   return (
     <Button

@@ -91,6 +91,8 @@ import {
   filterChips,
   filterPatchForGroup,
   gridRange,
+  itemAddress,
+  itemPath,
   monthOrToday,
   seededScope,
   shapeOf,
@@ -423,7 +425,14 @@ export function ItemsView({
   // WHAT `[` AND `]` WALK: the rows this list actually loaded, sorted and
   // filtered as the reader left them. Published rather than handed to the
   // rail, because only the list knows that order — see `PeekHost`.
-  const neighbours = useMemo(() => rows.map((r) => ({ kind: "item" as const, id: r.key })), [rows]);
+  //
+  // BY ADDRESS, like everything else that names a row here — see
+  // [itemAddress]: a key two rows share would make the stepper land on the
+  // claimant from both of them.
+  const neighbours = useMemo(
+    () => rows.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
+    [rows],
+  );
   usePeekNeighbours(neighbours);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
   // THE BANDS A LIST DRAWS, which are not the lanes a board draws — see
@@ -510,7 +519,14 @@ export function ItemsView({
     setFilters(patch);
   };
 
-  const itemHref = (row: WorkSummary) => href(["work", row.key]);
+  // WHERE A ROW GOES AND WHAT A PLAIN CLICK PEEKS, both by the row's ADDRESS
+  // and never by its key: a task flagged `key_collision` holds a key another
+  // task claimed first, and that key opens the claimant — so both of a pair
+  // drew one link and peeked one task. ONE pair of functions for every shape,
+  // so the board, the grid, the timeline and the calendar cannot disagree
+  // about which task a row is.
+  const itemHref = (row: WorkSummary) => href(itemPath(row));
+  const openItem = (row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) });
 
   // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
   // click and shows in the status bar. Built here because this is the only
@@ -776,7 +792,7 @@ export function ItemsView({
                 detail={detail}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={openItem}
                 onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
               />
@@ -801,7 +817,7 @@ export function ItemsView({
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={openItem}
                 onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
                 removals={inTrash ? removals : undefined}
@@ -820,7 +836,7 @@ export function ItemsView({
                 chrome={chrome}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={openItem}
               />
             )}
             {!nothingShown && shape === "calendar" && (
@@ -830,7 +846,7 @@ export function ItemsView({
                 month={thisMonth}
                 chrome={chrome}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={openItem}
                 onMonth={setMonth}
                 onToday={() => setMonth("")}
               />
