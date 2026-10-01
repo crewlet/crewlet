@@ -11,7 +11,7 @@
  * the answer; these hold that each read takes it at its word.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CATALOG, SetupPasses, useSetup, useSetupRun, useSetupRuns } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";
@@ -215,4 +215,40 @@ test("the pass panel draws a node that could not answer, not an empty history", 
   );
   await vi.waitFor(() => expect(screen.getByText(/cannot answer yet/)).toBeTruthy());
   expect(screen.queryByText(/No pass has run/)).toBeNull();
+});
+
+// A PASS'S READING BELONGS TO THAT PASS. The detail under the list is drawn by
+// one component for whichever row is open, and a failed read keeps what was
+// read rather than blanking it — so a component that outlived the row it was
+// opened for went on showing the first pass's findings under the second
+// pass's row once the second one's read failed: a claim about the wrong pass,
+// not a reading kept through a blip.
+test("opening another pass never shows the last one's reading under it", async () => {
+  const first: SetupRun = {
+    ...run("running"),
+    findings: [{ kind: "identity_missing", detail: "what the first pass found" }],
+  };
+  const second: SetupRun = { ...run("done"), run_id: "r2", started_at: "2026-09-30T11:00:00Z" };
+  answering({
+    [RUNS]: [() => json({ runs: [first, second], scope: "node-a" }, 200)],
+    [ONE]: [() => json(first, 200)],
+    [`${RUNS}/r2`]: [() => json({ error: "internal_error" }, 500)],
+  });
+  const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
+  render(
+    <Router>
+      <SetupPasses entry={entry} kinds={["jira"]} />
+    </Router>,
+  );
+  // NEWEST FIRST, the grid's own order: the first pass, then the second.
+  const rows = () => [...document.querySelectorAll<HTMLElement>(".grid-row[data-row-index]")];
+  await vi.waitFor(() => expect(rows()).toHaveLength(2));
+
+  fireEvent.click(rows()[0]!);
+  await vi.waitFor(() => expect(screen.getByText("what the first pass found")).toBeTruthy());
+
+  fireEvent.click(rows()[1]!);
+  await vi.waitFor(() => expect(reads(`${RUNS}/r2`)).toBe(1));
+  await wait(0);
+  expect(screen.queryByText("what the first pass found")).toBeNull();
 });

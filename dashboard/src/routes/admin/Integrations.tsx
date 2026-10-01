@@ -2648,6 +2648,13 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
         // to the panel's edges, as every grid in this product is.
         <Card.Footer variant="meta">
           <PassDetail
+            // KEYED ON THE PASS, as the panel is keyed on the tool: what one
+            // pass's read holds — the reading a failed re-read keeps, whether
+            // it was being followed — is about THAT pass. Reused for the next
+            // row, a failed read of the second pass went on drawing the
+            // first one's findings under it, and while it loaded it drew them
+            // anyway.
+            key={`${open.kind}/${open.id}`}
             kind={open.kind}
             id={open.id}
             name={named.get(open.kind) ?? open.kind}
