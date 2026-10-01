@@ -989,6 +989,27 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 }
 
+// A SEARCH THAT REACHED NOTHING STILL SAYS SO: at layout 0 one partition, its
+// only holder gone, is a search that failed — answered with no hits, as the
+// seam requires, and with that partition named missing, so the turn-start
+// block and the tool say "1 of 1 partitions did not answer" rather than
+// "nothing is written down".
+func TestASearchThatReachedNothingNamesWhatItMissed(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].set(func(n *fakeNode) { n.silent = true })
+	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 0 || got.Coverage.Addressed != 1 || len(got.Coverage.Missing) != 1 ||
+		got.Coverage.Missing[0].Partition != "estate.000" ||
+		got.Coverage.Missing[0].Reason != statelog.MissingUnreachable {
+		t.Fatalf("a search nothing answered = %+v, want estate.000 named unreachable", got)
+	}
+	const notice = "1 of 1 partitions did not answer; this list may be incomplete"
+	if got.Coverage.Notice() != notice {
+		t.Errorf("it renders %q, want %q", got.Coverage.Notice(), notice)
+	}
+}
+
 // A SEARCH ON A FLEET A BURST PUT BEHIND RUNS ON ONE NODE, as a read does:
 // under layout 0 a search is a gather of the one partition, and its last
 // resort asks the lagging copies one at a time, stopping at the first that

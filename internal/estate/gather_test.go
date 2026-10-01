@@ -1426,6 +1426,59 @@ func TestTheSearchesAreGathersOverTheirCorpus(t *testing.T) {
 		got.Coverage.Missing[0].Reason != statelog.MissingUnreachable {
 		t.Fatalf("with pages.001's holder gone the search answered %+v, want it named", got)
 	}
+
+	// NOTHING ANSWERED: still no "nothing is written down" — the answer
+	// names every partition it did not reach, though the search failed.
+	f.nodes["data-a"].set(func(n *partNode) { n.silent = true })
+	got = r.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 0 || got.Coverage.Addressed != 2 || len(got.Coverage.Missing) != 2 {
+		t.Fatalf("with every holder gone the search answered %+v, want both pages "+
+			"partitions named missing", got)
+	}
+	for _, m := range got.Coverage.Missing {
+		if m.Reason != statelog.MissingUnreachable {
+			t.Errorf("%s is missing as %q, want unreachable", m.Partition, m.Reason)
+		}
+	}
+}
+
+// A NOT-HOLDER AT THE ASKER'S OWN EPOCH, OR AN OLDER ONE, MOVES ON WITHOUT A
+// REFRESH: the holder is the one behind the map — a joiner not serving yet, or
+// a node on its way out — so the asker's view is right, and the partition is
+// asked of its next holder.
+func TestANotHolderFromAnOlderMapMovesOnWithoutARefresh(t *testing.T) {
+	t.Parallel()
+	for name, serverEpoch := range map[string]uint64{"the same epoch": 3, "an older epoch": 2} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newPartFleet(t, map[string][]statelog.PartitionID{
+				"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+				"data-b": {tp(2)},
+			})
+			for _, view := range []*partPlacement{f.placement, f.servers} {
+				view.mu.Lock()
+				view.epoch = 3
+				view.mu.Unlock()
+			}
+			f.servers.mu.Lock()
+			f.servers.epoch = serverEpoch
+			f.servers.mu.Unlock()
+			r := f.router(t, "agent-1", nil)
+			first := r.order(tp(2), []string{"data-a", "data-b"})[0]
+			f.nodes[first].set(func(n *partNode) { n.holds[tp(2)] = notServing })
+			answer, cov, err := listAll(t, r, 0, "")
+			if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+				t.Fatalf("gather = (%d rows, %+v, %v), want tracker.002 from its next holder",
+					len(answer.Rows), cov, err)
+			}
+			f.placement.mu.Lock()
+			refreshes := f.placement.refreshes
+			f.placement.mu.Unlock()
+			if refreshes != 0 {
+				t.Errorf("refreshed %d times on a not-holder at %s, want none", refreshes, name)
+			}
+		})
+	}
 }
 
 // A SINGLE-PARTITION READ WHOSE ANSWER A GATHER WILL ONE DAY ASSEMBLE SAYS WHAT
