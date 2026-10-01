@@ -13,9 +13,11 @@ import {
   fromLiveCall,
   fromPhaseEvent,
   decisionTone,
+  attemptOf,
   attempts,
   groupTurns,
   mergePhases,
+  nestedUnder,
   phaseKey,
   ledgerOf,
   narrations,
@@ -163,20 +165,20 @@ describe("attempts at one trigger", () => {
     // Newest first, which is the order the screens hold them in — the
     // numbering must not follow it.
     const got = attempts([second, first]);
-    expect(got.get("run-1")).toEqual({ index: 1, total: 2 });
-    expect(got.get("run-2")).toEqual({ index: 2, total: 2 });
+    expect(attemptOf(got, "run-1")).toEqual({ index: 1, total: 2 });
+    expect(attemptOf(got, "run-2")).toEqual({ index: 2, total: 2 });
   });
 
   test("a turn that ran once is not an attempt, and an empty key is not a group", () => {
     // A LONE RUN HAS NOTHING TO DISAMBIGUATE, so tagging it "attempt 1/1"
     // would put a re-run marker on every ordinary turn on the screen.
-    expect(attempts([group("run-1", "wk-1", "2026-01-01T00:00:09Z")]).size).toBe(0);
+    expect(attempts([group("run-1", "wk-1", "2026-01-01T00:00:09Z")])).toEqual({});
     // And an empty work key is the ABSENCE of an identity — a trigger with
     // nothing to collapse on. Grouping on it would report every unledgered
     // turn as an attempt at every other.
     const a = group("run-1", "", "2026-01-01T00:00:09Z");
     const b = group("run-2", "", "2026-01-01T00:05:00Z");
-    expect(attempts([a, b]).size).toBe(0);
+    expect(attempts([a, b])).toEqual({});
   });
 });
 
@@ -573,10 +575,10 @@ describe("delegated workers", () => {
     const [group] = groupTurns([exec, review, ...workers]);
     // The turn's OWN phases are the two it ran.
     expect(group?.phases.map((p) => p.phase)).toEqual(["execute", "review"]);
-    const nested = group?.nested.get(phaseKey("t1", "execute", 1)) ?? [];
+    const nested = (group && nestedUnder(group.nested, phaseKey("t1", "execute", 1))) ?? [];
     expect(nested.map((p) => p.taskId)).toEqual(["a", "b"]);
     // And nothing hangs off the phase that made no calls.
-    expect(group?.nested.get(phaseKey("t1", "review", 1))).toBeUndefined();
+    expect(group && nestedUnder(group.nested, phaseKey("t1", "review", 1))).toBeUndefined();
   });
 
   // A TURN'S OWN PHASES KEEP THE THREE-PART KEY they have always had, so a

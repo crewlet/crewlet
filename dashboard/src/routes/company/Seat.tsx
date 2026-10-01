@@ -120,6 +120,7 @@ import {
 import { spanWords } from "~/lib/range.ts";
 import { itemPath } from "~/lib/work.ts";
 import {
+  attemptOf,
   attempts,
   fromLiveCall,
   fromPhaseEvent,
@@ -988,11 +989,15 @@ export function SeatScreen({ handle }: { handle: string }) {
     return mergePhases([...streamed, ...stored], live);
   }, [history.data, phaseEvents, agent, agentId]);
 
-  const turns = useMemo(() => groupTurns(phases), [phases]);
+  // SHARED WITH THE GROUPS LAST DRAWN (`~/lib/share.ts`): the phases are
+  // merged and grouped afresh whenever any phase arrives — the store's phase
+  // slice is the whole company's — so every turn card drew again for a phase
+  // that was somebody else's. Shared, a card draws when its own turn moved.
+  const turns = useShared(useMemo(() => groupTurns(phases), [phases]));
   // WHICH OF THESE ARE THE SAME WORK. A turn id names one run, so a trigger
   // that failed without acting and came back is several cards here — and
   // without this they read as the seat having been asked twice.
-  const attempt = useMemo(() => attempts(turns), [turns]);
+  const attempt = useShared(useMemo(() => attempts(turns), [turns]));
   // The same count the Cost screen takes, over this seat's spend rows: how
   // many runs each trigger got in the window. A PLAIN RECORD, SHARED
   // (`~/lib/share.ts`), because the cost tab's columns close over it and a
@@ -1832,7 +1837,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       key={g.turnId}
                       group={g}
                       row={turnRows.get(g.turnId)}
-                      attempt={attempt.get(g.turnId)}
+                      attempt={attemptOf(attempt, g.turnId)}
                       defaultOpen
                     />
                   ))}
@@ -1850,7 +1855,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   key={g.turnId}
                   group={g}
                   row={turnRows.get(g.turnId)}
-                  attempt={attempt.get(g.turnId)}
+                  attempt={attemptOf(attempt, g.turnId)}
                   defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
                 />
               ))}

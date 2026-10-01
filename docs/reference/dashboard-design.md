@@ -776,6 +776,19 @@ whenever anything moved: the audit drew 350 rows for one changed tracker
 commit, and draws one. Only data is walked — an array or an object literal; a
 `Map`, a `Date` or a React element is kept only where it is the same value.
 
+**A seat's turn cards are rows too.** The Turns tab draws a seat's turns as
+cards rather than grid rows, grouped from the phases afresh whenever any phase
+arrives — and the store's phase slice is the whole company's, so another seat
+finishing a phase regrouped this seat's turns. The cards were not memoised and
+a group held its nested calls in a `Map`, which the walk does not read, so
+every card drew again on every render of the page (twelve of twelve for a
+phase that belonged to somebody else; every card twice for a review landing on
+one). A card is now memoised (`components/TurnCard.tsx`), a group holds its
+nested calls and a screen its attempts in plain records (`nestedUnder`,
+`attemptOf` in `lib/phases.ts`), and the page keeps both through `useShared`:
+another seat's phase draws no card, and a phase landing on a turn draws that
+turn's.
+
 **An org push is an event as well as a state.** The store shares an org
 projection like any other push, so one deep-equal to the last moves nothing —
 and a chart write that changed only what the projection leaves out (a seat's

@@ -684,8 +684,14 @@ export interface TurnGroup {
       worker. `host_phase` and `host_iteration` have always been on the
       wire and nothing read them, so a fan-out of eight rendered as eight
       siblings of the turn's own two phases and the reader had to work out
-      which round each belonged to. */
-  nested: Map<string, PhaseRecord[]>;
+      which round each belonged to.
+
+      A PLAIN RECORD rather than a `Map`, read through [nestedUnder], because
+      a screen keeps the groups it drew last time through `useShared`
+      (`~/lib/share.ts`), whose walk reads arrays and object literals only:
+      holding a `Map`, every group was a new value whenever any phase arrived
+      — any seat's — and every turn card on a seat's page drew again. */
+  nested: Record<string, PhaseRecord[]>;
   /** The newest instant in the group — what the group is ordered by. */
   at: string;
   /** When the turn's OLDEST phase began. Never moves; `at` does. */
@@ -716,6 +722,15 @@ export interface TurnGroup {
   trigger: PhaseRecord["trigger"];
 }
 
+/** The nested calls filed under the phase `key` names, or undefined where it made none. */
+export function nestedUnder(
+  nested: Record<string, PhaseRecord[]>,
+  key: string,
+): PhaseRecord[] | undefined {
+  // OWN KEYS ONLY: a record inherits `toString` and its kind.
+  return Object.hasOwn(nested, key) ? nested[key] : undefined;
+}
+
 /** Which attempt at its trigger a turn was, for the turns a screen holds. */
 export interface Attempt {
   /** 1-based, oldest attempt first. */
@@ -740,22 +755,33 @@ export interface Attempt {
  * A turn with no work key gets no attempt at all: an empty key is the absence
  * of an identity, not a value, so grouping on it would report every
  * unledgered turn on the page as attempts at one another.
+ *
+ * A PLAIN RECORD, by turn id, read through [attemptOf], for [TurnGroup.nested]'s
+ * reason: a screen hands each turn card its attempt, and a value it can keep
+ * through `useShared` is one whose cards draw only when an attempt moved.
  */
-export function attempts(groups: readonly TurnGroup[]): Map<string, Attempt> {
+export function attempts(groups: readonly TurnGroup[]): Record<string, Attempt> {
   const byKey = new Map<string, TurnGroup[]>();
   for (const g of groups) {
     if (!g.workKey) continue;
     byKey.set(g.workKey, [...(byKey.get(g.workKey) ?? []), g]);
   }
-  const out = new Map<string, Attempt>();
+  const out: Record<string, Attempt> = {};
   for (const list of byKey.values()) {
     if (list.length < 2) continue;
     // Oldest first, so "attempt 1" is the one that ran first however the
     // caller happened to sort them.
     const ordered = [...list].sort((a, b) => tsKey(a.startedAt) - tsKey(b.startedAt));
-    ordered.forEach((g, i) => out.set(g.turnId, { index: i + 1, total: ordered.length }));
+    ordered.forEach((g, i) => {
+      out[g.turnId] = { index: i + 1, total: ordered.length };
+    });
   }
   return out;
+}
+
+/** Which attempt `turnId` was among [attempts], or undefined for a turn that ran once. */
+export function attemptOf(all: Record<string, Attempt>, turnId: string): Attempt | undefined {
+  return Object.hasOwn(all, turnId) ? all[turnId] : undefined;
 }
 
 /** Group phases into the turns they belong to, newest turn first. */
@@ -782,14 +808,14 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       // the card, the trace tree, the counts — agrees about what a turn's
       // phases are.
       const own: PhaseRecord[] = [];
-      const nested = new Map<string, PhaseRecord[]>();
+      const nested: Record<string, PhaseRecord[]> = {};
       for (const rec of ordered) {
         if (!rec.hostPhase) {
           own.push(rec);
           continue;
         }
         const host = phaseKey(rec.turnId, rec.hostPhase, rec.hostIteration);
-        nested.set(host, [...(nested.get(host) ?? []), rec]);
+        nested[host] = [...(nestedUnder(nested, host) ?? []), rec];
       }
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
       // THE WINDOW THIS TURN RAN IN, by the one rule [turnSpan] states. It was

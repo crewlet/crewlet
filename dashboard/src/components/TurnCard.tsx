@@ -12,7 +12,7 @@
  * and shoved everything below it down the page.
  */
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Button, cx, EmptyValue, Tag } from "@crewlethq/ui";
 import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 // STILL OURS, and for the reason PhaseCard gives at its own import: `PhaseTag`
@@ -23,10 +23,22 @@ import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { ClockText } from "~/app/frame/cells.tsx";
 import { useNavigator } from "~/app/router.tsx";
-import { triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
+import { nestedUnder, triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
 
-export function TurnCard({
+/**
+ * A turn card, drawn again only when something it draws has changed.
+ *
+ * MEMOISED ON ITS PROPS, which are values: the group (kept by the screen
+ * through `useShared`, so an unchanged turn is the object drawn last time),
+ * the engine's row for it, its attempt and whether it opens. A seat's page
+ * renders for every push it reads — any seat's phase, the roster, the spend
+ * rollup — and unmemoised every card drew again, with every phase card inside
+ * an open one, for a phase that belonged to somebody else.
+ */
+export const TurnCard = memo(TurnCardView);
+
+function TurnCardView({
   group,
   row,
   attempt,
@@ -199,7 +211,7 @@ export function TurnCard({
             <PhaseCard
               key={p.key}
               record={p}
-              nested={group.nested.get(p.key)}
+              nested={nestedUnder(group.nested, p.key)}
               defaultOpen={i === 0 && group.phases.length === 1}
             />
           ))}

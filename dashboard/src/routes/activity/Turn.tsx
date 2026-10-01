@@ -101,6 +101,7 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
+  nestedUnder,
   phaseDuration,
   streamedPhases,
   turnSpan,
@@ -134,6 +135,9 @@ interface TurnRecord {
   /** `turn_completed` — the learning record: the clock, the outcome, the words. */
   learning: EventRecord | undefined;
 }
+
+/** A turn with no group in hand files nothing under any phase. */
+const NO_NESTED: Record<string, PhaseRecord[]> = {};
 
 function field(event: EventRecord | undefined, key: string): unknown {
   return (event?.payload as Record<string, unknown> | undefined)?.[key];
@@ -274,7 +278,7 @@ export interface TurnView {
   /** The turn's OWN phases, without those workers. */
   own: PhaseRecord[];
   /** The workers, filed under the phase that spawned each. */
-  nested: Map<string, PhaseRecord[]>;
+  nested: Record<string, PhaseRecord[]>;
   rec: TurnRecord;
   /**
    * The seat the turn ran for: its name, and the HANDLE its page is at —
@@ -447,7 +451,7 @@ export function useTurnView(turnId: string): TurnView {
     [phases, turnId],
   );
   const own = group?.phases ?? phases;
-  const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
+  const nested = group?.nested ?? NO_NESTED;
   const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
   const workerCount = phases.filter((p) => p.hostPhase).length;
 
@@ -1574,7 +1578,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Card.Header>
           <div className="col gap-2">
             {own.map((p, i) => (
-              <PhaseCard key={p.key} record={p} nested={nested.get(p.key)} defaultOpen={i === 0} />
+              <PhaseCard
+                key={p.key}
+                record={p}
+                nested={nestedUnder(nested, p.key)}
+                defaultOpen={i === 0}
+              />
             ))}
             {!own.length && (
               <span className="t-caption">

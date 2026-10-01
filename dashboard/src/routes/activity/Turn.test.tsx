@@ -231,7 +231,7 @@ describe("turnFacts", () => {
       cut: false,
       phases: [],
       own: [{} as PhaseRecord],
-      nested: new Map(),
+      nested: {},
       rec: {} as TurnView["rec"],
       role: "",
       handle: "",
