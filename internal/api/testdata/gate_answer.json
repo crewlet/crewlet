@@ -163,6 +163,79 @@
         }
       ]
     },
+    "readmit_map_in": {
+      "node": "node-4",
+      "evicted": false,
+      "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4",
+      "complete": true,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280007
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.pages:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4415
+          }
+        }
+      ],
+      "map": {
+        "gesture": "in",
+        "landed": true
+      }
+    },
+    "readmit_map_unwritten": {
+      "node": "node-4",
+      "evicted": false,
+      "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4",
+      "complete": false,
+      "domains": [
+        {
+          "domain": "tracker",
+          "stream": "CREWLET_TRACKER_LOG",
+          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.tracker:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_TRACKER_LOG",
+            "generation": 1,
+            "seq": 918280007
+          }
+        },
+        {
+          "domain": "pages",
+          "stream": "CREWLET_PAGES_LOG",
+          "op_id": "01a0c450-6c00-759e-9f3d-a8947a7f9160.readmit-node-4.readmit.pages:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_PAGES_LOG",
+            "generation": 1,
+            "seq": 4415
+          }
+        }
+      ],
+      "map": {
+        "gesture": "in",
+        "landed": false,
+        "error": "engine: the estate map could not be read or written",
+        "actions": [
+          "retry_same_op"
+        ],
+        "hint": "the estate map could not be read or written: the same gesture under the same operation id finishes it once coordination answers"
+      }
+    },
     "superseded": {
       "node": "node-4",
       "evicted": true,

@@ -74,6 +74,35 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 	}
 }
 
+// gateReadmitScenarios is a readmission's answers with the estate map's part —
+// the in, which lifts an eviction's bar — rendered as readmissions: one that
+// put the node back, and one whose every log took the node back while the map
+// could not be written, which leaves it barred until the same operation is
+// finished. A readmission carries a map part only under a divided layout, and
+// the estate screen readmits a node its map bars, so these are that screen's
+// fixtures as much as the gate dialog's.
+func gateReadmitScenarios() map[string]engine.GateResult {
+	gesture := statelog.DeriveOpID(time.UnixMilli(1_790_000_000_000), "readmit-node-4",
+		"internal/api", "gate_answer.json")
+	applied := func(domain, stream string, seq uint64) engine.DomainGate {
+		return engine.DomainGate{Domain: domain, Stream: stream,
+			OpID:     statelog.StepOpID(gesture, "readmit", domain+":node-4"),
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: stream, Generation: 1, Seq: seq}}
+	}
+	withMap := func(m engine.MapGate) engine.GateResult {
+		return engine.GateResult{Node: "node-4", OpID: gesture, Map: &m,
+			Domains: []engine.DomainGate{
+				applied("tracker", "CREWLET_TRACKER_LOG", 918280007),
+				applied("pages", "CREWLET_PAGES_LOG", 4415)}}
+	}
+	return map[string]engine.GateResult{
+		"readmit_map_in": withMap(engine.MapGate{Gesture: "in", Landed: true}),
+		"readmit_map_unwritten": withMap(engine.MapGate{Gesture: "in",
+			Err: engine.ErrEstateUnavailable}),
+	}
+}
+
 // gateRefusalScenarios is every refusal the routes answer before anything is
 // written, wrapped the way the engine wraps them.
 func gateRefusalScenarios() map[string]error {
@@ -117,6 +146,9 @@ func renderGateScenarios(t *testing.T) []byte {
 	answers := map[string]api.GateAnswer{}
 	for name, result := range gateAnswerScenarios() {
 		answers[name] = api.RenderGate(true, result)
+	}
+	for name, result := range gateReadmitScenarios() {
+		answers[name] = api.RenderGate(false, result)
 	}
 	refusals := map[string]goldenRefusal{}
 	for name, err := range gateRefusalScenarios() {
@@ -253,6 +285,24 @@ func TestTheGateAnswerCarriesTheMapsPartOnlyWhereThereIsOne(t *testing.T) {
 	if !out.Complete || out.Map == nil || !out.Map.Landed || out.Map.Gesture != "out" ||
 		out.Map.Actions != nil || out.Map.Hint != "" {
 		t.Errorf("a landed map rendered complete %v, %+v", out.Complete, out.Map)
+	}
+
+	// A READMISSION'S IN IS ITS LAST PART: every log took the node back and
+	// the map could not be written, so the node is still barred and the
+	// gesture is unfinished — finished by the same operation, never a
+	// fresh one.
+	readmits := gateReadmitScenarios()
+	stuck := api.RenderGate(false, readmits["readmit_map_unwritten"])
+	if stuck.Evicted || stuck.Complete || stuck.Map == nil || stuck.Map.Gesture != "in" ||
+		stuck.Map.Landed || !slices.Equal(stuck.Map.Actions,
+		[]statelog.GateAction{statelog.GateRetrySameOp}) {
+		t.Errorf("a readmission whose map was not written rendered %+v, map %+v",
+			stuck, stuck.Map)
+	}
+	in := api.RenderGate(false, readmits["readmit_map_in"])
+	if in.Evicted || !in.Complete || in.Map == nil || in.Map.Gesture != "in" ||
+		!in.Map.Landed || in.Map.Actions != nil {
+		t.Errorf("a readmission that put the node back rendered %+v, map %+v", in, in.Map)
 	}
 	raw, err := json.Marshal(api.RenderGate(true, scenarios["applied"]))
 	if err != nil {
