@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/objstore/upkeep"
@@ -802,7 +803,10 @@ func (e *Engine) NativeStatus(ctx context.Context) []ReplicationStatus {
 // two domains after somebody added a third.
 func (e *Engine) Domains() []statelog.Domain { return registeredDomains() }
 
-// Tracker is this node's tracker read side, or nil.
+// Tracker is this node's OWN copy's tracker read side, or nil — what this
+// node's router answers from while it serves the partition, and what a test
+// reads to see one node's copy. A surface reads through [OperatorWork]
+// instead, which answers from a peer's copy once this one is out of service.
 func (e *Engine) Tracker() *tracker.Reader {
 	n := e.native.Load()
 	if n == nil {
@@ -828,7 +832,8 @@ func (e *Engine) NodeGate() *NodeGate {
 	return n.gate
 }
 
-// Pages is this node's knowledge read side, or nil.
+// Pages is this node's OWN copy's knowledge read side, or nil — see
+// [Engine.Tracker]; a surface reads through [OperatorPages].
 func (e *Engine) Pages() *pages.Reader {
 	n := e.native.Load()
 	if n == nil {
@@ -1772,6 +1777,72 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 		}
 	}
 	return e.router.Pages(), e.router.Pages(), e.router.Await, true
+}
+
+// ---- what the operator's surfaces are given ------------------------------ //
+
+// OperatorWork is the tracker's read side as the operator's surfaces reach it —
+// the dashboard's and the REST routes' questions, and the operator's own MCP —
+// or false where this company runs no native tracker here.
+//
+// THE ROUTER'S, ON EVERY NODE, exactly as a seat's tools are handed it
+// ([Engine.trackerHalves]), and never this node's own copy read directly. Read
+// directly, a data node whose copy was out of service — wrong rather than
+// behind, or its file shut — sent its own seats' calls to a peer's copy and
+// went on answering its operator from the one it had stopped serving: a board,
+// a person's inbox or a purge read off rows the node itself would not vouch
+// for, or refused outright where the file was shut. Through the router the
+// operator is answered as the seats are, from this node's copy while it serves
+// and from a holder's whose copy does while it does not.
+func OperatorWork(e *Engine) (estate.Work, bool) {
+	runTracker, _, ok := e.nativeHalves()
+	if !ok || !runTracker || e.router == nil {
+		return estate.Work{}, false
+	}
+	return e.router.Work(), true
+}
+
+// OperatorWorkWriter is the tracker's write side for those surfaces, acting as
+// whichever party each call names — or false where this node hands out no
+// tracker writer: a company on a vendor tracker, or a data node in a
+// maintenance mode, which may publish nothing ([Engine.trackerHalves]'s rule).
+func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) {
+	if _, ok := e.trackerHalves(); !ok {
+		return nil, false
+	}
+	return e.router.WriterAs, true
+}
+
+// OperatorPages is the knowledge base's read side as the operator's surfaces
+// reach it, through the router for [OperatorWork]'s reason — or false where
+// this company runs no native knowledge base here.
+func OperatorPages(e *Engine) (estate.Pages, bool) {
+	_, wiki, ok := e.nativeHalves()
+	if !ok || !wiki || e.router == nil {
+		return estate.Pages{}, false
+	}
+	return e.router.Pages(), true
+}
+
+// OperatorPageWriter is the knowledge base's write side for those surfaces, or
+// false where this node hands out none ([Engine.pageHalves]'s rule).
+func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
+	if _, _, _, ok := e.pageHalves(); !ok {
+		return estate.Pages{}, false
+	}
+	return e.router.Pages(), true
+}
+
+// AwaitEstate waits until whichever holder answers this node's next read has
+// applied at — the router's session floor, which a surface's write raises so
+// its own next read sees it ([estate.Router.Await]) — the same wait a seat's
+// tools are handed, and for the same reason: this node's own applier is not the
+// one that answers once its copy is out of service.
+func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
+	if e.router == nil {
+		return nil
+	}
+	return e.router.Await(ctx, at)
 }
 
 // reservedContainers are the containers a seat's own writes may not target.

@@ -14,7 +14,11 @@
 // — so something has to answer them. A data node SERVES the partitions it holds
 // over the broker ([Serve]), and every node's tools are handed facades of one
 // [Router], which answers in-process where this node serves the partition and
-// asks a holder that does otherwise.
+// asks a holder that does otherwise. So are the operator's surfaces — the
+// API's tracker and knowledge-base routes and the operator's own MCP — for the
+// reason a data node's own seats are: read straight off the node's copy, a
+// node whose copy was out of service answered its operator from the very copy
+// it had stopped serving its seats from.
 //
 // # Every operation addresses a partition
 //

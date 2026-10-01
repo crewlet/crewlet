@@ -65,14 +65,18 @@ stateDiagram-v2
 ## How a request reaches its partition
 
 Every node — with `data` or without — reaches the estate through one
-**router**, and a seat's tools behave the same on either kind of node. Each
-operation says which partition it addresses: an operation on one task the
-partition that holds the task, a query over a domain that domain's partition.
-At layout 0 every one of them addresses `estate.000`.
+**router**, and a seat's tools behave the same on either kind of node. So do
+the operator's surfaces: the API's tracker and knowledge-base routes, a
+project's file rows and the operator's own MCP go through the same router, so a
+data node whose copy is out of service answers its operator from a peer's copy,
+exactly as it answers its seats. Each operation says which partition it
+addresses: an operation on one task the partition that holds the task, a query
+over a domain that domain's partition. At layout 0 every one of them addresses
+`estate.000`.
 
 ```mermaid
 flowchart TD
-    op[A seat's tool call] --> part[Resolve its partition]
+    op[A seat's tool call,<br/>or an operator's request] --> part[Resolve its partition]
     part --> local{Does this node serve it?}
     local -- yes --> own[Answer from this node's own copy,<br/>after its floors]
     local -- no --> order[Ask its holders in order:<br/>last to answer, rendezvous, silent ones last]

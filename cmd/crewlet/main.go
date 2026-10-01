@@ -41,6 +41,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -2451,26 +2452,27 @@ func appStateKeyMaterial(boot *config.Bootstrap) []string {
 	return out
 }
 
-// nativeWork and nativePages are this node's projections, as the read surface
-// wants them: an interface that is genuinely nil when the company runs the
-// vendor backends.
+// nativeWork and nativePages are the company's tracker and knowledge base as
+// the read surface wants them — through this node's estate router, as a seat's
+// tools reach them ([engine.OperatorWork]) — or an interface that is genuinely
+// nil when the company runs the vendor backends.
 //
 // THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
 // would satisfy its `!= nil` registration check and then panic on the first
 // question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
 // place where the check is a registration rather than a call.
-// nativeFiles is a project's file rows, or nil — converted for [nativeWork]'s
-// reason.
-func nativeFiles(e *engine.Engine) queries.FileReader {
-	if r := e.Tracker(); r != nil {
-		return r
+func nativeWork(e *engine.Engine) queries.WorkReader {
+	if w, ok := engine.OperatorWork(e); ok {
+		return w
 	}
 	return nil
 }
 
-func nativeWork(e *engine.Engine) queries.WorkReader {
-	if r := e.Tracker(); r != nil {
-		return r
+// nativeFiles is a project's file rows, or nil — converted for [nativeWork]'s
+// reason.
+func nativeFiles(e *engine.Engine) queries.FileReader {
+	if w, ok := engine.OperatorWork(e); ok {
+		return w
 	}
 	return nil
 }
@@ -2500,28 +2502,47 @@ func nativeNodes(e *engine.Engine) api.NodeGate {
 // `As` is where that identity is bound, and it is a tracker concept the API
 // package deliberately does not import a concrete type for.
 func nativePurger(e *engine.Engine) api.TaskPurger {
-	w := e.TrackerWriter()
-	if w == nil {
+	as, ok := engine.OperatorWorkWriter(e)
+	if !ok {
 		return nil
 	}
-	return purgeAdapter{writer: w}
+	return purgeAdapter{as: as}
 }
 
-type purgeAdapter struct{ writer *tracker.Writer }
+type purgeAdapter struct {
+	as func(estate.Actor) estate.WorkWriter
+}
 
 func (p purgeAdapter) PurgeAs(ctx context.Context, operator, opID, id, project,
 	reason string) (tracker.WriteResult, error) {
 
-	return p.writer.As(operator, tracker.AuthorOperator,
-		tracker.Provenance{OperatorID: operator}).
+	return p.as(estate.Actor{Handle: operator, Kind: tracker.AuthorOperator,
+		Provenance: tracker.Provenance{OperatorID: operator}}).
 		PurgeTask(ctx, opID, id, project, reason)
 }
 
 func nativePages(e *engine.Engine) queries.PageReader {
-	if r := e.Pages(); r != nil {
-		return r
+	if p, ok := engine.OperatorPages(e); ok {
+		return p
 	}
 	return nil
+}
+
+// operatorWriter is the tracker's writer acting as one operator, through this
+// node's estate router ([engine.OperatorWorkWriter]).
+//
+// ONE HELPER FOR THE EIGHT SEAMS BELOW, because turning a tool-layer actor
+// into a writer is a single rule and eight hand-copied spellings of it are
+// eight chances for one seam to carry an identity the other seven do not —
+// which is exactly what happened to [tracker.Provenance.Seat], the field that
+// decides whose person record a write lands on.
+func operatorWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) estate.WorkWriter {
+	return as(estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: tracker.Provenance{
+		// THE CREDENTIAL AND THE PERSON IT NAMES, which are two
+		// different facts: the author stays the token, and the seat is
+		// only ever the subject of that person's own state.
+		OperatorID: actor.OperatorID, Seat: actor.Seat,
+	}})
 }
 
 // operatorMCP builds the operator's own MCP surface, or nil.
@@ -2541,23 +2562,18 @@ func nativePages(e *engine.Engine) queries.PageReader {
 // named. It used to be stamped from the caller's own team, which an operator
 // has not got — so every item filed here read "Filed into: no unit" beside a
 // project page naming its unit.
-// operatorWriter is the node's tracker writer acting as one operator.
 //
-// ONE HELPER FOR THE EIGHT SEAMS BELOW, because turning a tool-layer actor
-// into a writer is a single rule and eight hand-copied spellings of it are
-// eight chances for one seam to carry an identity the other seven do not —
-// which is exactly what happened to [tracker.Provenance.Seat], the field that
-// decides whose person record a write lands on.
-func operatorWriter(w *tracker.Writer, actor builtin.Actor) *tracker.Writer {
-	return w.As(actor.Handle, actor.Kind, tracker.Provenance{
-		// THE CREDENTIAL AND THE PERSON IT NAMES, which are two
-		// different facts: the author stays the token, and the seat is
-		// only ever the subject of that person's own state.
-		OperatorID: actor.OperatorID, Seat: actor.Seat,
-	})
+// THROUGH THIS NODE'S ESTATE ROUTER, every read and every write, as a seat's
+// tools are ([engine.OperatorWork]) — so an operator's assistant on a node
+// whose copy is out of service is answered from a peer's, not from the copy
+// this node stopped serving.
+func operatorMCP(e *engine.Engine) *opsmcp.Server {
+	return opsmcp.New(operatorOptions(e))
 }
 
-func operatorMCP(e *engine.Engine) *opsmcp.Server {
+// operatorOptions is what [operatorMCP] builds its surface from — separate so a
+// test can see which seams the operator's assistant is handed.
+func operatorOptions(e *engine.Engine) opsmcp.Options {
 	var opts opsmcp.Options
 	if c := e.Company(); c != nil && c.Config != nil {
 		opts.Company = c.Config.Name
@@ -2576,7 +2592,9 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 		}
 		return c.Org
 	}
-	if reader, writer := e.Tracker(), e.TrackerWriter(); reader != nil && writer != nil {
+	reader, readable := engine.OperatorWork(e)
+	writer, writable := engine.OperatorWorkWriter(e)
+	if readable && writable {
 		opts.Work = builtin.WorkDeps{
 			Reader: reader,
 			// THE OPERATOR'S OWN CREDENTIAL IS THE PARTY, and it comes
@@ -2691,16 +2709,22 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 			// watchers and never her — while the tool's own description,
 			// which their assistant reads, promised it would.
 			Mentions: engine.LiveMentions(e),
-			Await:    e.WaitCommitted,
+			// THE ROUTER'S SESSION FLOOR, which every write above
+			// raises — never this node's own applier, which is not the
+			// one that answers the next read once its copy is out of
+			// service.
+			Await: e.AwaitEstate,
 		}
 	}
-	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
+	pageReader, pagesReadable := engine.OperatorPages(e)
+	pageWriter, pagesWritable := engine.OperatorPageWriter(e)
+	if pagesReadable && pagesWritable {
 		opts.Pages = builtin.PageDeps{
-			Reader: reader, Writer: writer,
+			Reader: pageReader, Writer: pageWriter,
 			Actor:    opsmcp.PageActor,
 			Mentions: engine.LiveMentions(e),
 			Reserved: reservedFor(e),
-			Await:    e.WaitCommitted,
+			Await:    e.AwaitEstate,
 		}
 	}
 	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
@@ -2718,7 +2742,7 @@ func operatorMCP(e *engine.Engine) *opsmcp.Server {
 	// AND THE PROJECT'S OWN LEAD, which is a different question: one is
 	// about a person's line, the other about who plans a container's work.
 	opts.LeadsProject = engine.LeadsProjectOf(e)
-	return opsmcp.New(opts)
+	return opts
 }
 
 // leadsOf answers whether one handle leads another, walking the chart's own
@@ -2808,15 +2832,16 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 	}
 }
 
-// nativeWorkSearch is this node's ranked item search, as the read surface
-// wants it — converted for [nativeWork]'s reason.
+// nativeWorkSearch is the ranked item search, as the read surface wants it —
+// through this node's estate router as a seat's search is
+// ([engine.WorkSearcher]), and converted for [nativeWork]'s reason.
 //
 // SEPARATE FROM [nativeWork], because the two are absent independently: a node
-// can hold the whole board and no lexical index at all, while it is building
-// one. Folding them into one seam would leave the board unregistered on a node
-// that can answer every question on it.
+// can hold the whole board and no lexical index at all. Folding them into one
+// seam would leave the board unregistered on a node that can answer every
+// question on it.
 func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
-	if s := e.WorkSearch(); s != nil {
+	if s := engine.WorkSearcher(e); s != nil {
 		return s
 	}
 	return nil

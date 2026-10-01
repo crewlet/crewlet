@@ -106,6 +106,24 @@ func (w Work) Search(ctx context.Context, text string, limit int) ([]tracker.Ran
 	return call(ctx, w.r, opWorkSearch, nil, workSearchArgs{Text: text, Limit: limit})
 }
 
+// Workload answers a unit's workload.
+func (w Work) Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
+	tracker.WorkloadAnswer, error) {
+	return call(ctx, w.r, opWorkload, nil, workloadArgs{Query: q, Now: now})
+}
+
+// Inbox answers what the company has asked of one person.
+func (w Work) Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (
+	tracker.InboxAnswer, error) {
+	return call(ctx, w.r, opInbox, nil, inboxArgs{Query: q, Now: now})
+}
+
+// Routing answers who a change reached, and why.
+func (w Work) Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
+	tracker.RoutingAnswer, error) {
+	return call(ctx, w.r, opRouting, nil, routingArgs{Query: q, Now: now})
+}
+
 // WorkWriter is the tracker's write side, acting as one party.
 type WorkWriter struct {
 	r     *Router
@@ -226,6 +244,92 @@ func (w WorkWriter) RecordTurn(ctx context.Context, opID string,
 	return out, err
 }
 
+// WriteView saves a view.
+func (w WorkWriter) WriteView(ctx context.Context, opID string, view tracker.View) (
+	tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWriteView, &w.actor, writeViewArgs{OpID: opID, View: view})
+	w.settled(out.Result)
+	return out, err
+}
+
+// WriteTypes sets the company's task types.
+func (w WorkWriter) WriteTypes(ctx context.Context, opID string, types []tracker.TaskType) (
+	tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWriteTypes, &w.actor, writeTypesArgs{OpID: opID, Types: types})
+	w.settled(out.Result)
+	return out, err
+}
+
+// WriteFields sets the company's custom fields.
+func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []tracker.FieldDef) (
+	tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWriteFields, &w.actor, writeFieldsArgs{OpID: opID, Fields: fields})
+	w.settled(out.Result)
+	return out, err
+}
+
+// WriteInbox marks a person's inbox entries.
+func (w WorkWriter) WriteInbox(ctx context.Context, opID, handle string,
+	read, unread, snoozed []tracker.InboxEntry, reasons []tracker.Reason,
+	seenThrough tracker.Position) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWriteInbox, &w.actor, writeInboxArgs{
+		OpID: opID, Handle: handle, Read: read, Unread: unread, Snoozed: snoozed,
+		Reasons: reasons, SeenThrough: seenThrough,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// WritePins sets a person's pinned views and favourites.
+func (w WorkWriter) WritePins(ctx context.Context, opID, handle string,
+	pinnedViews []string, favorites []tracker.Favorite) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWritePins, &w.actor, writePinsArgs{
+		OpID: opID, Handle: handle, PinnedViews: pinnedViews, Favorites: favorites,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// WritePriorities sets a person's priority order.
+func (w WorkWriter) WritePriorities(ctx context.Context, opID, handle string,
+	priorities []string, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWritePriorities, &w.actor, writePrioritiesArgs{
+		OpID: opID, Handle: handle, Priorities: priorities, Authority: authority,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// RemoveTask moves a task, or its subtree, to the trash.
+func (w WorkWriter) RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opRemoveTask, &w.actor, removeTaskArgs{
+		OpID: opID, ID: id, Project: project, Subtree: subtree, Notify: notify,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// RestoreTask brings a task back out of the trash.
+func (w WorkWriter) RestoreTask(ctx context.Context, opID, id, project string,
+	notify *tracker.Notify) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opRestoreTask, &w.actor, restoreTaskArgs{
+		OpID: opID, ID: id, Project: project, Notify: notify,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// PurgeTask destroys a task and everything derived from it.
+func (w WorkWriter) PurgeTask(ctx context.Context, opID, id, project, reason string) (
+	tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opPurgeTask, &w.actor, purgeTaskArgs{
+		OpID: opID, ID: id, Project: project, Reason: reason,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
 // Pages is the knowledge base, read and written.
 type Pages struct{ r *Router }
 
@@ -246,6 +350,26 @@ func (p Pages) Get(ctx context.Context, ref string, fresh statelog.Freshness) (p
 func (p Pages) SkillPages(ctx context.Context, container string,
 	fresh statelog.Freshness) ([]pages.Page, error) {
 	return call(ctx, p.r, opSkillPages, nil, skillPagesArgs{Container: container, Fresh: fresh})
+}
+
+// Containers lists every container.
+func (p Pages) Containers(ctx context.Context, fresh statelog.Freshness) (
+	[]pages.ContainerListing, error) {
+	return call(ctx, p.r, opContainers, nil, containersArgs{Fresh: fresh})
+}
+
+// Activity answers what happened to a page, a container or the whole
+// knowledge base.
+func (p Pages) Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error) {
+	return call(ctx, p.r, opPageActivity, nil, q)
+}
+
+// Revision answers one revision of a page's body, and false where the page
+// has none at that version.
+func (p Pages) Revision(ctx context.Context, pageID string, version int,
+	fresh statelog.Freshness) (pages.Revision, bool, error) {
+	out, err := call(ctx, p.r, opRevision, nil, revisionArgs{PageID: pageID, Version: version, Fresh: fresh})
+	return out.Revision, out.Found, err
 }
 
 // Create writes a new page. Never repeated when unanswered — see [ErrOutcomeUnknown].

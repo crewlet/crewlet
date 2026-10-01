@@ -49,7 +49,7 @@ func TestMigrateCheckReportsPendingWithoutApplying(t *testing.T) {
 		if perr != nil {
 			t.Fatalf("Pending: %v", perr)
 		}
-		node := estate(t, schemas, store.EstateNode)
+		node := schemaOf(t, schemas, store.EstateNode)
 		if len(node.Applied) != 0 || len(node.Pending) == 0 {
 			t.Errorf("-check applied %d migration(s)", len(node.Applied))
 		}
@@ -459,15 +459,15 @@ func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
-	node := estate(t, schemas, store.EstateNode)
+	node := schemaOf(t, schemas, store.EstateNode)
 	if len(node.Applied) == 0 || len(node.Pending) != 0 {
 		t.Errorf("applied %d, pending %d: the named document was not the one migrated",
 			len(node.Applied), len(node.Pending))
 	}
 }
 
-// estate picks one estate's report out of Pending's answer.
-func estate(t *testing.T, schemas []store.Schema, want store.Estate) store.Schema {
+// schemaOf picks one estate's report out of Pending's answer.
+func schemaOf(t *testing.T, schemas []store.Schema, want store.Estate) store.Schema {
 	t.Helper()
 	for _, s := range schemas {
 		if s.Estate == want {

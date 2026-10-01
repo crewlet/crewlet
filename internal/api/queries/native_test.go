@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -53,6 +54,9 @@ type stubWork struct {
 	taskLevel      statelog.ReadLevel
 	taskFresh      statelog.Freshness
 	taskWants      tracker.DetailWants
+
+	// expandErr is what expanding a view's parameters fails with.
+	expandErr error
 
 	err error
 }
@@ -104,6 +108,9 @@ func (s *stubWork) ExpandedQuery(_ context.Context, params map[string]any,
 	// parsed query does not carry: it is a property of the surface rather
 	// than a filter, so a handler that dropped it would still return rows.
 	s.expandViewer = viewer
+	if s.expandErr != nil {
+		return tracker.Query{}, s.expandErr
+	}
 	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
 }
 
@@ -538,6 +545,40 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	}
 	if errors.Is(err, queries.ErrUnavailable) {
 		t.Errorf("a refusal about the request was also reported as %v", queries.ErrUnavailable)
+	}
+}
+
+// A READ NO COPY COULD ANSWER IS "COME BACK", NEVER "ASK SOMETHING ELSE".
+//
+// The tracker is read through the estate router, as a seat's tools read it, so
+// a copy out of service, a peer restarting or no data node live at all reaches
+// this surface as the router's own refusal. The answers that read what is left
+// of a failure as a refusal of the request — a view's expansion, the activity
+// gate — told a caller to change a question nothing was wrong with, with a
+// 400; and the registry answered a 500 where a screen should try again.
+func TestAReadNoCopyCouldAnswerIsUnavailable(t *testing.T) {
+	t.Parallel()
+	unserved := &estate.ErrPartitionUnserved{Partition: "estate.000",
+		Detail: "data-a: no answer"}
+	for _, tc := range []struct {
+		name   string
+		what   string
+		params map[string]any
+		work   *stubWork
+	}{
+		{"the board", "work_items", map[string]any{}, &stubWork{err: unserved}},
+		{"a view's expansion", "work_items", map[string]any{},
+			&stubWork{expandErr: fmt.Errorf("estate: tracker.expanded_query: %w", unserved)}},
+		{"the activity", "work_activity", map[string]any{"container": "workspace"},
+			&stubWork{err: unserved}},
+		{"no data node at all", "work_items", map[string]any{},
+			&stubWork{err: fmt.Errorf("%w for tracker.tasks", estate.ErrNoDataNode)}},
+	} {
+		_, err := askNative(t, queries.Sources{Work: tc.work}, tc.what, tc.params)
+		if !errors.Is(err, queries.ErrUnavailable) || errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("%s: a read no copy could answer = %v, want %v and never %v", tc.name,
+				err, queries.ErrUnavailable, queries.ErrBadParams)
+		}
 	}
 }
 

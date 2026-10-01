@@ -68,7 +68,7 @@ and the decision above holds through it unchanged: one subject per serving
 node, the asker's choice of node, the failover rule stated per operation and
 the session floor on every request. What the amendment adds is the unit the
 router routes by — a PARTITION of the estate, which every operation names —
-and four consequences of routing by one on every node rather than by "any
+and five consequences of routing by one on every node rather than by "any
 data node" on the nodes that hold none:
 
 - A data node reaches its OWN copy through the same router, in-process, held to
@@ -87,6 +87,13 @@ data node" on the nodes that hold none:
   serving that partition and keeps its seats: for that partition it is a node
   without data, reaching the estate through a node that holds it — which is
   this record's decision, applied to the node itself.
+- The OPERATOR'S surfaces go through the same router as the seats' tools: the
+  API's tracker and knowledge-base routes, a project's file rows and the
+  operator's own MCP. Read straight off the node's own copy, a data node whose
+  copy was out of service answered its seats from a peer and its operator from
+  the copy it had stopped serving. What still keeps `ingress` on a data node is
+  what acts on a node's own state log rather than reads the estate — the
+  retention report, capacity, reanchor, eviction and backup.
 
 Under the single-file layout every data node serves the one partition, so what
 a fleet sees of this is routing through the watched view of the presence

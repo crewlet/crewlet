@@ -278,11 +278,14 @@ is the shape for an agent host you want small and disposable, and
 [Running One Agent Somewhere Else](satellite-nodes.md) walks through one.
 
 What it can run is `seats` alone, until the partitioned estate is live.
-`ingress` and `workers` read and write a node's own copy of the estate
-directly under this release's single-file layout — the API's tracker and
-knowledge surfaces, the retention report, the scheduler, the trim — so Tier A
-refuses either without `data`, naming the field and saying the refusal lasts
-only as long as that layout. Its seats use exactly the tools a data
+`ingress` and `workers` still read and write a node's own copy of the estate
+directly under this release's single-file layout — the API's retention report,
+capacity, reanchor, eviction and backup surfaces, the scheduler, the trim — so
+Tier A refuses either without `data`, naming the field and saying the refusal
+lasts only as long as that layout. (The API's tracker and knowledge-base
+routes and the operator's MCP do not: they go through the same router a seat's
+tools do, so a data node whose copy is out of service answers its operator from
+a peer's copy, as it answers its seats.) Its seats use exactly the tools a data
 node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to a data node that serves the partition the call

@@ -169,7 +169,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		OperatorID: party.OperatorID,
 		Project:    s.projectOf(viewer),
 	}, now, time.UTC)
-	if err != nil {
+	switch {
+	case transient(err):
+		// NOT A REFUSAL OF THE REQUEST: the expansion is read through
+		// the estate router, and no copy could answer it yet.
+		return nil, err
+	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
@@ -799,7 +804,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		switch {
 		case errors.Is(err, tracker.ErrNoTask):
 			return nil, ErrNotFound
-		case errors.Is(err, statelog.ErrUnavailable):
+		case errors.Is(err, statelog.ErrUnavailable), transient(err):
 			return nil, err
 		}
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller

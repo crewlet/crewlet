@@ -25,6 +25,7 @@ var carriedByServer = map[string]string{
 	"tracker.ProjectQuery.Units":       "the serving node attaches its own chart (opProjects)",
 	"tracker.ProjectDetailQuery.Units": "the serving node attaches its own chart (opProject)",
 	"tracker.DetailWants.Units":        "the serving node attaches its own chart (opTask)",
+	"tracker.WorkloadQuery.Units":      "the serving node attaches its own chart (opWorkload)",
 
 	"tracker.TaskPatch.Watch":   "carried beside the patch, in updateTaskArgs",
 	"tracker.TaskPatch.Relate":  "carried beside the patch, in updateTaskArgs",

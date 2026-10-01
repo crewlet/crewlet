@@ -17,11 +17,13 @@ import (
 // The serving half: what a data node answers with.
 //
 // Declared here, by the consumer, and kept to exactly what the operations
-// below call — which is the seat surface's tools and nothing more. The
-// operator's own surfaces (views, the catalogue, a person's inbox, the trash)
-// are served by the API, and the API runs only where the data is.
+// below call — the seat surface's tools, and the operator's own surfaces: the
+// dashboard and REST routes and the operator's MCP. Those reach the estate
+// through this node's router as a seat's tools do, so a node whose copy is out
+// of service answers its operator from a peer's copy rather than its own, and a
+// node holding no data serves them at all.
 
-// TrackerReader is the tracker's read side a seat's tools ask of.
+// TrackerReader is the tracker's read side the surfaces ask of.
 type TrackerReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
@@ -40,6 +42,12 @@ type TrackerReader interface {
 	Project(ctx context.Context, q tracker.ProjectDetailQuery) (tracker.ProjectDetail, error)
 	Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error)
 	File(ctx context.Context, project, path string, fresh statelog.Freshness) (tracker.FileDetail, error)
+
+	// The operator's reads: a unit's workload, a person's inbox and the
+	// routing a change took.
+	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (tracker.WorkloadAnswer, error)
+	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
+	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (tracker.RoutingAnswer, error)
 }
 
 // TrackerWriter is the tracker's write side, as ONE actor — see [Actor].
@@ -64,6 +72,23 @@ type TrackerWriter interface {
 	PutFile(ctx context.Context, opID string, put tracker.FilePut) (tracker.WriteResult, error)
 	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (tracker.WriteResult, error)
 	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
+
+	// The operator's writes, which no seat is handed: saved views, the
+	// catalogue, a person's own state, the trash and the purge.
+	WriteView(ctx context.Context, opID string, view tracker.View) (tracker.WriteResult, error)
+	WriteTypes(ctx context.Context, opID string, types []tracker.TaskType) (tracker.WriteResult, error)
+	WriteFields(ctx context.Context, opID string, fields []tracker.FieldDef) (tracker.WriteResult, error)
+	WriteInbox(ctx context.Context, opID, handle string, read, unread, snoozed []tracker.InboxEntry,
+		reasons []tracker.Reason, seenThrough tracker.Position) (tracker.WriteResult, error)
+	WritePins(ctx context.Context, opID, handle string, pinnedViews []string,
+		favorites []tracker.Favorite) (tracker.WriteResult, error)
+	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
+		authority tracker.PersonAuthority) (tracker.WriteResult, error)
+	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
+		notify *tracker.Notify) (tracker.WriteResult, error)
+	RestoreTask(ctx context.Context, opID, id, project string,
+		notify *tracker.Notify) (tracker.WriteResult, error)
+	PurgeTask(ctx context.Context, opID, id, project, reason string) (tracker.WriteResult, error)
 }
 
 // WorkSearcher is the tracker's ranked search.
@@ -76,6 +101,13 @@ type PageReader interface {
 	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
 	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
 	SkillPages(ctx context.Context, container string, fresh statelog.Freshness) ([]pages.Page, error)
+
+	// The operator's reads: every container, what happened to a page or
+	// a container, and one revision of a page's body.
+	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.ContainerListing, error)
+	Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error)
+	Revision(ctx context.Context, pageID string, version int,
+		fresh statelog.Freshness) (pages.Revision, bool, error)
 }
 
 // PageWriter is the knowledge base's write side. The author is an argument
@@ -342,6 +374,50 @@ var opWorkSearch = define("tracker.search", opRead, wholeDomain[workSearchArgs](
 		return b.WorkSearch.Search(ctx, a.Text, a.Limit)
 	}).floorless()
 
+type workloadArgs struct {
+	Query tracker.WorkloadQuery
+	Now   time.Time
+}
+
+var opWorkload = define("tracker.workload", opRead, wholeDomain[workloadArgs](trackerDomain), false,
+	func(ctx context.Context, b Backend, _ *Actor, a workloadArgs) (tracker.WorkloadAnswer, error) {
+		if b.Tracker == nil {
+			return tracker.WorkloadAnswer{}, errNoHalf
+		}
+		a.Query.Units = b.Units
+		return b.Tracker.Workload(ctx, a.Query, a.Now)
+	})
+
+type inboxArgs struct {
+	Query tracker.InboxQuery
+	Now   time.Time
+}
+
+// opInbox is named `read_inbox`, beside `write_inbox`, never `tracker.inbox`:
+// an operation's name is not a subject, but that one is spelled like a seat's
+// inbox subject, and the guard that keeps every subject in internal/queue/topics
+// rightly reads any literal ending `.inbox` as one written by hand.
+var opInbox = define("tracker.read_inbox", opRead, wholeDomain[inboxArgs](trackerDomain), false,
+	func(ctx context.Context, b Backend, _ *Actor, a inboxArgs) (tracker.InboxAnswer, error) {
+		if b.Tracker == nil {
+			return tracker.InboxAnswer{}, errNoHalf
+		}
+		return b.Tracker.Inbox(ctx, a.Query, a.Now)
+	})
+
+type routingArgs struct {
+	Query tracker.RoutingQuery
+	Now   time.Time
+}
+
+var opRouting = define("tracker.routing", opRead, wholeDomain[routingArgs](trackerDomain), false,
+	func(ctx context.Context, b Backend, _ *Actor, a routingArgs) (tracker.RoutingAnswer, error) {
+		if b.Tracker == nil {
+			return tracker.RoutingAnswer{}, errNoHalf
+		}
+		return b.Tracker.Routing(ctx, a.Query, a.Now)
+	})
+
 // ---- the tracker's writes ------------------------------------------------ //
 
 // A PROJECT'S FILES, as rows: the listing, one file with its manifest, and
@@ -576,6 +652,158 @@ var opEnsureTags = define("tracker.ensure_tags", opIdempotentWrite, wholeDomain[
 		return ensuredTags{Created: created, Warnings: warnings}, err
 	})
 
+// ---- the operator's writes ------------------------------------------------ //
+
+// The writes only the operator's surfaces make — no seat is handed a tool that
+// reaches them — routed for the reason every other write is: the node the
+// operator asked may hold no data, or a copy that is out of service.
+
+type writeViewArgs struct {
+	OpID string
+	View tracker.View
+}
+
+var opWriteView = define("tracker.write_view", opIdempotentWrite, wholeDomain[writeViewArgs](trackerDomain), true,
+	func(ctx context.Context, b Backend, actor *Actor, a writeViewArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.WriteView(ctx, a.OpID, a.View)
+	})
+
+type writeTypesArgs struct {
+	OpID  string
+	Types []tracker.TaskType
+}
+
+var opWriteTypes = define("tracker.write_types", opIdempotentWrite, wholeDomain[writeTypesArgs](trackerDomain), true,
+	func(ctx context.Context, b Backend, actor *Actor, a writeTypesArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.WriteTypes(ctx, a.OpID, a.Types)
+	})
+
+type writeFieldsArgs struct {
+	OpID   string
+	Fields []tracker.FieldDef
+}
+
+var opWriteFields = define("tracker.write_fields", opIdempotentWrite, wholeDomain[writeFieldsArgs](trackerDomain), true,
+	func(ctx context.Context, b Backend, actor *Actor, a writeFieldsArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.WriteFields(ctx, a.OpID, a.Fields)
+	})
+
+type writeInboxArgs struct {
+	OpID        string
+	Handle      string
+	Read        []tracker.InboxEntry
+	Unread      []tracker.InboxEntry
+	Snoozed     []tracker.InboxEntry
+	Reasons     []tracker.Reason
+	SeenThrough tracker.Position
+}
+
+var opWriteInbox = define("tracker.write_inbox", opIdempotentWrite, wholeDomain[writeInboxArgs](trackerDomain), true,
+	func(ctx context.Context, b Backend, actor *Actor, a writeInboxArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.WriteInbox(ctx, a.OpID, a.Handle, a.Read, a.Unread, a.Snoozed, a.Reasons, a.SeenThrough)
+	})
+
+type writePinsArgs struct {
+	OpID        string
+	Handle      string
+	PinnedViews []string
+	Favorites   []tracker.Favorite
+}
+
+var opWritePins = define("tracker.write_pins", opIdempotentWrite, wholeDomain[writePinsArgs](trackerDomain), true,
+	func(ctx context.Context, b Backend, actor *Actor, a writePinsArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.WritePins(ctx, a.OpID, a.Handle, a.PinnedViews, a.Favorites)
+	})
+
+type writePrioritiesArgs struct {
+	OpID       string
+	Handle     string
+	Priorities []string
+	Authority  tracker.PersonAuthority
+}
+
+var opWritePriorities = define("tracker.write_priorities", opIdempotentWrite, wholeDomain[writePrioritiesArgs](trackerDomain), true,
+	func(ctx context.Context, b Backend, actor *Actor, a writePrioritiesArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.WritePriorities(ctx, a.OpID, a.Handle, a.Priorities, a.Authority)
+	})
+
+type removeTaskArgs struct {
+	OpID    string
+	ID      string
+	Project string
+	Subtree bool
+	Notify  *tracker.Notify
+}
+
+var opRemoveTask = define("tracker.remove_task", opIdempotentWrite, byTask(func(a removeTaskArgs) string { return a.ID }), true,
+	func(ctx context.Context, b Backend, actor *Actor, a removeTaskArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.RemoveTask(ctx, a.OpID, a.ID, a.Project, a.Subtree, a.Notify)
+	})
+
+type restoreTaskArgs struct {
+	OpID    string
+	ID      string
+	Project string
+	Notify  *tracker.Notify
+}
+
+var opRestoreTask = define("tracker.restore_task", opIdempotentWrite, byTask(func(a restoreTaskArgs) string { return a.ID }), true,
+	func(ctx context.Context, b Backend, actor *Actor, a restoreTaskArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.RestoreTask(ctx, a.OpID, a.ID, a.Project, a.Notify)
+	})
+
+type purgeTaskArgs struct {
+	OpID    string
+	ID      string
+	Project string
+	Reason  string
+}
+
+// A PURGE crosses like every other tracker write — its operation id is what a
+// repeat after an unanswered one collapses on, and the purge's own ledger row
+// answers that repeat with the first outcome — and its refusals keep their
+// identity, so an operator re-running one is told it is purged, not behind.
+var opPurgeTask = define("tracker.purge_task", opIdempotentWrite, byTask(func(a purgeTaskArgs) string { return a.ID }), true,
+	func(ctx context.Context, b Backend, actor *Actor, a purgeTaskArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.PurgeTask(ctx, a.OpID, a.ID, a.Project, a.Reason)
+	})
+
 // ---- the knowledge base -------------------------------------------------- //
 
 type listPagesArgs struct {
@@ -615,6 +843,56 @@ var opSkillPages = define("pages.skill_pages", opRead, wholeDomain[skillPagesArg
 			return nil, errNoHalf
 		}
 		return b.Pages.SkillPages(ctx, a.Container, a.Fresh)
+	})
+
+type containersArgs struct {
+	Fresh statelog.Freshness
+}
+
+var opContainers = define("pages.containers", opRead, wholeDomain[containersArgs](pagesDomain), false,
+	func(ctx context.Context, b Backend, _ *Actor, a containersArgs) ([]pages.ContainerListing, error) {
+		if b.Pages == nil {
+			return nil, errNoHalf
+		}
+		return b.Pages.Containers(ctx, a.Fresh)
+	})
+
+// A PAGE'S ACTIVITY is that page's partition's; a container's, or the whole
+// knowledge base's, addresses the domain as one.
+var opPageActivity = define("pages.activity", opRead,
+	func(ctx context.Context, l statelog.Layout, r Resolver, q pages.PageActivityQuery) (
+		[]statelog.PartitionID, error) {
+		if q.Page != "" {
+			return byPage(func(q pages.PageActivityQuery) string { return q.Page })(ctx, l, r, q)
+		}
+		return wholeDomain[pages.PageActivityQuery](pagesDomain)(ctx, l, r, q)
+	}, false,
+	func(ctx context.Context, b Backend, _ *Actor, q pages.PageActivityQuery) (pages.PageActivity, error) {
+		if b.Pages == nil {
+			return pages.PageActivity{}, errNoHalf
+		}
+		return b.Pages.Activity(ctx, q)
+	})
+
+type revisionArgs struct {
+	PageID  string
+	Version int
+	Fresh   statelog.Freshness
+}
+
+// aRevision is [PageReader.Revision]'s two answers, named.
+type aRevision struct {
+	Revision pages.Revision
+	Found    bool
+}
+
+var opRevision = define("pages.revision", opRead, byPage(func(a revisionArgs) string { return a.PageID }), false,
+	func(ctx context.Context, b Backend, _ *Actor, a revisionArgs) (aRevision, error) {
+		if b.Pages == nil {
+			return aRevision{}, errNoHalf
+		}
+		rev, found, err := b.Pages.Revision(ctx, a.PageID, a.Version, a.Fresh)
+		return aRevision{Revision: rev, Found: found}, err
 	})
 
 type createPageArgs struct {

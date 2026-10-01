@@ -529,9 +529,9 @@ var needsData = map[placement.NodeRole]string{
 	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
 		"embedding pass, the maintenance sweep, the scheduler — read and " +
 		"write this node's own copy of the replicated estate directly",
-	placement.RoleIngress: "the API's tracker, knowledge-base and operator " +
-		"surfaces — the retention report, capacity, reanchor, eviction and " +
-		"backup — read this node's own estate and act on its own state log",
+	placement.RoleIngress: "the API's retention report, capacity, reanchor, " +
+		"eviction and backup surfaces read this node's own copy of the " +
+		"replicated estate and act on its own state log",
 }
 
 // validateTopology refuses slot combinations that cannot work.
