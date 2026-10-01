@@ -3102,9 +3102,10 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   company and "no events" from a query the engine refused are the same empty
   list and completely different problems. `QueryState` renders the engine's own
   code (`unknown_query`, `unauthorized`, `not_found`, `unavailable`,
-  `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
-  saying which. `bad_params` is the one that names the SCREEN as the fault: the
-  engine understood the question and refused it, so retrying sends the same bad
+  `bad_params`, `query_failed`) and the client's own — the socket's `timeout`
+  and `closed`, a REST read's `unanswered` — as a sentence saying which.
+  `bad_params` is the one that names the SCREEN as the fault: the engine
+  understood the question and refused it, so retrying sends the same bad
   request again. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
   reload — WHEN the engine's frame says. Its `retry_after` is waited out in
@@ -3133,26 +3134,42 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   own backoff and stops retrying a `503` the engine wrote with none — and the
   disconnect dialog, whose wait on a `surface_busy` surface is that refusal's
   `Retry-After` and nothing of its own. So does every screen that reads over
-  REST and asks again by itself (`restRetryMs`, armed by the answer through
-  `lib/reread.ts`): the Integrations screen's setup listing, its pass history
-  — whose four-second tick while a pass runs and one-minute tick otherwise
-  give way to the hint — and one pass while it runs, and the credential
-  listing. There a `503` the engine wrote is drawn as `unavailable` (the
-  credential listing drew it as a fault on the node, and the pass history as
-  "No pass has run on this node") and asked again when it says, and a
-  failure with no hint keeps whatever cadence the screen already had. Every
+  REST, and they read through ONE hook: `useRestRead` (`lib/restRead.ts`),
+  `useQuery`'s twin for the answers no socket question gives — the
+  Integrations screen's setup listing, its pass history (a four-second tick
+  while a pass runs, a minute otherwise) and one pass while it runs, and the
+  credential listing with its reference index. It replaced four hand-written
+  loaders, each with its own generation counter, failure mapping and idea of
+  when to ask again, and each wrong about a different case. It keeps the last
+  answer through any failure but a refusal on authority (a reader refused is
+  shown nothing they were refused), starts from nothing when its question
+  changes, and arms every next ask where the answer lands (`lib/reread.ts`),
+  at the wait `restRetryMs` decides: a `503` the engine wrote is drawn as
+  `unavailable` (the credential listing drew it as a fault on the node, and
+  the pass history as "No pass has run on this node") and asked again when it
+  says, never at its zero; a failure with no hint keeps the cadence of the
+  answer the screen holds; and a read NO ANSWER FROM THE ENGINE CAME BACK TO —
+  status 0, a request past its thirty-second deadline or dropped on the way,
+  or a gateway's page in the engine's place — is drawn as its own client code,
+  `unanswered`, and asked again on a backoff from one second to thirty (the
+  same `unansweredRetryMs` the org builder's check backs off on). That one was
+  drawn as `closed`, whose banner says the socket went away and the screen
+  reads again once it is back: true only of a socket nobody had seen go, and
+  with the socket up — the ordinary case for one slow request — nothing read
+  the credential listing or an unfollowed pass again until a reload. The
+  socket coming back still asks every such read at once
+  (`useRereadOnReconnect`), as `useQuery` does, ahead of the backoff. Every
   failure of those reads is drawn through ONE mapping (`restFailure`, the
-  REST twin of `queryFailure`) — a refusal on authority, a request that never
-  arrived as `closed`, the engine's `503` as `unavailable`, anything else as a
-  fault — because each screen that mapped its own forgot a different case:
-  the setup listing drew nothing for a `500`, one pass drew nothing under its
-  row, and a FIRST read of the pass history that failed was drawn as "No pass
-  has run on this node". And each of those reads asks again when the socket
-  comes back (`useRereadOnReconnect`), as `useQuery` does, which is what makes
-  the `closed` banner's "reads again once the socket is back" true of a REST
-  read. The table is keyed on the protocol's `QueryErrorCode` union, so a
-  code added to the union without a sentence here is a compile error, and a Go
-  test in `internal/api/stream` pins that union to the codes the engine sends —
+  REST twin of `queryFailure`) — a refusal on authority, the engine's `503` as
+  `unavailable`, a read nobody answered as `unanswered`, any other answer the
+  engine wrote as a fault — because each screen that mapped its own forgot a
+  different case: the setup listing drew nothing for a `500`, one pass drew
+  nothing under its row, and a FIRST read of the pass history that failed was
+  drawn as "No pass has run on this node". The table is keyed on
+  `ReadErrorCode` — the protocol's `QueryErrorCode` union and the one code a
+  REST read adds — so a code added to either without a sentence here is a
+  compile error, and a Go test in `internal/api/stream` pins `QueryErrorCode`
+  to the codes the engine sends plus the socket's own `timeout` and `closed` —
   and a second one pins those codes to the engine's own
   [refusal vocabulary](api-endpoints.md#every-refusal-is-one-envelope), so a
   query error and the HTTP refusal of the same question can never be two

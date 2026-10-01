@@ -298,7 +298,7 @@ var RETRY_AFTER_MAX_MS = 3e4;
 * changed it (a reconnect, a write, a reload). A caller whose answer carried no
 * hint at all does not come here: what an absent hint means is the caller's —
 * the socket's is {@link UNAVAILABLE_RETRY_MS}, a request that never reached
-* the engine backs off.
+* the engine backs off ({@link unansweredRetryMs}).
 *
 * The hint is whole seconds and never negative — both parsers that read one
 * admit nothing else — so anything at or under zero is the zero.
@@ -306,6 +306,42 @@ var RETRY_AFTER_MAX_MS = 3e4;
 function retryAfterMs(seconds) {
 	if (!(seconds > 0)) return null;
 	return Math.min(seconds * 1e3, RETRY_AFTER_MAX_MS);
+}
+/**
+* The wait before the first retry of a request NOBODY ANSWERED, in
+* milliseconds: one that never came back (its deadline passed, the connection
+* dropped), or one something in front of the engine answered instead.
+*
+* THERE IS NO HINT TO WAIT OUT, because the engine said nothing — and that is
+* not the engine saying waiting will not change it, which is the zero above.
+* So the wait is the client's own, and it BACKS OFF: asking at once would
+* hammer an engine that is restarting, or a network that is down, with
+* requests that each wait out the transport's deadline. One second is long
+* enough not to spin against a refused connection and short enough to notice
+* a restarted engine the moment it accepts one.
+*/
+var UNANSWERED_RETRY_BASE_MS = 1e3;
+/**
+* The longest wait between retries of a request nobody answered, in
+* milliseconds: `REQUEST_TIMEOUT_MS` in `rest.ts`, the longest one attempt may
+* itself take, so an engine that recovers is never noticed later than one more
+* attempt would have taken to fail. `retry.test.ts` holds the two equal; this
+* file imports nothing, so it cannot name the other.
+*/
+var UNANSWERED_RETRY_MAX_MS = 3e4;
+/**
+* The wait before retry `failures` of a request nobody answered — 1 for the
+* first — doubling from {@link UNANSWERED_RETRY_BASE_MS} up to
+* {@link UNANSWERED_RETRY_MAX_MS}.
+*
+* ONE BACKOFF for every such request: the org builder's check and a screen's
+* REST read are the same question put to the same engine, and two copies of
+* the arithmetic would be two answers to how hard this page leans on a node
+* that is not answering.
+*/
+function unansweredRetryMs(failures) {
+	const exponent = Math.max(0, failures - 1);
+	return Math.min(UNANSWERED_RETRY_MAX_MS, UNANSWERED_RETRY_BASE_MS * 2 ** Math.min(exponent, 30));
 }
 //#endregion
 //#region src/protocol/session.ts
@@ -585,18 +621,28 @@ function noteSession(refusal) {
 * When a REST read that failed with `err` is asked again, in milliseconds, or
 * `null` for "not on a timer" — the REST twin of the socket's
 * `unavailableRetryMs`, for a screen that reads over REST and asks again on
-* its own.
+* its own. Decided on the code [restFailure] draws the failure as, so the
+* banner and the timer can never disagree about which failure this is.
 *
-* A `503` the engine wrote says when ([RestError.retryHint]), read through
-* `retryAfterMs`: waited out exactly, bounded, and its ZERO — a `503` with no
-* `Retry-After` — never on a timer, because the engine is saying waiting will
-* not change the answer. Every other failure carries no hint, since nobody at
-* the engine decided one, and waits `otherwise`: the screen's own cadence, or
-* `null` where it has none.
+* - A `503` the engine wrote says when ([RestError.retryHint]), read through
+*   `retryAfterMs`: waited out exactly, bounded, and its ZERO — a `503` with
+*   no `Retry-After` — never on a timer, because the engine is saying waiting
+*   will not change the answer.
+* - A read NOBODY ANSWERED backs off (`unansweredRetryMs`), from a second to
+*   thirty. It is the one failure with nothing that would ever ask again
+*   otherwise: the live socket can be up the whole time — a request past its
+*   deadline on a slow engine, one dropped on the way — so its coming back
+*   never happens, and a screen with no poll of its own held the banner until
+*   somebody reloaded.
+* - Every other failure carries no hint, since nobody at the engine decided
+*   one, and waits the screen's own `cadence`.
 */
-function restRetryMs(err, otherwise) {
-	const hint = err instanceof RestError ? err.retryHint : null;
-	return hint === null ? otherwise : retryAfterMs(hint);
+function restRetryMs(err, context) {
+	switch (restFailure(err).error) {
+		case "unavailable": return retryAfterMs(err.retryHint ?? 0);
+		case "unanswered": return unansweredRetryMs(context.unanswered);
+		default: return context.cadence;
+	}
 }
 /**
 * A failed REST read in `QueryState`'s terms: the code its banner is chosen
@@ -612,15 +658,22 @@ function restRetryMs(err, otherwise) {
 *
 * - A refusal on AUTHORITY (`401`, `403`) is `unauthorized`, carrying the rule
 *   and the grants it named.
-* - A request that never reached the engine (status 0 — the network, a request
-*   past its deadline) is `closed`: nothing refused it. Its banner says the
-*   screen reads again once the socket is back, so a screen that draws it
-*   reads again when the socket reconnects (`useRereadOnReconnect`).
 * - A `503` the engine wrote ([RestError.retryHint]) is `unavailable`, with
 *   its state-log code and hint: the banner says the screen asks again on its
 *   own, or — at zero — that asking will not change it.
-* - Anything else is `query_failed`, a fault on the node: a `500`, or an
-*   answer something in front of the engine wrote.
+* - A read NO ANSWER FROM THE ENGINE CAME BACK TO ([RestError.unanswered]) is
+*   `unanswered`: status 0 — a request past its thirty-second deadline, one
+*   dropped on the way — or a status something in front of the engine wrote
+*   (a gateway's `502` or `504`, a body cut off part way). Nothing refused it
+*   and nothing here knows what the engine would have said, and its banner
+*   says the screen asks again on its own, which [restRetryMs]'s backoff
+*   makes true. It was `closed`, whose banner says the SOCKET went away and
+*   the screen reads again once it is back: while the socket stayed up — the
+*   ordinary case for one slow request — neither was true, and the screen
+*   read again only on a reload. And a gateway's answer was `query_failed`,
+*   "the engine tried to answer and failed", about an answer the engine never
+*   wrote.
+* - Anything else is `query_failed`, a fault on the node: a `500` it wrote.
 *
 * A `404` is the CALLER'S to read first, because what it means is the route's
 * — the credential surface unregistered on this process, or one pass nobody
@@ -635,13 +688,13 @@ function restFailure(err) {
 		error: "unauthorized",
 		refusal: err.refusal
 	};
-	if (err.status === 0) return {
-		error: "closed",
-		refusal: null
-	};
 	if (err.retryHint !== null) return {
 		error: "unavailable",
 		refusal: err.refusal
+	};
+	if (err.unanswered) return {
+		error: "unanswered",
+		refusal: null
 	};
 	return {
 		error: "query_failed",
@@ -883,7 +936,12 @@ var rest = {
 	* precondition, reads a tag, cancels, or branches on a success status.
 	*/
 	request,
-	get: (path) => bodyOf("GET", path),
+	/**
+	* A read, ended by `signal` where the caller passes one: a read whose
+	* screen went, or whose answer a newer read superseded, has nobody left to
+	* hand its answer to (`lib/restRead.ts`).
+	*/
+	get: (path, signal) => bodyOf("GET", path, { signal }),
 	post: (path, body, headers) => bodyOf("POST", path, {
 		body: body ?? {},
 		headers
@@ -1822,4 +1880,4 @@ var auth = {
 	}
 };
 //#endregion
-export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RETRY_AFTER_MAX_MS, RestError, Store, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, restFailure, restRetryMs, retryAfterMs, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unavailableRetryMs };
+export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RETRY_AFTER_MAX_MS, RestError, Store, UNANSWERED_RETRY_BASE_MS, UNANSWERED_RETRY_MAX_MS, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, restFailure, restRetryMs, retryAfterMs, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unansweredRetryMs, unavailableRetryMs };

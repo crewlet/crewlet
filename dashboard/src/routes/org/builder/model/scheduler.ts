@@ -59,8 +59,10 @@
  * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
  * each wait out the transport's deadline. After a failure the next check waits
- * [backoffDelay], doubling per consecutive failure up to a cap, and changes
- * made meanwhile ride that retry instead of scheduling their own.
+ * [unansweredRetryMs] — the one backoff every unanswered request in this
+ * dashboard takes (`~/protocol/retry.ts`), doubling per consecutive failure up
+ * to a cap — and changes made meanwhile ride that retry instead of scheduling
+ * their own.
  *
  * UNLESS THE ENGINE SAID WHEN. A `503` the engine wrote carries a
  * `Retry-After` — a node behind the chart's log says how far, a draining one
@@ -80,7 +82,7 @@ import { chartPrint, fingerprint } from "./document.ts";
 import type { Draft } from "./draft.ts";
 import { isRecord } from "./json.ts";
 import { placeSettingsFindings, preflight, type PlacedProblem } from "./problems.ts";
-import { retryAfterMs } from "~/protocol/retry.ts";
+import { retryAfterMs, unansweredRetryMs } from "~/protocol/retry.ts";
 import {
   revisionOfEtag,
   type BuilderMode,
@@ -105,26 +107,6 @@ import {
  * second after which a response to an action stops feeling like its result.
  */
 export const CHECK_DEBOUNCE_MS = 300;
-
-/**
- * The wait before the first retry after an unanswered or failed check. One
- * second is long enough not to spin against a refused connection and short
- * enough to recover as soon as a restarting engine accepts one.
- */
-export const CHECK_BACKOFF_BASE_MS = 1_000;
-
-/**
- * The longest wait between retries: `REQUEST_TIMEOUT_MS` in `protocol/rest.ts`,
- * the longest a single attempt may itself take, so an engine that recovers is
- * never noticed later than one more attempt would have taken to fail.
- */
-export const CHECK_BACKOFF_MAX_MS = 30_000;
-
-/** The wait before retry `failures` (1 for the first). */
-export function backoffDelay(failures: number): number {
-  const exponent = Math.max(0, failures - 1);
-  return Math.min(CHECK_BACKOFF_MAX_MS, CHECK_BACKOFF_BASE_MS * 2 ** Math.min(exponent, 30));
-}
 
 export type CheckStatus =
   "checking" | "clean" | "problems" | "conflict" | "guarded" | "unreachable";
@@ -517,7 +499,7 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
       if (state.halted) return { state: base, effects };
       if (state.failures > 0) {
         // Ride the retry that is already scheduled.
-        const dueAt = state.dueAt ?? event.now + backoffDelay(state.failures);
+        const dueAt = state.dueAt ?? event.now + unansweredRetryMs(state.failures);
         if (state.dueAt === null) effects.push({ type: "wake", at: dueAt });
         return { state: { ...base, dueAt }, effects };
       }
@@ -546,7 +528,7 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
       if (event.status === "unreachable") {
         const hint = event.retryAfter ?? null;
         const failures = state.failures + 1;
-        const wait = hint === null ? backoffDelay(failures) : retryAfterMs(hint);
+        const wait = hint === null ? unansweredRetryMs(failures) : retryAfterMs(hint);
         if (wait === null) {
           // THE ENGINE SAID WAITING WILL NOT CHANGE IT, so no retry is due,
           // and a change to the draft is asked about as a fresh question

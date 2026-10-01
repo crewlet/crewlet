@@ -26,7 +26,7 @@
  * that one request, and nothing keeps it.
  */
 
-import { retryAfterMs } from "./retry.ts";
+import { retryAfterMs, unansweredRetryMs } from "./retry.ts";
 import { confirmStepUp, needSession, type StepUpWindow } from "./session.ts";
 import type { LogRefusal, QueryErrorCode, QueryRefusal } from "./types.ts";
 
@@ -204,27 +204,69 @@ function noteSession(refusal: RestError): void {
   }
 }
 
+/** What [restRetryMs] needs to know beyond the failure itself. */
+export interface RetryContext {
+  /**
+   * The screen's own cadence for the answer it holds, in milliseconds, or
+   * `null` where it has none: what a failure the engine gave no hint for
+   * waits, as the poll it replaces would have.
+   */
+  readonly cadence: number | null;
+  /**
+   * How many reads IN A ROW, this one included, nobody answered
+   * ([RestError.unanswered]) — what the backoff is counted from. Any answer
+   * the engine wrote, a refusal included, starts the count again.
+   */
+  readonly unanswered: number;
+}
+
 /**
  * When a REST read that failed with `err` is asked again, in milliseconds, or
  * `null` for "not on a timer" — the REST twin of the socket's
  * `unavailableRetryMs`, for a screen that reads over REST and asks again on
- * its own.
+ * its own. Decided on the code [restFailure] draws the failure as, so the
+ * banner and the timer can never disagree about which failure this is.
  *
- * A `503` the engine wrote says when ([RestError.retryHint]), read through
- * `retryAfterMs`: waited out exactly, bounded, and its ZERO — a `503` with no
- * `Retry-After` — never on a timer, because the engine is saying waiting will
- * not change the answer. Every other failure carries no hint, since nobody at
- * the engine decided one, and waits `otherwise`: the screen's own cadence, or
- * `null` where it has none.
+ * - A `503` the engine wrote says when ([RestError.retryHint]), read through
+ *   `retryAfterMs`: waited out exactly, bounded, and its ZERO — a `503` with
+ *   no `Retry-After` — never on a timer, because the engine is saying waiting
+ *   will not change the answer.
+ * - A read NOBODY ANSWERED backs off (`unansweredRetryMs`), from a second to
+ *   thirty. It is the one failure with nothing that would ever ask again
+ *   otherwise: the live socket can be up the whole time — a request past its
+ *   deadline on a slow engine, one dropped on the way — so its coming back
+ *   never happens, and a screen with no poll of its own held the banner until
+ *   somebody reloaded.
+ * - Every other failure carries no hint, since nobody at the engine decided
+ *   one, and waits the screen's own `cadence`.
  */
-export function restRetryMs(err: unknown, otherwise: number | null): number | null {
-  const hint = err instanceof RestError ? err.retryHint : null;
-  return hint === null ? otherwise : retryAfterMs(hint);
+export function restRetryMs(err: unknown, context: RetryContext): number | null {
+  switch (restFailure(err).error) {
+    case "unavailable":
+      return retryAfterMs((err as RestError).retryHint ?? 0);
+    case "unanswered":
+      return unansweredRetryMs(context.unanswered);
+    default:
+      return context.cadence;
+  }
 }
+
+/**
+ * What a failed READ is drawn as: every code a socket question fails with, and
+ * the one a REST read adds — `unanswered`, a request no answer from the engine
+ * came back to ([RestError.unanswered]).
+ *
+ * NOT A MEMBER OF `QueryErrorCode`, which is the socket's vocabulary: a Go
+ * test in `internal/api/stream` pins that union to the codes the engine sends
+ * plus the two the socket mints itself, and a REST read is not a socket
+ * question. `QueryState`'s banner table is keyed on this wider union, so a
+ * code here with no sentence is a compile error exactly as one there is.
+ */
+export type ReadErrorCode = QueryErrorCode | "unanswered";
 
 /** A failed REST read as the pair `QueryState` renders — see [restFailure]. */
 export interface RestFailure {
-  readonly error: QueryErrorCode;
+  readonly error: ReadErrorCode;
   readonly refusal: QueryRefusal | LogRefusal | null;
 }
 
@@ -242,15 +284,22 @@ export interface RestFailure {
  *
  * - A refusal on AUTHORITY (`401`, `403`) is `unauthorized`, carrying the rule
  *   and the grants it named.
- * - A request that never reached the engine (status 0 — the network, a request
- *   past its deadline) is `closed`: nothing refused it. Its banner says the
- *   screen reads again once the socket is back, so a screen that draws it
- *   reads again when the socket reconnects (`useRereadOnReconnect`).
  * - A `503` the engine wrote ([RestError.retryHint]) is `unavailable`, with
  *   its state-log code and hint: the banner says the screen asks again on its
  *   own, or — at zero — that asking will not change it.
- * - Anything else is `query_failed`, a fault on the node: a `500`, or an
- *   answer something in front of the engine wrote.
+ * - A read NO ANSWER FROM THE ENGINE CAME BACK TO ([RestError.unanswered]) is
+ *   `unanswered`: status 0 — a request past its thirty-second deadline, one
+ *   dropped on the way — or a status something in front of the engine wrote
+ *   (a gateway's `502` or `504`, a body cut off part way). Nothing refused it
+ *   and nothing here knows what the engine would have said, and its banner
+ *   says the screen asks again on its own, which [restRetryMs]'s backoff
+ *   makes true. It was `closed`, whose banner says the SOCKET went away and
+ *   the screen reads again once it is back: while the socket stayed up — the
+ *   ordinary case for one slow request — neither was true, and the screen
+ *   read again only on a reload. And a gateway's answer was `query_failed`,
+ *   "the engine tried to answer and failed", about an answer the engine never
+ *   wrote.
+ * - Anything else is `query_failed`, a fault on the node: a `500` it wrote.
  *
  * A `404` is the CALLER'S to read first, because what it means is the route's
  * — the credential surface unregistered on this process, or one pass nobody
@@ -259,8 +308,8 @@ export interface RestFailure {
 export function restFailure(err: unknown): RestFailure {
   if (!(err instanceof RestError)) return { error: "query_failed", refusal: null };
   if (err.unauthorized) return { error: "unauthorized", refusal: err.refusal };
-  if (err.status === 0) return { error: "closed", refusal: null };
   if (err.retryHint !== null) return { error: "unavailable", refusal: err.refusal };
+  if (err.unanswered) return { error: "unanswered", refusal: null };
   return { error: "query_failed", refusal: null };
 }
 
@@ -638,7 +687,12 @@ export const rest = {
    * precondition, reads a tag, cancels, or branches on a success status.
    */
   request,
-  get: (path: string) => bodyOf("GET", path),
+  /**
+   * A read, ended by `signal` where the caller passes one: a read whose
+   * screen went, or whose answer a newer read superseded, has nobody left to
+   * hand its answer to (`lib/restRead.ts`).
+   */
+  get: (path: string, signal?: AbortSignal) => bodyOf("GET", path, { signal }),
   post: (path: string, body?: unknown, headers?: Record<string, string>) =>
     bodyOf("POST", path, { body: body ?? {}, headers }),
   put: (path: string, body?: unknown, headers?: Record<string, string>) =>

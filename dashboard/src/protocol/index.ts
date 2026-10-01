@@ -19,7 +19,14 @@ export {
   queryFailure,
   unavailableRetryMs,
 } from "./socket.ts";
-export { RETRY_AFTER_MAX_MS, retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
+export {
+  RETRY_AFTER_MAX_MS,
+  retryAfterMs,
+  UNANSWERED_RETRY_BASE_MS,
+  UNANSWERED_RETRY_MAX_MS,
+  unansweredRetryMs,
+  UNAVAILABLE_RETRY_MS,
+} from "./retry.ts";
 export type { QueryFailure } from "./socket.ts";
 export { api } from "./api.ts";
 export {
@@ -31,7 +38,14 @@ export {
   restFailure,
   restRetryMs,
 } from "./rest.ts";
-export type { RequestOptions, RestFailure, RestResponse, QueryValue } from "./rest.ts";
+export type {
+  ReadErrorCode,
+  RequestOptions,
+  RestFailure,
+  RestResponse,
+  RetryContext,
+  QueryValue,
+} from "./rest.ts";
 export {
   GATE_ACTIONS,
   GATE_ACTIONS_KEEPING_OPERATION,

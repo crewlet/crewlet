@@ -22,7 +22,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Avatar,
   Button,
@@ -62,7 +62,7 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { needsSentence } from "~/lib/refusal.ts";
-import { useReread, useRereadOnReconnect } from "~/lib/reread.ts";
+import { useRestRead, type RestRead } from "~/lib/restRead.ts";
 import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
@@ -71,7 +71,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { rest, RestError, restFailure, restRetryMs, type RestFailure } from "~/protocol/index.ts";
+import { rest, RestError, type RestFailure } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type {
   EventRecord,
@@ -1725,23 +1725,31 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
 }
 
 /**
- * Why a REST read on this screen failed, as the pair `QueryState` draws
- * ([restFailure]) — or null for a refusal on AUTHORITY, which every read here
- * draws as its own `guarded` sentence naming the grant it takes.
+ * A REST read on this screen, in the terms each panel draws it in: the
+ * refusal on AUTHORITY apart — every read here draws that as its own
+ * `guarded` sentence naming the grant it takes — and every other failure as
+ * the pair `QueryState` draws.
  *
- * EVERY FAILURE IS SAID, never only the engine's `503`. That was the one this
- * screen had learned to draw — "asks again on its own", or at zero that asking
- * will not change it, and asked again exactly when it said (`~/lib/reread.ts`)
- * — and every other failure still drew nothing or a lie: the listing went
- * quiet with no buttons and no banner for a `500` or a request that never
- * arrived, the pass history said "No pass has run on this node" when its FIRST
- * read failed, and one pass drew nothing under the row that opened it. A
- * request that never reached the engine is `closed`, whose banner promises a
- * read once the socket is back, and each read here keeps that promise
- * (`useRereadOnReconnect`).
+ * EVERY FAILURE IS SAID, never only the engine's `503`. That was the one these
+ * reads had learned to draw, and every other failure still drew nothing or a
+ * lie: the listing went quiet with no buttons and no banner for a `500`, the
+ * pass history said "No pass has run on this node" when its FIRST read
+ * failed, and one pass drew nothing under the row that opened it. And a read
+ * no answer came back to is `unanswered`, which asks again on its own — it
+ * was `closed`, whose promise of a read "once the socket is back" nothing
+ * kept while the socket stayed up. See `~/lib/restRead.ts`.
  */
-function failureOf(err: unknown): RestFailure | null {
-  return err instanceof RestError && err.unauthorized ? null : restFailure(err);
+function setupState<T>(read: RestRead<T>): {
+  guarded: boolean;
+  needs: string[];
+  failure: RestFailure | null;
+} {
+  const refused = read.failure?.error === "unauthorized";
+  return {
+    guarded: refused,
+    needs: refused && read.error instanceof RestError ? read.error.grants : [],
+    failure: refused ? null : read.failure,
+  };
 }
 
 /**
@@ -1768,120 +1776,48 @@ export function useSetup(): {
    * else made the page re-render, which is why it looked like a refresh
    * fixed it. Nothing was wrong; the answer had not arrived.
    *
-   * TRUE AGAIN WHILE A RE-READ IS IN FLIGHT, because the same disagreement
-   * happens in both directions. After a connect the rows say the block
-   * exists while this half still says it does not, and the card offered
-   * Connect beside Connected. After a disconnect the rows are gone while
-   * this half still says configured and satisfied, and the card had no tag
-   * and no button at all. A card rendered from one half is wrong either way,
-   * and a moment of the skeleton already on this screen is honest about
-   * which of the two it is: nothing is known yet.
+   * TRUE AGAIN WHILE A RE-READ A PERSON ASKED FOR IS IN FLIGHT ([reload]),
+   * because the same disagreement happens in both directions. After a
+   * connect the rows say the block exists while this half still says it
+   * does not, and the card offered Connect beside Connected. After a
+   * disconnect the rows are gone while this half still says configured and
+   * satisfied, and the card had no tag and no button at all. A card rendered
+   * from one half is wrong either way, and a moment of the skeleton already
+   * on this screen is honest about which of the two it is: nothing is known
+   * yet. A refresh nobody asked for — the tab coming back, the socket coming
+   * back, a retry — keeps the cards: blanking six of them because somebody
+   * switched tabs would report an absence that is not there.
    */
   loading: boolean;
   /**
    * Why the listing could not be read, other than a refusal on authority —
-   * see [failureOf] — or null. The screen draws it as the banner a socket
-   * question's failure draws, and reads again when that banner says it will.
+   * see [setupState] — or null. The screen draws it as the banner a socket
+   * question's failure draws, and the read asks again when that banner says
+   * it does.
    */
   failure: RestFailure | null;
+  /** Read again, holding [loading] until it answers — after a write. */
   reload: () => void;
 } {
-  const [listing, setListing] = useState<SetupListing | null>(null);
-  const [guarded, setGuarded] = useState(false);
-  const [needs, setNeeds] = useState<string[]>([]);
-  const [failure, setFailure] = useState<RestFailure | null>(null);
-  const [loading, setLoading] = useState(true);
-  const reread = useReread();
-
-  // `quiet` re-reads without the skeleton, for a refresh nobody asked for.
-  // Every re-read a person triggers keeps it, because the two halves of this
-  // screen disagree for a moment either side of a connect and a card drawn
-  // from one of them is wrong; a background refresh has no such moment, and
-  // blanking six cards because somebody came back to the tab would be the
-  // screen reporting an absence that is not there.
-  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST.
-  //
-  // Three things start one — mount, the tab becoming visible and
-  // useRecheck, which deliberately fires the same read twice 700 ms apart —
-  // so several can be in flight at once. Every answer was written into state
-  // unconditionally, and nothing polls this route, so whichever landed last
-  // is what the screen held until the operator changed tabs or came back to
-  // the screen. A generation counter is what useQuery in this same tree
-  // already uses for exactly this, and it is why its doc argues against a
-  // second hand-rolled loader.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      // An unmounted screen has no state to write into, and a stale
-      // generation is what says so to a read still in flight.
-      generation.current++;
-    },
-    [],
+  // NOTHING POLLS THIS ROUTE: it is asked at mount, after a write, when the
+  // engine says, and — because AN AGENT'S APP IS SET UP AT THE CODE HOST, IN
+  // ANOTHER TAB, and this listing is the only thing that carries the roster —
+  // whenever the tab comes back, which is exactly the moment a seat that
+  // offered Create needs to be offering Install instead. A SIGN-IN FROM THIS
+  // SCREEN'S BANNER is a screen of its own that comes back here, so the mount
+  // is what reads again as the new reader.
+  const read = useRestRead(
+    "/setup/integrations",
+    (signal) => rest.get("/setup/integrations", signal) as Promise<SetupListing>,
+    { refetchOnFocus: true },
   );
-
-  const reload = useCallback(
-    (quiet = false) => {
-      generation.current++;
-      const mine = generation.current;
-      reread.cancel();
-      if (!quiet) setLoading(true);
-      void (async () => {
-        try {
-          const answer = (await rest.get("/setup/integrations")) as SetupListing;
-          if (generation.current !== mine) return;
-          setListing(answer);
-          setGuarded(false);
-          setNeeds([]);
-          setFailure(null);
-        } catch (err) {
-          if (generation.current !== mine) return;
-          // A refusal is not an empty answer. The screen keeps every read it
-          // already has and simply offers no writes.
-          setListing(null);
-          setGuarded(err instanceof RestError && err.unauthorized);
-          setNeeds(err instanceof RestError ? err.grants : []);
-          setFailure(failureOf(err));
-          // NOTHING POLLS THIS ROUTE, so a node that said "ask me in two
-          // seconds" was asked again only when somebody changed tabs. It is
-          // asked when it says, and a failure it gave no hint for waits for
-          // a person, as every failure here used to.
-          reread.after(restRetryMs(err, null), () => reload(true));
-        } finally {
-          // ANSWERED, not answered WELL. A refusal is a state the screen can
-          // render honestly, with the banner and no buttons; waiting is not.
-          if (generation.current === mine) setLoading(false);
-        }
-      })();
-    },
-    [reread],
-  );
-
-  // A SIGN-IN FROM THIS SCREEN'S BANNER is a screen of its own that comes back
-  // here, so this mount is what reads again as the new reader.
-  useEffect(reload, [reload]);
-  // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
-  // listing is the only thing that carries the roster: nothing pushes it, and
-  // no answer this screen holds says when a person finished creating an app.
-  // So it is re-read when the tab comes back, which is exactly the moment a
-  // seat that offered Create needs to be offering Install instead.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") reload(true);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [reload]);
-  // AND WHEN THE SOCKET COMES BACK, which is what a `closed` banner promises.
-  const rereadQuietly = useCallback(() => reload(true), [reload]);
-  useRereadOnReconnect(rereadQuietly);
-
+  const { refetch } = read;
+  const reload = useCallback(() => refetch(true), [refetch]);
   return {
-    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
-    base: listing?.external_url ?? null,
-    guarded,
-    needs,
-    loading,
-    failure,
+    byKey: new Map((read.data?.tools ?? []).map((t) => [t.key, t])),
+    base: read.data?.external_url ?? null,
+    ...setupState(read),
+    loading: read.loading,
     reload,
   };
 }
@@ -2144,127 +2080,66 @@ export function useSetupRuns(kinds: string[]): {
   scope: string;
   guarded: boolean;
   needs: string[];
-  /** Why the last read failed, other than on authority — see [failureOf]. */
+  /** Why the last read failed, other than on authority — see [setupState]. */
   failure: RestFailure | null;
   loading: boolean;
 } {
-  // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
-  // the catalogue on every render, so an effect depending on the array itself
-  // would re-read this several times a second.
+  // THE KEY IS THE QUESTION, not the array. A caller derives its kinds from
+  // the catalogue on every render, so a read keyed on the array itself would
+  // be asked several times a second.
   const key = kinds.join(",");
-  const [runs, setRuns] = useState<SetupRun[]>([]);
-  const [scope, setScope] = useState("");
-  const [guarded, setGuarded] = useState(false);
-  const [needs, setNeeds] = useState<string[]>([]);
-  const [failure, setFailure] = useState<RestFailure | null>(null);
-  const [loading, setLoading] = useState(key !== "");
-  const reread = useReread();
-  // THE CADENCE THE LAST GOOD ANSWER SET, which a failure the engine gave no
-  // hint for keeps: a read that failed says nothing about whether the pass it
-  // was following has ended.
-  const cadence = useRef(PASS_IDLE_POLL_MS);
-  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST — the same
-  // generation counter [useSetup] keeps, and for the same reason: a poll tick
-  // and the re-read that follows a pass are in flight together every time one
-  // ends.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current++;
+  const read = useRestRead(
+    `/setup/integrations/${key}/runs`,
+    async (signal) => {
+      const answers = (await Promise.all(
+        key
+          .split(",")
+          .map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`, signal)),
+      )) as RunListing[];
+      return {
+        runs: answers
+          .flatMap((answer) => answer.runs ?? [])
+          .sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
+        scope: answers.find((answer) => answer.scope)?.scope ?? "",
+      };
     },
-    [],
-  );
-
-  const reload = useCallback(
-    (quiet = false) => {
-      generation.current++;
-      const mine = generation.current;
-      reread.cancel();
-      const wanted = key === "" ? [] : key.split(",");
-      if (wanted.length === 0) {
-        // NOTHING TO ASK IS NOT A LOADING STATE. With no kind there is no
-        // route, and a panel that spun for ever would be reporting a wait on
-        // a request nobody made.
-        setRuns([]);
-        setScope("");
-        setFailure(null);
-        setLoading(false);
-        return;
-      }
-      if (!quiet) setLoading(true);
-      void (async () => {
-        try {
-          const answers = (await Promise.all(
-            wanted.map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`)),
-          )) as RunListing[];
-          if (generation.current !== mine) return;
-          const listed = answers
-            .flatMap((answer) => answer.runs ?? [])
-            .sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at));
-          setRuns(listed);
-          setScope(answers.find((answer) => answer.scope)?.scope ?? "");
-          setGuarded(false);
-          setNeeds([]);
-          setFailure(null);
-          // QUIET, every re-read on its own: one that blanked the table into
-          // its skeleton once a minute would take the row an operator was
-          // reading out from under them to say nothing new.
-          //
-          // TWO CADENCES, ONE LOOP. A pass in flight ends on its own inside
-          // `setup.PassDeadline` and this list is the only place that says
-          // how it ended, so it is watched at [PASS_POLL_MS]; the rest of the
-          // time the history still moves without this panel touching
-          // anything, which is what [PASS_IDLE_POLL_MS] is for.
-          cadence.current = listed.some((run) => run.state === "running")
-            ? PASS_POLL_MS
-            : PASS_IDLE_POLL_MS;
-          reread.after(cadence.current, () => reload(true));
-        } catch (err) {
-          if (generation.current !== mine) return;
-          const refused = err instanceof RestError && err.unauthorized;
-          // A REFUSED READER IS SHOWN NOTHING it was refused. Any other
-          // failure KEEPS the last reading: it was a history blanked into "No
-          // pass has run on this node" by one failed quiet poll, which is a
-          // claim about the integration that nobody made. And it is SAID
-          // ([failureOf]) — with nothing kept, a first read that failed drew
-          // that same empty history.
-          if (refused) setRuns([]);
-          setGuarded(refused);
-          setNeeds(err instanceof RestError ? err.grants : []);
-          setFailure(failureOf(err));
-          // THE ENGINE'S HINT IN PLACE OF THE NEXT TICK, sooner or later —
-          // a node that said two seconds is not left for a minute, one that
-          // said thirty is not asked at four — and a hint of zero stops the
-          // poll: the panel says asking again will not change it, and the
-          // tab coming back asks again. A failure with no hint keeps the
-          // cadence, as the interval this replaced did.
-          reread.after(restRetryMs(err, cadence.current), () => reload(true));
-        } finally {
-          // ANSWERED, not answered WELL — [useSetup] says the rest.
-          if (generation.current === mine) setLoading(false);
-        }
-      })();
+    {
+      // NOTHING TO ASK IS NOT A LOADING STATE. With no kind there is no
+      // route, and a panel that spun for ever would be reporting a wait on a
+      // request nobody made.
+      enabled: key !== "",
+      // TWO CADENCES, ONE LOOP, every re-read quiet: one that blanked the
+      // table into its skeleton once a minute would take the row an operator
+      // was reading out from under them to say nothing new. A pass in flight
+      // ends on its own inside `setup.PassDeadline` and this list is the only
+      // place that says how it ended, so it is watched at [PASS_POLL_MS]; the
+      // rest of the time the history still moves without this panel touching
+      // anything, which is what [PASS_IDLE_POLL_MS] is for. A failure the
+      // engine gave no hint for keeps the cadence the history it HOLDS set —
+      // a failed read says nothing about whether the pass it was following
+      // has ended — and the engine's own hint replaces the next tick, sooner
+      // or later: a node that said two seconds is not left for a minute, one
+      // that said thirty is not asked at four, and at zero the poll stops
+      // until the tab comes back.
+      cadence: (held) =>
+        held?.runs.some((run) => run.state === "running") ? PASS_POLL_MS : PASS_IDLE_POLL_MS,
+      // AND WHENEVER THIS TAB COMES BACK. Connecting an integration means
+      // leaving for the third-party app and returning, and the pass that ran
+      // while the reader was away is the one they came back to read — the
+      // same argument [useSetup] makes for re-reading its listing.
+      refetchOnFocus: true,
     },
-    [key, reread],
   );
-
-  useEffect(() => reload(), [reload]);
-  // AND WHENEVER THIS TAB COMES BACK. Connecting an integration means leaving
-  // for the third-party app and returning, and the pass that ran while the
-  // reader was away is the one they came back to read — the same argument
-  // [useSetup] makes for re-reading its listing, on the same event.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") reload(true);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [reload]);
-  // AND WHEN THE SOCKET COMES BACK, which is what a `closed` banner promises.
-  const rereadQuietly = useCallback(() => reload(true), [reload]);
-  useRereadOnReconnect(rereadQuietly);
-
-  return { runs, scope, guarded, needs, failure, loading };
+  // A REFUSED READER IS SHOWN NOTHING it was refused, and any other failure
+  // KEEPS the last reading: it was a history blanked into "No pass has run on
+  // this node" by one failed quiet poll, which is a claim about the
+  // integration that nobody made.
+  return {
+    runs: read.data?.runs ?? [],
+    scope: read.data?.scope ?? "",
+    ...setupState(read),
+    loading: read.loading,
+  };
 }
 
 /**
@@ -2292,95 +2167,42 @@ export function useSetupRun(
   needs: string[];
   /**
    * Why the last read failed, other than on authority or as a pass nobody
-   * remembers — see [failureOf].
+   * remembers — see [setupState].
    */
   failure: RestFailure | null;
   loading: boolean;
 } {
-  const [run, setRun] = useState<SetupRun | null>(null);
-  const [missing, setMissing] = useState(false);
-  const [guarded, setGuarded] = useState(false);
-  const [needs, setNeeds] = useState<string[]>([]);
-  const [failure, setFailure] = useState<RestFailure | null>(null);
-  const [loading, setLoading] = useState(false);
-  const reread = useReread();
-  // Whether the last good answer was a pass still RUNNING, which a failure the
-  // engine gave no hint for goes on following, as [useSetupRuns] keeps its
-  // cadence.
-  const following = useRef(false);
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current++;
-    },
-    [],
-  );
-
-  const read = useCallback(
-    (quiet = false) => {
-      generation.current++;
-      const mine = generation.current;
-      reread.cancel();
-      if (kind === "" || id === "") {
-        setRun(null);
-        setMissing(false);
-        setFailure(null);
-        setLoading(false);
-        following.current = false;
-        return;
-      }
-      if (!quiet) setLoading(true);
-      void (async () => {
-        try {
-          const answer = (await rest.get(
-            `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
-          )) as SetupRun;
-          if (generation.current !== mine) return;
-          setRun(answer);
-          setMissing(false);
-          setGuarded(false);
-          setNeeds([]);
-          setFailure(null);
-          // FOLLOWED TO ITS END, and only while it is going: the row that
-          // opened this may have been a pass that was running when the list
-          // answered.
-          following.current = answer.state === "running";
-          reread.after(following.current ? PASS_POLL_MS : null, () => read(true));
-        } catch (err) {
-          if (generation.current !== mine) return;
-          const gone = err instanceof RestError && err.status === 404;
-          const refused = err instanceof RestError && err.unauthorized;
-          // A PASS NOBODY REMEMBERS AND A READER REFUSED ARE ANSWERS, and
-          // neither asks again. Any other failure keeps what was read, and is
-          // asked again when the engine says — never, at zero — or, with no
-          // hint, at the cadence it was being followed at.
-          if (gone || refused) {
-            setRun(null);
-            following.current = false;
-          }
-          setMissing(gone);
-          setGuarded(refused);
-          setNeeds(err instanceof RestError ? err.grants : []);
-          setFailure(gone ? null : failureOf(err));
-          reread.after(
-            gone || refused ? null : restRetryMs(err, following.current ? PASS_POLL_MS : null),
-            () => read(true),
-          );
-        } finally {
-          if (generation.current === mine) setLoading(false);
+  const path = `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`;
+  const read = useRestRead(
+    path,
+    async (signal): Promise<{ run: SetupRun | null }> => {
+      try {
+        return { run: (await rest.get(path, signal)) as SetupRun };
+      } catch (err) {
+        // A PASS NOBODY REMEMBERS IS AN ANSWER — the ENGINE's own 404, never
+        // a gateway's, which says nothing about the pass — and it asks
+        // nothing more: there is nothing left to follow.
+        if (err instanceof RestError && err.status === 404 && !err.unanswered) {
+          return { run: null };
         }
-      })();
+        throw err;
+      }
     },
-    [kind, id, reread],
+    {
+      enabled: kind !== "" && id !== "",
+      // FOLLOWED TO ITS END, and only while it is going: the row that opened
+      // this may have been a pass that was running when the list answered. A
+      // failure the engine gave no hint for goes on following the pass it
+      // holds, and a reader refused holds none, so asks nothing more.
+      cadence: (held) => (held?.run?.state === "running" ? PASS_POLL_MS : null),
+    },
   );
-
-  useEffect(() => read(), [read]);
-  // AND WHEN THE SOCKET COMES BACK, which is what a `closed` banner promises:
-  // a pass that was not being followed is otherwise never read again.
-  const rereadQuietly = useCallback(() => read(true), [read]);
-  useRereadOnReconnect(rereadQuietly);
-
-  return { run, missing, guarded, needs, failure, loading };
+  return {
+    run: read.data?.run ?? null,
+    missing: read.data !== null && read.data.run === null,
+    ...setupState(read),
+    loading: read.loading,
+  };
 }
 
 /**
@@ -3229,11 +3051,13 @@ export function Integrations({ kind }: { kind?: string }) {
         </Callout>
       )}
       {/* A LISTING THAT COULD NOT BE READ, which is not a company with
-          nothing to set up: the cards offer no way to connect until it
-          answers, and the banner says why — a node that cannot answer yet or
-          refuses until somebody acts, a request that never arrived, a fault —
-          and whether this screen reads again on its own. Any failure but a
-          refusal on authority drew nothing here but that `503`. */}
+          nothing to set up: a card offers no way to connect until the listing
+          has answered once — a re-read that failed keeps the last answer, as
+          every read does — and the banner says why — a node that cannot answer
+          yet or refuses until somebody acts, a request no answer came back
+          to, a fault — and whether this screen reads again on its own. Any
+          failure but a refusal on authority drew nothing here but that
+          `503`. */}
       {setup.failure && (
         <QueryState error={setup.failure.error} refusal={setup.failure.refusal} loading={false} />
       )}

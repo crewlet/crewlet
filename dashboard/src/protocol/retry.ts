@@ -69,7 +69,7 @@ export const RETRY_AFTER_MAX_MS = 30_000;
  * changed it (a reconnect, a write, a reload). A caller whose answer carried no
  * hint at all does not come here: what an absent hint means is the caller's —
  * the socket's is {@link UNAVAILABLE_RETRY_MS}, a request that never reached
- * the engine backs off.
+ * the engine backs off ({@link unansweredRetryMs}).
  *
  * The hint is whole seconds and never negative — both parsers that read one
  * admit nothing else — so anything at or under zero is the zero.
@@ -77,4 +77,43 @@ export const RETRY_AFTER_MAX_MS = 30_000;
 export function retryAfterMs(seconds: number): number | null {
   if (!(seconds > 0)) return null;
   return Math.min(seconds * 1_000, RETRY_AFTER_MAX_MS);
+}
+
+/**
+ * The wait before the first retry of a request NOBODY ANSWERED, in
+ * milliseconds: one that never came back (its deadline passed, the connection
+ * dropped), or one something in front of the engine answered instead.
+ *
+ * THERE IS NO HINT TO WAIT OUT, because the engine said nothing — and that is
+ * not the engine saying waiting will not change it, which is the zero above.
+ * So the wait is the client's own, and it BACKS OFF: asking at once would
+ * hammer an engine that is restarting, or a network that is down, with
+ * requests that each wait out the transport's deadline. One second is long
+ * enough not to spin against a refused connection and short enough to notice
+ * a restarted engine the moment it accepts one.
+ */
+export const UNANSWERED_RETRY_BASE_MS = 1_000;
+
+/**
+ * The longest wait between retries of a request nobody answered, in
+ * milliseconds: `REQUEST_TIMEOUT_MS` in `rest.ts`, the longest one attempt may
+ * itself take, so an engine that recovers is never noticed later than one more
+ * attempt would have taken to fail. `retry.test.ts` holds the two equal; this
+ * file imports nothing, so it cannot name the other.
+ */
+export const UNANSWERED_RETRY_MAX_MS = 30_000;
+
+/**
+ * The wait before retry `failures` of a request nobody answered — 1 for the
+ * first — doubling from {@link UNANSWERED_RETRY_BASE_MS} up to
+ * {@link UNANSWERED_RETRY_MAX_MS}.
+ *
+ * ONE BACKOFF for every such request: the org builder's check and a screen's
+ * REST read are the same question put to the same engine, and two copies of
+ * the arithmetic would be two answers to how hard this page leans on a node
+ * that is not answering.
+ */
+export function unansweredRetryMs(failures: number): number {
+  const exponent = Math.max(0, failures - 1);
+  return Math.min(UNANSWERED_RETRY_MAX_MS, UNANSWERED_RETRY_BASE_MS * 2 ** Math.min(exponent, 30));
 }

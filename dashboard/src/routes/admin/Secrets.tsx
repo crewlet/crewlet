@@ -25,7 +25,7 @@
  * and the two the engine already retired had both drifted into bugs.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Button,
   Callout,
@@ -59,17 +59,10 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useReread, useRereadOnReconnect } from "~/lib/reread.ts";
+import { useRestRead } from "~/lib/restRead.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { rest, RestError, restFailure, restRetryMs } from "~/protocol/index.ts";
-import type {
-  ConfigReference,
-  LogRefusal,
-  QueryErrorCode,
-  QueryRefusal,
-  RestFailure,
-  SecretRow,
-} from "~/protocol/index.ts";
+import { rest, RestError, restFailure } from "~/protocol/index.ts";
+import type { ConfigReference, RestFailure, SecretRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -84,15 +77,17 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
  * that only exists inside the entry that was being skipped.
  *
  * EVERY OTHER CASE IS [restFailure]'s, the one reading every REST screen
- * shares: a request that never reached the engine is `closed`, a `503` the
- * engine wrote is `unavailable` — it was drawn here as a fault on the node,
- * "its log says what went wrong", for a node only catching up — and anything
- * else is a fault. The one case that is this route's own is a 404, which on
- * the LIST route is the whole surface being unregistered: `secretsapi.Routes`
- * does that on a process that cannot reach the fleet's coordination store.
+ * shares: a read no answer from the engine came back to is `unanswered`, a
+ * `503` the engine wrote is `unavailable` — it was drawn here as a fault on
+ * the node, "its log says what went wrong", for a node only catching up — and
+ * anything else is a fault. The one case that is this route's own is the
+ * ENGINE's 404, which on the LIST route is the whole surface being
+ * unregistered: `secretsapi.Routes` does that on a process that cannot reach
+ * the fleet's coordination store. A gateway's 404 says nothing of the kind,
+ * so it stays `unanswered`.
  */
 function failureOf(err: unknown): RestFailure {
-  if (err instanceof RestError && err.status === 404) {
+  if (err instanceof RestError && err.status === 404 && !err.unanswered) {
     return { error: "unknown_query", refusal: null };
   }
   return restFailure(err);
@@ -128,19 +123,18 @@ interface Credentials {
   /** Null until the first answer — never an empty list standing in for one. */
   rows: SecretRow[] | null;
   loading: boolean;
-  /** The refusal as a machine code, which is what [QueryState] renders from. */
-  error: QueryErrorCode | null;
   /**
-   * What the refusal named beside its code — the grants a 403 said would have
-   * admitted the reader ([RestError.refusal]) — which [QueryState] turns into
-   * the sentence that says what would change the answer.
+   * Why the list could not be read, in the terms [QueryState] renders from —
+   * the code, and the refusal that lets the banner say what would change the
+   * answer — or null. See [failureOf].
    */
-  refusal: QueryRefusal | LogRefusal | null;
+  failure: RestFailure | null;
   /** Why the reference index is unknown, when it is. */
   unknown: string | null;
   /** The config fields naming one credential, or null where the check did not answer. */
   readersOf: (name: string) => string[] | null;
-  reload: () => Promise<void>;
+  /** Read both again, quietly: a write this screen made has landed. */
+  reload: () => void;
 }
 
 /**
@@ -153,7 +147,21 @@ interface Credentials {
  * two are on top of each other, so sharing has to be the hook rather than a
  * prop.
  *
- * `enabled` is the peek's guard: a rail opened on no name asks nothing.
+ * EACH IS THE SHARED REST READ (`~/lib/restRead.ts`), which is what keeps the
+ * banner true. Nothing polls this surface, so a read is asked again only when
+ * something says to: a `503` the engine wrote — a node whose identity estate
+ * or chart is behind, one draining — when its `Retry-After` says, and never on
+ * a timer at its zero; a read no answer came back to on a backoff, because
+ * the socket can be up the whole time (one request past its deadline on a slow
+ * engine) and its coming back was the only thing that read this again; the
+ * socket coming back; and a write this screen made. A failure with no hint (a
+ * fault, a refusal on authority) waits for a person.
+ *
+ * `enabled` is the peek's guard: a rail opened on no name asks nothing, and a
+ * rail CLOSED asks nothing more — not what an answer armed while it was open,
+ * and not what an answer still in flight would arm when it lands, which a
+ * `503` landing after the rail closed used to do for as long as the node
+ * refused, with nothing on screen to read into.
  */
 function useCredentials(enabled = true): Credentials {
   // GET /secrets, over REST, because no question in the registry answers it.
@@ -164,171 +172,80 @@ function useCredentials(enabled = true): Credentials {
   // a bad-params error and the table could never hold a row. The socket is
   // still the data channel for everything it answers; this surface is simply
   // not one of them.
-  const [rows, setRows] = useState<SecretRow[] | null>(null);
-  const [error, setError] = useState<QueryErrorCode | null>(null);
-  const [refusal, setRefusal] = useState<QueryRefusal | LogRefusal | null>(null);
-  const [loading, setLoading] = useState(enabled);
-
-  // THE REFERENCE INDEX IS THREE-VALUED, and collapsing it to two is the one
-  // mistake this screen must not make. `references` null means the question
-  // was not answered — never that the answer was "nothing" — and the removal
-  // confirmation branches on exactly that.
-  const [references, setReferences] = useState<ConfigReference[] | null>(null);
-  const [unknown, setUnknown] = useState<string | null>(null);
-
-  // THE ANSWER THAT LANDS IS NOT ALWAYS AN ANSWER ANYBODY IS STILL WAITING
-  // FOR, and this screen wrote every one of them into state unconditionally.
   //
-  // Two things start a read — mount (a sign-in comes back to one) and a write
-  // that finished — so two can be in flight at once, and nothing here
-  // polls: whichever landed last was what the screen held. The same
-  // generation counter [Integrations] uses for exactly this covers both
-  // halves, because "superseded" and "unmounted" are one question to a read
-  // still in flight.
-  //
-  // Unmounted is the half that was actually failing. A read outliving its
-  // screen set state against a torn-down document, and in a test run that is
-  // an unhandled `ReferenceError: window is not defined` from React's own
-  // dispatch — every case passing and the run still exiting non-zero. It is
-  // timing, so it appeared on CI and not here, which is exactly the kind of
-  // leak a guard has to close rather than a rerun.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      // An unmounted screen has no state to write into, and a stale
-      // generation is what says so to a read still in flight.
-      generation.current++;
-    },
-    [],
+  // THE LAST GOOD LIST STAYS. A refusal to refresh is not a reason to tell an
+  // operator the company holds no credentials.
+  const list = useRestRead(
+    "/secrets",
+    async (signal) =>
+      ((await rest.get("/secrets", signal)) as { secrets?: SecretRow[] } | null)?.secrets ?? [],
+    { enabled },
   );
 
-  // Each loader answers what it failed with, or null where it answered (or
-  // was superseded, which [reload] reads off the generation itself).
-  const load = useCallback(async (mine: number): Promise<unknown> => {
-    setLoading(true);
-    try {
-      const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
-      if (generation.current !== mine) return null;
-      setRows(body?.secrets ?? []);
-      setError(null);
-      setRefusal(null);
-      return null;
-    } catch (err) {
-      if (generation.current !== mine) return null;
-      // The last good list stays on screen. A refusal to refresh is not a
-      // reason to tell an operator the company holds no credentials.
-      const failure = failureOf(err);
-      setError(failure.error);
-      setRefusal(failure.refusal);
-      return err;
-    } finally {
-      // ANSWERED, not answered WELL: a refusal is a state this screen
-      // renders honestly, and waiting is not. Guarded like the rest — a
-      // `finally` runs on the superseded path too.
-      if (generation.current === mine) setLoading(false);
-    }
-  }, []);
-
-  const loadReferences = useCallback(async (mine: number): Promise<unknown> => {
-    try {
-      const body = (await rest.get("/config/references")) as {
-        references?: ConfigReference[];
-      } | null;
-      if (generation.current !== mine) return null;
-      setReferences(body?.references ?? []);
-      setUnknown(null);
-      return null;
-    } catch (err) {
-      if (generation.current !== mine) return null;
-      // A 404 IS AN ANSWER. A deployment before its first config import has
-      // no active document, so nothing can be pointing at anything, and
-      // treating that as a failed check would put a warning in front of
-      // every removal on a new install.
-      if (err instanceof RestError && err.status === 404) {
-        setReferences([]);
-        setUnknown(null);
-        return null;
+  // THE REFERENCE INDEX IS THREE-VALUED, and collapsing it to two is the one
+  // mistake this screen must not make: null means the question was not
+  // answered — never that the answer was "nothing" — and the removal
+  // confirmation branches on exactly that.
+  const references = useRestRead(
+    "/config/references",
+    async (signal) => {
+      try {
+        return (
+          (
+            (await rest.get("/config/references", signal)) as {
+              references?: ConfigReference[];
+            } | null
+          )?.references ?? []
+        );
+      } catch (err) {
+        // A 404 IS AN ANSWER — the ENGINE's, never a gateway's. A deployment
+        // before its first config import has no active document, so nothing
+        // can be pointing at anything, and treating that as a failed check
+        // would put a warning in front of every removal on a new install.
+        if (err instanceof RestError && err.status === 404 && !err.unanswered) return [];
+        throw err;
       }
-      setReferences(null);
-      setUnknown(refusalSentence(err));
-      return err;
-    }
-  }, []);
-
-  const reread = useReread();
-
-  // ONE GENERATION FOR THE PAIR, taken here rather than inside each loader:
-  // the two reads are one refresh, and giving them a generation each would
-  // let the second supersede the first half of the same gesture.
-  //
-  // AND ASKED AGAIN WHEN THE ENGINE SAYS. Nothing polls this surface, so a
-  // `503` the engine wrote — a node whose identity estate or chart is behind,
-  // one draining — was drawn as a fault and never read again until somebody
-  // reloaded; it is `unavailable` now ([failureOf]), whose banner says the
-  // screen asks again on its own, and this is what makes that true: the pair
-  // is read again after the SOONER of the two reads' hints ([restRetryMs]),
-  // since either may be the one that clears. A hint of zero is never on a
-  // timer, and a failure with no hint (a fault, a refusal on authority) waits
-  // for a person. A request that never arrived is the one exception, below.
-  const reload = useCallback(async () => {
-    generation.current++;
-    const mine = generation.current;
-    reread.cancel();
-    const failed = await Promise.all([load(mine), loadReferences(mine)]);
-    if (generation.current !== mine) return;
-    const waits = failed
-      .filter((err) => err !== null)
-      .map((err) => restRetryMs(err, null))
-      .filter((ms): ms is number => ms !== null);
-    reread.after(waits.length > 0 ? Math.min(...waits) : null, () => void reload());
-  }, [load, loadReferences, reread]);
-
-  // A PEEK CLOSED asks nothing more: not what an answer armed while it was
-  // open, and not what an answer still IN FLIGHT would arm when it lands. So
-  // closing supersedes the read as a newer one would — the generation moves,
-  // and an answer from before it writes nothing and arms nothing. Cancelling
-  // the armed timer alone left the second half open: a `503` landing after the
-  // rail closed armed its re-read, which was refused and armed the next, for
-  // as long as the node refused, with nothing on screen to read into. Nothing
-  // is waited on any more either, so nothing is loading.
-  useEffect(() => {
-    if (enabled) return;
-    generation.current++;
-    reread.cancel();
-    setLoading(false);
-  }, [enabled, reread]);
-
-  // A SIGN-IN FROM THIS SCREEN'S REFUSAL is a screen of its own that comes
-  // back here, so this mount is what reads again as the new reader.
-  useEffect(() => {
-    if (enabled) void reload();
-  }, [enabled, reload]);
-
-  // AND THE SOCKET COMING BACK reads again, as it re-asks every socket
-  // question. A read that never reached the engine is drawn `closed`, whose
-  // banner says the screen reads again once the socket is back — and nothing
-  // here did, so the banner stood until a reload.
-  const rereadAll = useCallback(() => void reload(), [reload]);
-  useRereadOnReconnect(rereadAll, enabled);
+    },
+    { enabled },
+  );
+  // NOT THE LAST ANSWER, unlike the list: an index from before a check that
+  // failed is the old answer to "what breaks if this goes", and drawn as the
+  // current one it would let a removal through with no warning about a field
+  // that names the row now.
+  const index = references.failure ? null : references.data;
 
   // Grouped by name, because one credential routinely has several readers: a
   // seat's bot_token and its mcp_env entry are two pointers at one row, and
   // both have to be visible before it goes.
   const readers = useMemo(() => {
-    if (references === null) return null;
+    if (index === null) return null;
     const byName = new Map<string, string[]>();
-    for (const ref of references) {
+    for (const ref of index) {
       byName.set(ref.name, [...(byName.get(ref.name) ?? []), ref.path]);
     }
     return byName;
-  }, [references]);
+  }, [index]);
 
   const readersOf = useCallback(
     (name: string): string[] | null => readers?.get(name) ?? (readers ? [] : null),
     [readers],
   );
 
-  return { rows, loading, error, refusal, unknown, readersOf, reload };
+  const { refetch: rereadList } = list;
+  const { refetch: rereadReferences } = references;
+  const reload = useCallback(() => {
+    rereadList();
+    rereadReferences();
+  }, [rereadList, rereadReferences]);
+
+  return {
+    rows: list.data,
+    loading: list.loading,
+    failure: list.failure ? failureOf(list.error) : null,
+    unknown: references.failure ? refusalSentence(references.error) : null,
+    readersOf,
+    reload,
+  };
 }
 
 /**
@@ -475,13 +392,17 @@ function CredentialBody({
  */
 export function CredentialPeek({ name }: { name: string }) {
   const now = useNow();
-  const { rows, loading, error, refusal, unknown, readersOf } = useCredentials(name !== "");
+  const { rows, loading, failure, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
   return (
     <>
       {loading && rows === null && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} refusal={refusal} loading={loading}>
+      <QueryState
+        error={failure?.error ?? null}
+        refusal={failure?.refusal ?? null}
+        loading={loading}
+      >
         {/* NOT AN EMPTY RAIL. A name that matches no row is a hand-edited URL
             or a credential removed since the link was made, and naming the one
             that resolved to nothing is more use than a header over no row. */}
@@ -516,7 +437,7 @@ export function CredentialPeek({ name }: { name: string }) {
 export function Secrets({ name }: { name?: string }) {
   const now = useNow();
   const toast = useToast();
-  const { rows, loading, error, refusal, unknown, readersOf, reload } = useCredentials();
+  const { rows, loading, failure, unknown, readersOf, reload } = useCredentials();
 
   const [writing, setWriting] = useState<{ editing: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -637,8 +558,8 @@ export function Secrets({ name }: { name?: string }) {
 
       {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
-        error={error}
-        refusal={refusal}
+        error={failure?.error ?? null}
+        refusal={failure?.refusal ?? null}
         loading={loading}
         empty={
           list.length
@@ -779,7 +700,7 @@ export function Secrets({ name }: { name?: string }) {
           onClose={() => setWriting(null)}
           onDone={(stored) => {
             toast.ok(writing.editing ? `Updated ${stored}` : `Stored ${stored}`);
-            void reload();
+            reload();
           }}
         />
       )}
@@ -792,7 +713,7 @@ export function Secrets({ name }: { name?: string }) {
           onClose={() => setRemoving(null)}
           onDone={() => {
             toast.ok(`Removed ${removing}`);
-            void reload();
+            reload();
           }}
         />
       )}

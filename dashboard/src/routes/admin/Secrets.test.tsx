@@ -126,6 +126,11 @@ function ok(payload: unknown): Response {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // HERE as well as in each case's own `finally`, which a case that overran
+  // its budget never reaches: its fake clock then stayed installed, and every
+  // case after it in the file failed on a clock that never moved — one
+  // overrun reported as a dozen failures, the first of them the only true one.
+  vi.useRealTimers();
 });
 
 // THE SESSION COOKIE IS THE CREDENTIAL, which the browser attaches and no
@@ -318,28 +323,86 @@ test("a peek closed while its read is in flight is not read again", async () => 
 });
 
 /**
- * A READ THAT NEVER REACHED THE ENGINE IS DRAWN `closed`, AND READ AGAIN WHEN
- * THE SOCKET IS BACK — which is what that banner says. Nothing polls this
- * surface, so the banner stood until somebody reloaded: the promise was the
- * socket question's, and this screen asks none.
+ * A LIST NO ANSWER CAME BACK TO IS SAID AS THAT, AND READ AGAIN ON ITS OWN —
+ * with the live socket up the whole time, which is the ordinary case: a
+ * request past its thirty-second deadline on a slow engine.
+ *
+ * It was drawn `closed`, "the connection went away; the screen reads again
+ * once the socket is back". The socket had not gone anywhere, and nothing
+ * polls this surface, so the banner stood — false twice over — until somebody
+ * reloaded. Its read backs off now, a second after the deadline first; the
+ * rest of the schedule is `lib/restRead.test.tsx`'s.
+ *
+ * THE FAKE CLOCK IS MOVED ONLY AS FAR AS THE NEXT ANSWER, never past it: the
+ * screen re-renders on the shared once-a-second clock, so every fake second
+ * is a render of the whole table once the list has arrived. Moved two and a
+ * half minutes past it, this case took five seconds under load and its fake
+ * clock outlived it.
  */
-test("a list that never arrived is read again when the socket comes back", async () => {
-  let failed = false;
-  const spy = stubFetch((path) => {
-    if (path === "/secrets" && !failed) {
-      failed = true;
-      throw new TypeError("Failed to fetch");
-    }
-    if (path === "/secrets") return ok(body);
-    return ok(references);
-  });
-  render(<Secrets />);
-  expect(await screen.findByText(/connection went away/)).toBeDefined();
-  expect(listReads(spy)).toBe(1);
+test("a list past its deadline with the socket up is said truthfully, and read again", async () => {
+  vi.useFakeTimers();
+  try {
+    act(() => store.setConnected(true));
+    const asked: number[] = [];
+    stubFetch((path, init) => {
+      if (path !== "/secrets") return ok(references);
+      asked.push(Date.now());
+      if (asked.length > 1) return ok(body);
+      // NEVER ANSWERED: the request's own deadline is what ends it, by
+      // aborting the fetch as a browser's would be.
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      }) as unknown as Response;
+    });
+    render(<Secrets />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.getByText(/No answer from the engine reached this page/)).toBeDefined();
+    expect(screen.queryByText(/connection went away/)).toBeNull();
 
-  act(() => store.setConnected(true));
-  expect(await screen.findByText("GITHUB_TOKEN")).toBeDefined();
-  expect(listReads(spy)).toBe(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(asked.slice(1).map((t, i) => Math.floor((t - asked[i]!) / 1_000))).toEqual([31]);
+    expect(screen.getByText("GITHUB_TOKEN")).toBeDefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// AND THE SOCKET COMING BACK reads it at once, ahead of the backoff: it is the
+// engine being reachable again.
+test("a list that never arrived is read again the moment the socket comes back", async () => {
+  vi.useFakeTimers();
+  try {
+    let failed = false;
+    const spy = stubFetch((path) => {
+      if (path === "/secrets" && !failed) {
+        failed = true;
+        throw new TypeError("Failed to fetch");
+      }
+      if (path === "/secrets") return ok(body);
+      return ok(references);
+    });
+    render(<Secrets />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(screen.getByText(/No answer from the engine reached this page/)).toBeDefined();
+    expect(listReads(spy)).toBe(1);
+
+    act(() => store.setConnected(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(listReads(spy)).toBe(2);
+    expect(screen.getByText("GITHUB_TOKEN")).toBeDefined();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // THE VALUE IS THE BODY, not a field of a document. `PUT /secrets/{name}`
@@ -461,6 +524,35 @@ test("a reference check that failed is never shown as nothing pointing at it", a
   // And it is gated exactly as a referenced row is: an unknown answer is not
   // a safe one.
   expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+// AND NOT THE LAST ANSWER EITHER. Every other read on this screen keeps what it
+// held through a failed re-read; this one must not, because the index from
+// before the failure is an old answer to "what breaks if this goes", and drawn
+// as the current one it lets a removal through with no warning about a field
+// that names the row now.
+test("a reference check that fails after one that answered is unknown, not the old answer", async () => {
+  let checks = 0;
+  stubFetch((path) => {
+    if (path === "/secrets") return ok(body);
+    if (path === "/config/references") {
+      checks++;
+      return checks === 1
+        ? ok(references)
+        : new Response(JSON.stringify({ error: "internal_error" }), { status: 500 });
+    }
+    return ok({});
+  });
+  render(<Secrets />);
+  expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
+  await vi.waitFor(() => expect(checks).toBe(1));
+
+  // THE SOCKET COMING BACK reads both again, and this time the check fails.
+  act(() => store.setConnected(true));
+  await vi.waitFor(() => expect(checks).toBe(2));
+  await openRemove("DATADOG_WEBHOOK_TOKEN");
+  expect(await screen.findByText(/could not be read/)).toBeDefined();
+  expect(screen.queryByText(/No field in the active configuration names this/)).toBeNull();
 });
 
 // A REFUSED CHECK NAMES THE GRANT THE ENGINE NAMED. The reference index is

@@ -18,16 +18,17 @@
 
 import { describe, expect, test } from "vitest";
 import type { ChartRead } from "~/protocol/index.ts";
-import { RETRY_AFTER_MAX_MS } from "~/protocol/retry.ts";
+import {
+  RETRY_AFTER_MAX_MS,
+  UNANSWERED_RETRY_BASE_MS,
+  UNANSWERED_RETRY_MAX_MS,
+} from "~/protocol/retry.ts";
 import { chartPrint, fingerprint, fromChart } from "./document.ts";
 import { EMPTY_DRAFT } from "./draft.ts";
 import {
-  CHECK_BACKOFF_BASE_MS,
-  CHECK_BACKOFF_MAX_MS,
   CHECK_DEBOUNCE_MS,
   CheckRunner,
   INITIAL_CHECK,
-  backoffDelay,
   classifyChart,
   classifySettings,
   classifySettingsRead,
@@ -514,7 +515,10 @@ describe("transition", () => {
       failures: 0,
       halted: false,
     });
-    const idle = transition(settled.state, { type: "timer", now: T0 + 10 * CHECK_BACKOFF_MAX_MS });
+    const idle = transition(settled.state, {
+      type: "timer",
+      now: T0 + 10 * UNANSWERED_RETRY_MAX_MS,
+    });
     expect(idle.effects).toEqual([]);
     const changed = transition(settled.state, { type: "changed", generation: 2, now: T0 + 5 });
     expect(changed.effects).toEqual([{ type: "wake", at: T0 + 5 + CHECK_DEBOUNCE_MS }]);
@@ -532,12 +536,6 @@ describe("transition", () => {
       expect(reset.effects, status).toEqual([{ type: "send", generation: 3, request: 2 }]);
       expect(reset.state.halted, status).toBe(false);
     }
-  });
-
-  test("backoffDelay is anchored to its constants", () => {
-    expect(backoffDelay(1)).toBe(CHECK_BACKOFF_BASE_MS);
-    expect(backoffDelay(2)).toBe(2 * CHECK_BACKOFF_BASE_MS);
-    expect(backoffDelay(1_000)).toBe(CHECK_BACKOFF_MAX_MS);
   });
 });
 
@@ -735,7 +733,7 @@ describe("CheckRunner", () => {
     await flush();
     expect(runner.state.status).toBe("unreachable");
     change();
-    clock.advance(CHECK_BACKOFF_BASE_MS - 1);
+    clock.advance(UNANSWERED_RETRY_BASE_MS - 1);
     expect(transport.of("chart")).toHaveLength(1);
     clock.advance(1);
     expect(transport.of("chart")).toHaveLength(2);
@@ -772,7 +770,7 @@ describe("CheckRunner", () => {
     transport.of("settings")[0]!.resolve({ status: 200, body: { valid: true } });
     await flush();
     expect(runner.state.status).toBe("unreachable");
-    clock.advance(10 * CHECK_BACKOFF_MAX_MS);
+    clock.advance(10 * UNANSWERED_RETRY_MAX_MS);
     expect(transport.of("chart")).toHaveLength(1);
   });
 
@@ -797,7 +795,7 @@ describe("CheckRunner", () => {
     expect(settled[0]).toMatchObject({
       outcome: { status: "unreachable", detail: "socket hang up" },
     });
-    clock.advance(CHECK_BACKOFF_BASE_MS);
+    clock.advance(UNANSWERED_RETRY_BASE_MS);
     expect(transport.of("chart")).toHaveLength(2);
     runner.dispose();
     expect(transport.of("chart")[1]!.signal.aborted).toBe(true);

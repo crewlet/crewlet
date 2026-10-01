@@ -170,6 +170,19 @@ test("a log refusal no wait clears says so and names it", () => {
   expect(screen.queryByText(/asks again on its own/)).toBeNull();
 });
 
+// A REST READ NO ANSWER CAME BACK TO IS NOT A SOCKET THAT WENT AWAY. It was
+// drawn as `closed`, which says the connection went and the screen reads again
+// once the socket is back: false whenever the socket stayed up, which is the
+// ordinary case for one request past its deadline. Its own sentence says only
+// what is true of every such read, and that it is asked again regardless.
+test("a read no answer came back to says so, and never that the socket went", () => {
+  render(<QueryState error="unanswered" refusal={null} loading={false} />);
+  expect(screen.getByText(/No answer from the engine reached this page/)).toBeTruthy();
+  expect(screen.getByText(/asks again on its own/)).toBeTruthy();
+  expect(screen.queryByText(/connection went away/)).toBeNull();
+  expect(screen.queryByText(/code this build does not know/)).toBeNull();
+});
+
 test("a log refusal that clears keeps the catching-up banner", () => {
   render(
     <QueryState

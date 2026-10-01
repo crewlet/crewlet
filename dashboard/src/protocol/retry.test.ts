@@ -5,8 +5,15 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { RestError, restFailure, restRetryMs } from "./rest.ts";
-import { RETRY_AFTER_MAX_MS, retryAfterMs, UNAVAILABLE_RETRY_MS } from "./retry.ts";
+import { REQUEST_TIMEOUT_MS, RestError, restFailure, restRetryMs } from "./rest.ts";
+import {
+  RETRY_AFTER_MAX_MS,
+  retryAfterMs,
+  UNANSWERED_RETRY_BASE_MS,
+  UNANSWERED_RETRY_MAX_MS,
+  unansweredRetryMs,
+  UNAVAILABLE_RETRY_MS,
+} from "./retry.ts";
 import { unavailableRetryMs } from "./socket.ts";
 
 describe("a retry hint", () => {
@@ -49,33 +56,67 @@ describe("an unavailable answer's wait", () => {
   });
 });
 
+describe("a request nobody answered", () => {
+  // IT BACKS OFF, from a second to the cap: asked at once, an engine that is
+  // restarting is hammered with requests that each wait out the deadline.
+  test("waits a second, then twice as long each time, up to the cap", () => {
+    expect([1, 2, 3, 4, 5, 6, 7].map(unansweredRetryMs)).toEqual([
+      1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000,
+    ]);
+    expect(unansweredRetryMs(1)).toBe(UNANSWERED_RETRY_BASE_MS);
+    expect(unansweredRetryMs(1_000)).toBe(UNANSWERED_RETRY_MAX_MS);
+  });
+
+  // THE CAP IS ONE ATTEMPT'S OWN DEADLINE, which is the whole of its claim: an
+  // engine that recovers is never noticed later than one more attempt would
+  // have taken to fail. `retry.ts` imports nothing, so it states the number,
+  // and this is what keeps the two from drifting apart.
+  test("is never waited longer than one attempt may take", () => {
+    expect(UNANSWERED_RETRY_MAX_MS).toBe(REQUEST_TIMEOUT_MS);
+  });
+});
+
 describe("a failed REST read's wait", () => {
   const engine = (retryAfter: number | null) =>
     new RestError(503, { error: "identity_unavailable" }, retryAfter);
+  const polled = { cadence: 60_000, unanswered: 0 };
+  const unpolled = { cadence: null, unanswered: 0 };
 
   test("is the hint on a 503 the engine wrote, bounded like every hint", () => {
-    expect(restRetryMs(engine(12), 60_000)).toBe(12_000);
-    expect(restRetryMs(engine(600), 60_000)).toBe(RETRY_AFTER_MAX_MS);
+    expect(restRetryMs(engine(12), polled)).toBe(12_000);
+    expect(restRetryMs(engine(600), polled)).toBe(RETRY_AFTER_MAX_MS);
   });
 
   // NO `Retry-After` ON A 503 THE ENGINE WROTE is its zero: never on a timer,
   // whatever the screen's own cadence would have been.
   test("is never on a timer for a 503 the engine wrote with no Retry-After", () => {
-    expect(restRetryMs(engine(null), 60_000)).toBeNull();
+    expect(restRetryMs(engine(null), polled)).toBeNull();
+  });
+
+  // A READ NOBODY ANSWERED BACKS OFF, on a screen with no cadence of its own
+  // too: the live socket can be up the whole time it fails — one request past
+  // its deadline, one dropped on the way — so its coming back is not an event
+  // anybody can wait for, and a read nothing polls was read again only on a
+  // reload.
+  test.each([
+    ["status 0, past its deadline", new RestError(0, { error: "unreachable" })],
+    ["a gateway's 504", new RestError(504, { error: "unreadable_body" })],
+    ["a proxy's 503", new RestError(503, {}, 5)],
+  ])("after %s is the backoff, whatever the cadence", (_, err) => {
+    expect(restRetryMs(err, { cadence: null, unanswered: 1 })).toBe(1_000);
+    expect(restRetryMs(err, { cadence: 60_000, unanswered: 3 })).toBe(4_000);
+    expect(restRetryMs(err, { cadence: 4_000, unanswered: 9 })).toBe(UNANSWERED_RETRY_MAX_MS);
   });
 
   // EVERY OTHER FAILURE carries no hint, because nobody at the engine decided
-  // one: a 503 a proxy wrote (no engine code), a fault, a refusal on
-  // authority, a request that never arrived. Each waits the screen's own.
+  // one: a fault, a refusal on authority. Each waits the screen's own.
   test.each([
-    ["a proxy's 503", new RestError(503, {}, 5)],
     ["a fault", new RestError(500, { error: "internal_error" })],
     ["a refusal on authority", new RestError(403, { error: "unauthorized" })],
-    ["no answer", new RestError(0, { error: "unreachable" })],
     ["something that is not a refusal at all", new TypeError("boom")],
   ])("is the screen's own after %s", (_, err) => {
-    expect(restRetryMs(err, 60_000)).toBe(60_000);
-    expect(restRetryMs(err, null)).toBeNull();
+    expect(restRetryMs(err, polled)).toBe(60_000);
+    expect(restRetryMs(err, unpolled)).toBeNull();
   });
 });
 
@@ -86,10 +127,14 @@ describe("a failed REST read's banner", () => {
   test.each([
     ["a refusal on authority", new RestError(403, { error: "unauthorized" }), "unauthorized"],
     ["nobody signed in", new RestError(401, { error: "invalid_token" }), "unauthorized"],
-    ["a request that never arrived", new RestError(0, { error: "unreachable" }), "closed"],
+    // NOT `closed`: that banner says the socket went away and promises a read
+    // once it is back, and the socket is routinely up the whole time.
+    ["a request that never arrived", new RestError(0, { error: "unreachable" }), "unanswered"],
     ["the engine's 503", new RestError(503, { error: "identity_unavailable" }, 2), "unavailable"],
     ["the engine's 503 with no hint", new RestError(503, { error: "unavailable" }), "unavailable"],
-    ["a proxy's 503", new RestError(503, {}, 5), "query_failed"],
+    // NOT A FAULT ON THE NODE: the engine never wrote these.
+    ["a proxy's 503", new RestError(503, {}, 5), "unanswered"],
+    ["a gateway's page", new RestError(502, { error: "unreadable_body" }), "unanswered"],
     ["a fault", new RestError(500, { error: "internal_error" }), "query_failed"],
     ["something that is not a refusal at all", new TypeError("boom"), "query_failed"],
   ])("after %s is the matching code", (_, err, code) => {

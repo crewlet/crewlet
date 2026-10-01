@@ -289,14 +289,20 @@ test("a first read of the history that failed is said, never drawn as no passes"
   expect(screen.queryByText(/No pass has run/)).toBeNull();
 });
 
+/** A request no answer came back to: the connection dropped on the way. */
+const dropped = (): Response => {
+  throw new TypeError("Failed to fetch");
+};
+
 test.each([
   ["a fault", () => json({ error: "internal_error" }, 500), "query_failed"],
+  // NOT `closed`, which says the SOCKET went away: it routinely did not.
+  ["a request that never arrived", dropped, "unanswered"],
+  // NOR A FAULT ON THE NODE: a gateway wrote this, and the engine never did.
   [
-    "a request that never arrived",
-    (): Response => {
-      throw new TypeError("Failed to fetch");
-    },
-    "closed",
+    "a gateway's page",
+    () => new Response("<html>Bad Gateway</html>", { status: 502 }),
+    "unanswered",
   ],
 ])("a listing that failed with %s says so", async (_, answer, code) => {
   answering({ [LISTING]: [answer] });
@@ -304,47 +310,34 @@ test.each([
   await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe(`${code}:-:0`));
 });
 
-// A `closed` BANNER SAYS THE SCREEN READS AGAIN ONCE THE SOCKET IS BACK, and
-// for a REST read nothing did: there is no socket question behind it to be
-// re-asked, so the banner stood until a reload. The socket coming back is the
-// engine being reachable again, and each of these reads asks then — the
-// listing here, since nothing else ever asks it again on its own.
-test("a read that never arrived is read again when the socket comes back", async () => {
-  answering({
-    [LISTING]: [
-      () => {
-        throw new TypeError("Failed to fetch");
-      },
-      () => json({ tools: [] }, 200),
-    ],
-  });
-  render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("closed:-:0"));
-  await wait(600_000);
-  expect(reads(LISTING)).toBe(1);
-
+// A READ NO ANSWER CAME BACK TO IS ASKED AGAIN ON ITS OWN, with the live socket
+// up the whole time. It was drawn `closed`, whose banner promises a read "once
+// the socket is back", and only the socket coming back read it again — so with
+// the socket up, a listing nothing polls stood failed until a reload. It backs
+// off: a second, then two, then four.
+test("a read that never arrived is asked again on its own while the socket stays up", async () => {
   act(() => store.setConnected(true));
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("ok:-:0"));
-  expect(reads(LISTING)).toBe(2);
+  answering({ [LISTING]: [dropped, dropped, dropped, () => json({ tools: [] }, 200)] });
+  render(<Listing />);
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unanswered:-:0"));
+  await wait(600_000);
+  expect(gaps(LISTING)).toEqual([1, 2, 4]);
+  expect(screen.getByTestId("listing").textContent).toBe("ok:-:0");
 });
 
-// AND THE OTHER TWO READS KEEP THE SAME PROMISE: the history, idle, would not
-// otherwise ask for a minute, and a pass that was not being followed never.
+// AND THE SOCKET COMING BACK STILL ASKS AT ONCE, ahead of the backoff: it is the
+// engine being reachable again, for each of these reads — the history, idle,
+// would otherwise wait out a backoff, and one pass the same.
 test.each([
-  ["the history", RUNS, () => render(<History />)],
-  ["one pass", ONE, () => render(<Pass />)],
-])("%s that never arrived is read again when the socket comes back", async (_, path, mount) => {
-  answering({
-    [path]: [
-      () => {
-        throw new TypeError("Failed to fetch");
-      },
-      path === ONE ? () => json(run("done"), 200) : listed("done"),
-    ],
-  });
+  ["the listing", LISTING, () => render(<Listing />), () => json({ tools: [] }, 200)],
+  ["the history", RUNS, () => render(<History />), listed("done")],
+  ["one pass", ONE, () => render(<Pass />), () => json(run("done"), 200)],
+])("%s that never arrived is read again the moment the socket comes back", async (...args) => {
+  const [, path, mount, answer] = args;
+  answering({ [path]: [dropped, answer] });
   mount();
   await vi.waitFor(() => expect(reads(path)).toBe(1));
-  await wait(1_000);
+  await wait(500);
   expect(reads(path)).toBe(1);
 
   act(() => store.setConnected(true));

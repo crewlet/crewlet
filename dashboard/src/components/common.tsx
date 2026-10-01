@@ -38,8 +38,8 @@ import type {
   AgentRow,
   FeedRow,
   LogRefusal,
-  QueryErrorCode,
   QueryRefusal,
+  ReadErrorCode,
   SandboxEntry,
 } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
@@ -336,10 +336,13 @@ export function Section({
  * branch at all for the same reason: `closed` told the reader "the engine
  * refused this query", which it did not — the socket went away.
  *
- * `Record<QueryErrorCode, …>` is what makes that checkable: a code added to
- * the type without a sentence here is a compile error.
+ * `Record<ReadErrorCode, …>` is what makes that checkable: a code added to
+ * the type without a sentence here is a compile error. The union is the
+ * socket's `QueryErrorCode` and the one code a REST read adds, `unanswered`,
+ * because a screen reading over REST draws its failure through this same
+ * table and its own failure needs its own true sentence.
  */
-const REFUSALS: Record<QueryErrorCode, ReactNode> = {
+const REFUSALS: Record<ReadErrorCode, ReactNode> = {
   unauthorized: (
     // `action` IS the spacer-then-control our markup spelled by hand: a
     // Callout puts its control at the trailing edge, so the `spacer` span
@@ -413,6 +416,19 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     <Callout variant="neutral" icon={<CableGlyph size="md" />}>
       The connection went away before this answered. Nothing refused it; the screen reads again once
       the socket is back.
+    </Callout>
+  ),
+  // A REST READ NO ANSWER CAME BACK TO, which is not `closed`: the socket can
+  // be up the whole time — one request past its deadline on a slow engine, or
+  // dropped on the way — and a banner promising a read "once the socket is
+  // back" was waiting on an event that never came. Nothing here knows what the
+  // engine would have said, so the sentence says only what is true of all of
+  // it, and the read backs off on its own (`restRetryMs`).
+  unanswered: (
+    <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
+      No answer from the engine reached this page: it took too long, the request was lost on the
+      way, or something in front of the engine answered in its place. Nothing refused it, and this
+      screen asks again on its own.
     </Callout>
   ),
 };
@@ -539,7 +555,7 @@ export function QueryState({
   if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
     return <RefusedByTheLog refusal={refusal} />;
   }
-  const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
+  const banner = error ? REFUSALS[error as ReadErrorCode] : undefined;
   if (banner) return <>{banner}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
   // evolves additively — and naming it is more use than calling it a refusal.

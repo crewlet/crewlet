@@ -1,17 +1,17 @@
 /**
- * The one timer a screen's hand-rolled REST read asks itself again on — and,
- * beside it, the one event: the socket coming back (`useRereadOnReconnect`).
+ * The one timer a REST read asks itself again on — and, beside it, the one
+ * event: the socket coming back (`useRereadOnReconnect`). Both are the
+ * machinery under `useRestRead` (`./restRead.ts`), which is what a screen
+ * reading over REST uses; nothing else should need either.
  *
- * `useQuery` asks the socket and arms its own next ask. A screen reading over
- * REST — the Integrations screen's `/setup` reads, the credential listing —
- * keeps its own loader, and each had its own idea of when to ask again: an
- * interval started on one cadence that went on firing on it whatever the next
- * answer said, or nothing at all, so a `503` whose `Retry-After` said two
- * seconds was asked a minute later or never. The wait after an answer is that
- * ANSWER's to decide — a pass still running, one that ended, the engine's own
- * hint on a `503` it wrote (`restRetryMs`), which at zero is "not on a timer"
- * — so each answer arms the next ask here, replacing whatever an earlier one
- * armed.
+ * Each screen reading over REST used to keep its own loader with its own idea
+ * of when to ask again: an interval started on one cadence that went on firing
+ * on it whatever the next answer said, or nothing at all, so a `503` whose
+ * `Retry-After` said two seconds was asked a minute later or never. The wait
+ * after an answer is that ANSWER's to decide — a pass still running, one that
+ * ended, the engine's own hint on a `503` it wrote (`restRetryMs`), which at
+ * zero is "not on a timer" — so each answer arms the next ask here, replacing
+ * whatever an earlier one armed.
  *
  * ARMED WHERE THE ANSWER LANDS, never through state and an effect: the next
  * ask is a consequence of the answer rather than of rendering it, and armed by
@@ -51,14 +51,14 @@ export function useReread(): Reread {
  * Ask `read` again when the live socket comes back after being down — the
  * REST twin of `useQuery`'s re-ask on a reconnect.
  *
- * WHAT MAKES A `closed` BANNER TRUE on a screen that reads over REST. A read
- * that never reached the engine is drawn as `closed`, whose sentence says the
- * screen reads again once the socket is back ([restFailure]); a REST loader
- * has no socket of its own, so without this nothing read again until somebody
- * reloaded or changed tabs. The socket reconnecting is the moment the engine
- * is reachable again — the two share the origin — and an answer from before
- * it is about an engine that has since moved, which is why `useQuery`
- * re-asks there by default.
+ * The socket reconnecting is the moment the engine is reachable again — the
+ * two share the origin — and an answer from before it is about an engine that
+ * has since moved, which is why `useQuery` re-asks there by default. A REST
+ * read that nobody answered asks again on its own backoff as well
+ * (`restRetryMs`), because the socket is routinely up the whole time such a
+ * read fails and this event then never comes; this is what asks at ONCE when
+ * it does, rather than at the end of a wait that may have grown to thirty
+ * seconds.
  *
  * A TRANSITION, not a state: only a socket that was down and is back asks,
  * never one that was connected all along, and a change of `read` asks
