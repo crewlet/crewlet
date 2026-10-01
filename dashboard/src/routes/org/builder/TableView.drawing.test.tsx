@@ -33,7 +33,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
 
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
@@ -67,22 +67,53 @@ const PACKAGE = read("node_modules/@crewlethq/ui/dist/styles.css");
  */
 const PART = orgTableParts();
 
-let sheets: HTMLStyleElement[] = [];
+/** Puts one stylesheet into the document, after every sheet already there. */
+function insert(css: string): HTMLStyleElement {
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.append(style);
+  return style;
+}
 
-/** Puts stylesheets into the document, in the order a page loads them. */
-function apply(...css: string[]) {
-  for (const text of css) {
-    const style = document.createElement("style");
-    style.textContent = text;
-    document.head.append(style);
-    sheets.push(style);
-  }
+/*
+ * THE DESIGN SYSTEM'S SHEET IS PARSED ONCE FOR THE FILE, and its rules indexed
+ * once, in a hook rather than in whichever case happens to run first.
+ *
+ * It is 570 KB of rules. jsdom parses a style element's text when it is
+ * inserted, and the first style computed against it extracts every rule's
+ * selector subjects: about 700 ms and 290 ms on an idle machine, measured, all
+ * of it paid by the FIRST case — which took a second alone and ran past its
+ * five-second budget whenever the suite shared its cores — and the parse paid
+ * again by every case after it. Nothing here changes the sheet, so one copy
+ * serves every case, and the style computed on the body is what indexes it.
+ */
+let shipped: HTMLStyleElement | null = null;
+
+beforeAll(() => {
+  shipped = insert(PACKAGE);
+  getComputedStyle(document.body);
+});
+
+afterAll(() => {
+  shipped?.remove();
+  shipped = null;
+});
+
+/**
+ * This screen's stylesheet, inserted AFTER the package's, in the order a page
+ * loads them, and taken out again after the case. Per case rather than for the
+ * file, because one case draws the table without it.
+ */
+let screenSheet: HTMLStyleElement | null = null;
+
+function withScreenSheet() {
+  screenSheet = insert(SCREEN);
 }
 
 afterEach(() => {
   cleanup();
-  for (const style of sheets) style.remove();
-  sheets = [];
+  screenSheet?.remove();
+  screenSheet = null;
 });
 
 function mount() {
@@ -93,10 +124,23 @@ function mount() {
   );
 }
 
-/** The row whose NAME cell says `name`. */
+/**
+ * The row whose NAME cell says `name`.
+ *
+ * `hidden: true` — EVERY ROW, WITHOUT ASKING THE CASCADE WHICH ARE VISIBLE.
+ * By default a role query filters out what is inaccessible, and it decides
+ * that by computing the style of every candidate and each of its ancestors;
+ * here the document holds the design system's shipped stylesheet and this
+ * screen's, 700 KB of rules jsdom walks for every one of those elements. One
+ * lookup cost 260 ms of the 1 s the first case took alone, measured, and the
+ * case that compares two drawings looks a row up four times. What these cases
+ * ask is how a row is DRAWN, which `getComputedStyle` answers below for the
+ * one element that matters; whether it is exposed to assistive technology is
+ * `TableView.test.tsx`'s question, asked there with no stylesheet in the way.
+ */
 function row(name: string): HTMLElement {
   const found = screen
-    .getAllByRole("row")
+    .getAllByRole("row", { hidden: true })
     .find((candidate) =>
       [...candidate.querySelectorAll<HTMLElement>(".btable-name")].some(
         (cell) => within(cell).queryAllByText(name, { exact: true }).length > 0,
@@ -126,7 +170,7 @@ const box = (element: Element) => {
  * every rule below would be this screen drawing a name group of its own.
  */
 test("the name cell is the package's own name group, and the screen only names it", () => {
-  apply(PACKAGE, SCREEN);
+  withScreenSheet();
   mount();
   const cell = row("Dev").querySelector(".btable-name")!;
   expect(cell.classList.contains(PART.node)).toBe(true);
@@ -148,13 +192,12 @@ test("the name cell is the package's own name group, and the screen only names i
  * which is where absence can be asserted.
  */
 test("this screen never overrides what the package draws in that cell", () => {
-  apply(PACKAGE);
   mount();
   const alone = box(row("Dev").querySelector(".btable-name")!);
   const label = getComputedStyle(row("Dev").querySelector(".btable-label")!).minWidth;
   cleanup();
 
-  apply(SCREEN);
+  withScreenSheet();
   mount();
   const together = box(row("Dev").querySelector(".btable-name")!);
   expect(together).toEqual(alone);
@@ -167,7 +210,7 @@ test("this screen never overrides what the package draws in that cell", () => {
  * does not wrap, so the row it sits in is the same height before and after.
  */
 test("the live state slot keeps its room on a drawn row", () => {
-  apply(PACKAGE, SCREEN);
+  withScreenSheet();
   mount();
   const slot = row("Dev").querySelector(".bnode-state")!;
   const seen = getComputedStyle(slot);
@@ -183,7 +226,7 @@ test("the live state slot keeps its room on a drawn row", () => {
  * the package, so both halves are read here. The Datadog fallback wears one.
  */
 test("a wiring mark on a row neither grows nor shrinks the line it rides", () => {
-  apply(PACKAGE, SCREEN);
+  withScreenSheet();
   mount();
   const mark = row("SRE").querySelector(".bnode-mark")!;
   expect(insidePart(mark, PART.caption)).toBe(true);
