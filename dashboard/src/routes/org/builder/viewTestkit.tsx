@@ -192,15 +192,27 @@ export function renderInBuilder(
 
 type Sizer = (el: Element) => { width: number; height: number } | null;
 
+/** How many rounds [LayoutObserver.settle] reports before it calls the layout unsettled. */
+const SETTLE_ROUNDS = 8;
+
 /**
  * A ResizeObserver a suite drives. Every instance records what it observes;
  * [LayoutObserver.settle] reports a size for every observed element, as a
  * browser does after layout, until nothing changes.
+ *
+ * A SIZE IS REPORTED WHEN IT CHANGES, as a browser's observer reports one: on
+ * the first layout after an element is observed, and then only when its box
+ * is a different size. Reporting every observed element on every round told
+ * the chart its whole layout again four times per settle, and each telling was
+ * a render of every card — the most expensive thing a chart case did, for
+ * answers nothing had changed.
  */
 export class LayoutObserver {
   static instances: LayoutObserver[] = [];
   static sizer: Sizer = () => null;
   readonly observed = new Set<Element>();
+  /** The size last reported for each element, so an unchanged one is not reported again. */
+  private readonly reported = new Map<Element, { width: number; height: number }>();
   constructor(private readonly callback: ResizeObserverCallback) {
     LayoutObserver.instances.push(this);
   }
@@ -209,16 +221,22 @@ export class LayoutObserver {
   }
   unobserve(el: Element): void {
     this.observed.delete(el);
+    this.reported.delete(el);
   }
   disconnect(): void {
     this.observed.clear();
+    this.reported.clear();
   }
 
-  private deliver(): void {
+  /** Reports what changed size since the last report, and says whether anything did. */
+  private deliver(): boolean {
     const entries = [...this.observed]
       .map((target) => {
         const size = LayoutObserver.sizer(target);
         if (!size) return null;
+        const was = this.reported.get(target);
+        if (was && was.width === size.width && was.height === size.height) return null;
+        this.reported.set(target, size);
         return {
           target,
           contentRect: { width: size.width, height: size.height },
@@ -227,11 +245,18 @@ export class LayoutObserver {
       })
       .filter((e) => e !== null) as unknown as ResizeObserverEntry[];
     if (entries.length > 0) this.callback(entries, this as unknown as ResizeObserver);
+    return entries.length > 0;
   }
 
   /**
-   * Reports every observed element's size, a few rounds, so cards rendered by a
-   * layout are measured too, and then lands every card at its target.
+   * Reports every observed element whose size changed, round after round, so
+   * cards rendered by a layout are measured too, until a round reports
+   * nothing; then lands every card at its target.
+   *
+   * BOUNDED, because a layout whose every report produces another size is a
+   * defect to name rather than a loop to wait out: a chart converges in two
+   * rounds (the cards, then what the cards' sizes placed), and eight is room
+   * for a nested one to take twice that.
    *
    * THE CHART TRAVELS. The design system tweens a relayout over real frames, so
    * a card's transform in the tick a suite changed the draft in is where the
@@ -241,11 +266,16 @@ export class LayoutObserver {
    * about. A suite about the travel itself drives [runFrames].
    */
   static settle(motion = true): void {
-    for (let round = 0; round < 4; round++) {
+    let quiet = false;
+    for (let round = 0; round < SETTLE_ROUNDS && !quiet; round++) {
       act(() => {
-        for (const observer of [...LayoutObserver.instances]) observer.deliver();
+        quiet = true;
+        for (const observer of [...LayoutObserver.instances]) {
+          if (observer.deliver()) quiet = false;
+        }
       });
     }
+    if (!quiet) throw new Error(`the chart's layout still changed after ${SETTLE_ROUNDS} rounds`);
     if (motion) settleMotion();
   }
 

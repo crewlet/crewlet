@@ -104,19 +104,34 @@ function mount(
   };
 }
 
-/** The treeitem whose name starts with `name`. */
+/**
+ * The treeitem whose name starts with `name`.
+ *
+ * A LOCATOR, so it skips the accessibility filter (`hidden: true`): that
+ * filter computes the style of every treeitem's every ancestor, the document
+ * changes between two calls so none of it is cached, and the cases that call
+ * this once per step spent more on finding nodes than on what they asserted.
+ * Whether the tree's items ARE exposed is asserted where it is the claim — by
+ * the cases that query the tree by role without it.
+ */
 const item = (name: string) =>
   screen
-    .getAllByRole("treeitem")
+    .getAllByRole("treeitem", { hidden: true })
     .find((el) => within(el).queryAllByText(name, { exact: true }).length > 0)!;
 const press = (key: string, init: Partial<KeyboardEventInit> = {}) =>
   fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
 /**
- * A pointer press on a button, as a browser makes one: the press moves focus
- * to the button unless the view stops it, which jsdom leaves to the caller.
+ * A pointer press on a button of the card `node` is drawn in, as a browser
+ * makes one: the press moves focus to the button unless the view stops it,
+ * which jsdom leaves to the caller.
+ *
+ * FOUND IN THAT CARD. The pointer's buttons are hidden from assistive
+ * technology, so the query has to include hidden elements, and across the
+ * whole chart that made every button of every card a candidate whose name
+ * jsdom computed — profiled, the costliest line of the cases that press them.
  */
-const pointerPress = (name: string) => {
-  const button = screen.getByRole("button", { name, hidden: true });
+const pointerPress = (node: string, name: string) => {
+  const button = within(chartCard(item(node))).getByRole("button", { name, hidden: true });
   if (fireEvent.mouseDown(button)) button.focus();
   fireEvent.click(button);
 };
@@ -220,7 +235,7 @@ describe("the tree", () => {
 
   test("a press on a card's hidden buttons focuses the node, never the button", () => {
     const { probe } = mount();
-    pointerPress("Actions for Dev");
+    pointerPress("Dev", "Actions for Dev");
     expect(screen.getByRole("menu", { name: "Actions for Dev" })).toBeDefined();
     press("Escape");
     // Focus in a subtree hidden from assistive technology is focus nowhere, so
@@ -228,13 +243,13 @@ describe("the tree", () => {
     expect(document.activeElement).toBe(item("Dev"));
     expect(probe.selection).toBe(seatKey("dev"));
 
-    pointerPress("Collapse Engineering");
+    pointerPress("Engineering", "Collapse Engineering");
     expect(document.activeElement).toBe(item("Engineering"));
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
 
     // The lead chip is drawn in the same hidden strip. It says the word
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
-    pointerPress("Lead: VP Engineering");
+    pointerPress("Engineering", "Lead: VP Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
@@ -558,9 +573,9 @@ describe("what a node offers a pointer", () => {
       // And the branch below is the Add, alone.
       "Add to Engineering",
     ]);
-    pointerPress("Edit Engineering");
+    pointerPress("Engineering", "Edit Engineering");
     expect(spies.openEditor).toHaveBeenCalledWith(unitKey("engineering"));
-    pointerPress("Delete Engineering");
+    pointerPress("Engineering", "Delete Engineering");
     expect(spies.openDelete).toHaveBeenCalledWith(unitKey("engineering"));
   });
 
@@ -901,7 +916,7 @@ describe("the reporting chart", () => {
       }),
     ).toBeNull();
     // And it still collapses, from the control that is there.
-    pointerPress("Collapse Chief");
+    pointerPress("Chief", "Collapse Chief");
     expect(item("Chief").getAttribute("aria-expanded")).toBe("false");
     // Nothing hangs on a branch of this chart: it adds nothing, so a strip
     // there would be an empty band under every node of it.
