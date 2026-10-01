@@ -90,6 +90,7 @@ import { isRecord } from "./model/json.ts";
 import {
   revisionOfEtag,
   settingsChanged,
+  type CancelTimer,
   type Clock,
   type EngineTransport,
   type HttpAnswer,
@@ -514,8 +515,10 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
  * sentence twice in a row (two undos of the same kind) would be announced
  * once unless the region is emptied first; a few frames apart is enough for
  * every screen reader to observe the empty state.
+ *
+ * Measured on the LENS'S clock ([useLiveRegion]).
  */
-const ANNOUNCE_DELAY_MS = 50;
+export const ANNOUNCE_DELAY_MS = 50;
 
 /**
  * What the live region says about the last change to the draft.
@@ -535,15 +538,36 @@ export function announcementOf(last: LastChange): string {
   }
 }
 
-function useLiveRegion(): { text: string; announce: (message: string) => void } {
+/**
+ * The region, and the sentence it is about to say.
+ *
+ * ON THE LENS'S CLOCK, the one the check's debounce runs on, rather than on a
+ * bare `setTimeout`. The lens takes its time as an argument so a suite can
+ * drive it; a sentence written on a timer only the browser moved was the one
+ * thing the lens did on its own time, so a suite could only poll for it — and
+ * a poll has a deadline, which a busy machine misses.
+ */
+function useLiveRegion(clock: Clock): { text: string; announce: (message: string) => void } {
   const [text, setText] = useState("");
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const announce = useCallback((message: string) => {
-    clearTimeout(timer.current);
-    setText("");
-    timer.current = setTimeout(() => setText(message), ANNOUNCE_DELAY_MS);
-  }, []);
+  const pending = useRef<CancelTimer | null>(null);
+  useEffect(
+    () => () => {
+      pending.current?.();
+      pending.current = null;
+    },
+    [clock],
+  );
+  const announce = useCallback(
+    (message: string) => {
+      pending.current?.();
+      setText("");
+      pending.current = clock.setTimer(() => {
+        pending.current = null;
+        setText(message);
+      }, ANNOUNCE_DELAY_MS);
+    },
+    [clock],
+  );
   return { text, announce };
 }
 
@@ -666,7 +690,7 @@ function Lens({
      ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
      and not others. */
   useFillScreen(loaded && view === "visualization");
-  const live = useLiveRegion();
+  const live = useLiveRegion(clock);
   const { announce } = live;
 
   // ---- Reading the company -------------------------------------------------

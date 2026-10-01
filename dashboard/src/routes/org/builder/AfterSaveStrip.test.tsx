@@ -6,7 +6,7 @@
  * before it.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -20,7 +20,17 @@ import {
 import { CompanyScreen } from "~/routes/company/Company.tsx";
 import { applyState, chartApplyState } from "./AfterSaveStrip.tsx";
 import { clearSavedChanges, recordSavedChanges } from "./savedChanges.ts";
-import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
+import {
+  checked,
+  company,
+  Engine,
+  InertWebSocket,
+  mountBuilder,
+  pressInToolbar,
+  pressInView,
+  settle,
+} from "./testkit.tsx";
+import { SETTLE_MS } from "~/routes/admin/recheck.ts";
 import { toastText } from "~/testing.tsx";
 
 beforeEach(() => {
@@ -30,6 +40,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   clearSavedChanges();
@@ -214,26 +225,42 @@ describe("in the builder", () => {
     { settings = false }: { settings?: boolean } = {},
   ) {
     mountBuilder({ engine, query });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await checked();
+    pressInView("Edit CEO");
     if (settings) {
-      fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
-      await waitFor(() => expect(engine.checks()).toHaveLength(1));
+      pressInView("Rename the company");
+      await checked();
+      expect(engine.checks()).toHaveLength(1);
     }
-    await waitFor(() =>
-      expect(
-        (screen.getByRole("button", { name: "Review and save" }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
-    const dialog = await screen.findByRole("dialog", { name: "Review and save" });
+    await checked();
+    pressInToolbar("Review and save");
+    const dialog = screen.getByRole("dialog", { name: "Review and save" });
     if (settings) fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
+    await settle();
+    expect(toastText()).toContain("Saved. The engine is applying it.");
+  }
+
+  /*
+   * THE STRIP'S OWN READS RUN ON THE PAGE'S TIMERS — the recheck a save
+   * starts, the shared health poll, the fleet's and the retention report's —
+   * so the two cases that wait for an apply to land hold those timers
+   * themselves rather than waiting seconds of real time for them, which a
+   * busy machine turned into a deadline missed. Only the four calls that
+   * arm and cancel a timer are faked: the scheduler React flushes through,
+   * and the microtasks every answer resolves on, stay real.
+   */
+  const holdTheTimers = () =>
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+
+  /** Moves the page's timers past the strip's second read, and renders what it found. */
+  async function readAgain() {
+    act(() => vi.advanceTimersByTime(SETTLE_MS));
+    await act(async () => {});
   }
 
   test("the strip follows the saved revision and offers the diff", async () => {
+    holdTheTimers();
     const engine = new Engine(company());
     let applied = 1;
     await save(
@@ -242,7 +269,6 @@ describe("in the builder", () => {
       { settings: true },
     );
     const strip = () => screen.getByText(/Saved settings revision/);
-    await screen.findByText(/Saved settings revision/);
     expect(strip().textContent).toContain("The engine is applying it.");
     expect(within(strip()).getByText("r-saved")).toBeDefined();
     // What the save changed is the saved revision against the one it was
@@ -252,12 +278,14 @@ describe("in the builder", () => {
       "#/admin/config?lens=diff&revision=r-saved&against=r1",
     );
     applied = 2;
-    await waitFor(() => expect(strip().textContent).toContain("Applied."), { timeout: 8000 });
-  }, 12_000);
+    await readAgain();
+    expect(strip().textContent).toContain("Applied.");
+  });
 
   // THE CHART IS FOLLOWED ON ITS OWN LOG: the save's furthest position, and
   // each node's applied position read off the retention report.
   test("the strip follows the chart's writes to every node", async () => {
+    holdTheTimers();
     const engine = new Engine(company());
     let through = 10;
     const retention = () => ({
@@ -271,18 +299,16 @@ describe("in the builder", () => {
       ],
     });
     await save(engine, (what) => (what === "retention" ? retention() : null));
-    const strip = await screen.findByText(/Saved the org chart at/);
+    const strip = screen.getByText(/Saved the org chart at/);
     expect(strip.textContent).toContain("CREWLET_CHART_LOG@1:11");
     expect(strip.textContent).toContain("The nodes are applying it.");
     // A save that wrote no settings offers nothing about a revision.
     expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy settings as YAML" })).toBeNull();
     through = 11;
-    await waitFor(
-      () => expect(screen.getByText(/Saved the org chart at/).textContent).toContain("Applied."),
-      { timeout: 8000 },
-    );
-  }, 12_000);
+    await readAgain();
+    expect(screen.getByText(/Saved the org chart at/).textContent).toContain("Applied.");
+  });
 
   test("Copy the chart reads the company export, credentials named and never valued", async () => {
     const engine = new Engine(company());
@@ -299,9 +325,10 @@ describe("in the builder", () => {
           )
         : null;
     await save(engine, () => null);
-    fireEvent.click(await screen.findByRole("button", { name: "Copy the chart" }));
-    const dialog = await screen.findByRole("dialog", { name: "The org chart" });
-    expect(await within(dialog).findByText(/CHART_X/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Copy the chart" }));
+    await settle();
+    const dialog = screen.getByRole("dialog", { name: "The org chart" });
+    expect(within(dialog).getByText(/CHART_X/)).toBeDefined();
     expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
   });
 
@@ -315,9 +342,10 @@ describe("in the builder", () => {
           })
         : null;
     await save(engine, () => null, { settings: true });
-    fireEvent.click(await screen.findByRole("button", { name: "Copy settings as YAML" }));
-    const dialog = await screen.findByRole("dialog", { name: "The settings as YAML" });
-    expect(await within(dialog).findByText(/name: Acme/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Copy settings as YAML" }));
+    await settle();
+    const dialog = screen.getByRole("dialog", { name: "The settings as YAML" });
+    expect(within(dialog).getByText(/name: Acme/)).toBeDefined();
     expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
     // The caption reads as a sentence: JSX drops the line break before an
     // element, and "keeps its${NAME} form" is what it rendered.
@@ -334,9 +362,10 @@ describe("in the builder", () => {
           })
         : null;
     await save(engine, () => null, { settings: true });
-    fireEvent.click(await screen.findByRole("button", { name: "Copy settings as YAML" }));
-    const dialog = await screen.findByRole("dialog", { name: "The settings as YAML" });
-    expect(await within(dialog).findByText(/which is active now/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Copy settings as YAML" }));
+    await settle();
+    const dialog = screen.getByRole("dialog", { name: "The settings as YAML" });
+    expect(within(dialog).getByText(/which is active now/)).toBeDefined();
   });
 });
 

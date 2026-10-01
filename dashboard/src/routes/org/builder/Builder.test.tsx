@@ -4,25 +4,32 @@
  * write, and keeps the operator's work through a change of reader.
  */
 
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type OrgProjection } from "~/protocol/index.ts";
+import { ANNOUNCE_DELAY_MS } from "./Builder.tsx";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
+import { CHECK_DEBOUNCE_MS } from "./model/scheduler.ts";
 import { menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
 import { seatPath } from "~/lib/seats.ts";
 import { FillRequest } from "~/app/fill.tsx";
 import {
   asReader,
+  checked,
   company,
   Engine,
   fakeSurfaces,
   FakeView,
   json,
+  lensToolbar,
   mountBuilder,
+  pressInToolbar,
+  pressInView,
   refusal,
   rereadViewer,
+  settle,
 } from "./testkit.tsx";
 
 beforeEach(() => {
@@ -46,12 +53,28 @@ const liveRegion = () => document.querySelector("[data-live-region]")!;
 /** A menu's entries by their labels, without the key hints some of them carry. */
 const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map(menuEntryLabel);
 
+/** What the toolbar's check status says. */
+const toolbarSays = (text: string) => within(lensToolbar()).getByText(text);
+
+/** Opens the toolbar's Add menu and picks `entry`. */
+function addFromTheToolbar(entry: string): void {
+  pressInToolbar("Add");
+  const menu = screen.getByRole("menu", { name: "Add to the organization" });
+  fireEvent.click(within(menu).getByRole("menuitem", { name: entry }));
+}
+
+/** Opens the toolbar's menu for the node it names, and returns it. */
+function toolbarMenu(node: string): HTMLElement {
+  pressInToolbar(node);
+  return screen.getByRole("menu", { name: `Actions for ${node}` });
+}
+
 describe("the posture table", () => {
   test("a served configuration and chart open edit mode", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    expect(await screen.findByText("CEO")).toBeDefined();
-    expect(await screen.findByText("No problems")).toBeDefined();
+    await checked();
+    expect(screen.getByText("CEO")).toBeDefined();
     // The chart is read with its runtime half asked for, and the first check
     // runs at once: it reads the chart again, and — the draft changing no
     // setting — the settings, never a dry run of a write nobody asked for.
@@ -63,9 +86,10 @@ describe("the posture table", () => {
   test("a settings edit is checked as the merge patch a save would send", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    await checked();
+    pressInView("Rename the company");
+    await settle();
+    expect(engine.checks()).toHaveLength(1);
     const check = engine.checks()[0]!;
     // A PATCH conditional on the revision it read, carrying only what changed.
     expect(check.method).toBe("PATCH");
@@ -77,7 +101,8 @@ describe("the posture table", () => {
   test("no active revision and no company in the org opens create mode", async () => {
     const engine = new Engine(null);
     mountBuilder({ engine });
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    await settle();
+    expect(engine.checks()).toHaveLength(1);
     const check = engine.checks()[0]!;
     // Create-only, fleet-wide: a company that appeared meanwhile is a 412.
     expect(check.method).toBe("PUT");
@@ -87,23 +112,24 @@ describe("the posture table", () => {
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
     mountBuilder({ engine, org: named });
+    await settle();
     expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
+      screen.getByText("This node has not caught up with the fleet's configuration yet."),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
     // Never create mode: nothing is checked, let alone written.
-    await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
   });
 
   test("create mode waits for the org snapshot before deciding", async () => {
     const engine = new Engine(null);
     const { store } = mountBuilder({ engine, connected: false });
-    await new Promise((r) => setTimeout(r, 50));
+    await settle();
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
+    await settle();
     expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
+      screen.getByText("This node has not caught up with the fleet's configuration yet."),
     ).toBeDefined();
   });
 
@@ -111,8 +137,9 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
     mountBuilder({ engine, query: asReader(() => "") });
+    await settle();
     expect(
-      await screen.findByText(/^Editing the organization needs a credential the engine accepts\./),
+      screen.getByText(/^Editing the organization needs a credential the engine accepts\./),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
@@ -125,12 +152,13 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () => (who === "" ? json({ error: "unauthorized" }, 401) : null);
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
+    await settle();
     expect(
-      await screen.findByText(/^Editing the organization needs a credential the engine accepts\./),
+      screen.getByText(/^Editing the organization needs a credential the engine accepts\./),
     ).toBeDefined();
     who = "jane.doe";
     rereadViewer(store);
-    expect(await screen.findByText("No problems")).toBeDefined();
+    await checked();
     expect(screen.getByText("editable")).toBeDefined();
   });
 
@@ -144,8 +172,9 @@ describe("the posture table", () => {
     engine.script = () =>
       json({ error: "unauthorized", reason: "no_grant", grants: ["config:read"] }, 403);
     mountBuilder({ engine });
+    await settle();
     expect(
-      await screen.findByText(
+      screen.getByText(
         "Editing the organization needs config:read, which the credential you presented does not carry.",
       ),
     ).toBeDefined();
@@ -156,28 +185,32 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
     mountBuilder({ engine, query: asReader(() => "jane.doe") });
-    expect(await screen.findByText("The engine refused this browser's session.")).toBeDefined();
+    await settle();
+    expect(screen.getByText("The engine refused this browser's session.")).toBeDefined();
   });
 
   test("a plain 404 is a process that does not serve the configuration", async () => {
     const engine = new Engine(company());
     engine.script = () => new Response("404 page not found", { status: 404 });
     mountBuilder({ engine });
-    expect(await screen.findByText("This process does not serve the configuration")).toBeDefined();
+    await settle();
+    expect(screen.getByText("This process does not serve the configuration")).toBeDefined();
   });
 
   test("a body that is not JSON is a process that does not serve the configuration", async () => {
     const engine = new Engine(company());
     engine.script = () => new Response("<html></html>", { status: 200 });
     mountBuilder({ engine });
-    expect(await screen.findByText("This process does not serve the configuration")).toBeDefined();
+    await settle();
+    expect(screen.getByText("This process does not serve the configuration")).toBeDefined();
   });
 
   test("an engine that never answers is unreachable", async () => {
     const engine = new Engine(company());
     engine.script = () => Promise.reject(new TypeError("Failed to fetch"));
     mountBuilder({ engine });
-    expect(await screen.findByText("The engine could not be reached")).toBeDefined();
+    await settle();
+    expect(screen.getByText("The engine could not be reached")).toBeDefined();
   });
 
   // THE TOOLBAR SAYS SO WHERE IT IS READ. An entry that is offered, pressed,
@@ -197,14 +230,16 @@ describe("the posture table", () => {
         ? json({ error: "forbidden" }, 403)
         : null;
     mountBuilder({ engine, query: asReader(() => "reader.only") });
-    expect(await screen.findByText("The engine refused the session")).toBeDefined();
+    await settle();
+    expect(toolbarSays("The engine refused the session")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
+    pressInView("Edit CEO");
+    await settle();
+    expect(liveRegion().textContent).toContain("Editing is paused");
 
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    const menu = await screen.findByRole("menu", { name: "Add to the organization" });
+    pressInToolbar("Add");
+    const menu = screen.getByRole("menu", { name: "Add to the organization" });
     for (const name of ["Add unit", "Add agent seat", "Add human seat"]) {
       expect(within(menu).getByRole("menuitem", { name }).getAttribute("aria-disabled")).toBe(
         "true",
@@ -234,19 +269,19 @@ describe("the views the lens hosts", () => {
     const count = { n: 0 };
     const engine = new Engine(company());
     mountBuilder({ engine, surfaces: { ...fakeSurfaces, canvas: registering(handle, count) } });
-    await screen.findByText("No problems");
+    await checked();
     const registered = count.n;
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    pressInToolbar("Expand all");
     expect(handle.expandAll).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    pressInToolbar("Collapse all");
     expect(handle.collapseAll).toHaveBeenCalledTimes(1);
 
     const reads = engine.chartReads().length;
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(handle.focusNode).toHaveBeenCalledWith("seat:ceo"));
-    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
-    await screen.findByText("No problems");
+    pressInView("Edit CEO");
+    await checked();
+    expect(handle.focusNode).toHaveBeenCalledWith("seat:ceo");
+    expect(engine.chartReads().length).toBe(reads + 1);
     // An edit and its answer changed the state twice, and the view was not
     // registered again for either.
     expect(count.n).toBe(registered);
@@ -260,14 +295,15 @@ describe("the views the lens hosts", () => {
    */
   test("the canvas is handed the chart the toolbar chooses, and the switch that chooses it", async () => {
     const engine = new Engine(company());
-    const { view } = mountBuilder({ engine });
-    expect(await screen.findByText("Drawing the structure chart")).toBeDefined();
+    mountBuilder({ engine });
+    await settle();
+    expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     // Inside what the lens hands the canvas, not in the toolbar beside it.
-    const toolbar = view.container.querySelector(".org-builder-toolbar")!;
     const reporting = screen.getByRole("tab", { name: "Reporting" });
-    expect(toolbar.contains(reporting)).toBe(false);
+    expect(lensToolbar().contains(reporting)).toBe(false);
     fireEvent.click(reporting);
-    expect(await screen.findByText("Drawing the reporting chart")).toBeDefined();
+    await settle();
+    expect(screen.getByText("Drawing the reporting chart")).toBeDefined();
     // A section, so the chart on screen is in the URL and a link opens it.
     expect(location.hash).toContain("chart=reporting");
   });
@@ -281,10 +317,11 @@ describe("the views the lens hosts", () => {
    */
   test("an add is handed to the structure chart rather than opened over it", async () => {
     mountBuilder({ engine: new Engine(company()) });
-    await screen.findByText("Drawing the structure chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-    expect(await screen.findByText("Adding agent to the company")).toBeDefined();
+    await settle();
+    expect(screen.getByText("Drawing the structure chart")).toBeDefined();
+    addFromTheToolbar("Add agent seat");
+    await settle();
+    expect(screen.getByText("Adding agent to the company")).toBeDefined();
     expect(screen.queryByRole("dialog")).toBeNull();
     // Not a surface ABOUT a node: the chart is neither dimmed nor moved off
     // what the reader was looking at, because the ghost is what it eases onto.
@@ -300,20 +337,23 @@ describe("the views the lens hosts", () => {
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
     mountBuilder({ engine: new Engine(company()), hash: "#/company?lens=builder&view=table" });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await checked();
+    addFromTheToolbar("Add agent seat");
+    await settle();
+    const dialog = screen.getByRole("dialog", { name: "Add to the company" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await settle();
+    expect(screen.queryByRole("dialog")).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
-    await screen.findByText("Drawing the structure chart");
+    await settle();
+    expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
-    await screen.findByText("Drawing the reporting chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
-    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    await settle();
+    expect(screen.getByText("Drawing the reporting chart")).toBeDefined();
+    addFromTheToolbar("Add agent seat");
+    await settle();
+    expect(screen.getByRole("dialog", { name: "Add to the company" })).toBeDefined();
   });
 
   /*
@@ -323,15 +363,17 @@ describe("the views the lens hosts", () => {
    */
   test("an add open in the chart becomes a dialog when the reader leaves the chart", async () => {
     mountBuilder({ engine: new Engine(company()) });
-    await screen.findByText("Drawing the structure chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
-    await screen.findByText("Adding unit to the company");
+    await settle();
+    addFromTheToolbar("Add unit");
+    await settle();
+    expect(screen.getByText("Adding unit to the company")).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
-    expect(await screen.findByRole("dialog", { name: "Add to the company" })).toBeDefined();
+    await settle();
+    expect(screen.getByRole("dialog", { name: "Add to the company" })).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(await screen.findByText("Adding unit to the company")).toBeDefined();
+    await settle();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Adding unit to the company")).toBeDefined();
   });
 
   /*
@@ -346,18 +388,16 @@ describe("the views the lens hosts", () => {
     });
     Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
     const engine = new Engine(company());
-    const { view } = mountBuilder({ engine });
-    await screen.findByText("Drawing the structure chart");
-    const toolbar = () => view.container.querySelector(".org-builder-toolbar")!;
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Fullscreen" })).not.toBeNull(),
-    );
+    mountBuilder({ engine });
+    await settle();
+    expect(screen.getByText("Drawing the structure chart")).toBeDefined();
     const toggle = () => screen.getByRole("button", { name: "Fullscreen" });
-    expect(toolbar().contains(toggle())).toBe(false);
+    expect(lensToolbar().contains(toggle())).toBe(false);
 
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
-    await waitFor(() => expect(screen.queryByText("Drawing the structure chart")).toBeNull());
-    expect(toolbar().contains(toggle())).toBe(true);
+    await settle();
+    expect(screen.queryByText("Drawing the structure chart")).toBeNull();
+    expect(lensToolbar().contains(toggle())).toBe(true);
   });
 
   /*
@@ -370,15 +410,14 @@ describe("the views the lens hosts", () => {
   test("discarding the draft is asked as a prompt, not a framed dialog", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() =>
-      expect(
-        (screen.getByRole("button", { name: "Discard changes" }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
-    const prompt = await screen.findByRole("alertdialog", { name: "Discard changes?" });
+    await checked();
+    pressInView("Edit CEO");
+    await checked();
+    const discard = within(lensToolbar()).getByRole("button", { name: "Discard changes" });
+    expect((discard as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(discard);
+    await settle();
+    const prompt = screen.getByRole("alertdialog", { name: "Discard changes?" });
     // The two answers and NOTHING ELSE: a framed dialog draws a close control
     // in its head band that does exactly what Keep editing does two inches
     // below it, which is the third control this prompt does not have.
@@ -397,12 +436,12 @@ describe("the views the lens hosts", () => {
   test("the chart is told which node an open surface is about", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await checked();
     expect(screen.queryByText(/^About /)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
-    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Edit reports" }));
-    expect(await screen.findByText("About seat:ceo")).toBeDefined();
+    pressInView("Select CEO");
+    fireEvent.click(within(toolbarMenu("CEO")).getByRole("menuitem", { name: "Edit reports" }));
+    await settle();
+    expect(screen.getByText("About seat:ceo")).toBeDefined();
   });
 });
 
@@ -413,12 +452,36 @@ describe("checking the draft", () => {
   test("an edit of a seat is checked against the chart, with no dry run", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await checked();
     const reads = engine.chartReads().length;
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
-    await screen.findByText("No problems");
+    pressInView("Edit CEO");
+    await checked();
+    expect(engine.chartReads().length).toBe(reads + 1);
     expect(engine.checks()).toHaveLength(0);
+  });
+
+  // A BURST IS CHECKED ONCE, after the debounce, which is time on the LENS'S
+  // clock: nothing is asked before it has passed, and the check that goes
+  // asks about the last of the burst.
+  test("an edit is checked once the debounce has passed, and not before", async () => {
+    const engine = new Engine(company());
+    const { clock } = mountBuilder({ engine });
+    await checked();
+    const reads = engine.chartReads().length;
+    pressInView("Rename the company");
+    clock.advance(CHECK_DEBOUNCE_MS - 1);
+    pressInView("Edit CEO");
+    clock.advance(CHECK_DEBOUNCE_MS - 1);
+    await act(async () => {});
+    expect(engine.chartReads()).toHaveLength(reads);
+    expect(within(lensToolbar()).getByText("Checking")).toBeDefined();
+    clock.advance(1);
+    await settle();
+    // One check for the two edits, and it is the draft holding both.
+    expect(engine.chartReads()).toHaveLength(reads + 1);
+    expect(engine.checks()).toHaveLength(1);
+    expect(engine.checks()[0]!.body).toEqual({ name: "Acme Labs" });
+    expect(toolbarSays("No problems")).toBeDefined();
   });
 
   test("what the chart would refuse is placed on the seat, and the settings' problems on the company", async () => {
@@ -432,13 +495,15 @@ describe("checking the draft", () => {
           ])
         : null;
     mountBuilder({ engine });
-    expect(await screen.findByText("1 problem")).toBeDefined();
+    await settle();
+    expect(toolbarSays("1 problem")).toBeDefined();
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
     // The control: a seat whose fields fit carries none.
     expect(screen.getByTestId("problems CEO").textContent).toBe("0");
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
-    expect(await screen.findByText("2 problems")).toBeDefined();
+    pressInView("Rename the company");
+    await settle();
+    expect(toolbarSays("2 problems")).toBeDefined();
     // The settings' problem is the company's, never a seat's.
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
     expect(screen.getByTestId("problems CEO").textContent).toBe("0");
@@ -447,36 +512,57 @@ describe("checking the draft", () => {
   test("the live region says what an edit did, and undo from the keyboard reverts it", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    const region = liveRegion;
-    await waitFor(() => expect(region().textContent).toBe("Edited CEO: goal."));
+    await checked();
+    pressInView("Edit CEO");
+    await settle();
+    expect(liveRegion().textContent).toBe("Edited CEO: goal.");
     // Ctrl or Command with Z, from anywhere in the page that is not a text
     // field. The region says the edit was undone: the bare sentence would
     // tell a screen reader it was just made.
     const reads = engine.chartReads().length;
     fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
-    await waitFor(() => expect(region().textContent).toBe("Undone: Edited CEO: goal."));
+    await settle();
+    expect(liveRegion().textContent).toBe("Undone: Edited CEO: goal.");
     // Every generation is checked: the undone draft too.
-    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
+    expect(engine.chartReads().length).toBe(reads + 1);
     // And Shift with it redoes, saying so.
     fireEvent.keyDown(document.body, { key: "Z", code: "KeyZ", ctrlKey: true, shiftKey: true });
-    await waitFor(() => expect(region().textContent).toBe("Redone: Edited CEO: goal."));
-    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 2));
+    await settle();
+    expect(liveRegion().textContent).toBe("Redone: Edited CEO: goal.");
+    expect(engine.chartReads().length).toBe(reads + 2);
+  });
+
+  // THE REGION IS EMPTIED FIRST, and the sentence written once the pause has
+  // passed on the lens's clock: a polite region announces a CHANGE, so the
+  // same sentence twice in a row would otherwise be said once.
+  test("the live region is emptied, then says the sentence once the pause has passed", async () => {
+    const engine = new Engine(company());
+    const { clock } = mountBuilder({ engine });
+    await checked();
+    pressInView("Edit CEO");
+    await settle();
+    expect(liveRegion().textContent).toBe("Edited CEO: goal.");
+    fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
+    expect(liveRegion().textContent).toBe("");
+    clock.advance(ANNOUNCE_DELAY_MS - 1);
+    expect(liveRegion().textContent).toBe("");
+    clock.advance(1);
+    expect(liveRegion().textContent).toBe("Undone: Edited CEO: goal.");
   });
 
   test("undo is left to a text field that has focus", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
-    await screen.findByText("No problems");
+    await checked();
+    pressInView("Edit CEO");
+    await checked();
+    expect(liveRegion().textContent).toBe("Edited CEO: goal.");
     const reads = engine.chartReads().length;
     const field = document.createElement("input");
     document.querySelector(".org-builder")!.appendChild(field);
     fireEvent.keyDown(field, { key: "z", code: "KeyZ", metaKey: true });
-    await new Promise((r) => setTimeout(r, 400));
+    // Settled, so an undo would have been checked and announced by now.
+    await settle();
     expect(engine.chartReads()).toHaveLength(reads);
     expect(liveRegion().textContent).toBe("Edited CEO: goal.");
     field.remove();
@@ -491,16 +577,17 @@ test("a company with no model provider is told so, and one with a provider is no
   delete without.settings.providers;
   const engine = new Engine(without);
   mountBuilder({ engine });
+  await settle();
   // The engine applies the company and holds its agents' work, so the
   // caution says what waits rather than claiming nothing is applied.
   expect(
-    await screen.findByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
+    screen.getByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
   ).toBeDefined();
   cleanup();
 
   const engineWith = new Engine(company());
   mountBuilder({ engine: engineWith });
-  await screen.findByText("No problems");
+  await checked();
   expect(screen.queryByText(/No model provider is configured/)).toBeNull();
 });
 
@@ -510,31 +597,34 @@ describe("the selection in the URL", () => {
   test("a selected unit is named in the URL by its key, which a new address rewrites", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
-    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
+    await checked();
+    pressInView("Select Engineering");
+    await settle();
+    expect(location.hash).toContain("unit=engineering");
 
     // The control: a new NAME is prose, and the address in the URL stays.
-    fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
-    await waitFor(() => expect(liveRegion().textContent).toContain("Engineering Two"));
+    pressInView("Rename Engineering");
+    await settle();
+    expect(liveRegion().textContent).toContain("Engineering Two");
     expect(location.hash).toMatch(/unit=engineering$/);
-    fireEvent.click(screen.getByRole("button", { name: "Readdress Engineering Two" }));
-    await waitFor(() => expect(location.hash).toContain("unit=engineering-two"));
+    pressInView("Readdress Engineering Two");
+    await settle();
+    expect(location.hash).toContain("unit=engineering-two");
   });
 
   test("a link naming a unit by its key selects it, and one naming it by its name does not", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&unit=engineering" });
-    await screen.findByText("No problems");
-    expect(await screen.findByRole("button", { name: "Engineering" })).toBeDefined();
+    await checked();
+    expect(within(lensToolbar()).getByRole("button", { name: "Engineering" })).toBeDefined();
     cleanup();
 
     mountBuilder({
       engine: new Engine(company()),
       hash: "#/company?lens=builder&view=visualization&unit=Engineering",
     });
-    await screen.findByText("No problems");
-    expect(screen.queryByRole("button", { name: "Engineering" })).toBeNull();
+    await checked();
+    expect(within(lensToolbar()).queryByRole("button", { name: "Engineering" })).toBeNull();
   });
 
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
@@ -544,11 +634,9 @@ describe("the selection in the URL", () => {
   test("the company stays selected, and the toolbar offers the charter's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Select the company" }));
-    const actions = await screen.findByRole("button", { name: "Acme" });
-    fireEvent.click(actions);
-    const menu = await screen.findByRole("menu", { name: "Actions for Acme" });
+    await checked();
+    pressInView("Select the company");
+    const menu = toolbarMenu("Acme");
     // Nothing moves or deletes the document the company IS.
     expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
     fireEvent.keyDown(menu, { key: "Escape" });
@@ -556,20 +644,19 @@ describe("the selection in the URL", () => {
     // And it survives the next answer about the draft, which is what a
     // locate-based reading of the selection did not.
     const reads = engine.chartReads().length;
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 1));
-    await screen.findByText("No problems");
-    expect(screen.getByRole("button", { name: "Acme" })).toBeDefined();
+    pressInView("Edit CEO");
+    await checked();
+    expect(engine.chartReads().length).toBe(reads + 1);
+    expect(within(lensToolbar()).getByRole("button", { name: "Acme" })).toBeDefined();
   });
 
   test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine, hash: "#/company?lens=builder&view=visualization&seat=ceo" });
-    await screen.findByText("No problems");
-    const actions = await screen.findByRole("button", { name: "CEO" });
+    await checked();
+    const actions = within(lensToolbar()).getByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
-    fireEvent.click(actions);
-    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    const menu = toolbarMenu("CEO");
     // The same actions, in the same order, as the seat's own card offers.
     expect(labels(menu)).toEqual([
       "Edit",
@@ -580,14 +667,13 @@ describe("the selection in the URL", () => {
       "Delete",
     ]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
+    await settle();
     // THE SEAT'S OWN PAGE, asked for the way every other link in this tree
     // asks: `seatPath` is the ONE place that knows where a seat lives, so
     // this claim survives the page moving and would fail a builder that built
     // the address itself. The path only — this harness keeps the Builder
     // mounted under any route, where the app replaces the whole screen.
-    await waitFor(() =>
-      expect(location.hash.split("?")[0]).toBe(href(seatPath({ handle: "ceo", name: "CEO" }))),
-    );
+    expect(location.hash.split("?")[0]).toBe(href(seatPath({ handle: "ceo", name: "CEO" })));
   });
 
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. Its handle is typed with
@@ -597,22 +683,22 @@ describe("the selection in the URL", () => {
   test("a seat added in the draft is offered no screen, and can change kind", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Select Analyst" }));
-    await waitFor(() => expect(location.hash).toContain("seat=analyst"));
-    fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
-    const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
+    await checked();
+    pressInView("Add an analyst");
+    await settle();
+    pressInView("Select Analyst");
+    await settle();
+    expect(location.hash).toContain("seat=analyst");
+    const menu = toolbarMenu("Analyst");
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
     const kind = within(menu).getByRole("menuitem", { name: "Change to human seat" });
     expect(kind.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // The control: a seat the chart holds is offered its screen.
-    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
-    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-    const saved = await screen.findByRole("menu", { name: "Actions for CEO" });
-    expect(within(saved).getByRole("menuitem", { name: "Open seat" })).toBeDefined();
+    pressInView("Select CEO");
+    await settle();
+    expect(within(toolbarMenu("CEO")).getByRole("menuitem", { name: "Open seat" })).toBeDefined();
   });
 });
 
@@ -629,12 +715,12 @@ describe("a company saved by somebody else", () => {
   test("an untouched draft is stood on the chart the org push reports", async () => {
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await checked();
     colleagueSaves(engine);
     act(() => store.applyOrg(engine.orgPush()));
 
-    await waitFor(() => expect(screen.getByText("editable")).toBeDefined());
-    expect(await screen.findByText("No problems")).toBeDefined();
+    await checked();
+    expect(screen.getByText("editable")).toBeDefined();
     expect(
       screen.queryByText("Somebody changed the org chart since you started editing."),
     ).toBeNull();
@@ -645,34 +731,36 @@ describe("a company saved by somebody else", () => {
   test("an untouched draft is stood on the settings revision a colleague saved", async () => {
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine });
-    await screen.findByText("No problems");
+    await checked();
     engine.settings = { ...engine.settings, mission: "Make better things" };
     engine.revision = "r2";
     const reads = engine.sent("GET").length;
     act(() => store.applyOrg(engine.orgPush()));
     // The check's read finds the revision, and the update reads the company.
-    await waitFor(() => expect(engine.sent("GET").length).toBeGreaterThanOrEqual(reads + 2));
-    await screen.findByText("No problems");
+    await checked();
+    expect(engine.sent("GET").length).toBeGreaterThanOrEqual(reads + 2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
+    pressInView("Rename the company");
+    await settle();
     // The dry run the edit sends is conditional on the revision it now stands on.
-    await waitFor(() => expect(engine.checks().at(-1)?.headers["If-Match"]).toBe('"r2"'));
+    expect(engine.checks().at(-1)?.headers["If-Match"]).toBe('"r2"');
     expect(screen.queryByText("The settings changed since you started editing.")).toBeNull();
   });
 
   test("a draft with work is not moved: the change is offered as an update", async () => {
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
-    await screen.findByText("No problems");
+    await checked();
+    pressInView("Edit CEO");
+    await checked();
+    expect(liveRegion().textContent).toBe("Edited CEO: goal.");
     colleagueSaves(engine);
     const settingsReads = engine.sent("GET").length;
     act(() => store.applyOrg(engine.orgPush()));
 
+    await settle();
     expect(
-      await screen.findByText("Somebody changed the org chart since you started editing."),
+      screen.getByText("Somebody changed the org chart since you started editing."),
     ).toBeDefined();
     // Nothing was loaded over the draft: the settings were not read to replace it.
     expect(engine.sent("GET")).toHaveLength(settingsReads + 1);
@@ -685,16 +773,18 @@ describe("a new reader mid-edit", () => {
     let who = "jane.doe";
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    await checked();
+    pressInView("Rename the company");
+    await settle();
+    expect(engine.checks()).toHaveLength(1);
     const reads = engine.chartReads().length;
 
     who = "sam.lee";
     rereadViewer(store);
+    await settle();
     // Read again (the chart once for the load and once for the check), and checked.
-    await waitFor(() => expect(engine.chartReads().length).toBe(reads + 2));
-    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    expect(engine.chartReads().length).toBe(reads + 2);
+    expect(engine.checks()).toHaveLength(2);
     // The edit is still in the draft that was checked.
     expect(engine.checks()[1]!.body).toEqual({ name: "Acme Labs" });
   });
@@ -705,10 +795,10 @@ describe("a new reader mid-edit", () => {
   test("the same reader read again changes nothing", async () => {
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
-    await screen.findByText("No problems");
+    await checked();
     const reads = engine.chartReads().length;
     rereadViewer(store);
-    await new Promise((r) => setTimeout(r, 50));
+    await settle();
     expect(engine.chartReads()).toHaveLength(reads);
   });
 
@@ -716,9 +806,10 @@ describe("a new reader mid-edit", () => {
     let who = "jane.doe";
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
-    await waitFor(() => expect(engine.checks()).toHaveLength(1));
+    await checked();
+    pressInView("Rename the company");
+    await settle();
+    expect(engine.checks()).toHaveLength(1);
 
     // Reads are served, writes and dry runs are refused: the new reader lacks
     // the right to write, which only the check can find out.
@@ -728,7 +819,8 @@ describe("a new reader mid-edit", () => {
         : null;
     who = "reader.only";
     rereadViewer(store);
-    expect(await screen.findByText("The engine refused the session")).toBeDefined();
+    await settle();
+    expect(toolbarSays("The engine refused the session")).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     expect(engine.checks().at(-1)!.body).toEqual({ name: "Acme Labs" });
   });
@@ -737,28 +829,27 @@ describe("a new reader mid-edit", () => {
     let who = "jane.doe";
     const engine = new Engine(company());
     const { store } = mountBuilder({ engine, query: asReader(() => who) });
-    await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
+    await checked();
+    pressInView("Edit CEO");
+    await settle();
+    expect(liveRegion().textContent).toBe("Edited CEO: goal.");
 
     engine.script = () => (who === "" ? json({}, 401) : null);
     who = "";
     rereadViewer(store);
+    await settle();
     expect(
-      await screen.findByText(
+      screen.getByText(
         /^Editing the organization needs a credential the engine accepts\..* Your draft is kept on this page\.$/,
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     // The status names what is missing: no session was refused, none is held.
-    expect(await screen.findByText("Needs a credential")).toBeDefined();
+    expect(toolbarSays("Needs a credential")).toBeDefined();
     expect(screen.queryByText("The engine refused the session")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-    await waitFor(() =>
-      expect(liveRegion().textContent).toBe(
-        "Editing is paused because no credential was presented.",
-      ),
-    );
+    pressInView("Edit CEO");
+    await settle();
+    expect(liveRegion().textContent).toBe("Editing is paused because no credential was presented.");
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();
   });
@@ -793,14 +884,16 @@ describe("the lens that fills the window", () => {
     // Not before the engine has answered: until then the lens draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
-    await waitFor(() => expect(calls).toContain(true));
+    await settle();
+    expect(calls).toContain(true);
   });
 
   test("the outline lens asks for nothing and leaves the scroller alone", async () => {
     const calls = asked("#/company?lens=builder&view=table");
     // The toolbar is what both lenses draw once the engine has answered, so
-    // waiting for it is waiting for the same moment the case above measures.
-    await screen.findByRole("toolbar", { name: "Organization builder" });
+    // settling on it is settling on the same moment the case above measures.
+    await settle();
+    expect(lensToolbar()).toBeDefined();
     expect(calls).not.toContain(true);
   });
 });

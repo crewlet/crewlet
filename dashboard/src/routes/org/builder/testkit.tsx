@@ -2,9 +2,16 @@
  * Fixtures for the Builder's component suites. Imported by tests only.
  *
  * A SCRIPTED ENGINE BEHIND A STUBBED FETCH, in the Secrets suite's idiom: the
- * Builder runs its real transport, its real clock and real session storage,
- * so what a suite asserts is the request that left the page and what the page
- * did with the answer.
+ * Builder runs its real transport and real session storage, so what a suite
+ * asserts is the request that left the page and what the page did with the
+ * answer.
+ *
+ * AND THE LENS'S TIME IS THE SUITE'S ([SuiteClock]). A suite waits for the
+ * lens with [settle] — every answer it has out, every timer due within the
+ * check's debounce — rather than polling the page for a sentence with a
+ * deadline: the first check after a mount is a read, a render and a second
+ * read, and on a loaded runner that took longer than the second a `findBy`
+ * gives it, so the same case passed or failed on how busy the machine was.
  *
  * TWO SURFACES, AS THE ENGINE HAS: the settings revision `/config` serves and
  * validates whole, and the org chart `/chart` serves and writes per object.
@@ -21,7 +28,7 @@
  * Builder rather than any one view.
  */
 
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, getConfig, render, within } from "@testing-library/react";
 import { vi } from "vitest";
 import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
@@ -43,7 +50,16 @@ import { useBuilder, type ChartKind } from "./BuilderContext.tsx";
 import { allSeats, allUnits } from "./model/draft.ts";
 import { COMPANY_KEY, type KeySource } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
+import { CHECK_DEBOUNCE_MS } from "./model/scheduler.ts";
 import { chartOf, fixtureDerived, type DerivedOverrides } from "./model/testkit.ts";
+import type {
+  CancelTimer,
+  Clock,
+  EngineRequest,
+  EngineTransport,
+  HttpAnswer,
+} from "./model/transport.ts";
+import { restTransport } from "./runtime.ts";
 import { builderSurfaces } from "./surfaces.ts";
 
 export class InertWebSocket {
@@ -257,6 +273,8 @@ export class Engine {
   /** Every chart write's answer, by its operation id, as the chart's ledger keeps it. */
   readonly ledger = new Map<string, { status: number; body: unknown }>();
   script: Script = () => null;
+  /** What [reached] is waiting for, asked again as each request arrives. */
+  private waiting: { holds: () => boolean; resolve: () => void }[] = [];
 
   constructor(company: Company | null, revision = "r1") {
     this.settings = company ? clone(company.settings) : null;
@@ -264,6 +282,27 @@ export class Engine {
     this.units = company ? clone(company.chart.units) : [];
     this.seats = company ? clone(company.chart.seats) : [];
     this.manages = company ? clone(company.chart.manages ?? {}) : {};
+  }
+
+  /**
+   * Resolves once `holds` is true of what has reached the engine — at once if
+   * it already is, and otherwise as the request that makes it true arrives.
+   *
+   * FOR AN ANSWER THE SUITE IS HOLDING, where [settle] cannot be used: settle
+   * waits for every request the lens has out, and one a script holds is out
+   * until the suite releases it. This waits for the REQUEST instead, which is
+   * an event rather than a deadline.
+   *
+   * NOT INSIDE `act`, and through the library's own wrapper for waiting
+   * outside it: the request is usually sent from an effect of a render, and
+   * `act` holds every render back until its callback resolves, so a case that
+   * waited for the request inside `act` waited for itself.
+   */
+  reached(holds: () => boolean): Promise<void> {
+    if (holds()) return Promise.resolve();
+    return getConfig().asyncWrapper(
+      () => new Promise<void>((resolve) => this.waiting.push({ holds, resolve })),
+    ) as Promise<void>;
   }
 
   /** The requests with this method and path, in order. */
@@ -629,9 +668,32 @@ export class Engine {
           body: text === undefined ? undefined : JSON.parse(text),
         };
         this.requests.push(request);
-        if (init?.signal?.aborted) throw new DOMException("aborted", "AbortError");
-        const scripted = await this.script(request, this);
-        return scripted ?? this.answer(request);
+        const arrived = this.waiting.filter((w) => w.holds());
+        this.waiting = this.waiting.filter((w) => !arrived.includes(w));
+        for (const w of arrived) w.resolve();
+        const signal = init?.signal;
+        if (signal?.aborted) throw new DOMException("aborted", "AbortError");
+        const answer = Promise.resolve(this.script(request, this)).then(
+          (scripted) => scripted ?? this.answer(request),
+        );
+        if (!signal) return answer;
+        // ABORTABLE WHILE IT IS OUT, as a browser's fetch is. An answer a
+        // script holds would otherwise outlive the request the page gave up
+        // on, and the lens's transport would count it as out for ever.
+        return new Promise<Response>((resolve, reject) => {
+          const abort = () => reject(new DOMException("aborted", "AbortError"));
+          signal.addEventListener("abort", abort, { once: true });
+          answer.then(
+            (response) => {
+              signal.removeEventListener("abort", abort);
+              resolve(response);
+            },
+            (err: unknown) => {
+              signal.removeEventListener("abort", abort);
+              reject(err);
+            },
+          );
+        });
       }),
     );
   }
@@ -650,11 +712,14 @@ export function refusal(problems: ConfigProblem[], status = 400): Response {
   );
 }
 
+/** The stand-in view's accessible name. */
+const STAND_IN = "Stand-in view";
+
 /** A stand-in view: every seat with its problem count and two edits. */
 export function FakeView() {
   const api = useBuilder();
   return (
-    <div>
+    <section aria-label={STAND_IN}>
       <p>{api.readOnly ? "read only" : "editable"}</p>
       <button type="button" onClick={() => api.selection.select(COMPANY_KEY)}>
         Select the company
@@ -770,8 +835,31 @@ export function FakeView() {
           </li>
         ))}
       </ul>
-    </div>
+    </section>
   );
+}
+
+/**
+ * Presses one of the stand-in view's own buttons, by its TEXT and inside the
+ * view.
+ *
+ * NOT A ROLE QUERY, because a role query with a name is the costliest thing a
+ * case can ask jsdom: it computes the accessible name of every candidate, and
+ * every element that name walks costs a computed style matched against the
+ * whole user-agent sheet. Profiled, the stand-in's own presses were the most
+ * expensive lines of the cases that used them, for buttons that are this
+ * kit's scaffolding rather than anything a reader meets — the product's
+ * controls, the toolbar's and the dialogs', are still asked for by role.
+ */
+export function pressInView(name: string): void {
+  const view = document.querySelector<HTMLElement>(`section[aria-label="${STAND_IN}"]`);
+  if (!view) throw new Error("no stand-in view is drawn");
+  fireEvent.click(within(view).getByText(name, { selector: "button" }));
+}
+
+/** Presses one of the Builder toolbar's own controls, found inside the toolbar. */
+export function pressInToolbar(name: string): void {
+  fireEvent.click(within(lensToolbar()).getByRole("button", { name }));
 }
 
 /**
@@ -818,6 +906,202 @@ export const fakeSurfaces: BuilderSurfaces = {
   table: FakeView,
 };
 
+/**
+ * THE LENS'S TIME IN A SUITE: it moves when the suite moves it, and never
+ * otherwise. The check's debounce and backoff and the live region's pause all
+ * run on the clock the lens is handed (`model/transport.ts`'s [Clock]), so a
+ * suite that holds this one decides exactly when each falls due — and a case
+ * cannot pass or fail on how busy the machine running it is.
+ */
+export class SuiteClock implements Clock {
+  private time = 0;
+  private sequence = 0;
+  private armed: { at: number; order: number; fire: () => void }[] = [];
+
+  now(): number {
+    return this.time;
+  }
+
+  setTimer(fire: () => void, ms: number): CancelTimer {
+    const timer = { at: this.time + Math.max(0, ms), order: ++this.sequence, fire };
+    this.armed.push(timer);
+    return () => {
+      this.armed = this.armed.filter((t) => t !== timer);
+    };
+  }
+
+  /** When the earliest armed timer falls due, or `null` when none is armed. */
+  nextDue(): number | null {
+    return this.armed.reduce<number | null>(
+      (due, t) => (due === null || t.at < due ? t.at : due),
+      null,
+    );
+  }
+
+  /**
+   * Moves the clock `ms` forward, firing each timer that falls due on the way
+   * in the order it falls due — the ones those arm included — inside `act`,
+   * since what a timer does is a state change the page renders.
+   */
+  advance(ms: number): void {
+    const until = this.time + ms;
+    act(() => {
+      for (;;) {
+        const next = [...this.armed].sort((a, b) => a.at - b.at || a.order - b.order)[0];
+        if (!next || next.at > until) break;
+        this.armed = this.armed.filter((t) => t !== next);
+        this.time = next.at;
+        next.fire();
+      }
+      this.time = until;
+    });
+  }
+}
+
+/** The lens's real transport, counting what it has out so a suite can wait for the answers. */
+class CountingTransport implements EngineTransport {
+  readonly out = new Set<Promise<HttpAnswer>>();
+
+  constructor(private readonly inner: EngineTransport) {}
+
+  private count(call: Promise<HttpAnswer>): Promise<HttpAnswer> {
+    this.out.add(call);
+    const done = () => void this.out.delete(call);
+    call.then(done, done);
+    return call;
+  }
+
+  send(request: EngineRequest, signal: AbortSignal): Promise<HttpAnswer> {
+    return this.count(this.inner.send(request, signal));
+  }
+
+  settings(signal: AbortSignal): Promise<HttpAnswer> {
+    return this.count(this.inner.settings(signal));
+  }
+
+  revision(id: string, signal: AbortSignal): Promise<HttpAnswer> {
+    return this.count(this.inner.revision(id, signal));
+  }
+
+  chart(signal: AbortSignal): Promise<HttpAnswer> {
+    return this.count(this.inner.chart(signal));
+  }
+}
+
+/**
+ * How many rounds [settle] takes before it calls the lens restless. A round is
+ * one batch of answers or one timer, and the longest sequence any case drives
+ * — a save's read, its writes, the read-back and the check after it — is a
+ * dozen; a lens still busy after a hundred is re-arming something for ever,
+ * which is a defect to report rather than to wait out.
+ */
+const SETTLE_ROUNDS = 100;
+
+/** The lens a suite mounted last: what [settle] waits for. */
+let mounted: { clock: SuiteClock; transport: CountingTransport } | null = null;
+
+/**
+ * Waits until the lens has nothing left in motion, and the page shows it.
+ *
+ * EVERY ANSWER IT HAS OUT, AND EVERY TIMER DUE WITHIN THE CHECK'S DEBOUNCE.
+ * Each round either waits for the requests the lens's transport has out — the
+ * company's read, a check, a save's writes — or moves the lens's clock to the
+ * next timer that falls due within [CHECK_DEBOUNCE_MS] (the debounce itself,
+ * and the live region's pause), and every round runs inside `act`, so what an
+ * answer set in motion is rendered before the next round looks. It stops when
+ * a round finds neither.
+ *
+ * NO DEADLINE, which is the point. What it waits for is the lens's own work,
+ * so a slow machine makes it slower and never makes it wrong; a case that
+ * polled for the toolbar's "No problems" had a second to see it, and on a
+ * loaded runner the first check took longer than that.
+ *
+ * NOTHING LATER THAN THE DEBOUNCE: a retry the check scheduled after an
+ * unanswered request is a second or more away, and a case about the retry
+ * moves the clock there itself ([SuiteClock.advance]) — settling past it
+ * would re-ask an engine that keeps failing for ever.
+ *
+ * NEVER WHILE THE SUITE HOLDS AN ANSWER the lens is waiting for: that request
+ * is out until the suite releases it. Wait for the request with
+ * [Engine.reached] instead.
+ */
+export async function settle(): Promise<void> {
+  const lens = mounted;
+  if (!lens) throw new Error("settle: no lens is mounted");
+  for (let round = 0; round < SETTLE_ROUNDS; round++) {
+    if (lens.transport.out.size > 0) {
+      const out = [...lens.transport.out];
+      await act(async () => {
+        await Promise.allSettled(out);
+      });
+      continue;
+    }
+    const due = lens.clock.nextDue();
+    if (due !== null && due - lens.clock.now() <= CHECK_DEBOUNCE_MS) {
+      lens.clock.advance(due - lens.clock.now());
+      continue;
+    }
+    // Nothing out and nothing due: one more turn for what the last answer
+    // set in motion without a request — a socket query, an effect — and done
+    // only if that turn started nothing either.
+    await act(async () => {});
+    const next = lens.clock.nextDue();
+    const quiet =
+      lens.transport.out.size === 0 &&
+      (next === null || next - lens.clock.now() > CHECK_DEBOUNCE_MS);
+    if (quiet) return;
+  }
+  throw new Error(
+    `settle: the lens was still busy after ${SETTLE_ROUNDS} rounds — ${lens.transport.out.size} requests out, the next timer at ${lens.clock.nextDue()} with the clock at ${lens.clock.now()}`,
+  );
+}
+
+/**
+ * Makes a move with `go` — a hash written, Back pressed — and waits until the
+ * browser has landed on `landsOn`, then settles the lens.
+ *
+ * ON THE BROWSER'S OWN EVENTS. jsdom dispatches `hashchange` and `popstate`
+ * as tasks of their own, and a move the router holds is undone with a second
+ * traversal, so where the browser ends up is known only after one or more
+ * events — and the next one is all that is waited for. At least one event is
+ * waited for, because the hash a move is undone to is often the hash it
+ * started on, and read at once it would say the move had already landed.
+ */
+export async function navigate(go: () => void, landsOn: string): Promise<void> {
+  const landed = new Promise<void>((resolve) => {
+    const moved = () => {
+      if (location.hash !== landsOn) return;
+      window.removeEventListener("hashchange", moved);
+      window.removeEventListener("popstate", moved);
+      resolve();
+    };
+    window.addEventListener("hashchange", moved);
+    window.addEventListener("popstate", moved);
+  });
+  act(go);
+  await getConfig().asyncWrapper(() => landed);
+  await settle();
+}
+
+/** The Builder's toolbar, where its check status and its own controls are drawn. */
+export function lensToolbar(): HTMLElement {
+  const toolbar = document.querySelector<HTMLElement>(
+    '[role="toolbar"][aria-label="Organization builder"]',
+  );
+  if (!toolbar) throw new Error("the Builder draws no toolbar");
+  return toolbar;
+}
+
+/**
+ * Settles the lens and holds it to a clean check: the toolbar says No
+ * problems. Read in the toolbar alone, because a query of the whole document
+ * walks every card and row the views draw.
+ */
+export async function checked(): Promise<void> {
+  await settle();
+  within(lensToolbar()).getByText("No problems");
+}
+
 /** Mounts the Builder lens against the scripted engine. */
 export function mountBuilder({
   engine,
@@ -861,12 +1145,23 @@ export function mountBuilder({
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(query(what));
+  const clock = new SuiteClock();
+  const transport = new CountingTransport(restTransport);
+  mounted = { clock, transport };
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        {wrap(<Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />)}
+        {wrap(
+          <Builder
+            surfaces={surfaces}
+            storage={storage}
+            transport={transport}
+            clock={clock}
+            {...(keys ? { keys } : {})}
+          />,
+        )}
       </Router>
     </ClientContext.Provider>,
   );
-  return { store, socket, view };
+  return { store, socket, view, clock };
 }

@@ -215,6 +215,21 @@ What follows are the prerequisites that legitimately vary by machine.
   `make dashboard-test`. None of that is checkable by looking at the
   stylesheet, which is why it is computed from the file that actually ships.
 
+  **A dashboard suite waits for the work, never for the clock.** `findBy*`
+  and `waitFor` poll the page against a one-second deadline, so a case that
+  waited that way for a screen to finish passed on a quiet machine and failed
+  on a loaded one — four full runs sharing four cores each failed two to four
+  of the org builder's cases, none of which had done anything wrong. A screen that takes its time as an argument is handed time the suite
+  moves: the builder's testkit mounts the lens on a `SuiteClock`, and
+  `settle()` waits for every answer the lens has out and every timer due
+  within the check's debounce. One that does not is flushed with `act` where
+  its work is promises, or driven by fake timers faked only for the calls
+  that arm and cancel one. And a role query is scoped with `within` to the
+  toolbar, dialog or chart it is about: asked by name, it computes the
+  accessible name of every candidate in its container, and in jsdom each
+  element of each name costs a computed style matched against the whole
+  user-agent stylesheet.
+
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
   `static/dashboard` with your source change. CI rebuilds and diffs it

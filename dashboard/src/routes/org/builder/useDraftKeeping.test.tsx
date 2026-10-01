@@ -4,7 +4,7 @@
  * changed hands.
  */
 
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { chartPrint, fingerprint, fromChart } from "./model/document.ts";
 import { EMPTY_DRAFT } from "./model/draft.ts";
@@ -12,7 +12,19 @@ import { OPERATIONS_VERSION, record, type Intent, type Operation } from "./model
 import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/persistence.ts";
 import { templateIntent } from "./model/templates.ts";
 import { countingKeys } from "./model/testkit.ts";
-import { asReader, company, Engine, json, mountBuilder, rereadViewer } from "./testkit.tsx";
+import {
+  asReader,
+  checked,
+  company,
+  Engine,
+  json,
+  lensToolbar,
+  mountBuilder,
+  navigate,
+  pressInView,
+  rereadViewer,
+  settle,
+} from "./testkit.tsx";
 import { noteReader } from "~/lib/reader.ts";
 
 beforeEach(() => {
@@ -65,19 +77,28 @@ const kept = () => sessionStorage.getItem(DRAFT_STORAGE_KEY);
 
 /** Whether the draft on screen holds changes: Review and save opens only then. */
 const holdsChanges = () =>
-  !(screen.getByRole("button", { name: "Review and save" }) as HTMLButtonElement).disabled;
+  !(within(lensToolbar()).getByRole("button", { name: "Review and save" }) as HTMLButtonElement)
+    .disabled;
 
 /** The Builder's one polite live region. */
 const liveRegion = () => document.querySelector("[data-live-region]")!;
+
+/** The sentence offering this tab's kept draft back, if it is on screen. */
+const OFFER = /This tab kept a draft with 1 change/;
+
+/** Presses one of the buttons the offer of a kept draft carries. */
+const answerTheOffer = (name: "Keep the draft" | "Discard it") =>
+  fireEvent.click(screen.getByRole("button", { name }));
 
 // ONLY THE LOG. The company holds contact identities, emails and policies,
 // and kept in storage they would outlive the operator's session.
 test("an edit is kept as its operation log and nothing of the document", async () => {
   const engine = new Engine(company());
   mountBuilder({ engine });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await waitFor(() => expect(kept()).not.toBeNull());
+  await checked();
+  pressInView("Edit CEO");
+  await settle();
+  expect(kept()).not.toBeNull();
   const value = JSON.parse(kept()!) as Record<string, unknown>;
   expect(Object.keys(value).sort()).toEqual(
     ["baseRevision", "basePrint", "mode", "ops", "reader", "savedAt", "undone", "v"].sort(),
@@ -93,13 +114,15 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
   keep({});
   const engine = new Engine(company());
   mountBuilder({ engine });
-  expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
+  await settle();
+  expect(screen.getByText(OFFER)).toBeDefined();
   // Nothing is recorded, and nothing is cleared, while the offer stands.
   expect(screen.getByText("read only")).toBeDefined();
   expect(kept()).not.toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
-  await waitFor(() => expect(holdsChanges()).toBe(true));
+  answerTheOffer("Keep the draft");
+  await settle();
+  expect(holdsChanges()).toBe(true);
   expect(screen.getByText("editable")).toBeDefined();
   expect(kept()).not.toBeNull();
   expect(engine.chartWrites()).toHaveLength(0);
@@ -113,35 +136,40 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
   keep({});
   const engine = new Engine(company());
   const { store } = mountBuilder({ engine });
-  await screen.findByText(/This tab kept a draft with 1 change/);
-  await screen.findByText("No problems");
+  await checked();
+  expect(screen.getByText(OFFER)).toBeDefined();
   engine.seats.find((s) => s.handle === "designer")!.goal = "Design things";
   const reads = engine.chartReads().length;
   act(() => store.applyOrg(engine.orgPush()));
-  expect(await screen.findByText("The company changed")).toBeDefined();
+  await settle();
+  expect(within(lensToolbar()).getByText("The company changed")).toBeDefined();
   // The base under the offer is not read again — only the check's read went
   // out: a Keep pressed while a newer base waited for its first check would be
-  // refused, and the kept draft cleared with the refusal.
-  await new Promise((r) => setTimeout(r, 100));
+  // refused, and the kept draft cleared with the refusal. Counted once the
+  // lens has settled, so a read it was going to make has been made.
   expect(engine.chartReads()).toHaveLength(reads + 1);
 
-  fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Update my draft" }));
-  const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
+  answerTheOffer("Keep the draft");
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
+  await settle();
+  const dialog = screen.getByRole("dialog", { name: "Update my draft and review" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
-  await screen.findByText("No problems");
+  await checked();
   expect(holdsChanges()).toBe(true);
   // Kept again, now against the chart the colleague saved.
   const moved = fingerprint(chartPrint(engine.chart()));
-  await waitFor(() => expect(JSON.parse(kept()!).basePrint).toBe(moved));
+  expect(JSON.parse(kept()!).basePrint).toBe(moved);
 });
 
 test("discarding a kept draft removes it and starts from the saved configuration", async () => {
   keep({});
   const engine = new Engine(company());
   mountBuilder({ engine });
-  fireEvent.click(await screen.findByRole("button", { name: "Discard it" }));
-  await waitFor(() => expect(kept()).toBeNull());
+  await settle();
+  answerTheOffer("Discard it");
+  await settle();
+  expect(kept()).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
   expect(holdsChanges()).toBe(false);
   expect(engine.chartWrites()).toHaveLength(0);
@@ -156,24 +184,26 @@ test.each([
   keep(older);
   const engine = new Engine(company());
   mountBuilder({ engine });
-  const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
+  await settle();
+  const dialog = screen.getByRole("dialog", { name: "Restore the kept draft" });
   expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Restore the draft" }));
-  await waitFor(() => expect(holdsChanges()).toBe(true));
+  await settle();
+  expect(holdsChanges()).toBe(true);
   // Kept again, now against the company it was restored onto.
-  await waitFor(() => {
-    const value = JSON.parse(kept()!) as KeptDraft;
-    expect([value.baseRevision, value.basePrint]).toEqual(["r1", fixturePrint()]);
-  });
+  const value = JSON.parse(kept()!) as KeptDraft;
+  expect([value.baseRevision, value.basePrint]).toEqual(["r1", fixturePrint()]);
 });
 
 test("declining to restore a kept draft onto a newer company discards it", async () => {
   keep({ baseRevision: "r0" });
   const engine = new Engine(company());
   mountBuilder({ engine });
-  const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
+  await settle();
+  const dialog = screen.getByRole("dialog", { name: "Restore the kept draft" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Discard the kept draft" }));
-  await waitFor(() => expect(kept()).toBeNull());
+  await settle();
+  expect(kept()).toBeNull();
   expect(holdsChanges()).toBe(false);
 });
 
@@ -190,8 +220,9 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
   });
   const engine = new Engine(company());
   mountBuilder({ engine });
+  await settle();
   expect(
-    await screen.findByText(
+    screen.getByText(
       "A draft for creating a company was discarded, because this engine now has a company.",
     ),
   ).toBeDefined();
@@ -205,16 +236,17 @@ test("a change of reader forgets the kept draft and keeps the one on screen", as
   let who = "jane.doe";
   const engine = new Engine(company());
   const { store } = mountBuilder({ engine, query: asReader(() => who) });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await waitFor(() => expect(kept()).not.toBeNull());
+  await checked();
+  pressInView("Edit CEO");
+  await settle();
+  expect(kept()).not.toBeNull();
   const reads = engine.chartReads().length;
   who = "sam.lee";
   rereadViewer(store);
-  await waitFor(() => expect(kept()).toBeNull());
+  await checked();
+  expect(kept()).toBeNull();
   // Checked again as the new reader, with the edit still in the draft.
-  await waitFor(() => expect(engine.chartReads().length).toBeGreaterThan(reads));
-  await screen.findByText("No problems");
+  expect(engine.chartReads().length).toBeGreaterThan(reads);
   expect(holdsChanges()).toBe(true);
 });
 
@@ -223,10 +255,12 @@ test("a change of reader while a kept draft is offered withdraws the offer", asy
   let who = "jane.doe";
   const engine = new Engine(company());
   const { store } = mountBuilder({ engine, query: asReader(() => who) });
-  await screen.findByText(/This tab kept a draft with 1 change/);
+  await settle();
+  expect(screen.getByText(OFFER)).toBeDefined();
   who = "sam.lee";
   rereadViewer(store);
-  await waitFor(() => expect(screen.queryByText(/This tab kept a draft/)).toBeNull());
+  await settle();
+  expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(kept()).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
 });
@@ -237,10 +271,11 @@ test("the same reader read again keeps the offer standing", async () => {
   keep({});
   const engine = new Engine(company());
   const { store } = mountBuilder({ engine, query: asReader(() => "jane.doe") });
-  await screen.findByText(/This tab kept a draft with 1 change/);
+  await settle();
+  expect(screen.getByText(OFFER)).toBeDefined();
   rereadViewer(store);
-  await new Promise((r) => setTimeout(r, 50));
-  expect(screen.getByText(/This tab kept a draft with 1 change/)).toBeDefined();
+  await settle();
+  expect(screen.getByText(OFFER)).toBeDefined();
   expect(kept()).not.toBeNull();
 });
 
@@ -249,14 +284,16 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   const engine = new Engine(company());
   engine.script = () => json({ error: "unauthorized" }, 401);
   mountBuilder({ engine });
-  await screen.findByText(/^Editing the organization needs a credential the engine accepts\./);
-  // WAITED FOR, NOT READ ON THE SPOT. The refusal is rendered from state and
-  // the draft is dropped by the EFFECT that state schedules, so the message
-  // is in the DOM one commit before the storage is cleared. Reading it in the
-  // same tick passed on a quiet runner and failed under a loaded one, which
-  // is a flake rather than a claim. The claim is that the draft is forgotten,
-  // and it still fails if it never is.
-  await waitFor(() => expect(kept()).toBeNull());
+  // SETTLED, NOT READ ON THE SPOT. The refusal is rendered from state and the
+  // draft is dropped by the EFFECT that state schedules, so the message is in
+  // the DOM one commit before the storage is cleared; a settled lens has run
+  // both. The claim is that the draft is forgotten, and it still fails if it
+  // never is.
+  await settle();
+  expect(
+    screen.getByText(/^Editing the organization needs a credential the engine accepts\./),
+  ).toBeDefined();
+  expect(kept()).toBeNull();
 });
 
 test("storage that refuses says the draft will not survive a reload", async () => {
@@ -269,15 +306,15 @@ test("storage that refuses says the draft will not survive a reload", async () =
   };
   const engine = new Engine(company());
   mountBuilder({ engine, storage: refusing });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await checked();
+  pressInView("Edit CEO");
+  // The work goes on.
+  await checked();
   expect(
-    await screen.findByText(
+    screen.getByText(
       "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
     ),
   ).toBeDefined();
-  // The work goes on.
-  await screen.findByText("No problems");
   expect(holdsChanges()).toBe(true);
   expect(engine.chartReads().length).toBeGreaterThan(1);
 });
@@ -287,10 +324,10 @@ test("storage that refuses says the draft will not survive a reload", async () =
 test("no storage at all says the draft will not survive a reload", async () => {
   const engine = new Engine(company());
   mountBuilder({ engine, storage: null });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await waitFor(() => expect(liveRegion().textContent).toBe("Edited CEO: goal."));
-  await screen.findByText("No problems");
+  await checked();
+  pressInView("Edit CEO");
+  await checked();
+  expect(liveRegion().textContent).toBe("Edited CEO: goal.");
   expect(holdsChanges()).toBe(true);
   expect(engine.chartReads().length).toBeGreaterThan(1);
   expect(
@@ -309,10 +346,11 @@ test("a draft with changes asks before the tab goes, and one without does not", 
     return event.defaultPrevented;
   };
   mountBuilder({ engine: new Engine(company()) });
-  await screen.findByText("No problems");
+  await checked();
   expect(unload()).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await waitFor(() => expect(unload()).toBe(true));
+  pressInView("Edit CEO");
+  await settle();
+  expect(unload()).toBe(true);
 });
 
 // WHERE NOTHING KEEPS THE DRAFT, leaving the lens loses it like a reload, so
@@ -327,48 +365,49 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
     removeItem: () => {},
   };
   mountBuilder({ engine: new Engine(company()), storage: refusing });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await screen.findByText(/This browser refuses to keep a draft/);
+  await checked();
+  pressInView("Edit CEO");
+  await settle();
+  expect(screen.getByText(/This browser refuses to keep a draft/)).toBeDefined();
   const start = location.hash;
+  const onTable = "#/company?lens=builder&view=table";
 
-  act(() => {
-    location.hash = "#/company?lens=builder&view=table";
-  });
-  await waitFor(() => expect(location.hash).toBe("#/company?lens=builder&view=table"));
+  await navigate(() => {
+    location.hash = onTable;
+  }, onTable);
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
-  act(() => {
+  // Held, so the browser is put back on the table once it has gone.
+  await navigate(() => {
     location.hash = "#/people";
-  });
-  const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/company?lens=builder&view=table"));
+  }, onTable);
+  const asked = screen.getByRole("dialog", { name: "Leave the builder?" });
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
-  act(() => {
+  await navigate(() => {
     location.hash = "#/people";
-  });
-  fireEvent.click(
-    within(await screen.findByRole("dialog", { name: "Leave the builder?" })).getByRole("button", {
-      name: "Leave without the draft",
-    }),
+  }, onTable);
+  const again = screen.getByRole("dialog", { name: "Leave the builder?" });
+  await navigate(
+    () => fireEvent.click(within(again).getByRole("button", { name: "Leave without the draft" })),
+    "#/people",
   );
-  await waitFor(() => expect(location.hash).toBe("#/people"));
   expect(start).toContain("lens=builder");
 });
 
 test("coming back to the lens restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await waitFor(() => expect(kept()).not.toBeNull());
+  await checked();
+  pressInView("Edit CEO");
+  await settle();
+  expect(kept()).not.toBeNull();
   first.view.unmount();
 
   mountBuilder({ engine });
-  await screen.findByText("No problems");
-  await waitFor(() => expect(holdsChanges()).toBe(true));
+  await checked();
+  expect(holdsChanges()).toBe(true);
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
 });
@@ -382,8 +421,8 @@ test("a draft kept for another reader is discarded and never offered", async () 
   keep({ reader: "p-2" });
   const engine = new Engine(company());
   mountBuilder({ engine, reader: "p-1" });
-  await screen.findByText("No problems");
-  await waitFor(() => expect(kept()).toBeNull());
+  await checked();
+  expect(kept()).toBeNull();
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(screen.getByText("editable")).toBeDefined();
 });
@@ -394,11 +433,11 @@ test("a kept draft waits for the tab's reader before it is offered or cleared", 
   keep({});
   const engine = new Engine(company());
   mountBuilder({ engine, reader: null });
-  await screen.findByText("No problems");
-  await new Promise((r) => setTimeout(r, 50));
+  await checked();
   expect(screen.queryByText(/This tab kept a draft/)).toBeNull();
   expect(kept()).not.toBeNull();
 
   act(() => noteReader("p-1"));
-  expect(await screen.findByText(/This tab kept a draft with 1 change/)).toBeDefined();
+  await settle();
+  expect(screen.getByText(OFFER)).toBeDefined();
 });
