@@ -220,11 +220,18 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		// eviction is one writer's and a readmission ends it, so `deleted`
 		// is the answer that stays true. The applier's opposite order
 		// decides only which gate a drop is COUNTED under.
-		if ObjectKind(subj.Kind) == KindTask {
+		//
+		// AND OVER THE SAME SUBJECTS, by asking the one function the
+		// applier asks: a task's own and its turns'. This read used to
+		// spell its own test — the task's subject alone — so a turn
+		// that landed after its task's purge was dropped `deleted` by
+		// every applier and reported ungated here, and its writer was
+		// told the store had broken the ledger contract.
+		if taskID, ok := markedTask(subj); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx,
 				`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
-				subj.ID).Scan(&author)
+				taskID).Scan(&author)
 			switch {
 			case errors.Is(err, sql.ErrNoRows):
 			case err != nil:
@@ -274,6 +281,38 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID
 		return "", false, err
 	}
 	return reason, gated, nil
+}
+
+// markedTask is the task whose deletion marker gates a record on subj, and
+// false for a subject no task's marker covers.
+//
+// # Two subjects, because two kinds of record are ABOUT a task
+//
+// The task's own, and its TURNS': a turn's subject is the task it spent on
+// ([TurnSubject]), and it is the record a purge races most often — a seat's
+// turn records its spend when it ENDS, which is after whatever the turn did,
+// its own task's purge included. Ungated, a turn landing after its task's
+// purge would reach an apply with no row to add to, which is a malformed
+// record there and stops the log on every node.
+//
+// # One function, asked by both sides of the gate
+//
+// [Applier.Gated] drops what this covers and [Gates.GatedAt] reports why, and
+// [statelog.Gates] holds the two to one answer — so the set is stated once.
+// It was two tests that looked alike, the applier's naming both kinds and the
+// reader's only the task, and every turn the marker dropped resolved as a
+// record applied without its ledger row: a contract violation reported to
+// the writer, counted under `error` rather than `deleted`.
+//
+// FROM THE SUBJECT ALONE, because the reader is handed nothing else — so
+// whatever a record names in its payload cannot decide whether a marker
+// holds it.
+func markedTask(subj statelog.Subject) (string, bool) {
+	switch ObjectKind(subj.Kind) {
+	case KindTask, KindTurn:
+		return subj.ID, true
+	}
+	return "", false
 }
 
 // GateRecordVersion is the SHAPE version every gate-installing record's

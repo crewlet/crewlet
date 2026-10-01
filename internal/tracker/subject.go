@@ -365,10 +365,13 @@ func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
 
-// TurnSubject names one turn's spend by the turn's id. The one ADDITIVE kind:
-// it carries no expectation and bumps no object's version, so writers here
-// never contend — see [ObjectKind.Arbitrated].
-func TurnSubject(id string) Subject { return Subject{Kind: KindTurn, ID: id} }
+// TurnSubject names a turn's spend by the TASK it was spent on — never by the
+// turn's own id, which the payload carries — because that is what puts it
+// under the task's deletion marker ([markedTask]): a turn is a record about
+// its task. The one ADDITIVE kind: it carries no expectation and bumps no
+// object's version, so writers here never contend — see
+// [ObjectKind.Arbitrated].
+func TurnSubject(task string) Subject { return Subject{Kind: KindTurn, ID: task} }
 
 // AliasSubject names a cross-project move's create-only claim on a former key.
 //

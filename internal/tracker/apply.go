@@ -117,27 +117,21 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		}
 	}
 
-	// The deletion gate reads the subject's own marker. A purge is the one
-	// operation that removes rows, and its marker is what makes the
+	// The deletion gate reads the marker of the task the record is ABOUT —
+	// [markedTask], which the publisher's reader asks too. A purge is the
+	// one operation that removes rows, and its marker is what makes the
 	// removal permanent rather than a race a redelivery can undo.
-	//
-	// A TURN IS A RECORD ABOUT A TASK TOO — its subject's id is the task's —
-	// and it is the one a purge races most often: a seat's turn on a task
-	// records its spend when the turn ENDS, which is after whatever the
-	// turn did, a purge included. Ungated, a turn landing after its task's
-	// purge would reach an apply with no row to add to, which is a
-	// malformed record there and stops the log on every node.
-	if kind := ObjectKind(rec.Subject.Kind); kind == KindTask || kind == KindTurn {
+	if taskID, ok := markedTask(rec.Subject); ok {
 		var author sql.NullString
 		err := tx.QueryRowContext(ctx,
 			`SELECT purge_record_id FROM tracker_deletions WHERE task_id = ?`,
-			rec.Subject.ID).Scan(&author)
+			taskID).Scan(&author)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return "", false, nil
 		case err != nil:
 			return "", false, fmt.Errorf("tracker: read the deletion gate for "+
-				"task %s: %w", rec.Subject.ID, err)
+				"task %s: %w", taskID, err)
 		}
 		// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE MARKER, by its
 		// own id — not by its op kind. "Any purge" would let a SECOND
@@ -151,9 +145,9 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE tracker_deletions
 			SET rejects = rejects + 1, last_reject_at = ?
-			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), rec.Subject.ID); err != nil {
+			WHERE task_id = ?`, store.EncodeTime(rec.StoredAt), taskID); err != nil {
 			return "", false, fmt.Errorf("tracker: count a gate hit on the "+
-				"purged task %s: %w", rec.Subject.ID, err)
+				"purged task %s: %w", taskID, err)
 		}
 		return statelog.ReasonDeleted, true, nil
 	}

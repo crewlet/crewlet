@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -108,5 +109,51 @@ func TestATurnOnAPurgedTaskAppliesNowhere(t *testing.T) {
 	})
 	if !errors.Is(err, tracker.ErrNoTask) {
 		t.Fatalf("a turn on a purged task answered %v, want ErrNoTask", err)
+	}
+}
+
+// A TURN THAT LANDS AFTER ITS TASK'S PURGE IS REFUSED `deleted`, ON THE NODE
+// THAT WROTE IT, WHEN THAT NODE APPLIES WHILE IT WAITS.
+//
+// The applier drops the turn under the task's deletion marker and writes no
+// ledger row, so the write's resolution asks the gate reader why — and a
+// reader that covered only the task's own subject answered "nothing gates
+// it" about the turn's, which the resolution can only read as a ledger that
+// lost a row it vouched for: the writer was told the store broke a contract,
+// and its refusal was counted under `error` rather than `deleted`. The two
+// sides of the gate read one rule ([tracker.Applier.Gated] and
+// [tracker.Gates.GatedAt] over the same subjects), and this is the case the
+// other turn test cannot reach, because there nothing applies until the
+// write has already answered `pending`.
+func TestATurnLandingAfterItsTasksPurgeIsRefusedDeleted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	task := r.createTask("Short lived")
+
+	// THE PURGE IS PUBLISHED AND NOT YET APPLIED, so the turn's own
+	// decision still sees the task and appends above the purge; from here
+	// the applier runs inside the write's own wait, as a live node's does.
+	if _, err := r.writer.PurgeTask(t.Context(), "op-purge", task.ID, task.Project,
+		"filed by mistake"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	r.applyWhileWriting()
+	_, err := r.writer.RecordTurn(t.Context(), "op-late-turn", tracker.TurnRecord{
+		Task: task.ID, Seat: "swe", TurnID: "run-late",
+		Spend: tracker.TurnSpend{Turns: 1, Rounds: 1, Input: 10, Output: 1},
+	})
+	var refused *statelog.Unavailable
+	switch {
+	case !errors.As(err, &refused):
+		t.Fatalf("a turn landing after its task's purge answered %v, want a "+
+			"refusal naming the gate that dropped it", err)
+	case refused.Reason != statelog.ReasonDeleted:
+		t.Fatalf("a turn landing after its task's purge was refused %q, want %q",
+			refused.Reason, statelog.ReasonDeleted)
+	case refused.OpID != "op-late-turn":
+		t.Fatalf("the refusal names the operation %q, want op-late-turn", refused.OpID)
+	}
+	if got := r.strings(`SELECT id FROM tracker_turns WHERE task_id = ?`, task.ID); len(got) != 0 {
+		t.Fatalf("a turn that landed after its task's purge wrote %v", got)
 	}
 }
