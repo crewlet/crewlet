@@ -94,7 +94,7 @@ func TestTheDutyBucketAgeIsOnlyEverRaised(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Open over an existing duty bucket: %v", err)
 			}
-			status, err := s.duties.kv.Status(ctx)
+			status, err := statusOf(ctx, s.duties.kv)
 			if err != nil {
 				t.Fatalf("duty bucket status: %v", err)
 			}
@@ -106,7 +106,7 @@ func TestTheDutyBucketAgeIsOnlyEverRaised(t *testing.T) {
 
 	// And a bucket nobody has made yet is made at the ceiling.
 	s := openStore(t, nc, productionSeatTTL)
-	status, err := s.duties.kv.Status(context.Background())
+	status, err := statusOf(context.Background(), s.duties.kv)
 	if err != nil {
 		t.Fatalf("duty bucket status: %v", err)
 	}

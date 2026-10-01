@@ -511,20 +511,24 @@ shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
-**A coordination read costs one ordered pass, and an account needs the
-consumer API.** A node lists coordination records constantly — several
-fifteen-second duty loops on every tick, and the state-log write fence, which
-lists the published trim floors on every write at an expectation of zero, a
-subject's first write among them — and each of those is one pass over a temporary
-consumer, which on a replicated bucket is two metadata-raft proposals. The
-engine deliberately does **not** use the batched direct get that would avoid
-the consumer: it is served by any replica, and this estate has reads whose
-answer is acted on with nothing to arbitrate them. So a credential scoped only
-to publishing and consuming is not enough; the account needs the consumer API
-alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
-consumer churn is what produces a steady stream of `JetStream connection
-closed: Client Closed` lines — see `stream.debug`, which is off by default for
-exactly this reason.
+**A coordination read asks the bucket's leader, and an account needs the
+consumer API and the message-get API.** A node lists coordination records
+constantly — several fifteen-second duty loops on every tick, and the
+state-log write fence, which lists the published trim floors on every write at
+an expectation of zero, a subject's first write among them — and each of those
+is one pass over a temporary consumer, which on a replicated bucket is two
+metadata-raft proposals, followed by one `$JS.API.STREAM.MSG.GET` to the
+bucket's stream leader asking whether the pass missed anything. A single key is
+read with that same request. The engine deliberately does **not** use the
+direct get the client defaults to, nor the batched one that would avoid the
+consumer: both are served by any replica, so a member that had not yet applied
+an acknowledged write answered from before it — see [Coordination § Every read
+is the leader's](../concepts/coordination.md#every-read-is-the-leaders). So a
+credential scoped only to publishing and consuming is not enough; the account
+needs the consumer and message-get APIs alongside the rest of `$JS.API`. If the
+broker's own debug logging is on, that consumer churn is what produces a steady
+stream of `JetStream connection closed: Client Closed` lines — see
+`stream.debug`, which is off by default for exactly this reason.
 
 #### A clustered node is given longer to create them
 

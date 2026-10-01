@@ -148,6 +148,16 @@
 // deliberate difference, not an oversight. The gate reads both lease buckets,
 // because the contract counts every live lease.
 //
+// # Every read is answered by the stream leader
+//
+// Every bucket here is held as a [leaderBucket], whose reads go to the
+// bucket's stream leader and whose handle on the client exposes no read at
+// all, because the client's own Get, Create and listings are served by
+// whichever replica the server picks, and a replica behind an acknowledged
+// write answered from before it — a lease read that misses this node's own
+// acquire is "definitively not held". bucket.go is the authority on that,
+// including why the buckets' allow_direct flag is not rewritten to fix it.
+//
 // # Every listing is ONE PASS, and never the client's ListKeys
 //
 // Reading a whole bucket goes through [eachEntry], which hands over the KEY
@@ -319,7 +329,7 @@ func (c *Config) normalize() error {
 
 // lane is one lease bucket and the rule its records expire by.
 type lane struct {
-	kv jetstream.KeyValue
+	kv *leaderBucket
 
 	// stream is the name of the stream backing the bucket, resolved once at
 	// Open. storeNow needs it because the clock is read through js.Stream,
@@ -351,7 +361,7 @@ type Store struct {
 	leases *lane
 	// duties holds every duty lease this build claims.
 	duties *lane
-	epochs jetstream.KeyValue
+	epochs *leaderBucket
 
 	ttl time.Duration
 
@@ -480,7 +490,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		// bucket, so believing a number the bucket does not carry would
 		// accept deadlines it will not honour.
 		leases: &lane{
-			kv:         leases,
+			kv:         newLeaderBucket(js, leases, leaseFacts),
 			stream:     leaseFacts.stream,
 			maxTTL:     leaseFacts.age,
 			reapsAtMax: true,
@@ -488,12 +498,12 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		// The duty bucket's ceiling is the CONTRACT's, and its age only has
 		// to cover it; openDuties has just made sure it does.
 		duties: &lane{
-			kv:         duties,
+			kv:         newLeaderBucket(js, duties, dutyFacts),
 			stream:     dutyFacts.stream,
 			maxTTL:     coord.MaxDutyTTL,
 			reapsAtMax: false,
 		},
-		epochs: epochs,
+		epochs: newLeaderBucket(js, epochs, epochFacts),
 		ttl:    leaseFacts.age,
 	}, nil
 }
@@ -575,10 +585,12 @@ func openDuties(ctx context.Context, js jetstream.JetStream, cfg Config) (jetstr
 }
 
 // bucketFacts is what one status read tells the boot path about a bucket:
-// the stream behind it, and the two values IN FORCE on it rather than the ones
-// this node asked for.
+// the stream behind it and the subject a key sits under, which is what a read
+// from the stream leader is addressed by (see [leaderBucket]), and the two
+// values IN FORCE on it rather than the ones this node asked for.
 type bucketFacts struct {
 	stream   string
+	prefix   string
 	age      time.Duration
 	replicas int
 }
@@ -605,8 +617,20 @@ func readBucket(ctx context.Context, bucket jetstream.KeyValue) (bucketFacts, er
 	if !ok || info.StreamInfo() == nil {
 		return bucketFacts{}, fmt.Errorf("coord/kv: %s reported no backing stream", bucket.Bucket())
 	}
+	// ONE SUBJECT SPACE, "$KV.<bucket>.>", which is the shape the client
+	// gives every bucket it makes. Anything else — a mirror, a bucket
+	// sourcing another — keeps its keys under subjects a read by key cannot
+	// address, and a read that guessed would answer "not there" for every
+	// key it has.
+	subjects := info.StreamInfo().Config.Subjects
+	if len(subjects) != 1 || !strings.HasSuffix(subjects[0], ".>") {
+		return bucketFacts{}, fmt.Errorf("coord/kv: %s is backed by a stream on subjects %v, "+
+			"not a bucket's one subject space, so its keys cannot be read by subject",
+			bucket.Bucket(), subjects)
+	}
 	return bucketFacts{
 		stream:   info.StreamInfo().Config.Name,
+		prefix:   strings.TrimSuffix(subjects[0], ">"),
 		age:      info.TTL(),
 		replicas: info.StreamInfo().Config.Replicas,
 	}, nil
@@ -626,18 +650,18 @@ func (s *Store) TTL() time.Duration { return s.ttl }
 // each walks a whole bucket — see [eachEntry], which is the one implementation
 // and which both backends reach through a method of their own only so that a
 // call site reads as a walk rather than as connection plumbing.
-func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
+func (s *Store) each(ctx context.Context, b *leaderBucket,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, kv, visit)
+	return eachEntry(ctx, b, visit)
 }
 
 // eachUnder is [Store.each] over one resource class, narrowed at the broker —
 // see [eachEntryUnder]. `what` names the listing a failure could not finish.
-func (s *Store) eachUnder(ctx context.Context, kv jetstream.KeyValue, class coord.Class, what string,
+func (s *Store) eachUnder(ctx context.Context, b *leaderBucket, class coord.Class, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, kv, coord.DocumentFilter(string(class)), what, visit)
+	return eachEntryUnder(ctx, b, coord.DocumentFilter(string(class)), what, visit)
 }
 
 // checkClass refuses a class that cannot address a key.
@@ -1503,11 +1527,8 @@ func (s *Store) collect(ctx context.Context, l *lane,
 			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", l.kv.Bucket(), "key", kve.Key())
 			return nil
 		}
-		// A write landing mid-listing can report a key twice; the later
-		// revision is the record.
-		if prev, seen := byResource[e.resource]; seen && prev.revision > e.revision {
-			return nil
-		}
+		// ONCE PER RESOURCE: the walk hands over each key once, at its
+		// newest revision, whatever its two halves delivered (walk.go).
 		byResource[e.resource] = e
 		return nil
 	})

@@ -394,6 +394,25 @@ floor was already established before the turn opened. What they buy is the
 other half: that an answer the turn *decides* on is not one from before the
 read arrived.
 
+## The coordination store is not on this scale
+
+Leases, budgets, the activation pointer, the trim's positions and every other
+record in the [coordination store](../concepts/coordination.md) are not a log a
+node applies, so none of the four levels describes them and none can be asked
+for. They have one level, fixed: **every read is answered by the bucket's
+stream leader**, so it reflects every write acknowledged anywhere in the fleet
+before it began — read-your-writes, whichever node made the write. It was not
+always: the client reads through any replica, and a replica that had not yet
+applied an acknowledged write answered from before it.
+
+It is not `linearizable` in this page's sense, and for the reason [How
+`linearizable` actually works](#how-linearizable-actually-works) gives: a leader
+cut off from its quorum answers from its own copy until it notices — ten
+seconds without a quorum, checked every ten — while every write through it
+fails. [Coordination § What a leader read does not
+promise](../concepts/coordination.md#what-a-leader-read-does-not-promise) says
+why no coordination read pays a barrier to close that window.
+
 ## See also
 
 - **[Replication](replication.md)** — what the two positions in every answer

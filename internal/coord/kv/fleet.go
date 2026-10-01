@@ -619,21 +619,21 @@ func (c *FleetConfig) normalize() error {
 
 // FleetStore is the JetStream KV [coord.Fleet].
 type FleetStore struct {
-	rate         jetstream.KeyValue
-	claims       jetstream.KeyValue
-	setup        jetstream.KeyValue
-	ledger       jetstream.KeyValue
-	cooldowns    jetstream.KeyValue
-	status       jetstream.KeyValue
-	config       jetstream.KeyValue
-	budgets      jetstream.KeyValue
-	channels     jetstream.KeyValue
-	follows      jetstream.KeyValue
-	secrets      jetstream.KeyValue
-	fires        jetstream.KeyValue
-	runs         jetstream.KeyValue
-	integrations jetstream.KeyValue
-	mailboxes    jetstream.KeyValue
+	rate         *leaderBucket
+	claims       *leaderBucket
+	setup        *leaderBucket
+	ledger       *leaderBucket
+	cooldowns    *leaderBucket
+	status       *leaderBucket
+	config       *leaderBucket
+	budgets      *leaderBucket
+	channels     *leaderBucket
+	follows      *leaderBucket
+	secrets      *leaderBucket
+	fires        *leaderBucket
+	runs         *leaderBucket
+	integrations *leaderBucket
+	mailboxes    *leaderBucket
 
 	// positions is the register every ageless key class the fleet still
 	// composes shares: a node's log positions, a trim hold, a backup point,
@@ -644,7 +644,7 @@ type FleetStore struct {
 	// class, which is the load-bearing half of sharing it. The document
 	// families that once had buckets beside this one left with the last
 	// projector; only their key grammar outlived them, in coord/keys.go.
-	positions jetstream.KeyValue
+	positions *leaderBucket
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -690,7 +690,7 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
 	defer cancel()
 
-	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
+	open := func(suffix, describe string, ttl time.Duration) (*leaderBucket, error) {
 		name := cfg.BucketPrefix + suffix
 		bucket, facts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl,
@@ -705,12 +705,15 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		// its own, in [Open], because there the age is also this
 		// store's arithmetic.
 		reportRetention(ctx, name, ttl, facts)
-		return bucket, nil
+		// EVERY READ OF IT ASKS THE LEADER, whatever the bucket's own
+		// allow_direct says — see bucket.go for why the guarantee is the
+		// reader's and why the flag is not rewritten.
+		return newLeaderBucket(js, bucket, facts), nil
 	}
 
 	store := &FleetStore{rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness}
 	for _, bucket := range []struct {
-		into     *jetstream.KeyValue
+		into     **leaderBucket
 		suffix   string
 		describe string
 		ttl      time.Duration
@@ -773,19 +776,19 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 // each walks a whole bucket — see [eachEntry], which is the one implementation
 // and which both backends reach through a method of their own only so that a
 // call site reads as a walk rather than as connection plumbing.
-func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
+func (f *FleetStore) each(ctx context.Context, b *leaderBucket,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, kv, visit)
+	return eachEntry(ctx, b, visit)
 }
 
 // eachUnder is [each] narrowed to the keys matching one filter, with `what`
 // naming the listing a failure could not complete — see [eachEntryUnder],
 // which is where both are explained.
-func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys, what string,
+func (f *FleetStore) eachUnder(ctx context.Context, b *leaderBucket, keys, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, kv, keys, what, visit)
+	return eachEntryUnder(ctx, b, keys, what, visit)
 }
 
 // ---- the rate valve ---------------------------------------------------- //
@@ -892,7 +895,7 @@ func (f *FleetStore) ClaimSetup(ctx context.Context, key string, now time.Time) 
 // between them is which bucket — and therefore which age — the record lands
 // in. Two copies would be two places for the create-not-put rule to be
 // forgotten.
-func claimOnce(ctx context.Context, bucket jetstream.KeyValue, what, key string,
+func claimOnce(ctx context.Context, bucket *leaderBucket, what, key string,
 	now time.Time) (bool, error) {
 
 	if key == "" {
@@ -1456,9 +1459,11 @@ func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 
 // Reset zeroes one scope, or every scope when given "".
 //
-// PURGE, not delete: a tombstone would be returned by a later listing as a
-// key with no value, so an operator who cleared a counter would still see the
-// scope in `crewlet budgets`.
+// PURGE, not delete, for the reason every ageless bucket here gives: a delete
+// leaves a tombstone revision, and a bucket with no age keeps every one of them
+// for the life of the deployment. (A listing shows neither — the walk drops
+// every removal marker — so the choice is about what the bucket keeps, not
+// about what `crewlet budgets` shows.)
 func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
 	if scope != "" {
 		if _, err := f.Used(ctx, scope); err != nil {

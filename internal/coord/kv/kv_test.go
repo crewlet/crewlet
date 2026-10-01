@@ -959,10 +959,10 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		t.Fatalf("claim presence: %v", err)
 	}
 
-	count := func(kv jetstream.KeyValue, class coord.Class) int {
+	count := func(b *leaderBucket, class coord.Class) int {
 		t.Helper()
 		n := 0
-		if err := s.eachUnder(ctx, kv, class, "the "+string(class)+" records",
+		if err := s.eachUnder(ctx, b, class, "the "+string(class)+" records",
 			func(jetstream.KeyValueEntry) error { n++; return nil }); err != nil {
 			t.Fatalf("walk %s: %v", class, err)
 		}
@@ -1056,7 +1056,7 @@ func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
 	}
 
 	// AND THE BUCKET ITSELF IS UNCHANGED — the second node wrote nothing.
-	status, err := second.leases.kv.Status(context.Background())
+	status, err := statusOf(context.Background(), second.leases.kv)
 	if err != nil {
 		t.Fatalf("read the lease bucket's status: %v", err)
 	}
@@ -1204,8 +1204,8 @@ func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
 	store := openFleet(t, embeddedNATS(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+	store.budgets.client = hangUpAfterWriting{
+		clientBucket: store.budgets.client, key: encodeKey(coord.OrgScope), hangUp: cancel,
 	}
 
 	if got, err := store.Charge(ctx, "agent:x", 10, 100, 100); err == nil {
@@ -1233,8 +1233,8 @@ func TestAPostChargeThatCannotFinishRecordsNeitherScope(t *testing.T) {
 	seat := coord.AgentScope("x")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+	store.budgets.client = hangUpAfterWriting{
+		clientBucket: store.budgets.client, key: encodeKey(coord.OrgScope), hangUp: cancel,
 	}
 
 	if got, err := store.PostCharge(ctx, seat, 10); err == nil {
@@ -1272,8 +1272,8 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 	defer cancel()
 	// The SEAT's write is the last one before the clears, so a hang-up
 	// there leaves both counters written and both clears to make.
-	store.budgets = hangUpAfterWriting{
-		KeyValue: store.budgets, key: encodeKey(seat), hangUp: cancel,
+	store.budgets.client = hangUpAfterWriting{
+		clientBucket: store.budgets.client, key: encodeKey(seat), hangUp: cancel,
 	}
 
 	if got, err := store.Charge(ctx, seat, 10, 100, 100); err != nil || !got.OK {
@@ -1291,25 +1291,22 @@ func TestACancelledChargeStillClearsTheRefusalItAdmittedPast(t *testing.T) {
 	}
 }
 
-// hangUpAfterWriting is the budgets bucket with one fault injected: the moment
-// one key is written, the caller's context is cancelled, the way a caller
-// hanging up between the org's write and the seat's makes the second fail.
+// hangUpAfterWriting is the budgets bucket's client handle with one fault
+// injected: the moment one key is written, the caller's context is cancelled,
+// the way a caller hanging up between the org's write and the seat's makes the
+// second fail.
+//
+// UPDATE IS THE ONE WRITE TO WRAP, because a create here is a conditional
+// publish at revision zero through it (see [leaderBucket.Create]) — so a
+// create and an increment of the key both land on it.
 type hangUpAfterWriting struct {
-	jetstream.KeyValue
+	clientBucket
 	key    string
 	hangUp context.CancelFunc
 }
 
-func (k hangUpAfterWriting) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
-	rev, err := k.KeyValue.Create(ctx, key, value, opts...)
-	if err == nil && key == k.key {
-		k.hangUp()
-	}
-	return rev, err
-}
-
 func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
-	rev, err := k.KeyValue.Update(ctx, key, value, revision)
+	rev, err := k.clientBucket.Update(ctx, key, value, revision)
 	if err == nil && key == k.key {
 		k.hangUp()
 	}

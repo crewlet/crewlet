@@ -78,6 +78,19 @@
 // error means unknown — there is no error worth special-casing into a
 // definite answer.
 //
+// # A definite answer is a CURRENT one
+//
+// The two definite answers are only worth their names if they reflect every
+// write acknowledged before the read began — this node's own and every
+// peer's. A backend whose store is replicated therefore answers from the copy
+// that has applied every acknowledged write, and from no other: an answer read
+// off a copy that is behind is "held as of that copy", which is the fourth
+// answer argued against below, delivered as one of the two definite ones.
+// coord/kv reads every record from its bucket's stream LEADER for exactly this
+// reason (its bucket.go has the measurements and the one residue: a leader cut
+// off from its quorum answers from its own copy until it notices, while every
+// write through it fails). The memory twin has one copy and meets it trivially.
+//
 // # Why coordination is not itself a replicated log
 //
 // The engine grows a durable-state framework — internal/statelog — whose

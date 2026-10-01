@@ -21,7 +21,7 @@ import (
 // are reached, and a method this test does not mean to exercise should panic
 // rather than quietly answer a zero value.
 type truncatingKV struct {
-	jetstream.KeyValue
+	clientBucket
 	deliver int // entries handed over before the channel closes
 }
 
@@ -68,7 +68,7 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 		t.Run(fmt.Sprintf("after_%d_entries", delivered), func(t *testing.T) {
 			t.Parallel()
 			var seen int
-			err := watchWalk(context.Background(), truncatingKV{deliver: delivered}, jetstream.AllKeys, "the bucket",
+			err := orderedPass(context.Background(), truncatingKV{deliver: delivered}, jetstream.AllKeys, "the bucket",
 				func(jetstream.KeyValueEntry) error { seen++; return nil })
 			if err == nil {
 				t.Fatalf("a listing that ended after %d of an unknown number of "+
@@ -133,7 +133,7 @@ func TestAnEmptyBucketWalksCleanly(t *testing.T) {
 // hands keys over a 256-buffered channel with a BLOCKING send, so a caller
 // that returned early — which five of these methods do on a bad record — left
 // the goroutine parked on that send for ever, and the server-side consumer
-// with it. watchWalk owns the watcher and stops it on every exit, so the walk
+// with it. orderedPass owns the watcher and stops it on every exit, so the walk
 // has no early-return path that leaks.
 func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	nc := embeddedNATS(t)
@@ -159,10 +159,10 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	// broker that answers a batched read would assert nothing, since that
 	// transport never creates one to leak.
 	abandon := errors.New("the caller gave up on the first record")
-	if err := watchWalk(ctx, store.budgets, jetstream.AllKeys, "the bucket", func(jetstream.KeyValueEntry) error {
+	if err := orderedPass(ctx, store.budgets.client, jetstream.AllKeys, "the bucket", func(jetstream.KeyValueEntry) error {
 		return abandon
 	}); !errors.Is(err, abandon) {
-		t.Fatalf("watchWalk = %v, want the visit's own error back unwrapped", err)
+		t.Fatalf("orderedPass = %v, want the visit's own error back unwrapped", err)
 	}
 
 	js, err := jetstream.New(nc)

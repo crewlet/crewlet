@@ -61,6 +61,8 @@ against a single-node broker it also returned empty answers for populated key
 classes, because a KV bucket keeps one message per subject and that churn
 leaves the server's per-subject index stale. An empty answer is the one this
 estate cannot survive, since "no rows" is legitimate everywhere it is asked.
+And the pass itself is closed by the stream's leader before anything is read
+out of it — see [Every read is the leader's](#every-read-is-the-leaders), below.
 
 That is why a **resource name is segmented**. A lease is named
 `seat:{seat-id}`, `node:{id}` or `worker:{duty}`, and the part before the colon
@@ -79,6 +81,87 @@ class with no members. Asking for a class that cannot address a key is
 refused instead. For the same reason a resource may not have an empty segment:
 `seat:` builds a key nothing can decode, so the lease would be written and
 then returned by no listing at all, which every node reads as a free seat.
+
+---
+
+## Every read is the leader's
+
+On a fleet every bucket is replicated (`stream.replicas`), and a write is
+acknowledged once a quorum holds it — so for a moment after the
+acknowledgement, the replicas that were not in that quorum still hold the
+bucket as it was before the write. **Every coordination read is answered from
+the bucket's stream leader**, which has applied every write it acknowledged.
+The guarantee a caller gets is *read-your-writes across the fleet*: a read
+reflects every write acknowledged anywhere before the read began.
+
+The client's own reads do not give that, and each way they fall short was
+measured on a three-member cluster under load:
+
+| Read | What the client does | What it returned |
+|---|---|---|
+| A key | A *direct get*, which the server hands to a random replica — the reader's own member or another (the bucket is created with `allow_direct` on) | The revision before an acknowledged write, 5–8 times in 100; a member cut off from the cluster went on answering from its own copy indefinitely |
+| A listing | An ordered pass over a consumer the server places on a random member of the stream | The bucket without its newest write, up to 3 passes in 100 hosted on a follower; never on the leader |
+| A create over a removed key | Reads the removal's marker with the same direct get before stepping over it | "Already exists" for a key a replica had not yet seen removed, to every racer at once |
+
+None of those was an error. A charge was counted short, a sandbox run just
+written read back as absent, a budget reset missed the counter it was clearing,
+a create race had no winner — and the trim floor, a *minimum* over the position
+rows, would rise over a row it could not see and delete records a node still
+needed. So:
+
+- **A key is read with `STREAM.MSG.GET`**, which only the stream leader answers.
+  A member that cannot see a leader answers an error or nothing, which is the
+  third value rather than a stale one.
+- **A listing is closed by the leader.** The ordered pass delivers in stream
+  order, so its highest sequence says how far its copy reached; one read asks
+  the leader for anything in the class past it. Nothing — the ordinary case,
+  one round trip — and the pass was current. Something, and the walk reads on
+  from the leader up to the class's newest message, applying each over what the
+  pass delivered, before a single row is handed to the caller.
+- **A create's step over a removal reads the marker from the leader.**
+
+There is no read left that a replica answers, including where a stale answer
+looked harmless: the cost of asking the leader is one hop, and "harmless" would
+be a claim about every future caller.
+
+**The buckets' own `allow_direct` setting is left as it is.** Turning it off is
+the obvious fix and, on a fleet that already runs, an outage: a bucket keeps the
+configuration it was created with, every client handle caches that flag when
+it binds, and once the flag is switched off every read through a handle bound
+before the switch fails with `no responders`. A rolling upgrade is exactly
+that — the first upgraded node to flip it would take every coordination read
+away from every node still on the previous build. So the guarantee is the
+reader's, which also makes it hold on a bucket an earlier build created,
+without anybody rewriting it. An operator's own tooling (`nats kv get`) still
+reads through any replica.
+
+### What a leader read does not promise
+
+A leader cut off from its quorum does not know it at once. Until nats-server's
+lost-quorum check notices — ten seconds without a quorum, checked every ten
+seconds — it goes on answering reads from its own copy, while the other members
+have already elected a successor and moved on. Every **write** through it fails
+for that whole time, because it has nothing to commit against. This is the same
+isolated former leader the state logs' `linearizable` level is built around
+([Read consistency](../guides/consistency.md#how-linearizable-actually-works)),
+and the coordination store does not pay for a barrier append per read to rule
+it out, because the decisions that cannot be taken back already carry one:
+each is a write to the **same bucket** the read came from — a compare-and-set
+at the revision it read, a mailbox retired at the version the sweep judged, the
+trim's floor, which is published before the purge it licenses and licenses
+nothing when it cannot be — and that write is what a former leader cannot
+commit. The reads that decide nothing on their own (a usage report, a follow
+check, the completion ledger, which fails open by design) are wrong for at most
+that window, on a side of the partition that can write nothing to that bucket.
+
+On a fleet whose buckets share their members — three nodes at three replicas,
+the shape most fleets are — a member without a quorum for one bucket has none
+for any, so it cannot claim a duty either, and nothing it reads in that window
+leads anywhere. On a larger fleet the buckets are placed independently, and one
+duty acts outside the store before it writes: the integration reconcile, whose
+call to a vendor comes before the status it records. A reconcile that read a
+former leader's status there may repeat a provisioning step the fleet has
+already taken, once, inside that window.
 
 ---
 

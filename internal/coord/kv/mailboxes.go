@@ -87,45 +87,45 @@ func (f *FleetStore) Mailbox(ctx context.Context, seat uuid.UUID) (coord.Mailbox
 }
 
 // Mailboxes returns every record, ordered by seat id.
+//
+// ONE WALK, like every other listing here, and never the client's key lister
+// followed by a Get per key, which is what this was. That lister ends on a nil
+// entry and a receive from the channel its subscription closes on failure
+// yields exactly that nil, so a listing cut off half way came back SHORT WITH
+// A NIL ERROR — and a short answer here is the very failure the next comment
+// names: a sweep concluding a removed seat has no mailbox left to retire. It
+// also read through a direct get any replica answers. See walk.go.
 func (f *FleetStore) Mailboxes(ctx context.Context) ([]coord.MailboxRecord, error) {
-	keys, err := f.mailboxes.ListKeys(ctx)
-	if err != nil {
-		return nil, unavailable("list the mailbox records", err)
-	}
 	var out []coord.MailboxRecord
-	for key := range keys.Keys() {
-		name, ok := decodeKey(key)
+	err := f.each(ctx, f.mailboxes, func(kve jetstream.KeyValueEntry) error {
+		name, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
 			// guessed at: an invented id would send a sweep to delete
 			// the mailbox of a seat nobody named.
-			continue
+			return nil
 		}
 		seat, err := uuid.Parse(name)
+		//nolint:nilerr // A key that decodes but is not a seat id — a
+		// record from before the registry keyed on one, or one written by
+		// hand — is SKIPPED for the same reason, never raised: the error is
+		// about the key's spelling, and failing the listing over it would
+		// stop every retirement in the company over one stray record.
 		if err != nil || seat == uuid.Nil {
-			// A key that decodes but is not a seat id: a record from
-			// before the registry keyed on one, or one written by hand.
-			// Skipped for the same reason.
-			continue
+			return nil
 		}
-		entry, err := f.mailboxes.Get(ctx, key)
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Deleted between the listing and the read, which is a
-			// retirement finishing. The outcome the reader would have
-			// acted towards, so it is skipped rather than raised.
-			continue
-		}
+		rec, err := decodeMailbox(seat, kve.Value(), kve.Revision())
 		if err != nil {
-			// RAISED, never skipped: a listing that quietly dropped a
-			// record is a sweep that concludes a removed seat has no
-			// mailbox left to retire.
-			return nil, unavailable("read a mailbox record", err)
-		}
-		rec, err := decodeMailbox(seat, entry.Value(), entry.Revision())
-		if err != nil {
-			return nil, err
+			return err
 		}
 		out = append(out, rec)
+		return nil
+	})
+	if err != nil {
+		// RAISED, never answered short: a listing that quietly dropped a
+		// record is a sweep that concludes a removed seat has no mailbox
+		// left to retire.
+		return nil, err
 	}
 	slices.SortFunc(out, func(a, b coord.MailboxRecord) int {
 		return cmp.Compare(a.Seat.String(), b.Seat.String())
