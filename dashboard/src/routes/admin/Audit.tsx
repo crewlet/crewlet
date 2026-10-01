@@ -53,10 +53,12 @@ import {
   HOLDS_UNAPPLIED,
   INCOMPLETE,
   INCOMPLETE_ROWS,
+  affected,
   ageUnknown,
   appliedThrough,
   oddLevel,
   unreadable,
+  unreadableRemedy,
   type CoverageFacts,
 } from "~/components/work.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -680,7 +682,15 @@ export function coverageSentences(
   if (!facts) return [];
   const out: string[] = [];
   if (facts.complete === false) {
-    out.push(`${label}: ${INCOMPLETE}${unreadable(facts.incomplete)}. ${INCOMPLETE_ROWS}`);
+    // WHOLE, as History's banner says it: which objects the records it cannot
+    // read are about, and that a build which reads them — not a refresh — is
+    // what resolves it. Cut to the lead and the rows' caveat, an operator
+    // auditing a node learned that writes were missing and neither where nor
+    // what would bring them back.
+    out.push(
+      `${label}: ${INCOMPLETE}${unreadable(facts.incomplete)}. ${INCOMPLETE_ROWS}` +
+        `${affected(facts.incomplete)}${unreadableRemedy(facts.incomplete)}`,
+    );
   }
   const behind = appliedThrough(facts);
   if (behind !== null) out.push(`${label}: ${HOLDS_UNAPPLIED} (${behind}).`);

@@ -466,6 +466,11 @@ test("a tracker answer that is incomplete or behind is named as the tracker's", 
   expect(header).toContain(
     "Work: This answer is incomplete — 2 record(s) this build cannot read. Rows may be missing",
   );
+  // AND WHOLE, as History says it: which objects the unread records are about,
+  // and that a build which reads them — not a refresh — is what resolves it.
+  expect(header).toContain(
+    "the counts were computed over what is shown. Affected: project:ENG. Record version 9, from sequence 40 — a build that can read it is what resolves this, not a refresh.",
+  );
   expect(header).toContain(
     "Work: This node holds records it has not applied yet (applied through 40 of 52).",
   );
@@ -488,6 +493,25 @@ test("a knowledge base answer that is behind is named as the knowledge base's", 
     "Knowledge: This node holds records it has not applied yet (applied through 12 of 30).",
   );
   expect(header).not.toContain("Work:");
+});
+
+// AN ANSWER OF NO KNOWN AGE IS ITS SOURCE'S TOO. A node that could not measure
+// its own distance from a log serves a coherent point in that log's order and
+// says nothing about how old it is — the chip History draws — and that is a
+// fact about the one log, not about the page.
+test("a source served at a level of unknown age is named as that source's", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true, read_level: "stale" },
+    page_activity: { changes: [], complete: true, read_level: "consistent_prefix" },
+  });
+  const { answered } = mount();
+  await answered();
+  const header = screen.getByText(/could not measure its own distance/).textContent ?? "";
+  expect(header).toContain(
+    "Knowledge: This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level consistent_prefix).",
+  );
+  expect(header).not.toContain("Work:");
+  expect(header).not.toContain("Every write a person or a token made");
 });
 
 // THE CONTROL: answers that covered everything say nothing of the kind, and the

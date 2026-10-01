@@ -546,6 +546,23 @@ export function unreadable(incomplete: WorkIncomplete | undefined): string {
   return incomplete ? ` — ${incomplete.records} record(s) this build cannot read` : "";
 }
 
+/** " Affected: project:ENG.", or "" where the answer named no scope. */
+export function affected(incomplete: WorkIncomplete | undefined): string {
+  return incomplete?.scope?.length ? ` Affected: ${incomplete.scope.join(", ")}.` : "";
+}
+
+/**
+ * The record version this node could not read and what resolves it, or ""
+ * where the answer did not say: a build that can read it, NOT A REFRESH, which
+ * is the one remedy a reader of an incomplete answer reaches for first and the
+ * one that changes nothing.
+ */
+export function unreadableRemedy(incomplete: WorkIncomplete | undefined): string {
+  return incomplete
+    ? ` Record version ${incomplete.version}, from sequence ${incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
+    : "";
+}
+
 /** What a node whose applied prefix stops short of its position is doing. */
 export const HOLDS_UNAPPLIED = "This node holds records it has not applied yet";
 
@@ -593,12 +610,8 @@ export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
         // everything, which is precisely what the sentence says.
         <Callout variant="warning" title={`${INCOMPLETE}${unreadable(answer.incomplete)}`}>
           {INCOMPLETE_ROWS}
-          {answer.incomplete?.scope?.length
-            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
-            : ""}
-          {answer.incomplete
-            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-            : ""}
+          {affected(answer.incomplete)}
+          {unreadableRemedy(answer.incomplete)}
         </Callout>
       )}
       <CoverageTags answer={answer} />

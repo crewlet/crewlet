@@ -26,9 +26,11 @@ import {
   CoverageTags,
   INCOMPLETE,
   INCOMPLETE_ROWS,
+  affected,
   appliedThrough,
   oddLevel,
   unreadable,
+  unreadableRemedy,
   type CoverageFacts,
 } from "~/components/work.tsx";
 
@@ -208,12 +210,8 @@ export function StateBar({
                 emphasised and whose next word is an em dash or a full stop. */}
             <strong>{INCOMPLETE}</strong>
             {`${unreadable(coverage?.incomplete)}.`} {INCOMPLETE_ROWS}
-            {coverage?.incomplete?.scope?.length
-              ? ` Affected: ${coverage.incomplete.scope.join(", ")}.`
-              : ""}
-            {coverage?.incomplete
-              ? ` Record version ${coverage.incomplete.version}, from sequence ${coverage.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-              : ""}
+            {affected(coverage?.incomplete)}
+            {unreadableRemedy(coverage?.incomplete)}
           </span>
         </Callout>
       )}

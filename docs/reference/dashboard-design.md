@@ -3407,7 +3407,12 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   sentence naming its source ("Work: This node holds records it has not
   applied yet (applied through 40 of 52).") in the words the state bar and
   History say the same facts in, which live once in `components/work.tsx`
-  (`INCOMPLETE`, `HOLDS_UNAPPLIED`, `appliedThrough`, …). Never as the page's
+  (`INCOMPLETE`, `HOLDS_UNAPPLIED`, `appliedThrough`, `affected`,
+  `unreadableRemedy`, …) — an incomplete answer WHOLE, with the objects its
+  unread records are about and the remedy (a build that can read them, not a
+  refresh), because cut to its lead it told an operator that writes were
+  missing and neither where nor what would bring them back; and an answer of
+  unknown age by its read level, as the chip says it. Never as the page's
   coverage: the two feeds are two logs, and one being behind says nothing about
   the other, the configuration or the credentials.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
