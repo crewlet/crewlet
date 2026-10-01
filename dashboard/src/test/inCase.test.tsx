@@ -3,28 +3,29 @@
  *
  * Each pair below is a case that RUNS OUT OF ITS TIME with something still
  * out — a wait of its OWN that nothing in the harness can see, an `act` scope,
- * a scope inside a scope or a wait inside one, a `findBy` — and the case
- * after it, which draws its own page, releases what the first one waited
- * for, and reads what the late case came to. The
- * timeout is real: the first case is `test.fails` with a budget of
- * [RUNS_OUT], waiting on something that never comes inside it, so what is
- * checked is what Vitest itself does with a case it has given up on — fails
- * it, starts the next, and leaves its function running.
+ * a scope inside a scope or a wait inside one, a `findBy`, a poll on a fake
+ * clock — and the case after it, which draws its own page, releases what the
+ * first one waited for, and reads what the late case came to. The timeout is
+ * real: the first case is `test.fails` with a budget of [RUNS_OUT], waiting
+ * on something that never comes inside it, so what is checked is what Vitest
+ * itself does with a case it has given up on — fails it, starts the next, and
+ * leaves its function running. And the case after it first holds it to having
+ * failed by that timeout and by nothing else ([runsOut]).
  *
  * Through the library alone, every one of these reached the second case: the
  * late `act` ran its body beside it, the open scope held React's act count
  * raised so the second case's own render never landed, the polling `findBy`
  * held the act environment set aside, and the late wait and click found and
- * pressed the second case's control. And ended in any order but innermost
- * first, a scope inside a scope left the count raised just the same, and a
- * wait inside a scope put back the scope's environment over the case's.
- * Each assertion below goes red when the matching half of `inCase.ts` is
- * taken away.
+ * pressed the second case's control. Ended in any order but innermost first,
+ * a scope inside a scope left the count raised just the same, and a wait
+ * inside a scope put back the scope's environment over the case's. And
+ * Vitest's own `vi.waitFor` moved the next case's fake clock. Each assertion
+ * below goes red when the matching half of `inCase.ts` is taken away.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { afterEach, expect, onTestFailed, onTestFinished, test, vi } from "vitest";
 import { act, answered, poll } from "./inCase.ts";
 
 afterEach(cleanup);
@@ -47,6 +48,34 @@ const ENDED =
  */
 const RUNS_OUT = 100;
 
+/**
+ * A case that RUNS OUT of its time: `test.fails` on a budget of [RUNS_OUT].
+ *
+ * `test.fails` reports ANY failure as the one expected — a case that threw
+ * before it ever waited would pass exactly as one the runner gave up on, and
+ * every pair below would then be checking something other than a timeout. So
+ * what the case failed with is kept, and the check handed back — which the
+ * case after it calls first — holds it to the runner's own timeout.
+ */
+function runsOut(name: string, body: () => Promise<void>): () => void {
+  let failedWith = "it did not fail";
+  test.fails(
+    name,
+    async () => {
+      onTestFailed(({ task }) => {
+        failedWith = (task.result?.errors ?? []).map((error) => error.message).join("\n");
+      });
+      await body();
+    },
+    RUNS_OUT,
+  );
+  return () => {
+    expect(failedWith, `"${name}" failed, but not by running out of its time`).toMatch(
+      new RegExp(`^Test timed out in ${RUNS_OUT}ms`),
+    );
+  };
+}
+
 /* A late act, and a late flush whose step would move the timers. */
 
 let release: () => void = () => {};
@@ -55,7 +84,7 @@ let lateFlush: Promise<string> = Promise.resolve("never started");
 /** Whether a late move's body ran — the move a late case must not make. */
 let lateMoved = false;
 
-test.fails(
+const waitingRanOut = runsOut(
   "a case that runs out of time while it waits for something of its own",
   async () => {
     const own = new Promise<void>((resolve) => {
@@ -81,10 +110,10 @@ test.fails(
     );
     await Promise.all([lateAct, lateFlush]);
   },
-  RUNS_OUT,
 );
 
 test("is refused its next act and its next flush, before either moves", async () => {
+  waitingRanOut();
   release();
   expect(await lateAct).toBe(`act: ${ENDED}`);
   expect(await lateFlush).toBe(`act: ${ENDED}`);
@@ -105,7 +134,7 @@ test("is refused its next act and its next flush, before either moves", async ()
 let unhold: () => void = () => {};
 let openScope: Promise<string> = Promise.resolve("never started");
 
-test.fails(
+const scopeRanOut = runsOut(
   "a case that runs out of time inside an act scope of its own",
   async () => {
     const held = new Promise<void>((resolve) => {
@@ -118,7 +147,6 @@ test.fails(
     );
     await openScope;
   },
-  RUNS_OUT,
 );
 
 function Counter() {
@@ -127,6 +155,7 @@ function Counter() {
 }
 
 test("finds that scope closed when it begins, so its own renders land", async () => {
+  scopeRanOut();
   // Left open, the scope keeps React's one act count raised, and this render's
   // own act — nested inside it — queues the render and flushes none of it.
   render(<Counter />);
@@ -140,7 +169,7 @@ test("finds that scope closed when it begins, so its own renders land", async ()
 
 let nestedScope: Promise<string> = Promise.resolve("never started");
 
-test.fails(
+const nestedRanOut = runsOut(
   "a case that runs out of time inside a scope it opened inside another",
   async () => {
     const never = new Promise<void>(() => {});
@@ -157,10 +186,10 @@ test.fails(
     );
     await nestedScope;
   },
-  RUNS_OUT,
 );
 
 test("finds both scopes closed, innermost first, so its own renders land", async () => {
+  nestedRanOut();
   render(<Counter />);
   fireEvent.click(screen.getByRole("button"));
   expect(screen.getByRole("button").textContent).toBe("pressed 1");
@@ -173,7 +202,7 @@ let scopedWait: Promise<string> = Promise.resolve("never started");
 /** The act environment as the case found it, before its scope and its wait each set it. */
 let environmentBefore: unknown = "unread";
 
-test.fails(
+const scopedWaitRanOut = runsOut(
   "a case that runs out of time in a wait inside a scope of its own",
   async () => {
     environmentBefore = actEnvironment();
@@ -188,10 +217,10 @@ test.fails(
     );
     await scopedWait;
   },
-  RUNS_OUT,
 );
 
 test("finds the act environment the late case began with", async () => {
+  scopedWaitRanOut();
   expect(actEnvironment()).toBe(environmentBefore);
   expect(await scopedWait).toBe(`findBy/waitFor: ${ENDED}`);
 });
@@ -206,7 +235,7 @@ function actEnvironment(): unknown {
   return (globalThis as { IS_REACT_ACT_ENVIRONMENT?: unknown }).IS_REACT_ACT_ENVIRONMENT;
 }
 
-test.fails(
+const findByRanOut = runsOut(
   "a case that runs out of time while a findBy of its own polls",
   async () => {
     environment = actEnvironment();
@@ -218,10 +247,10 @@ test.fails(
     });
     await found;
   },
-  RUNS_OUT,
 );
 
 test("finds that wait refused, and the act environment it set aside put back", async () => {
+  findByRanOut();
   expect(actEnvironment()).toBe(environment);
   render(<p>drawn by the next case</p>);
   // Long enough for the poll to see this page — which, still the first case's,
@@ -236,7 +265,7 @@ let releaseLate: () => void = () => {};
 let lateWait: Promise<string> = Promise.resolve("never started");
 let lateClick: Promise<string> = Promise.resolve("never started");
 
-test.fails(
+const movesRanOut = runsOut(
   "a case that runs out of time with a wait and a click still to make",
   async () => {
     const own = new Promise<void>((resolve) => {
@@ -256,10 +285,10 @@ test.fails(
     );
     await Promise.all([lateWait, lateClick]);
   },
-  RUNS_OUT,
 );
 
 test("is refused both, rather than finding and pressing this case's control", async () => {
+  movesRanOut();
   let presses = 0;
   render(<button onClick={() => presses++}>the next case's</button>);
   releaseLate();
@@ -279,7 +308,7 @@ const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const LOOKS_EVERY = 10;
 let latePoll: Promise<string> = Promise.resolve("never started");
 
-test.fails(
+const pollRanOut = runsOut(
   "a case that runs out of time while a poll of its own looks, on a fake clock",
   async () => {
     vi.useFakeTimers();
@@ -296,10 +325,10 @@ test.fails(
     );
     await latePoll;
   },
-  RUNS_OUT,
 );
 
 test("finds that poll refused, and its own fake clock where it left it", async () => {
+  pollRanOut();
   vi.useFakeTimers();
   onTestFinished(() => {
     vi.useRealTimers();

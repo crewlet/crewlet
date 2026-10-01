@@ -266,7 +266,8 @@ What follows are the prerequisites that legitimately vary by machine.
   refusal comes before the timers move. `src/test/inCase.test.tsx` holds each
   of these to a pair: a case that really runs out of its time with something
   out (`test.fails` on a budget it always spends), and the case after it,
-  which reads what the late one came to.
+  which first holds it to having failed by that timeout — `test.fails`
+  passes on any failure at all — and then reads what the late one came to.
 
   **And the harness's own waits end with it too.** The builder's testkit
   retires a lens when the case that mounted it finishes (`onTestFinished`):
