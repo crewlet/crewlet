@@ -470,3 +470,76 @@ test("a credential listing nothing answered is said, asked again, and then polle
     vi.useRealTimers();
   }
 });
+
+// A NAMED RANGE ENDS NOW, NOT AT THE TRACKER'S LAST ASK.
+//
+// The three sources narrowed here were cut at both edges the tracker was last
+// asked over, and the top one is only the instant of that ask: "the last seven
+// days" ends now. So a credential, a revision or a page change written after
+// it was hidden until the tracker was asked again — a minute on every poll,
+// and for ever once a refusal no wait clears stopped the tracker's poll while
+// the others went on answering. Here the credentials' read is retried a second
+// after the tracker's ask and finds one stored in that second; the tracker is
+// not asked again, so nothing but its own source's answer can let it in.
+test("a write after the tracker's last ask is listed when its own source answers", async () => {
+  vi.useFakeTimers();
+  try {
+    let stored = 0;
+    credentials((call) => {
+      if (call === 1) throw new TypeError("Failed to fetch");
+      stored = Date.now();
+      return new Response(
+        JSON.stringify({ secrets: [{ ...SECRET, updated_at: new Date(stored).toISOString() }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    const query = serving({ work_activity: { records: [], complete: true } });
+    mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const tracked = Date.parse(String(asked(query, "work_activity").to));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(stored).toBeGreaterThan(tracked);
+    expect(
+      (query.mock.calls as unknown as [string][]).filter(([what]) => what === "work_activity"),
+    ).toHaveLength(1);
+    expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// AND A READER'S OWN WINDOW STILL ENDS WHERE THEY SAID. Two instants a reader
+// named are a bound at both ends, so a revision written after the second one
+// is outside it whatever source it came from — which is what makes the case
+// above about the named range rather than about dropping the top edge.
+test("a reader's own window cuts every source at the end they named", async () => {
+  const to = Date.now() - 3_600_000;
+  const from = to - 86_400_000;
+  const iso = (at: number) => new Date(at).toISOString();
+  location.hash = `#/admin/audit?window=${encodeURIComponent(`${iso(from)}/${iso(to)}`)}`;
+  const revision = (id: string, at: number, summary: string) => ({
+    revision_id: id,
+    summary,
+    source: "dashboard",
+    created_by: "founder",
+    created_by_kind: "human",
+    created_at: iso(at),
+  });
+  const query = serving({
+    work_activity: { records: [], complete: true },
+    config_audit: [
+      revision("rev-inside", to - 60_000, "inside the window"),
+      revision("rev-after", to + 60_000, "after the window"),
+    ],
+  });
+  mount();
+  await answered();
+  expect(asked(query, "work_activity").to).toBe(iso(to));
+  expect(screen.getByText("inside the window")).toBeTruthy();
+  expect(screen.queryByText("after the window")).toBeNull();
+});

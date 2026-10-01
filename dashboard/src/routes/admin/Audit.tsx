@@ -57,7 +57,7 @@ import { needsSentence } from "~/lib/refusal.ts";
 import { useRestRead, type RestRead } from "~/lib/restRead.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { useWindow, type Offer } from "~/lib/range.ts";
+import { isRange, useWindow, type Offer } from "~/lib/range.ts";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
@@ -241,12 +241,18 @@ export function Audit() {
     },
     { pollMs: POLL_MS, window: { over: range.window, since: "from", until: "to" } },
   );
-  // AND THE WINDOW EVERY OTHER SOURCE IS CUT TO: the one the tracker was last
-  // asked over, so the three sources narrowed here and the one the engine
-  // narrowed agree about where it starts. Null only before the first ask,
-  // when nothing has answered to be cut.
+  // AND THE WINDOW EVERY OTHER SOURCE IS CUT TO. From below, where the
+  // tracker was last asked to begin, so the three sources narrowed here and
+  // the one the engine narrowed agree about where the window starts. From
+  // above only where the window HAS an end — a reader's own two instants: a
+  // named range ends now, and a revision, a page change or a credential
+  // written after the tracker's last ask is inside it. Cut at that ask, each
+  // was hidden until the tracker was asked again — up to a minute on every
+  // poll, and for ever once a refusal no wait clears stopped the tracker's
+  // poll while the other three went on answering. Empty only before the
+  // first ask, when nothing has answered to be cut.
   const since = work.asked?.since ?? "";
-  const until = work.asked?.until ?? "";
+  const until = work.asked && !isRange(work.asked.over) ? work.asked.until : "";
   // AND THE THREE THAT DO NOT. `page_activity` bounds on a log POSITION
   // rather than a clock, and neither the config history nor the credential
   // table has a window at all — so each is asked for its newest page and
@@ -344,9 +350,9 @@ export function Audit() {
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
-    if (!since || !until) return [];
+    if (!since) return [];
     const from = Date.parse(since);
-    const to = Date.parse(until);
+    const to = until ? Date.parse(until) : Number.POSITIVE_INFINITY;
     return rows
       .filter((row) => {
         const at = Date.parse(row.at);

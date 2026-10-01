@@ -49,14 +49,16 @@ export interface QueryResult<T> {
    */
   refusal: QueryRefusal | LogRefusal | null;
   /**
-   * The two instants a question with a `window` was LAST ASKED over — null
-   * before its first ask, and always for a question without one.
+   * The window a question with a `window` was LAST ASKED over, and the two
+   * instants that ask computed from it — null before its first ask, and
+   * always for a question without one.
    *
    * For what a screen narrows BESIDE the answer. The audit reads four
    * sources and only the tracker's takes a window; the other three are cut to
-   * it in the browser, and cut to these edges rather than to a pair of its own
-   * they cannot disagree with the engine about where "the last seven days"
-   * begins.
+   * it in the browser, and cut from below to this `since` rather than to an
+   * instant of their own they cannot disagree with the engine about where
+   * "the last seven days" begins. See [AskedWindow] for why the top edge is
+   * a bound only where `over` is an interval.
    */
   asked: AskedWindow | null;
   /**
@@ -97,9 +99,28 @@ export interface QueryWindow {
   until: string;
 }
 
-/** Two instants a question was asked over, RFC3339. */
+/**
+ * The window a question was last asked over, and the edges that ask computed.
+ *
+ * THE CHOICE TRAVELS WITH ITS EDGES, because the two edges are not the same
+ * kind of fact. `since` is where the window begins, which is what a screen
+ * cutting another source beside this answer has to agree with. `until` is a
+ * BOUND only for an interval — a reader's own two instants. For a named range
+ * it is merely the instant of the ask: "the last seven days" ends now, and a
+ * row another source answers with after this ask is inside it. Cut at this
+ * `until`, the audit hid every config revision, page change and credential
+ * written after the tracker's last ask until the tracker was asked again — a
+ * minute on every poll, and for ever once a refusal the engine said waiting
+ * cannot clear stopped the tracker's poll while the other three went on
+ * answering. Carrying `over` beside the edges lets a caller tell the two
+ * apart from the same ask, rather than from a window chosen since.
+ */
 export interface AskedWindow {
+  /** The window as chosen when this ask was made. */
+  over: Window;
+  /** The inclusive start, RFC3339. */
   since: string;
+  /** The end, RFC3339 — a bound only where `over` is an interval. */
   until: string;
 }
 
@@ -229,7 +250,7 @@ export function useQuery<K extends QueryName>(
         const { since, until } = windowEdges(chosen, Date.now());
         asking[sinceParam] = since;
         asking[untilParam] = until;
-        setState((prev) => ({ ...prev, asked: { since, until } }));
+        setState((prev) => ({ ...prev, asked: { over: chosen, since, until } }));
       }
       try {
         const data = await socket.query(what, asking);

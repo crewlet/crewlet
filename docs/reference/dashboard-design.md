@@ -595,8 +595,15 @@ they are read — so where they are read is the whole design:
   a minute and drew every row it held again each time, and a test that moved
   its clock a minute in one step re-keyed the question sixty times in a row,
   which React refuses as "Maximum update depth exceeded". What else a list
-  narrows in the browser is cut to the edges the engine was last asked over
-  (`asked`), so the two halves cannot disagree about where the window starts.
+  narrows in the browser is cut from below to where the engine was last asked
+  to begin (`asked`), so the two halves cannot disagree about where the window
+  starts — and from above only where the window has an end of its own, a
+  reader's two instants. A named range ends now: the top edge of an ask is
+  only the instant it was made, and a row another source answers with after
+  it is inside the window. Cut there, the audit hid every revision, page
+  change and credential written after the tracker's last ask until the
+  tracker was asked again, and for ever once a refusal no wait clears had
+  stopped its poll.
 - **A list drawn under its own axis takes the axis's.** The event log's rows
   and its bars are one window on the bars' bucket: run to the second against
   an axis run to the column, the oldest bar counted rows the list had already
@@ -3263,12 +3270,13 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   whole answer. **Audit** is the case that made this a rule: it composes four
   subsystems and only one of them — the tracker's feed — takes a wall-clock
   window, so the other three are asked for their newest page and narrowed on
-  the client — to the edges the tracker's feed was last asked over, computed
-  at that ask, so the four agree about where the window starts and move
-  together on the minute the screen polls at. A page that fills up before it reaches the start of the window is
-  older rows the screen never saw, and a caption reading "some of this may be
-  missing" is one nobody can act on where "Knowledge answered one page" says
-  where to look.
+  the client — from where the tracker's feed was last asked to begin, so the
+  four agree about where the window starts, and at the top only where a reader
+  named an end, since "the last seven days" ends now and a write after the
+  tracker's last ask is inside it. A page that fills up before it reaches the
+  start of the window is older rows the screen never saw, and a caption
+  reading "some of this may be missing" is one nobody can act on where
+  "Knowledge answered one page" says where to look.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
   its own emptiness, from what it already knows about itself, before the list
   it holds has answered anything — and that state REPLACES the list rather than
