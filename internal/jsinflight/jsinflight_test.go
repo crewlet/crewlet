@@ -43,8 +43,8 @@ func TestOnlyTheInFlightAnswerIsWaitedOut(t *testing.T) {
 		"no error":                {nil, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := jsinflight.Refused(tc.err); got != tc.want {
-				t.Errorf("Refused(%v) = %t, want %t", tc.err, got, tc.want)
+			if got := jsinflight.InFlight(tc.err); got != tc.want {
+				t.Errorf("InFlight(%v) = %t, want %t", tc.err, got, tc.want)
 			}
 		})
 	}
@@ -91,7 +91,7 @@ func TestAPublishIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 		t.Parallel()
 		publish, _ := script(inFlight, decided)
 		err := jsinflight.Decide(context.Background(), time.Minute, publish)
-		if !errors.Is(err, jetstream.ErrKeyRevisionMismatch) || jsinflight.Refused(err) {
+		if !errors.Is(err, jetstream.ErrKeyRevisionMismatch) || jsinflight.InFlight(err) {
 			t.Fatalf("Decide = %v, want the leader's decided refusal: the write ahead "+
 				"was somebody else's, and it landed first", err)
 		}

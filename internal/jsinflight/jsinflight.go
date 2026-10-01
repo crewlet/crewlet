@@ -74,10 +74,16 @@ const (
 	Jitter    = 0.2
 )
 
-// Refused reports the leader's in-flight answer: a conditional publish it
-// refused without comparing, because another write to the subject was still
-// in flight. See the package doc for why that decides nothing.
-func Refused(err error) bool {
+// InFlight reports the leader's in-flight answer: a conditional publish it
+// declined to compare, because another write to the subject was still in
+// flight. See the package doc for why that decides nothing.
+//
+// NAMED FOR WHAT IT IS AND NOT FOR THE WORDS THE SERVER USES. It was called
+// Refused, which is the one thing this answer is not — the decided refusal
+// is the other code — and a caller reaching for "was my write refused?" would
+// have found this predicate first and matched the answer that decides
+// nothing.
+func InFlight(err error) bool {
 	var api *jetstream.APIError
 	return errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequenceConstant
 }
@@ -125,7 +131,7 @@ func Decide(ctx context.Context, fallback time.Duration, publish func(context.Co
 	}
 	for attempt := 1; ; attempt++ {
 		err := publish(budget)
-		if !Refused(err) {
+		if !InFlight(err) {
 			return err
 		}
 		timer := time.NewTimer(backoff.Jitter(backoff.Doubling(attempt, FirstWait, MaxWait), Jitter))
