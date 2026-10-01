@@ -155,12 +155,17 @@ has not acked it exists, so a subject no consumer covers drops what is
 published to it. See [a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
 and [the fleet guide](../guides/fleet.md#what-a-fleet-needs).
 
-**Both halves ride one connection**, deliberately. The coordination KV is
-JetStream KV on the stream's own NATS connection rather than an estate of its
-own: two connections to one broker fail independently, so a node could hold
-live leases over a connection that still works while the one carrying its inbox
-has dropped — alive to its peers, deaf to its work. One connection makes
-"reachable" a single fact about a node rather than two that can disagree.
+**Both halves live on one broker**, deliberately. The coordination KV is
+JetStream KV on the stream's own NATS servers rather than an estate of its own,
+so reaching the leases is reaching the mail. A node's *connections* to that
+broker are one on an external cluster — the coordination store rides the
+queue's — and two on the embedded one, where the coordination store, the
+seat-memory replay and the backup's stream copies share a second connection so
+that none of them sits on the read loop every mailbox consumes through. Two
+connections fail independently, and a node holding live leases over one while
+the one carrying its inbox has gone would be alive to its peers and deaf to its
+work — so both are watched, and the client closing either one for good stops
+the node. "Reachable" can disagree with itself for no longer than a reconnect.
 
 **The state logs share one byte budget on that broker.** Each state log's
 stream reserves its whole byte ceiling when it is created, so the logs are

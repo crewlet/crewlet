@@ -116,12 +116,12 @@ store:
 # `local` keeps the leases inside this process — correct for exactly one
 # node, and catastrophic for more than one, since every node would hold
 # every lease and run every seat.  A fleet needs `embedded-kv`: the leases
-# live in a replicated KV riding the STREAM's own NATS connection, which
-# is what stops two processes running the same seat.  One connection
-# deliberately — two to the same broker fail independently, so a node
-# could go on renewing live leases over a working connection while the one
-# carrying its inbox is dead: alive to its peers, deaf to its work.  See
-# docs/guides/fleet.md.
+# live in a replicated KV on the STREAM's own NATS broker, which is what
+# stops two processes running the same seat.  On an embedded broker the KV
+# holds a second connection beside the queue's, and both are watched:
+# either one closing for good stops the node, so it never goes on renewing
+# leases over one while the one carrying its inbox is dead — alive to its
+# peers, deaf to its work.  See docs/guides/fleet.md.
 coordination:
   type: local
 

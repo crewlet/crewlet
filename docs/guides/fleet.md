@@ -41,12 +41,14 @@ clustered or external stream by name, because this is the one
 misconfiguration that would otherwise silently give two processes the
 same agents.
 
-There is nothing else to deploy for it: the KV rides the **stream's own
-NATS connection**, on every topology. A second connection to the same
-broker would fail independently of the first, which is the worst shape this
-could take — a node renewing leases happily over a connection that works
-while the one carrying its inbox has dropped, alive to its peers and deaf to
-its work.
+There is nothing else to deploy for it: the KV lives on the **stream's own
+NATS broker**, on every topology — over the queue's own connection on an
+external cluster, and over a second connection to the same server on an
+embedded one. Two connections fail independently, and the worst shape that
+could take is a node renewing leases happily over one that works while the
+one carrying its inbox has gone, alive to its peers and deaf to its work. So
+both are watched: the NATS client closing either one for good, rather than
+reconnecting, stops the node for its supervisor to restart.
 
 **One stream every node can reach.** The default embedded server binds no
 socket at all, so two nodes started side by side are not a fleet — they are
@@ -118,8 +120,8 @@ on the first.
 without each other, so the fleet stops serving the moment either
 restarts — and a rolling upgrade restarts them one at a time, which makes
 the outage certain rather than unlucky. Tier A refuses a two-member
-config by name, counting the **stream's** members: the KV rides the
-stream's connection, so the coordination quorum *is* the stream cluster's.
+config by name, counting the **stream's** members: the KV lives on the
+stream's broker, so the coordination quorum *is* the stream cluster's.
 
 **A distinct, stable id per node.** `node.id` in the Tier A file, or
 `CREWLET_NODE_ID`, which is how an orchestrator injects a pod name

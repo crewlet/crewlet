@@ -466,7 +466,7 @@ func (b *Bootstrap) validateTopology() error {
 	// unlucky.
 	//
 	// Counted over the STREAM's members, because that is where the leases
-	// live: the coordination store rides the stream's own connection on
+	// live: the coordination store lives on the stream's own broker on
 	// every topology, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
 		if members := peers + 1; members == 2 {

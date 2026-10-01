@@ -114,7 +114,7 @@ flowchart TB
     SEATS["<b>seats</b>: run agents<br/><i>mailbox → batching → turn engine · MCP bridge</i>"]
     WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
-    KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i>")]
+    KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i>")]
     DB[("<b>Store</b><br/><i>one local file this<br/>process owns exclusively</i>")]
 
     ING --> ALWAYS --> STREAM --> SEATS
@@ -161,10 +161,16 @@ node's own file, opened with them because everything that writes to it is driven
 by them. A node holding one without the others could hear work it may not do,
 hold seats it cannot serve, or run turns it cannot record.
 
-**Coordination rides the stream's connection.** Not a second dial that could
-fail on its own, and never the store file — see [Coordination](coordination.md)
-for the line between the two estates and [section 5](#5-where-state-lives) for
-which fact lives where. Only the *lease* half follows `coordination.type`: on a
+**Coordination lives on the stream's broker.** Never a second estate, and never
+the store file — see [Coordination](coordination.md) for the line between the
+two estates and [section 5](#5-where-state-lives) for which fact lives where. On
+an external broker it rides the queue's own connection; on the embedded one it
+holds a second connection to the same in-process server, shared with the
+seat-memory replay and the backup's stream copies so that neither sits on the
+read loop every mailbox consumes through. Two connections can fail
+independently, so both are watched: the NATS client closing either one for good
+stops the node, and a node holding leases over one connection while the one
+carrying its inbox is gone lasts no longer than a reconnect. Only the *lease* half follows `coordination.type`: on a
 single node it falls back to an in-process store, while the shared
 buckets — the activation pointer, the ledgers, the counters, the company's
 secrets — are opened on every topology, because a lone node still has to read
@@ -517,7 +523,7 @@ flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the node store<br/><i>one file, one process, exclusively owned</i>"]
     DERIVED["<b>Every node, identically</b> — the replicated store<br/><i>a second file, written by a state log's applier</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>nineteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>nineteen buckets on the stream's own broker</i>"]
     STREAM["<b>In flight, or keyed</b> — the streams<br/><i>6 message streams + one ordered log per domain</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL

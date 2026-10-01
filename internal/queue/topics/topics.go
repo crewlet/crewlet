@@ -84,7 +84,7 @@ const (
 	// Named HERE rather than beside the other stream names, because it is
 	// the one stream a package outside the queue has to address by name:
 	// internal/learning/memsync opens a replay consumer on it directly,
-	// the way coordination rides the same connection outside the queue
+	// over the coordination store's connection and outside the queue
 	// contract. Two spellings of it would be two things to keep equal.
 	MemoryStream = "CREWLET_MEMORY"
 

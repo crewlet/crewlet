@@ -90,10 +90,12 @@ Two slots change once a deployment outgrows one node:
 | **Coordination** | `local` (one node) · `embedded-kv` (a fleet — one node or three; two has no quorum and is refused by name) |
 
 Coordination takes no address of its own, and that is deliberate rather than an
-omission: the KV holding leases, ledgers and the token counter rides the
-stream's **own** connection. Two connections to one broker fail independently,
-so a node could keep renewing leases over a link that still works while the one
-carrying its inbox has dropped — alive to its peers, deaf to its work.
+omission: the KV holding leases, ledgers and the token counter lives on the
+stream's **own** broker. On the embedded broker it holds a second connection
+beside the queue's, and both are watched: either one closing for good stops the
+node, so it cannot keep renewing leases over a link that still works while the
+one carrying its inbox is gone — alive to its peers, deaf to its work — for
+longer than a reconnect.
 
 The **store** is never one of these: it stays one file per node, which is why
 everything genuinely shared lives in coordination instead. See

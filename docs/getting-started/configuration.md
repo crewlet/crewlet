@@ -721,13 +721,12 @@ coordination:
   type: local                       # one node holding its own seat leases;
                                     #   a fleet needs `embedded-kv`. There is no
                                     #   address to give it: the coordination KV
-                                    #   rides the stream's OWN connection. A
-                                    #   second dial to the same broker fails
-                                    #   independently, so a node could hold live
-                                    #   leases over a connection that still works
-                                    #   while the one carrying its inbox has
-                                    #   dropped — alive to its peers, deaf to
-                                    #   its work
+                                    #   lives on the stream's OWN broker. On the
+                                    #   embedded one it holds a second
+                                    #   connection, and both are watched: either
+                                    #   closing for good stops the node, so it
+                                    #   never holds live leases over one while
+                                    #   the one carrying its inbox is gone
   # lease_ttl_seconds: 45           # 0 takes the seat layer's own measured
                                     #   default of 45s — three heartbeat
                                     #   intervals, so two consecutive missed

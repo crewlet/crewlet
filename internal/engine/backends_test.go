@@ -113,12 +113,12 @@ func TestBothSlotsCloseTogether(t *testing.T) {
 	back.Close(t.Context())
 }
 
-func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
+func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	t.Parallel()
-	// A second dial would work and would be worse: two connections to one
-	// broker fail independently, so a node could hold live leases over a
-	// connection that still works while the one carrying its inbox has
-	// dropped — alive to its peers, deaf to its work.
+	// A second estate would work and would be worse: two estates fail
+	// independently, so a node could hold live leases on one while the
+	// other has lost its inbox — alive to its peers, deaf to its work
+	// (ADR-0001). The connection it rides is the case below's.
 	//
 	// Observable as: the KV slot builds at all on an embedded stream, which
 	// it can only do by reaching the in-process server.

@@ -512,7 +512,7 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 Everything above runs unchanged on one node: it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, which is why the Tier A file refuses the combination at load: `local` coordination beside a clustered embedded stream or an external NATS stream fails validation on `coordination.type`, naming `embedded-kv` as the fix.
 
-A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share, either a clustered embedded server or an external NATS. The two go together by construction: the coordination KV rides the stream's own connection, so refusing the mixed pairing keeps the halves from drifting apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
+A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share, either a clustered embedded server or an external NATS. The two go together by construction: the coordination KV lives on the stream's own broker, so refusing the mixed pairing keeps the halves from drifting apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
 
 ---
 

@@ -8,10 +8,13 @@ company with nothing else installed.
 One slot changes when a deployment outgrows one node — the stream, which
 becomes either a cluster of the members the nodes already embed or a NATS
 cluster somebody else runs — and this page is mostly about that path. The
-coordination KV is not a second address: it rides the stream's own
-connection, deliberately, so that a node cannot end up holding live leases
-over a link that still works while the one carrying its inbox has dropped —
-alive to its peers, deaf to its work. The store never becomes shared either:
+coordination KV is not a second address: it lives on the stream's own
+broker, deliberately, so that reaching the leases is reaching the mail. On an
+embedded broker it holds a second connection to it beside the queue's, and
+both are watched — either one closing for good stops the node — so a node
+cannot go on holding live leases over a link that still works while the one
+carrying its inbox is gone, alive to its peers and deaf to its work, for
+longer than a reconnect. The store never becomes shared either:
 it stays one file per node, which is why everything genuinely shared between
 nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
 [Scaling Out](../concepts/scaling.md).
@@ -178,8 +181,8 @@ stream:
                                        #   before Publish returns
 
 coordination:
-  type: embedded-kv                    # the leases ride the stream's own
-                                       #   connection; nothing else to set
+  type: embedded-kv                    # the leases live on the stream's own
+                                       #   broker; nothing else to set
 
 secrets:                               # the SAME keys on every member: each
   active_key_id: "2026-01"             #   one verifies what the others sign
@@ -864,7 +867,7 @@ draining, and rolling upgrades. The two things that bite hardest:
 > `coordination.type: embedded-kv`; see [Running a Fleet](fleet.md). The slot
 > governs the *leases* only — the fleet's shared records are on the KV
 > regardless, because they have to survive a restart as much as a peer, and
-> the KV rides the stream's own connection whichever value the slot holds.
+> the KV lives on the stream's own broker whichever value the slot holds.
 >
 > **And, when the nodes *are* the broker, a quorum to keep it on.**
 >

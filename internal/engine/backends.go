@@ -62,11 +62,12 @@ type Backends struct {
 	// merely dialled.
 	stopServer func()
 
-	// conn is the NATS connection the coordination store rides when it
-	// shares the stream's broker. Held so Close can release it; the store
-	// does not own it, because on an embedded topology the SERVER owns the
-	// lifetime and closing the connection from underneath it would take
-	// the stream down with the leases.
+	// conn is the SECOND connection, the one the coordination store rides
+	// on an embedded broker — dialled through [jetstream.Queue.DialWatched],
+	// so NATS closing it for good stops the node as the queue's own would.
+	// Held here so Close releases it in its place in the order, after the
+	// queue and before the server; the store does not own it. Nil on an
+	// external broker, where the store rides the queue's own.
 	conn *nats.Conn
 
 	// rides is the connection the coordination store rides on EVERY
@@ -116,9 +117,9 @@ func (b *Backends) Complete() error {
 //
 // Nil when this node DIALLED an external broker: the queue owns that
 // connection, and the streams belong to a cluster with its own backup tooling.
-// The caller takes no ownership: closing it is [Backends.Close]'s job, and
-// closing it from underneath an embedded server would take the stream down with
-// the leases.
+// The caller takes no ownership: closing it is [Backends.Close]'s job, and a
+// caller that closed it would take this node's leases down with it SILENTLY —
+// a close this process makes itself is never the loss the node stops for.
 func (b *Backends) Conn() *nats.Conn { return b.conn }
 
 // CoordinationConn is the broker connection this node's coordination store
@@ -225,7 +226,7 @@ func (b *Backends) abandon(ctx context.Context, err error) error {
 // refuses the incoherent combinations, and duplicating those rules here would
 // give an operator two places to read and two chances to disagree. What this
 // adds is the construction, and one rule validation cannot express — an
-// embedded-KV coordination store rides the stream's own NATS connection, so the
+// embedded-KV coordination store lives on the stream's own NATS broker, so the
 // two slots are not independent at runtime even though they are in config.
 //
 // It takes the COMPANY as well as the bootstrap, for one field: the width of
@@ -353,7 +354,7 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the
-// coordination store that rides its connection.
+// coordination store on the same broker.
 //
 // TWO BRANCHES FOR THE STREAM, ONE TAIL FOR COORDINATION. The branches differ
 // only in who owns the broker and therefore who owns the connection; what is
@@ -425,11 +426,21 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 // openStream dials or starts the broker, and answers the connection
 // coordination should ride.
 //
-// THE COORDINATION STORE RIDES THE STREAM'S CONNECTION either way. A second
-// dial would work and would be worse: two connections to one broker fail
-// independently, so a node could hold live leases over a connection that
-// still works while the one carrying its inbox has dropped — alive to its
-// peers, deaf to its work.
+// THE COORDINATION STORE LIVES ON THE STREAM'S BROKER either way, and that is
+// ADR-0001: one estate, so reaching the leases is reaching the mail. Which
+// CONNECTION it rides differs by topology. On an external broker it is the
+// queue's own. On the embedded one it is a SECOND connection to the same
+// in-process server, which the seat-memory replay and the backup's stream
+// copies ride too, so that neither — an ordered consumer over a seat's whole
+// history, a copy of whole streams — sits on the read loop every mailbox
+// consumes through.
+//
+// Two connections fail independently, and the hazard in that is a node holding
+// live leases over the one that still works while the one carrying its inbox
+// is gone — alive to its peers, deaf to its work. So the second one is dialled
+// WATCHED ([jetstream.Queue.DialWatched]): NATS closing either connection for
+// good stops the node ([Engine.Fatal]), and the split lasts no longer than a
+// reconnect.
 func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) (*Backends, *nats.Conn, error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
 	// `stream.type: nats` mean anything. Without it every path here

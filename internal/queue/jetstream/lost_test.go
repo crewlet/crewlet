@@ -371,6 +371,9 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 // handler installed there makes the coordination store's connection — the one
 // holding every lease on that topology — a loss the node hears of.
 //
+// It is the gate ADR-0001 names: the coordination store has a connection of its
+// own on an embedded broker, and that is safe only because both are watched.
+//
 // Mutation: drop watchClose from connect and the embedded rows go red; hand
 // DialOwned the queue's loss and the owned rows do.
 func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
