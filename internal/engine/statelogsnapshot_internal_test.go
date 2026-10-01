@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -874,6 +876,76 @@ func TestAnUnknownHoldingIsSaidWhenItChangesNotEveryPass(t *testing.T) {
 	said("the holding withheld again",
 		"WARN statelog_snapshot_holding_unknown tracker.003",
 		"WARN statelog_snapshot_holding_unknown tracker.005")
+}
+
+// THE LOOP CARRIES WHAT ONE PASS COULD NOT TELL INTO THE NEXT.
+//
+// [reportHolding] says a transition only against the passes before it, and
+// that is the LOOP's to hand it: the case above drives the function, and a
+// loop that dropped the answer — or kept it only inside one pass — compiled,
+// passed it, and warned on every pass of a coordination outage again. So this
+// runs the loop itself, its retry short, over a holding withheld for four
+// passes and then told: one warning and one line saying it is known again,
+// however many passes either state lasted.
+//
+// NOT PARALLEL: the loop logs through the package's own logger, which follows
+// the process-wide one this swaps — and a parallel case's loop logging the
+// same partition would be counted here, which is why the partition is one no
+// other case uses.
+func TestTheSnapshotLoopWarnsOfAnUnknownHoldingOnce(t *testing.T) {
+	logs := &stopLineBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+
+	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 47}
+	const withheld = 4
+	var passes atomic.Int64
+	ctx, stop := context.WithCancel(t.Context())
+	s := &stateLog{run: ctx, snapshotNudge: make(chan struct{}, 1)}
+	dir := t.TempDir()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		(&Engine{}).snapshotLoop(s, snapshotPlan{
+			// WITHHELD, THEN TOLD — and told NOT served, so every pass
+			// stays unsettled and the loop keeps asking at the retry.
+			served: func() snapshotScope {
+				if passes.Add(1) <= withheld {
+					return snapshotScope{unsettled: true, unknown: []holdingUnknown{
+						{partition: p, err: coord.ErrUnavailable}}}
+				}
+				return snapshotScope{unsettled: true}
+			},
+			dir: func(statelog.PartitionID) string { return dir },
+			taker: func(statelog.PartitionID) (snapshotTaker, error) {
+				return nil, errors.New("no partition is served, so none is taken")
+			},
+			retry: 5 * time.Millisecond,
+		}, 24*time.Hour)
+	}()
+	// TWO PASSES PAST THE ONE THAT TOLD, so a loop that forgot what it had
+	// said would have said it again by now — and the loop is stopped and
+	// waited for before a line is read, so every pass's report is written.
+	waitUntil(t, 10*time.Second, "the snapshot loop's passes",
+		func() bool { return passes.Load() >= withheld+3 })
+	stop()
+	<-done
+
+	said := map[string]int{}
+	for _, record := range logs.records(t) {
+		if record["partition"] == p.String() {
+			said[fmt.Sprint(record["msg"])]++
+		}
+	}
+	want := map[string]int{
+		"statelog_snapshot_holding_unknown": 1,
+		"statelog_snapshot_holding_known":   1,
+	}
+	if !maps.Equal(said, want) {
+		t.Errorf("%d passes withheld and %d told said %v about %s, want %v — the "+
+			"loop has to carry each pass's unknown partitions into the next",
+			withheld, passes.Load()-withheld, said, p, want)
+	}
 }
 
 // partitionAnswers is a holding that answers each partition as it is told to,
