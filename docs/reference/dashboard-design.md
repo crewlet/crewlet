@@ -3384,7 +3384,19 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   "Knowledge answered one page" says where to look. The tracker's own feed is
   a page as well — the engine windows it, but answers two hundred commits at
   most — and it is named the same way when the engine returns a cursor, which
-  it does only when more rows match.
+  it does only when more rows match. **And a source whose answer could not
+  account for everything, or whose node is behind its log, is named the same
+  way.** The tracker's feed and the knowledge base's each carry their own
+  coverage — `complete`, the records this build cannot read, `applied_through`
+  against `log_seq` — and the audit read none of it, so a node holding tracker
+  records it could not decode served an audit missing their writes under a
+  header claiming every write across the tracker. Each shortfall is now a
+  sentence naming its source ("Work: This node holds records it has not
+  applied yet (applied through 40 of 52).") in the words the state bar and
+  History say the same facts in, which live once in `components/work.tsx`
+  (`INCOMPLETE`, `HOLDS_UNAPPLIED`, `appliedThrough`, …). Never as the page's
+  coverage: the two feeds are two logs, and one being behind says nothing about
+  the other, the configuration or the credentials.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
   its own emptiness, from what it already knows about itself, before the list
   it holds has answered anything — and that state REPLACES the list rather than

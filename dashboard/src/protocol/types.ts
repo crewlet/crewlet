@@ -2889,6 +2889,12 @@ export interface PageActivityAnswer {
   changes: PageChange[];
   next_cursor?: string;
   read_level?: ReadLevel;
+  /** This node's checkpoint on the pages log and the prefix of it whose
+   *  records it applied — a tracker answer's two numbers, for the same
+   *  reason: a node holding a record it cannot decode moves its checkpoint
+   *  past it, and only the applied prefix stopping short says it is behind. */
+  log_seq?: number;
+  applied_through?: number;
   complete?: boolean;
 }
 

@@ -436,6 +436,73 @@ test("a tracker page that stops inside the window says so, and one that covers i
   expect(screen.getByText(/across the tracker, the knowledge base/)).toBeTruthy();
 });
 
+// A SOURCE WHOSE ANSWER COULD NOT ACCOUNT FOR EVERYTHING SAYS SO, AND SAYS
+// WHICH. The tracker's feed carries its own coverage — complete or not, the
+// records this build cannot read, the applied prefix against the position —
+// and this screen read none of it: a node holding tracker records it could not
+// decode served an audit missing their writes under a header claiming every
+// write across the tracker. It is said in History's words and named by its
+// source, because the knowledge base's log, the configuration and the
+// credentials are not behind with it.
+test("a tracker answer that is incomplete or behind is named as the tracker's", async () => {
+  serving({
+    work_activity: {
+      records: [commit()],
+      complete: false,
+      incomplete: {
+        records: 2,
+        from: { stream: "CREWLET_WORK_LOG", generation: 1, seq: 40 },
+        scope: ["project:ENG"],
+        version: 9,
+      },
+      log_seq: 52,
+      applied_through: 40,
+    },
+    page_activity: { changes: [], complete: true, log_seq: 7, applied_through: 7 },
+  });
+  const { answered } = mount();
+  await answered();
+  const header = screen.getByText(/This answer is incomplete/).textContent ?? "";
+  expect(header).toContain(
+    "Work: This answer is incomplete — 2 record(s) this build cannot read. Rows may be missing",
+  );
+  expect(header).toContain(
+    "Work: This node holds records it has not applied yet (applied through 40 of 52).",
+  );
+  // ONE SOURCE'S SHORTFALL IS NOT THE PAGE'S: the knowledge base answered
+  // whole and is not named, and the claim that every source is covered goes.
+  expect(header).not.toContain("Knowledge:");
+  expect(header).not.toContain("Every write a person or a token made");
+});
+
+test("a knowledge base answer that is behind is named as the knowledge base's", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true, log_seq: 5, applied_through: 5 },
+    page_activity: { changes: [], complete: false, log_seq: 30, applied_through: 12 },
+  });
+  const { answered } = mount();
+  await answered();
+  const header = screen.getByText(/has not applied yet/).textContent ?? "";
+  expect(header).toContain("Knowledge: This answer is incomplete.");
+  expect(header).toContain(
+    "Knowledge: This node holds records it has not applied yet (applied through 12 of 30).",
+  );
+  expect(header).not.toContain("Work:");
+});
+
+// THE CONTROL: answers that covered everything say nothing of the kind, and the
+// header still claims every source.
+test("sources that answered whole leave the header's claim standing", async () => {
+  serving({
+    work_activity: { records: [commit()], complete: true, log_seq: 5, applied_through: 5 },
+    page_activity: { changes: [], complete: true, log_seq: 7, applied_through: 7 },
+  });
+  const { answered } = mount();
+  await answered();
+  expect(screen.queryByText(/This answer is incomplete|has not applied yet/)).toBeNull();
+  expect(screen.getByText(/Every write a person or a token made/)).toBeTruthy();
+});
+
 // THE EXPORT IS WHAT IS ON SCREEN.
 //
 // A file that carried more than the grid shows cannot be reconciled with the

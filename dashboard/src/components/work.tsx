@@ -526,6 +526,45 @@ export interface CoverageFacts {
   incomplete?: WorkIncomplete;
 }
 
+/*
+ * THE WORDS AN ANSWER'S COVERAGE IS SAID IN, once, for every surface that says
+ * it: the page's state bar, a panel's own banner and chips, and the audit,
+ * which names the one source a shortfall belongs to. Written in each, the same
+ * fact would have reached a reader in three phrasings, and the one that
+ * drifted would read as a different state.
+ */
+
+/** The lead of an answer that could not account for everything it was asked. */
+export const INCOMPLETE = "This answer is incomplete";
+
+/** What an incomplete answer means for its rows and counts. */
+export const INCOMPLETE_ROWS =
+  "Rows may be missing, rows that should have gone may still be here, and the counts were computed over what is shown.";
+
+/** " — 3 record(s) this build cannot read", or "" where the answer did not count them. */
+export function unreadable(incomplete: WorkIncomplete | undefined): string {
+  return incomplete ? ` — ${incomplete.records} record(s) this build cannot read` : "";
+}
+
+/** What a node whose applied prefix stops short of its position is doing. */
+export const HOLDS_UNAPPLIED = "This node holds records it has not applied yet";
+
+/** "applied through 41 of 88" for an answer whose node is behind its log, or null. */
+export function appliedThrough(facts: CoverageFacts | null | undefined): string | null {
+  if (facts?.applied_through === undefined || facts.log_seq === undefined) return null;
+  return facts.applied_through < facts.log_seq
+    ? `applied through ${facts.applied_through} of ${facts.log_seq}`
+    : null;
+}
+
+/** The chip for an answer served at a level this surface did not expect. */
+export const AGE_UNKNOWN = "age unknown";
+
+/** What [AGE_UNKNOWN] means, naming the level the answer was served at. */
+export function ageUnknown(level: string): string {
+  return `This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`;
+}
+
 /**
  * How stale an answer may be, and what it could not account for.
  *
@@ -552,16 +591,8 @@ export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
         // already owns that. The severity stays a WARNING rather than a
         // danger — the answer is usable, it just cannot account for
         // everything, which is precisely what the sentence says.
-        <Callout
-          variant="warning"
-          title={`This answer is incomplete${
-            answer.incomplete
-              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
-              : ""
-          }`}
-        >
-          Rows may be missing, rows that should have gone may still be here, and the counts were
-          computed over what is shown.
+        <Callout variant="warning" title={`${INCOMPLETE}${unreadable(answer.incomplete)}`}>
+          {INCOMPLETE_ROWS}
           {answer.incomplete?.scope?.length
             ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
             : ""}
@@ -615,32 +646,24 @@ export function oddLevel(level: string | undefined): boolean {
  */
 export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   if (!answer) return null;
-  const behind =
-    answer.applied_through !== undefined &&
-    answer.log_seq !== undefined &&
-    answer.applied_through < answer.log_seq;
+  const behind = appliedThrough(answer);
   const level = answer.read_level ?? "";
   const odd = oddLevel(level);
-  if (!odd && !behind) return null;
+  if (!odd && behind === null) return null;
   return (
     <span className="work-coverage">
       {odd && (
-        <Tag
-          variant="warning"
-          appearance="outline"
-          size="xs"
-          title={`This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`}
-        >
-          age unknown
+        <Tag variant="warning" appearance="outline" size="xs" title={ageUnknown(level)}>
+          {AGE_UNKNOWN}
         </Tag>
       )}
       {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
           apply is visible as its own state rather than as lag. NEUTRAL: a
           read level and an apply position are facts about the answer, not
           states of it, and lag alone is never an alarm. */}
-      {behind && (
-        <Tag appearance="outline" size="xs" title="This node holds records it has not applied yet">
-          applied through {answer.applied_through} of {answer.log_seq}
+      {behind !== null && (
+        <Tag appearance="outline" size="xs" title={HOLDS_UNAPPLIED}>
+          {behind}
         </Tag>
       )}
     </span>

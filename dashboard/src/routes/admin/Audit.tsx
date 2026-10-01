@@ -49,6 +49,16 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
 import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
+import {
+  HOLDS_UNAPPLIED,
+  INCOMPLETE,
+  INCOMPLETE_ROWS,
+  ageUnknown,
+  appliedThrough,
+  oddLevel,
+  unreadable,
+  type CoverageFacts,
+} from "~/components/work.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useShared } from "~/lib/share.ts";
@@ -402,14 +412,33 @@ export function Audit() {
       const last = list[list.length - 1];
       if (last && Date.parse(last.at) > from) short.push(label);
     };
-    oldest(list(knowledge.data?.changes), PAGE.pages, "Knowledge");
+    oldest(list(knowledge.data?.changes), PAGE.pages, SOURCE_LABEL.knowledge);
     oldest(
       list(config.data).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
-      "Configuration",
+      SOURCE_LABEL.config,
     );
     return short;
   }, [work.data, knowledge.data, config.data, since]);
+
+  // AN ANSWER THAT COULD NOT ACCOUNT FOR EVERYTHING, OR WHOSE NODE HAD NOT
+  // APPLIED ALL IT HELD, said of the SOURCE it came from. The tracker's feed
+  // and the knowledge base's each carry their own coverage — whether they are
+  // complete, the records this build cannot read, how far the node applied
+  // against where it stands — and they are two different logs: one being
+  // behind says nothing about the other, nor about the configuration and the
+  // credentials, which have no log here at all. This screen read none of it,
+  // so a node holding tracker records it could not decode served an audit
+  // missing their writes under a header claiming every write across the
+  // tracker. Each shortfall is now named by its source, in the words History
+  // and the state bar say it in, and never drawn as the whole page's coverage.
+  const coverage = useMemo(
+    () => [
+      ...coverageSentences(SOURCE_LABEL.work, work.data),
+      ...coverageSentences(SOURCE_LABEL.knowledge, knowledge.data),
+    ],
+    [work.data, knowledge.data],
+  );
 
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [
@@ -538,7 +567,7 @@ export function Audit() {
           <Card.Header
             icon={<DescriptionGlyph size="sm" />}
             count={shown.length}
-            subtitle={auditSubtitle(truncated, secrets.withheld)}
+            subtitle={auditSubtitle(truncated, coverage, secrets.withheld)}
           >
             <Card.Title>What was done</Card.Title>
           </Card.Header>
@@ -622,16 +651,41 @@ function withheldSentence(read: RestRead<SecretRow[]>): string {
  * … the credentials" over an audit that read none of them was the screen
  * claiming rows it never had.
  */
-function auditSubtitle(truncated: string[], withheld: string): string {
+function auditSubtitle(truncated: string[], coverage: string[], withheld: string): string {
   const short = [
     truncated.length > 0
       ? `${truncated.join(" and ")} answered one page, which does not reach the start of this window — those rows are the newest, not all of them.`
       : "",
+    ...coverage,
     withheld,
   ].filter((sentence) => sentence !== "");
   return short.length > 0
     ? short.join(" ")
     : "Every write a person or a token made, across the tracker, the knowledge base, the configuration and the credentials.";
+}
+
+/**
+ * What one source's answer could not cover, as sentences naming the source —
+ * none where it covered everything.
+ *
+ * THE WORDS ARE THE COVERAGE WORDS (`~/components/work.tsx`), the ones History
+ * and the state bar say the same facts in, so a reader who has met "applied
+ * through 41 of 88" on one screen meets it here; only the source in front of
+ * them is this screen's own.
+ */
+export function coverageSentences(
+  label: string,
+  facts: CoverageFacts | null | undefined,
+): string[] {
+  if (!facts) return [];
+  const out: string[] = [];
+  if (facts.complete === false) {
+    out.push(`${label}: ${INCOMPLETE}${unreadable(facts.incomplete)}. ${INCOMPLETE_ROWS}`);
+  }
+  const behind = appliedThrough(facts);
+  if (behind !== null) out.push(`${label}: ${HOLDS_UNAPPLIED} (${behind}).`);
+  if (oddLevel(facts.read_level)) out.push(`${label}: ${ageUnknown(facts.read_level ?? "")}.`);
+  return out;
 }
 
 /**
