@@ -242,6 +242,7 @@ type fakePlacement struct {
 	nodes      []string
 	epoch      uint64
 	err        error
+	servingErr error
 	refreshes  int
 	onRefresh  func(*fakePlacement)
 	unanswered []string
@@ -261,6 +262,9 @@ func (p *fakePlacement) Serving(statelog.PartitionID) ([]string, uint64, error) 
 	defer p.mu.Unlock()
 	if p.err != nil {
 		return nil, 0, p.err
+	}
+	if p.servingErr != nil {
+		return nil, 0, p.servingErr
 	}
 	return slices.Clone(p.nodes), p.epoch, nil
 }
@@ -907,6 +911,50 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 	if own.askedFor("tasks") || !peered.nodes["data-a"].askedFor("tasks") {
 		t.Fatal("this node's lagging copy ran the read ahead of a peer whose copy does not lag")
+	}
+}
+
+// A LAGGING COPY OF ITS OWN STILL ANSWERS WHEN THE PLACEMENT CANNOT SAY WHO
+// SERVES. This node knows it holds the partition without asking anybody, so a
+// view that answers unknown names no peer to prefer and takes nothing from the
+// copy the walk passed over for lagging. Answered with the placement's error
+// instead, a single data node a burst put behind refused every call its own
+// seats made — while it kept them — for as long as its view could not answer.
+// A node whose own copy runs nothing still gets the placement's reason.
+func TestALaggingOwnCopyAnswersWhileThePlacementCannot(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.placement.set(func(p *fakePlacement) {
+		p.servingErr = errors.New("the presence view answers unknown")
+	})
+	own := &fakeNode{name: "data-self", units: chartOf("self"), notReady: true}
+	r := f.router(t, "data-self", own)
+	floor := statelog.Position{Stream: trackerStream, Generation: 1, Seq: 4}
+	r.Observe(floor)
+	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); err != nil {
+		t.Fatalf("a lagging copy of its own refused this node's read: %v", err)
+	}
+	own.mu.Lock()
+	waited := slices.Contains(own.floors, floor)
+	own.mu.Unlock()
+	if !own.askedFor("tasks") || !waited {
+		t.Fatalf("the read ran %v on this node's copy, floors %v, want it run there and held "+
+			"to the node's floor", own.asked, own.floors)
+	}
+	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-blind",
+		tracker.Task{Project: "ENG"}, nil); err != nil {
+		t.Fatalf("a lagging copy of its own refused this node's write: %v", err)
+	}
+
+	// A COPY THAT DOES NOT SERVE THE PARTITION is no holder at all, and the
+	// answer is the placement's own reason — never "nobody serves it".
+	own.set(func(n *fakeNode) { n.notHolder = true })
+	_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+	var unserved *ErrPartitionUnserved
+	if err == nil || errors.As(err, &unserved) ||
+		!strings.Contains(err.Error(), "the presence view answers unknown") {
+		t.Fatalf("a node serving nothing while its placement cannot answer = %v, want "+
+			"the placement's reason", err)
 	}
 }
 

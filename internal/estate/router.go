@@ -362,14 +362,31 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	if value, final, ranErr := r.tryLocal(ctx, spec, layout, p, x, false, w); final {
 		return value, ranErr
 	}
+	budget := r.budgetFor(ctx, spec)
 	nodes, epoch, err := r.placement.Serving(p)
 	if err != nil {
+		// A PLACEMENT THAT CANNOT SAY WHO SERVES p names no peer to ask,
+		// and takes nothing from this node's own copy, which the walk
+		// passed over above only for LAGGING: this node knows it holds p
+		// without asking anybody, so that copy is still the worse holder
+		// it always is rather than no holder. Returned here before it was
+		// asked, a single data node whose copy a burst put behind refused
+		// every call its own seats made for as long as the presence view
+		// could not answer — while it kept those seats, rightly: a
+		// partition a node answers from its own copy is one it needs no
+		// view to route.
+		if value, final, ranErr := r.lastResort(ctx, spec, actor, x, layout, p, 0, budget, w); final {
+			return value, ranErr
+		}
 		if w.fallback != nil {
 			return w.fallback.value, w.fallback.err
 		}
+		if len(w.reasons) > 0 {
+			return nil, fmt.Errorf("estate: %s: read who serves %s: %w (%s)", spec.name, p, err,
+				strings.Join(w.reasons, "; "))
+		}
 		return nil, fmt.Errorf("estate: %s: read who serves %s: %w", spec.name, p, err)
 	}
-	budget := r.budgetFor(ctx, spec)
 	tried := map[string]bool{r.self: true}
 	refreshed := false
 	for {
