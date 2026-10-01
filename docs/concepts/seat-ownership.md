@@ -210,6 +210,19 @@ the mailbox attaches**, and a hydration that fails refuses the seat — a peer
 that can hydrate should take it instead, and a seat serving with amnesia
 produces work its own history contradicts.
 
+**The replay reads to where the changelog's leader says the seat's rows end.**
+On a fleet the changelog is replicated, and the replay is a consumer the server
+places on any member of the stream, delivering out of that member's copy — and
+a follower applies a row a moment after the leader acknowledged it. A replay
+hosted on a follower that was behind counted what its copy held, delivered it
+and reported success, short of the rows the seat's previous owner wrote last:
+exactly the ones a graceful handoff flushes on release. So the node first asks
+the leader for the sequence of the seat's newest row, and the hydration is not
+done until the replay has delivered a row at or past it. A copy that is behind
+hands over the rest as it applies them; one that has not within the
+hydration's fifteen seconds fails the hydration, which refuses the seat rather
+than admitting it without its newest memory.
+
 The subject carries the seat's **id**, not its handle. Compaction is why:
 because the stream keeps one message per subject, a subject IS a row's durable
 address — so while the handle was in it, renaming a seat moved every one of its
