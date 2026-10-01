@@ -1578,11 +1578,14 @@ here would reach nothing.
 topology, embedded or external. What the client reports outside any call —
 a slow consumer, a permissions violation, a server refusing this node's
 credentials on a reconnect — is `jetstream_client_error` at `WARN` under
-`queue.jetstream`, naming the subscription where there is one. Left to the
-client's default it was a bare line written straight to stderr, outside
-`logging.file`, outside any level and in the middle of a `json` stream; the
-credentials refusal that comes before a [connection closed for
-good](#an-external-nats-server) was said only there.
+`queue.jetstream`, carrying the client's own error and nothing read off the
+subscription it came from: the client rewrites a JetStream consumer's
+subscription under a lock of its own on every reset, and what that field names
+there is a random inbox anyway. A permissions violation names the subject the
+server refused in the error itself. Left to the client's default it was a bare
+line written straight to stderr, outside `logging.file`, outside any level and
+in the middle of a `json` stream; the credentials refusal that comes before a
+[connection closed for good](#an-external-nats-server) was said only there.
 
 ### Per-Agent Token Tracking
 
