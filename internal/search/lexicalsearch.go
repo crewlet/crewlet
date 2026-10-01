@@ -60,6 +60,10 @@ type LexicalHit struct {
 // Carrying the field and leaving it zero is what this pair of types exists to
 // make impossible.
 type FusedHit struct {
+	// Key is the index's own document key — the one a ranking names — so
+	// a caller that hydrated a set can find each hit again by it.
+	Key string
+
 	Source    string
 	ID        string
 	Container string
@@ -363,7 +367,7 @@ func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]Fu
 			&hit.Title, &excerpt); err != nil {
 			return nil, fmt.Errorf("search: scan a fused hit: %w", err)
 		}
-		hit.Snippet = textindex.Snippet(excerpt, terms, snippetBytes)
+		hit.Key, hit.Snippet = id, textindex.Snippet(excerpt, terms, snippetBytes)
 		byKey[id] = hit
 	}
 	if err := rows.Err(); err != nil {

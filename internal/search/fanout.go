@@ -274,6 +274,12 @@ type Answer struct {
 	// SemanticSkipped says at least one answering participant ran without
 	// its semantic half.
 	SemanticSkipped bool
+
+	// Candidates are the two methods' global lists the fusion was computed
+	// from — each method merged by score across the answering slices, cut
+	// at [FuseN] — which is what this corpus answers a query with when it
+	// is one of several and somebody else fuses ([FuseCandidates]).
+	Candidates Candidates
 }
 
 // Partial reports whether part of the corpus went unscanned.
@@ -505,17 +511,12 @@ func fuseSlices(answers []Slice, table []Assigned, limit int) Answer {
 	}
 	slices.Sort(out.Absent)
 
-	keys := func(s []Scored) []string {
-		ids := make([]string, 0, len(s))
-		for _, one := range s {
-			ids = append(ids, one.Key)
-		}
-		return ids
+	out.Candidates = Candidates{
+		Lexical:         MergeByScore(lexical, FuseN),
+		Semantic:        MergeByScore(semantic, FuseN),
+		SemanticSkipped: out.SemanticSkipped,
 	}
-	fused := Fuse(
-		keys(MergeByScore(lexical, FuseN)),
-		keys(MergeByScore(semantic, FuseN)),
-	)
+	fused := FuseCandidates([]Candidates{out.Candidates})
 	if limit <= 0 {
 		limit = ReturnDepth
 	}
