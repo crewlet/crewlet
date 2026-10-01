@@ -53,6 +53,7 @@ import {
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { KeyCell, MeterCell, NumberCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, plural } from "~/lib/format.ts";
 import type { Tone } from "~/ui/primitives.tsx";
@@ -494,26 +495,29 @@ function PlacedEstateView({
               header: "",
               label: "Take out or put back",
               shrink: true,
-              cell: (m) => (
-                <span className="row gap-1">
-                  {m.probation && !m.out && (
+              cell: (m) =>
+                m.barred ? (
+                  <ReadmitPointer node={m.node} />
+                ) : (
+                  <span className="row gap-1">
+                    {m.probation && !m.out && (
+                      <Button
+                        variant="tertiary"
+                        size="small"
+                        onClick={() => setOpen({ kind: "member", node: m.node, out: false })}
+                      >
+                        Put back now
+                      </Button>
+                    )}
                     <Button
                       variant="tertiary"
                       size="small"
-                      onClick={() => setOpen({ kind: "member", node: m.node, out: false })}
+                      onClick={() => setOpen({ kind: "member", node: m.node, out: !m.out })}
                     >
-                      Put back now
+                      {m.out ? "Put back" : "Take out"}
                     </Button>
-                  )}
-                  <Button
-                    variant="tertiary"
-                    size="small"
-                    onClick={() => setOpen({ kind: "member", node: m.node, out: !m.out })}
-                  >
-                    {m.out ? "Put back" : "Take out"}
-                  </Button>
-                </span>
-              ),
+                  </span>
+                ),
             },
           ]}
         />
@@ -524,7 +528,11 @@ function PlacedEstateView({
                 <Callout key={b.node} variant="warning" role="status">
                   <InlineCode>{b.node}</InlineCode> is barred from the estate map by {b.by}
                   {b.reason ? ` (${b.reason})` : ""}: the map does not hold it, and should it come
-                  back it is placed on nothing until it is readmitted.
+                  back it is placed on nothing until it is readmitted from the{" "}
+                  <a className="prose-link" href={href(["admin", "fleet"])}>
+                    Fleet screen
+                  </a>
+                  .
                 </Callout>
               ))}
             </div>
@@ -699,6 +707,26 @@ function StoreCell({ lease, live }: { lease?: EstateLease; live: boolean }) {
     );
   }
   return <StatusCell glyph="●" label={`ok · ${fmtBytes(lease.free_bytes)} free`} tone="positive" />;
+}
+
+/**
+ * Where a barred member is put back: its READMISSION, on the Fleet screen's
+ * retention panel — never this screen's "Put back", which the engine refuses
+ * for a barred node (`barred_member`). The bar stands for the eviction on every
+ * log the node was counted on, and only the readmission knows when those have
+ * all taken it back; a button here that posted `/estate/in` would be one an
+ * operator clicks and is refused by every time.
+ */
+function ReadmitPointer({ node }: { node: string }) {
+  return (
+    <a
+      className="t-link"
+      href={href(["admin", "fleet"])}
+      title={`${node} is barred by an eviction: readmit it from the Fleet screen's retention panel, which puts it back in the map once every log has taken it back`}
+    >
+      Readmit on Fleet
+    </a>
+  );
 }
 
 /**

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { EstateView, estateSummary } from "./Estate.tsx";
-import { Router } from "~/app/router.tsx";
+import { Router, href } from "~/app/router.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
 import type { EstateGestureAnswer, FleetEstate, PlacedEstate } from "~/protocol/index.ts";
 
@@ -161,6 +161,13 @@ describe("a placed map", () => {
       .find(Boolean) as HTMLElement;
     expect(within(d).getByText("barred")).toBeTruthy();
     expect(within(d).queryByText("out")).toBeNull();
+    // NO PUT-BACK FOR A BARRED MEMBER: the engine refuses an in of one
+    // (`barred_member`), and only its readmission lifts the bar — so the
+    // row points there instead.
+    expect(within(d).queryByRole("button", { name: /Put back/ })).toBeNull();
+    expect(within(d).getByRole("link", { name: "Readmit on Fleet" }).getAttribute("href")).toBe(
+      href(["admin", "fleet"]),
+    );
     // data-x, never held, and data-e, which the map removed: each named once,
     // as barred — data-e is not also offered a removed node's "Put back now".
     expect(screen.getAllByText(/is barred from the estate map by founder/)).toHaveLength(2);
