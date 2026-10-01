@@ -119,13 +119,18 @@ const LISTING = "/setup/integrations";
 const RUNS = "/setup/integrations/jira/runs";
 const ONE = "/setup/integrations/jira/runs/r1";
 
+/**
+ * The listing as `code:hint:tools`, where tools is how many the listing holds
+ * — or `?` while it holds none it was ever told, which is NOT zero: a listing
+ * that never answered says nothing about what any tool needs.
+ */
 function Listing() {
   const setup = useSetup();
   return (
     <span data-testid="listing">
       {setup.loading
         ? "loading"
-        : `${setup.failure?.error ?? "ok"}:${hintOf(setup.failure)}:${setup.byKey.size}`}
+        : `${setup.failure?.error ?? "ok"}:${hintOf(setup.failure)}:${setup.byKey?.size ?? "?"}`}
     </span>
   );
 }
@@ -136,7 +141,7 @@ test("a listing the node could not read is read again when it says", async () =>
   answering({ [LISTING]: [unavailable(12), () => json({ tools: [] }, 200)] });
   render(<Listing />);
   await vi.waitFor(() =>
-    expect(screen.getByTestId("listing").textContent).toBe("unavailable:12:0"),
+    expect(screen.getByTestId("listing").textContent).toBe("unavailable:12:?"),
   );
   await wait(20_000);
   expect(gaps(LISTING)).toEqual([12]);
@@ -146,7 +151,7 @@ test("a listing the node could not read is read again when it says", async () =>
 test("a listing the engine said waiting will not clear is not read again on a timer", async () => {
   answering({ [LISTING]: [unavailable()] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unavailable:0:0"));
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unavailable:0:?"));
   await wait(600_000);
   expect(reads(LISTING)).toBe(1);
 });
@@ -307,7 +312,7 @@ test.each([
 ])("a listing that failed with %s says so", async (_, answer, code) => {
   answering({ [LISTING]: [answer] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe(`${code}:-:0`));
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe(`${code}:-:?`));
 });
 
 // A READ NO ANSWER CAME BACK TO IS ASKED AGAIN ON ITS OWN, with the live socket
@@ -319,7 +324,7 @@ test("a read that never arrived is asked again on its own while the socket stays
   act(() => store.setConnected(true));
   answering({ [LISTING]: [dropped, dropped, dropped, () => json({ tools: [] }, 200)] });
   render(<Listing />);
-  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unanswered:-:0"));
+  await vi.waitFor(() => expect(screen.getByTestId("listing").textContent).toBe("unanswered:-:?"));
   await wait(600_000);
   expect(gaps(LISTING)).toEqual([1, 2, 4]);
   expect(screen.getByTestId("listing").textContent).toBe("ok:-:0");

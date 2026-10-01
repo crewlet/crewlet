@@ -264,6 +264,7 @@ test("a tool reports its least ready surface, and names it", () => {
         reconcile: { phase: "degraded", actor: "admin", detail: "swe has no Jira account" },
       },
     ),
+    [],
   );
   expect(state.tag).toBe("degraded");
   expect(state.tone).toBe("warning");
@@ -273,7 +274,7 @@ test("a tool reports its least ready surface, and names it", () => {
 // is what says so on a collapsed card. Which surface, and why, is the note in
 // the body: the header line is the tool's name, not its latest complaint.
 test("a surface whose secret did not resolve colours the tag", () => {
-  const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
+  const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }), []);
   expect(state.tag).toBe("Connecting");
   expect(state.tone).toBe("warning");
 });
@@ -284,6 +285,7 @@ test("a ready tool is drawn ready", () => {
   const state = rollUp(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready", detail: "3 seats" } }),
+    [],
   );
   expect(state.tag).toBe("ready");
   expect(state.tone).not.toBe("warning");
@@ -297,15 +299,15 @@ test("absent, paused and connecting are told apart", () => {
   // NO TAG at all: the Connect button beside it is the whole message, and a
   // chip saying "not connected" on every unconfigured row reads as a fault
   // list rather than a catalogue.
-  expect(rollUp(slack, rowsOf()).tag).toBe("");
-  expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false })).tag).toBe(
+  expect(rollUp(slack, rowsOf(), []).tag).toBe("");
+  expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false }), []).tag).toBe(
     "Paused",
   );
   // Configured with no report behind it is NOT "connected": there is no
   // measured claim, and inventing one is the whole failure this screen is
   // built to avoid. It is the window between connecting and the loop's first
   // pass, and it says so.
-  const connecting = rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true }));
+  const connecting = rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true }), []);
   expect(connecting.tag).toBe("Connecting");
   expect(connecting.tone).toBe("warning");
 });
@@ -320,6 +322,7 @@ test("an unknown phase is never the tool's ready state", () => {
       { key: "jira", configured: true, reconcile: { phase: "ready" } },
       { key: "confluence", configured: true, reconcile: { phase: "something_new" } },
     ),
+    [],
   );
   expect(unknown.tag).toBe("something new");
   expect(unknown.tone).not.toBe("success");
@@ -330,6 +333,7 @@ test("an unknown phase is never the tool's ready state", () => {
       { key: "jira", configured: true, reconcile: { phase: "degraded", detail: "x" } },
       { key: "confluence", configured: true, reconcile: { phase: "something_new" } },
     ),
+    [],
   );
   expect(broken.tag).toBe("degraded");
 });
@@ -343,6 +347,7 @@ test("an unknown phase is never the tool's ready state", () => {
 test("a working surface adds nothing to the card", () => {
   render(
     <EntryRow
+      sections={[]}
       entry={atlassian}
       rows={rowsOf(
         {
@@ -368,6 +373,7 @@ test("a working surface adds nothing to the card", () => {
 test("a faulted surface says what is wrong and which surface it is", () => {
   render(
     <EntryRow
+      sections={[]}
       entry={atlassian}
       rows={rowsOf(
         { key: "jira", configured: true, reconcile: { phase: "ready" } },
@@ -405,7 +411,7 @@ test("a card's header says what the tool is, not what is wrong with it", () => {
       detail: "sre-lead has no GitHub App of its own",
     },
   });
-  render(<EntryRow entry={CATALOG.find((e) => e.key === "github")!} rows={rows} />);
+  render(<EntryRow sections={[]} entry={CATALOG.find((e) => e.key === "github")!} rows={rows} />);
 
   // THE CATALOGUE'S OWN LINE, and only it.
   expect(screen.getByText("Code and pull requests")).toBeTruthy();
@@ -421,7 +427,7 @@ test("a card's header says what the tool is, not what is wrong with it", () => {
 // A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a
 // chevron that opens an empty box is a control that lies.
 test("an absent tool is a plain card with no disclosure and no badge", () => {
-  const { container } = render(<EntryRow entry={slack} rows={rowsOf()} />);
+  const { container } = render(<EntryRow sections={[]} entry={slack} rows={rowsOf()} />);
   // NO STATUS BADGE. Nothing has been configured, so there is nothing to
   // report; the Connect button is the whole message.
   // uilet's pill, which is what the status badge is drawn from now.
@@ -447,6 +453,7 @@ test("a ready tool with a refused secret is not drawn ready", () => {
       secret_usable: false,
       reconcile: { phase: "ready" },
     }),
+    [],
   );
   // CONNECTED IS ONLY EVER GREEN, so a card nothing can reach does not wear
   // the word at all. Drawn as the engine's word in a colour that disagreed
@@ -473,6 +480,7 @@ test("nothing draws Connected in a colour that disagrees with it", () => {
           routes,
           reconcile: { phase: "ready", phase_label: "Connected" },
         }),
+        [],
       );
       if (state.tag === "Connected") expect(state.tone).toBe("success");
       // And the card that cannot say Connected says what is true instead.
@@ -500,6 +508,7 @@ test("an ingress fault does not overwrite a phase that says more", () => {
         secret_usable: false,
         reconcile: { phase, phase_label: `label:${phase}` },
       }),
+      [],
     );
     expect([phase, state.tag]).toEqual([phase, `label:${phase}`]);
   }
@@ -511,6 +520,7 @@ test("a ready tool that routes nothing is not drawn ready", () => {
   const state = rollUp(
     CATALOG.find((e) => e.key === "datadog")!,
     rowsOf({ key: "datadog", configured: true, routes: false, reconcile: { phase: "ready" } }),
+    [],
   );
   expect(state.tag).toBe("Action needed");
   expect(state.tone).toBe("warning");
@@ -526,6 +536,7 @@ test("a phase the engine is working through is not drawn as a fault", () => {
       configured: true,
       reconcile: { phase: "activating", actor: "engine", detail: "Atlassian is applying it" },
     }),
+    [],
   );
   expect(state.tone).not.toBe("danger");
 });
@@ -544,6 +555,7 @@ test("the phase order is the engine's", () => {
         reconcile: { phase: "activating", detail: "coming up" },
       },
     ),
+    [],
   );
   expect(state.tag).toBe("activating");
 });
@@ -572,6 +584,7 @@ test("the action follows the state", () => {
   const ready = rollUp(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
+    [],
   );
   // A TOOL NOBODY HAS CONNECTED: neither half has it, which is what makes
   // Connect the answer. Passing present=true here would be a card whose rows
@@ -596,6 +609,7 @@ test("the action follows the state", () => {
       configured: true,
       reconcile: { phase: "degraded", actor: "admin", detail: "x" },
     }),
+    [],
   );
   expect(actionFor(owed, [toolState({})], true)).toBeNull();
 });
@@ -610,7 +624,7 @@ test("the action follows the state", () => {
 // way until somebody refreshed the page by hand.
 test("a card the rows say is gone offers to connect it again", () => {
   const github = CATALOG.find((e) => e.key === "github")!;
-  const gone = rollUp(github, rowsOf());
+  const gone = rollUp(github, rowsOf(), []);
   expect(gone.tag).toBe("");
   // The listing has not caught up and still calls it configured.
   expect(actionFor(gone, [toolState({ key: "github", configured: true })], false)?.label).toBe(
@@ -620,7 +634,7 @@ test("a card the rows say is gone offers to connect it again", () => {
   // AND THE OTHER DIRECTION IS UNCHANGED: straight after a connect the rows
   // hold the surface while the listing is still the pre-connect one, and a
   // card then drew Connect beside a tag reading Connected.
-  const fresh = rollUp(github, rowsOf({ key: "github", configured: true }));
+  const fresh = rollUp(github, rowsOf({ key: "github", configured: true }), []);
   expect(actionFor(fresh, [toolState({ key: "github", configured: false })], true)).toBeNull();
 });
 
@@ -634,7 +648,7 @@ test("a card the rows say is gone offers to connect it again", () => {
 // saved, which is the moment the loop had least to say.
 test("a card the engine is mid-flight on offers no action", () => {
   // CONNECTED AND UNREPORTED: the window after a save.
-  const connecting = rollUp(atlassian, rowsOf({ key: "atlassian", configured: true }));
+  const connecting = rollUp(atlassian, rowsOf({ key: "atlassian", configured: true }), []);
   expect(connecting.tag).toBe("Connecting");
   // Atlassian is three surfaces, so the other two are unconfigured and this
   // is exactly the card that drew Continue beside Connecting.
@@ -654,6 +668,7 @@ test("a card the engine is mid-flight on offers no action", () => {
       configured: true,
       reconcile: { phase: "ready", disconnecting: true },
     }),
+    [],
   );
   expect(actionFor(going, [toolState({ configured: false })], true)).toBeNull();
 });
@@ -666,6 +681,7 @@ test("one unfinished surface makes the whole tool unfinished", () => {
   const ready = rollUp(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
+    [],
   );
   const mixed = actionFor(
     ready,
@@ -714,7 +730,7 @@ test("one unfinished surface makes the whole tool unfinished", () => {
 // A tool this build knows nothing about offers nothing: a button that
 // discovers on a press that there is no surface behind it is worse than none.
 test("a tool with no setup surface offers no action", () => {
-  const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
+  const state = rollUp(slack, rowsOf({ key: "slack", configured: true }), []);
   expect(actionFor(state, [], true)).toBeNull();
 });
 
@@ -805,6 +821,7 @@ test("a per-seat app leaves the work to the agent's own row", () => {
   const state = rollUp(
     slack,
     rowsOf({ key: "slack", configured: true, reconcile: { phase: "ready" } }),
+    [],
   );
   // GITHUB'S SHAPE: unfinished, and with nothing left to type. Both acts that
   // produce an agent's app happen at GitHub, from that agent's own row, so a
@@ -1138,6 +1155,7 @@ test("disconnect skips the surfaces this company does not have", () => {
 test("a dropped delivery is stated, not counted", () => {
   render(
     <EntryRow
+      sections={[]}
       entry={CATALOG.find((e) => e.key === "github")!}
       rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 3 })}
     />,
@@ -1151,6 +1169,7 @@ test("a dropped delivery is stated, not counted", () => {
 test("a surface dropping nothing carries no note about it", () => {
   render(
     <EntryRow
+      sections={[]}
       entry={CATALOG.find((e) => e.key === "github")!}
       rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 0 })}
     />,
@@ -1165,7 +1184,7 @@ test("a surface dropping nothing carries no note about it", () => {
 // control for it. Otherwise a catalogue of six unconfigured third-party apps
 // would carry six buttons that undo nothing.
 test("an unconfigured tool offers no disconnect", () => {
-  render(<EntryRow entry={slack} rows={rowsOf()} onDisconnect={() => {}} />);
+  render(<EntryRow sections={[]} entry={slack} rows={rowsOf()} onDisconnect={() => {}} />);
   expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
 });
 
@@ -1175,6 +1194,7 @@ test("a connected tool offers a disconnect", () => {
   const asked: string[] = [];
   render(
     <EntryRow
+      sections={[]}
       entry={CATALOG.find((e) => e.key === "github")!}
       rows={rowsOf({ key: "github", configured: true })}
       onDisconnect={() => asked.push("github")}
@@ -1202,6 +1222,7 @@ test("a disconnect that has been asked for reads as Disconnecting", () => {
       // intent set, and the phase still the last reconcile's.
       reconcile: { phase: "ready", disconnecting: true },
     }),
+    [],
   );
   expect(state.tag).toBe("Disconnecting");
   // NEUTRAL: the engine is doing it and nobody is owed anything, so a card
@@ -1218,6 +1239,7 @@ test("a teardown outranks a failing surface", () => {
       { key: "jira", configured: true, reconcile: { phase: "unconfigured" } },
       { key: "confluence", configured: true, reconcile: { phase: "ready", disconnecting: true } },
     ),
+    [],
   );
   expect(state.tag).toBe("Disconnecting");
 });
@@ -1304,6 +1326,7 @@ test("a stale setup listing offers nothing rather than contradicting the tag", (
   const connected = rollUp(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
+    [],
   );
   const behind = [
     toolState({ key: "atlassian", configured: false }),
@@ -1598,7 +1621,7 @@ function Probe() {
   const setup = useSetup();
   return (
     <span data-testid="probe">
-      {setup.loading ? "loading" : "ready"}:{[...setup.byKey.keys()].join(",")}
+      {setup.loading ? "loading" : "ready"}:{[...(setup.byKey?.keys() ?? [])].join(",")}
     </span>
   );
 }
@@ -1711,6 +1734,46 @@ test("a tool with no provisioning pass reports from what can be seen", () => {
   expect(withPass.tag).toBe("Connecting");
 });
 
+// A LISTING NOBODY HAS READ IS NOT AN EMPTY ONE. Whether anything converges a
+// tool is the listing's to say, so where it has not said — loading, refused,
+// failed before it ever answered — the tag that turns on it is not drawn at
+// all: it defaulted to an empty list, and Slack read "Connecting" in amber for
+// as long as the listing was missing. Every tag the ROWS decide alone is still
+// drawn, because none of them waits on the listing.
+test("a tool whose listing is not known draws no tag that turns on the listing", () => {
+  const routing = rowsOf({ key: "slack", configured: true, enabled: true, routes: true });
+  const unknown = rollUp(slack, routing, null);
+  expect(unknown.tag).toBe("");
+  // NOT BUSY EITHER: busy takes the card's controls away, over a fact nobody
+  // has read.
+  expect(unknown.busy).toBeFalsy();
+  // An empty listing is an answer, and keeps the window it has always meant.
+  expect(rollUp(slack, routing, []).tag).toBe("Connecting");
+
+  // THE ROWS' OWN TAGS STAND, listing or none.
+  expect(
+    rollUp(
+      atlassian,
+      rowsOf({ key: "jira", configured: true, reconcile: { phase: "degraded" } }),
+      null,
+    ).tag,
+  ).toBe("degraded");
+  expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false }), null).tag).toBe(
+    "Paused",
+  );
+  expect(
+    rollUp(
+      slack,
+      rowsOf({
+        key: "slack",
+        configured: true,
+        reconcile: { phase: "ready", disconnecting: true },
+      }),
+      null,
+    ).tag,
+  ).toBe("Disconnecting");
+});
+
 // ONE AGENT, ONE ROW.
 //
 // A per-seat app contributes one section per agent and they all carry the same
@@ -1784,6 +1847,7 @@ test("a surface registered at a moved address needs action", () => {
       endpoint_current: false,
       reconcile: { phase: "ready" },
     }),
+    [],
   );
   expect(moved.tag).toBe("Action needed");
   expect(moved.tone).toBe("warning");
@@ -1801,6 +1865,7 @@ test("a surface registered at a moved address needs action", () => {
       endpoint_current: null,
       reconcile: { phase: "ready" },
     }),
+    [],
   );
   expect(unknown.tag).not.toBe("Action needed");
 });

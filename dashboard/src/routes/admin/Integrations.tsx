@@ -69,7 +69,7 @@ import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { SetupDialog } from "./SetupDialog.tsx";
+import { SetupDialog, type SetupSection } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { rest, RestError, type RestFailure } from "~/protocol/index.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -321,7 +321,19 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
 export function rollUp(
   entry: Entry,
   rows: Map<string, IntegrationRow>,
-  tools: SetupToolState[] = [],
+  /**
+   * The engine's setup state for each tool this entry is made of, from the
+   * setup listing ([toolsOf]) — or NULL WHILE THAT LISTING IS NOT KNOWN: not
+   * answered yet, refused, or failed before it ever answered.
+   *
+   * THREE-VALUED AND REQUIRED. An empty list is an ANSWER — the listing names
+   * no tool here — and a missing one is not, and this argument used to
+   * default to the empty list, so every caller holding no listing drew the
+   * tag of a listing that had answered. On Slack, whose loop writes no status
+   * row ever, that tag was Connecting, in amber, for as long as the listing
+   * was loading, refused or failed.
+   */
+  tools: SetupToolState[] | null,
 ): EntryState {
   const present = presentSurfaces(entry, rows);
   if (present.length === 0) {
@@ -423,6 +435,13 @@ export function rollUp(
   if (present.every((p) => p.row.enabled === false)) {
     return { tag: "Paused", tone: "neutral", outline: true };
   }
+  // EVERYTHING BELOW TURNS ON THE LISTING, and with no listing it is not
+  // known which of its answers is true: whether anything converges this tool
+  // is what decides between "connected" and "the loop has not reported yet".
+  // So no tag at all, and not busy either — busy would take the card's
+  // controls away over a fact nobody has read. The banner beside the card
+  // says why the listing is missing, and the tag arrives with the listing.
+  if (tools === null) return { tag: "", tone: "neutral", outline: true };
   // A SURFACE NO PASS CONVERGES NEVER REPORTS, so "the loop has not got to
   // it yet" is a permanent claim about it rather than a window.
   //
@@ -1147,6 +1166,19 @@ export function actionFor(
 }
 
 /**
+ * The tools one card's sections are made of, each ONCE — or null where the
+ * sections are not known, which is what [rollUp] needs told apart from none.
+ *
+ * BY KEY, because a per-seat app contributes one section per agent and they
+ * all carry the same tool: counted once per section, a roster of one agent
+ * rendered four rows on the Atlassian card.
+ */
+export function toolsOf(sections: SetupSection[] | null): SetupToolState[] | null {
+  if (sections === null) return null;
+  return [...new Map(sections.map((section) => [section.tool.key, section.tool])).values()];
+}
+
+/**
  * The sections of one tool's dialog: the surfaces the engine reaches it over,
  * and for a third-party app whose credentials live on the SEAT, one per agent.
  *
@@ -1362,8 +1394,12 @@ export function EntryRow({
    * row that has to say what a moved registration should be changed to.
    */
   publicBase?: string;
-  /** The engine's setup state per surface this tool is made of. */
-  sections?: { name: string; tool: SetupToolState }[];
+  /**
+   * The engine's setup state per surface this tool is made of, or NULL while
+   * the setup listing is not known — required, because an empty list is the
+   * listing's answer and a missing one is not. See [rollUp].
+   */
+  sections: SetupSection[] | null;
   /**
    * Whether something above this card already names the tool and states it.
    *
@@ -1383,14 +1419,12 @@ export function EntryRow({
   const [open, setOpen] = useState(false);
   const present = presentSurfaces(entry, rows);
   const absent = present.length === 0;
-  // BY KEY, because a per-seat app contributes one section per agent and
-  // they all carry the same tool. Counting it once per section made a
-  // roster of one agent render four rows on the Atlassian card.
-  const tools = [...new Map((sections ?? []).map((s) => [s.tool.key, s.tool])).values()];
+  const tools = toolsOf(sections);
   // THE TAG NEEDS THEM TOO: whether anything converges this tool decides
   // whether a missing reconcile row is a window or a resting state.
   const state = rollUp(entry, rows, tools);
-  const action = actionFor(state, tools, !absent);
+  // NOTHING TO OFFER WITHOUT THEM: every action is a form the listing fills.
+  const action = actionFor(state, tools ?? [], !absent);
   // ONE ROW PER AGENT, whatever the card is made of.
   //
   // A company with one agent saw THREE rows on Atlassian — Organization,
@@ -1413,7 +1447,7 @@ export function EntryRow({
   // and that Atlassian was still setting it up, with the same agent's row
   // underneath badged ready, because the ${VAR} resolved.
   const seatNotes = seatFindings(present);
-  const rosters = tools.filter((t) => (t.seats ?? []).length > 0);
+  const rosters = (tools ?? []).filter((t) => (t.seats ?? []).length > 0);
   const roster =
     rosters.find((t) => t.seats_required) ?? rosters.find((t) => t.can_provision) ?? rosters[0];
   const seats = roster?.seats ?? [];
@@ -1761,7 +1795,13 @@ function setupState<T>(read: RestRead<T>): {
  * the operator has no token still gets the whole screen, minus the buttons.
  */
 export function useSetup(): {
-  byKey: Map<string, SetupToolState>;
+  /**
+   * Each tool's setup state by surface key — or NULL while the listing is not
+   * known: not answered yet, refused, or failed before it ever answered. A
+   * failed re-read keeps the last answer, so this is null only where nothing
+   * has said what the tools need. See [rollUp] for why it is not empty.
+   */
+  byKey: Map<string, SetupToolState> | null;
   base: SetupListing["external_url"] | null;
   guarded: boolean;
   /** The grants the refusal named, when [guarded] — see [needsSentence]. */
@@ -1814,12 +1854,63 @@ export function useSetup(): {
   const { refetch } = read;
   const reload = useCallback(() => refetch(true), [refetch]);
   return {
-    byKey: new Map((read.data?.tools ?? []).map((t) => [t.key, t])),
+    byKey: read.data ? new Map((read.data.tools ?? []).map((t) => [t.key, t])) : null,
     base: read.data?.external_url ?? null,
     ...setupState(read),
     loading: read.loading,
     reload,
   };
+}
+
+/**
+ * What the setup listing could not say, as a banner — ONE for both frames
+ * that read it, the screen and the peek.
+ *
+ * THE PEEK HAD NONE. It read the listing for the tag and drew nothing of its
+ * waiting, its refusal or its failure, so a card whose listing was refused
+ * said "Connecting" in amber with nothing on the rail to say why. Nothing
+ * while it is first loading: [rollUp] draws no tag that turns on the listing
+ * until it answers, and the screen's skeleton already covers the wait.
+ */
+function SetupListingState({
+  setup,
+}: {
+  setup: Pick<ReturnType<typeof useSetup>, "guarded" | "needs" | "failure">;
+}) {
+  if (setup.guarded) {
+    return (
+      <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+        {/* THE READ THAT WAS REFUSED, named as such: the listing is what
+            says what each integration still needs, and its refusal names
+            the grant IT takes. Connecting takes more, which the connect
+            route names when it is asked. */}
+        <span>
+          {needsSentence("Reading the integrations' setup state", setup.needs)} This screen shows
+          what it can read without it, and offers no way to connect.
+        </span>
+        <span className="spacer" />
+        {/* The same door QueryState opens, for the same reason: a banner
+            that only NAMES the missing grant leaves the reader with nothing
+            on the page that can act on it. */}
+        <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
+          Sign in
+        </Button>
+      </Callout>
+    );
+  }
+  // A LISTING THAT COULD NOT BE READ, which is not a company with nothing to
+  // set up: a card offers no way to connect until the listing has answered
+  // once — a re-read that failed keeps the last answer, as every read does —
+  // and the banner says why — a node that cannot answer yet or refuses until
+  // somebody acts, a request no answer came back to, a fault — and whether
+  // the read asks again on its own. Any failure but a refusal on authority
+  // drew nothing here but that `503`.
+  if (setup.failure) {
+    return (
+      <QueryState error={setup.failure.error} refusal={setup.failure.refusal} loading={false} />
+    );
+  }
+  return null;
 }
 
 /**
@@ -2701,7 +2792,11 @@ export function IntegrationPeek({ kind }: { kind: string }) {
   // CONVERGES a surface decides whether a missing reconcile row is a window or
   // a resting state, and without it Slack — whose apps are made by hand and
   // whose loop writes no status row, ever — reports "Connecting" for as long
-  // as it is configured. See [rollUp].
+  // as it is configured. See [rollUp]. And what it could NOT say is drawn here
+  // too, as the screen draws it ([SetupListingState]): the peek read the
+  // listing and showed none of its waiting, refusal or failure, so its tag
+  // was computed from the socket's half alone and a reader had nothing to
+  // tell them why.
   const setup = useSetup();
   const rows = useMemo(
     () => new Map((data?.integrations ?? []).map((row) => [row.key, row])),
@@ -2721,11 +2816,10 @@ export function IntegrationPeek({ kind }: { kind: string }) {
   }
 
   const present = presentSurfaces(entry, rows);
-  // BY KEY, because a per-seat app contributes one section per agent and they
-  // all carry the same tool — see [EntryRow], which counts them the same way.
-  const tools = [
-    ...new Map(sectionsFor(entry, setup.byKey).map((s) => [s.tool.key, s.tool])).values(),
-  ];
+  // NOT KNOWN UNTIL THE LISTING HAS ANSWERED, and [rollUp] draws no tag that
+  // turns on it until then — see [toolsOf], which counts them as [EntryRow]
+  // does.
+  const tools = toolsOf(setup.byKey ? sectionsFor(entry, setup.byKey) : null);
   const state = rollUp(entry, rows, tools);
   const findings = openFindings(present);
 
@@ -2758,6 +2852,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         }
       />
       <div className="col gap-3">
+        <SetupListingState setup={setup} />
         {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
         <QueryState error={error} refusal={refusal} loading={loading}>
           {data && present.length === 0 && (
@@ -2973,10 +3068,13 @@ export function Integrations({ kind }: { kind?: string }) {
   // THE HEADER'S OWN ROLL-UP, derived exactly as a card derives its own — the
   // state of a tool is the least ready of its surfaces, and a page and a card
   // disagreeing about that would be two answers to one question on one screen.
-  const focusTools = focus
-    ? [...new Map(sectionsFor(focus, setup.byKey).map((s) => [s.tool.key, s.tool])).values()]
-    : [];
-  const focusState = focus ? rollUp(focus, rows, focusTools) : undefined;
+  //
+  // ONE CARD'S SECTIONS, or null while the listing is not known — which is
+  // what keeps a card and this header from drawing the tag of a listing that
+  // has not answered. See [rollUp].
+  const sectionsOf = (entry: Entry): SetupSection[] | null =>
+    setup.byKey ? sectionsFor(entry, setup.byKey) : null;
+  const focusState = focus ? rollUp(focus, rows, toolsOf(sectionsOf(focus))) : undefined;
   // WHICH SURFACES OF THIS TOOL A PASS CAN EVEN RUN AGAINST, which is what the
   // runs route is keyed on: `integration.Kinds`, the same set the setup
   // listing carries and the same set `DELETE /setup/integrations/{kind}`
@@ -2988,9 +3086,10 @@ export function Integrations({ kind }: { kind?: string }) {
   // to hold none of them is a refused or unfinished read — and a passes panel
   // drawn from that would report "no pass has run" about a question it never
   // asked.
-  const focusKinds = focus
-    ? focus.surfaces.filter((s) => setup.byKey.has(s.key)).map((s) => s.key)
-    : [];
+  const focusKinds =
+    focus && setup.byKey
+      ? focus.surfaces.filter((s) => setup.byKey!.has(s.key)).map((s) => s.key)
+      : [];
   // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
   // engine mid-flight, and the screen's job while that is true is to keep
   // looking. Derived from what arrived rather than from what was clicked, so
@@ -3031,36 +3130,7 @@ export function Integrations({ kind }: { kind?: string }) {
           </span>
         </Callout>
       )}
-      {setup.guarded && (
-        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          {/* THE READ THAT WAS REFUSED, named as such: the listing is what
-              says what each integration still needs, and its refusal names
-              the grant IT takes. Connecting takes more, which the connect
-              route names when it is asked. */}
-          <span>
-            {needsSentence("Reading the integrations' setup state", setup.needs)} This screen shows
-            what it can read without it, and offers no way to connect.
-          </span>
-          <span className="spacer" />
-          {/* The same door QueryState opens, for the same reason: a banner
-              that only NAMES the missing grant leaves the reader with nothing
-              on the page that can act on it. */}
-          <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
-            Sign in
-          </Button>
-        </Callout>
-      )}
-      {/* A LISTING THAT COULD NOT BE READ, which is not a company with
-          nothing to set up: a card offers no way to connect until the listing
-          has answered once — a re-read that failed keeps the last answer, as
-          every read does — and the banner says why — a node that cannot answer
-          yet or refuses until somebody acts, a request no answer came back
-          to, a fault — and whether this screen reads again on its own. Any
-          failure but a refusal on authority drew nothing here but that
-          `503`. */}
-      {setup.failure && (
-        <QueryState error={setup.failure.error} refusal={setup.failure.refusal} loading={false} />
-      )}
+      <SetupListingState setup={setup} />
 
       {/* ONE OBJECT, ONE HEADER. `#/admin/integrations/{kind}` is a page about
           a single tool, and it opened with the catalogue's chrome and a card:
@@ -3173,13 +3243,13 @@ export function Integrations({ kind }: { kind?: string }) {
                 key={entry.key}
                 entry={entry}
                 rows={rows}
-                sections={sectionsFor(entry, setup.byKey)}
+                sections={sectionsOf(entry)}
                 publicBase={setup.base?.value}
                 titled={Boolean(focus)}
                 onConnect={() =>
                   setDialog({
                     title: entry.name,
-                    sections: sectionsFor(entry, setup.byKey),
+                    sections: sectionsOf(entry) ?? [],
                   })
                 }
                 onDisconnect={() =>
@@ -3193,7 +3263,7 @@ export function Integrations({ kind }: { kind?: string }) {
                     // removed, and the card still read Connected because
                     // Jira and Confluence were untouched. A person pressing
                     // Disconnect on a card means the card.
-                    kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
+                    kinds: disconnectOrder(entry, rows, sectionsOf(entry) ?? []),
                     stuck: stuckDisconnecting(entry, rows),
                     // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
                     // manage link only where what it holds has to be removed
@@ -3204,11 +3274,7 @@ export function Integrations({ kind }: { kind?: string }) {
                     // walking the sections listed the whole roster once per
                     // section: one agent, two rows, and a company of ten
                     // agents a hundred.
-                    apps: [
-                      ...new Map(
-                        sectionsFor(entry, setup.byKey).map((s) => [s.tool.key, s.tool]),
-                      ).values(),
-                    ]
+                    apps: (toolsOf(sectionsOf(entry)) ?? [])
                       .flatMap((tool) => tool.seats ?? [])
                       .filter((seat) => seat.manage_url)
                       .map((seat) => ({
@@ -3222,8 +3288,7 @@ export function Integrations({ kind }: { kind?: string }) {
                     // WHAT IS LEFT TO CLICK once the link has opened, in the
                     // app's own words. Stated once, because it is the same
                     // for every agent.
-                    appPath: sectionsFor(entry, setup.byKey).find((s) => s.tool.manage_path)?.tool
-                      .manage_path,
+                    appPath: sectionsOf(entry)?.find((s) => s.tool.manage_path)?.tool.manage_path,
                   })
                 }
               />
