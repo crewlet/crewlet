@@ -34,7 +34,7 @@ func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("countedOn: %v", err)
 		}
-		return n
+		return len(n)
 	}
 	before := count(now)
 
@@ -101,8 +101,8 @@ func TestAnUnansweredPresenceViewCountsTheRegisterAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an unanswered presence view failed the count: %v", err)
 	}
-	if n != 2 {
-		t.Errorf("counted %d, want the register's two rows", n)
+	if len(n) != 2 {
+		t.Errorf("counted %v, want the register's two rows", n)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestAStaleEstateViewCountsTheRegisterAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("countedOn: %v", err)
 		}
-		return n
+		return len(n)
 	}
 	if got := count(); got != 2 {
 		t.Fatalf("a fresh view counts %d on tracker.000, want its server and its joiner", got)

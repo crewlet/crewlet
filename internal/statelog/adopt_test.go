@@ -174,7 +174,7 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 		Dir:           snapDir,
 		NodeID:        "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 3, nil },
+		Recipients:    func(context.Context) (int, error) { return 2, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -193,8 +193,8 @@ func newJoinHarnessFrom(t *testing.T, from joinDonor) *joinHarness {
 
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor", Layout: statelog.EstateLayout(from.domain.Name()),
-		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
-		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
+		Keeps: statelog.KeepsOnly(statelog.EstatePartition).Keeps,
+		Dial:  func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
 		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) {
 			h.answered.CompareAndSwap(0, time.Now().UnixNano())
 			return h.manifest, true
@@ -807,7 +807,7 @@ func (h *joinHarness) addDonor(t *testing.T, nodeID string) {
 	t.Helper()
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: nodeID, Layout: statelog.EstateLayout(probeDomain{}.Name()),
-		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
+		Keeps:  statelog.KeepsOnly(statelog.EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return h.broker.DialOwned() },
 		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return h.manifest, true },
 		Path:   func(statelog.Manifest) string { return h.snapPath },

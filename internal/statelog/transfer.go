@@ -276,11 +276,19 @@ type DonorDeps struct {
 	// partition is not one it answers.
 	Layout Layout
 
-	// Serves is whether this node SERVES a partition now — the only
-	// partitions it donates ([Holding]): a node still joining one holds a
-	// copy that is not yet the partition's, and one leaving it has stopped
-	// answering for it. An error answers nothing.
-	Serves func(p PartitionID) (bool, error)
+	// Keeps is whether this node KEEPS AN ESTABLISHED COPY of a partition
+	// now — the only partitions it donates ([Copies]): a node still
+	// installing a fetched file holds no copy yet, and one whose leave has
+	// begun to drain is giving it up. An error answers nothing.
+	//
+	// NOT whether it may write the partition ([Holding]): what a donor
+	// hands over is a copy, which is the same on every node that applies
+	// the log, and the copy a partition is short of is often one nobody
+	// may write — a barred machine back with its files, the last server
+	// of a partition the map is moving. Held to the write rule, a joiner
+	// of such a partition had no donor, and the partition never had a
+	// serving holder again.
+	Keeps func(p PartitionID) (bool, error)
 
 	// Dial opens the transfer's own connection.
 	Dial Dialer
@@ -313,8 +321,8 @@ func NewDonor(d DonorDeps) (*Donor, error) {
 		return nil, fmt.Errorf("statelog: a donor cannot open a transfer connection")
 	case d.Newest == nil || d.Path == nil:
 		return nil, fmt.Errorf("statelog: a donor has nothing to offer")
-	case d.Serves == nil:
-		return nil, fmt.Errorf("statelog: a donor cannot tell which partitions it serves")
+	case d.Keeps == nil:
+		return nil, fmt.Errorf("statelog: a donor cannot tell which partitions it keeps a copy of")
 	case len(d.Layout.Partitions()) == 0:
 		// NOT [Layout.Validate], which is asked where a layout is made:
 		// the donor needs only which partitions the layout has — and a
@@ -365,7 +373,7 @@ func (d *Donor) Serve(ctx context.Context) error {
 // takes the best answer: a node with nothing to donate has nothing to say, and
 // an explicit "no" would only make the joiner wait for it. It says nothing
 // for a request naming no partition of its layout ([OfferRequest.Target]), a
-// partition it does not serve, or one it holds no artefact of.
+// partition it keeps no copy of, or one it holds no artefact of.
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 	m, ok := d.offer(ctx, msg.Data)
 	if !ok {
@@ -385,7 +393,7 @@ func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 
 // offer is this node's artefact for the request in body, and false when it has
 // none to offer: a request it cannot read, one naming no partition of its
-// layout, a partition it does not serve, or one it holds no artefact of.
+// layout, a partition it keeps no copy of, or one it holds no artefact of.
 func (d *Donor) offer(ctx context.Context, body []byte) (Manifest, bool) {
 	var req OfferRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -400,7 +408,7 @@ func (d *Donor) offer(ctx context.Context, body []byte) (Manifest, bool) {
 			"node", d.deps.NodeID, "asker", req.NodeID, "error", err.Error())
 		return Manifest{}, false
 	}
-	if serves, err := d.deps.Serves(p); err != nil || !serves {
+	if keeps, err := d.deps.Keeps(p); err != nil || !keeps {
 		return Manifest{}, false
 	}
 	return d.deps.Newest(p)
@@ -433,9 +441,9 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 			"donor answers for: %v", err))
 		return
 	}
-	serves, err := d.deps.Serves(p)
-	if err != nil || !serves {
-		d.terminate(nc, deliver, 404, fmt.Sprintf("this node does not serve %s", p))
+	keeps, err := d.deps.Keeps(p)
+	if err != nil || !keeps {
+		d.terminate(nc, deliver, 404, fmt.Sprintf("this node keeps no copy of %s", p))
 		return
 	}
 	m, ok := d.deps.Newest(p)

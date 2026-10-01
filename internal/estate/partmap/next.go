@@ -486,7 +486,9 @@ func (c *converging) settle(g int) {
 	// leave's own check keeps the copy on its disk while the target does
 	// not serve the partition — rather than being routed to while the
 	// target is still joining, which on a fleet taking its copies one
-	// transfer at a time is for hours.
+	// transfer at a time is for hours. Kept, it is still DONATED
+	// ([statelog.Copies]): the copy is faithful, and where it is the
+	// partition's only one it is what the target's joiner adopts.
 	for _, node := range c.reporting {
 		if !c.draw.Holds(node) || !c.able[node] || holderOf(p, node) != nil {
 			continue

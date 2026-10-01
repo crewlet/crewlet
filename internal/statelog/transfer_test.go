@@ -77,7 +77,7 @@ func newTransferHarness(t *testing.T, bytes int) *transferHarness {
 	}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor", Layout: statelog.EstateLayout(probeDomain{}.Name()),
-		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
+		Keeps:  statelog.KeepsOnly(statelog.EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.Conn(), nil },
 		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) { return h.manifest, true },
 		Path:   func(statelog.Manifest) string { return h.artefact },
@@ -689,7 +689,7 @@ func TestADonorOffersOnlyThePartitionsItServes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "donor", Layout: layout, Serves: statelog.ServesOnly(served).Serving,
+		NodeID: "donor", Layout: layout, Keeps: statelog.KeepsOnly(served).Keeps,
 		Dial: func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func(p statelog.PartitionID) (statelog.Manifest, bool) {
 			// AN ARTEFACT OF EVERY PARTITION, so what decides is whether
@@ -722,8 +722,8 @@ func TestADonorOffersOnlyThePartitionsItServes(t *testing.T) {
 		t.Fatalf("the served partition was offered %+v, want its one artefact", offers)
 	}
 	for name, req := range map[string]statelog.OfferRequest{
-		"a partition it does not serve": {Layout: 1, Partition: other.String()},
-		"a request naming no partition": {Layout: 1},
+		"a partition it keeps no copy of": {Layout: 1, Partition: other.String()},
+		"a request naming no partition":   {Layout: 1},
 	} {
 		if got := ask(req); len(got) != 0 {
 			t.Errorf("%s was answered with %+v", name, got)

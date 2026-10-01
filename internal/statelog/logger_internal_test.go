@@ -55,15 +55,15 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		Domains: []Registered{{Domain: loggerProbe{}, Log: loggerProbeLog, Spec: loggerProbeSpec()}},
 		File:    (&store.DB{}).PartitionHandle("estate.000"),
 		Dir:     t.TempDir(), NodeID: "node-a",
-		Counted:  func(context.Context) (int, error) { return 2, nil },
-		Interval: time.Hour,
+		Recipients: func(context.Context) (int, error) { return 1, nil },
+		Interval:   time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("NewSnapshotter: %v", err)
 	}
 	donor, err := NewDonor(DonorDeps{
 		NodeID: "node-a", Layout: EstateLayout(loggerProbe{}.Name()),
-		Serves: ServesOnly(EstatePartition).Serving,
+		Keeps:  KeepsOnly(EstatePartition).Keeps,
 		Dial:   func(context.Context) (*nats.Conn, error) { return nil, nil },
 		Newest: func(PartitionID) (Manifest, bool) { return Manifest{}, false },
 		Path:   func(Manifest) string { return "" },

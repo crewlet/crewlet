@@ -187,6 +187,12 @@ type stateLog struct {
 	// partition while the node runs ([holdingOf]).
 	holding statelog.Holding
 
+	// copies is which partitions this node KEEPS AN ESTABLISHED COPY of —
+	// the ones its snapshot loop takes artefacts of and its donor offers
+	// ([statelog.Copies]). Not holding: a copy nobody may write is still a
+	// copy, and sometimes a partition's only one ([copiesOf]).
+	copies statelog.Copies
+
 	// logs is every log this node runs NOW, as one immutable [logSet]: a
 	// log is started and stopped while the node runs ([stateLog.startLogs],
 	// [stateLog.stopLogs]), so every reader takes the whole set at once
@@ -580,6 +586,25 @@ func holdingOf(b *config.Bootstrap, layout statelog.Layout) statelog.Holding {
 	return statelog.ServesOnly(heldIn(b, layout)...)
 }
 
+// copiesOf is which partitions a node configured as b that runs layout keeps
+// an established copy of — what its snapshot loop takes artefacts of and its
+// donor offers a joiner ([statelog.Copies]).
+//
+// THE SET IT SERVES, HERE, for [holdingOf]'s reason: no partition is joined or
+// left while this build runs, so a data node keeps every partition it holds
+// from boot, and a node without `data` keeps none. Once partitions move the
+// join and leave executor answers this from its own steps, and THEN IT PARTS
+// FROM HOLDING: a copy is kept from its adoption until its leave begins to
+// drain it — so a holder the map moves away, and a machine an eviction barred
+// back with its files, still offers the copy it serves no writes from while the
+// partition's target does not serve it. Answered by the write rule instead, a
+// partition whose only copy was such a one had no donor for its joiner, never
+// had a serving holder again, and no gesture that has to reach its logs — a
+// readmission of that very machine among them — could finish.
+func copiesOf(b *config.Bootstrap, layout statelog.Layout) statelog.Copies {
+	return statelog.KeepsOnly(heldIn(b, layout)...)
+}
+
 // HeldPartitions is [HeldPartitions] for this node: the partitions it holds,
 // open or not at the instant of asking — the question a backup has to ask,
 // since one an adoption holds closed between its rename and its reopen is
@@ -706,11 +731,11 @@ func (s *stateLog) holdSnapshot(p statelog.PartitionID, h snapshotHeld) {
 }
 
 // keepSnapshotsOf forgets what the loop concluded about any partition the scope
-// neither serves nor cannot tell about: this node no longer takes artefacts of
-// it, and its row must not go on naming one as a donation.
+// neither keeps a copy of nor cannot tell about: this node no longer takes
+// artefacts of it, and its row must not go on naming one as a donation.
 //
-// ONE WHOSE HOLDING IS UNKNOWN IS KEPT. Not knowing whether this node serves a
-// partition for a pass is not having left it, and a report dropped on that
+// ONE WHOSE COPY IS UNKNOWN IS KEPT. Not knowing whether this node keeps a
+// partition's copy for a pass is not having let it go, and a report dropped on that
 // read stopped the row naming an artefact still on this node's disk — a donor
 // the trim's snapshot term then did not count — until the next pass that could
 // tell.
@@ -721,7 +746,7 @@ func (s *stateLog) keepSnapshotsOf(scope snapshotScope) {
 	}
 	next := heldSnapshots{}
 	for p, h := range *held {
-		if slices.Contains(scope.served, p) || scope.isUnknown(p) {
+		if slices.Contains(scope.kept, p) || scope.isUnknown(p) {
 			next[p] = h
 		}
 	}
@@ -800,8 +825,8 @@ func (e *Engine) startStateLogAt(ctx context.Context, boot *config.Bootstrap,
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
 		layout: layout, mode: e.Mode(), host: host, epoch: epoch,
-		holding: holdingOf(boot, layout),
-		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
+		holding: holdingOf(boot, layout), copies: copiesOf(boot, layout),
+		nodeID: nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
 		ceilings: ceilings, volume: streamVolume(boot),
@@ -3568,27 +3593,8 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	interval := boot.Stream.TrackerRetention.SnapshotInterval()
 	layout := s.layout
 
-	// ONE DONOR FOR EVERY PARTITION THIS NODE SERVES, answering each request
-	// with its newest artefact of the partition asked for — and nothing for
-	// one it does not serve ([statelog.DonorDeps.Serves]).
-	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: s.nodeID,
-		Layout: layout,
-		Serves: s.holding.Serving,
-		Dial:   func(context.Context) (*nats.Conn, error) { return broker.DialOwned() },
-		Newest: func(p statelog.PartitionID) (statelog.Manifest, bool) {
-			return newestSnapshot(statelog.SnapshotDir(root, layout.Number, p), layout.Number, p)
-		},
-		Path: func(m statelog.Manifest) string {
-			// THE NAME THE MANIFEST CARRIES, in its partition's own
-			// directory. Deriving the name here was one of three
-			// independent derivations that had to agree, and the
-			// derivation is what let a second take land on the previous
-			// pair's name — see [statelog.Manifest.Artifact].
-			p, _ := statelog.ParsePartitionID(m.Partition)
-			return filepath.Join(statelog.SnapshotDir(root, m.Layout, p), m.Artifact)
-		},
-	})
+	donor, err := statelog.NewDonor(s.donorDeps(root,
+		func(context.Context) (*nats.Conn, error) { return broker.DialOwned() }))
 	if err != nil {
 		log.ErrorContext(ctx, "statelog_donor_unavailable", "error", err.Error(),
 			"detail", "this node answers no offer request, so a peer below the "+
@@ -3611,7 +3617,7 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	go func() {
 		defer s.done.Done()
 		e.snapshotLoop(s, snapshotPlan{
-			served: s.servedPartitions,
+			kept: s.keptPartitions,
 			dir: func(p statelog.PartitionID) string {
 				return statelog.SnapshotDir(root, layout.Number, p)
 			},
@@ -3620,6 +3626,32 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 			},
 		}, interval)
 	}()
+}
+
+// donorDeps is this node's donor: ONE FOR EVERY PARTITION IT KEEPS A COPY OF,
+// answering each request with its newest artefact of the partition asked for —
+// and nothing for one it keeps no copy of ([statelog.DonorDeps.Keeps]), which
+// is not the question of whether it may write the partition.
+func (s *stateLog) donorDeps(root string, dial statelog.Dialer) statelog.DonorDeps {
+	layout := s.layout
+	return statelog.DonorDeps{
+		NodeID: s.nodeID,
+		Layout: layout,
+		Keeps:  s.copies.Keeps,
+		Dial:   dial,
+		Newest: func(p statelog.PartitionID) (statelog.Manifest, bool) {
+			return newestSnapshot(statelog.SnapshotDir(root, layout.Number, p), layout.Number, p)
+		},
+		Path: func(m statelog.Manifest) string {
+			// THE NAME THE MANIFEST CARRIES, in its partition's own
+			// directory. Deriving the name here was one of three
+			// independent derivations that had to agree, and the
+			// derivation is what let a second take land on the previous
+			// pair's name — see [statelog.Manifest.Artifact].
+			p, _ := statelog.ParsePartitionID(m.Partition)
+			return filepath.Join(statelog.SnapshotDir(root, m.Layout, p), m.Artifact)
+		},
+	}
 }
 
 // snapshotterOf is the snapshotter of partition p, over the logs of p this node
@@ -3643,50 +3675,55 @@ func (e *Engine) snapshotterOf(s *stateLog, p statelog.PartitionID, dir string,
 		Dir:           dir,
 		NodeID:        s.nodeID,
 		EngineVersion: version.String(),
-		Counted: func(ctx context.Context) (int, error) {
-			return e.countedOn(ctx, s, p, time.Now())
+		Recipients: func(ctx context.Context) (int, error) {
+			return e.recipientsOn(ctx, s, p, time.Now())
 		},
 		Interval: interval,
 	})
 }
 
 // snapshotScope is what one pass of the snapshot loop finds this node running:
-// the partitions it serves now, in the layout's order — the ones it takes
-// artefacts of — and those it runs a log of and does not serve yet, or cannot
-// tell whether it does.
+// the partitions it keeps an established copy of now, in the layout's order —
+// the ones it takes artefacts of — and those it runs a log of and keeps no
+// copy of yet, or cannot tell whether it does.
 type snapshotScope struct {
-	served []statelog.PartitionID
+	kept []statelog.PartitionID
 
-	// unknown is every partition whose holding could not be told this pass,
+	// unknown is every partition whose copy could not be told this pass,
 	// in the layout's order, each with why.
-	unknown []holdingUnknown
+	unknown []copyUnknown
 
-	// unsettled reports a partition this node runs a log of and does not
-	// serve, or cannot tell about: one it is joining or leaving, or whose
-	// answer a moment's blip withheld. The loop looks again soon rather
-	// than an interval later — see [Engine.snapshotLoop].
+	// unsettled reports a partition this node runs a log of and keeps no
+	// copy of, or cannot tell about: one it is adopting or giving up, or
+	// whose answer a moment's blip withheld. The loop looks again soon
+	// rather than an interval later — see [Engine.snapshotLoop].
 	unsettled bool
 }
 
-// holdingUnknown is a partition whose holding one pass could not tell, and the
-// holding's answer.
-type holdingUnknown struct {
+// copyUnknown is a partition one pass could not tell whether this node keeps
+// a copy of, and the answer's error.
+type copyUnknown struct {
 	partition statelog.PartitionID
 	err       error
 }
 
-// isUnknown reports whether p's holding could not be told this pass.
+// isUnknown reports whether p's copy could not be told this pass.
 func (s snapshotScope) isUnknown(p statelog.PartitionID) bool {
-	return slices.ContainsFunc(s.unknown, func(u holdingUnknown) bool { return u.partition == p })
+	return slices.ContainsFunc(s.unknown, func(u copyUnknown) bool { return u.partition == p })
 }
 
-// servedPartitions is what this node runs a log of and whether it SERVES each —
-// the partitions its snapshot loop takes artefacts of are the served ones. A
-// partition whose holding cannot be told is not taken, and named with why: a
-// copy nobody can vouch this node serves is not one to offer a joiner. It says
-// nothing itself — the loop says what CHANGED ([reportHolding]), since it asks
+// keptPartitions is what this node runs a log of and whether it KEEPS AN
+// ESTABLISHED COPY of each ([statelog.Copies]) — the partitions its snapshot
+// loop takes artefacts of are the kept ones, which are the ones its donor
+// offers. A partition whose copy cannot be told is not taken, and named with
+// why: a copy nobody can vouch for is not one to offer a joiner. It says
+// nothing itself — the loop says what CHANGED ([reportCopies]), since it asks
 // again every [snapshotSkipRetry] for as long as the answer is withheld.
-func (s *stateLog) servedPartitions() snapshotScope {
+//
+// KEPT, NOT SERVED: whether this node may write a partition ([stateLog.holding])
+// is not whether its copy is worth handing on, and the copy a joiner needs is
+// sometimes one nobody may write — see [copiesOf].
+func (s *stateLog) keptPartitions() snapshotScope {
 	var out snapshotScope
 	var seen []statelog.PartitionID
 	for _, running := range s.running() {
@@ -3695,13 +3732,13 @@ func (s *stateLog) servedPartitions() snapshotScope {
 			continue
 		}
 		seen = append(seen, p)
-		serving, err := s.holding.Serving(p)
+		keeps, err := s.copies.Keeps(p)
 		switch {
 		case err != nil:
-			out.unknown = append(out.unknown, holdingUnknown{partition: p, err: err})
+			out.unknown = append(out.unknown, copyUnknown{partition: p, err: err})
 			out.unsettled = true
-		case serving:
-			out.served = append(out.served, p)
+		case keeps:
+			out.kept = append(out.kept, p)
 		default:
 			out.unsettled = true
 		}
@@ -3710,12 +3747,12 @@ func (s *stateLog) servedPartitions() snapshotScope {
 }
 
 // snapshotPlan is what the snapshot loop takes artefacts of, and how: the
-// partitions this node serves now, where each one's artefacts are, a
+// partitions this node keeps a copy of now, where each one's artefacts are, a
 // snapshotter of each, and how soon a pass is retried.
 type snapshotPlan struct {
-	served func() snapshotScope
-	dir    func(statelog.PartitionID) string
-	taker  func(statelog.PartitionID) (snapshotTaker, error)
+	kept  func() snapshotScope
+	dir   func(statelog.PartitionID) string
+	taker func(statelog.PartitionID) (snapshotTaker, error)
 
 	// retry is how soon a partition that could not be taken is tried again,
 	// and the longest the loop waits while a partition it runs a log of is
@@ -3778,15 +3815,15 @@ func (p snapshotPlan) retryIn(interval time.Duration) time.Duration {
 // makes EVERY partition due, rather than leaving it to whichever wait it is in
 // — the interval, a day by default, after a taken snapshot.
 //
-// # Nor may a partition the node does not serve yet wait out a day
+// # Nor may a partition the node keeps no copy of yet wait out a day
 //
-// The loop takes the partitions this node SERVES, and which those are changes
-// while it runs: a node serves a partition only once its copy of it is
+// The loop takes the partitions this node KEEPS A COPY OF, and which those are
+// changes while it runs: a node keeps a partition's copy only once it is
 // established, which is after this loop has started — at every boot — and a
-// moment's unanswered holding withholds a partition from one pass. A wait
-// measured only from the partitions served sat out the whole interval behind
+// moment's unanswered answer withholds a partition from one pass. A wait
+// measured only from the partitions kept sat out the whole interval behind
 // the last one taken, or behind none: every restart took no artefact of what
-// the node came to serve for a day, while its row advertised none — and the
+// the node came to keep for a day, while its row advertised none — and the
 // trim, whose snapshot term wants two donors of every log, blocked everywhere
 // after a rolling restart. So while any partition this node runs a log of is
 // unsettled, the wait is at most the retry.
@@ -3819,17 +3856,17 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 	var unknown map[statelog.PartitionID]struct{}
 	due := map[statelog.PartitionID]time.Time{}
 	for {
-		scope := plan.served()
-		served := scope.served
-		unknown = reportHolding(ctx, log, unknown, scope)
+		scope := plan.kept()
+		kept := scope.kept
+		unknown = reportCopies(ctx, log, unknown, scope)
 		s.keepSnapshotsOf(scope)
 		for p := range due {
-			if !slices.Contains(served, p) {
+			if !slices.Contains(kept, p) {
 				delete(due, p)
 				delete(reported, p)
 			}
 		}
-		for _, p := range s.oldestFirst(served, due, time.Now()) {
+		for _, p := range s.oldestFirst(kept, due, time.Now()) {
 			if ctx.Err() != nil {
 				return
 			}
@@ -3839,7 +3876,7 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 		if scope.unsettled {
 			wait = plan.retryIn(interval)
 		}
-		for _, p := range served {
+		for _, p := range kept {
 			wait = min(wait, max(time.Until(due[p]), 0))
 		}
 		select {
@@ -3856,18 +3893,18 @@ func (e *Engine) snapshotLoop(s *stateLog, plan snapshotPlan, interval time.Dura
 	}
 }
 
-// reportHolding says what changed about the partitions whose holding the
-// snapshot loop cannot tell, against was — the ones the previous pass could not
-// — and answers the ones this pass could not, for the next.
+// reportCopies says what changed about the partitions whose copy the snapshot
+// loop cannot tell, against was — the ones the previous pass could not — and
+// answers the ones this pass could not, for the next.
 //
 // ON THE TRANSITION, NEVER THE STATE: a partition becoming unknown is a warning
 // once, and one known again is said once at info; a pass that finds what the
-// last one found says nothing. The loop asks every [snapshotSkipRetry] while a
-// holding is withheld, and a stale estate view withholds every partition at
+// last one found says nothing. The loop asks every [snapshotSkipRetry] while an
+// answer is withheld, and a stale estate view withholds every partition at
 // once — so a warning per pass was one line per held partition every thirty
 // seconds, hundreds at a time, for as long as the outage lasted, burying the
 // one line that said it began.
-func reportHolding(ctx context.Context, logger *slog.Logger, was map[statelog.PartitionID]struct{},
+func reportCopies(ctx context.Context, logger *slog.Logger, was map[statelog.PartitionID]struct{},
 	scope snapshotScope) map[statelog.PartitionID]struct{} {
 
 	now := make(map[statelog.PartitionID]struct{}, len(scope.unknown))
@@ -3876,11 +3913,12 @@ func reportHolding(ctx context.Context, logger *slog.Logger, was map[statelog.Pa
 		if _, already := was[u.partition]; already {
 			continue
 		}
-		logger.WarnContext(ctx, "statelog_snapshot_holding_unknown",
+		logger.WarnContext(ctx, "statelog_snapshot_copy_unknown",
 			"partition", u.partition.String(), "error", u.err.Error(),
-			"detail", "whether this node serves the partition is unknown, so no "+
-				"artefact of it is taken until it can be told; the loop asks again "+
-				"every "+snapshotSkipRetry.String()+" and says so once it can")
+			"detail", "whether this node keeps an established copy of the partition "+
+				"is unknown, so no artefact of it is taken or offered until it can be "+
+				"told; the loop asks again every "+snapshotSkipRetry.String()+
+				" and says so once it can")
 	}
 	for _, p := range slices.SortedFunc(maps.Keys(was), func(a, b statelog.PartitionID) int {
 		return cmp.Or(cmp.Compare(a.Space, b.Space), cmp.Compare(a.Index, b.Index))
@@ -3888,8 +3926,8 @@ func reportHolding(ctx context.Context, logger *slog.Logger, was map[statelog.Pa
 		if _, still := now[p]; still {
 			continue
 		}
-		logger.InfoContext(ctx, "statelog_snapshot_holding_known",
-			"partition", p.String(), "serving", slices.Contains(scope.served, p))
+		logger.InfoContext(ctx, "statelog_snapshot_copy_known",
+			"partition", p.String(), "keeps", slices.Contains(scope.kept, p))
 	}
 	return now
 }
@@ -3942,14 +3980,14 @@ func (e *Engine) snapshotOne(ctx context.Context, s *stateLog, plan snapshotPlan
 	return plan.retryIn(interval)
 }
 
-// oldestFirst is every partition of served that is due at now, the one whose
+// oldestFirst is every partition of kept that is due at now, the one whose
 // newest artefact is oldest first — one holding none before any — and the
 // layout's own order between equals.
-func (s *stateLog) oldestFirst(served []statelog.PartitionID,
+func (s *stateLog) oldestFirst(kept []statelog.PartitionID,
 	due map[statelog.PartitionID]time.Time, now time.Time) []statelog.PartitionID {
 
 	var out []statelog.PartitionID
-	for _, p := range served {
+	for _, p := range kept {
 		if at, scheduled := due[p]; !scheduled || !at.After(now) {
 			out = append(out, p)
 		}
@@ -4199,9 +4237,11 @@ func stampPartition(row *coord.NodePositions, p statelog.PartitionID, held snaps
 // window a rolling upgrade lives in.
 const snapshotSkipRetry = 30 * time.Second
 
-// countedOn is how many nodes the fleet counts on partition p's logs at now,
+// countedOn is the nodes the fleet counts on partition p's logs at now, sorted,
 // which is what decides whether there is anybody to donate an artefact of p to
-// at all: THE TRIM'S OWN COUNTED SET, log by log ([statelog.CountedSet]) —
+// at all — anybody but this node, which a barred machine keeping a copy is not
+// one of ([recipientsOn]): THE TRIM'S OWN COUNTED SET, log by log
+// ([statelog.CountedSet]) —
 // every node whose positions row names the log and has not released it, UNION
 // every holder of p, LESS the tombstones past their window — so the loop and
 // the trim's snapshot term ask one question of one set.
@@ -4238,14 +4278,14 @@ const snapshotSkipRetry = 30 * time.Second
 // rather than less — the direction that takes a copy nobody needed rather than
 // one that declines a copy a joiner is waiting for.
 func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.PartitionID,
-	now time.Time) (int, error) {
+	now time.Time) ([]string, error) {
 
 	if s.fleet == nil {
-		return 0, fmt.Errorf("engine: no coordination to count the fleet with")
+		return nil, fmt.Errorf("engine: no coordination to count the fleet with")
 	}
 	rows, err := s.positions(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	var holders []statelog.Presence
 	if held, err := e.watchedHolders(s.layout).Holders(ctx, []statelog.PartitionID{p}); err == nil {
@@ -4259,14 +4299,40 @@ func (e *Engine) countedOn(ctx context.Context, s *stateLog, p statelog.Partitio
 	for _, id := range s.layout.Logs(p) {
 		domain, err := registeredDomain(id.Domain)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		tombs, _ := logTombstones(ctx, db, domain, id.Partition, 0)
 		for _, n := range statelog.CountedSet(now, reportedPositions(rows, id.String()), holders, tombs) {
 			counted[n.NodeID] = true
 		}
 	}
-	return len(counted), nil
+	return slices.Sorted(maps.Keys(counted)), nil
+}
+
+// recipientsOn is how many nodes OTHER THAN THIS ONE the fleet counts on p's
+// logs at now ([countedOn]) — who an artefact of p could be donated to
+// ([statelog.SnapshotDeps.Recipients]).
+//
+// OTHERS, because this node need not be counted. One the fleet evicted and
+// barred, back with its files, keeps a copy that the logs its eviction gates
+// stop counting it on once the fence window has passed, and that copy may be
+// the partition's only one: judged as "fewer than two counted", the one joiner
+// beside it read as nobody to donate to, so the artefact that joiner was
+// waiting for was never taken.
+func (e *Engine) recipientsOn(ctx context.Context, s *stateLog, p statelog.PartitionID,
+	now time.Time) (int, error) {
+
+	counted, err := e.countedOn(ctx, s, p, now)
+	if err != nil {
+		return 0, err
+	}
+	others := 0
+	for _, node := range counted {
+		if node != s.nodeID {
+			others++
+		}
+	}
+	return others, nil
 }
 
 // newestSnapshot reads the newest complete manifest of partition p of layout in

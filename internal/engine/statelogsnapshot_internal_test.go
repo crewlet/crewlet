@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
@@ -445,8 +447,8 @@ func TestANudgeWakesTheSnapshotLoopOutOfEitherWait(t *testing.T) {
 				defer close(done)
 				dir := t.TempDir()
 				(&Engine{}).snapshotLoop(s, snapshotPlan{
-					served: func() snapshotScope {
-						return snapshotScope{served: []statelog.PartitionID{statelog.EstatePartition}}
+					kept: func() snapshotScope {
+						return snapshotScope{kept: []statelog.PartitionID{statelog.EstatePartition}}
 					},
 					dir: func(statelog.PartitionID) string { return dir },
 					taker: func(statelog.PartitionID) (snapshotTaker, error) {
@@ -641,8 +643,8 @@ func TestTheLoopTakesEachServedPartitionOldestFirst(t *testing.T) {
 	go func() {
 		defer close(done)
 		(&Engine{}).snapshotLoop(s, snapshotPlan{
-			served: func() snapshotScope {
-				return snapshotScope{served: []statelog.PartitionID{p0, p1, p2}}
+			kept: func() snapshotScope {
+				return snapshotScope{kept: []statelog.PartitionID{p0, p1, p2}}
 			},
 			dir: func(statelog.PartitionID) string { return t.TempDir() },
 			taker: func(p statelog.PartitionID) (snapshotTaker, error) {
@@ -687,42 +689,42 @@ type takerFunc func() (statelog.Manifest, error)
 
 func (f takerFunc) Take(context.Context) (statelog.Manifest, error) { return f() }
 
-// A PARTITION THIS NODE NO LONGER SERVES IS NO LONGER ITS DONATION.
+// A PARTITION THIS NODE NO LONGER KEEPS A COPY OF IS NO LONGER ITS DONATION.
 //
 // What the loop concluded about a partition is what the row advertises a joiner
-// may adopt; once the node has stopped serving it, keeping the entry would go
-// on advertising a copy it no longer answers for.
-func TestAPartitionNoLongerServedIsForgotten(t *testing.T) {
+// may adopt; once the node has begun to give its copy up, keeping the entry
+// would go on advertising a copy it no longer offers.
+func TestAPartitionNoLongerKeptIsForgotten(t *testing.T) {
 	t.Parallel()
 	p0 := statelog.PartitionID{Space: statelog.SpaceTracker}
 	p1 := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
 	s := &stateLog{}
 	s.holdSnapshot(p0, snapshotHeld{Have: true})
 	s.holdSnapshot(p1, snapshotHeld{Have: true})
-	s.keepSnapshotsOf(snapshotScope{served: []statelog.PartitionID{p1}})
+	s.keepSnapshotsOf(snapshotScope{kept: []statelog.PartitionID{p1}})
 	if _, held := s.snapshotOf(p0); held {
-		t.Error("a partition no longer served is still this node's donation")
+		t.Error("a partition no longer kept is still this node's donation")
 	}
 	if _, held := s.snapshotOf(p1); !held {
-		t.Error("the partition still served lost what the loop concluded about it")
+		t.Error("the partition still kept lost what the loop concluded about it")
 	}
 }
 
-// A PARTITION THIS NODE COMES TO SERVE AFTER ITS LOOP STARTED IS TAKEN WITHIN
+// A PARTITION THIS NODE COMES TO KEEP AFTER ITS LOOP STARTED IS TAKEN WITHIN
 // THE RETRY, NOT A DAY LATER.
 //
-// A node serves a partition only once its copy is established — after the loop
+// A node keeps a partition's copy only once it is established — after the loop
 // has started, at every boot — so the loop's first pass finds a partition it
-// runs a log of and does not serve yet. Waiting only on the partitions served
+// runs a log of and keeps no copy of yet. Waiting only on the partitions kept
 // then sat out the whole interval, and the node took no artefact of what it
-// came to serve for a day. While any partition is unsettled, the loop looks
+// came to keep for a day. While any partition is unsettled, the loop looks
 // again within the retry.
-func TestAPartitionServedAfterTheLoopStartsIsTakenSoon(t *testing.T) {
+func TestAPartitionKeptAfterTheLoopStartsIsTakenSoon(t *testing.T) {
 	t.Parallel()
 	p := statelog.PartitionID{Space: statelog.SpaceTracker}
 	ctx, stop := context.WithCancel(t.Context())
 	s := &stateLog{run: ctx, snapshotNudge: make(chan struct{}, 1)}
-	var serves atomic.Bool
+	var keeps atomic.Bool
 	taker := &countingTaker{took: make(chan struct{}, 8), take: func() (statelog.Manifest, error) {
 		return statelog.Manifest{TakenAt: time.Now().UTC(), Partition: p.String()}, nil
 	}}
@@ -731,16 +733,16 @@ func TestAPartitionServedAfterTheLoopStartsIsTakenSoon(t *testing.T) {
 	go func() {
 		defer close(done)
 		(&Engine{}).snapshotLoop(s, snapshotPlan{
-			served: func() snapshotScope {
+			kept: func() snapshotScope {
 				select {
 				case passes <- struct{}{}:
 				default:
 				}
-				if serves.Load() {
-					return snapshotScope{served: []statelog.PartitionID{p}}
+				if keeps.Load() {
+					return snapshotScope{kept: []statelog.PartitionID{p}}
 				}
-				// A JOINER: it runs the partition's log and does not
-				// serve it yet.
+				// A JOINER: it runs the partition's log and its copy is
+				// not established yet.
 				return snapshotScope{unsettled: true}
 			},
 			dir:   func(statelog.PartitionID) string { return t.TempDir() },
@@ -752,45 +754,52 @@ func TestAPartitionServedAfterTheLoopStartsIsTakenSoon(t *testing.T) {
 	select {
 	case <-passes:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the loop never looked at what it serves")
+		t.Fatal("the loop never looked at what it keeps")
 	}
-	serves.Store(true)
-	taker.await(t, "the partition it came to serve")
+	keeps.Store(true)
+	taker.await(t, "the partition it came to keep")
 }
 
-// WHAT THE LOOP FINDS IS WHAT THIS NODE RUNS, SORTED BY WHETHER IT SERVES IT.
+// WHAT THE LOOP FINDS IS WHAT THIS NODE RUNS, SORTED BY WHETHER IT KEEPS A COPY.
 //
 // The snapshot loop's scope comes from the partitions this node runs a log of,
-// each asked of the node's own holding: a partition it serves is taken; one it
-// runs and does not serve yet — a joiner catching up — and one whose holding
-// could not be told this pass each leave the loop UNSETTLED, so it looks again
-// within the retry rather than a day later; and the one it could not tell
-// about is named, so its report is kept rather than dropped on a moment's blip.
-func TestTheLoopsScopeIsWhatThisNodeRunsAndServes(t *testing.T) {
+// each asked of the copies the node keeps: a partition it keeps is taken; one
+// it runs and keeps no copy of yet — a joiner still installing one — and one
+// whose copy could not be told this pass each leave the loop UNSETTLED, so it
+// looks again within the retry rather than a day later; and the one it could
+// not tell about is named, so its report is kept rather than dropped on a
+// moment's blip.
+//
+// AND NEVER BY WHETHER IT MAY WRITE THEM: the node here serves nothing at all.
+// A copy nobody may write — a machine an eviction barred, back with its files —
+// may be its partition's only one, and a loop that took artefacts only of what
+// the node serves gave that partition's joiner nothing to fetch.
+func TestTheLoopsScopeIsWhatThisNodeRunsAndKeeps(t *testing.T) {
 	t.Parallel()
 	layout := partitionedTestLayout()
 	parts := layout.Partitions()
 	if len(parts) < 3 {
 		t.Fatalf("the premise: the test layout has %d partitions, want three", len(parts))
 	}
-	served, joining, unknown := parts[0], parts[1], parts[2]
+	kept, joining, unknown := parts[0], parts[1], parts[2]
 	var runs []*runningLog
 	for _, id := range layout.AllLogs() {
 		runs = append(runs, &runningLog{id: id, key: id.String()})
 	}
-	scopeOf := func(h partitionAnswers) snapshotScope {
-		s := &stateLog{run: t.Context(), layout: layout, holding: h}
+	scopeOf := func(c partitionAnswers) snapshotScope {
+		s := &stateLog{run: t.Context(), layout: layout, holding: statelog.ServesOnly(), copies: c}
 		s.logs.Store((&logSet{}).with(layout, runs))
-		return s.servedPartitions()
+		return s.keptPartitions()
 	}
 	stale := errors.New("the estate view is stale")
 
-	scope := scopeOf(partitionAnswers{served: {serves: true}, joining: {}, unknown: {err: stale}})
-	if !slices.Equal(scope.served, []statelog.PartitionID{served}) {
-		t.Errorf("the loop takes %v, want the one partition this node serves %v", scope.served, served)
+	scope := scopeOf(partitionAnswers{kept: {yes: true}, joining: {}, unknown: {err: stale}})
+	if !slices.Equal(scope.kept, []statelog.PartitionID{kept}) {
+		t.Errorf("the loop takes %v, want the one partition this node keeps a copy of %v "+
+			"— though it serves none", scope.kept, kept)
 	}
-	if want := []holdingUnknown{{partition: unknown, err: stale}}; !slices.Equal(scope.unknown, want) {
-		t.Errorf("the loop names %v unknown, want the one whose holding could not be "+
+	if want := []copyUnknown{{partition: unknown, err: stale}}; !slices.Equal(scope.unknown, want) {
+		t.Errorf("the loop names %v unknown, want the one whose copy could not be "+
 			"told, with why: %v", scope.unknown, want)
 	}
 	if !scope.unsettled {
@@ -799,40 +808,70 @@ func TestTheLoopsScopeIsWhatThisNodeRunsAndServes(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct {
-		holding partitionAnswers
-		want    bool
+		copies partitionAnswers
+		want   bool
 	}{
-		"a partition joining": {want: true, holding: partitionAnswers{
-			served: {serves: true}, joining: {}, unknown: {serves: true}}},
-		"a partition of unknown holding": {want: true, holding: partitionAnswers{
-			served: {serves: true}, joining: {serves: true}, unknown: {err: stale}}},
-		"every partition served": {holding: partitionAnswers{
-			served: {serves: true}, joining: {serves: true}, unknown: {serves: true}}},
+		"a partition joining": {want: true, copies: partitionAnswers{
+			kept: {yes: true}, joining: {}, unknown: {yes: true}}},
+		"a partition whose copy is unknown": {want: true, copies: partitionAnswers{
+			kept: {yes: true}, joining: {yes: true}, unknown: {err: stale}}},
+		"every partition kept": {copies: partitionAnswers{
+			kept: {yes: true}, joining: {yes: true}, unknown: {yes: true}}},
 	} {
-		if got := scopeOf(c.holding).unsettled; got != c.want {
+		if got := scopeOf(c.copies).unsettled; got != c.want {
 			t.Errorf("%s: the pass is unsettled %v, want %v", name, got, c.want)
 		}
 	}
 }
 
-// AN UNKNOWN HOLDING IS SAID WHEN IT BEGINS AND WHEN IT ENDS, NOT ON EVERY PASS.
+// THE DONOR OFFERS WHAT THIS NODE KEEPS, NOT WHAT IT MAY WRITE.
 //
-// The loop asks again every thirty seconds while a partition's holding is
-// withheld, and a stale estate view withholds every partition at once: a
-// warning per pass was a line per held partition every thirty seconds for the
-// whole outage. So two passes that cannot tell about the same partition warn
-// once, the pass that can again says so once at info — whether it serves it or
-// not — a pass after that says nothing, and the partition withheld again later
-// is a new warning.
-func TestAnUnknownHoldingIsSaidWhenItChangesNotEveryPass(t *testing.T) {
+// A barred machine back with its files serves no writes from the copy it
+// keeps, and that copy may be its partition's only one. A donor that answered
+// only for the partitions its node serves left that partition's joiner nothing
+// to fetch — the partition never had a serving holder again, and a readmission
+// of that very machine, which has to reach the partition's log through one,
+// could never be written. The node here serves nothing and keeps one copy.
+func TestTheDonorOffersTheCopiesThisNodeKeeps(t *testing.T) {
+	t.Parallel()
+	layout := partitionedTestLayout()
+	parts := layout.Partitions()
+	kept, other := parts[0], parts[1]
+	s := &stateLog{layout: layout, nodeID: "node-x", holding: statelog.ServesOnly(),
+		copies: statelog.KeepsOnly(kept)}
+	deps := s.donorDeps(t.TempDir(), func(context.Context) (*nats.Conn, error) {
+		return nil, errors.New("no transfer in this case")
+	})
+	if _, err := statelog.NewDonor(deps); err != nil {
+		t.Fatalf("the donor's deps are refused: %v", err)
+	}
+	for p, want := range map[statelog.PartitionID]bool{kept: true, other: false} {
+		got, err := deps.Keeps(p)
+		if err != nil || got != want {
+			t.Errorf("the donor of a node serving nothing answers %s (%v, %v), want "+
+				"%v: it donates what it keeps a copy of", p, got, err, want)
+		}
+	}
+}
+
+// AN UNKNOWN COPY IS SAID WHEN IT BEGINS AND WHEN IT ENDS, NOT ON EVERY PASS.
+//
+// The loop asks again every thirty seconds while whether a partition's copy is
+// kept is withheld, and a stale estate view withholds every partition at once:
+// a warning per pass was a line per held partition every thirty seconds for
+// the whole outage. So two passes that cannot tell about the same partition
+// warn once, the pass that can again says so once at info — whether it keeps
+// the copy or not — a pass after that says nothing, and the partition withheld
+// again later is a new warning.
+func TestAnUnknownCopyIsSaidWhenItChangesNotEveryPass(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 3}
 	q := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 5}
 	stale := errors.New("the estate view is stale")
-	both := snapshotScope{unknown: []holdingUnknown{{p, stale}, {q, stale}}, unsettled: true}
-	recovered := snapshotScope{served: []statelog.PartitionID{p}, unsettled: true}
+	both := snapshotScope{unknown: []copyUnknown{{p, stale}, {q, stale}}, unsettled: true}
+	recovered := snapshotScope{kept: []statelog.PartitionID{p}, unsettled: true}
 
 	lines := func() []map[string]any {
 		var got []map[string]any
@@ -858,33 +897,33 @@ func TestAnUnknownHoldingIsSaidWhenItChangesNotEveryPass(t *testing.T) {
 	}
 
 	var was map[statelog.PartitionID]struct{}
-	was = reportHolding(t.Context(), logger, was, both)
+	was = reportCopies(t.Context(), logger, was, both)
 	said("the first pass that cannot tell",
-		"WARN statelog_snapshot_holding_unknown tracker.003",
-		"WARN statelog_snapshot_holding_unknown tracker.005")
+		"WARN statelog_snapshot_copy_unknown tracker.003",
+		"WARN statelog_snapshot_copy_unknown tracker.005")
 	for range 3 {
-		was = reportHolding(t.Context(), logger, was, both)
+		was = reportCopies(t.Context(), logger, was, both)
 	}
 	said("three more passes that cannot tell")
-	was = reportHolding(t.Context(), logger, was, recovered)
+	was = reportCopies(t.Context(), logger, was, recovered)
 	said("the pass that can tell again",
-		"INFO statelog_snapshot_holding_known tracker.003",
-		"INFO statelog_snapshot_holding_known tracker.005")
-	was = reportHolding(t.Context(), logger, was, recovered)
+		"INFO statelog_snapshot_copy_known tracker.003",
+		"INFO statelog_snapshot_copy_known tracker.005")
+	was = reportCopies(t.Context(), logger, was, recovered)
 	said("a settled pass after it")
-	reportHolding(t.Context(), logger, was, both)
-	said("the holding withheld again",
-		"WARN statelog_snapshot_holding_unknown tracker.003",
-		"WARN statelog_snapshot_holding_unknown tracker.005")
+	reportCopies(t.Context(), logger, was, both)
+	said("the copy withheld again",
+		"WARN statelog_snapshot_copy_unknown tracker.003",
+		"WARN statelog_snapshot_copy_unknown tracker.005")
 }
 
 // THE LOOP CARRIES WHAT ONE PASS COULD NOT TELL INTO THE NEXT.
 //
-// [reportHolding] says a transition only against the passes before it, and
+// [reportCopies] says a transition only against the passes before it, and
 // that is the LOOP's to hand it: the case above drives the function, and a
 // loop that dropped the answer — or kept it only inside one pass — compiled,
 // passed it, and warned on every pass of a coordination outage again. So this
-// runs the loop itself, its retry short, over a holding withheld for four
+// runs the loop itself, its retry short, over a copy withheld for four
 // passes and then told: one warning and one line saying it is known again,
 // however many passes either state lasted.
 //
@@ -892,7 +931,7 @@ func TestAnUnknownHoldingIsSaidWhenItChangesNotEveryPass(t *testing.T) {
 // the process-wide one this swaps — and a parallel case's loop logging the
 // same partition would be counted here, which is why the partition is one no
 // other case uses.
-func TestTheSnapshotLoopWarnsOfAnUnknownHoldingOnce(t *testing.T) {
+func TestTheSnapshotLoopWarnsOfAnUnknownCopyOnce(t *testing.T) {
 	logs := &stopLineBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
@@ -907,18 +946,18 @@ func TestTheSnapshotLoopWarnsOfAnUnknownHoldingOnce(t *testing.T) {
 	go func() {
 		defer close(done)
 		(&Engine{}).snapshotLoop(s, snapshotPlan{
-			// WITHHELD, THEN TOLD — and told NOT served, so every pass
+			// WITHHELD, THEN TOLD — and told NOT kept, so every pass
 			// stays unsettled and the loop keeps asking at the retry.
-			served: func() snapshotScope {
+			kept: func() snapshotScope {
 				if passes.Add(1) <= withheld {
-					return snapshotScope{unsettled: true, unknown: []holdingUnknown{
+					return snapshotScope{unsettled: true, unknown: []copyUnknown{
 						{partition: p, err: coord.ErrUnavailable}}}
 				}
 				return snapshotScope{unsettled: true}
 			},
 			dir: func(statelog.PartitionID) string { return dir },
 			taker: func(statelog.PartitionID) (snapshotTaker, error) {
-				return nil, errors.New("no partition is served, so none is taken")
+				return nil, errors.New("no partition is kept, so none is taken")
 			},
 			retry: 5 * time.Millisecond,
 		}, 24*time.Hour)
@@ -938,8 +977,8 @@ func TestTheSnapshotLoopWarnsOfAnUnknownHoldingOnce(t *testing.T) {
 		}
 	}
 	want := map[string]int{
-		"statelog_snapshot_holding_unknown": 1,
-		"statelog_snapshot_holding_known":   1,
+		"statelog_snapshot_copy_unknown": 1,
+		"statelog_snapshot_copy_known":   1,
 	}
 	if !maps.Equal(said, want) {
 		t.Errorf("%d passes withheld and %d told said %v about %s, want %v — the "+
@@ -948,35 +987,40 @@ func TestTheSnapshotLoopWarnsOfAnUnknownHoldingOnce(t *testing.T) {
 	}
 }
 
-// partitionAnswers is a holding that answers each partition as it is told to,
-// and a partition it was told nothing of as not served.
+// partitionAnswers answers each partition as it is told to — as a holding and
+// as the copies a node keeps — and a partition it was told nothing of as no.
 type partitionAnswers map[statelog.PartitionID]struct {
-	serves bool
-	err    error
+	yes bool
+	err error
 }
 
 func (h partitionAnswers) Serving(p statelog.PartitionID) (bool, error) {
 	a := h[p]
-	return a.serves, a.err
+	return a.yes, a.err
 }
 
-// A PARTITION WHOSE HOLDING IS UNKNOWN KEEPS ITS REPORT, and one this node does
-// not serve loses it: not knowing for a pass whether this node serves a
-// partition is not having left it, and a report dropped on that read stopped
-// the row naming an artefact still on the node's disk.
-func TestAPartitionOfUnknownHoldingKeepsItsReport(t *testing.T) {
+func (h partitionAnswers) Keeps(p statelog.PartitionID) (bool, error) {
+	a := h[p]
+	return a.yes, a.err
+}
+
+// A PARTITION WHOSE COPY IS UNKNOWN KEEPS ITS REPORT, and one whose copy this
+// node does not keep loses it: not knowing for a pass whether this node keeps a
+// partition's copy is not having let it go, and a report dropped on that read
+// stopped the row naming an artefact still on the node's disk.
+func TestAPartitionWhoseCopyIsUnknownKeepsItsReport(t *testing.T) {
 	t.Parallel()
 	p := statelog.PartitionID{Space: statelog.SpaceTracker}
 	s := &stateLog{}
 	s.holdSnapshot(p, snapshotHeld{Have: true})
-	s.keepSnapshotsOf(snapshotScope{unknown: []holdingUnknown{{partition: p, err: coord.ErrUnavailable}},
+	s.keepSnapshotsOf(snapshotScope{unknown: []copyUnknown{{partition: p, err: coord.ErrUnavailable}},
 		unsettled: true})
 	if _, held := s.snapshotOf(p); !held {
-		t.Fatal("a partition whose holding is unknown for a pass lost its report")
+		t.Fatal("a partition whose copy is unknown for a pass lost its report")
 	}
 	s.keepSnapshotsOf(snapshotScope{unsettled: true})
 	if _, held := s.snapshotOf(p); held {
-		t.Error("a partition this node does not serve kept its report")
+		t.Error("a partition whose copy this node does not keep kept its report")
 	}
 }
 
@@ -1082,8 +1126,45 @@ func TestTheSnapshotLoopCountsAPartitionsHolders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("countedOn: %v", err)
 	}
-	if n != 2 {
-		t.Errorf("tracker.000 counts %d nodes, want its server and its joiner — not the "+
-			"node that released it, nor one holding another partition", n)
+	if want := []string{"node-a", "node-j"}; !slices.Equal(n, want) {
+		t.Errorf("tracker.000 counts %v, want its server and its joiner %v — not the "+
+			"node that released it, nor one holding another partition", n, want)
+	}
+}
+
+// A SNAPSHOT'S RECIPIENTS ARE THE COUNTED NODES OTHER THAN THIS ONE — and this
+// one need not be counted at all.
+//
+// A machine an eviction barred, back with its files, is not counted on the logs
+// its eviction gates once the fence window has passed, and the copy it keeps
+// may be its partition's only one. Judged as "fewer than two counted", the one
+// joiner beside it read as nobody to donate to: no artefact was taken, and the
+// joiner waited on a donor that never had one. So the count subtracts this node
+// only where it is counted: one joiner is one recipient whether or not the node
+// asking is counted beside it, and a node counted alone has none.
+func TestASnapshotsRecipientsAreTheCountedNodesOtherThanThisOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	layout := partitionedTestLayout()
+	tracker0 := statelog.PartitionID{Space: statelog.SpaceTracker}
+	fleet := placedMap(t, layout, map[statelog.PartitionID][]partmap.Holder{
+		tracker0: {{Node: "node-j", State: partmap.Joining, Since: 2}},
+	})
+	backend := coordmem.New()
+	claimLeases(t, backend, layout.Number, "node-j")
+	e := &Engine{backends: &Backends{Coord: backend}}
+	e.estateWatch.Store(runningWatch(t, fleet, backend, nil, layout, &viewClock{now: time.Now()}))
+	for node, want := range map[string]int{
+		"node-x": 1, // counted on nothing: its one recipient is the joiner
+		"node-j": 0, // the joiner itself, counted alone: nobody to donate to
+	} {
+		s := &stateLog{layout: layout, fleet: fleet, nodeID: node}
+		got, err := e.recipientsOn(ctx, s, tracker0, time.Now())
+		if err != nil {
+			t.Fatalf("recipientsOn %s: %v", node, err)
+		}
+		if got != want {
+			t.Errorf("%s counts %d recipient(s) of tracker.000, want %d", node, got, want)
+		}
 	}
 }

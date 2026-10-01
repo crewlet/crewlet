@@ -99,7 +99,8 @@ const (
 	// drained node has since fallen behind is `lagging` instead.
 	SkipUnhydrated SkipReason = "unhydrated"
 
-	// SkipSoleNode — there is nobody to donate to. The recovery artefact
+	// SkipSoleNode — there is nobody to donate to: the fleet counts no
+	// node on the partition but this one. The recovery artefact
 	// for a single node is a backup, which the trim's backup term already
 	// gates, and saying so here stops a reader concluding the trim's
 	// snapshot term deadlocks a solo fleet.
@@ -373,10 +374,18 @@ type SnapshotDeps struct {
 	NodeID        string
 	EngineVersion string
 
-	// Counted is how many nodes the fleet counts on the partition's logs —
-	// its holders, and every node whose row names one of them — which
-	// decides whether there is anybody to donate to at all.
-	Counted func(ctx context.Context) (int, error)
+	// Recipients is how many nodes OTHER THAN THIS ONE the fleet counts on
+	// the partition's logs — its holders, and every node whose row names
+	// one of them — which decides whether there is anybody to donate to at
+	// all.
+	//
+	// OTHERS, NOT A HEAD COUNT, because this node need not be one of them.
+	// A machine an eviction barred, back with its files, keeps a copy the
+	// logs its eviction gates stop counting it on once the fence window
+	// has passed, and that copy may be its partition's only one: judged as
+	// "fewer than two counted", one joiner beside it read as nobody to
+	// donate to, so the artefact the joiner needed was never taken.
+	Recipients func(ctx context.Context) (int, error)
 
 	// Interval is how stale the newest local snapshot may be.
 	Interval time.Duration
@@ -411,7 +420,7 @@ func NewSnapshotter(d SnapshotDeps) (*Snapshotter, error) {
 		return nil, fmt.Errorf("statelog: the snapshot loop has nowhere to write")
 	case d.NodeID == "":
 		return nil, fmt.Errorf("statelog: a snapshot names no donor")
-	case d.Counted == nil:
+	case d.Recipients == nil:
 		return nil, fmt.Errorf("statelog: the snapshot loop cannot count the fleet")
 	case d.Interval <= 0:
 		return nil, fmt.Errorf("statelog: the snapshot loop has no interval")
@@ -697,15 +706,15 @@ func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]
 
 // gate is the five preconditions, in the order that answers cheapest first.
 func (s *Snapshotter) gate(ctx context.Context) error {
-	counted, err := s.deps.Counted(ctx)
+	recipients, err := s.deps.Recipients(ctx)
 	if err != nil {
 		return fmt.Errorf("statelog: count the fleet: %w", err)
 	}
-	if counted < 2 {
-		return &ErrSkipped{Reason: SkipSoleNode, Detail: fmt.Sprintf(
-			"the fleet counts %d node(s), so there is nobody to donate to — a "+
-				"single node's recovery artefact is a backup, which the trim's "+
-				"own backup term gates", counted)}
+	if recipients < 1 {
+		return &ErrSkipped{Reason: SkipSoleNode, Detail: "the fleet counts no node " +
+			"on this partition but this one, so there is nobody to donate to — a " +
+			"single node's recovery artefact is a backup, which the trim's own " +
+			"backup term gates"}
 	}
 
 	for _, reg := range s.deps.Domains {

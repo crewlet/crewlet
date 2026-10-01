@@ -67,7 +67,7 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		Layout: LayoutZero(), Partition: statelog.EstatePartition,
 		Domains: registered, File: storetest.EstateOf(donorNode), Dir: snapDir, NodeID: "donor",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return 2, nil },
+		Recipients:    func(context.Context) (int, error) { return 1, nil },
 		Interval:      24 * time.Hour,
 	})
 	if err != nil {
@@ -83,8 +83,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	var answered atomic.Int64
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "donor", Layout: LayoutZero(),
-		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
-		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
+		Keeps: statelog.KeepsOnly(statelog.EstatePartition).Keeps,
+		Dial:  func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func(statelog.PartitionID) (statelog.Manifest, bool) {
 			answered.CompareAndSwap(0, time.Now().UnixNano())
 			return manifest, true

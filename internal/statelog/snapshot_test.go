@@ -121,7 +121,7 @@ func (h *snapHarness) rebuild(interval time.Duration) {
 		Dir:           h.dir,
 		NodeID:        "node-a",
 		EngineVersion: "v0.0.0-test",
-		Counted:       func(context.Context) (int, error) { return h.nodes, nil },
+		Recipients:    func(context.Context) (int, error) { return h.nodes - 1, nil },
 		Interval:      interval,
 		Now:           func() time.Time { return h.clock },
 	})
@@ -838,7 +838,7 @@ func TestASnapshotIsACopyOfOnePartitionAndSaysWhich(t *testing.T) {
 			File: (&store.DB{}).PartitionHandle("tracker.007")},
 	} {
 		deps.Dir, deps.NodeID, deps.Interval = h.dir, "node-a", time.Hour
-		deps.Counted = func(context.Context) (int, error) { return 3, nil }
+		deps.Recipients = func(context.Context) (int, error) { return 2, nil }
 		if _, err := statelog.NewSnapshotter(deps); err == nil {
 			t.Errorf("a snapshotter over %s was built", name)
 		}

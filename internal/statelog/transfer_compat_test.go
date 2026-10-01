@@ -229,7 +229,7 @@ func TestADividedDonorRefusesAPreviousBuildsFetch(t *testing.T) {
 	}}
 	served := statelog.PartitionID{Space: statelog.SpaceTracker}
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
-		NodeID: "divided", Layout: layout, Serves: statelog.ServesOnly(served).Serving,
+		NodeID: "divided", Layout: layout, Keeps: statelog.KeepsOnly(served).Keeps,
 		Dial: func(context.Context) (*nats.Conn, error) { return h.nc, nil },
 		Newest: func(p statelog.PartitionID) (statelog.Manifest, bool) {
 			return statelog.Manifest{V: statelog.ManifestVersion, Layout: 1, Partition: p.String(),

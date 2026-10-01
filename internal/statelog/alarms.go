@@ -977,11 +977,13 @@ var table = []rule{
 				r.EstateJoinBudget > 0 && r.EstateJoiningFor > r.EstateJoinBudget
 		},
 		remedy: "`crewlet estate map` shows what the joiner reports of the partition " +
-			"(adopting, catching_up, faulted). A join fetches a snapshot from a serving " +
-			"holder and replays the logs from it: check that a donor serves the partition " +
-			"and that the joiner's applier is moving (`crewlet retention status` on that " +
-			"node). One that cannot finish is taken off the node with `crewlet estate move`, " +
-			"so the copy is built on another member instead.",
+			"(adopting, catching_up, faulted). A join fetches a snapshot from a node that " +
+			"keeps a copy of the partition — a serving holder, or one leaving it, a barred " +
+			"machine back with its files among them — and replays the logs from it: check " +
+			"that such a node holds an artefact of it (`crewlet retention snapshots`) and " +
+			"that the joiner's applier is moving (`crewlet retention status` on that node). " +
+			"One that cannot finish is taken off the node with `crewlet estate move`, so the " +
+			"copy is built on another member instead.",
 	},
 	{
 		// AT THE VIEW'S OWN BOUND, borrowed (ADR-0015) and supplied in the

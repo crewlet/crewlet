@@ -418,7 +418,12 @@ would serve until the partition's target does, which on a fleet taking one
 transfer per node at a time is hours of routers sending writes that every
 holder drops. A node barred while it still serves (an eviction forced past a
 live lease) is retired like any other server, once the target serves without
-it, because its copy is faithful and may be the only one to rebuild from.
+it, because its copy is faithful and may be the only one to rebuild from. And
+while it waits, a barred node's copy is still **donated**: only its own records
+are dropped, so the copy it applies is the same as any holder's, and a node
+keeps offering a joiner the copies it keeps whether or not it may write them.
+That is what lets a partition whose only copy came back on an evicted machine
+be served again — by the node the map names in its place, adopting that copy.
 `crewlet retention readmit` lifts the bar, and only once every
 log has taken the node back: until then the map's part answers that it waits
 for the logs, and the same operation id finishes both, on any node

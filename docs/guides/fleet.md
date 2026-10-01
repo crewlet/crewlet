@@ -616,8 +616,9 @@ Three things make that work, and all three are per node:
   `snapshots/` beside the store file), no more often than
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
   to take one while it is still catching up, while it holds a record it
-  cannot decode, while the disk is short, or while it is the only member —
-  and retries shortly rather than waiting out the interval.
+  cannot decode, while the disk is short, or while the fleet counts no other
+  node on the partition — and retries shortly rather than waiting out the
+  interval.
 - **Every node serves them.** There is no designated donor: a fleet whose
   only donor was down would have nothing to give.
 

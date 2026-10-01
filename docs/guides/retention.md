@@ -281,16 +281,20 @@ what it lacks, replays it instead and needs none of this.)
 **A snapshot is a copy of one partition's file.** Under layout 0 that is the
 whole estate, as it has always been; under a [partitioned
 layout](../concepts/estate-placement.md) a node takes one artefact of each
-partition it serves, one at a time — the partition whose newest artefact is
-oldest first — each on `snapshot_interval` and each judged against its own
-file's size for free space. A partition the node runs and does not serve yet
-— at every boot until its copy is established, while it joins one, or while
-whether it serves one cannot be told — is looked at again every thirty seconds
-rather than an interval later, and an artefact it already holds of a partition
-whose holding is only unknown for a moment stays advertised. Its manifest names the partition and the layout it
+partition it keeps an established copy of, one at a time — the partition whose
+newest artefact is oldest first — each on `snapshot_interval` and each judged
+against its own file's size for free space. A copy is kept whether or not the
+node may write the partition: a holder the map is moving away keeps applying
+its logs until its leave begins, and so does a machine an eviction barred,
+back with its files — and either may hold its partition's only copy, which is
+the one a joiner has to fetch. A partition the node runs and keeps no copy of
+yet — at every boot until its copy is established, while it joins one, or
+while whether it keeps one cannot be told — is looked at again every thirty
+seconds rather than an interval later, and an artefact it already holds of a
+partition whose copy is only unknown for a moment stays advertised. Its manifest names the partition and the layout it
 is a copy of, and every log of that partition: a joiner refuses an artefact of
 another partition, or one naming a log its partition does not carry, before a
-byte moves, and a donor answers only for a partition it serves. A request that
+byte moves, and a donor answers only for a partition it keeps a copy of. A request that
 names no partition — a build from before partitions — is answered, under layout
 0, as a request for the whole estate, which is the only thing that build can
 mean, so the two builds donate to each other through a rolling upgrade; a donor
@@ -326,8 +330,8 @@ where they do not. A domain nobody has written to yet is at position zero in
 both, and adoptable.
 
 **On a single node the loop does not run at all.** It skips with the published
-reason `sole_node`, because a full copy every day buys an artefact no peer can
-fetch. A solo deployment's recovery artefact is `crewlet backup`. Who counts is
+reason `sole_node` — the fleet counts no node on the partition but this one —
+because a full copy every day buys an artefact no peer can fetch. A solo deployment's recovery artefact is `crewlet backup`. Who counts is
 the partition's counted set, as the trim counts it: every node whose row names
 one of its logs, and every node holding it — so a node joining the partition is
 counted before its first report, and the partition's lone server takes the
@@ -338,7 +342,7 @@ partitioned layout — so a failed join has an answer rather than a silence:
 
 | Reason | What it means |
 |---|---|
-| `sole_node` | fewer than two counted nodes on the partition; nothing to donate to. Counted as the trim counts: every node whose row names one of the partition's logs and has not released it, every holder of the partition — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted or released longer ago than the fence window. A view of the holders this node cannot confirm leaves them out, and the rows alone are counted |
+| `sole_node` | no counted node on the partition but this one; nothing to donate to. This node need not be counted itself: one an eviction barred, back with its files, still donates to a joiner beside it. Counted as the trim counts: every node whose row names one of the partition's logs and has not released it, every holder of the partition — so a joiner that has not published a row yet is somebody to donate to — less nodes evicted or released longer ago than the fence window. A view of the holders this node cannot confirm leaves them out, and the rows alone are counted |
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |

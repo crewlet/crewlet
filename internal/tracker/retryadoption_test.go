@@ -178,8 +178,8 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 			},
 		}},
 		File: donor.db, Dir: dir, NodeID: "node-a", EngineVersion: "v0.0.0-test",
-		Counted:  func(context.Context) (int, error) { return 3, nil },
-		Interval: 24 * time.Hour,
+		Recipients: func(context.Context) (int, error) { return 2, nil },
+		Interval:   24 * time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("NewSnapshotter: %v", err)
@@ -190,7 +190,7 @@ func adoptFrom(t *testing.T, donor *roundTrip, declared statelog.Domain) *roundT
 	}
 	server, err := statelog.NewDonor(statelog.DonorDeps{
 		NodeID: "node-a", Layout: statelog.EstateLayout(declared.Name()),
-		Serves: statelog.ServesOnly(statelog.EstatePartition).Serving,
+		Keeps: statelog.KeepsOnly(statelog.EstatePartition).Keeps,
 		Dial: func(context.Context) (*nats.Conn, error) {
 			return donor.broker.Conn(), nil
 		},

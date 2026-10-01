@@ -57,21 +57,62 @@ var ErrNotHolder = errors.New("statelog: this node does not serve that partition
 var ErrReleaseWhileServing = errors.New("statelog: a release is published after " +
 	"the node stops serving the partition, never while it serves it")
 
+// Copies is which partitions THIS node keeps an established copy of: the ones
+// it takes snapshots of and offers a joiner ([DonorDeps.Keeps]).
+//
+// NOT [Holding], which is whether this node may WRITE a partition's logs, and
+// the two part exactly where a partition is short of copies. A copy of a log is
+// the same function of the log's records on every node that applies them,
+// whoever may write: a holder the estate map is moving away keeps applying
+// until its leave begins, and so does one an eviction barred from the map,
+// whose own records each log drops but whose applier applies everyone's. Either
+// may be the partition's ONLY copy — the last server of a partition whose other
+// holders were lost, a barred machine back with its files after its eviction —
+// and held to the write rule neither offered it, so a joiner of that partition
+// had nowhere to fetch from, the partition never had a serving holder again,
+// and every gesture that has to reach its logs (a readmission among them) could
+// never finish.
+//
+// A copy is kept from the moment it is adopted and catching up until the node
+// begins to give it up: never while a fetched file is being installed over it,
+// never once its leave has begun to drain or release it, and never once it has
+// faulted, since a copy that diverged is not one to hand on.
+type Copies interface {
+	// Keeps reports whether this node keeps an established copy of p now.
+	//
+	// THREE-VALUED, as [Holding.Serving] is: an error is "cannot tell", and
+	// a copy nobody can vouch for is not one to offer.
+	Keeps(p PartitionID) (bool, error)
+}
+
 // ServesOnly is a [Holding] over a fixed set of partitions: what a node whose
 // partitions do not change while it runs answers — every node under layout 0,
 // where the one partition is held from boot by a data node and by nothing else.
 // No partitions at all is a node that serves nothing, which is the honest
 // answer for one that holds no data.
 func ServesOnly(partitions ...PartitionID) Holding {
-	return fixedHolding(slices.Clone(partitions))
+	return fixedSet(slices.Clone(partitions))
 }
 
-// fixedHolding is [ServesOnly]'s answer. Its zero value serves nothing.
-type fixedHolding []PartitionID
+// KeepsOnly is [ServesOnly]'s [Copies]: a fixed set of partitions this node
+// keeps a copy of, which on a node whose partitions do not change while it runs
+// is the set it serves.
+func KeepsOnly(partitions ...PartitionID) Copies {
+	return fixedSet(slices.Clone(partitions))
+}
+
+// fixedSet is [ServesOnly]'s and [KeepsOnly]'s answer. Its zero value serves
+// and keeps nothing.
+type fixedSet []PartitionID
 
 // Serving reports whether p is one of the set's partitions. A fixed set is read
 // from memory and cannot fail to answer.
-func (h fixedHolding) Serving(p PartitionID) (bool, error) {
+func (h fixedSet) Serving(p PartitionID) (bool, error) {
+	return slices.Contains(h, p), nil
+}
+
+// Keeps reports whether p is one of the set's partitions, as [fixedSet.Serving].
+func (h fixedSet) Keeps(p PartitionID) (bool, error) {
 	return slices.Contains(h, p), nil
 }
 
