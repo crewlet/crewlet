@@ -13,20 +13,41 @@ import (
 // A CREATE RACING OTHERS OVER A REMOVED RECORD IS A RACE ON A REPLICATED FLEET
 // TOO, AND NEVER AN OUTAGE.
 //
-// A removal leaves a marker, and the client creates over one with a second
-// conditional publish whose refusal it hands back unmapped — which a SOLO
-// stream words with the code the client's "key exists" sentinel matches, and a
-// REPLICATED one with a code it matches nothing. So the contract suite, which
-// runs the KV backend on one server, passed a backend whose every create
-// matching only the sentinel told a share of a race's losers that the store
-// was down: on a clustered fleet a failed sign-in racing another node's to a
-// just-flushed record went unrecorded and left its node's throttle on its own
-// curve for half a minute, and a released delivery claim answered "unknown"
-// and was processed twice. The same check [coordtest.RunFleet] runs, carried
-// to the one substrate where it can fail.
+// The same check [coordtest.RunFleet] runs against one server, carried to the
+// one substrate where it can fail. Every round stands on a set-up — a record
+// written, read back and removed at the version read, a counter charged and
+// reset — and on three members every step of that has a way to go wrong that
+// one server never shows, each of which this case has met:
 //
-// Mutation: match the failed attempt's create against the sentinel alone and
-// Fail answers an error here while the single-server suite stays green.
+//   - A READ SERVED BY A REPLICA behind an acknowledged write: a run just
+//     created read back as absent, a charge was counted short, and a reset
+//     whose listing missed the counter it was clearing left the race after it
+//     counting from one. coord/kv reads every key from the stream leader and
+//     closes every listing on it.
+//   - A LEADER'S "ANOTHER WRITE IS IN FLIGHT", read as a lost race: a removal
+//     at the version its caller had just read was refused while the leader
+//     still had that caller's own create in flight, and the race over a record
+//     that was never removed had no winner. coord/kv waits that answer out.
+//   - A LOSER TOLD THE STORE WAS DOWN: on a replicated stream a share of a
+//     create race's losers came back as a refusal the client wrapped in
+//     neither of its sentinels, and a create that matched only the sentinel
+//     answered "unknown" — a released delivery claim processed twice.
+//
+// IT IS A RACE AND FAILS LIKE ONE: under load, a share of runs, and on an idle
+// machine almost never. Each mechanism has a staged case that fails every time
+// — TestAWalkServedByACopyThatIsBehindIsClosedByTheLeader and
+// TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided in coord/kv, and
+// TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind here — and this
+// one holds them together under the timing that produced the failures.
+//
+// Mutation, measured with eight CPU burners on four cores: the build before
+// coord/kv read through the leader failed 9 runs of 12 ("a run just created
+// read back as absent", "8 admitted and 7 counted"); make
+// leaderBucket.closeOnLeader return without asking and 6 of 12 fail ("the
+// counter just reset reads back as (1, <nil>)"). Handing back the leader's
+// first answer from leaderBucket.settle failed 0 of 12 at that load — the
+// in-flight answer is rarer than a stale replica — which is why that
+// mechanism's guard is the staged case, not this one.
 func TestCreatesOverARemovedRecordAreRacesOnAReplicatedFleet(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
