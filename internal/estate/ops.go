@@ -187,6 +187,16 @@ type Backend struct {
 	// and where it was is what [Backend.Applied] says.
 	Barrier func(ctx context.Context, stream string) (statelog.Position, bool, error)
 
+	// Gates is this copy's writer of a node gate's record on one of the
+	// partition's identity-claiming logs, by the log's domain: the
+	// `statelog.gate` operation's server half, publishing through this
+	// node's own write authority on that log on behalf of the node an
+	// operator asked ([OpStatelogGate]). Nil where this node writes no gate
+	// record at all right now, and a nil writer for a domain is a log of
+	// the partition it does not run right now — each answered "no native
+	// backend here", so the request moves on to the next holder.
+	Gates func(domain string) GateWriter
+
 	// ServerSeams are the node's own, partition-free: the dispatcher sets
 	// them on every backend it hands an operation.
 	ServerSeams

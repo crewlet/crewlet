@@ -57,6 +57,14 @@
 // the honest answer, and the one a tool turns into "read the page before
 // writing again".
 //
+// A NODE GATE's record — an eviction or a readmission an operator ran on some
+// node, written on a log that node does not serve — is the same idempotent
+// write, carried by `statelog.gate` (gate.go) to the log's own partition and
+// published by a holder's write authority on the asking node's behalf. It is
+// ONE APPEND, so each holder is given [AppendAttempt] rather than the gesture's
+// whole deadline, and the router says which holder answered, because a gate's
+// refusal is about the node that wrote it.
+//
 // A node that answers "I did not run it" — it does not serve the partition,
 // cannot tell whether it does, runs no native backend, its copy lags its logs,
 // or it could not reach the caller's floor in time — did not execute anything,

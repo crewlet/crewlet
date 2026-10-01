@@ -83,6 +83,11 @@ type fakeNode struct {
 	// one: waited for until the asker's deadline, where a node that is
 	// simply gone is known to have answered nothing.
 	hang chan struct{}
+
+	// gates is every gate record this node published for another, and
+	// noGateLog a node that runs no log of the partition right now.
+	gates     []GateArgs
+	noGateLog bool
 }
 
 func (f *fakeNode) note(op string) {
@@ -222,7 +227,35 @@ func (f *fakeNode) backend() Backend {
 		Applied: func(stream string) statelog.Position {
 			return statelog.Position{Stream: stream, Generation: 1, Seq: 7}
 		},
+		Gates: func(string) GateWriter {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.noGateLog {
+				return nil
+			}
+			return f.gate
+		},
 	}
+}
+
+// gate publishes a gate record as this node's write authority would: applied,
+// or `unknown` unvouched by its ledger where the node says so.
+func (f *fakeNode) gate(_ context.Context, a GateArgs) (statelog.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gates = append(f.gates, a)
+	if f.unvouched {
+		return statelog.Result{Outcome: statelog.OutcomeUnknown, Unvouched: true}, nil
+	}
+	return statelog.Result{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: trackerStream, Generation: 1, Seq: 11}}, nil
+}
+
+// gated is every gate record this node published, in order.
+func (f *fakeNode) gated() []GateArgs {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.gates)
 }
 
 // CPUs implements [LocalBackends]: the node's one.

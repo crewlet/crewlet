@@ -140,10 +140,10 @@ type Router struct {
 	// places this node's in-process gather queries take.
 	cpus *CPUs
 
-	// readBudget and writeBudget are [readAttempt] and [writeAttempt], and
-	// admissionBudget [admissionAsk], held so a test can shorten them
-	// rather than wait out a dead node.
-	readBudget, writeBudget, admissionBudget time.Duration
+	// readBudget and writeBudget are [readAttempt] and [writeAttempt],
+	// appendBudget [AppendAttempt], and admissionBudget [admissionAsk],
+	// held so a test can shorten them rather than wait out a dead node.
+	readBudget, writeBudget, appendBudget, admissionBudget time.Duration
 
 	mu sync.Mutex
 	// sticky is, per partition, the node that answered last — asked
@@ -193,10 +193,11 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, cpus: cpus, session: opts.Session, seams: opts.Seams, now: now,
-		readBudget: readAttempt, writeBudget: writeAttempt, admissionBudget: admissionAsk,
-		sticky:   map[statelog.PartitionID]string{},
-		suspect:  map[string]time.Time{},
-		admitted: map[statelog.PartitionID]admission{},
+		readBudget: readAttempt, writeBudget: writeAttempt, appendBudget: AppendAttempt,
+		admissionBudget: admissionAsk,
+		sticky:          map[statelog.PartitionID]string{},
+		suspect:         map[string]time.Time{},
+		admitted:        map[statelog.PartitionID]admission{},
 	}, nil
 }
 
@@ -291,10 +292,23 @@ type exchange struct {
 	// operation whose answer reports its coverage ([opSpec.covered]). Nil
 	// for every other.
 	answered func(p statelog.PartitionID, at []statelog.Position)
+
+	// from is told the node whose answer is the one returned — this node's
+	// own id for one answered in-process — for a caller that reports WHO
+	// did what it asked ([Router.Gate]). Nil for every other; never told
+	// where no holder answered at all.
+	from func(node string)
 }
 
 // call runs one operation on a node that serves its partition.
 func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A) (R, error) {
+	return callFrom(ctx, r, o, actor, args, nil)
+}
+
+// callFrom is [call], telling from which node gave the answer it returns
+// ([exchange.from]).
+func callFrom[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A,
+	from func(node string)) (R, error) {
 	var zero R
 	spec := o.spec
 	encoded, err := json.Marshal(args)
@@ -314,6 +328,7 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 			decodeErr := json.Unmarshal(raw, &out)
 			return out, decodeErr
 		},
+		from: from,
 	}
 	var answer any
 	if o.addr.partitions == nil {
@@ -370,6 +385,10 @@ func cutOf(at []statelog.Position) statelog.Cut {
 type held struct {
 	value any
 	err   error
+
+	// node is the holder that gave it — this node's own id for its own
+	// copy's answer ([exchange.from]).
+	node string
 }
 
 // walk is one request's account of the holders it asked: why each ran
@@ -439,7 +458,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 			return value, ranErr
 		}
 		if w.fallback != nil {
-			return w.fallback.value, w.fallback.err
+			return x.kept(w.fallback)
 		}
 		if len(w.reasons) > 0 {
 			return nil, fmt.Errorf("estate: %s: read who serves %s: %w (%s)", spec.name, p, err,
@@ -503,7 +522,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		return value, ranErr
 	}
 	if w.fallback != nil {
-		return w.fallback.value, w.fallback.err
+		return x.kept(w.fallback)
 	}
 	return nil, &ErrPartitionUnserved{Partition: p.String(), Detail: strings.Join(w.reasons, "; ")}
 }
@@ -569,11 +588,12 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, layout statelog.Lay
 	case appendedNothing(ran):
 		w.note("%s: %v", r.self, ran)
 	case unvouched(spec, value, ran):
-		w.fallback = &held{value: value, err: ran}
+		w.fallback = &held{value: value, err: ran, node: r.self}
 	default:
 		if ran == nil && x.answered != nil {
 			x.answered(p, at)
 		}
+		x.tell(r.self)
 		return value, true, ran
 	}
 	return nil, false, nil
@@ -640,35 +660,63 @@ func (r *Router) settle(spec *opSpec, x exchange, p statelog.PartitionID, node s
 			w.note("%s: %v", node, failure)
 			return nil, false, nil
 		case unvouched(spec, nil, failure):
-			w.fallback = &held{err: failure}
+			w.fallback = &held{err: failure, node: node}
 			w.note("%s: unvouched", node)
 			return nil, false, nil
 		}
+		x.tell(node)
 		return nil, true, failure
 	}
 	value, err = x.decode(rep.Result)
 	if err != nil {
+		x.tell(node)
 		return nil, true, fmt.Errorf("estate: %s: %s answered with a result this build "+
 			"cannot decode: %w", spec.name, node, err)
 	}
 	if unvouched(spec, value, nil) {
-		w.fallback = &held{value: value}
+		w.fallback = &held{value: value, node: node}
 		w.note("%s: unvouched", node)
 		return nil, false, nil
 	}
 	if x.answered != nil {
 		x.answered(p, rep.At)
 	}
+	x.tell(node)
 	return value, true, nil
+}
+
+// tell tells the caller which node gave the answer the router returns, where
+// it asked ([exchange.from]).
+func (x exchange) tell(node string) {
+	if x.from != nil {
+		x.from(node)
+	}
+}
+
+// kept is the answer a walk kept while it asked on ([held]), as the router
+// returns it.
+func (x exchange) kept(h *held) (any, error) {
+	x.tell(h.node)
+	return h.value, h.err
 }
 
 // budgetFor is one attempt's budget on one holder: [readAttempt] for a read,
 // and for a write [writeAttempt] — or, where the caller has a deadline, that
 // deadline, since a gesture the caller gave five minutes must not be
 // abandoned after one.
+//
+// AN OPERATION THAT IS ONE APPEND ([opSpec.oneAppend]) is held to
+// [AppendAttempt] whatever the caller's deadline: its whole work is bounded by
+// the write authority's own budgets, so a holder that has not answered in that
+// time is silent rather than slow — and waited on until the caller's deadline,
+// one silent holder would take the whole call with it before the next was
+// asked.
 func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
 	if spec.class == opRead {
 		return r.readBudget
+	}
+	if spec.oneAppend {
+		return r.appendBudget
 	}
 	if _, bounded := ctx.Deadline(); bounded {
 		return 0

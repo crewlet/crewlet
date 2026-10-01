@@ -166,11 +166,15 @@ func TestEveryOperationsTypesDecode(t *testing.T) {
 // a field of its own refuses every older asker, and an older asker takes the
 // refusal as final. Admission's ping did exactly that, and withheld every seat
 // claim on every stateless node not yet upgraded.
+//
+// AN OPERATION NO OLDER BUILD SENDS IS NOT ONE ([opSpec.named]): every request
+// for it names its partition, and the server refuses one naming none rather
+// than resolve it — see [TestANamedOperationIsNeverResolvedInTheRequestsStead].
 func TestEveryOperationResolvesAnOlderAskersRequest(t *testing.T) {
 	t.Parallel()
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
-		if spec.partitions == nil {
+		if spec.partitions == nil || spec.named {
 			continue
 		}
 		parts, err := spec.partitions(t.Context(), layoutZero, layoutResolver{layout: layoutZero},
@@ -204,5 +208,38 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		if streams := spec.floorStreams(layoutZero, statelog.EstatePartition); len(streams) != 1 {
 			t.Errorf("%s's floors at layout 0 are on %v, want its own domain's one log", name, streams)
 		}
+	}
+}
+
+// A NAMED OPERATION IS NEVER RESOLVED IN THE REQUEST'S STEAD.
+//
+// No build from before partitions sends `statelog.gate`, so every request for
+// it names the partition it addresses — and one that names none is malformed,
+// refused by the serving node rather than resolved from arguments that carry
+// nothing an older asker could have meant. Resolved, a gate record whose
+// arguments named no log would have been sent to whatever the empty name
+// parsed as.
+func TestANamedOperationIsNeverResolvedInTheRequestsStead(t *testing.T) {
+	t.Parallel()
+	named := 0
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		spec := registry[name]
+		if !spec.named {
+			continue
+		}
+		named++
+		srv := server{placement: &fakePlacement{layout: layoutZero}}
+		if _, err := srv.partitionOf(t.Context(), spec, request{Op: name}); err == nil {
+			t.Errorf("%s: a request naming no partition was resolved, want it refused", name)
+		}
+		p, err := srv.partitionOf(t.Context(), spec, request{Op: name,
+			Partitions: []string{statelog.EstatePartition.String()}})
+		if err != nil || p != statelog.EstatePartition {
+			t.Errorf("%s: a request naming %s resolved to (%v, %v)", name,
+				statelog.EstatePartition, p, err)
+		}
+	}
+	if named == 0 {
+		t.Fatal("no operation is declared named, and statelog.gate must be")
 	}
 }

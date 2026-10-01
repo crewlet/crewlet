@@ -1,8 +1,10 @@
 package estate
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -21,30 +23,37 @@ import (
 // each log it does not serve is written by one that does: the gesture's record
 // for that log is this operation, sent to a serving holder of its partition.
 //
-// # What is declared here, and what is not yet
+// # Routed like every other operation, to the log's own partition
 //
-// The operation's NAME, its ARGUMENTS and its PARTITION FUNCTION — the one
-// partition a gate record goes to, which is the log's own. The router that
-// sends an operation to a serving holder of the partition its function names is
-// the estate's next shape (contract §G1, step 6), and the operation is
-// registered on it there, with the node gate sending each log it does not serve
-// through it. Until then the gate reports such a log as not written here, with
-// the remedy of running the gesture through a node that serves the partition
-// under the same operation id — which this operation automates. Registering it
-// is also what lets a READMISSION put the node back in the estate map from any
-// node: the in is made only by a gesture that finds every log has taken the
-// node back, so until one gesture reaches every log it is made only on a node
-// that serves every partition (engine.MapAwaitsLogs) — and on a fleet where NO
-// node serves every partition it is not made at all. Nothing else lifts the
-// bar: the operator's own in refuses a barred node
-// (membership.ErrBarredMember), because an in sees no log. So until this
-// operation is registered, such a fleet keeps a readmitted node barred from
-// the map, and registering it is what lets that readmission land.
+// The operation's PARTITION FUNCTION is the one partition a gate record goes
+// to, the log's own ([GatePartitions]), so the router sends it exactly where it
+// sends every other operation on that partition: this node first where it
+// serves it, then the partition's serving holders in order ([Router.Gate]).
+// The holder that takes it publishes the record through its own write
+// authority on that log ([Backend.Gates]) — the judgement was made once, on
+// the node the operator asked, and is not made again — and the router reports
+// WHICH node wrote it, because what a refusal says (evicted, released, behind,
+// unvouched) is about the node whose authority published, and an operator told
+// "this node" of a refusal another node gave is sent to the wrong machine.
+//
+// That is also what lets a READMISSION put the node back in the estate map
+// from any node: the in is made only by a gesture that finds every log has
+// taken the node back, and only one gesture that reaches every log can find
+// that — on a fleet where no node serves every partition, nothing else could
+// lift the bar, since the operator's own in refuses a barred node
+// (membership.ErrBarredMember) because an in sees no log.
 //
 // Its CLASS is an idempotent write (§G6): a gate record carries the operation
 // id the gesture derived for that log and node, and the log's own ledger
 // answers a repeat with the record the first copy landed, so an unanswered
-// request moves on to the partition's next serving holder under the same id.
+// request moves on to the partition's next serving holder under the same id —
+// and so does one a holder answered unvouched, whose ledger cannot say whether
+// it landed while another holder's may. It is ONE APPEND ([AppendAttempt]), so
+// a silent holder is passed after an attempt rather than after the gesture's
+// whole budget, and it carries no session floor: the write authority decides
+// from its own snapshot and the broker arbitrates, so nothing the asking node
+// wrote has to be visible first. And every request NAMES its partition, since
+// no build from before partitions sends it.
 
 // OpStatelogGate is the operation's name on the wire.
 const OpStatelogGate = "statelog.gate"
@@ -93,4 +102,56 @@ func GatePartitions(l statelog.Layout, a GateArgs) ([]statelog.PartitionID, erro
 		}
 	}
 	return nil, fmt.Errorf("%w: layout %d has no log %s", ErrGateArgs, l.Number, log)
+}
+
+// GateWriter publishes one log's gate record through the serving node's own
+// write authority on it: the `statelog.gate` operation's server half for one
+// log ([Backend.Gates]).
+type GateWriter func(ctx context.Context, a GateArgs) (statelog.Result, error)
+
+// AppendAttempt bounds one attempt, on one holder, at an operation that is ONE
+// APPEND on one log ([opSpec.oneAppend]) — `statelog.gate` — whatever the
+// caller's own deadline.
+//
+// FIFTEEN SECONDS, from what the holder does. Its waits are the write
+// authority's own, each bounded by [statelog.DefaultResolveBudget] (five
+// seconds): one for its applier to reach a peer's record the decision has to
+// see, and one for the resolution of its own append — ten seconds of work at
+// most, and five more for the request's own transit and the snapshot the
+// decision reads. A holder that has not answered in that is silent rather than
+// slow, and the next serving holder is asked under the same operation id.
+// Bounded by the caller's deadline alone, as a seat's longer writes are
+// ([writeAttempt]), one silent holder took the whole gesture with it.
+const AppendAttempt = 2*statelog.DefaultResolveBudget + 5*time.Second
+
+// opStatelogGate is the operation — see the file's doc.
+var opStatelogGate = define(OpStatelogGate, opIdempotentWrite,
+	address[GateArgs]{partitions: func(_ context.Context, l statelog.Layout, _ Resolver,
+		a GateArgs) ([]statelog.PartitionID, error) {
+		return GatePartitions(l, a)
+	}}, false,
+	func(ctx context.Context, b Backend, _ *Actor, a GateArgs) (statelog.Result, error) {
+		if b.Gates == nil {
+			return statelog.Result{}, errNoHalf
+		}
+		write := b.Gates(a.Domain)
+		if write == nil {
+			return statelog.Result{}, errNoHalf
+		}
+		return write(ctx, a)
+	}).floorless().appends().named()
+
+// Gate publishes one log's gate record on a node that serves the log's
+// partition — this one, where it serves it and runs the log — and answers the
+// write's own three-valued outcome and the node whose write authority gave the
+// answer: this node's own id where it did, and empty where no holder answered
+// at all ([ErrPartitionUnserved], or a request that could not be made).
+//
+// The caller has judged the gesture already; the holder publishes what it is
+// given, under the operation id in a, and a repeat of the id anywhere is the
+// same operation on that log.
+func (r *Router) Gate(ctx context.Context, a GateArgs) (statelog.Result, string, error) {
+	var writer string
+	res, err := callFrom(ctx, r, opStatelogGate, nil, a, func(node string) { writer = node })
+	return res, writer, err
 }
