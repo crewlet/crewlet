@@ -75,14 +75,22 @@ func BoundSeat(chart func() *org.Organization, operatorID string) string {
 func (s *Server) dispatch(ctx context.Context, transport, requestID, name string,
 	args map[string]any) (tools.Result, bool, error) {
 
+	// THE CALLER'S SEAT IS RESOLVED ONCE, here or at the transport's
+	// admission, and the tool's actor and the audit record both read that
+	// one answer — see [withSeat].
+	operatorID, _ := auth.OperatorFrom(ctx)
+	seat, pinned := pinnedSeat(ctx)
+	if !pinned {
+		seat = seatFor(s.chart, operatorID)
+		ctx = withSeat(ctx, seat)
+	}
 	result, served, err := s.catalogue.call(ctx, name, args)
 	if !served || readOnly(name) {
 		return result, served, err
 	}
-	operatorID, _ := auth.OperatorFrom(ctx)
 	record := types.OperatorActed{
 		OperatorID: operatorID,
-		ActorSeat:  seatFor(s.chart, operatorID),
+		ActorSeat:  seat,
 		Transport:  transport,
 		Tool:       name,
 		RequestID:  requestID,

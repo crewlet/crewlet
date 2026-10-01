@@ -43,6 +43,37 @@ func operationFrom(ctx context.Context) string {
 	return op
 }
 
+// seatKey is the context key [withSeat] stores under.
+type seatKey struct{}
+
+// withSeat pins the seat ONE call's caller is bound to — "" for a token
+// nobody binds — so every frame of that call reads the one answer.
+//
+// # Why the seat is resolved once per call and carried
+//
+// The binding lives in the company chart, which a config apply replaces
+// while a call is running. Resolved at each frame that asks, one call asked
+// three times — the act transport's admission, the actor the tool writes as
+// ([WorkActor]) and the audit record ([Server.dispatch]) — and an apply that
+// rebound or unbound the token between them admitted a call as one person,
+// wrote it as another or as nobody, and audited it under a third. A call is
+// made BY whoever it was admitted as, so the first answer is the call's, and
+// a rebinding applies from the next call on.
+//
+// THE DISPATCH SETS IT, for every transport — the act transport's admission
+// pins it first, and the dispatch reuses that answer rather than asking
+// again. Read back by [pinnedSeat], which tells a pinned "" (an unbound
+// caller) from no pin at all.
+func withSeat(ctx context.Context, seat string) context.Context {
+	return context.WithValue(ctx, seatKey{}, seat)
+}
+
+// pinnedSeat reads the seat [withSeat] pinned, and whether one was.
+func pinnedSeat(ctx context.Context) (string, bool) {
+	seat, ok := ctx.Value(seatKey{}).(string)
+	return seat, ok
+}
+
 // WorkActor and PageActor read the operator off the request's context.
 //
 // # An unbound token identifies as itself
@@ -79,6 +110,10 @@ func operationFrom(ctx context.Context) string {
 // value a config apply replaces — so it is read per call rather than captured.
 // A nil chart, or a build with none loaded, resolves no seat, which is exactly
 // an unbound token and an ordinary state.
+//
+// THE SEAT THE CALL WAS PINNED TO WINS ([withSeat]): every call through the
+// dispatch carries the one answer its admission and its audit read, and the
+// chart is read here only for a caller that reached the actor some other way.
 func WorkActor(chart func() *org.Organization) func(
 	context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
@@ -94,7 +129,11 @@ func WorkActor(chart func() *org.Organization) func(
 		actor := builtin.Actor{
 			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
 		}
-		actor.Seat = seatFor(chart, id)
+		if seat, pinned := pinnedSeat(ctx); pinned {
+			actor.Seat = seat
+		} else {
+			actor.Seat = seatFor(chart, id)
+		}
 		// AND THE OPERATION THE TRANSPORT NAMED, where it named one: it
 		// is what makes a retried request the same writes. See
 		// [WithOperation].

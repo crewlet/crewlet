@@ -1723,7 +1723,9 @@ or not it went through:
 Each carries `source: "operator"` on the envelope, so
 `GET /events?source=operator` is the runtime audit on its own; its actor is the
 token's own name (`operator_id`), with `actor_seat` naming the person the token
-is bound to by `contact.crewlet_operator_id` (absent for a token nobody bound).
+is bound to by `contact.crewlet_operator_id` (absent for a token nobody bound)
+— the seat the call was made as, resolved once for the call, so a config apply
+landing while it ran never makes the record name a different person.
 Both are filed under `lifecycle`.
 
 ```json
@@ -2854,7 +2856,11 @@ disable a control with the reason rather than offer a press that fails.
 **Who the write is attributed to does not change.** The author is the token,
 the kind `operator`, and the bound seat rides beside it as the person whose own
 state it is — so a write from the dashboard and one from the same person's
-assistant read identically in the audit and in every thread.
+assistant read identically in the audit and in every thread. The seat is
+resolved **once per call**, when the call is admitted, and the write and its
+audit record both name that one answer: a config apply that rebinds or unbinds
+the token while the call is running applies from the next call on, and never
+admits a call as one person and makes it as another.
 
 **The body is JSON and nothing else**: `{request_id, args}`, declared
 `Content-Type: application/json` (UTF-8). A form post, `text/plain` or no

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -184,6 +186,86 @@ func TestTheAuditReadsACallAsItsAnswerDoes(t *testing.T) {
 			}
 			if !outcome.Valid() {
 				t.Errorf("%q is not an audit outcome", outcome)
+			}
+		})
+	}
+}
+
+// rebindingChart is a chart a config apply replaces on EVERY read: the token
+// `founder` is bound to Jane Founder, then to Pat Successor, then to nobody,
+// and round again — the worst case of an apply landing while one call runs.
+func rebindingChart() func() *org.Organization {
+	var mu sync.Mutex
+	reads := 0
+	bindings := []string{"Jane Founder", "Pat Successor", ""}
+	return func() *org.Organization {
+		mu.Lock()
+		bound := bindings[reads%len(bindings)]
+		reads++
+		mu.Unlock()
+		o := &org.Organization{Name: "Nimbus"}
+		for _, name := range []string{"Jane Founder", "Pat Successor"} {
+			contact := &org.HumanContact{}
+			if name == bound {
+				contact.CrewletOperatorID = "founder"
+			}
+			o.Roles = append(o.Roles, &org.Role{Name: name, Kind: org.KindHuman, Contact: contact})
+		}
+		o.Normalize()
+		return o
+	}
+}
+
+// ONE CALL IS MADE BY ONE PERSON, whatever an apply does to the chart while it
+// runs. The seat a call is admitted as is the seat its write is made as and the
+// seat its audit record names: resolved at each frame instead, a rebinding
+// between them admitted the act as Jane, wrote it as Pat and audited it as
+// nobody. Over MCP, which admits nobody by seat, the write and the audit still
+// read one answer.
+func TestACallIsMadeAndAuditedAsTheSeatItWasAdmittedAs(t *testing.T) {
+	t.Parallel()
+	for _, transport := range []string{types.TransportAct, types.TransportMCP} {
+		t.Run(transport, func(t *testing.T) {
+			t.Parallel()
+			chart := rebindingChart()
+			audit := &auditLog{}
+			work := &recordingWork{}
+			s := newSurface(t, operator.Options{
+				Work: builtin.WorkDeps{
+					Reader: stubWorkReader{}, Writer: work.writer,
+					Actor: operator.WorkActor(chart),
+				},
+				Org:   chart,
+				Audit: audit,
+			})
+			switch transport {
+			case types.TransportAct:
+				status, answer := act(t, guarded(s, false), "founder-secret",
+					tracker.CreateWorkItemTool, "application/json", createBody(requestA))
+				if status != http.StatusOK {
+					t.Fatalf("the act answered %d %v", status, answer)
+				}
+			case types.TransportMCP:
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				if _, err := dialOperator(t, s, "founder").CallTool(ctx, &mcp.CallToolParams{
+					Name: tracker.CreateWorkItemTool, Arguments: createArgs(),
+				}); err != nil {
+					t.Fatalf("create over MCP: %v", err)
+				}
+			}
+			actors, _ := work.writes()
+			recorded := audit.published()
+			if len(actors) != 1 || len(recorded) != 1 {
+				t.Fatalf("one call wrote %d times and was audited %d times",
+					len(actors), len(recorded))
+			}
+			written, audited := actors[0].Seat, payloadOf(t, recorded[0]).ActorSeat
+			if written != audited {
+				t.Errorf("the call wrote as %q and was audited as %q", written, audited)
+			}
+			if transport == types.TransportAct && written != "jane-founder" {
+				t.Errorf("the act was admitted as jane-founder and wrote as %q", written)
 			}
 		})
 	}

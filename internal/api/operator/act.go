@@ -202,7 +202,9 @@ func readOnly(name string) bool {
 // The author is the token, the kind `operator`, the bound seat rides beside
 // them — all decided by [WorkActor] off the request's own credential, exactly
 // as on the MCP transport. This handler adds nothing to the actor but the
-// operation its request id names; see [WithOperation].
+// operation its request id names ([WithOperation]) and the seat it admitted
+// the caller as ([withSeat]), so a config apply that rebinds the token while
+// the call runs cannot make it somebody else's.
 func (s *Server) ActHandler() http.Handler {
 	return http.HandlerFunc(s.act)
 }
@@ -295,6 +297,12 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWith(w, http.StatusForbidden, CodeUnbound, unbound(name, operatorID))
 		return
 	}
+
+	// AND THE CALL IS MADE AS THAT PERSON, whatever an apply does to the
+	// chart while it runs: the seat admitted here is pinned on the context,
+	// so the actor the tool writes as and the audit record name this one
+	// answer rather than asking the chart again. See [withSeat].
+	ctx = withSeat(ctx, seat)
 
 	logged := []any{"tool", name, "operator_id", operatorID, "seat", seat,
 		"request_id", requestID}
