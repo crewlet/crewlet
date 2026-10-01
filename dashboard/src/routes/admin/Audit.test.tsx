@@ -33,7 +33,18 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
 });
 
+/*
+ * THE SCREEN'S CLOCK IS HELD STILL. The audit reads the shared one-second
+ * clock (`useNow`), and a list's window follows it, so every real tick moved
+ * the window's edges: the tracker was asked again and every row was rendered
+ * again, once a second, for as long as a case ran. A case that took three
+ * seconds on a loaded runner did three ticks of work it never asked for, and
+ * the slower the runner the more ticks — the hundred-row case timed out on
+ * exactly that. Only the interval the clock ticks on is faked; the one case
+ * about time passing moves every timer itself.
+ */
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   location.hash = "#/admin/audit";
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
@@ -50,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   location.hash = "";
 });
