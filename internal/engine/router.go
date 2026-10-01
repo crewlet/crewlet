@@ -427,12 +427,16 @@ func (e *Engine) partitionGates(s *stateLog, p statelog.PartitionID) func(domain
 					"was sent to %s for %s of layout %d", estate.ErrGateArgs, a.Domain,
 					a.Partition, a.Layout, s.nodeID, id, layout.Number)
 			}
+			readmit, err := readmits(a.Kind)
+			if err != nil {
+				return statelog.Result{}, err
+			}
 			gl, err := gateLogFor(running, running.publisher,
 				e.backends.Store.PartitionHandle(p.String()).Reader(), s.nodeID, e.metrics)
 			if err != nil {
 				return statelog.Result{}, err
 			}
-			return gl.write(ctx, a.By, a.OpID, a.Node, a.Readmit)
+			return gl.write(ctx, a.By, a.OpID, a.Node, readmit)
 		}
 	}
 }

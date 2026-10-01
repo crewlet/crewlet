@@ -182,11 +182,11 @@ func TestALogThisNodeCannotWriteIsSentToANodeThatCan(t *testing.T) {
 	}
 	want := []estate.GateArgs{
 		{Layout: 1, Domain: "tracker", Partition: "tracker.000", Node: away, By: "ops",
-			OpID: "op-tracker@tracker.000"},
+			OpID: "op-tracker@tracker.000", Kind: estate.GateEvict},
 		{Layout: 1, Domain: "tracker", Partition: "tracker.001", Node: away, By: "ops",
-			OpID: "op-tracker@tracker.001"},
+			OpID: "op-tracker@tracker.001", Kind: estate.GateEvict},
 		{Layout: 1, Domain: "pages", Partition: "pages.000", Node: away, By: "ops",
-			OpID: "op-pages@pages.000"},
+			OpID: "op-pages@pages.000", Kind: estate.GateEvict},
 	}
 	if got := route.sent(); !slices.Equal(got, want) {
 		t.Errorf("the router was sent\n%+v\nwant\n%+v", got, want)

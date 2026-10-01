@@ -598,6 +598,21 @@ func (d DomainGate) Remedy() statelog.GateRemedy {
 			"or did not answer. The same gesture under the same operation id "+
 			"finishes it once one does", d.Stream))
 	}
+	if errors.Is(d.Err, estate.ErrGateKind) {
+		// A KIND THE WRITING NODE DOES NOT WRITE: it runs an older build
+		// than this one, which knows neither the kind nor what to do with
+		// it — and refused it rather than writing the wrong gate. Nothing
+		// landed, so the same operation id finishes it once that node runs
+		// the build this one does.
+		writer := "the node that served the partition " + d.Stream + " is on"
+		if d.Writer != "" {
+			writer = "node " + d.Writer
+		}
+		return retry(fmt.Sprintf("%s does not write this kind of gate record: it runs "+
+			"an older build than this node, and refused the record rather than write "+
+			"another kind in its place. Once it runs this node's build, the same gesture "+
+			"under the same operation id finishes it", writer))
+	}
 	if errors.Is(d.Err, queue.ErrTooLarge) {
 		return statelog.GateRemedy{Detail: "the record is larger than the broker " +
 			"carries, which no retry changes: check the broker's max_payload"}
@@ -830,13 +845,37 @@ func routedGateLog(route gateRoute, layout statelog.Layout, id statelog.LogID,
 
 			res, writer, err := route.Gate(ctx, estate.GateArgs{
 				Layout: layout.Number, Domain: id.Domain, Partition: id.Partition.String(),
-				Node: node, By: by, OpID: opID, Readmit: readmit,
+				Node: node, By: by, OpID: opID, Kind: gateKind(readmit),
 			})
 			if writer == self {
 				writer = ""
 			}
 			return res, writer, err
 		}}
+}
+
+// gateKind is the wire's name for a gesture's sign ([estate.GateKind]).
+func gateKind(readmit bool) estate.GateKind {
+	if readmit {
+		return estate.GateReadmit
+	}
+	return estate.GateEvict
+}
+
+// readmits is the sign of a gate record that arrived over the wire: whether it
+// is a readmission, and an error for a kind this build does not write.
+//
+// EVERY KIND NAMED, and no default that writes: a record that is not a
+// readmission is not thereby an eviction, which is the one reading that
+// publishes the most destructive record a gate has ([estate.GateKind]).
+func readmits(kind estate.GateKind) (bool, error) {
+	switch kind {
+	case estate.GateEvict:
+		return false, nil
+	case estate.GateReadmit:
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: %q", estate.ErrGateKind, kind)
 }
 
 // liveLeases is the slice of the coordination backend the gate and the trim

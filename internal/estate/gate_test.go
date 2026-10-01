@@ -22,7 +22,7 @@ func TestAGateRecordGoesToItsOwnLogsPartition(t *testing.T) {
 		{Space: statelog.SpacePages, Partitions: 1, Domains: []string{"pages"}},
 	}}
 	args := GateArgs{Layout: 1, Domain: "tracker", Partition: "tracker.003", Node: "node-b",
-		By: "ops", OpID: "op"}
+		By: "ops", OpID: "op", Kind: GateEvict}
 	got, err := GatePartitions(layout, args)
 	if err != nil || len(got) != 1 || got[0] != (statelog.PartitionID{Space: statelog.SpaceTracker, Index: 3}) {
 		t.Fatalf("the gate record of tracker@tracker.003 goes to %v (%v), want tracker.003 alone", got, err)
@@ -44,7 +44,7 @@ func TestAGateRecordGoesToItsOwnLogsPartition(t *testing.T) {
 
 // aGateRecord is an eviction's record on layout 0's tracker log.
 var aGateRecord = GateArgs{Layout: 0, Domain: "tracker", Partition: statelog.EstatePartition.String(),
-	Node: "node-away", By: "ops", OpID: "op-evict-1"}
+	Node: "node-away", By: "ops", OpID: "op-evict-1", Kind: GateEvict}
 
 // A GATE RECORD ON A LOG THIS NODE DOES NOT SERVE REACHES A SERVING HOLDER,
 // which publishes it, and the router says which node did.
@@ -171,5 +171,36 @@ func TestAGateRecordPassesAWedgedHolderAfterOneAppend(t *testing.T) {
 	}
 	if took := time.Since(began); took > 20*time.Second {
 		t.Errorf("the record took %v past a wedged holder, want about one append's attempt", took)
+	}
+}
+
+// A GATE RECORD OF A KIND THIS NODE DOES NOT WRITE IS REFUSED, AND NOTHING IS
+// PUBLISHED.
+//
+// The kind is named on the wire, never a flag whose zero value is an eviction:
+// read as one, a record with no kind — or a kind a later build adds, decoded by
+// this one — would have dropped every record the named node publishes on that
+// log, on every applier. Refused at the serving node instead, before any
+// backend sees it, and the refusal keeps its identity back across the wire.
+func TestAGateRecordOfAKindThisNodeDoesNotWriteIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []GateKind{"", "release", "readmit-all"} {
+		f := newFleet(t, "data-1")
+		r := f.router(t, "node-x", nil)
+		record := aGateRecord
+		record.Kind = kind
+		res, _, err := r.Gate(t.Context(), record)
+		if !errors.Is(err, ErrGateKind) || res.Outcome != "" {
+			t.Errorf("a record of kind %q answered (%+v, %v), want ErrGateKind and no "+
+				"outcome", kind, res, err)
+		}
+		if got := f.nodes["data-1"].gated(); len(got) != 0 {
+			t.Errorf("a record of kind %q was published: %+v", kind, got)
+		}
+	}
+	for _, kind := range GateKinds {
+		if !kind.Valid() {
+			t.Errorf("%q is a kind this build writes and is not valid", kind)
+		}
 	}
 }

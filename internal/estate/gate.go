@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -76,12 +77,49 @@ type GateArgs struct {
 	By   string `json:"by"`
 	OpID string `json:"op_id"`
 
-	// Readmit is a readmission; false is an eviction.
-	Readmit bool `json:"readmit,omitempty"`
+	// Kind is which gate the record is — REQUIRED, and refused by the
+	// serving node when it is not one this build knows ([GateKind.Valid]).
+	Kind GateKind `json:"kind"`
 }
+
+// GateKind is which node gate a `statelog.gate` record is: an eviction, or the
+// readmission that undoes one.
+//
+// A NAMED KIND, NEVER A FLAG, because of what the zero value of a flag would
+// mean here. Carried as `readmit bool`, every request that was not a
+// readmission — an empty field, a sender that forgot it, and above all a kind
+// a later build adds, which this build would decode to false — was published
+// as an EVICTION: the most destructive record a node gate writes, dropping
+// every record the named node publishes on that log, on every applier. A kind
+// this build does not know is refused instead ([ErrGateKind]), with nothing
+// written, so a rolling upgrade's newer gesture reaches a node that can write
+// it rather than one that writes the wrong one. A RELEASE never travels here:
+// a leaving node publishes its own (contract §F8).
+type GateKind string
+
+const (
+	// GateEvict is an operator's eviction: the node's records above it
+	// apply nowhere on this log, and the trim stops counting it here.
+	GateEvict GateKind = "evict"
+
+	// GateReadmit is a readmission: the eviction before it lifted, and the
+	// node counted on this log again.
+	GateReadmit GateKind = "readmit"
+)
+
+// GateKinds is every kind this build writes, for validation and for a test
+// that walks them.
+var GateKinds = []GateKind{GateEvict, GateReadmit}
+
+// Valid reports whether k is a kind this build writes.
+func (k GateKind) Valid() bool { return slices.Contains(GateKinds, k) }
 
 // ErrGateArgs reports a gate record that names no log of the running layout.
 var ErrGateArgs = errors.New("estate: the gate record names no log of the running layout")
+
+// ErrGateKind reports a gate record whose kind the serving node does not write
+// — none at all, or one a later build added. Nothing was published.
+var ErrGateKind = errors.New("estate: the gate record is of a kind this node does not write")
 
 // GatePartitions is the partition a gate record goes to — exactly one, the
 // log's own — or why the record names none of layout: another layout's log,
@@ -131,6 +169,14 @@ var opStatelogGate = define(OpStatelogGate, opIdempotentWrite,
 		return GatePartitions(l, a)
 	}}, false,
 	func(ctx context.Context, b Backend, _ *Actor, a GateArgs) (statelog.Result, error) {
+		// THE KIND FIRST, before any backend sees the record: a kind this
+		// node does not write is refused whatever it runs, and never read
+		// as the eviction a missing flag would have been.
+		if !a.Kind.Valid() {
+			return statelog.Result{}, fmt.Errorf("%w: %q (this node writes %v) — the "+
+				"record for %s@%s on %s", ErrGateKind, a.Kind, GateKinds, a.Domain,
+				a.Partition, a.Node)
+		}
 		if b.Gates == nil {
 			return statelog.Result{}, errNoHalf
 		}

@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,5 +188,36 @@ func TestTheGateBudgetCoversAWalkPastEveryDefaultHolder(t *testing.T) {
 	if GateBudget < walk {
 		t.Errorf("GateBudget is %v, and a walk past %d holders with one asked again "+
 			"last takes %v", GateBudget, config.DefaultEstateReplicas, walk)
+	}
+}
+
+// A GATE RECORD THAT IS NOT A READMISSION IS NOT THEREBY AN EVICTION.
+//
+// The serving half reads the sign of a record that arrived over the wire from
+// its named kind, and a kind this build does not write — none, or one a later
+// build adds — is refused rather than published as the eviction a missing flag
+// used to decode to. The remedy says nothing landed and names the node that
+// refused it.
+func TestAGateRecordOfAnUnknownKindIsNeverAnEviction(t *testing.T) {
+	t.Parallel()
+	for kind, want := range map[estate.GateKind]bool{estate.GateEvict: false, estate.GateReadmit: true} {
+		if got, err := readmits(kind); err != nil || got != want {
+			t.Errorf("a record of kind %q reads as readmit=%v (%v), want %v", kind, got, err, want)
+		}
+		if gateKind(want) != kind {
+			t.Errorf("readmit=%v is sent as %q, want %q", want, gateKind(want), kind)
+		}
+	}
+	for _, kind := range []estate.GateKind{"", "release", "Evict"} {
+		if got, err := readmits(kind); !errors.Is(err, estate.ErrGateKind) {
+			t.Errorf("a record of kind %q reads as readmit=%v (%v), want ErrGateKind", kind, got, err)
+		}
+	}
+	d := DomainGate{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", Writer: "node-old",
+		Err: fmt.Errorf("refused: %w", estate.ErrGateKind)}
+	remedy := d.Remedy()
+	if !remedy.Offers(statelog.GateRetrySameOp) || !strings.Contains(remedy.Detail, "node-old") {
+		t.Errorf("a kind the writer refused is remedied %+v, want the same gesture again, "+
+			"naming node-old", remedy)
 	}
 }
