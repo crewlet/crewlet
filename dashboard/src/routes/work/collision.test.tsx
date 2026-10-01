@@ -14,6 +14,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeAll, afterAll, expect, test, vi } from "vitest";
 
 import { Work } from "./Work.tsx";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkSummary } from "~/protocol/index.ts";
@@ -141,3 +142,39 @@ for (const shape of ["list", "table", "board", "timeline", "calendar"]) {
     expect(screen.queryAllByText(SHARED_KEY).length).toBeGreaterThanOrEqual(2);
   });
 }
+
+// `[` AND `]` STEP FROM ONE OF THE PAIR TO THE OTHER.
+//
+// The rail walks the order the list publishes, matching the open peek against
+// it by token. Published by key, the pair was two entries naming the claimant:
+// `]` from the claimant found its own token next and stayed put, and the
+// duplicate, once open by its id, matched no entry at all, so its rail had no
+// stepper. The keys are pressed on the window, as a reader presses them.
+test("[ and ] step the rail between two tasks under one key", async () => {
+  location.hash = "#/work?shape=list";
+  serving("list");
+  render(
+    <Router>
+      <PeekNeighbours>
+        <Work />
+        <PeekHost />
+      </PeekNeighbours>
+    </Router>,
+  );
+  await waitFor(() => expect(anchorOf("list", DUPLICATE_TITLE)).toBeTruthy());
+
+  fireEvent.click(linkIn(anchorOf("list", CLAIMANT_TITLE)));
+  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+  // THE RAIL IS UP before a key is pressed, or `]` lands on no binding and
+  // the case reads a stepper that was never drawn as one that did not move.
+  await waitFor(() => expect(screen.getByLabelText("Next")).toBeTruthy());
+
+  fireEvent.keyDown(window, { key: "]" });
+  await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
+
+  // AND BACK: the duplicate's own entry is found by its id, so its rail has
+  // a stepper at all.
+  await waitFor(() => expect(screen.getByLabelText("Previous")).toBeTruthy());
+  fireEvent.keyDown(window, { key: "[" });
+  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+});

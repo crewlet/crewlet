@@ -18,6 +18,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkSearch } from "./WorkSearch.tsx";
+import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type WorkRanked } from "~/protocol/index.ts";
@@ -93,7 +94,12 @@ const hit = (over: Partial<WorkRanked>): WorkRanked => ({
 /** What the engine answers: one fixed list, or one chosen by the phrase asked. */
 type Answer = WorkRanked[] | ((q: string) => WorkRanked[]);
 
-function mount(answer: Answer) {
+/**
+ * The screen over a socket answering `answer`. With `rail`, it is mounted the
+ * way the frame mounts it — beside the peek rail, inside the provider the
+ * screen publishes its `[`/`]` order to — so a case can step the rail.
+ */
+function mount(answer: Answer, { rail = false }: { rail?: boolean } = {}) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string, p: { q: string }) => Promise<unknown> }).query = (
@@ -107,7 +113,14 @@ function mount(answer: Answer) {
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <WorkSearch />
+        {rail ? (
+          <PeekNeighbours>
+            <WorkSearch />
+            <PeekHost />
+          </PeekNeighbours>
+        ) : (
+          <WorkSearch />
+        )}
       </Router>
     </ClientContext.Provider>,
   );
@@ -222,4 +235,26 @@ test("two hits under one key open two different tasks", async () => {
   await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
   await waitFor(() => expect(rowOf(CLAIMANT_TITLE).classList.contains("selected")).toBe(true));
   expect(rowOf(DUPLICATE_TITLE).classList.contains("selected")).toBe(false);
+});
+
+// AND `[` / `]` STEP DOWN THE RANKING FROM ONE OF THE PAIR TO THE OTHER. The
+// rail walks the order this screen publishes, matched against the open peek
+// by token: published by key, both hits were the claimant's entry, so `]` from
+// the claimant stayed put and the duplicate's rail, matching no entry, drew no
+// stepper at all.
+test("[ and ] step the rail between two hits under one key", async () => {
+  mount(collidingHits(), { rail: true });
+  await waitFor(() => expect(screen.getByText(DUPLICATE_TITLE)).toBeTruthy());
+
+  const link = (title: string) => rowOf(title).querySelector<HTMLAnchorElement>("a.row-link")!;
+  fireEvent.click(link(CLAIMANT_TITLE));
+  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
+  await waitFor(() => expect(screen.getByLabelText("Next")).toBeTruthy());
+
+  fireEvent.keyDown(window, { key: "]" });
+  await waitFor(() => expect(peekNow()).toBe(`item:${DUPLICATE}`));
+
+  await waitFor(() => expect(screen.getByLabelText("Previous")).toBeTruthy());
+  fireEvent.keyDown(window, { key: "[" });
+  await waitFor(() => expect(peekNow()).toBe(`item:${SHARED_KEY}`));
 });
