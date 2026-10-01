@@ -426,7 +426,6 @@ export function MyWork() {
                 <Asks
                   rows={mine.asked_of_me}
                   chrome={chrome}
-                  ownDay={ownDay}
                   whenEmpty={
                     <EmptyState
                       size="compact"
@@ -852,12 +851,7 @@ function Block({
 export function Asks({
   rows,
   chrome,
-  // WHOSE QUESTIONS THESE ARE, and the DEFAULT IS SOMEBODY ELSE'S. This block
-  // is rendered on a report's day here and on every seat page, which is written
-  // in the third person throughout — so a caller that says nothing is a caller
-  // that has not claimed the rows are the reader's.
-  ownDay = false,
-  // AND WHAT AN EMPTY ONE DRAWS IS THE CALLER'S DECISION, never a default that
+  // WHAT AN EMPTY ONE DRAWS IS THE CALLER'S DECISION, never a default that
   // suits one of them: a TAB must say something, because a tab that rendered
   // nothing would leave its own name on the strip over a blank panel; a block
   // STACKED among other cards must say nothing, because three "nothing here"
@@ -866,7 +860,6 @@ export function Asks({
 }: {
   rows: WorkAskRow[];
   chrome?: RowChrome;
-  ownDay?: boolean;
   whenEmpty?: ReactNode;
 }) {
   if (rows.length === 0) return <>{whenEmpty ?? null}</>;

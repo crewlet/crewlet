@@ -268,7 +268,7 @@ export function orgTableParts(): {
         { key: "actions", header: "Actions", headerHidden: true },
       ],
       rows: [{ id: "a", label: "A" }],
-      renderCell: (id: string, column: number) =>
+      renderCell: (_id: string, column: number) =>
         column === 1
           ? createElement(OrgTableName, {
               icon: createElement("svg"),

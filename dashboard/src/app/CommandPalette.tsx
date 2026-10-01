@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Input, Kbd, useBodyScrollLock, useLayerContainer, useModalLayer } from "@crewlethq/ui";
 import { DESTINATIONS } from "./nav.ts";
-import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
+import { useNavigator, useRoute, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRecentsByVisit, forgetAll } from "~/lib/recents.ts";
 import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
@@ -84,7 +84,7 @@ function score(text: string, q: string): number {
  * dark" while the page is already dark is a control that does not know what it
  * is looking at.
  */
-function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
+function commands(prefs: ViewerPrefs, route: Route): Hit[] {
   const out: Hit[] = [];
   const add = (id: string, icon: MarkName, label: string, hint: string, go: () => void) =>
     out.push({ id: `cmd-${id}`, group: "Commands", icon, label, hint, go });
@@ -295,7 +295,7 @@ export function CommandPalette({
     }
 
     if (sigil === ">") {
-      for (const command of commands(prefs, nav, route)) {
+      for (const command of commands(prefs, route)) {
         const s = query ? score(command.label, query) : 0;
         if (s < 0) continue;
         push(command, s);
