@@ -115,7 +115,7 @@ func (g Gathered[P]) Cursor(next map[statelog.PartitionID]string) string {
 		}
 		return ""
 	}
-	return encodeGatherCursor(next)
+	return encodeGatherCursor(g.op, next)
 }
 
 // gatherOp is a typed handle on one registered gather: its declaration, and
@@ -402,9 +402,19 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 	cursors := map[statelog.PartitionID]string{}
 	if paging := o.hooks.paging; paging != nil && !single {
 		if gathered := paging.cursor(args); gathered != "" {
-			own, cursorErr := decodeGatherCursor(gathered)
+			own, cursorErr := decodeGatherCursor(spec.name, gathered)
 			if cursorErr != nil {
 				return zero, statelog.Coverage{}, fmt.Errorf("estate: %s: %w", spec.name, cursorErr)
+			}
+			// EVERY PARTITION THE CURSOR NAMES IS ONE THIS LIST ADDRESSES:
+			// one it does not was minted under another layout, and read
+			// against this one the cursor would page nothing at all.
+			for p := range own {
+				if !slices.Contains(parts, p) {
+					return zero, statelog.Coverage{}, fmt.Errorf("estate: %s: %w: it names %s, "+
+						"which this list does not address under layout %d", spec.name, ErrBadCursor,
+						p, layout.Number)
+				}
 			}
 			// A PARTITION THE CURSOR DOES NOT NAME HAS NO MORE ROWS: the
 			// page that minted it took its last one.
@@ -422,12 +432,6 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 				"was asked from no surface, which is what decides it", spec.name)
 		}
 		level = statelog.GatherLevel(surface, lv.of(args), addressed)
-	}
-	if len(parts) == 0 {
-		// EVERY PARTITION THE CURSOR NAMED HAS RUN OUT: the page past the
-		// last, which is empty and complete.
-		out, mergeErr := o.merge(args, Gathered[P]{op: spec.name})
-		return out, statelog.Coverage{}, mergeErr
 	}
 	encoded, err := json.Marshal(args)
 	if err != nil {
@@ -493,6 +497,10 @@ func (o gatherOp[A, P, R]) resolve(ctx context.Context, l statelog.Layout, args 
 		if !slices.Contains(out, p) {
 			return nil, fmt.Errorf("%w: layout %d has no partition %s", ErrUnaddressed, l.Number, p)
 		}
+	}
+	if len(out) == 0 {
+		// NOTHING TO ASK, which a read must not answer as an empty list.
+		return nil, fmt.Errorf("%w: layout %d gives it no partition", ErrUnaddressed, l.Number)
 	}
 	return out, nil
 }

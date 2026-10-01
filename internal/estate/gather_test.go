@@ -3,6 +3,7 @@ package estate
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1241,16 +1242,32 @@ func TestAPagedGatherResumesEachPartitionWhereItLeftOff(t *testing.T) {
 	}
 }
 
-// A CURSOR THIS LIST DID NOT MINT IS REFUSED BY NAME, never read as the start.
+// A CURSOR THIS LIST DID NOT MINT IS REFUSED BY NAME, never read as the start
+// and never as an empty last page: a partition's own cursor handed to a list
+// across several, one another list minted, one naming a partition this list
+// does not address (another layout's), and one naming none.
 func TestAGatherCursorItDidNotMintIsRefused(t *testing.T) {
 	t.Parallel()
-	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": {tp(0)}})
-	_, _, err := listAll(t, f.router(t, "agent-1", nil), 5, "K07")
-	if !errors.Is(err, ErrBadCursor) {
-		t.Fatalf("err = %v, want ErrBadCursor", err)
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+	})
+	r := f.router(t, "agent-1", nil)
+	for name, cursor := range map[string]string{
+		"a partition's own": "K07",
+		"another list's": encodeGatherCursor("knowledge.search",
+			map[statelog.PartitionID]string{tp(1): "K05"}),
+		"another layout's": encodeGatherCursor(opTestList.spec.name,
+			map[statelog.PartitionID]string{pp(0): "K05"}),
+		"one naming none": gatherCursorVersion + base64.RawURLEncoding.EncodeToString(
+			[]byte(`{"op":"test.list","parts":{}}`)),
+	} {
+		answer, _, err := listAll(t, r, 5, cursor)
+		if !errors.Is(err, ErrBadCursor) {
+			t.Errorf("%s cursor = (%d rows, %v), want ErrBadCursor", name, len(answer.Rows), err)
+		}
 	}
 	next := map[statelog.PartitionID]string{tp(0): "", tp(3): "K11"}
-	got, err := decodeGatherCursor(encodeGatherCursor(next))
+	got, err := decodeGatherCursor(opTestList.spec.name, encodeGatherCursor(opTestList.spec.name, next))
 	if err != nil || len(got) != 2 || got[tp(3)] != "K11" || got[tp(0)] != "" {
 		t.Fatalf("the cursor read back as (%v, %v), want %v", got, err, next)
 	}

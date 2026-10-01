@@ -27,35 +27,50 @@ import (
 // presence, never by a sentinel string.
 //
 // The token is opaque to a caller — versioned and base64url, so it survives a
-// URL and a later change of shape is a new version rather than a misread.
+// URL and a later change of shape is a new version rather than a misread — and
+// it NAMES THE LIST that minted it: a cursor another list minted, or one that
+// names a partition this list does not address (minted under another layout),
+// is refused rather than read. Pruned by this list's partitions instead, it
+// would come back as an empty, complete page — the short list that reads like
+// a company with less in it.
 
 // gatherCursorVersion prefixes every gathered cursor this build mints.
 const gatherCursorVersion = "g1."
 
 // ErrBadCursor reports a gathered cursor this build cannot read: not one it
-// minted, or one a different shape of the list minted.
+// minted, or one a different list, or a different shape of this one, minted.
 var ErrBadCursor = errors.New("estate: the cursor is not one this list minted — " +
 	"page again from the start")
 
-// encodeGatherCursor is the cursor that resumes every partition in next, each
-// from its own cursor — empty when no partition has more rows.
-func encodeGatherCursor(next map[statelog.PartitionID]string) string {
+// gatherCursor is a gathered cursor's body: the list that minted it, and where
+// each partition still holding rows resumes, by partition id.
+type gatherCursor struct {
+	Op    string            `json:"op"`
+	Parts map[string]string `json:"parts"`
+}
+
+// encodeGatherCursor is the cursor that resumes every partition in next of the
+// list op, each from its own cursor — empty when no partition has more rows.
+func encodeGatherCursor(op string, next map[statelog.PartitionID]string) string {
 	if len(next) == 0 {
 		return ""
 	}
-	byName := make(map[string]string, len(next))
+	body := gatherCursor{Op: op, Parts: make(map[string]string, len(next))}
 	for p, own := range next {
-		byName[p.String()] = own
+		body.Parts[p.String()] = own
 	}
-	raw, err := json.Marshal(byName) // a map of strings always encodes, keys sorted
+	raw, err := json.Marshal(body) // strings and a map of them always encode, keys sorted
 	if err != nil {
 		return ""
 	}
 	return gatherCursorVersion + base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// decodeGatherCursor reads back what [encodeGatherCursor] wrote.
-func decodeGatherCursor(token string) (map[statelog.PartitionID]string, error) {
+// decodeGatherCursor reads back what [encodeGatherCursor] wrote for the list
+// op: where each partition it names resumes. A cursor op did not mint, or one
+// that names no partition — which [encodeGatherCursor] never writes — is
+// [ErrBadCursor].
+func decodeGatherCursor(op, token string) (map[statelog.PartitionID]string, error) {
 	body, ok := strings.CutPrefix(token, gatherCursorVersion)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrBadCursor, token)
@@ -64,12 +79,18 @@ func decodeGatherCursor(token string) (map[statelog.PartitionID]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadCursor, err)
 	}
-	var byName map[string]string
-	if err := json.Unmarshal(raw, &byName); err != nil {
+	var cursor gatherCursor
+	if err := json.Unmarshal(raw, &cursor); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadCursor, err)
 	}
-	out := make(map[statelog.PartitionID]string, len(byName))
-	for name, own := range byName {
+	switch {
+	case cursor.Op != op:
+		return nil, fmt.Errorf("%w: it pages %q, not %s", ErrBadCursor, cursor.Op, op)
+	case len(cursor.Parts) == 0:
+		return nil, fmt.Errorf("%w: it names no partition", ErrBadCursor)
+	}
+	out := make(map[statelog.PartitionID]string, len(cursor.Parts))
+	for name, own := range cursor.Parts {
 		p, err := statelog.ParsePartitionID(name)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrBadCursor, err)
