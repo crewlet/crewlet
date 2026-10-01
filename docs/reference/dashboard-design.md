@@ -3143,7 +3143,10 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   when to ask again, and each wrong about a different case. It keeps the last
   answer through any failure but a refusal on authority (a reader refused is
   shown nothing they were refused), starts from nothing when its question
-  changes, and arms every next ask where the answer lands (`lib/reread.ts`),
+  changes — in the very render that carries the new question, since each
+  answer is stamped with the question it answers, where a reset written by an
+  effect left one render drawing the last question's answer as finished — and
+  arms every next ask where the answer lands (`lib/reread.ts`),
   at the wait `restRetryMs` decides: a `503` the engine wrote is drawn as
   `unavailable` (the credential listing drew it as a fault on the node, and
   the pass history as "No pass has run on this node") and asked again when it

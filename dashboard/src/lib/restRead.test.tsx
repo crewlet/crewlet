@@ -252,6 +252,45 @@ test("a new key starts from nothing and is read at once", async () => {
   expect(view.result.current.data).toBe("answer 2");
 });
 
+// AND NOT ONE RENDER SAYS OTHERWISE. The key's effect resets what is held, a
+// render late: the render that first carried a new key handed back the last
+// key's answer, finished, and a read closed or opened again did the same — a
+// closed rail still holding what it read, and one opened again drawn as a read
+// that had answered nothing. Every render is recorded here, not only the one
+// after the effects have settled, because the one before them is drawn too.
+test("no render under a new key, or of a read closed or opened, holds another's answer", async () => {
+  const seen: Array<{ k: string; data: unknown; loading: boolean }> = [];
+  const view = renderHook(
+    ({ k, enabled }: { k: string; enabled: boolean }) => {
+      const reading = useRestRead(k, () => Promise.resolve(`answer for ${k}`), { enabled });
+      seen.push({ k, data: reading.data, loading: reading.loading });
+      return reading;
+    },
+    { wrapper, initialProps: { k: "/runs/r1", enabled: true } },
+  );
+  await wait(0);
+  expect(view.result.current.data).toBe("answer for /runs/r1");
+
+  seen.length = 0;
+  view.rerender({ k: "/runs/r2", enabled: true });
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.every((r) => r.data === null && r.loading)).toBe(true);
+  await wait(0);
+  expect(view.result.current.data).toBe("answer for /runs/r2");
+
+  seen.length = 0;
+  view.rerender({ k: "/runs/r2", enabled: false });
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.every((r) => r.data === null && !r.loading)).toBe(true);
+
+  seen.length = 0;
+  view.rerender({ k: "/runs/r2", enabled: true });
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.every((r) => r.data === null && r.loading)).toBe(true);
+  await wait(0);
+  expect(view.result.current.data).toBe("answer for /runs/r2");
+});
+
 // AND SO DOES ITS CADENCE: a failure under the new key is waited by what THAT
 // key holds — nothing yet — never by the pass the last key was following.
 test("a new key's first failure is not waited by the last key's cadence", async () => {

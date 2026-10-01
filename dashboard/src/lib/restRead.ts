@@ -100,14 +100,31 @@ export interface RestRead<T> {
   refetch: (blank?: boolean) => void;
 }
 
+/**
+ * What the hook holds, and THE QUESTION IT HOLDS IT FOR: the key it was read
+ * under, or null for a read that is disabled.
+ *
+ * STAMPED, because state an effect writes is a render late. The key's effect
+ * resets what is held, but only after the render that first carries the new
+ * key — and that render handed back the LAST key's answer, not loading, under
+ * the new one: the last tool's passes under the next tool's header, a closed
+ * rail still holding the credentials it had read, and a rail opened again
+ * drawn as a finished read of nothing. A reading whose question is not the one
+ * asked now is never returned ([useRestRead] hands back a fresh one in its
+ * place), so that render cannot exist.
+ */
 interface Reading<T> {
+  question: string | null;
   data: T | null;
   loading: boolean;
   failure: RestFailure | null;
   error: unknown;
 }
 
-const NOTHING: Reading<never> = { data: null, loading: false, failure: null, error: null };
+/** What a read holds before `question` has answered: nothing, and waiting if asked. */
+function fresh<T>(question: string | null): Reading<T> {
+  return { question, data: null, loading: question !== null, failure: null, error: null };
+}
 
 /**
  * Read `read` under `key`, and keep reading it as its answers say.
@@ -122,7 +139,9 @@ export function useRestRead<T>(
   options: RestReadOptions<T> = {},
 ): RestRead<T> {
   const { enabled = true, cadence, refetchOnFocus = false } = options;
-  const [reading, setReading] = useState<Reading<T>>(() => ({ ...NOTHING, loading: enabled }));
+  // THE QUESTION ASKED NOW, which every reading is held against.
+  const question = enabled ? key : null;
+  const [reading, setReading] = useState<Reading<T>>(() => fresh(question));
   const reread = useReread();
 
   // THE LATEST CLOSURES, so the identity of an inline function never starts a
@@ -141,10 +160,14 @@ export function useRestRead<T>(
   // in a row nobody answered, for the backoff.
   const held = useRef<T | null>(null);
   const unanswered = useRef(0);
+  // The question the key's effect last started, which every answer is stamped
+  // with: an answer the generation still lets write is always this one's.
+  const asking = useRef<string | null>(question);
 
   const ask = useCallback(
     (blank: boolean) => {
       const mine = ++generation.current;
+      const about = asking.current;
       reread.cancel();
       inFlight.current?.abort();
       const controller = new AbortController();
@@ -157,7 +180,7 @@ export function useRestRead<T>(
           if (generation.current !== mine) return;
           held.current = data;
           unanswered.current = 0;
-          setReading({ data, loading: false, failure: null, error: null });
+          setReading({ question: about, data, loading: false, failure: null, error: null });
           next = cadenceRef.current?.(data) ?? null;
         } catch (err) {
           if (generation.current !== mine) return;
@@ -168,6 +191,7 @@ export function useRestRead<T>(
           if (refused) held.current = null;
           unanswered.current = failure.error === "unanswered" ? unanswered.current + 1 : 0;
           setReading((prev) => ({
+            question: about,
             data: refused ? null : prev.data,
             loading: false,
             failure,
@@ -191,15 +215,9 @@ export function useRestRead<T>(
   useEffect(() => {
     held.current = null;
     unanswered.current = 0;
-    if (!enabled) {
-      setReading(NOTHING);
-      return;
-    }
-    setReading((prev) =>
-      prev.data === null && prev.loading && prev.failure === null
-        ? prev
-        : { ...NOTHING, loading: true },
-    );
+    asking.current = question;
+    setReading((prev) => (prev.question === question ? prev : fresh(question)));
+    if (question === null) return;
     ask(false);
     return () => {
       generation.current++;
@@ -207,7 +225,7 @@ export function useRestRead<T>(
       inFlight.current = null;
       reread.cancel();
     };
-  }, [key, enabled, ask, reread]);
+  }, [question, ask, reread]);
 
   // THE SOCKET COMING BACK reads again, quietly, as `useQuery` re-asks.
   const quietly = useCallback(() => ask(false), [ask]);
@@ -232,5 +250,14 @@ export function useRestRead<T>(
     [enabled, ask],
   );
 
-  return { ...reading, refetch };
+  // NEVER ANOTHER QUESTION'S READING: until the key's effect has caught up,
+  // the question asked now holds nothing yet. See [Reading].
+  const shown = reading.question === question ? reading : fresh<T>(question);
+  return {
+    data: shown.data,
+    loading: shown.loading,
+    failure: shown.failure,
+    error: shown.error,
+    refetch,
+  };
 }
