@@ -13,7 +13,7 @@
  * credential, masked or referenced, reaches the page.
  */
 
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, getConfig, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ChartRead, ChartSeat, CompanyDocument } from "~/protocol/index.ts";
 import { REDACTED } from "~/lib/format.ts";
@@ -338,44 +338,77 @@ describe("the unsaved-changes prompt", () => {
     expect(view.state().log.ops).toHaveLength(0);
   });
 
+  /**
+   * Makes a move with `go` — a link pressed, a hash written, Back — and waits
+   * until the browser has landed on `landsOn`, then renders what the router
+   * made of it.
+   *
+   * ON THE BROWSER'S OWN EVENTS, never a poll of `location.hash`: the hash is
+   * written at once, before the router has heard of the move, so a poll for
+   * it passed before anything the case meant to wait for — and an assertion
+   * that nothing asked was read before there was anything to ask. jsdom
+   * dispatches `hashchange` and `popstate` as tasks of their own, and a held
+   * move is undone with a second traversal, so the landing is the first of
+   * those events to find the browser on `landsOn`. Waited for outside `act`,
+   * because the guard that undoes a held move runs in the router's listener
+   * and its question renders from it; then `act` renders that question.
+   */
+  async function move(go: () => void, landsOn: string): Promise<void> {
+    const landed = new Promise<void>((resolve) => {
+      const moved = () => {
+        if (location.hash !== landsOn) return;
+        window.removeEventListener("hashchange", moved);
+        window.removeEventListener("popstate", moved);
+        resolve();
+      };
+      window.addEventListener("hashchange", moved);
+      window.addEventListener("popstate", moved);
+    });
+    act(go);
+    await getConfig().asyncWrapper(() => landed);
+    await act(async () => {});
+  }
+
+  const discardPrompt = () => screen.getByRole("alertdialog", { name: "Discard your changes?" });
+
   // A MOVE TO ANOTHER ENTRY takes the form with it, whatever makes it: one of
   // the form's own links, Back or Forward, or a push from code. So a changed
   // form holds every move and asks first; keeping the changes undoes the
   // move, and discarding them makes it.
   test("a link, Back and a push each ask before they leave a changed form", async () => {
-    history.replaceState(null, "", "#/company?lens=builder");
+    const onTheLens = "#/company?lens=builder";
+    const elsewhere = "#/admin/integrations";
+    history.replaceState(null, "", onTheLens);
     const view = edit(editing(), "seat:dev");
     const link = () =>
       within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
-    const prompt = () => screen.findByRole("alertdialog", { name: "Discard your changes?" });
     // Untouched: the link simply goes.
-    fireEvent.click(link());
-    await waitFor(() => expect(location.hash).toBe("#/admin/integrations"));
+    await move(() => fireEvent.click(link()), elsewhere);
     expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
-    act(() => {
-      location.hash = "#/company?lens=builder";
-    });
-    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
+    await move(() => {
+      location.hash = onTheLens;
+    }, onTheLens);
 
     type("Goal", "Ship");
-    fireEvent.click(link());
-    const asked = await prompt();
+    // Held, and undone: the page is back where it was, and so is the form.
+    await move(() => fireEvent.click(link()), onTheLens);
+    const asked = discardPrompt();
     expect(asked.textContent).toContain("you are leaving the builder");
-    // Held, and undone: the page is where it was, and so is the form.
-    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
-    act(() => history.back());
-    fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
-    await waitFor(() => expect(location.hash).toBe("#/company?lens=builder"));
+    await move(() => history.back(), onTheLens);
+    fireEvent.click(within(discardPrompt()).getByRole("button", { name: "Keep editing" }));
     expect(view.onClose).not.toHaveBeenCalled();
 
-    act(() => history.back());
-    fireEvent.click(within(await prompt()).getByRole("button", { name: "Discard changes" }));
-    expect(view.onClose).toHaveBeenCalledTimes(1);
+    await move(() => history.back(), onTheLens);
     // The move the reader asked for is made: back past the entry they were on.
-    await waitFor(() => expect(location.hash).toBe("#/admin/integrations"));
+    await move(
+      () =>
+        fireEvent.click(within(discardPrompt()).getByRole("button", { name: "Discard changes" })),
+      elsewhere,
+    );
+    expect(view.onClose).toHaveBeenCalledTimes(1);
     cleanup();
     history.replaceState(null, "", "#/");
   });
@@ -395,10 +428,9 @@ describe("the unsaved-changes prompt", () => {
       "#/company?lens=builder&view=visualization&chart=reporting",
       "#/company?lens=builder&view=visualization&chart=reporting&seat=ceo",
     ]) {
-      act(() => {
+      await move(() => {
         location.hash = hash;
-      });
-      await waitFor(() => expect(location.hash).toBe(hash));
+      }, hash);
       expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" }), hash).toBeNull();
     }
     // The form is still open, still changed, and was never closed.
