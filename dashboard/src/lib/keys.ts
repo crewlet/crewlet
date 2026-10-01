@@ -67,8 +67,24 @@ export interface Chord {
   meta?: boolean;
   /** Fire even while the reader is typing. For `escape`, and little else. */
   whileTyping?: boolean;
-  /** Skip this binding without changing the shape of the list. */
-  when?: boolean;
+  /**
+   * Skip this binding without changing the shape of the list.
+   *
+   * A FUNCTION IS ASKED AT THE KEYSTROKE. A value is captured at render and is
+   * as current as the last render, which is right for a condition the caller
+   * draws from — a cursor, a selection — and wrong for one nothing on screen
+   * depends on: a caller that held such a condition as a value had to render
+   * whenever it changed just to keep the value fresh. The grids did exactly
+   * that for "whose keystroke is this", and every row of every grid on a
+   * screen was drawn again each time the answer moved.
+   */
+  when?: boolean | (() => boolean);
+}
+
+/** Whether a binding is live for this keystroke — see [Chord.when]. */
+function live(chord: Chord): boolean {
+  const { when } = chord;
+  return typeof when === "function" ? when() : when !== false;
 }
 
 /** A chord that only fires after a prefix key. */
@@ -142,7 +158,7 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
         if (typing) return;
         for (const chord of held.current) {
           if (!("after" in chord) || chord.after !== prefix) continue;
-          if (chord.when === false || chord.key !== key) continue;
+          if (chord.key !== key || !live(chord)) continue;
           e.preventDefault();
           chord.run(e);
           return;
@@ -151,11 +167,13 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
       }
 
       for (const chord of held.current) {
-        if (chord.when === false) continue;
         if (chord.key !== key) continue;
         if ("after" in chord) continue;
         if (Boolean(chord.meta) !== meta) continue;
         if (typing && !chord.whileTyping) continue;
+        // ASKED LAST, once everything else about the press matched: a `when`
+        // that is a function runs only for a chord this press could be.
+        if (!live(chord)) continue;
         e.preventDefault();
         chord.run(e);
         return;
@@ -165,7 +183,7 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
       // screen that binds both `g` and `g i` has said the first is what a
       // bare `g` means.
       if (typing || meta || e.altKey) return;
-      if (held.current.some((c) => "after" in c && c.after === key && c.when !== false)) {
+      if (held.current.some((c) => "after" in c && c.after === key && live(c))) {
         armed = key;
         timer = window.setTimeout(disarm, PrefixWindow);
       }

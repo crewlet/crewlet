@@ -659,6 +659,30 @@ the reader had touched. A name rather than an index, because an index is a fact
 about the source order and inserting a grid above would move every link's
 meaning by one.
 
+**A row is drawn when something it draws has changed, and at no other time.**
+Each row is a memoised component handed only values it draws — its object, the
+column list, its place, whether it is the cursor, selected or failed, its link
+— and one click handler the grid keeps stable through a ref, since every
+screen hands `onRowActivate` a fresh closure. So a `j` draws the row it leaves
+and the row it lands on, and a screen rendering for a reason of its own draws
+no row. The rows were built inline in the grid's render, which drew all of
+them for anything at all: a `j` on a hundred-row grid drew a hundred rows, and
+a screen's own render drew every row of every grid on it — 169–268 ms for two
+hundred-row grids under the development build. It pays where a caller's column
+list stays the same between renders — a `useMemo`, as the audit, the work
+grid, the projects directory and the model page hold theirs, or a module
+constant, as the org builder's table does: a list built inline is rightly a new value to every row on every
+render, and draws every row exactly as before.
+
+**Which grid the keyboard drives is asked at the keystroke.** `j`, `k` and
+Enter go to the grid the reader last pressed a pointer in, else the first one
+mounted, and nothing a grid draws depends on which that is — so the question
+is a `when` that is a function (`lib/keys.ts`), evaluated when a key is
+pressed, rather than a value every grid held and had to render to refresh.
+It was a store every grid subscribed to: each grid's mount drew every row of
+every grid a second time, and every pointer press that moved the keyboard did
+the same, 143–197 ms on two hundred-row grids to change no pixel.
+
 **A `shrink` column is capped, because `max-content` is not "shrink to
 content" — it is *grow* to content, with no ceiling.** Grid resolves an
 intrinsic track before it gives anything to a flexible one, so a single long

@@ -25,13 +25,14 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useParam } from "../router.tsx";
@@ -276,28 +277,18 @@ export function parseSort(raw: string): { key: string; desc: boolean } | null {
  * frequently in different subtrees (a screen and the peek rail over it), and a
  * provider around both would have to be the shell, which knows nothing about
  * grids.
+ *
+ * AND NOTHING RENDERS WHEN IT CHANGES HANDS. Which grid drives is asked at the
+ * keystroke (a `when` that is a function, `lib/keys.ts`), because nothing a
+ * grid DRAWS depends on it — the cursor row stays drawn in a grid the reader
+ * has left, as it always did. It was a store every grid subscribed to, so a
+ * `when` captured at render could be kept fresh: each grid's mount announced
+ * itself and drew every row of every grid on the screen a second time, and so
+ * did every pointer press that moved the keyboard — 143 to 197 ms for two
+ * hundred-row grids under the development build, to change no pixel.
  */
 const drivable: string[] = [];
 let touched: string | null = null;
-let revision = 0;
-const watchers = new Set<() => void>();
-
-/** Wake every grid: whose keystroke this is has changed. */
-function announce(): void {
-  revision += 1;
-  for (const watcher of watchers) watcher();
-}
-
-function watchDriving(watcher: () => void): () => void {
-  watchers.add(watcher);
-  return () => {
-    watchers.delete(watcher);
-  };
-}
-
-function drivingRevision(): number {
-  return revision;
-}
 
 function isDriving(gridId: string): boolean {
   if (touched !== null) return touched === gridId;
@@ -432,55 +423,63 @@ export function DataGrid<T>({
 
   // `j` and `k` walk a cursor row; `enter` activates it. No selection, because
   // there is nothing to do with one.
-  const step = useCallback(
-    (by: number) =>
-      setCursor((at) => {
-        const next = Math.max(0, Math.min(flat.length - 1, at + by));
-        body.current
-          ?.querySelector<HTMLElement>(`[data-row-index="${next}"]`)
-          ?.scrollIntoView({ block: "nearest" });
-        return next;
-      }),
-    [flat.length],
-  );
-  // `when` below is a value captured at render, so a pointer gesture that
-  // changes nothing on screen still has to re-render every grid for them to
-  // agree about whose keystroke the next one is.
-  useSyncExternalStore(watchDriving, drivingRevision);
+  //
+  // THE SCROLL IS THE KEYSTROKE'S, not the state update's. It ran inside the
+  // `setCursor` updater, which React calls while it renders — and may call
+  // twice — so scrolling the page was a side effect of rendering. Here it runs
+  // once, in the handler, against the row already drawn at that index; and a
+  // press at either end still brings the cursor row back into view, which is
+  // what a reader who scrolled away and pressed `j` is asking for.
+  const step = (by: number) => {
+    const next = Math.max(0, Math.min(flat.length - 1, cursor + by));
+    setCursor(next);
+    body.current
+      ?.querySelector<HTMLElement>(`[data-row-index="${next}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  };
   const canDrive = flat.length > 0;
   useEffect(() => {
     if (!canDrive) return;
     drivable.push(gridId);
-    announce();
     return () => {
       const at = drivable.indexOf(gridId);
       if (at >= 0) drivable.splice(at, 1);
       // A grid the reader touched and then left takes nothing with it: the
       // fallback has to be free to name the next one.
       if (touched === gridId) touched = null;
-      announce();
     };
   }, [gridId, canDrive]);
-  const driving = isDriving(gridId);
 
   const claimKeyboard = useCallback(() => {
-    if (touched === gridId) return;
     touched = gridId;
-    announce();
   }, [gridId]);
 
+  // WHOSE KEYSTROKE THIS IS is asked when the key is pressed — see the
+  // registry above — and the cursor half is this render's, which is the one
+  // the reader is looking at.
+  const driving = () => isDriving(gridId);
   useKeyChords([
     { key: "j", run: () => step(1), when: driving },
     { key: "k", run: () => step(-1), when: driving },
     {
       key: "enter",
-      when: driving && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
+      when: () => driving() && cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
       run: (e) => {
         const row = flat[cursor];
         if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
       },
     },
   ]);
+
+  // THE ROW'S CLICK, through a ref, so a caller handing a fresh closure every
+  // render — which every caller does — does not give every row a new prop and
+  // undo [GridRow]'s memo. The click reads the handler of the latest commit.
+  const activation = useRef(onRowActivate);
+  useLayoutEffect(() => {
+    activation.current = onRowActivate;
+  });
+  const activate = useCallback((row: T, e: React.MouseEvent) => activation.current?.(row, e), []);
+  const activatable = Boolean(onRowActivate);
 
   function headerClick(column: GridColumn<T>): void {
     if (!column.sortValue) return;
@@ -554,94 +553,21 @@ export function DataGrid<T>({
   function renderRow(row: T): ReactNode {
     index += 1;
     const at = index;
-    const key = rowKey(row);
-    // THE CELL CARRIES ITS COLUMN'S OWN NAME.
-    //
-    // Below the drawer breakpoint a row is not a row: the column heads go and
-    // each cell is drawn as a labelled line, because a nine-column table in a
-    // 390px card clips six of them with nothing to scroll (the wrap is
-    // `overflow: clip`, which is what keeps the sticky head working). A label
-    // per cell is the only way a value keeps its meaning once the head it sat
-    // under is gone.
-    //
-    // FROM THE HEADER WHERE THE HEADER IS A WORD, and from `label` where it is
-    // not. A head may be a glyph or nothing at all — a type mark, a row action,
-    // a pair of state tags — because the column is twenty pixels wide and a
-    // word does not fit in it. `attr()` can only read text, and a head like
-    // that leaves the card with an unnamed line: measured on the tracker at
-    // 390px as a bare type mark floating between KEY and TITLE, which reads as
-    // a rendering fault rather than as a value. The head cannot carry the word
-    // — that is what made it a glyph — so the column says it separately, and
-    // the card is the only layout that spends it.
-    //
-    // THE LABEL IS SET UNCONDITIONALLY AND THE SHEET DROPS THE LINE. A column
-    // draws no value on a row that has none — `PriorityMark` renders null for
-    // `normal`, which nearly every task is — and in the card that left the
-    // label alone on a line: `PRIORITY` with nothing beside it. Nothing here
-    // can see that, because a component that renders null is an element like
-    // any other until the browser draws it; `.grid-cell:empty` in `frame.css`
-    // is the browser answering, and the element has to stay in the DOM anyway
-    // or the wide layout's positional tracks move. What this file owes that
-    // rule is that a cell with no value has no child nodes — which is what
-    // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
-    // span would defeat it silently.
-    const inner = shownColumns.map((column) => (
-      <span
-        key={column.key}
-        className={cx("grid-cell", column.align === "right" && "right", column.shrink && "shrink")}
-        data-label={
-          (typeof column.header === "string" && column.header ? column.header : column.label) ||
-          undefined
-        }
-      >
-        {column.cell(row)}
-      </span>
-    ));
-    const className = cx(
-      "grid-row",
-      isSelected?.(row) && "selected",
-      isFailed?.(row) && "failed",
-      cursor === at && "cursor",
-    );
-    // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
-    //
-    // The row used to BE an `<a>` when `rowHref` was given, and a cell that
-    // links — `SeatCell`, `SeatChip`, `KeyCell` — then put an anchor inside an
-    // anchor. That is not merely invalid: the HTML parser CLOSES the outer one
-    // at the inner one, so the row link covered only the cells before the
-    // first seat chip and the rest of the row silently stopped being
-    // clickable. Both halves looked identical and one of them did nothing.
-    //
-    // Stretched over the row instead, the link keeps everything it had — a
-    // real href, so ⌘-click, middle-click and "copy link address" all work —
-    // and the cells' own links sit above it (`.grid-row a { position:
-    // relative }`), so a click on a seat reaches the seat and a click on the
-    // row reaches the row.
-    //
-    // It takes its accessible name FROM THE ROW, which is what the anchor row
-    // announced before: the name computation walks the element `aria-labelledby`
-    // points at, so a screen reader still reads the cells rather than "link".
-    const rowId = `${gridId}-row-${at}`;
+    // EVERYTHING A ROW IS HANDED IS A VALUE IT DRAWS — see [GridRow] — so a
+    // render of this grid that changed nothing about a row draws nothing of it.
     return (
-      <div
-        key={key}
-        id={rowHref ? rowId : undefined}
-        className={className}
-        data-row-index={at}
-        role={!rowHref && onRowActivate ? "button" : undefined}
-        tabIndex={!rowHref && onRowActivate ? 0 : undefined}
-        onClick={!rowHref && onRowActivate ? (e) => onRowActivate(row, e) : undefined}
-      >
-        {rowHref && (
-          <a
-            className="row-link"
-            href={rowHref(row)}
-            aria-labelledby={rowId}
-            onClick={(e) => onRowActivate?.(row, e)}
-          />
-        )}
-        {inner}
-      </div>
+      <GridRow<T>
+        key={rowKey(row)}
+        row={row}
+        columns={shownColumns}
+        index={at}
+        id={`${gridId}-row-${at}`}
+        cursor={cursor === at}
+        selected={Boolean(isSelected?.(row))}
+        failed={Boolean(isFailed?.(row))}
+        href={rowHref?.(row)}
+        activate={activatable ? activate : undefined}
+      />
     );
   }
 
@@ -779,3 +705,136 @@ export function DataGrid<T>({
     </div>
   );
 }
+
+interface GridRowProps<T> {
+  row: T;
+  /** The columns as drawn — `cols=` applied, in the reader's order. */
+  columns: GridColumn<T>[];
+  /** Where the row is in the walk `j` and `k` take, `data-row-index`. */
+  index: number;
+  /** The row's own element id, which its overlay link is named by. */
+  id: string;
+  cursor: boolean;
+  selected: boolean;
+  failed: boolean;
+  /** The row's link; `undefined` where the grid takes no `rowHref`. */
+  href: string | undefined;
+  /** The grid's click, stable across renders; `undefined` where it takes none. */
+  activate: ((row: T, e: React.MouseEvent) => void) | undefined;
+}
+
+/**
+ * One row, drawn again only when something it draws has changed.
+ *
+ * MEMOISED ON VALUES, and every prop is one the row draws: its object, the
+ * columns, its place, and three booleans and a string the grid works out for
+ * it. The click is the one function, and the grid hands every row the same
+ * one through a ref, because a caller's `onRowActivate` is a fresh closure on
+ * every render of every screen. So a cursor stepping from one row to the next
+ * draws those two rows; a parent rendering for a reason of its own — a poll
+ * that brought the same rows back, a filter typed above the grid — draws none;
+ * and a row whose object, columns, place or state moved is drawn again. Built
+ * inline, every one of those drew every row: a `j` on a hundred-row grid was a
+ * hundred rows, and a screen's own render was every row of every grid on it.
+ *
+ * WHICH IS WHY A COLUMN LIST IS MEMOISED BY ITS CALLER: a new list is a new
+ * value here, and rightly — a column closing over something new may draw
+ * something new — so a screen that builds its columns inline draws every row
+ * whenever it renders, exactly as before.
+ */
+function GridRowView<T>({
+  row,
+  columns,
+  index,
+  id,
+  cursor,
+  selected,
+  failed,
+  href,
+  activate,
+}: GridRowProps<T>): ReactNode {
+  // THE CELL CARRIES ITS COLUMN'S OWN NAME.
+  //
+  // Below the drawer breakpoint a row is not a row: the column heads go and
+  // each cell is drawn as a labelled line, because a nine-column table in a
+  // 390px card clips six of them with nothing to scroll (the wrap is
+  // `overflow: clip`, which is what keeps the sticky head working). A label
+  // per cell is the only way a value keeps its meaning once the head it sat
+  // under is gone.
+  //
+  // FROM THE HEADER WHERE THE HEADER IS A WORD, and from `label` where it is
+  // not. A head may be a glyph or nothing at all — a type mark, a row action,
+  // a pair of state tags — because the column is twenty pixels wide and a
+  // word does not fit in it. `attr()` can only read text, and a head like
+  // that leaves the card with an unnamed line: measured on the tracker at
+  // 390px as a bare type mark floating between KEY and TITLE, which reads as
+  // a rendering fault rather than as a value. The head cannot carry the word
+  // — that is what made it a glyph — so the column says it separately, and
+  // the card is the only layout that spends it.
+  //
+  // THE LABEL IS SET UNCONDITIONALLY AND THE SHEET DROPS THE LINE. A column
+  // draws no value on a row that has none — `PriorityMark` renders null for
+  // `normal`, which nearly every task is — and in the card that left the
+  // label alone on a line: `PRIORITY` with nothing beside it. Nothing here
+  // can see that, because a component that renders null is an element like
+  // any other until the browser draws it; `.grid-cell:empty` in `frame.css`
+  // is the browser answering, and the element has to stay in the DOM anyway
+  // or the wide layout's positional tracks move. What this file owes that
+  // rule is that a cell with no value has no child nodes — which is what
+  // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
+  // span would defeat it silently.
+  const inner = columns.map((column) => (
+    <span
+      key={column.key}
+      className={cx("grid-cell", column.align === "right" && "right", column.shrink && "shrink")}
+      data-label={
+        (typeof column.header === "string" && column.header ? column.header : column.label) ||
+        undefined
+      }
+    >
+      {column.cell(row)}
+    </span>
+  ));
+  const className = cx("grid-row", selected && "selected", failed && "failed", cursor && "cursor");
+  const linked = href !== undefined;
+  // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
+  //
+  // The row used to BE an `<a>` when `rowHref` was given, and a cell that
+  // links — `SeatCell`, `SeatChip`, `KeyCell` — then put an anchor inside an
+  // anchor. That is not merely invalid: the HTML parser CLOSES the outer one
+  // at the inner one, so the row link covered only the cells before the
+  // first seat chip and the rest of the row silently stopped being
+  // clickable. Both halves looked identical and one of them did nothing.
+  //
+  // Stretched over the row instead, the link keeps everything it had — a
+  // real href, so ⌘-click, middle-click and "copy link address" all work —
+  // and the cells' own links sit above it (`.grid-row a { position:
+  // relative }`), so a click on a seat reaches the seat and a click on the
+  // row reaches the row.
+  //
+  // It takes its accessible name FROM THE ROW, which is what the anchor row
+  // announced before: the name computation walks the element `aria-labelledby`
+  // points at, so a screen reader still reads the cells rather than "link".
+  return (
+    <div
+      id={linked ? id : undefined}
+      className={className}
+      data-row-index={index}
+      role={!linked && activate ? "button" : undefined}
+      tabIndex={!linked && activate ? 0 : undefined}
+      onClick={!linked && activate ? (e) => activate(row, e) : undefined}
+    >
+      {linked && (
+        <a
+          className="row-link"
+          href={href}
+          aria-labelledby={id}
+          onClick={(e) => activate?.(row, e)}
+        />
+      )}
+      {inner}
+    </div>
+  );
+}
+
+const GridRow = memo(GridRowView) as typeof GridRowView;

@@ -16,7 +16,8 @@
  * perfectly well-typed React.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Profiler, useState } from "react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test } from "vitest";
 
 import { DataGrid } from "./DataGrid.tsx";
@@ -512,4 +513,112 @@ test("colsName keys the columns without moving the sort key", () => {
   expect(location.hash).toContain("sort=who");
   expect(location.hash).not.toContain("sort.list=");
   location.hash = "#/";
+});
+
+// A ROW IS DRAWN WHEN SOMETHING IT DRAWS CHANGED, AND AT NO OTHER TIME.
+//
+// Every row of a grid used to be built inline in the grid's own render, so
+// anything that rendered the grid drew every row: the keyboard changing hands
+// (a store every grid subscribed to, announced on each mount and each pointer
+// press), a `j` that moved one cursor, and every render of the screen holding
+// the grid. Measured on two hundred-row grids under the development build,
+// that was 143–197 ms for a pointer press and 169–268 ms for a screen's own
+// render, to change no row. These cases count the rows a CELL draws, which is
+// the work a row's render does, rather than the grid's renders.
+
+/** Two grids of `n` rows under one screen, whose cells count their renders. */
+function countedScreen(n: number) {
+  // ROWS DRAWN, and COMMITS of anything under the screen: a grid rendering
+  // with no row drawn is still a render nobody asked for.
+  const drawn = { rows: 0, commits: 0 };
+  function Counted({ text }: { text: string }) {
+    drawn.rows += 1;
+    return <>{text}</>;
+  }
+  const upper = Array.from({ length: n }, (_, i) => ({ id: `u${i}`, who: `ceo-${i}` }));
+  const lower = Array.from({ length: n }, (_, i) => ({ id: `l${i}`, who: `cto-${i}` }));
+  // ONE COLUMN LIST, held as every screen holds its own (memoised): a new
+  // list is a new value to a row, and rightly, because a column closing over
+  // something new may draw something new.
+  const columns = [{ key: "who", header: "Who", cell: (r: Row) => <Counted text={r.who} /> }];
+  const seen: string[] = [];
+  let rerender: () => void = () => {};
+  function Screen() {
+    const [, setN] = useState(0);
+    rerender = () => setN((x) => x + 1);
+    return (
+      <>
+        {/* AN INLINE HANDLER, which is what every screen hands a grid. */}
+        <DataGrid<Row>
+          rows={upper}
+          name="upper"
+          rowKey={(r) => r.id}
+          onRowActivate={(r) => seen.push(r.id)}
+          columns={columns}
+        />
+        <DataGrid<Row>
+          rows={lower}
+          name="lower"
+          rowKey={(r) => r.id}
+          onRowActivate={(r) => seen.push(r.id)}
+          columns={columns}
+        />
+      </>
+    );
+  }
+  const view = render(
+    <Router>
+      <Profiler
+        id="screen"
+        onRender={() => {
+          drawn.commits += 1;
+        }}
+      >
+        <Screen />
+      </Profiler>
+    </Router>,
+  );
+  return { drawn, seen, view, rerender: () => act(() => rerender()) };
+}
+
+test("a grid draws each row once when it mounts, beside another grid", () => {
+  const { drawn } = countedScreen(20);
+  expect(drawn.rows).toBe(40);
+});
+
+test("the keyboard changing hands draws no row, and the next key reaches the new grid", () => {
+  const { drawn, seen, view } = countedScreen(20);
+  const wraps = view.container.querySelectorAll<HTMLElement>(".grid-wrap");
+  drawn.rows = 0;
+  drawn.commits = 0;
+  fireEvent.pointerDown(wraps[1]!);
+  // NOTHING AT ALL, not merely no row: no grid draws who holds the keyboard.
+  expect(drawn.commits).toBe(0);
+  expect(drawn.rows).toBe(0);
+  // AND IT CHANGED HANDS: whose keystroke this is was asked at the keystroke.
+  fireEvent.keyDown(window, { key: "j" });
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(seen).toEqual(["l0"]);
+});
+
+test("a cursor step draws the rows it leaves and lands on, and no other", () => {
+  const { drawn, view } = countedScreen(20);
+  drawn.rows = 0;
+  fireEvent.keyDown(window, { key: "j" });
+  expect(drawn.rows).toBe(1);
+  fireEvent.keyDown(window, { key: "j" });
+  expect(drawn.rows).toBe(3);
+  const cursor = view.container.querySelectorAll(".grid-row.cursor");
+  expect(cursor).toHaveLength(1);
+  expect(cursor[0]?.getAttribute("data-row-index")).toBe("1");
+});
+
+test("a screen rendering with the same rows and columns draws no row", () => {
+  const { drawn, seen, rerender } = countedScreen(20);
+  drawn.rows = 0;
+  rerender();
+  expect(drawn.rows).toBe(0);
+  // AND THE CLICK IS STILL THE LATEST HANDLER'S, through the ref the rows share.
+  fireEvent.click(screen.getAllByRole("button")[0]!);
+  expect(seen).toEqual(["u0"]);
 });
