@@ -55,9 +55,19 @@ import (
 // The member this connection landed on, and only what that member announces.
 // A client dialling a cluster reconnects to whichever member answers, so a
 // member configured apart from the others is met after boot, and a server
-// whose limit is lowered under a running node likewise: both refuse a message
-// past their limit when it is written, naming the limit — see
-// [reconnectWatch], which says so on the reconnect itself.
+// restarted with a lower limit under a running node likewise: the reconnect
+// reads what they announce, and both refuse a message past their limit when it
+// is written, naming the limit — see [reconnectWatch], which says so on the
+// reconnect itself.
+//
+// And NOTHING AT ALL of a limit lowered by a LIVE RELOAD, which no check on
+// this side can see: nats-server applies a reloaded max_payload to the
+// connections it holds without sending them an INFO, so the client goes on
+// reading the contract's figure, and the first message past the new limit
+// makes the server close the connection with `Maximum Payload Violation` —
+// a refusal the client treats as final, so the connection is CLOSED for good
+// rather than reconnected. Measured against nats-server v2.15.0 and nats.go
+// v1.54.0. The deployment guide tells an operator never to lower it that way.
 func carriesTheContract(nc *nats.Conn, embedded bool) error {
 	// NAMED BEFORE THE ROUND TRIP: a connection that drops during it no
 	// longer says which member it was talking to, and that member is the

@@ -2,10 +2,13 @@ package jetstream
 
 import (
 	"errors"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -260,5 +263,75 @@ func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
 		t.Fatalf("re-creating with a moved start sequence gave %v, want "+
 			"ErrConsumerExists — DomainConsumer's recovery branch keys on "+
 			"that error and would be unreachable", err)
+	}
+}
+
+// A LIVE RELOAD OF A LOWER max_payload CLOSES A CONNECTED CLIENT FOR GOOD, AT
+// ITS FIRST MESSAGE PAST THE NEW LIMIT.
+//
+// Two facts, and the deployment guide's "never lower it with a live reload"
+// rests on both, as does what carriesTheContract says it cannot see: the
+// server applies the reloaded limit to the connections it holds WITHOUT an
+// INFO, so the client goes on reading the old figure and no check on this side
+// can learn the new one; and the server's `Maximum Payload Violation` is a
+// refusal the client treats as final, so the connection is CLOSED rather than
+// reconnected, whatever its reconnect policy — reconnect for ever here, as
+// this package dials. A bump that announced a reload, or that reconnected
+// after the refusal, turns this case red, so the warning is rewritten rather
+// than left standing over a hazard that has gone.
+func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
+	t.Parallel()
+	const before, after = 8 << 20, 1 << 20
+	opts := &server.Options{Host: "127.0.0.1", Port: -1, NoLog: true,
+		NoSigs: true, MaxPayload: before}
+	ns, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("configure a server: %v", err)
+	}
+	go ns.Start()
+	t.Cleanup(func() {
+		ns.Shutdown()
+		ns.WaitForShutdown()
+	})
+	if !ns.ReadyForConnections(30 * time.Second) {
+		t.Fatal("the server never became ready")
+	}
+	nc, err := nats.Connect(ns.ClientURL(), nats.MaxReconnects(-1),
+		nats.ReconnectWait(50*time.Millisecond))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	lowered := *opts
+	lowered.MaxPayload = after
+	lowered.Port = ns.Addr().(*net.TCPAddr).Port
+	if err := ns.ReloadOptions(&lowered); err != nil {
+		t.Fatalf("reload a lower max_payload: %v", err)
+	}
+	if err := nc.FlushTimeout(5 * time.Second); err != nil {
+		t.Fatalf("a round trip after the reload: %v", err)
+	}
+	if got := nc.MaxPayload(); got != before {
+		t.Fatalf("after the reload the client reads a max_payload of %d: the "+
+			"server now tells a connected client about a reload, and the "+
+			"guide's warning is to be rewritten", got)
+	}
+
+	_ = nc.Publish("crewlet.fact.oversized", make([]byte, 2*after))
+	_ = nc.Flush()
+	deadline := time.Now().Add(10 * time.Second)
+	for !nc.IsClosed() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !nc.IsClosed() {
+		t.Fatalf("a message past the reloaded limit left the client %v rather "+
+			"than closed: it now survives the refusal, and the guide's warning "+
+			"is to be rewritten", nc.Status())
+	}
+	if err := nc.LastError(); err == nil ||
+		!strings.Contains(err.Error(), "Maximum Payload Violation") {
+		t.Errorf("the client closed on %v, not on the server's max_payload refusal",
+			err)
 	}
 }

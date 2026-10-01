@@ -572,12 +572,21 @@ it has signed in — the account's and the user's included, which the server
 states only after authenticating it — on the member the client reached at
 boot. That is why the setting is needed on every server rather than the first
 one a node happens to dial: a member configured apart from the others is met
-later, when the client reconnects to it, and so is a server whose limit is
-lowered under a running node. The node logs
+later, when the client reconnects to it, and so is a server restarted with a
+lower limit under a running node. The node logs
 `jetstream_max_payload_below_contract` at `ERROR` on the reconnect, naming
 that server and its value, and a message past that server's limit is refused
 when it is written — a state-log write answers `record_too_large`, naming the
 server's `max_payload`.
+
+**Never lower it with a live reload under running nodes.** nats-server applies
+a reloaded `max_payload` to the connections it already holds without telling
+their clients, so a node goes on believing its server carries 8 MiB, and the
+first message past the new limit makes the server close the connection with
+`Maximum Payload Violation`. The NATS client treats that refusal as final and
+does not reconnect, so the node is left with no connection to the broker —
+no publish, no consumer, no lease renewal — until it is restarted, and
+restarted it refuses to start, naming `max_payload`.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
