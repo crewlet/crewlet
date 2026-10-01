@@ -5,13 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -166,20 +163,7 @@ func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
 		t.Fatalf("%d statelog_write_gated lines for one refused write, want one", len(lines))
 	}
 
-	guide, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "replication.md"))
-	if err != nil {
-		t.Fatalf("read the replication guide: %v", err)
-	}
-	var row string
-	for line := range strings.SplitSeq(string(guide), "\n") {
-		if strings.HasPrefix(line, "| `statelog_write_gated` |") {
-			row = line
-		}
-	}
-	if row == "" {
-		t.Fatal("the replication guide's table of state-log lines has no " +
-			"statelog_write_gated row")
-	}
+	row := guideRow(t, "statelog_write_gated")
 	for key := range lines[0] {
 		switch key {
 		case slog.TimeKey, slog.LevelKey, slog.MessageKey:
@@ -199,6 +183,45 @@ func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
 	}
 }
 
+// reasonDecision is what one [statelog.Reason] is: a GATE's — a rule under
+// which a record the broker accepted applies on no node, and so the reason a
+// `statelog_record_gated` line, the records-gated counter and a write refused
+// over such a record all carry — and, for a gate, whether it BLAMES the
+// record's writer ([statelog.Reason.BlamesWriter]).
+type reasonDecision struct{ gate, blames bool }
+
+// reasonDecisions decides both for EVERY reason this build names — not only
+// the ones that are true — so a reason added to [statelog.Reasons] fails
+// [TestOnlyAGateThatHoldsAWriterBlamesIt] until somebody says which side of
+// each it is on, and a gate added that way reaches every surface held to the
+// gate set ([TestTheReplicationGuideSaysWhatTheRecordGatedLineCarries]).
+var reasonDecisions = map[statelog.Reason]reasonDecision{
+	// Gates that drop a record for what its WRITER was or did.
+	statelog.ReasonEvicted:        {gate: true, blames: true},
+	statelog.ReasonReleased:       {gate: true, blames: true},
+	statelog.ReasonAbandoned:      {gate: true, blames: true},
+	statelog.ReasonOvertaken:      {gate: true, blames: true},
+	statelog.ReasonWrongPartition: {gate: true, blames: true},
+	// Gates every writer's record meets alike: the object's marker, a kind
+	// no build applies.
+	statelog.ReasonDeleted: {gate: true},
+	statelog.ReasonRetired: {gate: true},
+	// Not a gate's at all: refusals made before or instead of an append,
+	// about this node, the log or the operation.
+	statelog.ReasonNotHolder:      {},
+	statelog.ReasonHoldingUnknown: {},
+	statelog.ReasonDeferred:       {},
+	statelog.ReasonBehind:         {},
+	statelog.ReasonBelowFloor:     {},
+	statelog.ReasonFloorUnknown:   {},
+	statelog.ReasonLogFull:        {},
+	statelog.ReasonSkew:           {},
+	statelog.ReasonOpReused:       {},
+	statelog.ReasonLogTruncated:   {},
+	statelog.ReasonWrongStream:    {},
+	statelog.ReasonSuperseded:     {},
+}
+
 // ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the five that drop a record for
 // what its writer was or did, and none of the rest. The set is what decides
 // whether a refusal of another node's copy names that node
@@ -211,49 +234,28 @@ func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
 // added to [statelog.Reasons] and forgotten in the switch — and a collapse onto
 // another node's copy under it named no writer, which every surface reads as
 // this node's own refusal and answers by sending the write away from the node
-// that can finish it. With an explicit answer per reason, a new one fails here
-// until somebody says which side it is on.
+// that can finish it. With an explicit answer per reason ([reasonDecisions]), a
+// new one fails here until somebody says which side it is on.
 func TestOnlyAGateThatHoldsAWriterBlamesIt(t *testing.T) {
 	t.Parallel()
-	decided := map[statelog.Reason]bool{
-		// What the record's WRITER was or did.
-		statelog.ReasonEvicted:        true,
-		statelog.ReasonReleased:       true,
-		statelog.ReasonAbandoned:      true,
-		statelog.ReasonOvertaken:      true,
-		statelog.ReasonWrongPartition: true,
-		// What every writer's record meets alike: the object's marker, a
-		// kind no build applies.
-		statelog.ReasonDeleted: false,
-		statelog.ReasonRetired: false,
-		// Not a gate's at all: refusals made before or instead of an
-		// append, about this node, the log or the operation.
-		statelog.ReasonNotHolder:      false,
-		statelog.ReasonHoldingUnknown: false,
-		statelog.ReasonDeferred:       false,
-		statelog.ReasonBehind:         false,
-		statelog.ReasonBelowFloor:     false,
-		statelog.ReasonFloorUnknown:   false,
-		statelog.ReasonLogFull:        false,
-		statelog.ReasonSkew:           false,
-		statelog.ReasonOpReused:       false,
-		statelog.ReasonLogTruncated:   false,
-		statelog.ReasonWrongStream:    false,
-		statelog.ReasonSuperseded:     false,
-	}
 	for _, reason := range statelog.Reasons() {
-		want, ok := decided[reason]
+		want, ok := reasonDecisions[reason]
 		if !ok {
 			t.Errorf("%q is a reason this build names and nothing here decides "+
-				"whether its gate blames the writer — say which side it is on, "+
-				"here and in Reason.BlamesWriter", reason)
+				"whether it is a gate's and whether its gate blames the writer — "+
+				"say which side of each it is on, here and in "+
+				"Reason.BlamesWriter", reason)
 			continue
 		}
-		if got := reason.BlamesWriter(); got != want {
-			t.Errorf("%q.BlamesWriter() = %v, want %v", reason, got, want)
+		if want.blames && !want.gate {
+			t.Errorf("%q is decided to blame a writer and not to be a gate's — only "+
+				"a gate drops a record, so only a gate has a writer to blame", reason)
+		}
+		if got := reason.BlamesWriter(); got != want.blames {
+			t.Errorf("%q.BlamesWriter() = %v, want %v", reason, got, want.blames)
 		}
 	}
-	for reason := range decided {
+	for reason := range reasonDecisions {
 		if !slices.Contains(statelog.Reasons(), reason) {
 			t.Errorf("%q is decided here and is not a reason this build names", reason)
 		}

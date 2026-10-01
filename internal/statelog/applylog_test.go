@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A STOP IS WRITTEN ONCE, AND THE LINE SAYS WHAT RESUMES IT.
@@ -81,6 +85,111 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 	}
 }
 
+// gatedLine runs a REAL runner over domain on the records offer puts on its
+// log — the first of which a gate drops — and returns the one
+// `statelog_record_gated` line it wrote for that drop.
+func gatedLine(t *testing.T, domain statelog.Domain, offer func(h *applyHarness)) map[string]any {
+	t.Helper()
+	h := newApplyHarness(t, domain)
+	logs := &lockedBuffer{}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: domain, Spec: specOf(domain), Layout: layoutOf(domain),
+		LogID:      logOf(domain),
+		Applier:    h.applier,
+		Fetch:      h.fetch,
+		Log:        h.fetch,
+		Node:       h.db,
+		DB:         h.estate,
+		Checkpoint: statelog.Position{Generation: 1},
+		Metrics:    h.metrics,
+		Logger:     slog.New(slog.NewJSONHandler(logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	h.runner = runner
+	offer(h)
+	if err := h.run(1); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	lines := logRecords(t, logs.Bytes(), "statelog_record_gated")
+	if len(lines) != 1 {
+		t.Fatalf("%d statelog_record_gated lines for one dropped record, want one",
+			len(lines))
+	}
+	return lines[0]
+}
+
+// THE REPLICATION GUIDE SAYS WHAT THE RECORD-GATED LINE CARRIES, UNDER EVERY
+// GATE.
+//
+// The line is a dropped record's only witness, and the guide's row is what an
+// operator reads it by — the row the `statelog_write_gated` row and the
+// records-gated alarm both send them to. It named three gates of seven, every
+// one the framework's, so an operator following a `released` refusal to the
+// drop behind it read that the line never carries that gate; and it named no
+// key but `log` and `belongs_to`, so nothing said the line names the node that
+// wrote the record, the one fact the alarm's remedy says to read it for.
+//
+// So the row is held to the line itself — every key a domain's gate puts on it
+// and every key the partition's adds — and to every reason that is a gate's
+// ([reasonDecisions]), since the line is logged under whichever one dropped the
+// record.
+func TestTheReplicationGuideSaysWhatTheRecordGatedLineCarries(t *testing.T) {
+	t.Parallel()
+	lines := []map[string]any{
+		// A DOMAIN'S GATE, which every node asks of its own rows.
+		gatedLine(t, probeDomain{}, func(h *applyHarness) {
+			h.applier.gate, h.applier.gated[1] = statelog.ReasonReleased, true
+			h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+		}),
+		// THE PARTITION'S, which also names the log and where the record
+		// belongs.
+		gatedLine(t, placingDomain{}, func(h *applyHarness) {
+			h.fetch.offer(1, env(1, strayKind, "b", "op-2", 1))
+		}),
+	}
+	row := guideRow(t, "statelog_record_gated")
+	for _, line := range lines {
+		for key := range line {
+			switch key {
+			case slog.TimeKey, slog.LevelKey, slog.MessageKey:
+				continue
+			}
+			if !strings.Contains(row, "`"+key+"`") {
+				t.Errorf("the guide's statelog_record_gated row never names `%s`, a "+
+					"key the line carries under the gate %v: %s", key, line["gate"], row)
+			}
+		}
+	}
+	for _, reason := range statelog.Reasons() {
+		if reasonDecisions[reason].gate && !strings.Contains(row, "`"+string(reason)+"`") {
+			t.Errorf("the guide's statelog_record_gated row never names `%s`, a gate "+
+				"the line is logged under: %s", reason, row)
+		}
+	}
+	if !strings.Contains(row, "`"+metrics.StatelogRecordsGated+"`") {
+		t.Errorf("the guide's statelog_record_gated row never names `%s`, which "+
+			"counts the lines: %s", metrics.StatelogRecordsGated, row)
+	}
+}
+
+// guideRow is the replication guide's table row for one log line.
+func guideRow(t *testing.T, line string) string {
+	t.Helper()
+	guide, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "replication.md"))
+	if err != nil {
+		t.Fatalf("read the replication guide: %v", err)
+	}
+	for row := range strings.SplitSeq(string(guide), "\n") {
+		if strings.HasPrefix(row, "| `"+line+"` |") {
+			return row
+		}
+	}
+	t.Fatalf("the replication guide's table of state-log lines has no %s row", line)
+	return ""
+}
+
 // lockedBuffer is a log destination safe to write from the loop's goroutine
 // while a test reads it.
 type lockedBuffer struct {
@@ -131,35 +240,10 @@ func logRecords(t *testing.T, written []byte, msg string) []map[string]any {
 // the line's own message, and every other is a key on it.
 func TestTheRecordsGatedRemedyNamesWhatItsLineCarries(t *testing.T) {
 	t.Parallel()
-	h := newApplyHarness(t, probeDomain{})
-	logs := &lockedBuffer{}
-	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Layout: layoutOf(probeDomain{}),
-		LogID:      logOf(probeDomain{}),
-		Applier:    h.applier,
-		Fetch:      h.fetch,
-		Log:        h.fetch,
-		Node:       h.db,
-		DB:         h.estate,
-		Checkpoint: statelog.Position{Generation: 1},
-		Metrics:    h.metrics,
-		Logger:     slog.New(slog.NewJSONHandler(logs, nil)),
+	line := gatedLine(t, probeDomain{}, func(h *applyHarness) {
+		h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
+		h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
 	})
-	if err != nil {
-		t.Fatalf("NewRunner: %v", err)
-	}
-	h.runner = runner
-	h.applier.gate, h.applier.gated[1] = statelog.ReasonEvicted, true
-	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
-	if err := h.run(1); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	lines := logRecords(t, logs.Bytes(), "statelog_record_gated")
-	if len(lines) != 1 {
-		t.Fatalf("%d statelog_record_gated lines for one dropped record, want one",
-			len(lines))
-	}
-	line := lines[0]
 
 	alarm, found := find(statelog.Evaluate(statelog.Reading{RecordsGated: 1}),
 		statelog.KindRecordsGated)
