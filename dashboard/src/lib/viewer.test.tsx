@@ -6,8 +6,7 @@
  * remedy is a line of company configuration.
  */
 
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, renderHook, waitFor } from "~/test/inCase.ts";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { useViewer } from "./viewer.ts";

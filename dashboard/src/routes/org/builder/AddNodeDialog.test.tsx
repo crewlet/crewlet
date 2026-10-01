@@ -9,7 +9,7 @@
  * silently.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { isMintedKey } from "./model/keys.ts";

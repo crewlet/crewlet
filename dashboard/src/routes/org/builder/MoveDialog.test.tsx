@@ -9,7 +9,7 @@
  * strands and the seats working now are named before the move, not after.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "~/test/inCase.ts";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, ChartRead } from "~/protocol/index.ts";
 import { locate } from "./model/draft.ts";

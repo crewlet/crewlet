@@ -13,7 +13,7 @@
  * than per row, and never a line under a value that is not there.
  */
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 

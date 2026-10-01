@@ -13,7 +13,7 @@
  * second test holds the chip to the answer when a thread IS open.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";

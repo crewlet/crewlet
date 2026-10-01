@@ -20,14 +20,13 @@
  */
 
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, poll, render as rtlRender, screen } from "~/test/inCase.ts";
 
 // uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
 // context is no longer supplied anywhere, so a dialog tested under it would
 // pass while writing its confirmation into a hook nothing is listening to.
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { afterEach, expect, test, vi } from "vitest";
-import { poll } from "~/test/inCase.ts";
 import {
   HELD,
   SetupDialog,

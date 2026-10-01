@@ -9,8 +9,7 @@
  * exchange is sent once, in the header, and kept nowhere.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { act, answered } from "~/test/inCase.ts";
+import { act, answered, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";

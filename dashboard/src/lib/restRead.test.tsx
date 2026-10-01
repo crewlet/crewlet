@@ -10,8 +10,7 @@
  * again only on a reload.
  */
 
-import { cleanup, renderHook } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, renderHook } from "~/test/inCase.ts";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useRestRead, type RestReadOptions } from "./restRead.ts";

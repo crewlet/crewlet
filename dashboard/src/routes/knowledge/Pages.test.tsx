@@ -10,7 +10,7 @@
  * as a stray button over a header that says the same thing three lines down.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { PageView } from "./Pages.tsx";

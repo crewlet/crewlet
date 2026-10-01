@@ -10,7 +10,7 @@
  * wrong in opposite directions on two screens at once.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 import { Meter } from "./primitives.tsx";
 

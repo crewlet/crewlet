@@ -10,7 +10,7 @@
  * to shape, and that each lens answers its own question.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Project, ProjectPeek } from "./Project.tsx";

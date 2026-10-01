@@ -6,8 +6,7 @@
  * in Retention.test.tsx must not see.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import type {

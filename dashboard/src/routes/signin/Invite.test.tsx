@@ -7,8 +7,7 @@
  * join from a browser at all.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";

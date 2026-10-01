@@ -17,7 +17,7 @@
  */
 
 import { afterEach, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { LayerHost } from "@crewlethq/ui";
 import { TimeRangePicker } from "./TimeRange.tsx";
 import type { TimeRange, Window } from "~/lib/range.ts";

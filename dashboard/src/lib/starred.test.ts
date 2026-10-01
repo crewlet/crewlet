@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, renderHook } from "~/test/inCase.ts";
 import {
   MaxStars,
   isStarred,

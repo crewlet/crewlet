@@ -10,8 +10,7 @@
  * each opened the whole company's live view where it promised a filtered log.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 

@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";

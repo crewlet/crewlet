@@ -237,40 +237,41 @@ What follows are the prerequisites that legitimately vary by machine.
   you change, waits for the work.
 
   **What a case does ends with the case.** A case that times out is failed,
-  not stopped: its function goes on running beside the cases after it.
-  React keeps one `act` scope count for the process, so an `act` it opens
-  beside the next case's leaves every later render in the file queued and
-  never flushed — one timeout read as the rest of the file failing — and a
-  `findBy` or `waitFor` it still has out polls the next case's page, where it
-  can find what that case drew. So every case runs in an async context of
-  its own (`aroundEach` in `src/test/setup.ts`, over `src/test/cases.ts`,
-  which loads no testing library so a file with no document pays for none),
-  and `src/test/inCase.ts` binds to it — loaded by `setup.ts` wherever there
-  is a document, so a suite that never imports it is bound all the same
-  (`libraryBound.test.tsx`): its `act`, which is the only one a suite imports
-  (`inCase.source.test.ts` fails a file that reaches the library's); its
-  `poll`, which a suite uses in place of Vitest's `vi.waitFor` — that one
-  cannot be bound, goes on looking after its case has ended, and advances
-  whatever fake clock is installed before every look, which by then is the
-  next case's, so the same gate refuses it and `vi.waitUntil` and
-  `expect.poll` with it; and the library's own waits and `fireEvent`, through
-  the library's `asyncWrapper` and `eventWrapper`. When the case ends, every
-  act scope, wait and poll it still has out is closed before the next case
-  begins — innermost first, because each puts back on exit the act count or
-  act environment it found on entry, and closed in any other order a scope
-  opened inside another left React's count raised — and everything it asks
-  for after that is refused before it opens. Node carries the context
-  through the case's own awaits and timers, so a case that timed out inside
-  a promise of its own and resumes later still reads its own, ended case —
-  which is what a helper every case shares (`answered()`, a suite's
-  `settle()`) could not tell before, and why the flush used to be handed to
-  each case. A case
-  that holds the page's timers advances them as `answered`'s `step`, so the
-  refusal comes before the timers move. `src/test/inCase.test.tsx` holds each
-  of these to a pair: a case that really runs out of its time with something
-  out (`test.fails` on a budget it always spends), and the case after it,
-  which first holds it to having failed by that timeout — `test.fails`
-  passes on any failure at all — and then reads what the late one came to.
+  not stopped: its function goes on running beside the cases after it. React
+  keeps one `act` scope count for the process, so an `act` it opens beside the
+  next case's leaves every later render in the file queued and never flushed —
+  one timeout read as the rest of the file failing — a `findBy` or `waitFor`
+  it still has out polls the next case's page, where it can find what that
+  case drew, and a `render` or `cleanup` it makes draws into that page or
+  takes it away. So every case runs in an async context of its own
+  (`aroundEach` in `src/test/setup.ts`, over `src/test/cases.ts`, which loads
+  no testing library so a file with no document pays for none), and
+  `src/test/inCase.ts` binds the testing library to it. A suite imports the
+  library from there and nowhere else — `inCase.source.test.ts` fails a file
+  that takes it, or React's own `act`, from anywhere else — so the import that
+  gives a suite the library is the one that binds it: its `act`, `render`,
+  `renderHook` and `cleanup`, refused once their case has ended; its `poll`,
+  which a suite uses in place of Vitest's `vi.waitFor` — that one cannot be
+  bound, goes on looking after its case has ended, and advances whatever fake
+  clock is installed before every look, which by then is the next case's, so
+  the same gate refuses it and `vi.waitUntil` and `expect.poll` with it; and
+  the library's own waits and `fireEvent`, through the library's
+  `asyncWrapper` and `eventWrapper`. When the case ends, every act scope, wait
+  and poll it still has out is closed before the next case begins — innermost
+  first, because each puts back on exit the act count or act environment it
+  found on entry, and closed in any other order a scope opened inside another
+  left React's count raised — and everything it asks for after that is refused
+  before it opens. Node carries the context through the case's own awaits and
+  timers, so a case that timed out inside a promise of its own and resumes
+  later still reads its own, ended case — which is what a helper every case
+  shares (`answered()`, a suite's `settle()`) could not tell before, and why
+  the flush used to be handed to each case. A case that holds the page's
+  timers advances them as `answered`'s `step`, so the refusal comes before the
+  timers move. `src/test/inCase.test.tsx` holds each of these to a pair: a
+  case that really runs out of its time with something out (`test.fails` on a
+  budget it always spends), and the case after it, which first holds it to
+  having failed by that timeout — `test.fails` passes on any failure at all —
+  and then reads what the late one came to.
 
   **And the harness's own waits end with it too.** The builder's testkit
   retires a lens when the case that mounted it finishes (`onTestFinished`):

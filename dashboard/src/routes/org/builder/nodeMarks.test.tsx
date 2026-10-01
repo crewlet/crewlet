@@ -17,7 +17,7 @@
  * every mark on a node makes: a push changes a word and never a measured box.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";

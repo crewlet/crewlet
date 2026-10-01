@@ -17,8 +17,7 @@
  */
 
 import { Profiler, useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeAll, expect, test } from "vitest";
 
 import { DataGrid } from "./DataGrid.tsx";

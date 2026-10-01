@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { WorkGrid } from "~/routes/work/shapes/Grid.tsx";

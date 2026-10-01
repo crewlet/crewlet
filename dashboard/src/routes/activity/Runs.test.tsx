@@ -8,7 +8,7 @@
  * that the log in front of them is complete.
  */
 
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 import type { ReactElement } from "react";
 

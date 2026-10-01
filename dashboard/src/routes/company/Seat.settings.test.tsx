@@ -22,8 +22,7 @@
  *  - it reads the runtime half WITHHELD as a runtime half that is empty.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatPeek, SeatScreen } from "./Seat.tsx";

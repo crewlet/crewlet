@@ -12,7 +12,7 @@
  * defect was never the arithmetic — each surface counted something true.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { UnitBlock, UnitScreen } from "./Company.tsx";

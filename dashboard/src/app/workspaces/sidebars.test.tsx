@@ -14,7 +14,7 @@
  * half of it.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { useWorkSidebar } from "./sidebars.tsx";

@@ -14,7 +14,7 @@
  * back, and the SCREEN owns Clear — so the last section mounts the list.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { FilterChips } from "./FilterChips.tsx";

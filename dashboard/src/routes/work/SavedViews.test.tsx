@@ -7,7 +7,7 @@
  * one person two ways, which is the failure this case exists to hold shut.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import { SavedViews } from "./SavedViews.tsx";

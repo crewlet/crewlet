@@ -68,8 +68,9 @@
  * functions, `@vitest-environment node` — has no page for the library to
  * wait on or dispatch to. Kept with the library binding, the lifecycle loaded
  * `@testing-library/react` and `react-dom` into every such file's setup,
- * which measured about 200 ms a file for nothing; here it loads neither, and
- * `setup.ts` loads the binding only where there is a document.
+ * which measured about 200 ms a file for nothing. Here it loads neither; the
+ * binding is loaded by the import that gives a suite the library, the only
+ * door to it there is.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";

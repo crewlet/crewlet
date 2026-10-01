@@ -22,8 +22,7 @@
  * with nothing in it still saying its own name.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { MyWork } from "./MyWork.tsx";

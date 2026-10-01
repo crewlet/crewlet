@@ -14,7 +14,7 @@
  * alone would still be a fact nobody can name.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { WorkSearch } from "./WorkSearch.tsx";

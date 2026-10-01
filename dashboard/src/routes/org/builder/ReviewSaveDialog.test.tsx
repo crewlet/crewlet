@@ -6,8 +6,7 @@
  * the work.
  */
 
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, screen, within } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { clearSavedChanges } from "./savedChanges.ts";

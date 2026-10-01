@@ -18,8 +18,7 @@
  * a fixed size and each card by what it holds.
  */
 
-import { getConfig, render } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, getConfig, render } from "~/test/inCase.ts";
 import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";

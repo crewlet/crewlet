@@ -9,7 +9,7 @@
  * sign-in, and it comes back to this screen.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Integrations } from "./Integrations.tsx";
 import { Router } from "~/app/router.tsx";

@@ -14,7 +14,7 @@
  * the panel unable to disagree is that neither of them owns the value.
  */
 
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { DetailRail, peekRow } from "./DetailRail.tsx";

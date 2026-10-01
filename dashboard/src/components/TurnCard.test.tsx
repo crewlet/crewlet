@@ -15,7 +15,7 @@
  * mutually impossible figures for it.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 
 import { TurnCard } from "./TurnCard.tsx";

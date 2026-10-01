@@ -24,8 +24,7 @@
  * later with nowhere to live fails here rather than shipping invisible.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { answered } from "~/test/inCase.ts";
+import { answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ItemsView } from "../ItemsView.tsx";

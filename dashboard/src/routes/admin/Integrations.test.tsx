@@ -9,7 +9,7 @@
  * answer is worth pinning.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
@@ -1342,7 +1342,6 @@ test("a stale setup listing offers nothing rather than contradicting the tag", (
 
 // --- an agent's own app, in the two acts a person performs ---------------- //
 
-import { waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
 
@@ -1596,7 +1595,6 @@ test("the engine's refusal is reported beside the agent it was refused for", asy
 
 // --- the listing, and when it is worth reading again ---------------------- //
 
-import { act } from "~/test/inCase.ts";
 import type { ReactElement } from "react";
 import { useSetup } from "./Integrations.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";

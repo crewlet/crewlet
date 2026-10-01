@@ -6,8 +6,7 @@
  * before it.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { answered } from "~/test/inCase.ts";
+import { answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";

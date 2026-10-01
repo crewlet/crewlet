@@ -10,8 +10,7 @@
  * happens to arrive.
  */
 
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, renderHook, waitFor } from "~/test/inCase.ts";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { chartSeatPath, chartUnitPath, useChartRead, WITH_RUNTIME } from "./chartReads.ts";

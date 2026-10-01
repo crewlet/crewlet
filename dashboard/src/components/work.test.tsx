@@ -13,7 +13,7 @@
  * Grid.test.tsx` holds the same rule over the grid's two column sets.
  */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 
 import { Assignee, BoardCard, type RowChrome } from "./work.tsx";

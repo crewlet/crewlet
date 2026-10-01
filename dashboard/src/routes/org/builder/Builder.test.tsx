@@ -4,8 +4,7 @@
  * write, and keeps the operator's work through a change of reader.
  */
 
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, screen, within } from "~/test/inCase.ts";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type OrgProjection } from "~/protocol/index.ts";

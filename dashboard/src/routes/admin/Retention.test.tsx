@@ -10,7 +10,7 @@
  * and finishes under, force — are in GateDialog.test.tsx.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {

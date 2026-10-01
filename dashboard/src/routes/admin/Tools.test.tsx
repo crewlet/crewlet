@@ -13,7 +13,7 @@
  * through the peek's neighbours.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToolPeek, Tools } from "./Tools.tsx";
 import { Router } from "~/app/router.tsx";

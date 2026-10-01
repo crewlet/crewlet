@@ -13,7 +13,7 @@
  * exactly what the component's own comment says a tree must never do.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { WorkspaceSidebar, type SidebarRow, type SidebarSection } from "./WorkspaceSidebar.tsx";

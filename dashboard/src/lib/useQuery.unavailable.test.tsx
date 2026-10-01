@@ -12,8 +12,7 @@
  * and a refusal only an operator could lift went on being polled.
  */
 
-import { cleanup, render } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, render } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "./store-hooks.ts";
 import { useQuery } from "./useQuery.ts";

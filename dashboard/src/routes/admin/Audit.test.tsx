@@ -21,8 +21,7 @@
  */
 
 import { Profiler } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
-import { act, answered } from "~/test/inCase.ts";
+import { act, answered, cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Audit, auditCsv } from "./Audit.tsx";

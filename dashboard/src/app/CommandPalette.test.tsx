@@ -11,7 +11,7 @@
  * failed rendered as an empty result are all perfectly well-typed.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { Router } from "./router.tsx";

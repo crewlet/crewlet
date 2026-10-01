@@ -12,7 +12,7 @@
  * more, so it answered "no unit" for every container in every company.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ContainerPeek } from "./Knowledge.tsx";

@@ -25,8 +25,7 @@
  * nothing here asserts them again.
  */
 
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { drawnClasses, drawnPart, insidePart, menuEntryLabel, orgTableParts } from "~/testing.tsx";
@@ -34,7 +33,6 @@ import { Tag } from "@crewlethq/ui";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
-import { render } from "@testing-library/react";
 
 afterEach(() => {
   cleanup();

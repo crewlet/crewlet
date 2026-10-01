@@ -7,8 +7,7 @@
  * card said Connect, and nothing moved until they refreshed by hand.
  */
 
-import { renderHook } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, renderHook } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SETTLE_MS, WATCH_MS, useRecheck } from "./recheck.ts";

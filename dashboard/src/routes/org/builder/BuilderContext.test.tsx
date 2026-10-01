@@ -3,7 +3,7 @@
  * registration lasts exactly as long as the view.
  */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   BuilderContext,

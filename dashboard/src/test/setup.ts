@@ -23,13 +23,12 @@ aroundEach(async (runTest) => {
   await runCase(runTest);
 });
 
-// THE LIBRARY IS BOUND WHERE THERE IS A PAGE: loading `inCase.ts` wraps the
-// testing library's waits and events, so a suite that renders and waits
-// without ever importing it is bound all the same. A file with no document
-// has nothing for the library to wait on, and loading it there — with
-// `react-dom` behind it — cost each such file about 200 ms of setup for
-// nothing; one that imports the library anyway loads the binding with it.
-if (typeof document !== "undefined") await import("./inCase.ts");
+// THE LIBRARY IS NOT LOADED HERE. Every suite reaches it through `inCase.ts`
+// and nowhere else (`inCase.source.test.ts`), and loading that module binds
+// it — so a file that uses the library is bound by the import that gives it
+// the library, and a file that does not, such as every suite of pure
+// functions, never loads it or `react-dom` behind it: loaded here for every
+// file, that was about 200 ms of setup a file for nothing.
 
 // A WARNING IS A FAILURE OF THE CASE THAT PRINTED IT — see `console.ts` for
 // the defects that printed theirs into passing cases. Checked in an

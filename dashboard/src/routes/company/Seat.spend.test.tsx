@@ -16,7 +16,7 @@
  * one"; this is the client half of that.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";

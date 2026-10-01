@@ -8,7 +8,7 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";

@@ -8,8 +8,7 @@
  * of it said it was not.
  */
 
-import { cleanup, render } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, render } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { HEALTH_POLL_MS, useEngineHealth } from "./engineHealth.ts";
 import { ClientContext } from "./store-hooks.ts";

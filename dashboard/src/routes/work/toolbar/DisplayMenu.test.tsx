@@ -15,8 +15,7 @@
  * throw the order away.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { answered } from "~/test/inCase.ts";
+import { answered, cleanup, fireEvent, render, screen, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { DisplayMenu, type DisplayMenuProps } from "./DisplayMenu.tsx";

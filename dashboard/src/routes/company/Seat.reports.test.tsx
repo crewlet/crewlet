@@ -14,7 +14,7 @@
  * clamps and does not nowrap — is in `styles/text.test.ts`.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatPeek, SeatScreen } from "./Seat.tsx";

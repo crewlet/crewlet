@@ -8,7 +8,7 @@
  * the seat becomes; and a schedule the change strands is named first.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AgentRow, ChartRead, ChartSeat } from "~/protocol/index.ts";
 import { ChangeKindDialog } from "./ChangeKindDialog.tsx";

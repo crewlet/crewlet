@@ -14,7 +14,7 @@
  * would go red for reasons that have nothing to do with how a seat is drawn.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { WorkGrid } from "./Grid.tsx";

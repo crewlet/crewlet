@@ -16,7 +16,7 @@
  * rather than through the mount's own container.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { FilterMenu, type FilterMenuProps } from "./FilterMenu.tsx";

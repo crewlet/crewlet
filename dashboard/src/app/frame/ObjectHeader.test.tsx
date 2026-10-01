@@ -9,7 +9,7 @@
  * draws exactly what it was handed.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { FactLine, ObjectHeader, SetByLine, type SetBy } from "./ObjectHeader.tsx";

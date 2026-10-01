@@ -12,7 +12,7 @@
  * and never rendered against a real answer is a screen nobody has seen.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { ConfigScreen } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";

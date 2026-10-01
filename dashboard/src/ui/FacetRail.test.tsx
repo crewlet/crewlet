@@ -10,7 +10,7 @@
  * anywhere: the rule was held by memory, which is how it decayed.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 
 import { FacetRail } from "./FacetRail.tsx";

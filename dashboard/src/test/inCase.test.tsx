@@ -24,10 +24,9 @@
  * away.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, answered, cleanup, fireEvent, poll, render, renderHook, screen } from "./inCase.ts";
 import { useState } from "react";
 import { afterEach, expect, onTestFailed, onTestFinished, test, vi } from "vitest";
-import { act, answered, poll } from "./inCase.ts";
 
 afterEach(cleanup);
 
@@ -299,6 +298,50 @@ test("is refused both, rather than finding and pressing this case's control", as
   // And this case's own wait and click are its to make.
   fireEvent.click(await screen.findByRole("button", { name: "the next case's" }));
   expect(presses).toBe(1);
+});
+
+/* A render, a rerender, a hook and a cleanup a late case would make on the next case's page. */
+
+let releaseDrawing: () => void = () => {};
+let lateRender: Promise<string> = Promise.resolve("never started");
+let lateRerender: Promise<string> = Promise.resolve("never started");
+let lateHook: Promise<string> = Promise.resolve("never started");
+let lateCleanup: Promise<string> = Promise.resolve("never started");
+
+const drawingRanOut = runsOut(
+  "a case that runs out of time with a render, a hook and a cleanup still to make",
+  async () => {
+    const own = new Promise<void>((resolve) => {
+      releaseDrawing = resolve;
+    });
+    const page = render(<p>drawn by the late case</p>);
+    const late = (move: () => void) =>
+      settled(
+        (async () => {
+          await own;
+          move();
+        })(),
+      );
+    lateRender = late(() => render(<p>drawn late</p>));
+    lateRerender = late(() => page.rerender(<p>redrawn late</p>));
+    lateHook = late(() => renderHook(() => useState(0)));
+    // `cleanup` unmounts EVERY page the library mounted — by then, the next
+    // case's.
+    lateCleanup = late(() => cleanup());
+    await Promise.all([lateRender, lateRerender, lateHook, lateCleanup]);
+  },
+);
+
+test("is refused all four, and this case's page is its own", async () => {
+  drawingRanOut();
+  render(<p>drawn by this case</p>);
+  releaseDrawing();
+  expect(await lateRender).toBe(`render: ${ENDED}`);
+  expect(await lateRerender).toBe(`rerender: ${ENDED}`);
+  expect(await lateHook).toBe(`renderHook: ${ENDED}`);
+  expect(await lateCleanup).toBe(`cleanup: ${ENDED}`);
+  expect(screen.queryByText("drawn late")).toBeNull();
+  expect(screen.getByText("drawn by this case")).toBeTruthy();
 });
 
 /* A poll still out, on a fake clock, when its case runs out of time. */

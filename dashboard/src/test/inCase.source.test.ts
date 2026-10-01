@@ -1,22 +1,25 @@
 // @vitest-environment node
 
 /**
- * A suite reaches `act`, and configures the testing library, only through
+ * A suite reaches the testing library — and React's `act` — only through
  * `inCase.ts`.
  *
- * The binding there ends every act scope, wait and event with the case that
- * made it — but only the ones that go through it. The library's own `act`,
- * imported anywhere else, is the bare one again: a `settle()` every case in a
- * file shares, or a line in a case body, that a case still running after its
- * time ran out opens beside the next case, with nothing to refuse it. And a
- * second `configure` of the library replaces the two wrappers its waits and
- * events are bound through, which unbinds every `findBy`, `waitFor` and
- * `fireEvent` in the run at once.
+ * The binding there ends every render, act scope, wait and event with the
+ * case that made it — but only the ones that go through it. The library
+ * imported anywhere else is the bare one again: an `act`, a `render` or a
+ * `cleanup` that a case still running after its time ran out makes on the
+ * next case's page, with nothing to refuse it. And loading the library is
+ * what binds its waits and events (the binding wraps them as it loads), so a
+ * suite that took the library from anywhere else would have its `findBy`
+ * bound only if some other file happened to load the binding first. A second
+ * `configure` of the library replaces the two wrappers its waits and events
+ * are bound through, which unbinds every `findBy`, `waitFor` and `fireEvent`
+ * in the run at once — and the binding hands out no `configure`.
  *
- * A bare `await act(` cannot be told from a bound one by its text — both are
- * spelled the same — so what is held is where `act` COMES FROM: every file
- * that calls it imports it from `inCase.ts`, and nothing but `inCase.ts`
- * reaches the library's.
+ * So the rules are where things COME FROM, since a bare `await act(` cannot
+ * be told from a bound one by its text: nothing but `inCase.ts` takes a value
+ * from the testing library; nothing takes React's own `act`; and every file
+ * that calls `act` imports it from `inCase.ts`.
  *
  * And nothing polls through Vitest's own `vi.waitFor`, `vi.waitUntil` or
  * `expect.poll`, which nothing can bind: each goes on looking on real timers
@@ -47,22 +50,17 @@ import { parseAst } from "vite";
 import { expect, test } from "vitest";
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
-/** The one file that may reach the library's own `act` and `configure`. */
+/** The one file that may take a value from the testing library. */
 const BINDING = join("test", "inCase.ts");
 
-/** The modules a bare `act` comes from. */
-const ACTS = new Set([
-  "@testing-library/react",
-  "@testing-library/react/pure",
-  "react",
-  "react-dom/test-utils",
-]);
-/** The modules whose `configure` replaces the library's wrappers. */
-const CONFIGURES = new Set([
+/** The testing library: every entry a suite could take it from. */
+const LIBRARY = new Set([
   "@testing-library/react",
   "@testing-library/react/pure",
   "@testing-library/dom",
 ]);
+/** React's own `act`, and the test utilities that hand it out. */
+const REACT_ACTS = new Set(["react", "react-dom/test-utils"]);
 /** Vitest's own polls, by the export that carries them: none ends with its case. */
 const POLLS = new Map([
   ["vi", new Set(["waitFor", "waitUntil"])],
@@ -137,9 +135,12 @@ function memberName(node: Node): string | null {
     : null;
 }
 
-/** What one file does with `act`, as its parsed tree says. */
+/** What one file reaches, as its parsed tree says. */
 interface Reading {
-  /** What it reaches that only the binding may — the library's `act` and `configure` — or nothing may: Vitest's polls. */
+  /**
+   * What it reaches that only the binding may — the testing library, React's
+   * own `act` — or that nothing may: Vitest's polls.
+   */
   reaches: string[];
   /** Whether it calls an identifier named `act`. */
   callsAct: boolean;
@@ -186,8 +187,13 @@ function read(file: string, text: string): Reading {
   for (const node of program.body as Node[]) {
     if (node.type !== "ImportDeclaration" || node.importKind === "type") continue;
     const from = (node.source as Node).value as string;
-    for (const spec of node.specifiers as Node[]) {
-      if (spec.importKind === "type") continue;
+    const values = (node.specifiers as Node[]).filter((spec) => spec.importKind !== "type");
+    // A TYPE moves nothing; a value — or a bare `import "x"`, which runs the
+    // module — is the library itself.
+    if (LIBRARY.has(from) && (values.length > 0 || (node.specifiers as Node[]).length === 0)) {
+      reaches.push(`imports "${from}"`);
+    }
+    for (const spec of values) {
       const local = nameOf(spec.local)!;
       bind(local);
       const imported = spec.type === "ImportSpecifier" ? nameOf(spec.imported) : "default";
@@ -198,10 +204,8 @@ function read(file: string, text: string): Reading {
         wholes.set(local, from);
       } else if (from === "vitest" && imported !== null && POLLS.has(imported)) {
         vitest.set(local, imported);
-      } else if (imported === "act" && ACTS.has(from)) {
+      } else if (imported === "act" && REACT_ACTS.has(from)) {
         reaches.push(`act from "${from}"`);
-      } else if (imported === "configure" && CONFIGURES.has(from)) {
-        reaches.push(`configure from "${from}"`);
       }
     }
   }
@@ -211,27 +215,27 @@ function read(file: string, text: string): Reading {
       case "ExportNamedDeclaration": {
         if (!isNode(node.source) || node.exportKind === "type") break;
         const from = node.source.value as string;
+        if (LIBRARY.has(from)) {
+          reaches.push(`re-exports "${from}"`);
+          break;
+        }
         for (const spec of node.specifiers as Node[]) {
-          const name = nameOf(spec.local);
-          if (
-            (name === "act" && ACTS.has(from)) ||
-            (name === "configure" && CONFIGURES.has(from))
-          ) {
-            reaches.push(`export ${name} from "${from}"`);
+          if (nameOf(spec.local) === "act" && REACT_ACTS.has(from)) {
+            reaches.push(`re-exports act from "${from}"`);
           }
         }
         break;
       }
       case "ExportAllDeclaration": {
         const from = (node.source as Node).value as string;
-        if (node.exportKind !== "type" && (ACTS.has(from) || CONFIGURES.has(from))) {
-          reaches.push(`export * from "${from}"`);
+        if (node.exportKind !== "type" && (LIBRARY.has(from) || REACT_ACTS.has(from))) {
+          reaches.push(`re-exports "${from}"`);
         }
         break;
       }
       case "ImportExpression": {
         const from = nameOf(node.source);
-        if (from !== null && (ACTS.has(from) || CONFIGURES.has(from))) {
+        if (from !== null && (LIBRARY.has(from) || REACT_ACTS.has(from))) {
           reaches.push(`import("${from}")`);
         }
         break;
@@ -242,12 +246,8 @@ function read(file: string, text: string): Reading {
         if (node.object.type === "Identifier") {
           const object = node.object.name as string;
           const from = wholes.get(object);
-          if (
-            from !== undefined &&
-            ((member === "act" && ACTS.has(from)) ||
-              (member === "configure" && CONFIGURES.has(from)))
-          ) {
-            reaches.push(`${object}.${member}`);
+          if (from !== undefined && member === "act" && REACT_ACTS.has(from)) {
+            reaches.push(`${object}.act`);
           }
           const carrier = vitest.get(object);
           if (carrier !== undefined && POLLS.get(carrier)!.has(member)) {
@@ -311,61 +311,81 @@ function read(file: string, text: string): Reading {
 }
 
 /**
- * Every shape the reading must see, and one it must not: each is a way a
- * file once reached — or could reach — the library's `act` unseen, so a
- * reading that went blind to one fails here by name rather than passing the
- * walk below over a tree that happens not to hold it today.
+ * Every shape the reading must see, and the ones it must not: each is a way
+ * a file once reached — or could reach — the library or an unbound `act`
+ * unseen, so a reading that went blind to one fails here by name rather than
+ * passing the walk below over a tree that happens not to hold it today.
  */
 const SHAPES: { shape: string; file?: string; source: string; reading: Partial<Reading> }[] = [
   {
-    shape: "a named import",
+    shape: "the library's act",
     source: `import { act } from "@testing-library/react";`,
-    reading: { reaches: [`act from "@testing-library/react"`] },
+    reading: { reaches: [`imports "@testing-library/react"`] },
   },
   {
-    shape: "an aliased import from react",
-    source: `import { act as flush } from "react"; flush(() => {});`,
-    reading: { reaches: [`act from "react"`], callsAct: false },
+    shape: "the library's render, which moves the page as surely",
+    source: `import { render, screen } from "@testing-library/react";`,
+    reading: { reaches: [`imports "@testing-library/react"`] },
   },
   {
-    shape: "a namespace's member",
-    source: `import * as RTL from "@testing-library/react"; RTL.act(() => {});`,
-    reading: { reaches: ["RTL.act"] },
+    shape: "the library through a namespace",
+    source: `import * as RTL from "@testing-library/react/pure"; RTL.act(() => {});`,
+    reading: { reaches: [`imports "@testing-library/react/pure"`] },
   },
   {
-    shape: "a default import's member",
-    source: `import React from "react"; React.act(() => {});`,
-    reading: { reaches: ["React.act"] },
+    shape: "the library's dom half, whose configure unbinds the waits",
+    source: `import { configure } from "@testing-library/dom"; configure({});`,
+    reading: { reaches: [`imports "@testing-library/dom"`] },
   },
   {
-    shape: "a default imported by name, its member computed",
-    source: `import { default as R } from "react"; R["act"](() => {});`,
-    reading: { reaches: ["R.act"] },
+    shape: "the library for its side effects alone",
+    source: `import "@testing-library/react";`,
+    reading: { reaches: [`imports "@testing-library/react"`] },
   },
   {
-    shape: "a re-export",
-    source: `export { act } from "react-dom/test-utils";`,
-    reading: { reaches: [`export act from "react-dom/test-utils"`] },
+    shape: "the library's types, which move nothing",
+    source: `import type { RenderResult } from "@testing-library/react"; import { type RenderOptions } from "@testing-library/react";`,
+    reading: { reaches: [] },
   },
   {
-    shape: "a re-export of everything",
+    shape: "a re-export of part of the library",
+    source: `export { screen } from "@testing-library/react";`,
+    reading: { reaches: [`re-exports "@testing-library/react"`] },
+  },
+  {
+    shape: "a re-export of all of it",
     source: `export * from "@testing-library/react/pure";`,
-    reading: { reaches: [`export * from "@testing-library/react/pure"`] },
+    reading: { reaches: [`re-exports "@testing-library/react/pure"`] },
   },
   {
-    shape: "a dynamic import",
+    shape: "a dynamic import of the library",
     source: `const m = await import("@testing-library/react");`,
     reading: { reaches: [`import("@testing-library/react")`] },
   },
   {
-    shape: "a configure of the library's dom half",
-    source: `import { configure } from "@testing-library/dom"; configure({});`,
-    reading: { reaches: [`configure from "@testing-library/dom"`] },
+    shape: "React's act by an alias",
+    source: `import { act as flush } from "react"; flush(() => {});`,
+    reading: { reaches: [`act from "react"`], callsAct: false },
   },
   {
-    shape: "a configure through a namespace",
-    source: `import * as DTL from "@testing-library/dom"; DTL.configure({});`,
-    reading: { reaches: ["DTL.configure"] },
+    shape: "React's act off its default import",
+    source: `import React from "react"; React.act(() => {});`,
+    reading: { reaches: ["React.act"] },
+  },
+  {
+    shape: "React's act off a default imported by name, its member computed",
+    source: `import { default as R } from "react"; R["act"](() => {});`,
+    reading: { reaches: ["R.act"] },
+  },
+  {
+    shape: "React's act re-exported from the test utilities",
+    source: `export { act } from "react-dom/test-utils";`,
+    reading: { reaches: [`re-exports act from "react-dom/test-utils"`] },
+  },
+  {
+    shape: "the rest of React, which is not an act",
+    source: `import React, { useState } from "react"; React.useEffect(() => {}); useState(0);`,
+    reading: { reaches: [] },
   },
   {
     shape: "an import after a string holding a slash and a star",
@@ -374,18 +394,13 @@ const SHAPES: { shape: string; file?: string; source: string; reading: Partial<R
   },
   {
     shape: "an import after a string holding two slashes",
-    source: `const at = "#//evil.example"; import { act } from "react";`,
-    reading: { reaches: [`act from "react"`] },
+    source: `const at = "#//evil.example"; import { render } from "@testing-library/react";`,
+    reading: { reaches: [`imports "@testing-library/react"`] },
   },
   {
     shape: "an import written in a comment, which is not one",
-    source: `// import { act } from "react";\n/* import { act } from "react"; */`,
+    source: `// import { act } from "react";\n/* import { render } from "@testing-library/react"; */`,
     reading: { reaches: [], callsAct: false },
-  },
-  {
-    shape: "a type-only import, which cannot be called",
-    source: `import type { act } from "@testing-library/react";`,
-    reading: { reaches: [] },
   },
   {
     shape: "a call of the binding's act",
@@ -449,9 +464,9 @@ const SHAPES: { shape: string; file?: string; source: string; reading: Partial<R
 ];
 
 test.each(SHAPES)("the reading sees $shape", ({ file = "x.test.tsx", source, reading }) => {
-  const read_ = read(file, source);
+  const seen = read(file, source);
   for (const [key, value] of Object.entries(reading)) {
-    expect(read_[key as keyof Reading], key).toEqual(value);
+    expect(seen[key as keyof Reading], key).toEqual(value);
   }
 });
 
@@ -476,26 +491,22 @@ function sources(): { path: string; reading: Reading }[] {
 const files = sources();
 
 test("the walk reads the suites, and finds the binding reaching the library itself", () => {
-  // A walk rooted in the wrong place passes the two rules below having
-  // checked nothing. The binding is the one file that must import the
-  // library's `act` and `configure`, so finding both there is the proof the
-  // walk reached it.
+  // A walk rooted in the wrong place passes the rules below having checked
+  // nothing. The binding is the one file that must take the library, so
+  // finding it there is the proof the walk reached it.
   expect(files.length).toBeGreaterThan(400);
   const binding = files.find((f) => f.path === BINDING);
   expect(binding, `no ${BINDING} under ${SRC}`).toBeDefined();
-  expect(binding!.reading.reaches.sort()).toEqual([
-    `act from "@testing-library/react"`,
-    `configure from "@testing-library/react"`,
-  ]);
+  expect(binding!.reading.reaches).toContain(`imports "@testing-library/react"`);
 });
 
-test("nothing but the binding reaches the library's act or configures the library, and nothing polls through Vitest", () => {
+test("nothing but the binding takes the testing library or React's act, and nothing polls through Vitest", () => {
   const offenders = files
     .filter((f) => f.path !== BINDING)
     .flatMap((f) => f.reading.reaches.map((what) => `${f.path} — ${what}`));
   expect(
     offenders,
-    `import \`act\` and \`poll\` from "~/test/inCase.ts", which end with the case that called them; the library's \`act\` is opened beside the next case by a case that timed out, a second \`configure\` unbinds every wait and event, and Vitest's polls go on looking — and moving the fake clock — in the next case:\n${offenders.join("\n")}`,
+    `take the testing library — \`act\`, \`render\`, \`screen\` and the rest — and \`poll\` from "~/test/inCase.ts", which ends what they do with the case that did it; the library taken anywhere else moves the next case's page for a case that timed out, its waits are bound only if something else loaded the binding, and Vitest's polls go on looking — and moving the fake clock — in the next case:\n${offenders.join("\n")}`,
   ).toEqual([]);
 });
 

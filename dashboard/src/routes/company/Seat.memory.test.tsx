@@ -20,7 +20,7 @@
  * running company rather than from the type.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test } from "vitest";
 
 import { CounterpartyRow, ThreadTurn, counterpartyKey } from "./Seat.tsx";

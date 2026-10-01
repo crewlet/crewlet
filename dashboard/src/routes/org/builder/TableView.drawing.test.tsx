@@ -32,7 +32,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "~/test/inCase.ts";
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
 
 import { checkedEdit } from "./testState.ts";

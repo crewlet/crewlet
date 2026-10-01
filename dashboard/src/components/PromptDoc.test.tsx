@@ -11,7 +11,7 @@
  * would have traded one half of the job for the other.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "~/test/inCase.ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { PromptRecord } from "./PromptDoc.tsx";
 

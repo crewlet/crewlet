@@ -7,7 +7,7 @@
  * labelled from the wrong end, a zero where nobody has written anything.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {

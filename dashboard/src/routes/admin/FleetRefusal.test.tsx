@@ -5,7 +5,7 @@
  * renderings of this screen must not see.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import { Fleet } from "./Fleet.tsx";

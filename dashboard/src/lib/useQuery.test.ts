@@ -7,9 +7,8 @@
  * back — and coming back is a stronger signal than any cadence can be.
  */
 
-import { cleanup, renderHook } from "@testing-library/react";
+import { cleanup, poll, renderHook } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
-import { poll } from "~/test/inCase.ts";
 
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";

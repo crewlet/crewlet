@@ -8,7 +8,7 @@
  * matches what the engine does; and a mass removal is acknowledged.
  */
 
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "~/test/inCase.ts";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, ChartRead } from "~/protocol/index.ts";
 import { DeleteDialog } from "./DeleteDialog.tsx";

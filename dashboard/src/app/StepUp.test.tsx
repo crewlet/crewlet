@@ -4,8 +4,7 @@
  * same request, with nothing retyped.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { StepUpHost } from "./StepUp.tsx";

@@ -10,7 +10,7 @@
  * neighbouring row on this screen already tells apart.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatPeek, SeatScreen } from "./Seat.tsx";

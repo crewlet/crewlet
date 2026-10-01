@@ -12,7 +12,7 @@
  * also why the board can be drawn inside a peek panel.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";

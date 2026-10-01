@@ -10,8 +10,7 @@
  * out: on a shared machine their cookie stayed live until its own deadline.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { act } from "~/test/inCase.ts";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "~/test/inCase.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";

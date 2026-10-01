@@ -8,9 +8,8 @@
  * omitting the field and letting a default on the far side decide.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, poll, render, screen, waitFor } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
-import { poll } from "~/test/inCase.ts";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 
 type Sent = { method: string; path: string; body: unknown };

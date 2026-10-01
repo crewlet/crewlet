@@ -17,7 +17,7 @@
  * its own.
  */
 
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "~/test/inCase.ts";
 import { afterEach, expect, test, vi } from "vitest";
 import { company, Engine, mountBuilder, pressInToolbar, pressInView } from "./testkit.tsx";
 import { waitInCase } from "./viewTestkit.tsx";
