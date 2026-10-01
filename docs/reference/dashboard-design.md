@@ -3276,7 +3276,10 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   tracker's last ask is inside it. A page that fills up before it reaches the
   start of the window is older rows the screen never saw, and a caption
   reading "some of this may be missing" is one nobody can act on where
-  "Knowledge answered one page" says where to look.
+  "Knowledge answered one page" says where to look. The tracker's own feed is
+  a page as well — the engine windows it, but answers two hundred commits at
+  most — and it is named the same way when the engine returns a cursor, which
+  it does only when more rows match.
 - **An empty CONTAINER** vs **a query that matched nothing.** A container says
   its own emptiness, from what it already knows about itself, before the list
   it holds has answered anything — and that state REPLACES the list rather than

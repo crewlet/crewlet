@@ -364,14 +364,27 @@ export function Audit() {
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   }, [rows, since, until, kind, actor]);
 
-  // A PAGE THAT DID NOT REACH BACK AS FAR AS THE WINDOW. The three sources
-  // narrowed here are asked for their newest N, so a busy company's window can
-  // extend past the oldest row that arrived — and a screen that said nothing
-  // would be claiming those rows do not exist.
+  // A PAGE THAT DID NOT REACH BACK AS FAR AS THE WINDOW. Every source answers
+  // one page — the three narrowed here their newest N, the tracker the newest
+  // N inside the window — so a busy company's window can extend past the
+  // oldest row that arrived, and a screen that said nothing would be claiming
+  // those rows do not exist.
   const truncated = useMemo(() => {
     const short: string[] = [];
     if (!since) return short;
     const from = Date.parse(since);
+    // THE TRACKER'S FEED TOO. The engine windows it, but its answer is still
+    // one page of `PAGE.work`, and a busy window fills that page before it
+    // reaches its start — which this screen used to pass over in silence
+    // while its header claimed every write across the tracker. The engine
+    // says so exactly: a cursor comes back only when more rows match. It is
+    // short of THIS window only if what it did return stops inside it, since
+    // the question asked is the window widened to the minute (`asked`).
+    const records = list(work.data?.records);
+    if (work.data?.next_cursor && records.length > 0) {
+      const reached = Math.min(...records.map((record) => Date.parse(record.at)));
+      if (reached > from) short.push(SOURCE_LABEL.work);
+    }
     const oldest = (list: { at: string }[], page: number, label: string) => {
       if (list.length < page) return;
       const last = list[list.length - 1];
@@ -384,7 +397,7 @@ export function Audit() {
       "Configuration",
     );
     return short;
-  }, [knowledge.data, config.data, since]);
+  }, [work.data, knowledge.data, config.data, since]);
 
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [

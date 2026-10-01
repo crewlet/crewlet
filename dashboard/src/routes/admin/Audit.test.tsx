@@ -14,9 +14,10 @@
  *     revision and a credential write are four honest records in four places;
  *     read separately they cannot answer "what did we change on Tuesday".
  *  3. A PAGE THAT DID NOT REACH THE WINDOW SAYS SO. Only the tracker's feed
- *     takes a wall-clock window; the other three are narrowed here, so a busy
- *     company's window can extend past the oldest row that arrived — and a
- *     screen silent about that is claiming those rows do not exist.
+ *     takes a wall-clock window; the other three are narrowed here, and every
+ *     one of the four answers a single page, so a busy company's window can
+ *     extend past the oldest row that arrived — and a screen silent about that
+ *     is claiming those rows do not exist.
  */
 
 import { Profiler } from "react";
@@ -366,6 +367,29 @@ test("a source whose page stops inside the window says so", async () => {
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
   // nobody can act on; "Knowledge answered one page" says where to look.
   expect(caption.textContent).toContain("Knowledge");
+});
+
+// AND THE TRACKER'S PAGE IS A PAGE TOO. The engine windows its feed, but it
+// answers one page of two hundred, and a busy week fills it before reaching
+// the window's start — while the header claimed every write across the
+// tracker. A cursor comes back exactly when more rows match.
+test("a tracker page that stops inside the window says so, and one that covers it does not", async () => {
+  serving({
+    work_activity: { records: [commit()], next_cursor: "CREWLET_WORK_LOG@1:1", complete: true },
+  });
+  const { answered } = mount();
+  await answered();
+  expect(
+    screen.getByText(/Work answered one page, which does not reach the start of this window/),
+  ).toBeTruthy();
+  cleanup();
+
+  // THE CONTROL: the same page with nothing after it is the whole window.
+  serving({ work_activity: { records: [commit()], complete: true } });
+  mount();
+  await answered();
+  expect(screen.queryByText(/does not reach the start of this window/)).toBeNull();
+  expect(screen.getByText(/across the tracker, the knowledge base/)).toBeTruthy();
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
