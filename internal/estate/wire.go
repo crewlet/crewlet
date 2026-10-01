@@ -174,19 +174,20 @@ const (
 	unservedHoldingUnknown unservedReason = "holding_unknown"
 
 	// unservedOverflow: a gather slice this node ANSWERED and could not
-	// fit in the reply beside the slices before it — the reply has a
+	// fit in the reply beside the rest of the batch — the reply has a
 	// ceiling ([queue.MaxPayloadBytes]) and a batch of partitions can
 	// outgrow it. Not a failure of this node, so the asker asks it again
-	// for the partitions that overflowed; a slice that does not fit even
-	// alone is answered as an error naming its size instead, so every
-	// reply answers at least one partition and the batch always shrinks.
+	// for the partitions that overflowed — in a reply that DECIDED another
+	// partition ([partReply.decisive]); a slice that can never fit is
+	// answered as an error naming its size instead ([fitParts]), so every
+	// reply decides at least one partition and the batch always shrinks.
 	unservedOverflow unservedReason = "overflow"
 
 	// unservedUnfinished: a gather slice this node had not finished when
 	// the batch had to be answered — a margin before the asker's deadline
 	// ([batchMargin]), with every slice it HAD finished. Not a failure of
 	// this node either: a batch costs more the more partitions it carries,
-	// so the asker asks it again for the rest, unless this reply finished
+	// so the asker asks it again for the rest, unless this reply decided
 	// none at all, which is a holder that cannot answer one of them within
 	// an attempt.
 	unservedUnfinished unservedReason = "unfinished"
@@ -249,6 +250,23 @@ type partReply struct {
 	// or the barriers it was read after, at `linearizable`. Empty for a
 	// read that is not of a log's rows.
 	At []statelog.Position `json:"at,omitempty"`
+}
+
+// decisive reports whether p ends its holder's part in a gather for its
+// partition whatever else the reply says: a result, an error, or a refusal
+// that sends the partition to its next holder. Everything but the two answers
+// that ask for the partition AGAIN of the same holder — [unservedOverflow] and
+// [unservedUnfinished] — which the asker honours only beside a decisive part,
+// because a reply deciding nothing is one the same batch would get again.
+//
+// ONE PREDICATE FOR BOTH ENDS: the holder fits its reply so that one part in
+// it is decisive ([fitParts]) and the asker asks again only beside one
+// ([Router.askBatch]). Counting an unfinished partition's note as the
+// progress — what each end once did in its own words — sent a batch with an
+// oversized slice to the same holder once an attempt until its caller
+// stopped waiting, or for ever.
+func (p partReply) decisive() bool {
+	return p.Unserved != unservedOverflow && p.Unserved != unservedUnfinished
 }
 
 // opSpec is one operation's declaration: what it is called, how a failover

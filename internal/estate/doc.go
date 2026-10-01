@@ -149,7 +149,10 @@
 // A batch that outgrows one reply ([queue.MaxPayloadBytes]) is answered in
 // pages: what fits, then what did not, asked again of the same holder; one
 // that outgrows an attempt is answered a margin before the asker stops
-// waiting, with what finished, the rest asked again the same way. And a copy
+// waiting, with what finished, the rest asked again the same way — and only
+// ever beside a partition the reply DECIDED ([partReply.decisive]), so every
+// reply shrinks the batch: a slice no reply can carry is the error naming
+// its size, and a reply deciding nothing moves its partitions on. And a copy
 // that lags its logs is asked last, one at a time, as a single read's last
 // resort is.
 //

@@ -95,6 +95,9 @@ const (
 	// lagsFailing is a copy that lags its logs and whose read, told to
 	// answer anyway, fails.
 	lagsFailing
+	// stalls is a copy whose read never finishes within an attempt: it
+	// runs until the batch is told to give up.
+	stalls
 )
 
 // partNode is one data node holding some partitions of the divided layout.
@@ -263,6 +266,10 @@ func (r partRead) Tasks(ctx context.Context, q tracker.Query, _ time.Time) (trac
 		case <-ctx.Done():
 			return tracker.Answer{}, ctx.Err()
 		}
+	}
+	if r.t == stalls {
+		<-ctx.Done()
+		return tracker.Answer{}, ctx.Err()
 	}
 	if r.t == failing || r.t == lagsFailing {
 		return tracker.Answer{}, fmt.Errorf("the read of %s failed on %s: %w", r.p, r.node.name,
@@ -1154,6 +1161,172 @@ func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
 	}
 	if _, _, err := listAll(t, r, 0, ""); !errors.Is(err, queue.ErrTooLarge) {
 		t.Errorf("err = %v, want queue.ErrTooLarge naming the size", err)
+	}
+}
+
+// A SLICE TOO LARGE TO SEND BESIDE ONE ITS HOLDER DID NOT FINISH IS ITS SIZE
+// ERROR, and the gather ends: every reply decides at least one partition. The
+// note of a partition the holder did not finish decides nothing — the asker
+// asks it again — and counted as what made the reply progress, it kept an
+// oversized slice from ever being answered as its error, so the same batch
+// went to the same holder once an attempt until the caller stopped waiting,
+// and the slice was named unreachable rather than too large.
+func TestAnOversizedSliceBesideAnUnfinishedOneIsItsSizeError(t *testing.T) {
+	t.Parallel()
+	// EVERY TRACKER SLICE IS OVER THE CEILING (about 1.25 KiB each against
+	// 600 bytes), the company's empty one fits, and an unfinished
+	// partition's note fits too.
+	f, node, srv := ceilingFleet(t, 600)
+	srv.cpus = 2
+	two := statelog.Layout{Number: 1, Spaces: []statelog.SpaceLayout{
+		{Space: statelog.SpaceTracker, Partitions: 2, Domains: []string{"tracker"}},
+		{Space: statelog.SpaceCompany, Partitions: 1, Domains: []string{"tracker"}},
+	}}
+	for _, view := range []*partPlacement{f.placement, f.servers} {
+		view.mu.Lock()
+		view.layout = two
+		view.mu.Unlock()
+	}
+	node.set(func(n *partNode) { n.holds[tp(1)] = stalls })
+	r := f.router(t, "agent-1", nil)
+	r.readBudget = 400 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, cov, err := gather(ctx, r, opTestList, statelog.SurfaceOperator,
+		listArgs{Level: statelog.ReadLinearizable})
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	if !slices.Equal(cov.Answered, []string{"company.000"}) || len(cov.Missing) != 2 {
+		t.Fatalf("coverage = %+v, want company.000 answered and both tracker partitions missing", cov)
+	}
+	for _, m := range cov.Missing {
+		switch m.Partition {
+		case "tracker.000":
+			if m.Reason != statelog.MissingError || !strings.Contains(m.Detail, "narrow the read") {
+				t.Errorf("tracker.000 is missing as %q (%s), want the error naming its size",
+					m.Reason, m.Detail)
+			}
+		case "tracker.001":
+			if m.Reason != statelog.MissingUnreachable || strings.Contains(m.Detail, "stopped waiting") {
+				t.Errorf("tracker.001 is missing as %q (%s), want unfinished on its holder, "+
+					"before the caller stopped waiting", m.Reason, m.Detail)
+			}
+		}
+	}
+	if asked := node.asked(); len(asked) != 2 {
+		t.Errorf("the holder was asked %d times, want twice — the batch, then the "+
+			"partition it did not finish", len(asked))
+	}
+}
+
+// EVERY SLICE THAT CAN NEVER FIT IS ITS SIZE ERROR IN ONE REPLY, beside what
+// does fit: asked again, it would fit in no smaller batch either, and one
+// such error a reply re-ran every other oversized slice's read once a reply.
+func TestEverySliceThatCanNeverFitIsItsErrorAtOnce(t *testing.T) {
+	t.Parallel()
+	const ceiling = 8 << 10
+	big, _ := json.Marshal(strings.Repeat("r", 10<<10))
+	parts := []partReply{{Partition: tp(0).String(), Result: big}}
+	for i := 1; i < 4; i++ {
+		parts = append(parts, partReply{Partition: tp(uint16(i)).String(), Result: big})
+	}
+	parts = append(parts, partReply{Partition: company.String(), Result: json.RawMessage(`{}`)})
+	got := fitParts("data-a", ceiling, reply{Node: "data-a"}, parts)
+	for _, part := range got[:4] {
+		if part.Err == nil || !errors.Is(decodeError(part.Err), queue.ErrTooLarge) {
+			t.Errorf("%s = %+v, want the error naming its size", part.Partition, part)
+		}
+	}
+	if got[4].Result == nil {
+		t.Errorf("%s = %+v, want its answer, which fits", got[4].Partition, got[4])
+	}
+	if size := len(encodeReply(reply{Node: "data-a", Parts: got})); size > ceiling {
+		t.Errorf("the reply is %d bytes, over its %d ceiling", size, ceiling)
+	}
+}
+
+// A REPLY DECIDES A PARTITION EVEN WHEN NO DECISION FITS BESIDE THE BATCH: a
+// slice that would fit alone but not beside the other partitions' notes is
+// answered as its size error, since a reply of notes alone decides nothing and
+// is the same batch asked again — while what the holder did not finish is a
+// note asking for it again.
+func TestAReplyDecidesAPartitionWhenNoDecisionFits(t *testing.T) {
+	t.Parallel()
+	slice, _ := json.Marshal(strings.Repeat("r", 1<<10))
+	whole := partReply{Partition: tp(0).String(), Result: slice}
+	// ROOM FOR THE SLICE ALONE, and short of it beside the notes of the
+	// partitions the holder did not finish.
+	ceiling := len(encodeReply(reply{Node: "data-a", Parts: []partReply{whole}})) + 20
+	parts := []partReply{whole}
+	for i := 1; i < 4; i++ {
+		parts = append(parts, partReply{Partition: tp(uint16(i)).String(), Unserved: unservedUnfinished,
+			Detail: "data-a had not finished it when the batch had to be answered"})
+	}
+	got := fitParts("data-a", ceiling, reply{Node: "data-a"}, parts)
+	if got[0].Err == nil || !errors.Is(decodeError(got[0].Err), queue.ErrTooLarge) {
+		t.Fatalf("%s = %+v, want the error naming its size", got[0].Partition, got[0])
+	}
+	for _, part := range got[1:] {
+		if part.decisive() {
+			t.Errorf("%s = %+v, want it asked for again", part.Partition, part)
+		}
+	}
+}
+
+// A REPLY THAT DECIDED NOTHING MOVES EVERY PARTITION ON: what the holder could
+// not finish or could not fit is asked of it again only beside a partition the
+// reply decided. Beside none, the same batch would be answered the same way —
+// once an attempt until the caller stopped waiting, and a caller with no
+// deadline for ever.
+func TestAReplyThatDecidedNothingMovesEveryPartitionOn(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, nil)
+	node := &partNode{name: "data-x", holds: map[statelog.PartitionID]trouble{}}
+	all := []statelog.PartitionID{tp(0), tp(1), tp(2), tp(3), company}
+	for _, p := range all {
+		f.placement.holders[p] = []string{"data-x"}
+	}
+	stop, err := recorder{q: f.client(t), node: node}.Serve(t.Context(), Subject("data-x"),
+		func(_ context.Context, raw []byte) ([]byte, error) {
+			var req request
+			if err := json.Unmarshal(raw, &req); err != nil {
+				return nil, err
+			}
+			// THE FIRST DID NOT FIT, AND THE REST DID NOT FINISH.
+			out := reply{Node: "data-x"}
+			for i, name := range req.Partitions {
+				part := partReply{Partition: name, Unserved: unservedUnfinished,
+					Detail: "data-x had not finished it"}
+				if i == 0 {
+					part = partReply{Partition: name, Unserved: unservedOverflow}
+				}
+				out.Parts = append(out.Parts, part)
+			}
+			return encodeReply(out), nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, cov, err := gather(ctx, f.router(t, "agent-1", nil), opTestList, statelog.SurfaceOperator,
+		listArgs{Level: statelog.ReadLinearizable})
+	if err == nil {
+		t.Fatalf("gather answered with %+v, want the error naming every partition", cov)
+	}
+	if len(cov.Missing) != len(all) {
+		t.Fatalf("missing = %+v, want all %d partitions", cov.Missing, len(all))
+	}
+	for _, m := range cov.Missing {
+		if m.Reason != statelog.MissingUnreachable || strings.Contains(m.Detail, "stopped waiting") {
+			t.Errorf("%s is missing as %q (%s), want the holder's own answer, before the "+
+				"caller stopped waiting", m.Partition, m.Reason, m.Detail)
+		}
+	}
+	if asked := node.asked(); len(asked) != 1 {
+		t.Errorf("the holder was asked %d times, want once", len(asked))
 	}
 }
 

@@ -33,7 +33,10 @@ import (
 //     A holder answers a batch a margin before the asker stops waiting
 //     ([batchMargin]), with every partition it finished, and names the rest
 //     [unservedUnfinished] — asked of it again, since a batch larger than an
-//     attempt is not a failure of the holder.
+//     attempt is not a failure of the holder, wherever the reply decided
+//     another partition ([partReply.decisive]): a reply deciding none is a
+//     holder that cannot answer them, and the same batch asked again would
+//     be answered the same way.
 //  4. A partition its holder failed is asked of its next holder, within the
 //     caller's deadline — and NEVER again of a holder that already failed it
 //     in this gather: a node that was silent, behind or not serving a moment
@@ -949,13 +952,14 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 		}
 		return false
 	}
-	// PROGRESS is a reply that settled anything: then what the holder did
-	// not finish is the batch's size against the attempt, and is asked of
-	// it again; a reply that finished NOTHING is a holder that cannot
-	// answer one of these partitions within an attempt, and each moves on.
-	progress := slices.ContainsFunc(rep.Parts, func(p partReply) bool {
-		return p.Unserved != unservedUnfinished
-	})
+	// PROGRESS is a reply that DECIDED a partition ([partReply.decisive]):
+	// then what the holder did not finish, or could not fit, is the batch's
+	// size against the attempt or the reply, and is asked of it again in a
+	// smaller batch. A reply that decided NOTHING is a holder that cannot
+	// answer one of these partitions in an attempt or a reply, and each
+	// moves on — asked again, the same batch would get the same answer, once
+	// an attempt until the caller stopped waiting.
+	progress := slices.ContainsFunc(rep.Parts, partReply.decisive)
 	newer := false
 	for _, st := range batch {
 		part, found := partNamed(rep.Parts, st.p.String())
@@ -963,11 +967,16 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 		case !found:
 			st.tried[node] = true
 			st.note(statelog.MissingError, "%s: answered the batch without %s", node, st.p)
-		case part.Unserved == unservedUnfinished && progress:
+		case !part.decisive() && progress:
+			// ASKED AGAIN, of a holder that did nothing wrong.
 			st.again = node
 		case part.Unserved == unservedUnfinished:
 			st.tried[node] = true
 			st.note(statelog.MissingUnreachable, "%s: %s", node, part.Detail)
+		case part.Unserved == unservedOverflow:
+			st.tried[node] = true
+			st.note(statelog.MissingUnreachable, "%s: answered %s in no reply it could send, "+
+				"beside no partition it decided", node, st.p)
 		default:
 			if r.settlePart(plan, node, st, part, acceptLagging) {
 				newer = true
@@ -989,7 +998,10 @@ func (r *Router) settleWhole(plan gatherPlan, node string, st *partState, rep re
 
 // settlePart settles one partition from one holder's answer for it, asked
 // with [request.AcceptLagging] in the last resort. It reports whether the
-// holder named a newer map than the partition was routed by.
+// holder named a newer map than the partition was routed by. An answer that
+// asks to be asked again is never its to judge: whether it is depends on the
+// rest of the reply ([Router.askBatch]), and a whole answer — the reply to a
+// single read, which is never fitted — is never one.
 func (r *Router) settlePart(plan gatherPlan, node string, st *partState, part partReply,
 	acceptLagging bool) bool {
 	if st.done {
@@ -999,12 +1011,6 @@ func (r *Router) settlePart(plan gatherPlan, node string, st *partState, part pa
 	}
 	switch part.Unserved {
 	case "":
-	case unservedOverflow:
-		// ANSWERED, AND IT DID NOT FIT: asked again of the same holder,
-		// in a batch of what did not fit — which is not a failure of
-		// that holder.
-		st.again = node
-		return false
 	case unservedLagging:
 		st.tried[node] = true
 		if !acceptLagging {
@@ -1314,9 +1320,23 @@ func isCancellation(err error) bool {
 // fitParts is parts as a reply can carry them under ceiling bytes, beside the
 // rest of envelope — the reply they go in, its node and its obsolete floors:
 // every slice that fits whole, and every other one answered [unservedOverflow]
-// instead, so the asker asks again for those. When not one slice fits, the
-// first is answered as the error that says so, naming its size: every reply
-// settles at least one partition, so a batch always makes progress.
+// instead, so the asker asks again for those.
+//
+// # Every reply decides a partition
+//
+// The asker asks again only beside a DECISIVE part ([partReply.decisive]): a
+// reply with none is a batch it would send this holder again, answered the
+// same way. So the decisive parts are fitted FIRST, beside nothing but the
+// other parts' overflow notes, and a slice that can NEVER fit — over what a
+// reply carries beside its envelope alone — is answered at once as the error
+// that says so, naming its size, rather than asked again in a batch it will
+// not fit in either: one such error a reply re-ran every other oversized
+// slice's read once a reply. When not one decisive part made it in even so —
+// each too large beside the batch's notes, or its error too large beside
+// them — the first is answered as its error regardless. Only then
+// are the notes of the partitions the holder did not finish fitted, in what
+// room is left: they decide nothing, and counted as what made a reply
+// progress they once kept an oversized slice from ever being answered.
 //
 // MEASURED, not estimated — the envelope as it encodes, and each part as the
 // reply will encode it — because what a body costs on the wire is a property
@@ -1333,27 +1353,56 @@ func fitParts(self string, ceiling int, envelope reply, parts []partReply) []par
 	// the last part does not need.
 	budget := ceiling - len(encodeReply(envelope)) - len(`,"parts":[]`)
 	out := make([]partReply, len(parts))
-	notes := make([]int, len(parts))
+	sizes := make([]int, len(parts))
 	total := 0
 	for i, part := range parts {
 		out[i] = partReply{Partition: part.Partition, Unserved: unservedOverflow}
-		notes[i] = encodedSize(out[i]) + 1
-		total += notes[i]
+		sizes[i] = encodedSize(out[i]) + 1
+		total += sizes[i]
 	}
-	kept := false
+	// place answers part i as p, of size bytes with its separator, where
+	// the reply still fits beside everything else in it.
+	place := func(i int, p partReply, size int) bool {
+		if total-sizes[i]+size > budget {
+			return false
+		}
+		out[i], total, sizes[i] = p, total-sizes[i]+size, size
+		return true
+	}
+	tooLarge := func(i, size, room int) partReply {
+		return partReply{Partition: parts[i].Partition, Err: encodeError(fmt.Errorf(
+			"estate: %s's answer for %s is %d bytes, over the %d one reply had room for — "+
+				"narrow the read: %w", self, parts[i].Partition, size, room, queue.ErrTooLarge))}
+	}
+	decided := false
 	for i, part := range parts {
-		if grown := total - notes[i] + encodedSize(part) + 1; grown <= budget {
-			out[i], total, kept = part, grown, true
+		if !part.decisive() {
+			continue
+		}
+		size := encodedSize(part) + 1
+		switch {
+		case place(i, part, size):
+			decided = true
+		case size > budget:
+			// NEVER TO FIT, in this batch or in any smaller one.
+			answer := tooLarge(i, size, budget)
+			if place(i, answer, encodedSize(answer)+1) {
+				decided = true
+			}
 		}
 	}
-	if !kept && len(parts) > 0 {
-		// NOT EVEN THE FIRST SLICE FITS: nothing smaller can be sent for
-		// it, so it is answered as the error it is.
-		room := budget - (total - notes[0])
-		out[0] = partReply{Partition: parts[0].Partition, Err: encodeError(fmt.Errorf(
-			"estate: %s's answer for %s is %d bytes, over the %d one reply carries beside "+
-				"the batch — narrow the read: %w", self, parts[0].Partition,
-			encodedSize(parts[0])+1, room, queue.ErrTooLarge))}
+	if first := slices.IndexFunc(parts, partReply.decisive); !decided && first >= 0 {
+		// NOT ONE DECISION FITS beside the batch's notes: nothing smaller
+		// can be sent for the first, so it is answered as the error it
+		// is — a reply deciding nothing is the same batch asked again.
+		answer := tooLarge(first, encodedSize(parts[first])+1, budget-(total-sizes[first]))
+		size := encodedSize(answer) + 1
+		out[first], total, sizes[first] = answer, total-sizes[first]+size, size
+	}
+	for i, part := range parts {
+		if !part.decisive() {
+			place(i, part, encodedSize(part)+1)
+		}
 	}
 	return out
 }
