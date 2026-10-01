@@ -119,9 +119,12 @@ type GateArgs struct {
 // as an EVICTION: the most destructive record a node gate writes, dropping
 // every record the named node publishes on that log, on every applier. A kind
 // this build does not know is refused instead ([ErrGateKind]), with nothing
-// written, so a rolling upgrade's newer gesture reaches a node that can write
-// it rather than one that writes the wrong one. A RELEASE never travels here:
-// a leaving node publishes its own (contract §F8).
+// written, and the refusal is FINAL rather than a reason to ask the next
+// holder: a newer kind is written once every node counted on the log reads it
+// (the record versions each advertises), so the asking node reports which
+// holder refused it, and the same gesture finishes once that holder runs the
+// newer build. A RELEASE never travels here: a leaving node publishes its own
+// (contract §F8).
 type GateKind string
 
 const (
