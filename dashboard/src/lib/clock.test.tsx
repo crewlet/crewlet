@@ -8,9 +8,18 @@
  * shapes a reader of the clock can take: a component that wants the second
  * gets it, and one that wants a READING — words, a day, a year — renders when
  * the reading moves and at no other tick.
+ *
+ * And the shared instant is never older than a tick, including the first time
+ * a screen reads it after nothing has. The ticker runs only while something is
+ * subscribed; before the first subscriber and after the last one goes, the
+ * instant used to sit where it was — the moment the module loaded, or the last
+ * tick before everything unmounted — and the next screen rendered against it
+ * until its first tick: relative times out by however long the tab had shown
+ * nothing that read the clock, and a list keyed on its window asking the
+ * engine twice, once for a stale window and once for the real one.
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { useClockReading, useNow, useToday } from "./clock.ts";
@@ -100,20 +109,65 @@ test("today renders its reader when the day turns, and not before", () => {
   expect(seen).toBe(browserDay(new Date(midnight)));
 });
 
-// THE INSTANT IS READ AGAIN WHEN THE CLOCK STARTS. A screen with no time on it
-// lets the clock stop, and nothing moves the instant while it is stopped — so
-// the first reader mounted afterwards rendered against the last tick's
-// instant, an hour old here, until the next tick came round.
-test("the first reader after the clock stopped reads the time it is now", () => {
-  function Reader() {
-    return <span data-testid="at">{useNow()}</span>;
+/** What a screen rendering the clock draws: the instant, and every read of one render. */
+function Instant() {
+  const first = useNow();
+  const second = useNow();
+  return (
+    <span data-testid="now">
+      {new Date(first).toISOString()} {first === second ? "one instant" : "two instants"}
+    </span>
+  );
+}
+
+const shown = () => screen.getByTestId("now").textContent;
+
+// THE FIRST READ AFTER NOTHING HAS BEEN READING THE CLOCK IS THE TIME NOW, on
+// the first render and not a tick later: a screen's effects run with what its
+// first render read, and a query asked from one is asked for that.
+test("the first read after nothing has been reading the clock is the time now", () => {
+  render(<Instant />);
+  expect(shown()).toBe(`${new Date(T0).toISOString()} one instant`);
+  cleanup();
+
+  // An hour on a screen that reads no clock — a sign-in form, say.
+  const later = T0 + 3_600_000;
+  vi.setSystemTime(later);
+  render(<Instant />);
+  expect(shown()).toBe(`${new Date(later).toISOString()} one instant`);
+});
+
+// THE SAME FOR A READING, which is what a date cell holds: an hour-old instant
+// read by `useClockReading` drew "1h ago" where the cell meant "just now".
+test("the first reading after nothing has been reading the clock is of the time now", () => {
+  function Hour() {
+    return <span data-testid="hour">{useClockReading((now) => Math.floor(now / 3_600_000))}</span>;
   }
-  const first = render(<Reader />);
+  const first = render(<Hour />);
   tick(1);
   first.unmount();
 
   const later = T0 + 3_600_000;
   vi.setSystemTime(later);
-  const second = render(<Reader />);
-  expect(Number(second.getByTestId("at").textContent)).toBe(later);
+  render(<Hour />);
+  expect(Number(screen.getByTestId("hour").textContent)).toBe(Math.floor(later / 3_600_000));
+});
+
+test("while the ticker runs, the instant is the ticker's and moves once a tick", () => {
+  render(<Instant />);
+  expect(shown()).toBe(`${new Date(T0).toISOString()} one instant`);
+  // Within a tick, nothing moves: every reader on the page agrees.
+  act(() => vi.advanceTimersByTime(400));
+  expect(shown()).toBe(`${new Date(T0).toISOString()} one instant`);
+  act(() => vi.advanceTimersByTime(600));
+  expect(shown()).toBe(`${new Date(T0 + 1_000).toISOString()} one instant`);
+});
+
+test("a wall clock set back by more than a tick is read afresh too", () => {
+  render(<Instant />);
+  cleanup();
+  const earlier = T0 - 3 * 3_600_000;
+  vi.setSystemTime(earlier);
+  render(<Instant />);
+  expect(shown()).toBe(`${new Date(earlier).toISOString()} one instant`);
 });
