@@ -137,17 +137,26 @@ const (
 
 // classify decides which fault a publish error was.
 //
-// # Why BOTH rejection codes, and why this is one function
+// # Why ONE rejection code, and why the other is no answer
 //
-// The solo broker answers 10071 and a clustered one answers 10164 — the
-// client's own comment calls them "equivalent 'wrong last sequence'
-// responses" — and the engine's default topology is the solo embedded broker,
-// so a build testing only the clustered code would pass every fleet test and
-// mis-read every single-node write.
+// 10071 is the leader's decision: it compared the expectation with the
+// subject's last sequence and refused it, on a solo stream and a clustered one
+// alike. 10164 says the same three words without a number and decides nothing
+// — a clustered leader answers it while another write to the subject is still
+// in flight, which may be this node's own, already acknowledged (see
+// internal/jsinflight, which has the server source). The client's own comment
+// calls the two "equivalent", and this classifier believed it: a write whose
+// anchor was perfectly current was sent to the discriminator, re-decided
+// against the anchor it already had, and refused again for as long as the
+// write ahead took to clear — rounds a colleague's edit was then reported as
+// having taken. internal/queue/jetstream's DomainLog.Append waits 10164 out, so it reaches
+// here only as the no-answer an append still in flight at its deadline is;
+// and a raw one, if anything ever handed it here, is the same no-answer,
+// since the leader stored nothing of the append it refused.
 //
 // A design writing directly to a stream does not get the client's own
 // revision-mismatch mapping for free: that wrapper lives inside the key-value
-// layer. So the raw APIError is classified here, once, against both codes.
+// layer. So the raw APIError is classified here, once.
 //
 // # And why a rejection's description is never parsed
 //
@@ -187,9 +196,13 @@ func classify(err error) (fault, string) {
 	var apiErr *jetstream.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode {
-		case jetstream.JSErrCodeStreamWrongLastSequence,
-			jetstream.JSErrCodeStreamWrongLastSequenceConstant:
+		case jetstream.JSErrCodeStreamWrongLastSequence:
 			return faultRejected, apiErr.Description
+		case jetstream.JSErrCodeStreamWrongLastSequenceConstant:
+			// ANOTHER WRITE STILL IN FLIGHT, not a comparison: see above.
+			// Nothing of this append was stored, so the ordered
+			// classification finds none of it and the write retakes.
+			return faultUnknown, apiErr.Description
 		case codeStreamStoreFailed:
 			switch apiErr.Description {
 			case storeFailedMaxBytes:

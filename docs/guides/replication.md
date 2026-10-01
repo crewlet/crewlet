@@ -56,6 +56,24 @@ different with each.
   applies a moment later — so the retry under the same id is answered by the
   broker's duplicate acknowledgement once it lands.
 
+**A clustered leader has a third answer to a conditional append that is not a
+refusal either:** `wrong last sequence` with no sequence in it, which means
+another write to the same subject is still in flight at the leader — often
+this node's own previous write, already acknowledged, whose bookkeeping the
+leader clears only after the acknowledgement has gone out. It compared nothing
+and stored nothing of the append, so the append is simply asked again — a
+millisecond later, doubling to 64 ms, within the append's own deadline — until
+the leader answers with something it decided: the record lands, or `wrong last
+sequence: N` says who wrote first. Read as that second answer, it sent a write
+whose expectation was perfectly current round the lost-race path, re-decided
+against the same anchor and refused again, until the round budget reported a
+conflict nobody was causing. One still in flight at the append's deadline is
+treated as an append nobody answered: the log is asked whether this
+operation's record is on it, and finding none, the write decides again. The
+coordination store's compare-and-sets take the same rule — see
+[Coordination § A compare-and-set waits for the leader to
+decide](../concepts/coordination.md#a-compare-and-set-waits-for-the-leader-to-decide).
+
 ### Two pendings, and only one says something about the node
 
 There are two ways to get `pending`, and they carry opposite information about

@@ -108,10 +108,13 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 		{"a JetStream store with no resources left",
 			wire(server.NewJSInsufficientResourcesError()), faultRefused, nil, nil},
 		{"a sealed stream", wire(server.NewJSStreamSealedError()), faultRefused, nil, nil},
-		{"a lost race, solo",
+		{"a lost race",
 			wire(server.NewJSStreamWrongLastSequenceError(7)), faultRejected, nil, nil},
-		{"a lost race, clustered",
-			wire(server.NewJSStreamWrongLastSequenceConstantError()), faultRejected, nil, nil},
+		// NOT A LOST RACE, though it says the same words: a clustered
+		// leader's "another write to this subject is still in flight",
+		// which compared nothing and stored nothing of this append.
+		{"another write still in flight",
+			wire(server.NewJSStreamWrongLastSequenceConstantError()), faultUnknown, nil, nil},
 		// NEITHER IS A REFUSAL, though the broker named both: each says
 		// this operation's record may yet land.
 		{"this operation's own record in flight",
@@ -205,7 +208,7 @@ func TestEveryBrokerAnswerIsClassifiedAsWhatItIs(t *testing.T) {
 	}{
 		"an acknowledgement":           {err: nil, want: faultNone},
 		"a wrong last sequence":        {err: api(jetstream.JSErrCodeStreamWrongLastSequence, "wrong last sequence"), want: faultRejected},
-		"a clustered wrong sequence":   {err: api(jetstream.JSErrCodeStreamWrongLastSequenceConstant, "wrong last sequence"), want: faultRejected},
+		"a write still in flight":      {err: api(jetstream.JSErrCodeStreamWrongLastSequenceConstant, "wrong last sequence"), want: faultUnknown},
 		"maximum bytes exceeded":       {err: api(codeStreamStoreFailed, storeFailedMaxBytes), want: faultFull},
 		"a message over the stream's":  {err: api(codeStreamMessageExceedsMaximum, "message size exceeds maximum allowed"), want: faultTooLarge},
 		"a payload the client refused": {err: fmt.Errorf("publish: %w", nats.ErrMaxPayload), want: faultTooLarge},
