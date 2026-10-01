@@ -78,11 +78,13 @@ import (
 // for absence and its return — so the maintainer never places a partition on
 // an evicted node that comes back, nor makes it a server of a copy it comes
 // back with (partmap's "a barred node is never made a server"), and a
-// readmission puts it back IN. An
-// operator's plain out would not do: it ends when membership removes the
-// member, which for a machine an operator evicts is usually already the case,
-// and a repaired machine restarted under its old id was then placed on after
-// its probation while every log it was placed to serve still gated it.
+// readmission lifts the bar and puts it back IN ([EstateControl.Readmit]) —
+// the one gesture that does: the operator's own `crewlet estate in` refuses a
+// barred node, since only the readmission knows when its logs have taken it
+// back. An operator's plain out would not do: it ends when membership removes
+// the member, which for a machine an operator evicts is usually already the
+// case, and a repaired machine restarted under its old id was then placed on
+// after its probation while every log it was placed to serve still gated it.
 //
 // Both AFTER the logs, and the in ONLY ONCE EVERY LOG HAS TAKEN THE NODE BACK:
 // an in placing the node while one of its logs still holds its eviction is the
@@ -266,7 +268,10 @@ var ErrMapAwaitsLogs = errors.New("engine: the node is put back in the estate ma
 // EVERY partition, where each finished log answers from its own ledger. Until
 // the estate routes a gesture's logs to the nodes that serve them
 // ([estate.OpStatelogGate]) — which reaches every log from any node in one
-// call — that is the only node that can put the node back.
+// call — that is the only node that can put the node back, and on a fleet
+// where no node serves every partition there is none: the operator's own in
+// refuses a barred node ([EstateControl.In]), so the node stays barred until
+// that operation lands.
 type MapAwaitsLogs struct {
 	// Elsewhere is every log the gesture left unfinished because this node
 	// does not serve its partition, in the gesture's order: empty when
@@ -286,7 +291,8 @@ func (e *MapAwaitsLogs) Unwrap() error { return ErrMapAwaitsLogs }
 
 // MapGate is the estate map's part of a gesture: an eviction bars the node from
 // it ([membership.Bar], recorded as `evicted`) — out, and kept out whatever
-// becomes of its membership — and a readmission puts it back ([membership.In]).
+// becomes of its membership — and a readmission lifts the bar and puts it back
+// ([membership.Readmit]).
 type MapGate struct {
 	// Gesture is "out" for an eviction's bar and "in" for a readmission.
 	Gesture string
@@ -710,10 +716,11 @@ type NodeGate struct {
 }
 
 // estateMembership is the estate map's two membership gestures, as the node
-// gate makes them ([EstateControl]).
+// gate makes them ([EstateControl]): the eviction's bar, and the readmission's
+// lift of it — never the operator's in, which refuses a barred node.
 type estateMembership interface {
 	Bar(ctx context.Context, node, by, reason string) (EstateGesture, error)
-	In(ctx context.Context, node, by string) (EstateGesture, error)
+	Readmit(ctx context.Context, node, by string) (EstateGesture, error)
 }
 
 // gateMembership is the estate map's gestures as the node gate makes them
@@ -1266,11 +1273,11 @@ func (r GateResult) notServedHere() []string {
 	return out
 }
 
-// mapGesture is the estate map's part of a gesture: out for an eviction, in for
-// a readmission.
+// mapGesture is the estate map's part of a gesture: the bar for an eviction,
+// and for a readmission its lift — the in, under the gesture's name for it.
 func (g *NodeGate) mapGesture(ctx context.Context, req GateRequest, readmit bool) *MapGate {
 	if readmit {
-		res, err := g.estate.In(ctx, req.Node, req.By)
+		res, err := g.estate.Readmit(ctx, req.Node, req.By)
 		return &MapGate{Gesture: "in", Landed: res.Landed, Err: err}
 	}
 	res, err := g.estate.Bar(ctx, req.Node, req.By, evictedReason)

@@ -58,6 +58,23 @@ var (
 
 	// ErrHoldRange is a hold of no length, or one past [MaxHold].
 	ErrHoldRange = errors.New("a hold lasts more than nothing and at most a day")
+
+	// ErrBarredMember is putting back a node the map bars ([Bar]) — an
+	// eviction's record, which an operator's in does not lift and only the
+	// readmission does ([Readmit]) — or taking out one it bars and does not
+	// hold, which places nothing already.
+	//
+	// NOT AN UNKNOWN MEMBER, unlike [ErrRemovedMember]: a barred node may
+	// be a member — one that came back, joined out and placed on nothing —
+	// and whether it is says nothing about what lifts the bar. And tested
+	// BEFORE a removal by both gestures, since a barred node the map removed
+	// is both, and what a removal tells an operator — it rejoins on
+	// probation, and an in vouches for it — is false of a barred one. A
+	// statement of what is, with the node named last and no remedy in it,
+	// for [ErrRemovedMember]'s reason: each surface words the readmission
+	// for its own reader.
+	ErrBarredMember = errors.New("the map bars it: an eviction keeps it placed on " +
+		"nothing until the node is readmitted, which no gesture on the map does")
 )
 
 // Out takes a member out: the map places nothing on it, so its share moves to
@@ -76,9 +93,10 @@ var (
 //
 // It refuses to take out the last member present to place copies on: every
 // write would then have nowhere to land. Present is what the latest tick saw
-// ([absentNow]), so a member back from a missed tick counts. It refuses a node
-// the map removed and has not seen back ([ErrRemovedMember]): that one places
-// nothing already.
+// ([absentNow]), so a member back from a missed tick counts. And it refuses a
+// node the map removed and has not seen back ([ErrRemovedMember]), or bars and
+// does not hold ([ErrBarredMember]): each places nothing already. A member
+// the map bars is out already, so taking it out changes nothing.
 //
 // AND IT NEVER DROPS A COPY ([ErrNowhereToRebuild]): an out whose member the
 // map could not do without — fewer copies placed without it than with it, as
@@ -108,6 +126,9 @@ func Out(s State, d placement.Draw, node, by, reason string, now time.Time) (Sta
 	member, ok := d.Member(node)
 	switch {
 	case !ok:
+		if _, barred := s.Barred[node]; barred {
+			return s, d, fmt.Errorf("%w: %q", ErrBarredMember, node)
+		}
 		if _, removed := s.Removed[node]; removed {
 			return s, d, fmt.Errorf("%w: %q", ErrRemovedMember, node)
 		}
@@ -151,10 +172,10 @@ func lastPlaceable(s State, d placement.Draw, node string) bool {
 
 // Bar bars a node from the map: it is placed on nothing — a member now is taken
 // out, its share moving to the others — and stays so WHATEVER BECOMES OF ITS
-// MEMBERSHIP, removed for absence, forgotten, seen back, until [In] lifts the
-// bar ([State.Barred]). It is how a map records an EVICTION: the operator's
-// judgement that the machine is gone, whose copies are fenced off until it is
-// readmitted.
+// MEMBERSHIP, removed for absence, forgotten, seen back, until [Readmit] lifts
+// the bar ([State.Barred]). It is how a map records an EVICTION: the
+// operator's judgement that the machine is gone, whose copies are fenced off
+// until it is readmitted. [In] refuses a barred node ([ErrBarredMember]).
 //
 // A NODE THE MAP DOES NOT HOLD IS BARRED ALL THE SAME — one it removed for
 // absence, or one it has never seen: a bar is about a machine that may come
@@ -195,18 +216,55 @@ func Bar(s State, d placement.Draw, node, by, reason string, now time.Time) (Sta
 
 // In puts a member back: the map places on it again, and its share moves back.
 //
-// IT VOUCHES FOR THE NODE, whatever is keeping it off the map: an operator's
-// out, a bar ([Bar]), a probation the maintainer is counting, or a removal the
-// map remembers. A member out, barred or on probation is placed on at once; a
-// node removed and not seen since is FORGOTTEN, so it joins — placeable — the
-// next time it is seen present and healthy, rather than after it has proven
-// itself stable: the operator vouching for it in place of the ticks; and a bar
-// on a node the map does not hold is lifted, so it joins as any node would.
-// Forgetting it and lifting a bar change no member, only the state.
+// IT VOUCHES FOR THE NODE, whatever is keeping it off the map but a bar: an
+// operator's out, a probation the maintainer is counting, or a removal the map
+// remembers. A member out or on probation is placed on at once; a node removed
+// and not seen since is FORGOTTEN, so it joins — placeable — the next time it
+// is seen present and healthy, rather than after it has proven itself stable:
+// the operator vouching for it in place of the ticks. Forgetting it changes no
+// member, only the state.
+//
+// A BARRED NODE IS REFUSED ([ErrBarredMember]), and nothing is changed. A bar
+// is an eviction's part in the map, and the eviction is a record on every log
+// the node was counted on: the node is fit to be placed on again only once
+// every one of those logs has taken it back, which is a fact about the logs
+// and nothing here can see. So the bar is lifted by the readmission that
+// writes them, and only once they are done ([Readmit]); an in lifting it put
+// the node back on the map while its logs still gated it — every write it
+// decided on a partition placed on it dropped on every holder, and the trim
+// counting it from a tombstone rather than its row.
 //
 // PUTTING BACK A MEMBER ALREADY PLACED ON CHANGES NOTHING: the answer is the
 // state and draw it was given, so a re-sent `in` writes nothing.
 func In(s State, d placement.Draw, node string) (State, placement.Draw, error) {
+	if _, barred := s.Barred[node]; barred {
+		return s, d, fmt.Errorf("%w: %q", ErrBarredMember, node)
+	}
+	return putBack(s, d, node)
+}
+
+// Readmit is a readmission's part in the map: it lifts the node's bar ([Bar]),
+// if it has one, and puts it back as [In] does — vouching for it, whatever
+// else keeps it off the map.
+//
+// THE ONE GESTURE THAT LIFTS A BAR, and it belongs to whatever readmits the
+// node — the gesture that takes it back on every log the eviction was written
+// to, made only once every one of them has ([In]'s doc says why). No operator
+// surface offers it: an operator readmits the node, and the map follows.
+//
+// A node it does not bar is put back exactly as [In] puts it back, unknown
+// member included, so a readmission of a node whose eviction never reached the
+// map — or reached it before the map was written — answers what the map
+// keeps of it. Readmitting a node already placed on and not barred changes
+// nothing, so a re-sent readmission writes nothing.
+func Readmit(s State, d placement.Draw, node string) (State, placement.Draw, error) {
+	return putBack(s, d, node)
+}
+
+// putBack is [In] and [Readmit] once the bar is judged: whatever keeps node off
+// the map is lifted, the bar included, and a node already placed on and not
+// barred is answered as it was given.
+func putBack(s State, d placement.Draw, node string) (State, placement.Draw, error) {
 	member, isMember := d.Member(node)
 	_, removed := s.Removed[node]
 	_, barred := s.Barred[node]

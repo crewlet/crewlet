@@ -34,7 +34,12 @@ import (
 // is also what lets a READMISSION put the node back in the estate map from any
 // node: the in is made only by a gesture that finds every log has taken the
 // node back, so until one gesture reaches every log it is made only on a node
-// that serves every partition (engine.MapAwaitsLogs).
+// that serves every partition (engine.MapAwaitsLogs) — and on a fleet where NO
+// node serves every partition it is not made at all. Nothing else lifts the
+// bar: the operator's own in refuses a barred node
+// (membership.ErrBarredMember), because an in sees no log. So until this
+// operation is registered, such a fleet keeps a readmitted node barred from
+// the map, and registering it is what lets that readmission land.
 //
 // Its CLASS is an idempotent write (§G6): a gate record carries the operation
 // id the gesture derived for that log and node, and the log's own ledger

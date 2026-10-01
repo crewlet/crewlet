@@ -507,7 +507,7 @@ func estateMemberGesture(args []string, stdout, stderr io.Writer, out bool) erro
 	answer, err := estateGesture(client, fmt.Sprintf("/estate/%s/%s?%s", verb,
 		url.PathEscape(node), query.Encode()), false, stderr)
 	if err != nil {
-		return err
+		return barredByEviction(err, node)
 	}
 	switch {
 	case out:
@@ -524,6 +524,29 @@ func estateMemberGesture(args []string, stdout, stderr io.Writer, out bool) erro
 			node)
 	}
 	return nil
+}
+
+// barredByEviction is err, unless it is the node's refusal of a gesture on a
+// node an eviction bars — an in, or an out of one the map does not hold —
+// which it says in this command's own words, naming the command that does put
+// it back.
+//
+// THE READMISSION, NEVER A RESEND: the bar stands for the eviction on every log
+// the node was counted on, and only `crewlet retention readmit` — which takes
+// it back on those logs and lifts the bar once every one has — knows when it is
+// fit to be placed on again. The node's hint says so in no surface's words; an
+// operator at this command needs the command.
+func barredByEviction(err error, node string) error {
+	var refusal *nodeRefusal
+	if !errors.As(err, &refusal) || refusal.Code != "barred_member" {
+		return err
+	}
+	return fmt.Errorf("%s is barred from the estate map by an eviction, so it is placed on "+
+		"nothing until it is readmitted, which no `crewlet estate` gesture does: "+
+		"`crewlet retention readmit %s -confirm %s` takes it back on every log the eviction "+
+		"was written to and puts it back in the map once every one of them has — a "+
+		"readmission that answered with an operation id and did not finish is finished by "+
+		"the same command with -op-id", node, node, node)
 }
 
 // unconfirmedByGeneration is err, unless it is the node's refusal of a hold or

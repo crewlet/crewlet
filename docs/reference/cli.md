@@ -32,7 +32,7 @@ subcommand below is served by it.
 | `crewlet objects release` | End a hold |
 | `crewlet estate map [config] [-all] [-json]` | Which data nodes hold each partition of the replicated estate: the [estate map](../concepts/estate-placement.md) read from a running node — its layout, epoch and copies, a hold, one row per member with its share, how many partitions it serves, joins and leaves, whether it is out, on probation or has partitions moved off it, how far an absence has run and what its store says — then every partition that is not settled, with its copies, target, holders and moves (`-all` lists every one). At layout 0, every fleet on this build, it says that every data node holds the whole estate and lists them |
 | `crewlet estate out <node> -confirm <node> [-reason TEXT]` | Take a data node out of every partition's target: each copy it holds is rebuilt on another member while it keeps serving, then released |
-| `crewlet estate in <node> -confirm <node>` | Put a member back, or vouch for a node the map removed for being gone |
+| `crewlet estate in <node> -confirm <node>` | Put a member back, or vouch for a node the map removed for being gone. Refused for a node an eviction bars, which only `crewlet retention readmit` puts back |
 | `crewlet estate hold -for DURATION -confirm <generation> [-reason TEXT]` | Hold the estate map, at most 24h: no member is removed however long it is gone. Confirmed by the map's generation, which `map` prints |
 | `crewlet estate release -confirm <generation>` | End a hold |
 | `crewlet estate move <partition> -from <node> -confirm <node> [-reason TEXT] [-cancel]` | Move one partition's copy off one node: it is rebuilt on the member the partition's ranking offers next, then released. `-cancel` lifts the move |
@@ -873,8 +873,12 @@ its copies — as many placeable members as `estate.replicas` — since every
 partition would then keep one copy fewer rather than move one: add a data node
 first, or lower `estate.replicas` if the company means to keep fewer and take it
 out once `map` shows the lower count (the map takes it on its duty's next tick
-after the activation). `in` puts
-it back, or vouches for a node the map removed. `move` takes
+after the activation). `in` puts it back, or vouches for a node the map removed
+— but never a node an eviction **bars**: that is refused (`barred_member`) with
+the map unchanged — as is an `out` of a barred node the map does not hold,
+which is placed on nothing already — and the command names `crewlet retention
+readmit`, the one gesture that lifts a bar, because only it knows when every
+log the eviction was written to has taken the node back. `move` takes
 one partition's copy off one node: the partition's target skips it, so the copy
 is rebuilt on the member its ranking offers next and then released; it lasts
 until `-cancel` lifts it or the node leaves the map, and it is refused

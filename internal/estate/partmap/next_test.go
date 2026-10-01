@@ -1107,7 +1107,8 @@ func TestNothingABarredNodeSaysMakesItAServer(t *testing.T) {
 // Adopted serving, it would be routed to for as long as the new node's joins
 // took, while every log of those partitions dropped each write it decided and
 // the trim passed the holder applying them. It is adopted leaving instead, and
-// releases; the new node's joins finish; and only [In] places on it again.
+// releases; the new node's joins finish; and only [Readmit] places on it
+// again.
 func TestABarredNodeThatComesBackIsNeverAServer(t *testing.T) {
 	t.Parallel()
 	s := settled(t, smallLayout, 2, "data-00", "data-01", "data-02")
@@ -1165,7 +1166,7 @@ func TestABarredNodeThatComesBackIsNeverAServer(t *testing.T) {
 		t.Fatalf("a barred node holds %v once the map has settled", held)
 	}
 
-	back, err := In(s.state, "data-02")
+	back, err := Readmit(s.state, "data-02")
 	if err != nil {
 		t.Fatal(err)
 	}

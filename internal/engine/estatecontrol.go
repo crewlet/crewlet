@@ -34,9 +34,11 @@ import (
 // [partmap.ErrNoMap] (no estate map), [partmap.ErrUnknownPartition],
 // [partmap.ErrNotAHolder] and [partmap.ErrNowhereToMove] for a move, and
 // internal/membership's refusals for the rest — ErrRemovedMember tested
-// before ErrUnknownMember, which it wraps, and ErrNowhereToRebuild for an out
-// no other member could take the copies of, which is a move's refusal made by
-// the membership rule both maps share. A hold or a release confirmed by
+// before ErrUnknownMember, which it wraps, ErrNowhereToRebuild for an out no
+// other member could take the copies of, which is a move's refusal made by the
+// membership rule both maps share, and ErrBarredMember for an in of a node an
+// eviction bars, which only the readmission puts back
+// ([EstateControl.Readmit]). A hold or a release confirmed by
 // no generation at all is [ErrEstateUnconfirmed], and one confirmed for
 // another map [ErrEstateOtherMap] — both judged against the stored map, so
 // where there is none the refusal is the no-map one below; a store that did
@@ -120,8 +122,8 @@ func (c *EstateControl) Out(ctx context.Context, node, by, reason string) (Estat
 
 // Bar bars a data node from the estate map — an eviction's part in it: taken out
 // if it is a member, and recorded whether or not the map holds it, so that
-// neither its removal nor its return lifts it; only [EstateControl.In] does.
-// by and reason are recorded on the map.
+// neither its removal nor its return lifts it; only [EstateControl.Readmit]
+// does. by and reason are recorded on the map.
 func (c *EstateControl) Bar(ctx context.Context, node, by, reason string) (EstateGesture, error) {
 	return c.apply(ctx, "bar", func(s partmap.MapState) (partmap.MapState, error) {
 		return partmap.Bar(s, node, by, reason, c.now())
@@ -129,10 +131,31 @@ func (c *EstateControl) Bar(ctx context.Context, node, by, reason string) (Estat
 }
 
 // In puts a data node back: the targets may name it again — and vouches for
-// one the map removed for absence and has on probation, and lifts a bar.
+// one the map removed for absence and has on probation.
+//
+// A NODE AN EVICTION BARS IS REFUSED (membership's ErrBarredMember), with
+// nothing written. It is the operator's gesture — `crewlet estate in`, the
+// dashboard's "Put back" — and the bar is lifted only by the readmission, once
+// every log the eviction was written to has taken the node back
+// ([EstateControl.Readmit]): lifted here, the maintainer's next tick placed
+// partitions on a node whose logs still dropped every write it decided.
 func (c *EstateControl) In(ctx context.Context, node, by string) (EstateGesture, error) {
 	return c.apply(ctx, "in", func(s partmap.MapState) (partmap.MapState, error) {
 		return partmap.In(s, node)
+	}, "node", node, "by", by)
+}
+
+// Readmit is a readmission's part in the estate map: the node's bar is lifted
+// and it is put back as [EstateControl.In] puts back a member
+// ([partmap.Readmit]).
+//
+// THE NODE GATE'S ALONE ([NodeGate.Readmit]), which makes it only once every log
+// the eviction was written to has taken the node back. No route offers it:
+// the API's estate seam declares [EstateControl.In] and not this, so an
+// operator reaches it only by readmitting the node.
+func (c *EstateControl) Readmit(ctx context.Context, node, by string) (EstateGesture, error) {
+	return c.apply(ctx, "readmit", func(s partmap.MapState) (partmap.MapState, error) {
+		return partmap.Readmit(s, node)
 	}, "node", node, "by", by)
 }
 

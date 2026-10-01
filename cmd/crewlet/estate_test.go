@@ -307,6 +307,32 @@ func TestEstateMapNamesTheNodesItBars(t *testing.T) {
 	}
 }
 
+// PUTTING BACK A NODE AN EVICTION BARS IS REFUSED, AND THE COMMAND SAYS WHICH
+// COMMAND DOES: the node's `barred_member` hint is in no surface's words, so
+// `crewlet estate in` names `crewlet retention readmit` with the node — and
+// the map still bars it.
+func TestEstateInOfABarredNodeNamesTheReadmission(t *testing.T) {
+	node := newFakeEstateNode(t)
+	node.mu.Lock()
+	next, err := partmap.Bar(node.state, "data-c", "ops", "evicted", objectsAt)
+	node.state = next
+	node.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = cli(t, "estate", "in", "data-c", "-confirm", "data-c",
+		bootstrapForURL(t, node.server.URL))
+	if err == nil || !strings.Contains(err.Error(),
+		"crewlet retention readmit data-c -confirm data-c") {
+		t.Fatalf("an in of a barred node = %v, want the readmission named", err)
+	}
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if _, still := node.state.Barred["data-c"]; !still {
+		t.Errorf("an in of a barred node lifted the bar: %v", node.state.Barred)
+	}
+}
+
 // THE STATES WITH NOTHING TO SHOW say their sentence: a map not written yet
 // is a wait, and a map nobody could read is a failure.
 func TestEstateMapSaysTheStatesWithNothingToShow(t *testing.T) {

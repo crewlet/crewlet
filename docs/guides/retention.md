@@ -611,7 +611,10 @@ same rule reads per partition, and three things follow from it:
   that does not, the line says it waits for the logs and names those on
   partitions the node does not serve: finish them through nodes that serve
   them, then run the same `-op-id` on a node that serves every partition,
-  where each finished log answers from its own ledger and the in is made. The
+  where each finished log answers from its own ledger and the in is made — and
+  on a fleet where no node serves every partition the node stays barred, since
+  no gesture there sees every log done. `crewlet estate in` never lifts the
+  bar: it refuses a barred node and names this command. The
   answer carries the map's own line (`estate map: out — written`). A map that could not be written leaves the gesture unfinished
   however the logs answered, and the same `-op-id` finishes it; a readmission
   of a node the map keeps nothing of — no member, no removal it remembers, no

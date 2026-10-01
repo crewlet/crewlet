@@ -230,7 +230,8 @@ type PlacedEstate struct {
 
 	// Barred are the nodes barred from the map — evicted — that it does not
 	// hold, whether removed, forgotten or never seen. Each is placed on
-	// nothing should it come back, until it is put back.
+	// nothing should it come back, until it is readmitted. A removed node
+	// named here is not also named in Removed ([RenderRemoved]).
 	Barred []MapBar `json:"barred"`
 
 	// Partitions are every partition of the layout, in its order.

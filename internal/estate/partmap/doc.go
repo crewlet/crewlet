@@ -182,7 +182,8 @@
 // withdrawn, whatever it says; and a leave of its is never taken back — not
 // even while nobody else serves the partition, whose only copy then waits on
 // its disk — the leave protocol has a node re-check that the target serves
-// before it drains — until the target is served or [In] lifts the bar.
+// before it drains — until the target is served or the readmission lifts the
+// bar ([Readmit]; an operator's [In] is refused for a barred node).
 //
 // What a bar does NOT do is let a serving copy go at once. A node barred while
 // it serves — an eviction an operator forced past a live lease — is retired

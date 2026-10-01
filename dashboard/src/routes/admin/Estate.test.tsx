@@ -161,8 +161,12 @@ describe("a placed map", () => {
       .find(Boolean) as HTMLElement;
     expect(within(d).getByText("barred")).toBeTruthy();
     expect(within(d).queryByText("out")).toBeNull();
-    expect(screen.getByText(/is barred from the estate map by founder/)).toBeTruthy();
+    // data-x, never held, and data-e, which the map removed: each named once,
+    // as barred — data-e is not also offered a removed node's "Put back now".
+    expect(screen.getAllByText(/is barred from the estate map by founder/)).toHaveLength(2);
     expect(screen.getByText("data-x")).toBeTruthy();
+    expect(screen.getAllByText("data-e")).toHaveLength(1);
+    expect(screen.queryByText(/was removed for being/)).toBeNull();
   });
 
   test("a hold in force is a banner, and the header offers its release", () => {

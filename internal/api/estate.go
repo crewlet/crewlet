@@ -27,7 +27,10 @@ import (
 //     every partition's target: what it holds is rebuilt on the others while
 //     it keeps serving, and then released.
 //   - POST /estate/in/{node}?confirm={node} puts it back — or vouches for a
-//     node the map removed for absence.
+//     node the map removed for absence. A node an eviction bars is refused
+//     `barred_member`: only its readmission, once every log has taken it
+//     back, lifts the bar, and the readmission is the node gate's
+//     (POST /work/retention/readmit/{node}), never this route's.
 //   - POST /estate/hold?for={duration}&confirm={generation}&reason= holds the
 //     map, at most a day: no member is removed for absence while it holds.
 //   - POST /estate/release?confirm={generation} ends the hold.
@@ -198,6 +201,7 @@ type EstateRefusalBody struct {
 // fleet with no map yet waits for one, a name the map does not hold is a typo,
 // a move or an out with nowhere to rebuild the copy needs a data node or fewer
 // copies first, a node the map removed is put back rather than taken out, a
+// node an eviction bars is readmitted rather than put back or taken out, a
 // hold or a release confirmed by no generation at all is made again with the
 // one the map names, one confirmed for another map was sent to the wrong
 // fleet, and a store that did not answer is asked again.
@@ -242,6 +246,16 @@ func RenderEstateRefusal(err error) (EstateRefusal, bool) {
 		return refuse(http.StatusConflict, "removed_member",
 			"leave it: it rejoins on probation the next time it is seen present and "+
 				"healthy, or putting it back vouches for it now")
+	case errors.Is(err, membership.ErrBarredMember):
+		// THE READMISSION, NOT A RETRY: the bar stands for the eviction on
+		// every log the node was counted on, and only the gesture that
+		// takes it back on those logs knows when it is fit to be placed
+		// on again — so no put-back, however often sent, lands.
+		return refuse(http.StatusConflict, "barred_member",
+			"it is placed on nothing already, and only its readmission puts it back: that "+
+				"takes it back on every log the eviction was written to and lifts the bar "+
+				"once every one of them has — and a readmission that answered with an "+
+				"operation id and did not finish is finished under that id")
 	case errors.Is(err, membership.ErrUnknownMember):
 		return refuse(http.StatusNotFound, "unknown_member",
 			"name a node the estate map lists: a member to take out or put back, or a "+

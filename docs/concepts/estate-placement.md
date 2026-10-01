@@ -363,7 +363,7 @@ sighting, as a stale view does.
 | Gesture | Effect | Confirmed by |
 |---|---|---|
 | `crewlet estate out <node>` | Takes the node out of every partition's target: each copy it holds is rebuilt on another member while it serves, then released; refused where no other member could take its copies | the node |
-| `crewlet estate in <node>` | Puts it back, or vouches for a node the map removed | the node |
+| `crewlet estate in <node>` | Puts it back, or vouches for a node the map removed; refused for a node an eviction bars | the node |
 | `crewlet estate hold -for D` | No member is removed for being gone, for at most a day | the map's generation |
 | `crewlet estate release` | Ends the hold | the map's generation |
 | `crewlet estate move <partition> -from <node>` | That partition's copy on that node is rebuilt on the member its ranking offers next, then released; refused where no member is left to rebuild on, and waits — the node back in the target — while members that left since leave none | the node |
@@ -424,6 +424,15 @@ log has taken the node back: until then the map's part answers that it waits
 for the logs, and the same operation id finishes both — the in on a node that
 serves every partition, since a node reaches only the logs of the partitions
 it serves ([the retention guide](../guides/retention.md#eviction) says how).
+Nothing else lifts it: `crewlet estate in` refuses a barred node
+(`barred_member`) with the map unchanged — and the dashboard's estate screen
+offers a barred member no **Put back**, pointing at its readmission on the
+Fleet screen instead — because an in cannot see the logs, and lifting the bar
+before they have all taken the node back would place partitions on a node they
+still gate. On a fleet where no
+node serves every partition, no gesture sees every log done, and the node stays
+barred: this build sends a log's gate record only to the node the operator
+asked, never on to a node that serves the log.
 `crewlet estate map`
 names every bar. The map's answer is a line of the gesture's own: a map that
 could not be written leaves the gesture unfinished, and the same operation id

@@ -260,18 +260,14 @@
           }
         }
       ],
-      "removed": [
+      "removed": [],
+      "barred": [
         {
           "node": "data-e",
-          "at": "2026-09-01T12:00:00Z",
-          "reason": "unhealthy",
-          "detail": "its store says it cannot hold partitions",
-          "gone": 6,
-          "forget_after_ticks": 40,
-          "placed_after_ticks": 40
-        }
-      ],
-      "barred": [
+          "by": "founder",
+          "reason": "evicted",
+          "at": "2026-09-01T12:00:00Z"
+        },
         {
           "node": "data-x",
           "by": "founder",
@@ -1514,6 +1510,14 @@
     }
   },
   "refusals": {
+    "barred_member": {
+      "status": 409,
+      "body": {
+        "error": "barred_member",
+        "detail": "estate/partmap: the map bars it: an eviction keeps it placed on nothing until the node is readmitted, which no gesture on the map does: \"data-d\"",
+        "hint": "it is placed on nothing already, and only its readmission puts it back: that takes it back on every log the eviction was written to and lifts the bar once every one of them has — and a readmission that answered with an operation id and did not finish is finished under that id"
+      }
+    },
     "confirm_required": {
       "status": 400,
       "body": {

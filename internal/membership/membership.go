@@ -14,8 +14,8 @@
 // duplicated rule in this tree has (ADR-0008). So they are written once,
 // here, as PURE functions over a state value both maps' records embed
 // ([State]) and the members a draw is taken over ([placement.Draw]): [Tick]
-// is the whole policy of one maintainer tick, and [Out], [In], [HoldFor] and
-// [Release] are the gestures. What a map does with the members it is handed —
+// is the whole policy of one maintainer tick, and [Out], [In], [Bar],
+// [Readmit], [HoldFor] and [Release] are the gestures. What a map does with the members it is handed —
 // balance them, split its groups, converge its holders — is the map's own.
 //
 // # Why all of it rides in the record
@@ -54,7 +54,8 @@
 // refused rather than taken as a copy dropped — HOLD the map ([HoldFor])
 // through planned maintenance so nothing is removed while nodes restart, and
 // BAR a node ([Bar]) — an eviction's record — so it is placed on nothing
-// whatever becomes of its membership, until it is put back ([In]).
+// whatever becomes of its membership, until its readmission lifts the bar
+// ([Readmit]); an operator's in does not ([ErrBarredMember]).
 //
 // How many copies a map keeps and which label they are spread across are the
 // COMPANY's (ADR-0020), taken from the company configuration stamped with the
@@ -188,7 +189,10 @@ type State struct {
 	// off until it is readmitted — and a node an operator evicts is usually
 	// one the map has already let go, or soon will. So neither removal nor
 	// forgetting lifts it: a barred node seen back joins as a member OUT,
-	// placed on nothing, until [In] lifts the bar. Kept only while it was a
+	// placed on nothing, until [Readmit] lifts the bar — never [In], which
+	// refuses a barred node, because the bar stands for the eviction on
+	// every log and only the readmission knows when those have taken the
+	// node back. Kept only while it was a
 	// member, the bar vanished with the removal and a repaired machine
 	// restarted under its old id was placed on after its probation, while
 	// every log it was placed to serve still gated its writes as evicted.

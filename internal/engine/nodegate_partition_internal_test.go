@@ -237,8 +237,8 @@ func (m *mapRecorder) Bar(_ context.Context, node, by, reason string) (EstateGes
 	return m.record("bar " + node + " by " + by + " as " + reason)
 }
 
-func (m *mapRecorder) In(_ context.Context, node, by string) (EstateGesture, error) {
-	return m.record("in " + node + " by " + by)
+func (m *mapRecorder) Readmit(_ context.Context, node, by string) (EstateGesture, error) {
+	return m.record("readmit " + node + " by " + by)
 }
 
 func (m *mapRecorder) record(call string) (EstateGesture, error) {
@@ -297,7 +297,7 @@ func TestAnEvictionBarsTheNodeFromTheMapAndAReadmissionPutsItBack(t *testing.T) 
 	if err != nil {
 		t.Fatalf("readmit: %v", err)
 	}
-	if want := []string{"bar node-away by ops as evicted", "in node-away by ops"}; !slices.Equal(recorder.calls, want) {
+	if want := []string{"bar node-away by ops as evicted", "readmit node-away by ops"}; !slices.Equal(recorder.calls, want) {
 		t.Errorf("the gestures made %v on the estate map, want %v", recorder.calls, want)
 	}
 	if want := []int{2, 4}; !slices.Equal(recorder.atGesture, want) {
@@ -428,7 +428,7 @@ func TestAReadmissionPutsTheNodeBackOnlyOnceEveryLogHas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readmit again: %v", err)
 	}
-	if want := []string{"in node-back by ops"}; !slices.Equal(recorder.calls, want) || !res.Complete() {
+	if want := []string{"readmit node-back by ops"}; !slices.Equal(recorder.calls, want) || !res.Complete() {
 		t.Errorf("once every log is done the map was changed %v, complete %v; want %v",
 			recorder.calls, res.Complete(), want)
 	}

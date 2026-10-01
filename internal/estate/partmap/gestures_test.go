@@ -2,6 +2,7 @@ package partmap
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ func TestAGestureWithNoMapIsRefused(t *testing.T) {
 		"out":     func() error { _, err := Out(MapState{}, "data-00", "op", "", base); return err },
 		"bar":     func() error { _, err := Bar(MapState{}, "data-00", "op", "", base); return err },
 		"in":      func() error { _, err := In(MapState{}, "data-00"); return err },
+		"readmit": func() error { _, err := Readmit(MapState{}, "data-00"); return err },
 		"hold":    func() error { _, err := HoldFor(MapState{}, time.Hour, "op", "", base); return err },
 		"release": func() error { _, err := Release(MapState{}); return err },
 		"move":    func() error { _, err := Move(MapState{}, p, "data-00", "op", "", base); return err },
@@ -80,13 +82,14 @@ func TestTakingAMemberOutMovesItsPartitionsWhileItServes(t *testing.T) {
 	}
 }
 
-// AN EVICTED NODE THAT COMES BACK IS PLACED ON NOTHING UNTIL IT IS PUT BACK.
+// AN EVICTED NODE THAT COMES BACK IS PLACED ON NOTHING UNTIL IT IS READMITTED.
 //
 // The eviction bars it: its partitions are rebuilt on the others, it is
 // removed for its absence, and when the machine returns under its old id — and
 // stays for far longer than any probation — no partition is placed on it,
-// because every log it would serve still gates it as evicted. Putting it back
-// is the one thing that places on it again.
+// because every log it would serve still gates it as evicted. An operator's in
+// is refused and changes nothing; the readmission is the one thing that places
+// on it again.
 func TestAnEvictedNodeThatComesBackIsPlacedOnNothing(t *testing.T) {
 	t.Parallel()
 	s := settled(t, smallLayout, 2, nodeIDs(4)...)
@@ -109,7 +112,12 @@ func TestAnEvictedNodeThatComesBackIsPlacedOnNothing(t *testing.T) {
 		t.Fatalf("an evicted node back for %d ticks holds %v", 4*membership.StableTicks, held)
 	}
 
-	back, err := In(s.state, "data-01")
+	if refused, err := In(s.state, "data-01"); !errors.Is(err, membership.ErrBarredMember) ||
+		!reflect.DeepEqual(refused, s.state) {
+		t.Fatalf("an in of the evicted node = %v, want membership.ErrBarredMember and the "+
+			"map unchanged", err)
+	}
+	back, err := Readmit(s.state, "data-01")
 	if err != nil {
 		t.Fatal(err)
 	}

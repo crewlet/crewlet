@@ -14,9 +14,10 @@ import (
 
 // The gestures' own refusals. Every other refusal is membership's —
 // [membership.ErrUnknownMember], [membership.ErrRemovedMember],
-// [membership.ErrNothingPlaceable], [membership.ErrNowhereToRebuild] and
-// [membership.ErrHoldRange] — wrapped in this map's name ([refused]), so the
-// detail every surface shows says which map refused.
+// [membership.ErrBarredMember], [membership.ErrNothingPlaceable],
+// [membership.ErrNowhereToRebuild] and [membership.ErrHoldRange] — wrapped in
+// this map's name ([refused]), so the detail every surface shows says which
+// map refused.
 var (
 	// ErrNoMap is a gesture on a fleet that has no estate map.
 	//
@@ -105,9 +106,10 @@ func Out(state MapState, node, by, reason string, now time.Time) (MapState, erro
 // Bar bars a node from the estate map ([membership.Bar]) — an eviction's part in
 // the map: a member is taken out as [Out] takes one, and the bar is recorded
 // whether or not the map holds the node, and lasts through its removal and
-// its return until [In] lifts it — so the maintainer never places a partition
-// on an evicted node that comes back while its logs still gate it. Barring a
-// node already barred answers the record it was given.
+// its return until [Readmit] lifts it — so the maintainer never places a
+// partition on an evicted node that comes back while its logs still gate it.
+// [In] refuses a barred node ([membership.ErrBarredMember]). Barring a node
+// already barred answers the record it was given.
 //
 // NO EPOCH MOVES, as with every membership gesture.
 func Bar(state MapState, node, by, reason string, now time.Time) (MapState, error) {
@@ -121,15 +123,36 @@ func Bar(state MapState, node, by, reason string, now time.Time) (MapState, erro
 
 // In puts a member back ([membership.In]): the targets name it again, and the
 // shares are balanced again. A node removed and not seen since is forgotten,
-// and a bar on a node the map does not hold is lifted, neither of which
-// changes a target. Putting back a member already placed on answers the record
-// it was given.
+// which changes no target. Putting back a member already placed on answers the
+// record it was given.
+//
+// A BARRED NODE IS REFUSED ([membership.ErrBarredMember]) with nothing
+// changed: the bar is an eviction's, and only the readmission that takes the
+// node back on every log lifts it ([Readmit]).
 func In(state MapState, node string) (MapState, error) {
 	if state.Map.Generation == uuid.Nil {
 		return state, ErrNoMap
 	}
 	return gesture(state, func(s membership.State, d placement.Draw) (membership.State, placement.Draw, error) {
 		return membership.In(s, d, node)
+	})
+}
+
+// Readmit is a readmission's part in the estate map ([membership.Readmit]): the
+// node's bar is lifted and it is put back as [In] puts a member back, the
+// shares balanced again — a bar on a node the map does not hold lifted with no
+// target changed. A node with no bar is put back exactly as [In] would.
+//
+// THE NODE GATE'S ALONE, and made only once every log the eviction was written
+// to has taken the node back: lifted earlier, the maintainer places partitions
+// on a node their logs still gate. No operator surface offers it — an operator
+// readmits the node, and the gate makes this.
+func Readmit(state MapState, node string) (MapState, error) {
+	if state.Map.Generation == uuid.Nil {
+		return state, ErrNoMap
+	}
+	return gesture(state, func(s membership.State, d placement.Draw) (membership.State, placement.Draw, error) {
+		return membership.Readmit(s, d, node)
 	})
 }
 

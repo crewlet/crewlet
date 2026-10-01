@@ -52,8 +52,9 @@ type MapMember struct {
 	OutAt     time.Time `json:"out_at,omitzero"`
 
 	// Barred is a member barred from the map — an eviction — which is out
-	// until it is put back, whatever becomes of its membership: a removal
-	// does not lift it, as it lifts an out ([membership.State.Barred]).
+	// until it is readmitted, whatever becomes of its membership: a removal
+	// does not lift it, as it lifts an out ([membership.State.Barred]), and
+	// nor does putting it back ([membership.ErrBarredMember]).
 	// Absent while it is not. OutBy, OutReason and OutAt are the bar's where
 	// no out of an operator's own was recorded beside it.
 	Barred bool `json:"barred,omitempty"`
@@ -192,7 +193,8 @@ func RenderHold(s membership.State, now time.Time) *MapHold {
 
 // MapBar is a node barred from a map — an eviction — that the map does not hold:
 // removed for its absence, forgotten, or never seen. Should it come back it
-// joins as a member out, placed on nothing, until it is put back.
+// joins as a member out, placed on nothing, until it is readmitted — which is
+// the only gesture that lifts a bar ([membership.Readmit]).
 type MapBar struct {
 	Node   string    `json:"node"`
 	By     string    `json:"by"`
@@ -219,10 +221,17 @@ func RenderBarred(s membership.State, d placement.Draw) []MapBar {
 // seen back, in node order. A removed node that IS back is a member on
 // probation and is rendered on its member row instead ([MapMember.Probation]):
 // it is one node, and two lists naming it would each say half of what it is.
+//
+// A REMOVED NODE THE MAP BARS IS LISTED ONLY AS BARRED ([RenderBarred]), for
+// the same reason and a worse one: what a removal says of a node — it rejoins
+// on probation the next time it is seen, and putting it back vouches for it now
+// — is false of a barred one, which joins placed on nothing and which an in
+// refuses ([membership.ErrBarredMember]). Listed under both, every surface
+// offered a removed node's put-back for a node only its readmission puts back.
 func RenderRemoved(s membership.State, d placement.Draw) []MapRemoval {
 	out := make([]MapRemoval, 0, len(s.Removed))
 	for node, r := range s.Removed {
-		if d.Holds(node) {
+		if _, barred := s.Barred[node]; barred || d.Holds(node) {
 			continue
 		}
 		out = append(out, MapRemoval{

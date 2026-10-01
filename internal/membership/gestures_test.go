@@ -2,6 +2,7 @@ package membership
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -359,9 +360,10 @@ func TestAnOutNeverDropsACopy(t *testing.T) {
 // Barred while a member, it is out at once; gone past the grace, it is removed
 // — and a bar, unlike an out, stays; gone for another grace, it is forgotten,
 // and the bar still stays; seen back and present for far longer than any
-// probation, it is a member again and still placed on nothing. Only In lifts
-// it. And a node the map has already removed, or never held, is barred all the
-// same — the usual case, since an operator evicts a machine that is gone.
+// probation, it is a member again and still placed on nothing. Only Readmit
+// lifts it — In is refused ([TestAnInNeverLiftsABar]). And a node the map has
+// already removed, or never held, is barred all the same — the usual case,
+// since an operator evicts a machine that is gone.
 func TestABarOutlivesMembership(t *testing.T) {
 	t.Parallel()
 	c := company(1, 2, "")
@@ -390,12 +392,12 @@ func TestABarOutlivesMembership(t *testing.T) {
 		if placeable(back, "data-02") {
 			t.Errorf("%s: a barred node back for %d ticks is placed on", name, 2*StableTicks)
 		}
-		s, d, err := In(back.s, back.d, "data-02")
+		s, d, err := Readmit(back.s, back.d, "data-02")
 		if err != nil {
-			t.Fatalf("%s: In: %v", name, err)
+			t.Fatalf("%s: Readmit: %v", name, err)
 		}
 		if !placeable(record{s, d}, "data-02") || s.Barred != nil {
-			t.Errorf("%s: put back, the node is placeable %v with bars %v", name,
+			t.Errorf("%s: readmitted, the node is placeable %v with bars %v", name,
 				placeable(record{s, d}, "data-02"), s.Barred)
 		}
 	}
@@ -416,11 +418,144 @@ func TestABarOutlivesMembership(t *testing.T) {
 		if placeable(back, node) {
 			t.Errorf("%s, barred while the map did not hold it, is placed on once back", node)
 		}
-		s, _, err = In(s, d, node)
+		s, _, err = Readmit(s, d, node)
 		if err != nil || s.Barred != nil {
-			t.Errorf("In of barred %s the map does not hold = (%v, %v), want the bar lifted",
+			t.Errorf("Readmit of barred %s the map does not hold = (%v, %v), want the bar lifted",
 				node, s.Barred, err)
 		}
+	}
+}
+
+// AN IN NEVER LIFTS A BAR. A bar is an eviction's part in the map, and the
+// node is fit to be placed on only once every log the eviction was written to
+// has taken it back — which only the readmission knows. So an operator's in of
+// a barred node is refused with nothing changed, whether the map holds it (a
+// member barred while present, or one that came back and joined out) or not
+// (removed, forgotten, never seen); and the readmission's own lift puts each
+// back exactly as an in puts back a node that is merely out.
+func TestAnInNeverLiftsABar(t *testing.T) {
+	t.Parallel()
+	c := company(1, 2, "")
+	base := first(t, roster(3), c)
+	s, d, err := Bar(base.s, base.d, "data-02", "ops@example.com", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := record{s, d}
+	gone := ticks(t, present, without(roster(3), "data-02"), c, OutTicks)
+	back := ticks(t, gone, roster(3), c, 2*StableTicks)
+	s, d, err = Bar(base.s, base.d, "data-09", "ops", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	never := record{s, d}
+	for name, tc := range map[string]struct {
+		r    record
+		node string
+	}{
+		"a member barred while present": {present, "data-02"},
+		"barred and removed":            {gone, "data-02"},
+		"barred, removed and back":      {back, "data-02"},
+		"barred and never seen":         {never, "data-09"},
+	} {
+		if tc.r.s.Barred[tc.node].Reason != "evicted" {
+			t.Fatalf("%s: the premise: %s is barred, bars %v", name, tc.node, tc.r.s.Barred)
+		}
+		s, d, err := In(tc.r.s, tc.r.d, tc.node)
+		if !errors.Is(err, ErrBarredMember) || !strings.Contains(err.Error(), tc.node) {
+			t.Errorf("%s: In = %v, want ErrBarredMember naming %s", name, err, tc.node)
+		}
+		if errors.Is(err, ErrUnknownMember) {
+			t.Errorf("%s: In of a barred node = %v, which a caller reads as nothing to lift",
+				name, err)
+		}
+		if !reflect.DeepEqual(record{s, d}, tc.r) {
+			t.Errorf("%s: a refused In changed the record", name)
+		}
+		readmitted, readmittedD, err := Readmit(tc.r.s, tc.r.d, tc.node)
+		if err != nil {
+			t.Fatalf("%s: Readmit: %v", name, err)
+		}
+		if _, still := readmitted.Barred[tc.node]; still {
+			t.Errorf("%s: Readmit left the bar", name)
+		}
+		if readmittedD.Holds(tc.node) && !placeable(record{readmitted, readmittedD}, tc.node) {
+			t.Errorf("%s: a readmitted member is not placed on", name)
+		}
+	}
+}
+
+// TAKING OUT A NODE THE MAP BARS AND DOES NOT HOLD IS REFUSED AS BARRED, and
+// never as removed: a barred node the map removed is both, and the removal's
+// answer — it rejoins on probation, and an in vouches for it now — is false of
+// it. One never seen is barred too, rather than unknown. A barred member is out
+// already, so taking it out changes nothing.
+func TestTakingOutABarredNodeSaysItIsBarred(t *testing.T) {
+	t.Parallel()
+	c := company(1, 2, "")
+	base := first(t, roster(3), c)
+	s, d, err := Bar(base.s, base.d, "data-02", "ops", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := record{s, d}
+	gone := ticks(t, present, without(roster(3), "data-02"), c, OutTicks)
+	if _, removed := gone.s.Removed["data-02"]; !removed || gone.d.Holds("data-02") {
+		t.Fatal("the premise: the barred node gone past the grace is removed and remembered")
+	}
+	s, d, err = Bar(base.s, base.d, "data-09", "ops", "evicted", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	never := record{s, d}
+	for name, tc := range map[string]struct {
+		r    record
+		node string
+	}{"barred and removed": {gone, "data-02"}, "barred and never seen": {never, "data-09"}} {
+		_, _, err := Out(tc.r.s, tc.r.d, tc.node, "ops", "", t0)
+		if !errors.Is(err, ErrBarredMember) || errors.Is(err, ErrRemovedMember) {
+			t.Errorf("%s: Out = %v, want ErrBarredMember and not ErrRemovedMember", name, err)
+		}
+	}
+	s, d, err = Out(present.s, present.d, "data-02", "ops", "", t0)
+	if err != nil || !reflect.DeepEqual(record{s, d}, present) {
+		t.Errorf("Out of a barred member = %v, changing %+v to %+v; want nothing changed",
+			err, present, record{s, d})
+	}
+}
+
+// A READMISSION OF A NODE NOTHING BARS IS AN IN. Its eviction may never have
+// reached the map — refused, or made before the map was written — and then the
+// readmission answers exactly what an in answers: a member out is put back, a
+// member placed on is left as it was given, and a node the map keeps nothing of
+// is an unknown member, which the readmission reads as nothing to lift.
+func TestAReadmissionOfAnUnbarredNodeIsAnIn(t *testing.T) {
+	t.Parallel()
+	c := company(1, 2, "")
+	base := first(t, roster(3), c)
+	s, d, err := Out(base.s, base.d, "data-01", "ops", "disk swap", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := record{s, d}
+	for name, tc := range map[string]struct {
+		r    record
+		node string
+	}{
+		"a member out":       {out, "data-01"},
+		"a member placed on": {base, "data-00"},
+		"an unknown node":    {base, "data-09"},
+	} {
+		inS, inD, inErr := In(tc.r.s, tc.r.d, tc.node)
+		reS, reD, reErr := Readmit(tc.r.s, tc.r.d, tc.node)
+		if !reflect.DeepEqual(record{reS, reD}, record{inS, inD}) ||
+			fmt.Sprint(reErr) != fmt.Sprint(inErr) {
+			t.Errorf("%s: Readmit = (%+v, %v), In = (%+v, %v)", name,
+				record{reS, reD}, reErr, record{inS, inD}, inErr)
+		}
+	}
+	if _, _, err := Readmit(base.s, base.d, "data-09"); !errors.Is(err, ErrUnknownMember) {
+		t.Errorf("Readmit of a node the map keeps nothing of = %v, want ErrUnknownMember", err)
 	}
 }
 

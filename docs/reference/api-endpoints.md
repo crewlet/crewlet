@@ -105,7 +105,7 @@ node means nothing was done.
 | `POST` | `/objects/release` | End a hold |
 | `GET` | `/estate` | The [estate map](../concepts/estate-placement.md): which data nodes hold each partition of the replicated estate, in which state, and what each node's estate lease says. At layout 0 — every fleet on this build — it answers that every data node holds the whole estate. **Always needs a token** (see [below](#get-estate)) |
 | `POST` | `/estate/out/{node}` | Take a data node out of every partition's target: what it holds is rebuilt on the others while it keeps serving, then released. `?confirm=` repeats the node id; `?reason=` is recorded. **Operator-only** (see [Gestures on the estate map](#gestures-on-the-estate-map)) |
-| `POST` | `/estate/in/{node}` | Put a member back, or vouch for a node the map removed for being gone. `?confirm=` repeats the node id |
+| `POST` | `/estate/in/{node}` | Put a member back, or vouch for a node the map removed for being gone — never one an eviction bars, which only its [readmission](#the-three-retention-gestures-that-write) puts back. `?confirm=` repeats the node id |
 | `POST` | `/estate/hold` | Hold the estate map for `?for=` (at most `24h`, required): no member is removed however long it is gone. `?confirm=` repeats the map's `generation`; `?reason=` is recorded |
 | `POST` | `/estate/release` | End a hold. `?confirm=` repeats the map's `generation` |
 | `POST` | `/estate/move/{partition}` | Move one partition's copy off `?from=`: it is rebuilt on another member, then released. `?confirm=` repeats the node; `?reason=` is recorded |
@@ -3232,7 +3232,7 @@ Under a partitioned layout, a `placed` answer carries the map whole:
 | `balance` | How evenly the map spreads partitions over the members' weights, and the tolerance it aimed within — the finest the partition count promises for the fleet. `converged: false` is a measurement, never a fault |
 | `unserved` / `short` / `joining` / `leaving` / `moves` | Partitions no copy can answer for; partitions with fewer copies that can answer than their target has; holders joining and leaving; operator moves in force |
 | `members` | Each member as the map describes it — `weight`, `domain`, `out`, `barred` (evicted: out until it is readmitted, whatever becomes of its membership, with the bar's `out_by`, `out_reason` and `out_at` where no out of an operator's own is recorded), `probation` and `absence` counted in the maintainer's ticks, as the object map's members are — plus its `share_percent` of every partition copy, how many partitions it is `serving`, `joining` and `leaving`, the partitions an operator `moved_off` it, whether it holds a `live` estate lease, and that lease: whether its store is `healthy` (absent when it does not say, which the map counts as failed), whether the map counts it `able`, the `map_epoch` it last acted on, and its `free_bytes` |
-| `removed` | Nodes the map removed for being gone and still remembers, as the object map lists them |
+| `removed` | Nodes the map removed for being gone and still remembers, as the object map lists them — except one an eviction bars, which is listed under `barred` alone: what a removal says (it rejoins on probation, and `in` vouches for it) is false of it |
 | `barred` | Nodes barred by an eviction that the map does not hold — removed for their absence, forgotten, or never seen — each with `by`, `reason` and `at`. One that comes back joins as a member out and is placed on nothing until it is readmitted |
 | `partitions` | Every partition in the layout's order: its `target`, how many copies are `serving` (holders the map lists serving whose node it counts present and healthy) against how many it has `wanted`, its `holders` — each with the map's `state` and the epoch it entered it `since`, what the node's own lease `reports` of the partition, and whether the map counts the node `able` — and the operator's `moves` of it, each `waiting: true` while the members left could not hold the partition's copies without that node, which is then in the `target` again |
 
@@ -3270,6 +3270,10 @@ fleet's own — `estate_whole` or `no_estate_map` — whatever `?confirm=` says.
   rebuilt on another member while it keeps serving, then released under the two
   conditions every leave waits for.
 - **in** puts it back — or vouches for a node the map removed for being gone.
+  A node an eviction **bars** is refused `barred_member` with the map unchanged:
+  the bar stands for the eviction on every log the node was counted on, so it is
+  lifted only by the node's readmission, once every one of those logs has taken
+  it back — and no route offers that lift on its own.
 - **hold** holds the map for `for`, at most `24h` and required: no member is
   removed for being gone until the hold ends or is released.
 - **release** ends the hold.
@@ -3338,6 +3342,7 @@ Every refusal carries `detail` and `hint`:
 | `404` | `unknown_partition` | The map's layout has no such partition |
 | `409` | `estate_whole` | Layout 0: every data node holds the whole estate, and there is nothing to place, move or hold |
 | `409` | `removed_member` | `out` of a node the map removed: `in` is the gesture that names it |
+| `409` | `barred_member` | `in` of a node an eviction bars, or `out` of one it bars and the map does not hold: it is placed on nothing already, and only its readmission — which lifts the bar once every log has taken it back — puts it back |
 | `409` | `not_a_holder` | A move off a node that holds no copy of the partition |
 | `409` | `nowhere_to_move` | A move with no member to rebuild the copy on — as many placeable members as copies. Add a data node first, or lower `estate.replicas` if the company means to keep fewer and send the move again once the map shows the lower count |
 | `409` | `estate_refused` | Taking it out would leave no member present to hold a copy |

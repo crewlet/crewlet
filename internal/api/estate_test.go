@@ -466,6 +466,42 @@ func TestAnEstateGestureAnswersWhatTheMapNowSays(t *testing.T) {
 	}
 }
 
+// PUTTING BACK A NODE AN EVICTION BARS IS REFUSED, AND THE BAR STAYS. The bar
+// stands for the eviction on every log the node was counted on, and only its
+// readmission knows when those have taken it back: an in that lifted it put a
+// node on the map whose logs still dropped every write it decided. So the
+// route answers 409 `barred_member`, whose hint sends the operator to the
+// readmission, and the stored map still bars the node — whether the map holds
+// it (data-d, barred while a member) or has removed it (data-e).
+func TestPuttingBackABarredNodeIsRefusedAndTheBarStays(t *testing.T) {
+	t.Parallel()
+	f := newFakeEstate()
+	barred, err := partmap.Bar(f.state, "data-d", "founder", "evicted", estateSince)
+	if err == nil {
+		barred, err = partmap.Bar(barred, "data-e", "founder", "evicted", estateSince)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.state = barred
+	a := estateApp(t, f)
+	for _, node := range []string{"data-d", "data-e"} {
+		status, body := postObjects(t, a, "/estate/in/"+node+"?confirm="+node)
+		hint, _ := body["hint"].(string)
+		if status != http.StatusConflict || body["error"] != "barred_member" ||
+			!strings.Contains(hint, "readmission") {
+			t.Errorf("an in of barred %s answered %d %v, want 409 barred_member sending the "+
+				"operator to the readmission", node, status, body)
+		}
+		if g, still := f.state.Barred[node]; !still || g.Reason != "evicted" {
+			t.Errorf("an in of barred %s lifted its bar: bars %v", node, f.state.Barred)
+		}
+	}
+	if !reflect.DeepEqual(f.state, barred) {
+		t.Error("a refused in changed the map")
+	}
+}
+
 // UNDER LAYOUT 0 EVERY GESTURE IS REFUSED IN THE LAYOUT'S OWN WORDS, and not as
 // a map to wait for: `estate_whole`, 409, the sentence every surface gives it.
 // At a partitioned layout with no map yet the same gesture is a wait.
@@ -553,12 +589,18 @@ func renderEstateScenarios(t *testing.T) []byte {
 	if !waiting.Map.MoveWaiting(statelog.PartitionID{Space: statelog.SpaceTracker, Index: 2}, "data-c") {
 		t.Fatal("the premise: with data-b out, the move off data-c waits")
 	}
-	// THE FLEET WITH TWO NODES EVICTED: data-d, a member, barred and so out
-	// on its row; data-x, which the map has never held, barred all the same
-	// and listed beside the removed nodes.
+	// THE FLEET WITH THREE NODES EVICTED: data-d, a member, barred and so
+	// out on its row; data-x, which the map has never held, barred all the
+	// same and listed beside the removed nodes; and data-e, which it removed
+	// and remembers (below).
 	barred, err := partmap.Bar(fleet, "data-d", "founder", "evicted", estateSince)
 	if err == nil {
 		barred, err = partmap.Bar(barred, "data-x", "founder", "evicted", estateSince)
+	}
+	// AND data-e, WHICH THE MAP HAD REMOVED AND REMEMBERS: listed as barred
+	// and not as removed, whose "put back vouches for it" is false of it.
+	if err == nil {
+		barred, err = partmap.Bar(barred, "data-e", "founder", "evicted", estateSince)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -655,6 +697,9 @@ func renderEstateScenarios(t *testing.T) []byte {
 		}),
 		"removed_member": refusedBy("out of a removed node", func() (partmap.MapState, error) {
 			return partmap.Out(fleet, "data-e", "founder", "", estateSince)
+		}),
+		"barred_member": refusedBy("in of a barred node", func() (partmap.MapState, error) {
+			return partmap.In(barred, "data-d")
 		}),
 		"estate_refused": refusedBy("out of the last member", func() (partmap.MapState, error) {
 			return partmap.Out(lone, "data-a", "founder", "", estateSince)

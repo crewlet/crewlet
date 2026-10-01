@@ -72,6 +72,7 @@ func TestUnderLayoutZeroEveryEstateGestureSaysThereIsNoMap(t *testing.T) {
 	for name, gesture := range map[string]func() (EstateGesture, error){
 		"out":     func() (EstateGesture, error) { return c.Out(ctx, "a", "ops", "") },
 		"in":      func() (EstateGesture, error) { return c.In(ctx, "a", "ops") },
+		"readmit": func() (EstateGesture, error) { return c.Readmit(ctx, "a", "ops") },
 		"hold":    func() (EstateGesture, error) { return c.Hold(ctx, uuid.NewString(), time.Hour, "ops", "") },
 		"release": func() (EstateGesture, error) { return c.Release(ctx, uuid.NewString(), "ops") },
 		// WITH NO GENERATION TO REPEAT, which is all an operator at layout
@@ -187,7 +188,10 @@ func TestAnEstateGestureLandsInTheStoredMap(t *testing.T) {
 	}
 
 	// A BAR LANDS FOR A NODE THE MAP DOES NOT HOLD — where an out has
-	// nothing to take out — and In lifts it.
+	// nothing to take out — and an operator's In does NOT lift it: it is
+	// refused with the stored map unchanged, since only the readmission
+	// knows when the logs the eviction was written to have taken the node
+	// back. The readmission's own gesture lifts it.
 	barred, err := c.Bar(ctx, "gone", "ops@example.com", "evicted")
 	if err != nil || !barred.Landed {
 		t.Fatalf("Bar of a node the map does not hold = (%v, %v), want it landed", barred.Landed, err)
@@ -195,9 +199,17 @@ func TestAnEstateGestureLandsInTheStoredMap(t *testing.T) {
 	if g := barred.State.Barred["gone"]; g.By != "ops@example.com" || g.Reason != "evicted" {
 		t.Errorf("the bar is recorded as %+v", g)
 	}
-	lifted, err := c.In(ctx, "gone", "ops")
+	if _, err := c.In(ctx, "gone", "ops"); !errors.Is(err, membership.ErrBarredMember) {
+		t.Fatalf("In of a barred node = %v, want membership.ErrBarredMember", err)
+	}
+	if after, v, _, err := c.State(ctx); err != nil || v != barred.Version ||
+		after.Barred["gone"].Reason != "evicted" {
+		t.Fatalf("a refused In left the map at version %d (was %d) with bars %v (%v)",
+			v, barred.Version, after.Barred, err)
+	}
+	lifted, err := c.Readmit(ctx, "gone", "ops")
 	if err != nil || !lifted.Landed || lifted.State.Barred != nil {
-		t.Fatalf("In of a barred node = (%v, %v) leaving %v", lifted.Landed, err, lifted.State.Barred)
+		t.Fatalf("Readmit of a barred node = (%v, %v) leaving %v", lifted.Landed, err, lifted.State.Barred)
 	}
 
 	p := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
