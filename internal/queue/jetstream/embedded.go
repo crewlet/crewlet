@@ -604,13 +604,46 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 		e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers)
 }
 
+// embeddedReconnectWait is how long a connection to this process's own broker
+// waits between two reconnect attempts: the second the external dial waits,
+// since nothing about the wait itself differs by where the server runs.
+const embeddedReconnectWait = time.Second
+
+// embeddedReconnects is how many failed attempts in a row a connection to this
+// process's own broker makes before the client closes it for good — which the
+// node then stops for ([connectionLoss]).
+//
+// # Only a stopped broker runs them out
+//
+// The server is in this process, so a connection to it drops for one of two
+// reasons. Either the server pushed the client off — a slow consumer, a stale
+// connection — which the first attempt undoes, the count starting again from
+// zero on every success; or the server has stopped, which no attempt undoes,
+// because nothing starts an in-process server again but the process. So the
+// budget is how long a node whose own broker has stopped stays up, dark, before
+// it exits for its supervisor to restart the two together.
+//
+// # The accept budget, spent one wait at a time
+//
+// It is the decision [acceptBudget] already made about this server — how long
+// it gets to take a connection, thirty seconds solo and two minutes on a
+// cluster member — because a reconnect asks the same server the same question
+// a boot does. It was nats.go's own default, sixty attempts two seconds apart,
+// which was nobody's decision: two minutes dark on a solo node whose broker a
+// boot would have given thirty seconds, and the one number on the path to a
+// node stopping itself that nothing here stated.
+func embeddedReconnects(clustered bool) int {
+	return int(acceptBudget(clustered) / embeddedReconnectWait)
+}
+
 // connect opens a client connection to this server: through an in-memory
 // pipe when it listens on no socket, over its loopback client port when it
 // does.
 //
 // BOTH DIALS TAKE THE ACCEPT BUDGET as their handshake timeout, not nats's
 // two-second default — see the budgets' doc for why a handshake with a server
-// already accepting shares it. One option list for the two branches, so the
+// already accepting shares it — and as the span of their reconnects
+// ([embeddedReconnects]). One option list for the two branches, so the
 // loopback dial a clustered member takes cannot lose a budget the in-process
 // one keeps.
 //
@@ -624,6 +657,8 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, replicas int) er
 func (e *embeddedServer) connect(loss *connectionLoss) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.Timeout(acceptBudget(e.clustered)),
+		nats.MaxReconnects(embeddedReconnects(e.clustered)),
+		nats.ReconnectWait(embeddedReconnectWait),
 		nats.ReconnectHandler(reconnectWatch{
 			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
 		// And the client's asynchronous errors through the engine's own

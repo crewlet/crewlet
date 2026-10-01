@@ -469,7 +469,10 @@ restarts a process which exits non-zero — a systemd unit with
 `Restart=on-failure`, a container restart policy, a Kubernetes deployment —
 and the node comes back by itself once the cause is fixed. The same applies
 to the connection the coordination store rides on an embedded broker, and to
-this node's own embedded broker going away under it. A snapshot donor's
+this node's own embedded broker going away under it: a connection to it tries
+again once a second for as long as a boot gives that broker to accept one —
+30 seconds solo, 2 minutes on a cluster member — and nothing but a restart
+brings a broker in this process back. A snapshot donor's
 connection is the one exception: it serves *peers*, and a node whose donor is
 down still serves its own company, so that connection closing never stops the
 node — the donor [dials again](retention.md) by itself.

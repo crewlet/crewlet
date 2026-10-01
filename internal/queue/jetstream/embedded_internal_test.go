@@ -149,7 +149,12 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 // that stopped passing it. The clustered budget is asked of the same two
 // servers, since the member's flag, not its listener, is what picks it.
 //
-// Mutation: drop the budget from either dial in connect and its rows go red.
+// AND ITS RECONNECTS SPAN THAT SAME BUDGET, since running them out is how a
+// node whose own broker has stopped stops itself ([embeddedReconnects]).
+//
+// Mutation: drop the budget from either dial in connect and its rows go red;
+// drop the reconnect options and the solo rows do (nats's own sixty attempts
+// two seconds apart happen to span exactly the clustered budget).
 func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) {
 	t.Parallel()
 	inProcess, err := startEmbedded(t.Context(), Config{})
@@ -177,12 +182,23 @@ func TestAConnectionToItsOwnBrokerHandshakesWithinTheAcceptBudget(t *testing.T) 
 				t.Fatalf("%s: connect: %v", c.name, err)
 			}
 			got := nc.Opts.Timeout
+			reconnects, wait := nc.Opts.MaxReconnect, nc.Opts.ReconnectWait
 			nc.Close()
 			if want := acceptBudget(clustered); got != want {
 				t.Errorf("%s, clustered=%v: the handshake budget is %v, want "+
 					"the accept budget %v — nats's own default is %v, a figure "+
 					"for a remote server rather than one in this process",
 					c.name, clustered, got, want, nats.DefaultTimeout)
+			}
+			// AND THE RECONNECTS SPAN THE SAME BUDGET, one wait at a time:
+			// running them out is how a node whose own broker stopped
+			// stops itself, and nats's own sixty attempts two seconds
+			// apart were two minutes dark whatever the topology.
+			if span := time.Duration(reconnects) * wait; reconnects <= 0 ||
+				span != acceptBudget(clustered) {
+				t.Errorf("%s, clustered=%v: %d reconnects %v apart span %v, want "+
+					"the accept budget %v", c.name, clustered, reconnects, wait,
+					span, acceptBudget(clustered))
 			}
 		}
 	}
