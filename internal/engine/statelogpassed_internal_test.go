@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -321,6 +322,9 @@ func copyEstate(t *testing.T, back *Backends) string {
 // standUpDonor serves a snapshot of rows — with one domain's checkpoint moved to
 // at, keyed to created — on the node's broker, the way a peer that re-anchored
 // that domain would, until the test ends.
+//
+// IT RETURNS ONCE THE DONOR ANSWERS AN ASK, and not merely once it has been
+// started: see [awaitDonor].
 func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
@@ -388,6 +392,90 @@ func standUpDonor(t *testing.T, q *jetstream.Queue, rows string,
 		t.Fatalf("NewDonor: %v", err)
 	}
 	ctx, stop := context.WithCancel(t.Context())
-	t.Cleanup(stop)
-	go func() { _ = donor.Serve(ctx) }()
+	// CLOSED after the send, so the cleanup's receive returns even when
+	// awaitDonor has already taken the error.
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(ctx); close(served) }()
+	t.Cleanup(func() { stop(); <-served })
+	awaitDonor(t, q.Conn(), "donor", served)
+}
+
+// awaitDonor returns once the donor named node answers an offer request on
+// nc's broker — the condition every caller of [standUpDonor] depends on.
+//
+// # Why started is not serving
+//
+// [statelog.Donor.Serve] dials its own connection and subscribes from its own
+// goroutine, and a joiner asks ONCE: [statelog.CollectOffers] publishes one
+// request and collects for a window, so a donor whose subscription the broker
+// registers after that publish never hears it, however long the window runs.
+// A case that stood a donor up and then called [Engine.rejoin] directly ran
+// exactly that race. Measured, the donor dials within milliseconds of being
+// started and the rejoin asks fifty milliseconds to a second after, so the
+// case passed whenever the donor won; one that loses it fails the case as `no
+// peer could donate a usable snapshot`, which a donor dialling four hundred
+// milliseconds late reproduces exactly. The heartbeat-driven callers asked
+// again a heartbeat later and only ran slow.
+//
+// # Why this is the condition
+//
+// A donor's own answer is the only thing that proves the broker holds its
+// subscription: an answer to an ask published on the same subject means every
+// later ask reaches it too. Asking the subject rather than any responder,
+// because this node's own donor listens on it as well and answers first. The
+// ask is REPEATED, since one published before the subscription landed is lost
+// rather than delivered late, and every answer is read from one inbox, so an
+// answer arriving after the next ask went out still counts.
+//
+// # The bound
+//
+// One [statelog.OfferWindow]: the time the framework gives a donor to answer
+// a joiner. A donor that cannot answer within it would not be heard by a real
+// join either, so the case fails here, naming the donor, rather than in the
+// adoption with an error that names nothing.
+func awaitDonor(t *testing.T, nc *nats.Conn, node string, served <-chan error) {
+	t.Helper()
+	inbox := nats.NewInbox()
+	answers, err := nc.SubscribeSync(inbox)
+	if err != nil {
+		t.Fatalf("open the probe's inbox: %v", err)
+	}
+	defer func() { _ = answers.Unsubscribe() }()
+	ask, err := json.Marshal(statelog.OfferRequest{NodeID: "probe"})
+	if err != nil {
+		t.Fatalf("encode the probe's ask: %v", err)
+	}
+	const between = 20 * time.Millisecond
+	deadline := time.Now().Add(statelog.OfferWindow)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-served:
+			t.Fatalf("donor %s stopped serving before it answered: %v", node, err)
+		default:
+		}
+		if err := nc.PublishRequest(statelog.SubjectOffer, inbox, ask); err != nil {
+			t.Fatalf("ask donor %s: %v", node, err)
+		}
+		for {
+			msg, err := answers.NextMsg(between)
+			if errors.Is(err, nats.ErrTimeout) {
+				break
+			}
+			// NOBODY SUBSCRIBES AT ALL, which the broker says at once:
+			// wait out the interval rather than asking at its reply rate.
+			if errors.Is(err, nats.ErrNoResponders) {
+				time.Sleep(between)
+				break
+			}
+			if err != nil {
+				t.Fatalf("read donor %s's answer: %v", node, err)
+			}
+			var offer statelog.Offer
+			if json.Unmarshal(msg.Data, &offer) == nil && offer.Manifest.NodeID == node {
+				return
+			}
+		}
+	}
+	t.Fatalf("donor %s did not answer an offer request within %s, so no join "+
+		"would have heard it", node, statelog.OfferWindow)
 }
