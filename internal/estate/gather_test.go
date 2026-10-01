@@ -91,6 +91,9 @@ const (
 	notServing
 	cannotTell
 	noHalves
+	// lagsFailing is a copy that lags its logs and whose read, told to
+	// answer anyway, fails.
+	lagsFailing
 )
 
 // partNode is one data node holding some partitions of the divided layout.
@@ -152,7 +155,7 @@ func (n *partNode) backend(p statelog.PartitionID, t trouble) Backend {
 			}
 			return nil
 		},
-		Answers: func(context.Context) bool { return t != lags },
+		Answers: func(context.Context) bool { return t != lags && t != lagsFailing },
 		Applied: func(stream string) statelog.Position {
 			return statelog.Position{Stream: stream, Generation: 1, Seq: 10}
 		},
@@ -231,7 +234,7 @@ func (r partRead) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracke
 	}
 	r.node.levels[r.p] = append(r.node.levels[r.p], q)
 	r.node.mu.Unlock()
-	if r.t == failing {
+	if r.t == failing || r.t == lagsFailing {
 		return tracker.Answer{}, fmt.Errorf("the read of %s failed on %s: %w", r.p, r.node.name,
 			tracker.ErrNoProject)
 	}
@@ -797,11 +800,11 @@ func TestLocalPartitionsRunConcurrentlyWithinTheCPUs(t *testing.T) {
 	}
 }
 
-// A BATCH THAT OUTGROWS ONE REPLY IS ANSWERED IN PAGES: what fits, then what
-// did not, asked again alone — and a slice too large to fit even alone is the
-// error that says so, naming the partition, never a silence.
-func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
-	t.Parallel()
+// ceilingFleet is one data node, data-a, holding every partition of the
+// divided layout and answering under a reply ceiling of ceiling bytes, which
+// the case may change through the server it is handed.
+func ceilingFleet(t *testing.T, ceiling int) (*partFleet, *partNode, *server) {
+	t.Helper()
 	f := newPartFleet(t, nil)
 	node := &partNode{name: "data-a", holds: map[statelog.PartitionID]trouble{}}
 	for _, p := range []statelog.PartitionID{tp(0), tp(1), tp(2), tp(3), company} {
@@ -810,17 +813,24 @@ func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
 		f.servers.holders[p] = []string{"data-a"}
 	}
 	f.nodes["data-a"] = node
-	srv := server{self: "data-a", local: node, placement: f.servers,
-		// ROOM FOR TWO OF THE FOUR FULL SLICES (about 1.25 KiB each)
-		// beside the headroom.
-		ceiling: replyHeadroom + 2700}
+	srv := &server{self: "data-a", local: node, placement: f.servers, ceiling: ceiling}
 	stop, err := recorder{q: f.client(t), node: node}.Serve(t.Context(), Subject("data-a"),
 		func(ctx context.Context, raw []byte) ([]byte, error) { return srv.answer(ctx, raw), nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stop(context.Background()) })
+	return f, node, srv
+}
 
+// A BATCH THAT OUTGROWS ONE REPLY IS ANSWERED IN PAGES: what fits, then what
+// did not, asked again of the same holder — and a slice too large to fit even alone is the
+// error that says so, naming the partition, never a silence.
+func TestABatchThatOutgrowsTheReplyIsAnsweredInPages(t *testing.T) {
+	t.Parallel()
+	// ROOM FOR TWO OF THE FOUR FULL SLICES (about 1.25 KiB each) beside the
+	// headroom.
+	f, node, srv := ceilingFleet(t, replyHeadroom+2700)
 	r := f.router(t, "agent-1", nil)
 	answer, cov, err := listAll(t, r, 0, "")
 	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
@@ -970,6 +980,66 @@ func TestAGatherAsksALaggingCopyLastRatherThanMissingIt(t *testing.T) {
 	}
 	if !accepted {
 		t.Error("the lagging copy was never asked to answer anyway")
+	}
+}
+
+// THE LAST RESORT ASKS ONE LAGGING COPY AT A TIME, and the first answer that
+// settles the partition is its answer: the next copy is never asked, so it
+// can neither run the read for nothing nor overwrite the rows with its own
+// failure.
+func TestTheLastResortAsksOneLaggingCopyAtATime(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{
+		"data-a": {tp(0), tp(1), tp(2), tp(3), company},
+		"data-b": {tp(1)},
+	})
+	r := f.router(t, "agent-1", nil)
+	order := r.order(tp(1), []string{"data-a", "data-b"})
+	first, second := f.nodes[order[0]], f.nodes[order[1]]
+	first.set(func(n *partNode) { n.holds[tp(1)] = lags })
+	second.set(func(n *partNode) { n.holds[tp(1)] = lagsFailing })
+
+	answer, cov, err := listAll(t, r, 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want tracker.001 answered by %s, the first "+
+			"lagging copy", len(answer.Rows), cov, err, first.name)
+	}
+	for _, req := range second.asked() {
+		if req.AcceptLagging {
+			t.Errorf("%s, the second lagging copy, was told to answer anyway (%v) after the "+
+				"first had answered", second.name, req.Partitions)
+		}
+	}
+}
+
+// A PARTITION IS SETTLED ONCE: the first answer stands, and a later one — a
+// failure above all — never discards the rows it settled with.
+func TestAPartitionIsSettledOnce(t *testing.T) {
+	t.Parallel()
+	st := &partState{p: tp(1), tried: map[string]bool{}}
+	st.settle(tracker.Answer{Rows: rowsOf(tp(1))}, nil, nil)
+	st.settle(nil, nil, errors.New("the read of tracker.001 failed on data-b"))
+	if m := st.missing(); m != nil {
+		t.Fatalf("a settled partition is missing as %+v after a second answer", m)
+	}
+	if got, _ := st.value.(tracker.Answer); len(got.Rows) != 6 {
+		t.Errorf("the settled rows were replaced: %+v", st.value)
+	}
+}
+
+// A LAGGING COPY'S ANSWER THAT DID NOT FIT IS ASKED AGAIN, as any holder's
+// is: the last resort is a round like the others, not one last batch whose
+// overflow is lost.
+func TestALaggingCopysOverflowIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	f, node, _ := ceilingFleet(t, replyHeadroom+2700)
+	for p := range node.holds {
+		node.holds[p] = lags
+	}
+	answer, cov, err := listAll(t, f.router(t, "agent-1", nil), 0, "")
+	if err != nil || !cov.Complete() || len(answer.Rows) != 24 {
+		t.Fatalf("gather = (%d rows, %+v, %v), want every row of the lagging copy across pages",
+			len(answer.Rows), cov, err)
 	}
 }
 

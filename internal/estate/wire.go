@@ -175,9 +175,9 @@ const (
 	// fit in the reply beside the slices before it — the reply has a
 	// ceiling ([queue.MaxPayloadBytes]) and a batch of partitions can
 	// outgrow it. Not a failure of this node, so the asker asks it again
-	// for the overflowed partitions alone; a slice that does not fit even
+	// for the partitions that overflowed; a slice that does not fit even
 	// alone is answered as an error naming its size instead, so every
-	// reply answers at least one partition.
+	// reply answers at least one partition and the batch always shrinks.
 	unservedOverflow unservedReason = "overflow"
 )
 

@@ -145,9 +145,11 @@
 // A slice reads at [statelog.GatherLevel]: a seat's at `session`, floored at
 // this node's writes and at the record whose wake started the turn, and an
 // operator's at `linearizable`, whose holder appends a barrier on the
-// partition's log of the operation's own domain and answers at or after it. A batch that outgrows one
-// reply ([queue.MaxPayloadBytes]) is answered in pages: what fits, then what
-// did not, asked again alone.
+// partition's log of the operation's own domain and answers at or after it.
+// A batch that outgrows one reply ([queue.MaxPayloadBytes]) is answered in
+// pages: what fits, then what did not, asked again of the same holder. And a
+// copy that lags its logs is asked last, one at a time, as a single read's
+// last resort is.
 //
 // A single-partition read whose answer a gather will one day assemble — a
 // board, a person's day, an inbox — reports its coverage too

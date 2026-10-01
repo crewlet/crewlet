@@ -472,9 +472,10 @@ type partState struct {
 	lagging     []string
 	laggingHere bool
 
-	// overflow is the holder that answered this partition and could not
-	// fit it in its reply: asked again, for this partition alone.
-	overflow string
+	// again is a holder to ask this partition of AGAIN, next round — one
+	// that answered it and could not fit it in its reply, which is not a
+	// failure of that holder.
+	again string
 
 	// epoch is the map epoch the partition's holders were read at.
 	epoch uint64
@@ -486,6 +487,15 @@ type partState struct {
 	// what each holder said, and the strongest reason among it.
 	reasons []string
 	reason  statelog.MissingReason
+}
+
+// settle is the partition's answer — its value and cut, or the error its read
+// ran into — and the FIRST one stands: a partition is settled once.
+func (s *partState) settle(value any, at []statelog.Position, err error) {
+	if s.done {
+		return
+	}
+	s.done, s.value, s.at, s.err = true, value, at, err
 }
 
 func (s *partState) note(reason statelog.MissingReason, format string, args ...any) {
@@ -576,24 +586,45 @@ func coverageOf(states []*partState) (statelog.Coverage, error) {
 // runGather settles every partition of a gather, in rounds: each round asks
 // every unsettled partition of its next holder, one request per holder and this
 // node's own partitions in-process, until each has answered, failed, or run out
-// of holders — then asks the copies that said they lag, as a last resort.
+// of holders — then the LAST RESORT, the copies that said they lag, asked the
+// same way.
+//
+// # One outstanding ask per partition, in every round
+//
+// A partition is asked of ONE holder at a time, the last resort included, and
+// the first answer that settles it is its answer. The last resort walks a
+// partition's lagging copies in order — this node's own first, then each holder
+// in the order it said so — rather than all at once: asked together, every one
+// of them ran the read (under layout 0, where a search is a gather of one
+// partition, a fleet a burst had put behind ran every search and every
+// "is the index building" on EVERY data node), and two answers raced to settle
+// one partition, so a copy whose read failed could discard another's rows. It
+// is the order a single-partition read's last resort keeps ([Router.lastResort]).
 func (r *Router) runGather(ctx context.Context, plan gatherPlan, parts []statelog.PartitionID) []*partState {
 	states := make([]*partState, len(parts))
 	for i, p := range parts {
 		states[i] = &partState{p: p, tried: map[string]bool{}}
 	}
-	refreshed := false
+	refreshed, lastResort := false, false
 	for ctx.Err() == nil {
-		round := r.planRound(ctx, states)
+		round := r.planRound(ctx, states, lastResort)
 		if round.empty() {
-			break
+			if lastResort {
+				break
+			}
+			// THE LAST RESORT: every holder whose copy does not lag has
+			// run nothing, so the copies that lag are told to answer
+			// anyway.
+			lastResort = true
+			continue
 		}
-		refresh := r.runRound(ctx, plan, round, false)
+		refresh := r.runRound(ctx, plan, round, lastResort)
 		if refresh && !refreshed {
 			// THE SERVER KNOWS A NEWER MAP: read ours again, once. The
 			// partitions still unsettled read their holders afresh
-			// next round, and a holder that failed one stays failed.
-			refreshed = true
+			// next round — the fresh map's before any lagging copy —
+			// and a holder that failed one stays failed.
+			refreshed, lastResort = true, false
 			if err := r.placement.Refresh(ctx); err != nil {
 				for _, st := range states {
 					if !st.done {
@@ -602,10 +633,6 @@ func (r *Router) runGather(ctx context.Context, plan gatherPlan, parts []statelo
 				}
 			}
 		}
-	}
-	// THE LAST RESORT: the copies that lag their logs, told to answer anyway.
-	if ctx.Err() == nil {
-		r.runRound(ctx, plan, r.lastResortRound(states), true)
 	}
 	if err := ctx.Err(); err != nil {
 		for _, st := range states {
@@ -618,29 +645,33 @@ func (r *Router) runGather(ctx context.Context, plan gatherPlan, parts []statelo
 }
 
 // gatherRound is one round's asks: this node's partitions, and each holder's
-// batch.
+// batch — every unsettled partition in at most one of them.
 type gatherRound struct {
 	local   []*partState
 	holders map[string][]*partState
-
-	// alone is the partitions a holder answered and could not fit, each
-	// asked of that holder by itself.
-	alone []*partState
 }
 
 func (g gatherRound) empty() bool {
-	return len(g.local) == 0 && len(g.holders) == 0 && len(g.alone) == 0
+	return len(g.local) == 0 && len(g.holders) == 0
 }
 
-// planRound chooses each unsettled partition's next holder.
-func (r *Router) planRound(ctx context.Context, states []*partState) gatherRound {
+// planRound chooses each unsettled partition's next holder: one a holder must
+// be asked AGAIN by ([partState.again]); otherwise, outside the last resort,
+// this node where it serves the partition and then the first holder the
+// placement names that has not failed it; and in the last resort the next of
+// the copies that said they lag.
+func (r *Router) planRound(ctx context.Context, states []*partState, lastResort bool) gatherRound {
 	round := gatherRound{holders: map[string][]*partState{}}
 	for _, st := range states {
 		switch {
 		case st.done:
 			continue
-		case st.overflow != "":
-			round.alone = append(round.alone, st)
+		case st.again != "":
+			round.holders[st.again] = append(round.holders[st.again], st)
+			st.again = ""
+			continue
+		case lastResort:
+			r.planLastResort(st, &round)
 			continue
 		case !st.tried[r.self] && r.serves(ctx, st):
 			round.local = append(round.local, st)
@@ -665,6 +696,20 @@ func (r *Router) planRound(ctx context.Context, states []*partState) gatherRound
 	return round
 }
 
+// planLastResort puts st's next lagging copy in round: this node's own first,
+// where it said it lags, then each holder in the order it said so.
+func (r *Router) planLastResort(st *partState, round *gatherRound) {
+	switch {
+	case st.laggingHere:
+		st.laggingHere = false
+		round.local = append(round.local, st)
+	case len(st.lagging) > 0:
+		node := st.lagging[0]
+		st.lagging = st.lagging[1:]
+		round.holders[node] = append(round.holders[node], st)
+	}
+}
+
 // serves reports whether this node serves st's partition — and notes it
 // where it cannot tell, which is a holder that failed the partition.
 func (r *Router) serves(ctx context.Context, st *partState) bool {
@@ -678,26 +723,6 @@ func (r *Router) serves(ctx context.Context, st *partState) bool {
 			r.self, st.p, unknown)
 	}
 	return ok
-}
-
-// lastResortRound is the asks of the copies that said they lag, for the
-// partitions nobody else answered.
-func (r *Router) lastResortRound(states []*partState) gatherRound {
-	round := gatherRound{holders: map[string][]*partState{}}
-	for _, st := range states {
-		if st.done {
-			continue
-		}
-		if st.laggingHere {
-			st.laggingHere = false
-			round.local = append(round.local, st)
-		}
-		for _, node := range st.lagging {
-			round.holders[node] = append(round.holders[node], st)
-		}
-		st.lagging = nil
-	}
-	return round
 }
 
 // runRound runs one round's asks concurrently and settles what they answer.
@@ -735,12 +760,6 @@ func (r *Router) runRound(ctx context.Context, plan gatherPlan, round gatherRoun
 		wg.Add(1)
 		go ask(node, batch)
 	}
-	for _, st := range round.alone {
-		node := st.overflow
-		st.overflow = ""
-		wg.Add(1)
-		go ask(node, []*partState{st})
-	}
 	wg.Wait()
 	return refresh
 }
@@ -766,6 +785,9 @@ func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partStat
 	defer mu.Unlock()
 	st.tried[r.self] = true
 	switch {
+	case st.done:
+		// SETTLED ALREADY, which one outstanding ask per partition rules
+		// out — and if it ever did not, the first answer stands.
 	case unknown != nil:
 		st.note(statelog.MissingUnserved, "%s: cannot tell whether it serves %s: %v",
 			r.self, st.p, unknown)
@@ -777,9 +799,9 @@ func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partStat
 	case out.reason != "":
 		st.note(missingFor(out.reason), "%s: %s", r.self, out.detail)
 	case out.err != nil:
-		st.done, st.err = true, out.err
+		st.settle(nil, nil, out.err)
 	default:
-		st.done, st.value, st.at = true, out.value, out.at
+		st.settle(out.value, out.at, nil)
 	}
 }
 
@@ -832,7 +854,7 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 	}
 	r.session.Forget(named(floors, rep.Obsolete)...)
 	if plan.whole {
-		return r.settleWhole(plan, node, batch[0], rep)
+		return r.settleWhole(plan, node, batch[0], rep, acceptLagging)
 	}
 	if rep.Unserved != "" || rep.Err != nil || len(rep.Parts) == 0 {
 		// THE WHOLE REQUEST WAS REFUSED — an operation this build does
@@ -856,7 +878,7 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 			st.note(statelog.MissingError, "%s: answered the batch without %s", node, st.p)
 			continue
 		}
-		if r.settlePart(plan, node, st, part) {
+		if r.settlePart(plan, node, st, part, acceptLagging) {
 			newer = true
 		}
 	}
@@ -865,26 +887,40 @@ func (r *Router) askBatch(ctx context.Context, plan gatherPlan, node string, bat
 
 // settleWhole settles a one-partition gather from a whole answer — the
 // reply a single-partition read gets.
-func (r *Router) settleWhole(plan gatherPlan, node string, st *partState, rep reply) bool {
+func (r *Router) settleWhole(plan gatherPlan, node string, st *partState, rep reply,
+	acceptLagging bool) bool {
 	return r.settlePart(plan, node, st, partReply{
 		Partition: st.p.String(), Unserved: rep.Unserved, Epoch: rep.Epoch,
 		Detail: rep.Detail, Result: rep.Result, Err: rep.Err, At: rep.At,
-	})
+	}, acceptLagging)
 }
 
-// settlePart settles one partition from one holder's answer for it. It reports
-// whether the holder named a newer map than the partition was routed by.
-func (r *Router) settlePart(plan gatherPlan, node string, st *partState, part partReply) bool {
+// settlePart settles one partition from one holder's answer for it, asked
+// with [request.AcceptLagging] in the last resort. It reports whether the
+// holder named a newer map than the partition was routed by.
+func (r *Router) settlePart(plan gatherPlan, node string, st *partState, part partReply,
+	acceptLagging bool) bool {
+	if st.done {
+		// SETTLED ALREADY, which one outstanding ask per partition rules
+		// out — and if it ever did not, the first answer stands.
+		return false
+	}
 	switch part.Unserved {
 	case "":
 	case unservedOverflow:
 		// ANSWERED, AND IT DID NOT FIT: asked again of the same holder,
-		// alone — which is not a failure of that holder.
-		st.overflow = node
+		// in a batch of what did not fit — which is not a failure of
+		// that holder.
+		st.again = node
 		return false
 	case unservedLagging:
 		st.tried[node] = true
-		st.lagging = append(st.lagging, node)
+		if !acceptLagging {
+			// COME BACK TO IT LAST. Told to answer anyway and refusing
+			// again — an older build, which does not know the request
+			// may say so — it is not asked a third time.
+			st.lagging = append(st.lagging, node)
+		}
 		st.note(statelog.MissingUnserved, "%s: %s", node, part.Detail)
 		return false
 	case unservedNotHolder:
@@ -898,17 +934,16 @@ func (r *Router) settlePart(plan gatherPlan, node string, st *partState, part pa
 	}
 	r.markAnswered(st.p, node)
 	if part.Err != nil {
-		st.done, st.err = true, decodeError(part.Err)
+		st.settle(nil, nil, decodeError(part.Err))
 		return false
 	}
 	value, err := plan.decode(part.Result)
 	if err != nil {
-		st.done = true
-		st.err = fmt.Errorf("estate: %s: %s answered %s with a result this build cannot "+
-			"decode: %w", plan.spec.name, node, st.p, err)
+		st.settle(nil, nil, fmt.Errorf("estate: %s: %s answered %s with a result this build "+
+			"cannot decode: %w", plan.spec.name, node, st.p, err))
 		return false
 	}
-	st.done, st.value, st.at = true, value, part.At
+	st.settle(value, part.At, nil)
 	return false
 }
 

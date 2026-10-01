@@ -72,6 +72,10 @@ type fakeNode struct {
 	// release, when set, holds a floor wait until it is closed.
 	release chan struct{}
 
+	// refusesLagging is a build from before a request could say "answer
+	// anyway": it answers every request that its copy lags.
+	refusesLagging bool
+
 	// hang, when set, is a node that takes a request and never answers it
 	// until hang is closed — a wedged node, as the broker's own ask sees
 	// one: waited for until the asker's deadline, where a node that is
@@ -380,8 +384,13 @@ type silencer struct {
 func (s silencer) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
 	return s.q.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
 		s.node.mu.Lock()
-		silent, hang := s.node.silent, s.node.hang
+		silent, hang, refusesLagging := s.node.silent, s.node.hang, s.node.refusesLagging
 		s.node.mu.Unlock()
+		if refusesLagging {
+			s.node.note("lagging")
+			return json.Marshal(reply{Node: s.node.name, Unserved: unservedLagging,
+				Detail: s.node.name + "'s copy lags its logs"})
+		}
 		if hang != nil {
 			s.node.note("hung")
 			select {
@@ -977,6 +986,57 @@ func TestALaggingCopyIsAskedLastAndNeverRefusedForLagging(t *testing.T) {
 	}
 	if own.askedFor("tasks") || !peered.nodes["data-a"].askedFor("tasks") {
 		t.Fatal("this node's lagging copy ran the read ahead of a peer whose copy does not lag")
+	}
+}
+
+// A SEARCH ON A FLEET A BURST PUT BEHIND RUNS ON ONE NODE, as a read does:
+// under layout 0 a search is a gather of the one partition, and its last
+// resort asks the lagging copies one at a time, stopping at the first that
+// answers — never every data node at once for one search.
+func TestASearchWithEveryCopyLaggingRunsOnce(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b", "data-c")
+	for _, n := range f.nodes {
+		n.set(func(n *fakeNode) { n.notReady = true })
+	}
+	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 1 || !got.Coverage.Complete() {
+		t.Fatalf("search with every copy lagging = %+v, want one copy's answer", got)
+	}
+	var ran []string
+	for name, n := range f.nodes {
+		if n.askedFor("search") {
+			ran = append(ran, name)
+		}
+	}
+	if len(ran) != 1 {
+		t.Errorf("the search ran on %v, want exactly one lagging copy", ran)
+	}
+}
+
+// A COPY TOLD TO ANSWER ANYWAY THAT REFUSES AGAIN IS NOT ASKED A THIRD TIME —
+// an older build, which ignores the request's say-so — so a gather whose only
+// holder is one ends naming the partition rather than circling it until the
+// caller's deadline.
+func TestALaggingCopyThatRefusesTheLastResortIsNotAskedAgain(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	node := f.nodes["data-a"]
+	node.set(func(n *fakeNode) { n.refusesLagging = true })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	got := f.client.Knowledge().Search(ctx, knowledge.Query{Text: "deploys", Limit: 5})
+	if ctx.Err() != nil || len(got.Coverage.Missing) != 1 ||
+		got.Coverage.Missing[0].Reason != statelog.MissingUnserved {
+		t.Fatalf("search = %+v (deadline %v), want estate.000 missing as unserved before the "+
+			"caller's deadline", got, ctx.Err())
+	}
+	node.mu.Lock()
+	asked := slices.Clone(node.asked)
+	node.mu.Unlock()
+	if len(asked) != 2 {
+		t.Errorf("the lagging copy was asked %d times (%v), want twice: once, and once told "+
+			"to answer anyway", len(asked), asked)
 	}
 }
 
