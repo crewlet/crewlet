@@ -214,8 +214,9 @@ type View struct {
 	taken uint64
 	// lastErr is the last read or watch failure.
 	lastErr error
-	// confirmedAt is when the store last answered, by a read or a
-	// delivery.
+	// confirmedAt is the newest instant the store is known to have held what
+	// the view holds: when a delivery arrived, and when a read that answered
+	// was ASKED — never when its answer arrived ([View.confirmLocked]).
 	confirmedAt time.Time
 
 	// watches are every [View.Watch] reader's slot.
@@ -310,15 +311,15 @@ func (v *View) follow(ctx context.Context) {
 // read confirms the map half against the store, bounded by the confirmation
 // interval so a store that hangs cannot hold the next one.
 func (v *View) read(ctx context.Context) {
-	asked, cancel := context.WithTimeout(ctx, ViewConfirm)
+	bounded, cancel := context.WithTimeout(ctx, ViewConfirm)
 	defer cancel()
-	before := v.takenCount()
-	rec, found, err := v.maps.EstateMap(asked)
+	before, asked := v.takenCount(), v.now()
+	rec, found, err := v.maps.EstateMap(bounded)
 	if err != nil {
 		v.failed(ctx, fmt.Errorf("read the estate map: %w", err))
 		return
 	}
-	v.answered(rec, found, before)
+	v.answered(rec, found, before, asked)
 }
 
 // takenCount is how many take-ins the view has made: what a read compares
@@ -349,16 +350,17 @@ func (v *View) delivered(rec coord.EstateMapRecord) {
 	state, gen, err := readRecord(rec.Value)
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	now := v.now()
 	if !v.known || v.newerLocked(rec.Version, gen) {
-		v.takeLocked(rec.Version, state, gen, err)
+		v.takeLocked(rec.Version, state, gen, err, now)
 		return
 	}
-	v.confirmLocked()
+	v.confirmLocked(now)
 }
 
 // answered takes in what a read of the store answered — a version, or that
 // there is no map. before is how many take-ins the view had made when the read
-// was asked.
+// was asked, and asked when it was.
 //
 // NOTHING TAKEN IN MEANWHILE makes the answer the store's value now, from its
 // leader, and it is taken whatever it is ordered against: a lower version is a
@@ -369,7 +371,7 @@ func (v *View) delivered(rec coord.EstateMapRecord) {
 // the watch delivered that map, would otherwise put a fleet with a map back to
 // one without — so it is taken only when it is a later version of the lineage
 // held.
-func (v *View) answered(rec coord.EstateMapRecord, found bool, before uint64) {
+func (v *View) answered(rec coord.EstateMapRecord, found bool, before uint64, asked time.Time) {
 	var (
 		state MapState
 		gen   uuid.UUID
@@ -383,7 +385,7 @@ func (v *View) answered(rec coord.EstateMapRecord, found bool, before uint64) {
 	overtaken := v.taken != before
 	switch {
 	case !found && overtaken:
-		v.confirmLocked()
+		v.confirmLocked(asked)
 	case !found:
 		// THE STORE HOLDS NO MAP NOW. The lineage and version are kept
 		// (see the struct).
@@ -391,20 +393,20 @@ func (v *View) answered(rec coord.EstateMapRecord, found bool, before uint64) {
 			v.known, v.present, v.state, v.undecodable = true, false, MapState{}, nil
 			v.taken++
 		}
-		v.confirmLocked()
+		v.confirmLocked(asked)
 	case !v.known:
-		v.takeLocked(rec.Version, state, gen, err)
+		v.takeLocked(rec.Version, state, gen, err, asked)
 	case overtaken:
 		if gen != uuid.Nil && gen == v.gen && rec.Version > v.seen {
-			v.takeLocked(rec.Version, state, gen, err)
+			v.takeLocked(rec.Version, state, gen, err, asked)
 			return
 		}
-		v.confirmLocked()
+		v.confirmLocked(asked)
 	case v.present && rec.Version == v.seen && gen == v.gen:
 		// ALREADY HELD: the store answered, so the view is confirmed.
-		v.confirmLocked()
+		v.confirmLocked(asked)
 	default:
-		v.takeLocked(rec.Version, state, gen, err)
+		v.takeLocked(rec.Version, state, gen, err, asked)
 	}
 }
 
@@ -419,13 +421,15 @@ func (v *View) newerLocked(version uint64, gen uuid.UUID) bool {
 	return version > v.seen
 }
 
-// takeLocked makes a record the newest the view holds, and hands a readable map
-// to every watch. The caller holds the lock.
-func (v *View) takeLocked(version uint64, state MapState, gen uuid.UUID, decodeErr error) {
+// takeLocked makes a record the newest the view holds, as the store answered
+// it at at, and hands a readable map to every watch. The caller holds the
+// lock.
+func (v *View) takeLocked(version uint64, state MapState, gen uuid.UUID, decodeErr error,
+	at time.Time) {
 	was, held := v.gen, v.present && v.undecodable == nil
 	v.known, v.present, v.gen, v.seen = true, true, gen, version
 	v.taken++
-	v.confirmLocked()
+	v.confirmLocked(at)
 	if decodeErr != nil {
 		// A VERSION THIS BUILD CANNOT READ is the newest there is, so the
 		// one before it is no longer the map: unknown until a readable
@@ -445,9 +449,25 @@ func (v *View) takeLocked(version uint64, state MapState, gen uuid.UUID, decodeE
 	}
 }
 
-// confirmLocked records that the store answered. The caller holds the lock.
-func (v *View) confirmLocked() {
-	v.confirmedAt, v.lastErr = v.now(), nil
+// confirmLocked records that the store answered as of at. The caller holds the
+// lock.
+//
+// # A read is stamped when it was ASKED
+//
+// What a read answers held at some instant between asking and answering, and
+// only the first is one the view can vouch for: stamped when its answer
+// ARRIVED, a read that took ten seconds made the half look ten seconds fresher
+// than anything the store said, and a read asked just before the store stopped
+// answering confirmed the view at an instant after it had — so the view read
+// fresh, and its alarm stayed quiet, for a store that had not answered since.
+// A delivery has no asking and is stamped when it arrives. And the instant
+// only moves FORWARD: a slow read overtaken by a delivery or a quicker read
+// says nothing about the view that they did not say later.
+func (v *View) confirmLocked(at time.Time) {
+	if at.After(v.confirmedAt) {
+		v.confirmedAt = at
+	}
+	v.lastErr = nil
 }
 
 // readRecord decodes a stored map, and — where it cannot — still reads the
@@ -572,12 +592,12 @@ func (v *View) wholeServers(p statelog.PartitionID) ([]string, error) {
 // it — for a caller told its routing is stale, which must not wait for the
 // watch. [ErrNoMap] when the store holds none.
 func (v *View) Read(ctx context.Context) (Map, uint64, error) {
-	before := v.takenCount()
+	before, asked := v.takenCount(), v.now()
 	rec, found, err := v.maps.EstateMap(ctx)
 	if err != nil {
 		return Map{}, 0, fmt.Errorf("%w: read the estate map: %w", coord.ErrUnavailable, err)
 	}
-	v.answered(rec, found, before)
+	v.answered(rec, found, before, asked)
 	m, version, held, err := v.Map()
 	switch {
 	case err != nil:
@@ -614,9 +634,10 @@ type Staleness struct {
 	// any is: "the estate map" or "the estate leases".
 	Half string
 
-	// Age is how long ago that half was last confirmed: the map by a read
-	// or a delivery the store answered, the leases by a listing — whatever
-	// its age, and from when the view was built for a half never confirmed.
+	// Age is how long ago that half was last confirmed: the map by a
+	// delivery, or by a read the store answered as of when it was ASKED
+	// ([View.confirmLocked]), the leases by a listing — whatever its age,
+	// and from when the view was built for a half never confirmed.
 	Age time.Duration
 
 	// Bound is the age past which anything deciding from the view treats

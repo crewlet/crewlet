@@ -173,7 +173,10 @@ whose view went stale in between, counts from again — so an alarm can fire a
 sighting late, never on a condition nobody saw hold. While the view is stale the
 other three alarms are silent and `estate_view_stale` says why. The view lists
 the estate leases at least every fifteen seconds whatever the lease TTL, so a
-healthy node's view is never stale. At layout 0 there is no map, so only
+healthy node's view is never stale. The map half's age runs from when the store
+was **asked** for what the view holds — a read is dated when it was sent, never
+when its answer arrived — so a slow answer never makes the view look fresher
+than anything the store said. At layout 0 there is no map, so only
 `estate_view_stale` can fire; the fleet's presence, which names layout 0's
 servers, is not judged, since it answers routing alone.
 

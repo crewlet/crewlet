@@ -370,7 +370,7 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 
 	before := v.takenCount()
 	v.delivered(coord.EstateMapRecord{Value: raw, Version: 5})
-	v.answered(coord.EstateMapRecord{}, false, before) // a read asked before version 5
+	v.answered(coord.EstateMapRecord{}, false, before, v.now()) // a read asked before version 5
 	if _, version, found, err := v.Map(); err != nil || !found || version != 5 {
 		t.Fatalf("a read answered before the first map, arriving after it, left (version %d, "+
 			"found %v, %v), want version 5", version, found, err)
@@ -378,7 +378,7 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 	v.delivered(coord.EstateMapRecord{Value: oldRaw, Version: 4})
 	before = v.takenCount()
 	v.delivered(coord.EstateMapRecord{Value: raw, Version: 6})
-	v.answered(coord.EstateMapRecord{Value: raw, Version: 5}, true, before) // raced version 6
+	v.answered(coord.EstateMapRecord{Value: raw, Version: 5}, true, before, v.now()) // raced version 6
 	m, version, found, err := v.Map()
 	if err != nil || !found || version != 6 || m.Epoch != state.Map.Epoch {
 		t.Fatalf("the view holds (version %d, epoch %d, found %v, %v), want version 6",
@@ -418,7 +418,7 @@ func TestAViewNeverTakesAnOlderMap(t *testing.T) {
 
 	// AND AN ABSENCE THE STORE ANSWERS WITH NOTHING TAKEN IN MEANWHILE is
 	// the map gone, never kept as the last one held.
-	v.answered(coord.EstateMapRecord{}, false, v.takenCount())
+	v.answered(coord.EstateMapRecord{}, false, v.takenCount(), v.now())
 	if _, _, found, err := v.Map(); err != nil || found {
 		t.Errorf("an answered absence reads as (found %v, %v)", found, err)
 	}
@@ -477,28 +477,28 @@ func TestAViewTakesAMapWrittenAgainAfterItsKeyWasLost(t *testing.T) {
 	// ...and the lost lineage delivered late is not taken back.
 	before := v.takenCount()
 	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 4})
-	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, true, before)
+	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 57}, true, before, v.now())
 	holds(v, recreated, 4)
 
 	// BY THE WATCH, after a read saw the key gone.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
 	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
-	v.answered(coord.EstateMapRecord{}, false, v.takenCount())
+	v.answered(coord.EstateMapRecord{}, false, v.takenCount(), v.now())
 	v.delivered(coord.EstateMapRecord{Value: newRaw, Version: 1})
 	holds(v, recreated, 1)
 
 	// BY A READ NOTHING OVERTOOK, after a read saw the key gone.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
 	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
-	v.answered(coord.EstateMapRecord{}, false, v.takenCount())
-	v.answered(coord.EstateMapRecord{Value: newRaw, Version: 1}, true, v.takenCount())
+	v.answered(coord.EstateMapRecord{}, false, v.takenCount(), v.now())
+	v.answered(coord.EstateMapRecord{Value: newRaw, Version: 1}, true, v.takenCount(), v.now())
 	holds(v, recreated, 1)
 
 	// A STORE RESTORED TO AN EARLIER VERSION OF THE SAME LINEAGE, by a
 	// read nothing overtook: the store's value now.
 	v = viewOver(t, coordmemory.NewFleet(), coordmemory.New(), layoutZero, nil)
 	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 57})
-	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 30}, true, v.takenCount())
+	v.answered(coord.EstateMapRecord{Value: lostRaw, Version: 30}, true, v.takenCount(), v.now())
 	holds(v, lost, 30)
 	v.delivered(coord.EstateMapRecord{Value: lostRaw, Version: 31})
 	holds(v, lost, 31)
@@ -608,6 +608,79 @@ func TestAViewIsFreshOnlyWhileBothHalvesAreConfirmed(t *testing.T) {
 	if st := v.Staleness(c.Now()); st.Half != "the estate leases" || !st.Stale() ||
 		st.Age < c.Now().Sub(quiet) {
 		t.Errorf("Staleness = %+v at %v, want the leases, listed before %v", st, c.Now(), quiet)
+	}
+}
+
+// heldMaps is a store whose reads wait to be let go, saying when each is
+// asked.
+type heldMaps struct {
+	MapSource
+	asked   chan struct{}
+	release chan struct{}
+}
+
+func (h *heldMaps) EstateMap(ctx context.Context) (coord.EstateMapRecord, bool, error) {
+	h.asked <- struct{}{}
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+		return coord.EstateMapRecord{}, false, ctx.Err()
+	}
+	return h.MapSource.EstateMap(ctx)
+}
+
+// confirmedAtOf is when the view last confirmed its map half.
+func confirmedAtOf(v *View) time.Time {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.confirmedAt
+}
+
+// A READ CONFIRMS THE MAP HALF AS OF WHEN IT WAS ASKED, never when its answer
+// arrived — and nothing moves the confirmation back.
+//
+// What a read answers held at some instant between the two, and only the first
+// is one the view can vouch for. Stamped on arrival, a read asked just before
+// the store stopped answering confirmed the view at an instant after it had:
+// the view read fresh, and its estate_view_stale alarm stayed quiet, for a
+// store that had not answered since — which is how the engine's own case for a
+// stale view failed whenever the view's first read answered after that case
+// moved its clock.
+func TestAReadConfirmsTheViewWhenItWasAsked(t *testing.T) {
+	t.Parallel()
+	c := &clock{now: base}
+	store, state, version := storeWithMap(t)
+	held := &heldMaps{MapSource: quietWatch{store}, asked: make(chan struct{}, 1),
+		release: make(chan struct{})}
+	v := viewOver(t, held, coordmemory.New(), layoutZero, c)
+
+	answered := make(chan error, 1)
+	go func() {
+		_, _, err := v.Read(t.Context())
+		answered <- err
+	}()
+	<-held.asked
+	c.advance(time.Minute)
+	close(held.release)
+	if err := <-answered; err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if at := confirmedAtOf(v); !at.Equal(base) {
+		t.Fatalf("a read asked at %v and answered a minute later confirmed the view at %v — "+
+			"an instant the store was never asked at", base, at)
+	}
+
+	// A DELIVERY IS STAMPED WHEN IT ARRIVES, and a read asked before it that
+	// answers after it says nothing newer.
+	v.delivered(coord.EstateMapRecord{Value: encoded(t, state), Version: version})
+	if at := confirmedAtOf(v); !at.Equal(c.Now()) {
+		t.Fatalf("a delivery confirmed the view at %v, want %v", at, c.Now())
+	}
+	v.answered(coord.EstateMapRecord{Value: encoded(t, state), Version: version}, true,
+		v.takenCount(), base)
+	if at := confirmedAtOf(v); !at.Equal(c.Now()) {
+		t.Errorf("a read asked before a delivery, answering after it, moved the "+
+			"confirmation back to %v from %v", at, c.Now())
 	}
 }
 
