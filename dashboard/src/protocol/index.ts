@@ -10,6 +10,7 @@
  */
 
 export { Store, MAX_EVENTS } from "./store.ts";
+export { share } from "./share.ts";
 export type { StoreState, Slice } from "./store.ts";
 export {
   LiveSocket,

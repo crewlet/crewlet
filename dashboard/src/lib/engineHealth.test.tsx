@@ -206,3 +206,33 @@ test("two tabs are two sockets, and each has its own read", async () => {
   expect(one.asked).toEqual(["stream"]);
   expect(two.asked).toEqual(["stream"]);
 });
+
+// A TICK THAT SAID NOTHING NEW WAKES NOBODY. The read is polled every five
+// seconds for as long as anything shows it, and every answer is parsed afresh:
+// handed over whole, each tick re-rendered every surface reading it — the rail,
+// the inbox, the panel — to change no pixel. Shared with the last answer
+// (`~/protocol/share.ts`), an unchanged tick is the reading already held.
+test("a tick that brought back the same health renders no reader", async () => {
+  const store = new Store();
+  store.setConnected(true);
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: () => Promise<unknown> }).query = () =>
+    Promise.resolve({ configured: true, status: "healthy" });
+  let renders = 0;
+  function Counted() {
+    useEngineHealth();
+    renders += 1;
+    return null;
+  }
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Counted />
+    </ClientContext.Provider>,
+  );
+  await flush();
+  const settled = renders;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(HEALTH_POLL_MS * 3);
+  });
+  expect(renders).toBe(settled);
+});

@@ -307,7 +307,7 @@ describe("subscriptions", () => {
     store.subscribe(["sandboxes", "agents"], fn);
     // A sandbox move IS a seat move — a seat's effective state folds in
     // whether it is parked on a question — so both slices change together.
-    store.applySandboxes([]);
+    store.applySandboxes([{ turn_id: "t-1" } as never]);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -334,6 +334,121 @@ describe("subscriptions", () => {
     store.applyAgents([{ agent_id: PM.agent_id, state: "working" }]);
     expect(store.version("agents")).toBeGreaterThan(before);
     expect(store.version("tokens")).toBe(0);
+  });
+});
+
+// A PUSH IS AN ANSWER LIKE ANY OTHER, parsed afresh off the wire. A spend
+// rollup is pushed after every phase, and handed over whole it gave the spend
+// tables a new object for every seat and every turn — every row of both drawn
+// again for the one turn that finished. Shared with what the slice held, a push
+// that said nothing new wakes nobody, and one that did keeps the objects of
+// everything it left alone.
+describe("a push shares what it did not change", () => {
+  function rollup(turns: string[]) {
+    return JSON.parse(
+      JSON.stringify({
+        since: "2026-09-30T00:00:00Z",
+        until: "2026-09-30T12:00:00Z",
+        agent_id: "",
+        totals: { total_tokens: 10 },
+        by_phase: [],
+        by_model: [],
+        by_worker: [],
+        by_agent: [{ agent_id: "id-pm", total_tokens: 10 }],
+        by_turn: turns.map((id) => ({ turn_id: id, total_tokens: 1 })),
+      }),
+    ) as never;
+  }
+
+  test("a push that changed nothing moves no version and wakes nobody", () => {
+    const store = new Store();
+    store.applyTokens(rollup(["t-1", "t-2"]));
+    const held = store.state.tokens;
+    const woke = vi.fn();
+    store.subscribe(["tokens"], woke);
+    const version = store.version("tokens");
+
+    store.applyTokens(rollup(["t-1", "t-2"]));
+    expect(store.state.tokens).toBe(held);
+    expect(store.version("tokens")).toBe(version);
+    expect(woke).not.toHaveBeenCalled();
+  });
+
+  test("a push that changed one row keeps every other row's object", () => {
+    const store = new Store();
+    store.applyTokens(rollup(["t-1", "t-2"]));
+    const before = store.state.tokens!;
+    store.applyTokens(rollup(["t-0", "t-1", "t-2"]));
+    const after = store.state.tokens!;
+    expect(after).not.toBe(before);
+    expect(after.by_turn.map((t) => t.turn_id)).toEqual(["t-0", "t-1", "t-2"]);
+    expect(after.by_turn[1]).toBe(before.by_turn[0]);
+    expect(after.by_turn[2]).toBe(before.by_turn[1]);
+    expect(after.by_agent).toBe(before.by_agent);
+  });
+
+  test("an overlay restating a seat's state moves nothing", () => {
+    const store = new Store();
+    store.applySeats([{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm", state: "idle" }]);
+    const held = store.state.agents;
+    const woke = vi.fn();
+    store.subscribe(["agents"], woke);
+    store.applyAgents([{ agent_id: "id-pm", state: "idle" }]);
+    expect(store.state.agents).toBe(held);
+    expect(woke).not.toHaveBeenCalled();
+  });
+
+  // AN ORG PUSH IS ALSO AN EVENT: it follows a chart write that landed, and a
+  // write that changed only what the projection leaves out — a seat's model
+  // chain, its credentials — is pushed as a projection deep-equal to the last.
+  // The projection does not move; the push is still counted, and a screen
+  // holding a chart read reads it again on the count.
+  test("an org push that restates the projection is still counted", () => {
+    const store = new Store();
+    const org = { name: "Acme", roles: [{ name: "Ada", handle: "ada" }] } as never;
+    store.applyOrg(org);
+    const held = store.state.org;
+    const projection = vi.fn();
+    const pushes = vi.fn();
+    store.subscribe(["org"], projection);
+    store.subscribe(["orgPushes"], pushes);
+
+    store.applyOrg(JSON.parse(JSON.stringify(org)) as never);
+    expect(store.state.org).toBe(held);
+    expect(projection).not.toHaveBeenCalled();
+    expect(pushes).toHaveBeenCalledTimes(1);
+    expect(store.state.orgPushes).toBe(2);
+  });
+
+  test("a snapshot announces only the slices it moved", () => {
+    const store = new Store();
+    store.applySnapshot({ agents: [], events: [], tools: [{ name: "x" } as never] });
+    const tools = vi.fn();
+    const agents = vi.fn();
+    store.subscribe(["tools"], tools);
+    store.subscribe(["agents"], agents);
+    store.applySnapshot({
+      agents: [{ id: "pm", agent_id: "id-pm", role: "PM", handle: "pm" }],
+      events: [],
+      tools: [{ name: "x" } as never],
+    });
+    expect(agents).toHaveBeenCalledTimes(1);
+    expect(tools).not.toHaveBeenCalled();
+  });
+
+  test("health that did not move wakes nobody, and a connection that did still does", () => {
+    // A SNAPSHOT CARRIES HEALTH AND CLAIMS NO CONNECTION, so the first health
+    // frame after it restates the health and moves only `connected` — which
+    // is still a move, and the one the connection banner is waiting for.
+    const store = new Store();
+    store.applySnapshot({ health: { status: "ok" }, agents: [] });
+    const woke = vi.fn();
+    store.subscribe(["health"], woke);
+    store.applyHealth({ status: "ok" });
+    expect(store.state.connected).toBe(true);
+    expect(woke).toHaveBeenCalledTimes(1);
+    store.applyHealth({ status: "ok" });
+    expect(woke).toHaveBeenCalledTimes(1);
   });
 });
 

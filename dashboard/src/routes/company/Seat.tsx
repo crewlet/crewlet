@@ -77,6 +77,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   useAgents,
   useOrg,
+  useOrgPushes,
   usePhaseEvents,
   useSandboxes,
   useSchedules,
@@ -517,6 +518,9 @@ function configuredProperties(seat: ChartSeat, human: boolean): Property[] {
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
   const org = useOrg();
+  // THE PUSH, NOT THE PROJECTION, is what a chart read is asked again on —
+  // see `useOrgPushes`.
+  const orgPushes = useOrgPushes();
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const tokens = useTokens();
@@ -708,13 +712,13 @@ export function SeatScreen({ handle }: { handle: string }) {
   const seatRead = useChartRead<ChartSeatRead>(
     seat?.handle ? chartSeatPath(seat.handle) : null,
     WITH_RUNTIME,
-    org,
+    orgPushes,
   );
   const homeKey = seatRead.state === "read" ? (seatRead.value.seat.unit ?? "") : "";
   const unitRead = useChartRead<ChartUnitRead>(
     homeKey !== "" ? chartUnitPath(homeKey) : null,
     WITH_RUNTIME,
-    org,
+    orgPushes,
   );
   // WHAT THIS READER CAN SAY ABOUT THE GUARDED HALF, as a named outcome rather
   // than a nullable seat: [seatReading] carries the six this screen has to

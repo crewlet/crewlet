@@ -1,3 +1,161 @@
+//#region src/protocol/share.ts
+/**
+* An answer that did not change keeps the objects it was drawn from.
+*
+* # Why identity is the thing worth keeping
+*
+* Every list in this product is drawn by the one grid
+* (`app/frame/DataGrid.tsx`), whose rows are memoised on the OBJECT each row
+* is drawn from — and never on its place: a row whose object is the one it was
+* drawn from last time is not drawn again, wherever it now sits. A poll
+* defeats that by construction — every answer is parsed afresh off the wire,
+* so a poll that brought back exactly what the screen already held handed the
+* grid two hundred new objects, and the grid drew two hundred rows to change
+* no pixel. Measured on the turns list and the audit under the development
+* build: every row of both, on every poll, whatever the answer said.
+*
+* So an answer is SHARED with the one it replaces before anything reads it:
+* every part of the new answer that is deep-equal to a part of the old one is
+* replaced by the old part. An unchanged answer comes back as the very object
+* the screen already holds, which renders nothing at all; an answer in which
+* one row moved comes back as a new list holding the old objects for every
+* row but that one, which draws that one row.
+*
+* # A row is matched by its content, not only by its place
+*
+* The obvious walk — compare each element with the one at the same index —
+* is what most implementations do, and it is wrong for the lists this product
+* polls most: a feed ordered newest-first. One new turn at the top moves every
+* other row down a place, so not one of them equals the element at its own
+* index, and every row is drawn again for an answer that changed by one. So
+* an element that does not equal the one at its own place is looked up among
+* EVERY element of the old list — bucketed by a short print of its leading
+* fields, then confirmed by the same deep comparison — and reused from
+* wherever it was.
+*
+* # Only data is walked
+*
+* An array and an object literal are looked inside; anything else — a `Map`,
+* a `Date`, a class instance, a function, and above all a React element, which
+* is an object literal whose `_owner` is a fiber that reaches the whole tree —
+* is kept only where it is the SAME value, never compared by its contents.
+* Answers off the socket are JSON and are all data; what a screen derives
+* from one may not be, and walking into a fiber to compare two of them would
+* be a walk of the application.
+*
+* Nothing here mutates either argument, and the result is always deep-equal to
+* `next`: sharing changes which objects an answer is made of, never what it
+* says.
+*
+* # Why it is in the protocol layer
+*
+* Every way an answer reaches a screen goes through it: a question
+* (`lib/useQuery.ts`), a REST read (`lib/restRead.ts`), the engine-health poll
+* (`lib/engineHealth.ts`) and every push the store replaces a slice with
+* (`./store.ts`). The store is here, and nothing here may import React — the
+* hook that shares a value a SCREEN derives is `lib/share.ts`.
+*/
+/**
+* `next`, with every part deep-equal to a part of `prev` replaced by that part.
+*
+* Returns `prev` itself when the two are deep-equal.
+*/
+function share(prev, next) {
+	return shareValue(prev, next);
+}
+/** Whether the walk may look inside a value: an array or an object literal. */
+function walkable(value) {
+	if (value === null || typeof value !== "object") return false;
+	if (Array.isArray(value)) return true;
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return false;
+	return !("$$typeof" in value);
+}
+function shareValue(prev, next) {
+	if (Object.is(prev, next)) return prev;
+	if (Array.isArray(prev) && Array.isArray(next)) return shareList(prev, next);
+	if (walkable(prev) && walkable(next) && !Array.isArray(prev) && !Array.isArray(next)) return shareRecord(prev, next);
+	return next;
+}
+function shareRecord(prev, next) {
+	const keys = Object.keys(next);
+	let same = keys.length === Object.keys(prev).length;
+	const out = {};
+	for (const key of keys) {
+		const had = Object.prototype.hasOwnProperty.call(prev, key);
+		const value = had ? shareValue(prev[key], next[key]) : next[key];
+		out[key] = value;
+		if (!had || value !== prev[key]) same = false;
+	}
+	return same ? prev : out;
+}
+function shareList(prev, next) {
+	let same = prev.length === next.length;
+	const out = new Array(next.length);
+	let elsewhere = null;
+	for (let i = 0; i < next.length; i++) {
+		const value = next[i];
+		const kept = i < prev.length ? shareValue(prev[i], value) : value;
+		out[i] = kept;
+		if (i < prev.length && kept === prev[i]) continue;
+		same = false;
+		if (!walkable(value)) continue;
+		elsewhere ??= buckets(prev);
+		for (const candidate of elsewhere.get(print(value)) ?? []) if (shareValue(candidate, value) === candidate) {
+			out[i] = candidate;
+			break;
+		}
+	}
+	return same ? prev : out;
+}
+/** Every walkable element of a list, by its [print]. */
+function buckets(list) {
+	const out = /* @__PURE__ */ new Map();
+	for (const item of list) {
+		if (!walkable(item)) continue;
+		const key = print(item);
+		const bucket = out.get(key);
+		if (bucket) bucket.push(item);
+		else out.set(key, [item]);
+	}
+	return out;
+}
+/**
+* How many of a row's own fields its [print] reads, and how much of each.
+*
+* Enough to tell the rows of one list apart, which is all a bucket is for: a
+* row off the wire leads with what identifies it — an id, a key, an instant,
+* each well under sixty-four characters (a uuid is 36) — and eight fields is
+* past every row's identity in this protocol. A collision costs one deep
+* comparison, never a wrong answer.
+*/
+var PRINT_FIELDS = 8;
+var PRINT_CHARS = 64;
+/**
+* Which bucket a value is looked for in: a SHALLOW print of it.
+*
+* A BUCKET, NOT A VERDICT: two deep-equal values always print alike, and a
+* match is confirmed by the deep comparison, so two values that print alike
+* and differ are told apart there. SHALLOW AND SHORT because it is taken of
+* every row of a list each time anything in that list moves, and a row may be
+* large — a phase record carries its whole prompts and response, and a full
+* print of each would be megabytes of string built to find one new row at the
+* top. Not `JSON.stringify` for the same reason, and because that reads a
+* `Map` as `{}` and walks into a React element's fiber until it meets a cycle.
+*/
+function print(value) {
+	if (Array.isArray(value)) return `[${value.length}`;
+	const parts = [];
+	for (const key of Object.keys(value).slice(0, PRINT_FIELDS)) {
+		const field = value[key];
+		let shown;
+		if (field !== null && typeof field === "object") shown = Array.isArray(field) ? `[${field.length}` : "{";
+		else shown = `${(typeof field).charAt(0)}${String(field).slice(0, PRINT_CHARS)}`;
+		parts.push(`${JSON.stringify(key)}=${shown}`);
+	}
+	return parts.join(",");
+}
+//#endregion
 //#region src/protocol/store.ts
 /**
 * Longest activity feed a tab keeps.
@@ -10,17 +168,6 @@
 * starts rather than drawing the gap as quiet.
 */
 var MAX_EVENTS = 400;
-var ALL_DATA_SLICES = [
-	"agents",
-	"events",
-	"sandboxes",
-	"org",
-	"tools",
-	"tokens",
-	"budget",
-	"schedules",
-	"health"
-];
 function emptyState() {
 	return {
 		agents: [],
@@ -37,7 +184,8 @@ function emptyState() {
 		authRejected: false,
 		identityUnverifiable: false,
 		accessRefused: null,
-		inboxMoves: {}
+		inboxMoves: {},
+		orgPushes: 0
 	};
 }
 var Store = class {
@@ -70,6 +218,23 @@ var Store = class {
 			for (const slice of slices) this.subs.get(slice)?.delete(fn);
 		};
 	}
+	/**
+	* Replace one slice with what was pushed, SHARED with what it held
+	* (`./share.ts`), and say whether anything moved.
+	*
+	* A push is an answer like any other — parsed afresh off the wire — so a
+	* spend rollup pushed after every phase handed the spend tables a new object
+	* for every seat and every turn, and every row of both was drawn again for
+	* the one turn that finished. Shared, a push that changed nothing moves no
+	* version and wakes nobody, and one that changed something keeps the objects
+	* of everything it did not change.
+	*/
+	replace(slice, next) {
+		const kept = share(this.state[slice], next);
+		if (kept === this.state[slice]) return false;
+		this.state[slice] = kept;
+		return true;
+	}
 	emit(...slices) {
 		for (const slice of slices) this.versions[slice] = (this.versions[slice] ?? 0) + 1;
 		const called = /* @__PURE__ */ new Set();
@@ -81,16 +246,20 @@ var Store = class {
 	}
 	applySnapshot(snap) {
 		if (!snap) return;
-		this.state.agents = snap.agents ?? [];
-		this.state.events = (snap.events ?? []).slice(0, 400);
-		this.state.sandboxes = snap.sandboxes ?? [];
-		this.state.org = snap.org ?? {};
-		this.state.tools = snap.tools ?? [];
-		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-		this.state.budget = snap.budget ?? {};
-		if (snap.schedules) this.state.schedules = snap.schedules;
-		if (snap.health) this.state.health = snap.health;
-		this.emit(...ALL_DATA_SLICES);
+		const moved = [];
+		const put = (slice, next) => {
+			if (this.replace(slice, next)) moved.push(slice);
+		};
+		put("agents", snap.agents ?? []);
+		put("events", (snap.events ?? []).slice(0, 400));
+		put("sandboxes", snap.sandboxes ?? []);
+		put("org", snap.org ?? {});
+		put("tools", snap.tools ?? []);
+		if (snap.tokens && snap.tokens.totals) put("tokens", snap.tokens);
+		put("budget", snap.budget ?? {});
+		if (snap.schedules) put("schedules", snap.schedules);
+		if (snap.health) put("health", snap.health);
+		if (moved.length > 0) this.emit(...moved);
 	}
 	/**
 	* Changed seat overlays, merged onto the roster rows by AGENT ID.
@@ -114,17 +283,14 @@ var Store = class {
 		if (!Array.isArray(rows) || rows.length === 0) return;
 		const byID = /* @__PURE__ */ new Map();
 		for (const row of rows) if (row && typeof row.agent_id === "string" && row.agent_id !== "") byID.set(row.agent_id, row);
-		let moved = false;
-		this.state.agents = this.state.agents.map((a) => {
+		const merged = this.state.agents.map((a) => {
 			const patch = byID.get(a.agent_id);
-			if (!patch) return a;
-			moved = true;
-			return {
+			return patch ? {
 				...a,
 				...patch
-			};
+			} : a;
 		});
-		if (moved) this.emit("agents");
+		if (this.replace("agents", merged)) this.emit("agents");
 	}
 	/**
 	* The complete seat list, replacing what is on screen.
@@ -136,44 +302,41 @@ var Store = class {
 	applySeats(rows) {
 		if (!Array.isArray(rows)) return;
 		const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
-		this.state.agents = rows.map((row) => {
+		const roster = rows.map((row) => {
 			const current = live.get(row.agent_id);
 			return current ? {
 				...current,
 				...row
 			} : row;
 		});
-		this.emit("agents");
+		if (this.replace("agents", roster)) this.emit("agents");
 	}
 	applySandboxes(list) {
-		this.state.sandboxes = list ?? [];
-		this.emit("sandboxes", "agents");
+		if (this.replace("sandboxes", list ?? [])) this.emit("sandboxes", "agents");
 	}
 	applyTokens(rollup) {
 		if (!rollup) return;
-		this.state.tokens = rollup;
-		this.emit("tokens");
+		if (this.replace("tokens", rollup)) this.emit("tokens");
 	}
 	applyBudget(budget) {
-		this.state.budget = budget ?? {};
-		this.emit("budget");
+		if (this.replace("budget", budget ?? {})) this.emit("budget");
 	}
 	applySchedules(payload) {
 		if (!payload) return;
-		if (payload.schedules) this.state.schedules = payload.schedules;
-		this.emit("schedules");
+		if (payload.schedules && this.replace("schedules", payload.schedules)) this.emit("schedules");
 	}
 	applyOrg(org) {
-		this.state.org = org ?? {};
-		this.emit("org");
+		this.state.orgPushes += 1;
+		if (this.replace("org", org ?? {})) this.emit("org", "orgPushes");
+		else this.emit("orgPushes");
 	}
 	applyTools(tools) {
-		this.state.tools = tools ?? [];
-		this.emit("tools");
+		if (this.replace("tools", tools ?? [])) this.emit("tools");
 	}
 	applyHealth(health) {
-		this.state.health = health ?? { status: "unknown" };
-		this.state.connected = !!health && health.status !== "unknown";
+		const connected = !!health && health.status !== "unknown";
+		if (!this.replace("health", health ?? { status: "unknown" }) && connected === this.state.connected) return;
+		this.state.connected = connected;
 		this.emit("health");
 	}
 	setConnected(value) {
@@ -1883,4 +2046,4 @@ var auth = {
 	}
 };
 //#endregion
-export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RETRY_AFTER_MAX_MS, RestError, Store, UNANSWERED_RETRY_BASE_MS, UNANSWERED_RETRY_MAX_MS, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, restFailure, restRetryMs, retryAfterMs, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, unansweredRetryMs, unavailableRetryMs };
+export { GATE_ACTIONS, GATE_ACTIONS_KEEPING_OPERATION, GATE_REQUEST_TIMEOUT_MS, LiveSocket, MAX_EVENTS, QueryRefusedError, REQUEST_TIMEOUT_MS, RETRY_AFTER_MAX_MS, RestError, Store, UNANSWERED_RETRY_BASE_MS, UNANSWERED_RETRY_MAX_MS, UNAVAILABLE_RETRY_MS, api, auth, confirmStepUp, currentSessionNeed, isAbort, isLogRefusal, keepsOperation, layoutOpID, needSession, newGateOpID, onSessionNeed, queryErrorCode, queryFailure, refusedGrants, rest, restFailure, restRetryMs, retryAfterMs, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, share, unansweredRetryMs, unavailableRetryMs };

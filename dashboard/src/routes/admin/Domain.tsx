@@ -42,6 +42,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
 import {
   DomainBlock,
   DomainRefusals,
@@ -80,40 +81,46 @@ export function DomainScreen({ name }: { name: string }) {
   // EVERY NODE'S POSITION IN THIS ONE DOMAIN. The fleet's own table has this
   // folded into a cell that lists every domain a node reports, so reading one
   // domain's rows meant reading every node's cell and filtering by eye.
-  const positions = useMemo<Position[]>(() => {
-    const nodes: RetentionNode[] = data?.nodes ?? [];
-    const out: Position[] = [];
-    for (const node of nodes) {
-      const at = node.domains?.[name];
-      // A NODE THAT HAS PUBLISHED NOTHING FOR THIS DOMAIN IS NOT AT ZERO, and
-      // it is the one the trim is most likely waiting on — the minimum is
-      // taken across these rows, so a node it cannot see is a node it cannot
-      // trim past. It is kept as a row with no position rather than dropped.
-      if (!at) {
+  //
+  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`): each is built here
+  // afresh on every poll, so a report that moved one node's position drew
+  // every node's row again.
+  const positions = useShared(
+    useMemo<Position[]>(() => {
+      const nodes: RetentionNode[] = data?.nodes ?? [];
+      const out: Position[] = [];
+      for (const node of nodes) {
+        const at = node.domains?.[name];
+        // A NODE THAT HAS PUBLISHED NOTHING FOR THIS DOMAIN IS NOT AT ZERO, and
+        // it is the one the trim is most likely waiting on — the minimum is
+        // taken across these rows, so a node it cannot see is a node it cannot
+        // trim past. It is kept as a row with no position rather than dropped.
+        if (!at) {
+          out.push({
+            node_id: node.node_id,
+            counted: node.counted,
+            live: node.live,
+            seq: -1,
+            applied_through: -1,
+            generation: 0,
+          });
+          continue;
+        }
         out.push({
           node_id: node.node_id,
           counted: node.counted,
           live: node.live,
-          seq: -1,
-          applied_through: -1,
-          generation: 0,
+          seq: at.seq,
+          applied_through: at.applied_through,
+          lag: at.lag,
+          generation: at.generation,
+          generation_state: at.generation_state,
+          log_diverged: at.log_diverged,
         });
-        continue;
       }
-      out.push({
-        node_id: node.node_id,
-        counted: node.counted,
-        live: node.live,
-        seq: at.seq,
-        applied_through: at.applied_through,
-        lag: at.lag,
-        generation: at.generation,
-        generation_state: at.generation_state,
-        log_diverged: at.log_diverged,
-      });
-    }
-    return out;
-  }, [data, name]);
+      return out;
+    }, [data, name]),
+  );
 
   const facts: Fact[] = domain
     ? [

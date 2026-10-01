@@ -698,18 +698,58 @@ meaning by one.
 
 **A row is drawn when something it draws has changed, and at no other time.**
 Each row is a memoised component handed only values it draws — its object, the
-column list, its place, whether it is the cursor, selected or failed, its link
-— and one click handler the grid keeps stable through a ref, since every
-screen hands `onRowActivate` a fresh closure. So a `j` draws the row it leaves
-and the row it lands on, and a screen rendering for a reason of its own draws
-no row. The rows were built inline in the grid's render, which drew all of
-them for anything at all: a `j` on a hundred-row grid drew a hundred rows, and
-a screen's own render drew every row of every grid on it — 169–268 ms for two
-hundred-row grids under the development build. It pays where a caller's column
-list stays the same between renders — a `useMemo`, as the audit, the work
-grid, the projects directory and the model page hold theirs, or a module
-constant, as the org builder's table does: a list built inline is rightly a
-new value to every row on every render, and draws every row exactly as before.
+column list, an element id made from its KEY, whether it is the cursor,
+selected or failed, its link — and one click handler the grid keeps stable
+through a ref, since every screen hands `onRowActivate` a fresh closure. So a
+`j` draws the row it leaves and the row it lands on, and a screen rendering for
+a reason of its own draws no row. The rows were built inline in the grid's
+render, which drew all of them for anything at all: a `j` on a hundred-row grid
+drew a hundred rows, and a screen's own render drew every row of every grid on
+it — 169–268 ms for two hundred-row grids under the development build. It pays
+where a caller's column list stays the same between renders — a `useMemo`, as
+the audit, the work grid, the projects directory and the model page hold
+theirs, or a module constant, as the org builder's table does: a list built
+inline is rightly a new value to every row on every render, and draws every
+row exactly as before.
+
+**A row is never told its place.** A feed is newest first, so one new row at
+the top moves every other row down a place — and a row handed its index, as
+this one was for a `data-row-index` attribute and an element id, was drawn
+again for that alone, every row of the list for the one that arrived. Its id
+is its grid's and its key's (encoded, because an id list is split on
+whitespace and a key is whatever a screen's `rowKey` returns), and a cursor
+step finds the row it scrolls to by that id.
+
+**An answer that did not change keeps its objects.** A row's memo is on its
+OBJECT, and every answer is parsed afresh off the wire, so a poll that brought
+back exactly what the screen held handed every grid all-new rows: the turns
+list drew its two hundred rows on every twenty-second poll and the audit its
+three hundred and fifty on every minute's, whatever the answer said —
+179–220 ms and 103–375 ms of render under the development build, to change no
+pixel. So every answer is SHARED with the one it replaces before a screen
+reads it (`protocol/share.ts`): a part deep-equal to a part of the old answer
+is replaced by the old part — matched by its content, not only its place, so
+the rows a new row at the top pushed down are still the rows that were drawn —
+and an answer that changed nothing is the very object already held. That
+covers every way an answer arrives: a question (`useQuery`), a REST read
+(`useRestRead`), the shared engine-health poll, and every push the store
+replaces a slice with, where a push that said nothing new moves no version and
+wakes nobody. An unchanged poll now renders nothing at all, and a poll that
+moved one row draws that row. A screen that BUILDS its rows from an answer —
+the audit's four sources folded into one shape, a domain's positions, the
+model page's phase records, a run list's live boxes — passes them through
+`useShared` (`lib/share.ts`), or its derivation would make every row new again
+whenever anything moved: the audit drew 350 rows for one changed tracker
+commit, and draws one. Only data is walked — an array or an object literal; a
+`Map`, a `Date` or a React element is kept only where it is the same value.
+
+**An org push is an event as well as a state.** The store shares an org
+projection like any other push, so one deep-equal to the last moves nothing —
+and a chart write that changed only what the projection leaves out (a seat's
+model chain, its credentials, a unit's knowledge space) is pushed as exactly
+that. The chart reads that hold the runtime half (`useChartRead`) are asked
+again on the COUNT of org pushes (`useOrgPushes`), never on the projection's
+identity, or they would go on showing the settings from before the write.
 
 **Which grid the keyboard drives is asked at the keystroke.** `j`, `k` and
 Enter go to the grid the reader last pressed a pointer in, else the first one
@@ -3239,7 +3279,8 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   credential listing with its reference index, and the org chart's guarded
   reads (`useChartRead`, `lib/chartReads.ts`: a seat's runtime half on its
   page, the chart behind the tool and knowledge pages), which also ask again
-  on every org push, the Audit screen's credential listing, on the minute its
+  on every org push — counted, not compared, since one deep-equal to the last
+  still follows a write — the Audit screen's credential listing, on the minute its
   other three sources poll at, and the identity menu's `GET /auth/session`. It
   replaced seven hand-written loaders, each with its own generation counter,
   failure mapping and idea of when to ask again, and each wrong about a

@@ -12,6 +12,14 @@
  * every poll interval is named and justified at the call site, and a query
  * re-runs when the socket comes back because an answer taken before a
  * reconnect is an answer about a company that has since moved.
+ *
+ * And AN ANSWER THAT DID NOT CHANGE KEEPS ITS OBJECTS. Every answer is parsed
+ * afresh off the wire, so a poll that brought back exactly what the screen
+ * held used to hand it all-new objects, and every memoised grid row drew
+ * again to change no pixel. Each answer is shared with the one it replaces
+ * (`~/protocol/share.ts`): an unchanged poll is the state already held and renders
+ * nothing, and a poll that moved one row hands back the old object for every
+ * other.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,6 +28,7 @@ import { windowEdges, type Window } from "./range.ts";
 import {
   queryErrorCode,
   queryFailure,
+  share,
   unavailableRetryMs,
   type LogRefusal,
   type QueryErrorCode,
@@ -250,18 +259,25 @@ export function useQuery<K extends QueryName>(
         const { since, until } = windowEdges(chosen, Date.now());
         asking[sinceParam] = since;
         asking[untilParam] = until;
-        setState((prev) => ({ ...prev, asked: { over: chosen, since, until } }));
+        // SHARED like an answer, so an ask over a reader's own two instants —
+        // the same edges every time — renders nothing before its answer does.
+        setState((prev) => {
+          const asked = share(prev.asked, { over: chosen, since, until });
+          return asked === prev.asked ? prev : { ...prev, asked };
+        });
       }
       try {
         const data = await socket.query(what, asking);
         if (generation.current !== mine) return;
-        setState((prev) => ({
-          data,
-          loading: false,
-          error: null,
-          refusal: null,
-          asked: prev.asked,
-        }));
+        setState((prev) => {
+          // THE ANSWER IS SHARED WITH THE ONE IT REPLACES (`~/protocol/share.ts`), so
+          // every row a poll brought back unchanged is the object the screen
+          // already drew — and a poll that changed nothing at all is the state
+          // this hook already holds, which renders nothing.
+          const kept = share(prev.data, data);
+          if (kept === prev.data && !prev.loading && prev.error === null) return prev;
+          return { data: kept, loading: false, error: null, refusal: null, asked: prev.asked };
+        });
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
@@ -296,7 +312,9 @@ export function useQuery<K extends QueryName>(
       }
     };
 
-    setState((prev) => ({ ...prev, loading: prev.data === null }));
+    setState((prev) =>
+      prev.loading === (prev.data === null) ? prev : { ...prev, loading: prev.data === null },
+    );
     void run();
 
     return () => {

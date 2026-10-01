@@ -33,6 +33,10 @@
  *   to thirty for a read nobody answered; and otherwise the screen's own
  *   cadence for what it holds. So the banner and the timer never disagree
  *   about which failure this is.
+ * - THE OBJECTS OF AN ANSWER THAT DID NOT CHANGE (`~/protocol/share.ts`): a re-read is
+ *   shared with the answer it replaces, so a row it brought back unchanged is
+ *   the object the screen already drew, and a re-read that changed nothing
+ *   renders nothing.
  * - A READ AGAIN WHEN THE SOCKET COMES BACK (`useRereadOnReconnect`), and,
  *   where asked for, when the tab does: an answer from before either is about
  *   an engine that has since moved.
@@ -48,7 +52,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useReread, useRereadOnReconnect } from "./reread.ts";
-import { restFailure, restRetryMs, type RestFailure } from "~/protocol/index.ts";
+import { restFailure, restRetryMs, share, type RestFailure } from "~/protocol/index.ts";
 
 export interface RestReadOptions<T> {
   /**
@@ -180,10 +184,18 @@ export function useRestRead<T>(
         try {
           const data = await readRef.current(controller.signal);
           if (generation.current !== mine) return;
-          held.current = data;
+          // SHARED WITH THE LAST ANSWER TO THIS QUESTION (`~/protocol/share.ts`), for
+          // `useQuery`'s reason: a re-read that brought back what is on screen
+          // is the reading already held, and renders nothing.
+          const kept = share(held.current, data);
+          held.current = kept;
           unanswered.current = 0;
-          setReading({ question: about, data, loading: false, failure: null, error: null });
-          next = cadenceRef.current?.(data) ?? null;
+          setReading((prev) =>
+            prev.question === about && prev.data === kept && !prev.loading && prev.failure === null
+              ? prev
+              : { question: about, data: kept, loading: false, failure: null, error: null },
+          );
+          next = cadenceRef.current?.(kept) ?? null;
         } catch (err) {
           if (generation.current !== mine) return;
           const failure = restFailure(err);

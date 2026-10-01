@@ -31,7 +31,7 @@ import {
   SearchGlyph,
   TargetGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useOrg } from "~/lib/store-hooks.ts";
+import { useOrg, useOrgPushes } from "~/lib/store-hooks.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { indexOrg, seatLookup, unitPath, type OrgIndex } from "~/lib/seats.ts";
 import { useChartRead } from "~/lib/chartReads.ts";
@@ -473,6 +473,7 @@ function containerFacts({
  */
 export function ContainerPeek({ id }: { id: string }) {
   const org = useOrg();
+  const orgPushes = useOrgPushes();
   const index = useMemo(() => indexOrg(org), [org]);
   const containers = useQuery("containers", undefined, { enabled: id !== "", pollMs: 60_000 });
   // THE SAME SET THE COUNT COUNTS. `containers` excludes trashed pages from
@@ -510,7 +511,7 @@ export function ContainerPeek({ id }: { id: string }) {
   // A UNIT'S `space:` IS CASE-INSENSITIVE against the key, because the engine
   // upper-cases a container key on the way in and whoever wrote the unit wrote
   // whatever they typed.
-  const chart = useChartRead<ChartRead>(id !== "" ? "/chart" : null, undefined, org);
+  const chart = useChartRead<ChartRead>(id !== "" ? "/chart" : null, undefined, orgPushes);
   const units = useMemo(() => {
     if (chart.state !== "read") return null;
     return (chart.value.units ?? [])

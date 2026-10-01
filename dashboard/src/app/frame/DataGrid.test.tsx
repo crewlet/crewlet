@@ -457,9 +457,10 @@ test("a band's own bands are drawn, and it counts what is under them", () => {
   // THE ROWS ARE UNDER THE SUB-BAND, and they are the grid's rows: a cursor
   // that could not reach them would step over half a screen.
   expect(container.querySelectorAll(".grid-row").length).toBe(2);
-  expect(
-    [...container.querySelectorAll(".grid-row")].map((el) => el.getAttribute("data-row-index")),
-  ).toEqual(["0", "1"]);
+  expect([...container.querySelectorAll(".grid-row")].map((el) => el.textContent)).toEqual([
+    "one",
+    "two",
+  ]);
 });
 
 // AND A GROUPED ANSWER WITH NO ROWS ON THIS PAGE IS NOT AN EMPTY ANSWER. A
@@ -610,7 +611,7 @@ test("a cursor step draws the rows it leaves and lands on, and no other", () => 
   expect(drawn.rows).toBe(3);
   const cursor = view.container.querySelectorAll(".grid-row.cursor");
   expect(cursor).toHaveLength(1);
-  expect(cursor[0]?.getAttribute("data-row-index")).toBe("1");
+  expect([...view.container.querySelectorAll(".grid-row")].indexOf(cursor[0]!)).toBe(1);
 });
 
 test("a screen rendering with the same rows and columns draws no row", () => {
@@ -709,4 +710,42 @@ test("a row's sort value is read once per order, and not by a render that change
   fireEvent.click(screen.getByRole("button", { name: "Rank" }));
   expect(reads.count).toBe(RANKED.length);
   location.hash = "#/";
+});
+
+// A CURSOR STEP SCROLLS TO THE ROW IT LANDS ON, found by that row's KEY. A row
+// is no longer told its place — a new row above it would draw it again for that
+// alone — so the step finds the row by its own id, which is its key, ENCODED:
+// an id list is split on whitespace, and a key is whatever a screen's `rowKey`
+// returns.
+test("a cursor step scrolls the row it lands on into view, whatever its key", () => {
+  const scrolled: Element[] = [];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function (this: Element) {
+    scrolled.push(this);
+  };
+  try {
+    const rows: Row[] = [
+      { id: "a b", who: "ceo" },
+      { id: "a%20b", who: "cto" },
+    ];
+    const { container } = render(
+      <Router>
+        <DataGrid<Row>
+          rows={rows}
+          rowKey={(r) => r.id}
+          onRowActivate={() => {}}
+          columns={[{ key: "who", header: "Who", cell: (r) => r.who }]}
+        />
+      </Router>,
+    );
+    const drawn = [...container.querySelectorAll(".grid-row")];
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "j" });
+    expect(scrolled).toEqual([drawn[0], drawn[1]]);
+    // AND THE TWO KEYS ARE TWO IDS, neither of which names anything else.
+    expect(new Set(drawn.map((row) => row.id)).size).toBe(2);
+    expect(drawn.every((row) => !/\s/.test(row.id))).toBe(true);
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
 });

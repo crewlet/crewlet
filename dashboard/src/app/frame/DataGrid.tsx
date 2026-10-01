@@ -371,7 +371,6 @@ export function DataGrid<T>({
   // other render. Parsed afresh it was a new object every render, and the grid
   // sorted its whole answer on every one of them.
   const sort = useMemo(() => parseSort(sortRaw), [sortRaw]);
-  const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(-1);
   // UNIQUE PER MOUNTED GRID, not per `name`. A page and the peek rail over it
   // both render grids at once, and `name` distinguishes the grids on ONE
@@ -441,7 +440,7 @@ export function DataGrid<T>({
     // THROUGH THE SUB-BANDS TOO, and in the order they draw: this is the list
     // `j`, `k` and `enter` walk, so a row the grid renders and this misses is a
     // row the cursor steps over — and a row counted here that is not rendered
-    // puts every later `data-row-index` one place out.
+    // puts the cursor one place out from every row after it.
     const walk = (band: GridBand<T>): T[] => (band.bands ? band.bands.flatMap(walk) : band.rows);
     return ordered.bands ? ordered.bands.flatMap(walk) : ordered.rows;
   }, [ordered]);
@@ -458,9 +457,10 @@ export function DataGrid<T>({
   const step = (by: number) => {
     const next = Math.max(0, Math.min(flat.length - 1, cursor + by));
     setCursor(next);
-    body.current
-      ?.querySelector<HTMLElement>(`[data-row-index="${next}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    const row = flat[next];
+    if (row !== undefined) {
+      document.getElementById(rowDomId(gridId, rowKey(row)))?.scrollIntoView({ block: "nearest" });
+    }
   };
   const canDrive = flat.length > 0;
   useEffect(() => {
@@ -578,15 +578,18 @@ export function DataGrid<T>({
   function renderRow(row: T): ReactNode {
     index += 1;
     const at = index;
+    const key = rowKey(row);
     // EVERYTHING A ROW IS HANDED IS A VALUE IT DRAWS — see [GridRow] — so a
     // render of this grid that changed nothing about a row draws nothing of it.
+    // AND NOTHING IT IS HANDED IS ITS PLACE, but for whether the cursor is on
+    // it: a feed is newest first, so one new row at the top moves every other
+    // one down a place, and a row handed its index drew again for that alone.
     return (
       <GridRow<T>
-        key={rowKey(row)}
+        key={key}
         row={row}
         columns={shownColumns}
-        index={at}
-        id={`${gridId}-row-${at}`}
+        id={rowDomId(gridId, key)}
         cursor={cursor === at}
         selected={Boolean(isSelected?.(row))}
         failed={Boolean(isFailed?.(row))}
@@ -704,7 +707,7 @@ export function DataGrid<T>({
         })}
       </div>
 
-      <div className="grid-body" ref={body}>
+      <div className="grid-body">
         {ordered.bands
           ? ordered.bands.map((band) => renderBand(band))
           : ordered.rows.map(renderRow)}
@@ -733,13 +736,24 @@ export function DataGrid<T>({
   );
 }
 
+/**
+ * A row's element id: its grid's, and its own KEY rather than its place.
+ *
+ * What the overlay link is named by and what a cursor step scrolls to. Keyed
+ * on the row's identity because a place is not one — see `renderRow` — and
+ * ENCODED because a key is whatever a screen's `rowKey` returns, while an id
+ * list (`aria-labelledby`) is split on whitespace: a key with a space in it
+ * would name two elements, neither of them this row.
+ */
+function rowDomId(gridId: string, key: string): string {
+  return `${gridId}-row-${encodeURIComponent(key)}`;
+}
+
 interface GridRowProps<T> {
   row: T;
   /** The columns as drawn — `cols=` applied, in the reader's order. */
   columns: GridColumn<T>[];
-  /** Where the row is in the walk `j` and `k` take, `data-row-index`. */
-  index: number;
-  /** The row's own element id, which its overlay link is named by. */
+  /** The row's own element id ([rowDomId]): its overlay link's name, and where a cursor step scrolls. */
   id: string;
   cursor: boolean;
   selected: boolean;
@@ -754,13 +768,16 @@ interface GridRowProps<T> {
  * One row, drawn again only when something it draws has changed.
  *
  * MEMOISED ON VALUES, and every prop is one the row draws: its object, the
- * columns, its place, and three booleans and a string the grid works out for
- * it. The click is the one function, and the grid hands every row the same
+ * columns, its id, and three booleans and a string the grid works out for
+ * it — and never its PLACE, which a new row above it moves without changing
+ * anything it draws. The click is the one function, and the grid hands every row the same
  * one through a ref, because a caller's `onRowActivate` is a fresh closure on
  * every render of every screen. So a cursor stepping from one row to the next
  * draws those two rows; a parent rendering for a reason of its own — a poll
  * that brought the same rows back, a filter typed above the grid — draws none;
- * and a row whose object, columns, place or state moved is drawn again. Built
+ * and a row whose object, columns or state moved is drawn again. A poll's
+ * answer keeps the objects of the rows it did not change (`lib/share.ts`), so
+ * what a poll draws is what it changed. Built
  * inline, every one of those drew every row: a `j` on a hundred-row grid was a
  * hundred rows, and a screen's own render was every row of every grid on it.
  *
@@ -772,7 +789,6 @@ interface GridRowProps<T> {
 function GridRowView<T>({
   row,
   columns,
-  index,
   id,
   cursor,
   selected,
@@ -844,9 +860,8 @@ function GridRowView<T>({
   // points at, so a screen reader still reads the cells rather than "link".
   return (
     <div
-      id={linked ? id : undefined}
+      id={id}
       className={className}
-      data-row-index={index}
       role={!linked && activate ? "button" : undefined}
       tabIndex={!linked && activate ? 0 : undefined}
       onClick={!linked && activate ? (e) => activate(row, e) : undefined}

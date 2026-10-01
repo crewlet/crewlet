@@ -43,6 +43,7 @@ import { useAgents, useClient, useOrg, usePhaseEvents } from "~/lib/store-hooks.
 import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
 import { eventHistoryLabel, fmtElapsed, plural, tsKey } from "~/lib/format.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
@@ -139,7 +140,11 @@ export function ModelActivity() {
     [agents, bySeat],
   );
 
-  const merged = useMemo(() => mergePhases(stored, live), [stored, live]);
+  // SHARED WITH THE RECORDS LAST DRAWN (`~/lib/share.ts`). Every record is
+  // built afresh whenever a phase completes anywhere or a live one moves a
+  // round, so each of those drew every row of both tables; shared, a row is
+  // drawn when its own record moved.
+  const merged = useShared(useMemo(() => mergePhases(stored, live), [stored, live]));
 
   const filtered = useMemo(
     () => merged.filter((r) => !phase || r.phase === phase).filter((r) => !onlyFailed || r.failed),

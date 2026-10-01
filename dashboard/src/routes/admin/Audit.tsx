@@ -51,6 +51,7 @@ import { DateCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { needsSentence } from "~/lib/refusal.ts";
@@ -274,84 +275,90 @@ export function Audit() {
   // banner shows together.
   const failed = [work, knowledge, config].find((read) => read.error !== null);
 
-  const rows = useMemo<AuditEntry[]>(() => {
-    const out: AuditEntry[] = [];
-    for (const record of list(work.data?.records)) {
-      out.push({
-        id: `work:${record.id}`,
-        at: record.at,
-        source: "work",
-        kind: record.kind,
-        actor: record.actor ?? "",
-        actorKind: record.actor_kind ?? "",
-        through: throughOf(record.actor ?? "", record.operator_id),
-        ...workSubject(record),
-        // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
-        // It also keeps a body's newlines out of a CSV field, where they are
-        // legal inside quotes and unreadable in every spreadsheet.
-        detail: plainText(record.excerpt ?? ""),
-      });
-    }
-    for (const change of list(knowledge.data?.changes)) {
-      out.push({
-        id: `page:${change.id}`,
-        at: change.at,
-        source: "knowledge",
-        kind: change.kind,
-        actor: change.actor ?? "",
-        actorKind: change.actor_kind ?? "",
-        through: throughOf(change.actor ?? "", change.operator_id),
-        subject: change.title || change.page_id,
-        path:
-          change.container && change.title
-            ? ["knowledge", change.container, change.title]
-            : undefined,
-        detail: plainText(change.excerpt ?? ""),
-      });
-    }
-    for (const revision of list(config.data)) {
-      out.push({
-        id: `config:${revision.revision_id}`,
-        at: revision.created_at,
-        source: "config",
-        // THE SOURCE IS THE KIND HERE — `dashboard`, `cli`, `setup` — because
-        // "a revision was created" is the only thing that ever happens to the
-        // config history, so the word that distinguishes two rows is how it
-        // was created rather than what was done.
-        kind: revision.source || "revision",
-        actor: revision.created_by ?? "",
-        // THE RECORDED KIND, where there is one. This said `operator` for
-        // every revision, so a person bound to a seat, the reconcile loop and
-        // a Tier A token all read alike; a revision written before the kind
-        // was recorded shows none rather than a guess.
-        actorKind: revision.created_by_kind ?? "",
-        through: throughOf(revision.created_by ?? "", revision.operator_id),
-        subject: revision.revision_id.slice(0, 8),
-        path: ["admin", "config", "revisions", revision.revision_id],
-        detail: revision.summary ?? "",
-      });
-    }
-    for (const row of list(secrets.rows)) {
-      out.push({
-        id: `secret:${row.name}`,
-        at: row.updated_at,
-        source: "credentials",
-        // THE LAST WRITE ONLY, and the row says so. `/secrets` answers the
-        // CURRENT state of each name — there is no history of a credential,
-        // deliberately, because a history of writes to a secret is a map of
-        // when it was weakest. So this is one entry per name, at the instant
-        // it was last stored.
-        kind: "stored",
-        actor: row.updated_by ?? "",
-        actorKind: row.updated_by_kind ?? "",
-        through: throughOf(row.updated_by ?? "", row.operator_id),
-        subject: row.name,
-        path: ["admin", "credentials"],
-        detail: row.source ? `from ${row.source}` : "",
-      });
-    }
-    return out;
-  }, [work.data, knowledge.data, config.data, secrets.rows]);
+  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`). Every entry is built
+  // here afresh whenever any of the four sources answers, so a poll that moved
+  // one tracker commit made all three hundred and fifty rows new objects, and
+  // the grid drew every one of them; shared, it draws the one that moved.
+  const rows = useShared(
+    useMemo<AuditEntry[]>(() => {
+      const out: AuditEntry[] = [];
+      for (const record of list(work.data?.records)) {
+        out.push({
+          id: `work:${record.id}`,
+          at: record.at,
+          source: "work",
+          kind: record.kind,
+          actor: record.actor ?? "",
+          actorKind: record.actor_kind ?? "",
+          through: throughOf(record.actor ?? "", record.operator_id),
+          ...workSubject(record),
+          // FLATTENED AT THE ROW, so the grid cell and `auditCsv` cannot differ.
+          // It also keeps a body's newlines out of a CSV field, where they are
+          // legal inside quotes and unreadable in every spreadsheet.
+          detail: plainText(record.excerpt ?? ""),
+        });
+      }
+      for (const change of list(knowledge.data?.changes)) {
+        out.push({
+          id: `page:${change.id}`,
+          at: change.at,
+          source: "knowledge",
+          kind: change.kind,
+          actor: change.actor ?? "",
+          actorKind: change.actor_kind ?? "",
+          through: throughOf(change.actor ?? "", change.operator_id),
+          subject: change.title || change.page_id,
+          path:
+            change.container && change.title
+              ? ["knowledge", change.container, change.title]
+              : undefined,
+          detail: plainText(change.excerpt ?? ""),
+        });
+      }
+      for (const revision of list(config.data)) {
+        out.push({
+          id: `config:${revision.revision_id}`,
+          at: revision.created_at,
+          source: "config",
+          // THE SOURCE IS THE KIND HERE — `dashboard`, `cli`, `setup` — because
+          // "a revision was created" is the only thing that ever happens to the
+          // config history, so the word that distinguishes two rows is how it
+          // was created rather than what was done.
+          kind: revision.source || "revision",
+          actor: revision.created_by ?? "",
+          // THE RECORDED KIND, where there is one. This said `operator` for
+          // every revision, so a person bound to a seat, the reconcile loop and
+          // a Tier A token all read alike; a revision written before the kind
+          // was recorded shows none rather than a guess.
+          actorKind: revision.created_by_kind ?? "",
+          through: throughOf(revision.created_by ?? "", revision.operator_id),
+          subject: revision.revision_id.slice(0, 8),
+          path: ["admin", "config", "revisions", revision.revision_id],
+          detail: revision.summary ?? "",
+        });
+      }
+      for (const row of list(secrets.rows)) {
+        out.push({
+          id: `secret:${row.name}`,
+          at: row.updated_at,
+          source: "credentials",
+          // THE LAST WRITE ONLY, and the row says so. `/secrets` answers the
+          // CURRENT state of each name — there is no history of a credential,
+          // deliberately, because a history of writes to a secret is a map of
+          // when it was weakest. So this is one entry per name, at the instant
+          // it was last stored.
+          kind: "stored",
+          actor: row.updated_by ?? "",
+          actorKind: row.updated_by_kind ?? "",
+          through: throughOf(row.updated_by ?? "", row.operator_id),
+          subject: row.name,
+          path: ["admin", "credentials"],
+          detail: row.source ? `from ${row.source}` : "",
+        });
+      }
+      return out;
+    }, [work.data, knowledge.data, config.data, secrets.rows]),
+  );
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {

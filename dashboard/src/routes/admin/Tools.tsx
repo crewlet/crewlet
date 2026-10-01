@@ -41,7 +41,7 @@ import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRai
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { needsSentence } from "~/lib/refusal.ts";
-import { useOrg, useTools } from "~/lib/store-hooks.ts";
+import { useOrg, useOrgPushes, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import type { Capability } from "~/lib/tools.ts";
 import {
@@ -342,11 +342,15 @@ function useServerSharing(server: string): {
  * The panel said "the active configuration did not answer" for all of them —
  * about a read of the org chart, and while the configuration had answered.
  */
-function useServerHolders(
-  server: string,
-  org: unknown,
-): { byServer: Map<string, Set<string>> | null; unanswered: string } {
-  const chart = useChartRead<ChartRead>(server !== "" ? "/chart" : null, WITH_RUNTIME, org);
+function useServerHolders(server: string): {
+  byServer: Map<string, Set<string>> | null;
+  unanswered: string;
+} {
+  const chart = useChartRead<ChartRead>(
+    server !== "" ? "/chart" : null,
+    WITH_RUNTIME,
+    useOrgPushes(),
+  );
   const byServer = useMemo(() => {
     if (server === "" || chart.state !== "read" || !chart.value.runtime) return null;
     const out = new Map<string, Set<string>>();
@@ -402,10 +406,7 @@ function ToolBody({ name }: { name: string }) {
   const index = useMemo(() => indexOrg(org), [org]);
   const { matches, tool, server, cold } = useTool(name);
   const { shared, entity } = useServerSharing(server);
-  const { byServer: holdersByServer, unanswered: holdersUnanswered } = useServerHolders(
-    server,
-    org,
-  );
+  const { byServer: holdersByServer, unanswered: holdersUnanswered } = useServerHolders(server);
 
   // THE CATALOGUE HAS NOT ARRIVED YET, which is not the same screen as a tool
   // that does not exist. An engine registers its builtins at boot, so an empty

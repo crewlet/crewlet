@@ -52,6 +52,7 @@ import {
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useShared } from "~/lib/share.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import {
   elapsedMs,
@@ -430,7 +431,9 @@ export function Runs({ runId }: { runId?: string }) {
     pollMs: POLL_MS,
   });
 
-  const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
+  // SHARED WITH THE ROWS LAST DRAWN (`~/lib/share.ts`): a live box is turned
+  // into a row afresh on every sandbox push, so each one drew every live row.
+  const rows = useShared(useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]));
 
   // THE ORDER `[` AND `]` WALK is the one on screen, which is this list sorted
   // as the reader left it. Published from the merged rows rather than from the

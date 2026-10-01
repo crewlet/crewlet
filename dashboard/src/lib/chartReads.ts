@@ -23,9 +23,14 @@
  *
  * RE-READ ON EVERY ORG PUSH. A chart write that lands is followed by an org
  * projection the engine pushes, so the push is the signal that what was read
- * may have moved; `refresh` is that push's identity. A refusal REPLACES what
- * was read rather than sitting beside it, because a guarded answer a reader
- * has since lost the right to must not stay on screen.
+ * may have moved; `refresh` is the COUNT of those pushes (`useOrgPushes`),
+ * never the projection itself: a write that changed only what the projection
+ * leaves out — exactly the runtime half these reads exist for — is pushed as
+ * a projection deep-equal to the last, which the store shares rather than
+ * replaces, so keyed on its identity the read was never asked again. A
+ * refusal REPLACES what was read rather than sitting beside it, because a
+ * guarded answer a reader has since lost the right to must not stay on
+ * screen.
  *
  * AND ASKED AGAIN ON ITS OWN, because it is the shared REST read
  * (`./restRead.ts`) rather than a loader of its own. It was a fifth

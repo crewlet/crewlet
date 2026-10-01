@@ -267,7 +267,7 @@ test("opening another pass never shows the last one's reading under it", async (
   const entry = CATALOG.find((e) => e.surfaces.some((s) => s.key === "jira"))!;
   render(<SetupPasses entry={entry} kinds={["jira"]} />);
   // NEWEST FIRST, the grid's own order: the first pass, then the second.
-  const rows = () => [...document.querySelectorAll<HTMLElement>(".grid-row[data-row-index]")];
+  const rows = () => [...document.querySelectorAll<HTMLElement>(".grid-row")];
   await vi.waitFor(() => expect(rows()).toHaveLength(2));
 
   fireEvent.click(rows()[0]!);

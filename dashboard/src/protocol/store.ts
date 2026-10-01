@@ -31,6 +31,7 @@ import type {
   Snapshot,
   ToolRow,
 } from "./types.ts";
+import { share } from "./share.ts";
 
 /**
  * Longest activity feed a tab keeps.
@@ -129,24 +130,22 @@ export interface StoreState {
    * anyway, so there is nothing for a snapshot to restore.
    */
   inboxMoves: Record<string, number>;
+  /**
+   * How many org projections this socket has been pushed.
+   *
+   * THE PUSH AS AN EVENT, beside `org` as a state. A chart write that landed is
+   * followed by an org push, so a screen holding something it read from the
+   * chart reads it again on one — and a write that changed only what the
+   * projection leaves out (a seat's model chain, its credentials, a unit's
+   * knowledge space) is pushed as a projection deep-equal to the last, which
+   * the store shares and so does not move. Keyed on `org`'s identity, those
+   * screens went on showing the settings from before the write. NOT part of
+   * what a snapshot replaces: a reconnect re-reads every chart read anyway.
+   */
+  orgPushes: number;
 }
 
 export type Slice = keyof StoreState;
-
-// What a snapshot replaces. `phases` is deliberately absent: a snapshot carries
-// payload-free feed rows and no phase payloads, so emitting it here would wake
-// every phase reader for an answer that did not move.
-const ALL_DATA_SLICES: Slice[] = [
-  "agents",
-  "events",
-  "sandboxes",
-  "org",
-  "tools",
-  "tokens",
-  "budget",
-  "schedules",
-  "health",
-];
 
 function emptyState(): StoreState {
   return {
@@ -165,6 +164,7 @@ function emptyState(): StoreState {
     identityUnverifiable: false,
     accessRefused: null,
     inboxMoves: {},
+    orgPushes: 0,
   };
 }
 
@@ -203,6 +203,24 @@ export class Store {
     };
   }
 
+  /**
+   * Replace one slice with what was pushed, SHARED with what it held
+   * (`./share.ts`), and say whether anything moved.
+   *
+   * A push is an answer like any other — parsed afresh off the wire — so a
+   * spend rollup pushed after every phase handed the spend tables a new object
+   * for every seat and every turn, and every row of both was drawn again for
+   * the one turn that finished. Shared, a push that changed nothing moves no
+   * version and wakes nobody, and one that changed something keeps the objects
+   * of everything it did not change.
+   */
+  private replace<K extends Slice>(slice: K, next: StoreState[K]): boolean {
+    const kept = share(this.state[slice], next);
+    if (kept === this.state[slice]) return false;
+    this.state[slice] = kept;
+    return true;
+  }
+
   private emit(...slices: Slice[]): void {
     for (const slice of slices) this.versions[slice] = (this.versions[slice] ?? 0) + 1;
     const called = new Set<() => void>();
@@ -219,21 +237,29 @@ export class Store {
 
   applySnapshot(snap: Snapshot | null | undefined): void {
     if (!snap) return;
-    this.state.agents = snap.agents ?? [];
-    this.state.events = (snap.events ?? []).slice(0, MAX_EVENTS);
-    this.state.sandboxes = snap.sandboxes ?? [];
-    this.state.org = snap.org ?? {};
-    this.state.tools = snap.tools ?? [];
-    if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
-    this.state.budget = snap.budget ?? {};
+    // ONLY THE SLICES IT MOVED are announced: a reconnect's snapshot is mostly
+    // what this tab already holds, and announcing every slice redrew every
+    // screen for it. `phases` is never among them — a snapshot carries
+    // payload-free feed rows and no phase payloads.
+    const moved: Slice[] = [];
+    const put = <K extends Slice>(slice: K, next: StoreState[K]) => {
+      if (this.replace(slice, next)) moved.push(slice);
+    };
+    put("agents", snap.agents ?? []);
+    put("events", (snap.events ?? []).slice(0, MAX_EVENTS));
+    put("sandboxes", snap.sandboxes ?? []);
+    put("org", snap.org ?? {});
+    put("tools", snap.tools ?? []);
+    if (snap.tokens && snap.tokens.totals) put("tokens", snap.tokens);
+    put("budget", snap.budget ?? {});
     // A bare list here, unlike the push's `{schedules: […]}` object.
-    if (snap.schedules) this.state.schedules = snap.schedules;
+    if (snap.schedules) put("schedules", snap.schedules);
     // NOT `connected`. That belongs to the transport, which knows whether the
     // socket is open; deriving it from a payload's contents meant a snapshot
     // arriving over the degraded REST fallback announced a live connection
     // that did not exist.
-    if (snap.health) this.state.health = snap.health;
-    this.emit(...ALL_DATA_SLICES);
+    if (snap.health) put("health", snap.health);
+    if (moved.length > 0) this.emit(...moved);
   }
 
   /**
@@ -266,14 +292,14 @@ export class Store {
         byID.set(row.agent_id, row);
       }
     }
-    let moved = false;
-    this.state.agents = this.state.agents.map((a) => {
+    // A PATCH THAT RESTATES WHAT THE ROW SAYS MOVES NOTHING: an overlay is
+    // pushed twice per tool-loop round, and a round that changed only one seat
+    // re-sends the others' state as it was.
+    const merged = this.state.agents.map((a) => {
       const patch = byID.get(a.agent_id);
-      if (!patch) return a;
-      moved = true;
-      return { ...a, ...patch };
+      return patch ? { ...a, ...patch } : a;
     });
-    if (moved) this.emit("agents");
+    if (this.replace("agents", merged)) this.emit("agents");
   }
 
   /**
@@ -289,52 +315,54 @@ export class Store {
     // which is what a renamed seat still carries when its handle and name
     // have both moved.
     const live = new Map(this.state.agents.map((a) => [a.agent_id, a]));
-    this.state.agents = (rows as AgentRow[]).map((row) => {
+    const roster = (rows as AgentRow[]).map((row) => {
       const current = live.get(row.agent_id);
       return current ? { ...current, ...row } : row;
     });
-    this.emit("agents");
+    if (this.replace("agents", roster)) this.emit("agents");
   }
 
   applySandboxes(list: SandboxEntry[] | null | undefined): void {
-    this.state.sandboxes = list ?? [];
     // `agents` too: a seat's effective state folds in whether it is parked on
     // a sandbox question, so a sandbox move is a seat move.
-    this.emit("sandboxes", "agents");
+    if (this.replace("sandboxes", list ?? [])) this.emit("sandboxes", "agents");
   }
 
   applyTokens(rollup: Rollup | null | undefined): void {
     if (!rollup) return;
-    this.state.tokens = rollup;
-    this.emit("tokens");
+    if (this.replace("tokens", rollup)) this.emit("tokens");
   }
 
   applyBudget(budget: OrgBudget | null | undefined): void {
-    this.state.budget = budget ?? {};
-    this.emit("budget");
+    if (this.replace("budget", budget ?? {})) this.emit("budget");
   }
 
   applySchedules(payload: { schedules?: ScheduleRow[] } | null): void {
     if (!payload) return;
     // Applied only when present: the push carries the CONFIGURED rows and
     // nothing else, so an absent key means "unchanged" rather than "empty".
-    if (payload.schedules) this.state.schedules = payload.schedules;
-    this.emit("schedules");
+    if (payload.schedules && this.replace("schedules", payload.schedules)) {
+      this.emit("schedules");
+    }
   }
 
   applyOrg(org: OrgProjection | null | undefined): void {
-    this.state.org = org ?? {};
-    this.emit("org");
+    // EVERY PUSH IS COUNTED, one deep-equal to the last included — see
+    // `orgPushes` — while `org` moves only when the projection did.
+    this.state.orgPushes += 1;
+    if (this.replace("org", org ?? {})) this.emit("org", "orgPushes");
+    else this.emit("orgPushes");
   }
 
   applyTools(tools: ToolRow[] | null | undefined): void {
-    this.state.tools = tools ?? [];
-    this.emit("tools");
+    if (this.replace("tools", tools ?? [])) this.emit("tools");
   }
 
   applyHealth(health: HealthPush | null | undefined): void {
-    this.state.health = health ?? { status: "unknown" };
-    this.state.connected = !!health && health.status !== "unknown";
+    const connected = !!health && health.status !== "unknown";
+    const moved = this.replace("health", health ?? { status: "unknown" });
+    if (!moved && connected === this.state.connected) return;
+    this.state.connected = connected;
     this.emit("health");
   }
 

@@ -29,6 +29,7 @@ import { useClient } from "./store-hooks.ts";
 import {
   queryErrorCode,
   queryFailure,
+  share,
   unavailableRetryMs,
   type LiveSocket,
   type LogRefusal,
@@ -138,7 +139,12 @@ class SharedHealth {
       .then(
         (data) => {
           if (this.generation !== mine) return;
-          this.set({ data, loading: false, error: null, refusal: null });
+          // SHARED WITH THE LAST ANSWER (`~/protocol/share.ts`), as every
+          // other poll's is: a tick that brought back the same health is the
+          // reading every reader already holds, and wakes none of them.
+          const kept = share(this.snapshot.data, data);
+          if (kept === this.snapshot.data && !this.snapshot.loading && !this.snapshot.error) return;
+          this.set({ data: kept, loading: false, error: null, refusal: null });
         },
         (err: unknown) => {
           if (this.generation !== mine) return;
