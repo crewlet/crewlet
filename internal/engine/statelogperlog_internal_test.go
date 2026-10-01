@@ -777,7 +777,7 @@ func TestAnotherLayoutsRecordsUnderThisLogsKeyAreNotThisLogs(t *testing.T) {
 			"not on this log", reported, running.key, want)
 	}
 	// THE READMISSION BOUND.
-	if err := s.Readmissible(t.Context(), "node-back", fixedHolders{}); err != nil {
+	if err := s.Readmissible(t.Context(), "node-back", fixedHolders{}, nil); err != nil {
 		t.Errorf("a node holding every record of this layout's logs is refused "+
 			"readmission: %v", err)
 	}
@@ -810,18 +810,18 @@ func TestAReadmissionIsJudgedOnlyWhereTheNodeWouldBeCounted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish a floor on %s: %v", running.key, err)
 	}
-	if err := s.Readmissible(t.Context(), "node-stranger", fixedHolders{}); err != nil {
+	if err := s.Readmissible(t.Context(), "node-stranger", fixedHolders{}, nil); err != nil {
 		t.Errorf("a node with no row that holds nothing is refused readmission: %v", err)
 	}
 	other := statelog.PartitionID{Space: statelog.SpaceTracker, Index: 1}
 	elsewhere := fixedHolders{other: {{NodeID: "node-stranger"}}}
-	if err := s.Readmissible(t.Context(), "node-stranger", elsewhere); err != nil {
+	if err := s.Readmissible(t.Context(), "node-stranger", elsewhere, nil); err != nil {
 		t.Errorf("a holder of an untrimmed partition only is refused on a log it is "+
 			"not counted on: %v", err)
 	}
 	here := fixedHolders{running.id.Partition: {{NodeID: "node-stranger"}}}
 	var refusal *statelog.ReadmissionRefusal
-	if err := s.Readmissible(t.Context(), "node-stranger", here); !errors.As(err, &refusal) ||
+	if err := s.Readmissible(t.Context(), "node-stranger", here, nil); !errors.As(err, &refusal) ||
 		refusal.Domain != running.key {
 		t.Errorf("a holder of a trimmed partition with no row = %v, want refused on %s",
 			err, running.key)
@@ -857,10 +857,10 @@ func TestAReadmissionIsDecidedOnOneReadingOfTheRegister(t *testing.T) {
 	register := &readingsRegister{fleetRegister: s.fleet,
 		readings: [][]coord.NodePositions{{row}, nil}}
 	// The same running logs, judged against the register above.
-	judge := &stateLog{layout: s.layout, fleet: register, nodeID: s.nodeID}
+	judge := &stateLog{layout: s.layout, fleet: register, nodeID: s.nodeID, holding: s.holding}
 	judge.logs.Store(s.held())
 
-	if err := judge.Readmissible(t.Context(), "node-back", fixedHolders{}); err != nil {
+	if err := judge.Readmissible(t.Context(), "node-back", fixedHolders{}, nil); err != nil {
 		t.Errorf("a node whose row holds %s at its floor is refused readmission: %v",
 			running.key, err)
 	}

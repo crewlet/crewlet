@@ -21,18 +21,17 @@ func TestAGateRecordGoesToItsOwnLogsPartition(t *testing.T) {
 		{Space: statelog.SpaceTracker, Partitions: 4, Domains: []string{"tracker", "vectors"}},
 		{Space: statelog.SpacePages, Partitions: 1, Domains: []string{"pages"}},
 	}}
-	args := GateArgs{Layout: 1, Domain: "tracker", Partition: "tracker.003", Node: "node-b",
-		By: "ops", OpID: "op", Kind: GateEvict}
+	args := LogRef{Layout: 1, Domain: "tracker", Partition: "tracker.003"}
 	got, err := GatePartitions(layout, args)
 	if err != nil || len(got) != 1 || got[0] != (statelog.PartitionID{Space: statelog.SpaceTracker, Index: 3}) {
 		t.Fatalf("the gate record of tracker@tracker.003 goes to %v (%v), want tracker.003 alone", got, err)
 	}
-	for name, change := range map[string]func(*GateArgs){
-		"another layout's log":          func(a *GateArgs) { a.Layout = 2 },
-		"a partition the layout lacks":  func(a *GateArgs) { a.Partition = "tracker.004" },
-		"a domain with no log there":    func(a *GateArgs) { a.Domain = "pages" },
-		"a name that is no partition's": func(a *GateArgs) { a.Partition = "tracker.3" },
-		"no partition":                  func(a *GateArgs) { a.Partition = "" },
+	for name, change := range map[string]func(*LogRef){
+		"another layout's log":          func(a *LogRef) { a.Layout = 2 },
+		"a partition the layout lacks":  func(a *LogRef) { a.Partition = "tracker.004" },
+		"a domain with no log there":    func(a *LogRef) { a.Domain = "pages" },
+		"a name that is no partition's": func(a *LogRef) { a.Partition = "tracker.3" },
+		"no partition":                  func(a *LogRef) { a.Partition = "" },
 	} {
 		bad := args
 		change(&bad)
@@ -43,8 +42,9 @@ func TestAGateRecordGoesToItsOwnLogsPartition(t *testing.T) {
 }
 
 // aGateRecord is an eviction's record on layout 0's tracker log.
-var aGateRecord = GateArgs{Layout: 0, Domain: "tracker", Partition: statelog.EstatePartition.String(),
-	Node: "node-away", By: "ops", OpID: "op-evict-1", Kind: GateEvict}
+var aGateRecord = GateArgs{LogRef: LogRef{Layout: 0, Domain: "tracker",
+	Partition: statelog.EstatePartition.String()}, Node: "node-away", By: "ops", OpID: "op-evict-1",
+	Kind: GateEvict}
 
 // A GATE RECORD ON A LOG THIS NODE DOES NOT SERVE REACHES A SERVING HOLDER,
 // which publishes it, and the router says which node did.
@@ -202,5 +202,53 @@ func TestAGateRecordOfAKindThisNodeDoesNotWriteIsRefused(t *testing.T) {
 		if !kind.Valid() {
 			t.Errorf("%q is a kind this build writes and is not valid", kind)
 		}
+	}
+}
+
+// A READMISSION'S BOUND IS READ WHERE THE LOG IS WRITTEN.
+//
+// A readmission is judged once, before any log is written, and each log's bound
+// is the one the fence of the node that writes it holds: so a log the asking
+// node does not write has its bound read, by `statelog.readmission_bound`, on a
+// serving holder of its partition — the same partition function as the record
+// it is judged for, this node first where it serves the partition and runs the
+// log, and past a holder that runs no such log right now to the next.
+func TestAReadmissionBoundIsReadWhereTheLogIsWritten(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-1", "data-2")
+	here := &fakeNode{name: "node-x", notHolder: true}
+	r := f.router(t, "node-x", here)
+	firstName, first := f.first(t, r)
+
+	bound, err := r.ReadmissionBound(t.Context(), aGateRecord.LogRef)
+	if err != nil || bound != first.bound("tracker") {
+		t.Fatalf("the bound answered (%+v, %v), want %s's own %+v", bound, err, firstName,
+			first.bound("tracker"))
+	}
+	if here.askedFor("readmission_bound") {
+		t.Errorf("a node that does not serve the partition read the bound itself")
+	}
+
+	first.set(func(n *fakeNode) { n.noGateLog = true })
+	other := f.other(first)
+	if bound, err = r.ReadmissionBound(t.Context(), aGateRecord.LogRef); err != nil ||
+		bound != other.bound("tracker") {
+		t.Fatalf("past a holder that runs no such log the bound answered (%+v, %v), want "+
+			"%s's own", bound, err, other.name)
+	}
+
+	// THIS NODE'S OWN, where it serves the partition and runs the log.
+	here.set(func(n *fakeNode) { n.notHolder = false })
+	if bound, err = r.ReadmissionBound(t.Context(), aGateRecord.LogRef); err != nil ||
+		bound != here.bound("tracker") {
+		t.Fatalf("a log this node writes had its bound read as (%+v, %v), want its own",
+			bound, err)
+	}
+
+	// A LOG NO LAYOUT HAS is refused before anybody is asked.
+	bad := aGateRecord.LogRef
+	bad.Partition = "tracker.999"
+	if _, err := r.ReadmissionBound(t.Context(), bad); !errors.Is(err, ErrGateArgs) {
+		t.Errorf("the bound of a log the layout lacks answered %v, want ErrGateArgs", err)
 	}
 }

@@ -55,19 +55,46 @@ import (
 // from its own snapshot and the broker arbitrates, so nothing the asking node
 // wrote has to be visible first. And every request NAMES its partition, since
 // no build from before partitions sends it.
+//
+// # And the readmission's judgement reads each log where it is written
+//
+// A readmission is JUDGED ONCE, before any log is written, against every log
+// the node would be counted on — refused if the node is below a trim floor it
+// would be counted against ([statelog.PermitReadmission]) — and each log's
+// bound is what the write fence of the node that writes it reads: the floor
+// published at the generation that node runs the log at, and the log's first
+// surviving sequence. A log the asking node does not write is written by a
+// holder of its partition, so its bound is read there too, by the companion
+// operation `statelog.readmission_bound` ([Router.ReadmissionBound]), routed to
+// the same partition by the same function. Judged only on the logs the asking
+// node runs, a readmission was refused on none of the others and then written
+// on all of them through their holders — putting back, unannounced, the very
+// pin the eviction was run to lift.
 
 // OpStatelogGate is the operation's name on the wire.
 const OpStatelogGate = "statelog.gate"
 
-// GateArgs is one log's gate record, as the node an operator asked sends it to
-// a serving holder of the log's partition.
-type GateArgs struct {
-	// Layout is the number of the layout the log is of, and Domain and
-	// Partition name the log — a log of the partition, never the key alone,
-	// which does not carry the layout.
+// OpReadmissionBound is the name on the wire of the read a readmission's
+// judgement makes of one log it does not write itself.
+const OpReadmissionBound = "statelog.readmission_bound"
+
+// LogRef names one log of a layout: the log a gate record is published on, or
+// whose readmission bound is read.
+//
+// THE LAYOUT, THE DOMAIN AND THE PARTITION, never the log's key alone, which
+// does not carry the layout (`tracker@tracker.007` is the same key in layouts 1
+// and 2).
+type LogRef struct {
 	Layout    int    `json:"layout"`
 	Domain    string `json:"domain"`
 	Partition string `json:"partition"`
+}
+
+// GateArgs is one log's gate record, as the node an operator asked sends it to
+// a serving holder of the log's partition.
+type GateArgs struct {
+	// LogRef is the log the record is published on.
+	LogRef
 
 	// Node is the node the gesture evicts or readmits, By the operator who
 	// ran it, and OpID the operation the record is published under — the
@@ -121,10 +148,12 @@ var ErrGateArgs = errors.New("estate: the gate record names no log of the runnin
 // — none at all, or one a later build added. Nothing was published.
 var ErrGateKind = errors.New("estate: the gate record is of a kind this node does not write")
 
-// GatePartitions is the partition a gate record goes to — exactly one, the
-// log's own — or why the record names none of layout: another layout's log,
-// a partition the layout does not have, or a domain that has no log there.
-func GatePartitions(l statelog.Layout, a GateArgs) ([]statelog.PartitionID, error) {
+// GatePartitions is the partition a request about one log goes to — exactly
+// one, the log's own — or why it names no log of layout: another layout's log,
+// a partition the layout does not have, or a domain that has no log there. It
+// is both node-gate operations' partition function, so a log's bound is read
+// where its record is written.
+func GatePartitions(l statelog.Layout, a LogRef) ([]statelog.PartitionID, error) {
 	p, err := statelog.ParsePartitionID(a.Partition)
 	switch {
 	case err != nil:
@@ -166,7 +195,7 @@ const AppendAttempt = 2*statelog.DefaultResolveBudget + 5*time.Second
 var opStatelogGate = define(OpStatelogGate, opIdempotentWrite,
 	address[GateArgs]{partitions: func(_ context.Context, l statelog.Layout, _ Resolver,
 		a GateArgs) ([]statelog.PartitionID, error) {
-		return GatePartitions(l, a)
+		return GatePartitions(l, a.LogRef)
 	}}, false,
 	func(ctx context.Context, b Backend, _ *Actor, a GateArgs) (statelog.Result, error) {
 		// THE KIND FIRST, before any backend sees the record: a kind this
@@ -200,4 +229,40 @@ func (r *Router) Gate(ctx context.Context, a GateArgs) (statelog.Result, string,
 	var writer string
 	res, err := callFrom(ctx, r, opStatelogGate, nil, a, func(node string) { writer = node })
 	return res, writer, err
+}
+
+// BoundReader reads one log's readmission bound on the serving node's own copy:
+// the `statelog.readmission_bound` operation's server half for one log
+// ([Backend.ReadmissionBounds]).
+type BoundReader func(ctx context.Context) (statelog.ReadmissionBound, error)
+
+// opReadmissionBound is the read a readmission's judgement makes of one log it
+// does not write itself — see the file's doc.
+//
+// A READ OF THE LOG'S STANDING, never of its rows at a position, so it carries
+// no session floor; and like the record it is judged for, every request names
+// its partition. A holder that runs no such log right now answers "no native
+// backend here", and the request moves on.
+var opReadmissionBound = define(OpReadmissionBound, opRead,
+	address[LogRef]{partitions: func(_ context.Context, l statelog.Layout, _ Resolver,
+		a LogRef) ([]statelog.PartitionID, error) {
+		return GatePartitions(l, a)
+	}}, false,
+	func(ctx context.Context, b Backend, _ *Actor, a LogRef) (statelog.ReadmissionBound, error) {
+		if b.ReadmissionBounds == nil {
+			return statelog.ReadmissionBound{}, errNoHalf
+		}
+		read := b.ReadmissionBounds(a.Domain)
+		if read == nil {
+			return statelog.ReadmissionBound{}, errNoHalf
+		}
+		return read(ctx)
+	}).floorless().named()
+
+// ReadmissionBound reads one log's readmission bound on a node that serves the
+// log's partition — this one, where it serves it and runs the log: the bound
+// the write fence of that node reads, which is the one a readmission written
+// there is held to ([statelog.ReadmissionBound]).
+func (r *Router) ReadmissionBound(ctx context.Context, l LogRef) (statelog.ReadmissionBound, error) {
+	return call(ctx, r, opReadmissionBound, nil, l)
 }

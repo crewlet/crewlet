@@ -235,7 +235,25 @@ func (f *fakeNode) backend() Backend {
 			}
 			return f.gate
 		},
+		ReadmissionBounds: func(domain string) BoundReader {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.noGateLog {
+				return nil
+			}
+			return func(context.Context) (statelog.ReadmissionBound, error) {
+				f.note("readmission_bound")
+				return f.bound(domain), nil
+			}
+		},
 	}
+}
+
+// bound is the readmission bound this node's copy reads on domain's log: a
+// floor that names the node, so an answer says whose fence it is.
+func (f *fakeNode) bound(domain string) statelog.ReadmissionBound {
+	return statelog.ReadmissionBound{Domain: domain + "@" + f.name, Generation: 1,
+		Floor: uint64(len(f.name)), First: 1}
 }
 
 // gate publishes a gate record as this node's write authority would: applied,

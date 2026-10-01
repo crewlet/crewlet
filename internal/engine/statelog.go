@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/estate/partmap"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -1925,12 +1926,23 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 //
 // HERE, because this is the one object holding all three inputs — the
 // positions register the node's own heartbeat writes, the floor the trim
-// publishes, and every domain's log — and each is read exactly as the write
-// fence reads it: the floor through [floorFor] at the generation this node
-// runs, and the stream's first sequence beside it, the higher of the two
-// bounding what may be gone. A readmission judged against a different bound
-// from the fence the node is about to be subject to would clear it for writes
-// that fence refuses.
+// publishes, and the logs — and each log's bound is read exactly as the write
+// fence of the node that WRITES its readmission reads it: the floor through
+// [floorFor] at the generation that node runs the log at, and the stream's
+// first sequence beside it, the higher of the two bounding what may be gone
+// ([stateLog.readmissionBound]). A readmission judged against a different
+// bound from the fence the node is about to be subject to would clear it for
+// writes that fence refuses.
+//
+// SO A LOG THIS NODE DOES NOT WRITE IS JUDGED WHERE IT IS WRITTEN. The gesture
+// sends such a log's record to a node serving its partition ([countedGateLogs]),
+// and its bound is read there, through the same router
+// ([estate.Router.ReadmissionBound]) — all of them at once, before anything is
+// written. Judged only on the logs this node runs, a readmission on a node
+// running few of them was refused on none of the rest and then written on every
+// one, through their holders: the pin the eviction was run to lift, put back
+// with nobody told. A bound no holder could give refuses, like every other
+// read here.
 //
 // IDENTITY-CLAIMING DOMAINS ONLY. The floor theorem is about an expectation of
 // zero, which only a domain that claims identity can form; a compacted domain
@@ -1951,7 +1963,9 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 // Every read that fails is an error and REFUSES: a register nobody could list
 // is not a register without the node in it, a holder table nobody could read
 // is not one that names nobody, and a floor nobody could read is not a low one.
-func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders partitionHolders) error {
+func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders partitionHolders,
+	route boundRoute) error {
+
 	if s == nil || s.fleet == nil {
 		return fmt.Errorf("engine: this node reads no positions register, so it "+
 			"cannot judge where %s stands against the trim floor", nodeID)
@@ -1972,27 +1986,89 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string, holders part
 		return fmt.Errorf("engine: read the published trim floors to judge %s's "+
 			"readmission: %w", nodeID, err)
 	}
-	var bounds []statelog.ReadmissionBound
-	for _, running := range s.running() {
-		name := running.key
-		if !running.domain.ClaimsIdentity() || !slices.Contains(counted, running.id) {
+	// EVERY LOG IT WOULD BE COUNTED ON, each read where it is written: this
+	// node's own copy where it writes the log, and a holder of the log's
+	// partition where the gesture sends the record there — read all at once,
+	// as the gesture then writes them.
+	bounds := make([]statelog.ReadmissionBound, len(counted))
+	errs := make([]error, len(counted))
+	var wg sync.WaitGroup
+	for i, id := range counted {
+		if running := s.gateWrites(id); running != nil {
+			bounds[i], errs[i] = s.readmissionBound(ctx, running, floors)
 			continue
 		}
-		generation := running.runner.Committed().Generation
-		floor, err := floorFor(floors, name, generation)
-		if err != nil {
-			return err
+		if route == nil {
+			errs[i] = fmt.Errorf("engine: this node does not write %s and has no route "+
+				"to a node that does", id)
+			continue
 		}
-		first, _, err := running.log.Bounds(ctx)
-		if err != nil {
-			return fmt.Errorf("engine: read %s's first surviving sequence to judge "+
-				"%s's readmission: %w", name, nodeID, err)
-		}
-		bounds = append(bounds, statelog.ReadmissionBound{
-			Domain: name, Generation: generation, Floor: floor, First: first,
+		wg.Go(func() {
+			bound, err := route.ReadmissionBound(ctx, logRef(s.layout, id))
+			// THE REGISTER'S KEY, which is what the judgement looks the
+			// node's position up by, whatever the holder named it.
+			bound.Domain = id.String()
+			bounds[i], errs[i] = bound, err
 		})
 	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return fmt.Errorf("engine: read %s's readmission bound to judge %s's "+
+				"readmission: %w", counted[i], nodeID, err)
+		}
+	}
 	return statelog.PermitReadmission(nodeID, register, bounds)
+}
+
+// boundRoute reads a log's readmission bound on a node that serves the log's
+// partition: the estate's router ([estate.Router.ReadmissionBound]).
+type boundRoute interface {
+	ReadmissionBound(ctx context.Context, l estate.LogRef) (statelog.ReadmissionBound, error)
+}
+
+// readmissionBound is running's bound as this node's write fence reads it
+// ([statelog.ReadmissionBound]): the floor published at the generation this
+// node runs the log at, out of floors, and the log's first surviving sequence.
+func (s *stateLog) readmissionBound(ctx context.Context, running *runningLog,
+	floors []coord.TrimFloor) (statelog.ReadmissionBound, error) {
+
+	generation := running.runner.Committed().Generation
+	floor, err := floorFor(floors, running.key, generation)
+	if err != nil {
+		return statelog.ReadmissionBound{}, err
+	}
+	first, _, err := running.log.Bounds(ctx)
+	if err != nil {
+		return statelog.ReadmissionBound{}, fmt.Errorf("engine: read %s's first "+
+			"surviving sequence: %w", running.key, err)
+	}
+	return statelog.ReadmissionBound{
+		Domain: running.key, Generation: generation, Floor: floor, First: first,
+	}, nil
+}
+
+// partitionBounds is p's half of the `statelog.readmission_bound` operation: for
+// each of p's identity-claiming logs this node runs, the bound a readmission is
+// judged against on this node's copy ([stateLog.readmissionBound]) — the one
+// this node's fence holds a node it writes the readmission for to. None for a
+// log it does not run right now, which is "no native backend here", and the
+// request moves on.
+func (s *stateLog) partitionBounds(p statelog.PartitionID) func(domain string) estate.BoundReader {
+	return func(domain string) estate.BoundReader {
+		running := s.Log(statelog.LogID{Domain: domain, Partition: p}.String())
+		if running == nil || !running.domain.ClaimsIdentity() {
+			return nil
+		}
+		return func(ctx context.Context) (statelog.ReadmissionBound, error) {
+			floors, err := s.floors(ctx)
+			if err != nil {
+				return statelog.ReadmissionBound{}, fmt.Errorf("engine: read the "+
+					"published trim floors: %w", err)
+			}
+			return s.readmissionBound(ctx, running, floors)
+		}
+	}
 }
 
 // observeStream hands one live reading of a domain log's state to its runner —

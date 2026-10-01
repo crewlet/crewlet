@@ -197,6 +197,14 @@ type Backend struct {
 	// backend here", so the request moves on to the next holder.
 	Gates func(domain string) GateWriter
 
+	// ReadmissionBounds is this copy's reader of a readmission's bound on
+	// one of the partition's identity-claiming logs, by the log's domain:
+	// the `statelog.readmission_bound` operation's server half
+	// ([OpReadmissionBound]). A read, so present whatever mode the node is
+	// in; nil where this node runs no state log, and a nil reader for a
+	// domain is a log of the partition it does not run right now.
+	ReadmissionBounds func(domain string) BoundReader
+
 	// ServerSeams are the node's own, partition-free: the dispatcher sets
 	// them on every backend it hands an operation.
 	ServerSeams

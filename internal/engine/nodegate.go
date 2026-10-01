@@ -69,7 +69,11 @@ import (
 // serves it and runs the log; for every other log the record is sent, as the
 // estate's `statelog.gate` operation, to a holder that does
 // ([estate.Router.Gate]), which publishes it through its own write authority
-// on this node's behalf — the judgement above is not made again there. So one
+// on this node's behalf — the judgement above is not made again there. And
+// that judgement reads each such log where it is written: a readmission's
+// bound on a log this node does not write is read on a holder of its
+// partition ([stateLog.Readmissible]), since that node's fence is the one the
+// node is held to. So one
 // gesture on any node reaches every log, and each log's answer names the node
 // that wrote it where that is not this one ([DomainGate.Writer]), because a
 // refusal is about the node whose authority gave it.
@@ -825,18 +829,31 @@ func (l gateLog) publish(ctx context.Context, by, opID, node string,
 	return res, "", err
 }
 
-// gateRoute is how the gate sends a log's record to a node serving the log's
-// partition: the estate's router ([estate.Router.Gate]), which tries this node
-// first where it serves the partition and then the partition's holders in
-// order, under the same operation id.
+// gateRoute is how the gate reaches a node serving a log's partition: the
+// estate's router, which tries this node first where it serves the partition
+// and then the partition's holders in order — to send a log's record there
+// under the same operation id ([estate.Router.Gate]), and to read the bound a
+// readmission is judged against there ([boundRoute]).
 type gateRoute interface {
+	gateSender
+	boundRoute
+}
+
+// gateSender sends a log's gate record to a node serving the log's partition
+// ([estate.Router.Gate]), and answers the node whose authority gave the answer.
+type gateSender interface {
 	Gate(ctx context.Context, a estate.GateArgs) (statelog.Result, string, error)
+}
+
+// logRef is the log id of layout, as the estate names it on the wire.
+func logRef(layout statelog.Layout, id statelog.LogID) estate.LogRef {
+	return estate.LogRef{Layout: layout.Number, Domain: id.Domain, Partition: id.Partition.String()}
 }
 
 // routedGateLog is the gate log for id, sent through route as `statelog.gate`
 // under layout. An answer this node itself gave — the router asks it first
 // where it serves the partition — names no other writer.
-func routedGateLog(route gateRoute, layout statelog.Layout, id statelog.LogID,
+func routedGateLog(route gateSender, layout statelog.Layout, id statelog.LogID,
 	spec statelog.StreamSpec, self string) gateLog {
 
 	return gateLog{domain: id.String(), stream: spec.Name, duplicates: spec.Duplicates,
@@ -844,8 +861,8 @@ func routedGateLog(route gateRoute, layout statelog.Layout, id statelog.LogID,
 			readmit bool) (statelog.Result, string, error) {
 
 			res, writer, err := route.Gate(ctx, estate.GateArgs{
-				Layout: layout.Number, Domain: id.Domain, Partition: id.Partition.String(),
-				Node: node, By: by, OpID: opID, Kind: gateKind(readmit),
+				LogRef: logRef(layout, id), Node: node, By: by, OpID: opID,
+				Kind: gateKind(readmit),
 			})
 			if writer == self {
 				writer = ""
@@ -986,7 +1003,7 @@ func newNodeGate(s *stateLog, leases liveLeases, holders partitionHolders,
 			return livePresences(ctx, leases)
 		},
 		readmissible: func(ctx context.Context, node string) error {
-			return s.Readmissible(ctx, node, holders)
+			return s.Readmissible(ctx, node, holders, route)
 		},
 		publishing: s.appends,
 		logs: func(ctx context.Context, node string, readmit bool) ([]gateLog, error) {
@@ -1015,7 +1032,7 @@ func newNodeGate(s *stateLog, leases liveLeases, holders partitionHolders,
 // node — which on a divided estate was the ordinary answer for most logs, and
 // left a readmission's map part waiting on logs no single node could finish.
 func countedGateLogs(ctx context.Context, s *stateLog, holders partitionHolders,
-	route gateRoute, db *store.DB, nodeID string, rec *metrics.Recorder, node string,
+	route gateSender, db *store.DB, nodeID string, rec *metrics.Recorder, node string,
 	readmit bool) ([]gateLog, error) {
 
 	counted, err := s.identityLogs()
@@ -1031,22 +1048,37 @@ func countedGateLogs(ctx context.Context, s *stateLog, holders partitionHolders,
 		if err != nil {
 			return nil, err
 		}
-		spec := s.layout.StreamSpec(domain, id)
-		serving, holdErr := s.holding.Serving(id.Partition)
-		running := s.Log(id.String())
-		switch {
-		case holdErr != nil || !serving || running == nil:
-			out = append(out, routedGateLog(route, s.layout, id, spec, nodeID))
-		default:
-			gl, err := gateLogFor(running, running.publisher,
-				db.PartitionHandle(id.Partition.String()).Reader(), nodeID, rec)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, gl)
+		running := s.gateWrites(id)
+		if running == nil {
+			out = append(out, routedGateLog(route, s.layout, id,
+				s.layout.StreamSpec(domain, id), nodeID))
+			continue
 		}
+		gl, err := gateLogFor(running, running.publisher,
+			db.PartitionHandle(id.Partition.String()).Reader(), nodeID, rec)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, gl)
 	}
 	return out, nil
+}
+
+// gateWrites is the running log through which this node writes id's gate
+// record itself — where it serves id's partition and runs the log — and nil
+// where the gesture sends the record to a node that does ([countedGateLogs]).
+//
+// ONE ANSWER FOR THE WRITE AND FOR THE JUDGEMENT: a readmission's bound on a
+// log is read where its record is written ([stateLog.Readmissible]), because
+// the bound is the one the writing node's fence holds the node to.
+func (s *stateLog) gateWrites(id statelog.LogID) *runningLog {
+	if s.holding == nil {
+		return nil
+	}
+	if serving, err := s.holding.Serving(id.Partition); err != nil || !serving {
+		return nil
+	}
+	return s.Log(id.String())
 }
 
 // countedOnLogs is every identity-claiming log of this node's layout that node

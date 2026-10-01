@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -85,6 +87,99 @@ func TestAnEvictionOnALogThisNodeDoesNotServeReachesAServingHolder(t *testing.T)
 			}
 		})
 	}
+}
+
+// A READMISSION IS JUDGED ON EVERY LOG IT WRITES, THE ONES SERVED ELSEWHERE TOO.
+//
+// The node an operator asks runs no log, so every log's record goes through the
+// router to node-p — and so must every log's JUDGEMENT. One log has a trim
+// floor the readmitted node is below (it never reported a position, and the
+// map names it a holder there, so it would be counted at zero): the gesture is
+// refused naming that log, and nothing is written on any log. Judged only on
+// the logs the asking node runs — none — the readmission went through, and its
+// routed records put back on every log the very pin the eviction lifted, with
+// nobody told. The bound is read where the record would be written: node-p's
+// fence, at the generation node-p runs the log at.
+func TestAReadmissionIsJudgedOnTheLogsItSendsElsewhere(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		boot    func(t *testing.T) (*Engine, *stateLog)
+		trimmed string
+	}{
+		{"layout 0", aLayoutZeroStateLog, "tracker"},
+		{"a divided layout", func(t *testing.T) (*Engine, *stateLog) {
+			e, s, _ := aPartitionedStateLog(t)
+			return e, s
+		}, "tracker@tracker.000"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e, s := c.boot(t)
+			const node = "node-stranger"
+			gate := aGateServedElsewhere(t, e, s, node)
+			evict := func(name string) {
+				t.Helper()
+				evicted, err := gate.Evict(t.Context(), GateRequest{Node: node, By: "ops",
+					OpID: statelog.NewOpID(time.Now(), name)})
+				if err != nil || !evicted.Complete() {
+					t.Fatalf("evict %s through node-p = %+v (%v), want complete", node, evicted, err)
+				}
+			}
+			// THE CONTROL: with no floor anywhere, the same routed judgement
+			// clears the node and every log takes it back through node-p.
+			evict("evict-first")
+			back, err := gate.Readmit(t.Context(), GateRequest{Node: node, By: "ops",
+				OpID: statelog.NewOpID(time.Now(), "readmit-first")})
+			if err != nil || !back.Complete() {
+				t.Fatalf("with no floor the readmission answered %+v (%v), want complete", back, err)
+			}
+			evict("evict-again")
+			running := s.Log(c.trimmed)
+			at := running.runner.Committed()
+			if err := s.fleet.PutFloor(t.Context(), coord.TrimFloor{
+				Domain: running.key, Layout: s.layout.Number, Generation: at.Generation,
+				TrimTo: 1000, Floor: 1000,
+			}); err != nil {
+				t.Fatalf("publish a floor on %s: %v", running.key, err)
+			}
+			before := endsByKey(t, s)
+
+			res, err := gate.Readmit(t.Context(), GateRequest{Node: node, By: "ops",
+				OpID: statelog.NewOpID(time.Now(), "readmit-again")})
+			var refusal *statelog.ReadmissionRefusal
+			if !errors.As(err, &refusal) || refusal.Domain != c.trimmed {
+				t.Fatalf("the readmission of a node below %s's floor answered %+v (%v), "+
+					"want refused on %s", c.trimmed, res, err, c.trimmed)
+			}
+			if refusal.Bound.Floor != 1000 || refusal.Bound.Generation != at.Generation {
+				t.Errorf("the refusal judged against %+v, want node-p's floor 1000 at "+
+					"generation %d", refusal.Bound, at.Generation)
+			}
+			if after := endsByKey(t, s); !maps.Equal(after, before) {
+				t.Errorf("a refused readmission wrote: the logs ended at %v and now at %v",
+					before, after)
+			}
+		})
+	}
+}
+
+// endsByKey is every identity-claiming log s runs, at its last sequence on the
+// broker, by the log's key — two logs of one domain under a divided layout.
+func endsByKey(t *testing.T, s *stateLog) map[string]uint64 {
+	t.Helper()
+	ends := map[string]uint64{}
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		_, last, err := running.log.Bounds(t.Context())
+		if err != nil {
+			t.Fatalf("read %s's end: %v", running.key, err)
+		}
+		ends[running.key] = last
+	}
+	return ends
 }
 
 // evictThroughTheRouter evicts node from a node that serves nothing and runs no

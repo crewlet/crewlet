@@ -587,7 +587,11 @@ same rule reads per partition, and three things follow from it:
   evicted it changes no row there. It is **judged** only on the logs it would
   be counted on once back: a node with no row that the map names a holder of
   nothing is refused nowhere, since it returns to a partition only by adopting
-  a copy.
+  a copy. And it is judged on **every one** of those, before any log is
+  written: a log the node you run it on does not write has its bound — the
+  floor and first surviving sequence the writing node's fence holds a node to
+  — read from a node that serves its partition, and a bound no holder could
+  give refuses the readmission rather than passing it unjudged.
 - **Each log is written by a node that serves its partition.** The node you
   run the gesture on writes the logs of the partitions it serves and runs; it
   sends every other log's record to a node that serves that partition, which

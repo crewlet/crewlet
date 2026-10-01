@@ -426,7 +426,10 @@ for the logs, and the same operation id finishes both, on any node
 reaches every log from whichever node it runs on: the node writes the logs of
 the partitions it serves and runs, and sends every other log's record — as
 the estate's `statelog.gate` operation — to a node that serves that
-partition, which writes it on its behalf. Nothing else lifts the bar:
+partition, which writes it on its behalf; and a readmission's judgement, made
+once before anything is written, reads each such log's bound there too
+(`statelog.readmission_bound`), since that node's fence is the one the
+readmitted node is held to. Nothing else lifts the bar:
 `crewlet estate in` refuses a barred node (`barred_member`) with the map
 unchanged — and the dashboard's estate screen offers a barred node no
 **Put back** but **Readmit…**, the readmission itself — because an in cannot

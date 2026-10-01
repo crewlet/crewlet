@@ -392,6 +392,9 @@ func (e *Engine) partitionBackend(n *native, p statelog.PartitionID) estate.Back
 	if n.log != nil && e.backends != nil && e.backends.Store != nil {
 		b.Gates = e.partitionGates(n.log, p)
 	}
+	if n.log != nil {
+		b.ReadmissionBounds = n.log.partitionBounds(p)
+	}
 	return b
 }
 

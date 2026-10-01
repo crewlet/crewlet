@@ -63,7 +63,9 @@
 // published by a holder's write authority on the asking node's behalf. It is
 // ONE APPEND, so each holder is given [AppendAttempt] rather than the gesture's
 // whole deadline, and the router says which holder answered, because a gate's
-// refusal is about the node that wrote it.
+// refusal is about the node that wrote it. A readmission's judgement reads each
+// such log's bound on a holder too (`statelog.readmission_bound`, a read): the
+// bound is the writing node's fence, so it is read where the record is written.
 //
 // A node that answers "I did not run it" — it does not serve the partition,
 // cannot tell whether it does, runs no native backend, its copy lags its logs,
