@@ -96,13 +96,42 @@ function mount(viewer: Viewer) {
   );
 }
 
+/** The open menu's entries, in order, as they are drawn now. */
+function entries(): string[] {
+  return within(screen.getByRole("menu"))
+    .getAllByRole("menuitem")
+    .map((item) => item.querySelector(".crewlet-menu__label")?.textContent ?? "");
+}
+
 /** Opens the menu by the name its trigger shows, and answers its entries, in order. */
 async function openMenu(name: string): Promise<string[]> {
   fireEvent.click(await screen.findByRole("button", { name }));
-  const menu = await screen.findByRole("menu");
-  return within(menu)
-    .getAllByRole("menuitem")
-    .map((item) => item.querySelector(".crewlet-menu__label")?.textContent ?? "");
+  await screen.findByRole("menu");
+  return entries();
+}
+
+/**
+ * Opens the menu ONCE its trigger is named, and waits for what it draws to
+ * hold `entry` — one of the entries the session's own answer adds, which
+ * arrives after the viewer that names the trigger.
+ *
+ * NO POLL'S BUDGET IS SPENT ON WORK THAT IS NOT WAITING. This was a `waitFor`
+ * around `openMenu`, an ASYNC poll: its one-second budget covered the first
+ * role query by accessible name the file makes — every element's role and
+ * name computed cold, a quarter of a second idle, measured — and the click,
+ * the render and a second query, and every retry clicked the trigger again.
+ * With the suite sharing its cores that first pass alone outlasted the budget
+ * and the case failed before its answer could be read. So the wait is on the
+ * viewer's ANSWER, observed as the session being asked for (it is asked only
+ * once a viewer is known), with a check that costs nothing; the trigger is
+ * then named before the first query looks, which finds it on its first,
+ * synchronous pass; and the menu, opened once, redraws as the session answers.
+ */
+async function openAnswered(name: string, entry: string): Promise<string[]> {
+  await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+  await openMenu(name);
+  await waitFor(() => expect(entries()).toContain(entry));
+  return entries();
 }
 
 function choose(label: string) {
@@ -136,15 +165,13 @@ describe("what the menu offers", () => {
   test("a person signed in with a session: their seat, their second factor, and both sign-outs", async () => {
     engine({ "GET /auth/session": PERSON });
     mount(JANE);
-    await waitFor(async () => {
-      expect(await openMenu("Jane Doe")).toEqual([
-        "Your seat",
-        "Two-step verification…",
-        "New recovery codes…",
-        "Sign out",
-        "Sign out everywhere",
-      ]);
-    });
+    expect(await openAnswered("Jane Doe", "Two-step verification…")).toEqual([
+      "Your seat",
+      "Two-step verification…",
+      "New recovery codes…",
+      "Sign out",
+      "Sign out everywhere",
+    ]);
   });
 
   // A MACHINE HOLDS NO SECOND FACTOR, and a dialog the engine would refuse
@@ -294,7 +321,7 @@ describe("recovery codes", () => {
       "POST /auth/totp/recovery": { status: 200, body: { codes: ["a1b2-c3d4", "e5f6-g7h8"] } },
     });
     mount(JANE);
-    await waitFor(async () => expect(await openMenu("Jane Doe")).toContain("New recovery codes…"));
+    await openAnswered("Jane Doe", "New recovery codes…");
     choose("New recovery codes…");
     await screen.findByRole("dialog", { name: "Recovery codes" });
     expect(sent.filter((s) => s.path === "/auth/totp/recovery")).toEqual([]);
@@ -316,7 +343,7 @@ describe("recovery codes", () => {
       },
     });
     mount(JANE);
-    await waitFor(async () => expect(await openMenu("Jane Doe")).toContain("New recovery codes…"));
+    await openAnswered("Jane Doe", "New recovery codes…");
     choose("New recovery codes…");
     fireEvent.click(await screen.findByRole("button", { name: "Issue new codes" }));
     expect(await screen.findByText(/It is not known whether a new set was stored/)).toBeDefined();
