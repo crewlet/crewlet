@@ -56,7 +56,14 @@ import {
 // and six history entries to press Back through. See the report.
 import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, NumberCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
+import {
+  ClockText,
+  DateCell,
+  KeyCell,
+  NumberCell,
+  TextCell,
+  TokenCell,
+} from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { AgentSpendRow, TurnSpendRow } from "~/protocol/types.ts";
@@ -74,7 +81,6 @@ import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -247,8 +253,7 @@ export function Spend() {
   const pushed = useTokens();
   const { open: openPeek } = usePeekControls();
   const orgBudget = useOrgBudget();
-  const now = useNow();
-  const range = useTimeRange(now, SPEND_OFFER);
+  const range = useTimeRange(SPEND_OFFER);
 
   // The pushed rollup covers the live window. Any other window is a query,
   // and while it loads the pushed one stays on screen rather than blanking.
@@ -419,7 +424,7 @@ export function Spend() {
           label="Counted through"
           value={
             tokens?.aggregated_through ? (
-              relTime(tokens.aggregated_through, now)
+              <ClockText read={(now) => relTime(tokens.aggregated_through, now)} />
             ) : (
               <EmptyValue label="Nothing has been counted yet" />
             )

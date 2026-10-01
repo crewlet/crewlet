@@ -578,11 +578,33 @@ vocabulary's order either way, so `1d` reads the same on every screen.
 pressed Back means the narrower one.
 
 The two edges reach the engine as the half-open `since`/`until` pair every
-windowed question takes. A chart's edges are rounded **up to the bucket it
-draws**, so the hour in progress is on the chart while it is still being spent
-and the query changes once per column rather than once per second; a list's are
-not. An interval never moves at all — it is the one window that is stable to
-link to.
+windowed question takes, and the edges of a named range are a function of WHEN
+they are read — so where they are read is the whole design:
+
+- **A chart's are its column's.** They are rounded **up to the bucket it
+  draws**, so the hour in progress is on the chart while it is still being
+  spent, and the chart reads the clock AS that edge (`useTimeRange`): it
+  renders, and its question changes, when a column rolls and at no other time.
+- **A list's are its ask's.** A list holds the window as CHOSEN (`useWindow`
+  — `7d`, or a reader's two instants, and no clock at all), and `useQuery`'s
+  `window` option computes the edges at the instant it asks — the first ask,
+  every poll, a refetch, a reconnect — so its newest row is the newest as of
+  the ask and the question is keyed on `7d`, not on its edges. Read at render
+  off the one-second clock they were a new pair of instants every second: the
+  audit asked the tracker for its feed once a second where its poll said once
+  a minute and drew every row it held again each time, and a test that moved
+  its clock a minute in one step re-keyed the question sixty times in a row,
+  which React refuses as "Maximum update depth exceeded". What else a list
+  narrows in the browser is cut to the edges the engine was last asked over
+  (`asked`), so the two halves cannot disagree about where the window starts.
+- **A list drawn under its own axis takes the axis's.** The event log's rows
+  and its bars are one window on the bars' bucket: run to the second against
+  an axis run to the column, the oldest bar counted rows the list had already
+  cut. The top edge rounded up asks the store for rows that are not there
+  yet, which is no row at all.
+
+An interval never moves at all — it is the one window that is stable to link
+to.
 
 ### Every list is one grid
 
@@ -3209,7 +3231,9 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   whole answer. **Audit** is the case that made this a rule: it composes four
   subsystems and only one of them — the tracker's feed — takes a wall-clock
   window, so the other three are asked for their newest page and narrowed on
-  the client. A page that fills up before it reaches the start of the window is
+  the client — to the edges the tracker's feed was last asked over, computed
+  at that ask, so the four agree about where the window starts and move
+  together on the minute the screen polls at. A page that fills up before it reaches the start of the window is
   older rows the screen never saw, and a caption reading "some of this may be
   missing" is one nobody can act on where "Knowledge answered one page" says
   where to look.

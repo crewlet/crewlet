@@ -75,9 +75,10 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import { awaitingPerson, indexOrg, liveRowFor, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { useClockReading } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { cutInto, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
+import { cutInto, spanOf, spanWords, useWindow, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -126,15 +127,16 @@ export function LiveNow() {
   const org = useOrg();
   const tokens = useTokens();
   const budget = useOrgBudget();
-  const now = useNow();
   // THE DURABLE CODING RUNS, the same source the Inbox reads for the same
   // reason: the live projection sweeps a parked run after twelve hours, and
   // two screens computing one queue from two sources would disagree about
   // whether anybody is waiting.
   const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
-  // NOT ALIGNED to a bucket: the strip's cell is its own, finer than either of
-  // the engine's, and its newest cell is the minute in progress.
-  const range = useTimeRange(now, STRIP_OFFER, false);
+  // THE CHOICE ALONE. Nothing here asks the engine over this window — the strip
+  // is folded from the events this tab holds — so the edges would only be read
+  // to be thrown away, and read off the clock at render they gave the window a
+  // new identity every second.
+  const range = useWindow(STRIP_OFFER);
 
   const index = useMemo(() => indexOrg(org), [org]);
 
@@ -173,8 +175,13 @@ export function LiveNow() {
   // `p0..p59` over a window recomputed from the clock shifts every cell's
   // content one position left on each roll, and rewrites the lot.
   const { cell, cells } = cutInto(spanOf(range.window), STRIP_CELLS);
+  // THE CELL IN PROGRESS, which is all of the clock this screen reads: it held
+  // the second for it, and drew the whole screen — every tile, every seat card
+  // and the strip re-folded — once a second to draw the same cells. Read as the
+  // cell's own start it changes when a cell rolls over, which with an event
+  // arriving is the only thing that changes what the strip draws.
+  const end = useClockReading((now) => Math.floor(now / cell) * cell);
   const strip = useMemo(() => {
-    const end = Math.floor(now / cell) * cell;
     const buckets = new Map<number, number>();
     for (let t = end - (cells - 1) * cell; t <= end; t += cell) buckets.set(t, 0);
     for (const ev of events) {
@@ -182,15 +189,18 @@ export function LiveNow() {
       if (buckets.has(t)) buckets.set(t, (buckets.get(t) ?? 0) + 1);
     }
     return [...buckets.entries()].map(([t, v]) => ({ t, v }));
-  }, [events, now, cell, cells]);
+  }, [events, end, cell, cells]);
 
   // The feed's own retention is the limit of what this panel can HONESTLY
   // claim: 400 events fill in minutes on a busy company, so a strip covering
   // an hour has to say where the record actually starts rather than drawing
   // the gap as quiet.
   const oldestHeld = events.length ? tsKey(events[events.length - 1]!.timestamp) : 0;
-  const covered = cells * cell;
-  const stripTruncated = events.length >= MAX_EVENTS && oldestHeld > now - covered;
+  // THE STRIP'S FIRST CELL, which is where the record has to reach for the
+  // strip to be whole: an oldest held event inside or after it means the
+  // events before it were evicted from the tab, not that none happened.
+  const stripStart = end - (cells - 1) * cell;
+  const stripTruncated = events.length >= MAX_EVENTS && oldestHeld > stripStart;
 
   const seatCount = index.seats.filter((s) => s.kind === "agent").length;
   const humanCount = index.seats.length - seatCount;
@@ -457,7 +467,9 @@ export function LiveNow() {
                     {run.coding_agent ? ` · ${run.coding_agent}` : ""}
                   </span>
                 </span>
-                <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>
+                <span className="t-caption nowrap">
+                  <ClockText read={(now) => relTime(run.started_at, now)} />
+                </span>
               </a>
             ))}
             {/* WHAT IS NOT SHOWN, said rather than left to be inferred: a list

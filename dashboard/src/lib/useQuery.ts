@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
+import { windowEdges, type Window } from "./range.ts";
 import {
   queryErrorCode,
   queryFailure,
@@ -48,6 +49,17 @@ export interface QueryResult<T> {
    */
   refusal: QueryRefusal | LogRefusal | null;
   /**
+   * The two instants a question with a `window` was LAST ASKED over — null
+   * before its first ask, and always for a question without one.
+   *
+   * For what a screen narrows BESIDE the answer. The audit reads four
+   * sources and only the tracker's takes a window; the other three are cut to
+   * it in the browser, and cut to these edges rather than to a pair of its own
+   * they cannot disagree with the engine about where "the last seven days"
+   * begins.
+   */
+  asked: AskedWindow | null;
+  /**
    * Ask again now.
    *
    * For the moment a screen KNOWS the answer has changed, which no poll
@@ -58,6 +70,37 @@ export interface QueryResult<T> {
    * It does not blank what is on screen. See `loading`.
    */
   refetch: () => void;
+}
+
+/**
+ * A wall-clock window a question is asked over, and the two parameters its
+ * edges are written to.
+ *
+ * THE EDGES ARE COMPUTED WHEN THE QUESTION IS ASKED — the first ask, every
+ * poll, a refetch, a reconnect — and the question is KEYED ON THE WINDOW
+ * rather than on its edges. A named range's edges ARE the clock: computed at
+ * render they were a fresh pair of instants on every tick of `useNow`, so the
+ * key changed once a second and a list meant to be polled once a minute was
+ * asked once a second instead — the audit asked the tracker for its feed one,
+ * two, three, four times over three ticks. A test that moved its clock a
+ * minute in one `act` re-keyed the question sixty times in a row, which React
+ * reports as "Maximum update depth exceeded". Keyed on `7d`, a second passing
+ * is not a new question: the poll is what asks again, over the seven days
+ * ending when it asks.
+ */
+export interface QueryWindow {
+  /** The window, as the screen holds it. */
+  over: Window;
+  /** The parameter the inclusive start is written to — `from` on the tracker's feed. */
+  since: string;
+  /** The parameter the end is written to. */
+  until: string;
+}
+
+/** Two instants a question was asked over, RFC3339. */
+export interface AskedWindow {
+  since: string;
+  until: string;
 }
 
 export interface QueryOptions {
@@ -102,6 +145,8 @@ export interface QueryOptions {
    * leaves the screen.
    */
   refetchOnInboxOf?: string;
+  /** Ask over a wall-clock window whose edges the ask computes — see [QueryWindow]. */
+  window?: QueryWindow;
 }
 
 /**
@@ -133,6 +178,7 @@ export function useQuery<K extends QueryName>(
     refetchOnReconnect = true,
     refetchOnFocus = false,
     refetchOnInboxOf = "",
+    window: over,
   } = options;
 
   const [state, setState] = useState<{
@@ -140,11 +186,15 @@ export function useQuery<K extends QueryName>(
     loading: boolean;
     error: QueryErrorCode | null;
     refusal: QueryRefusal | LogRefusal | null;
-  }>({ data: null, loading: enabled, error: null, refusal: null });
+    asked: AskedWindow | null;
+  }>({ data: null, loading: enabled, error: null, refusal: null, asked: null });
 
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
   const key = JSON.stringify(params ?? {});
+  // AND THE WINDOW BY WHAT WAS CHOSEN — `7d`, or a reader's two instants —
+  // never by the edges an ask computes from it. See [QueryWindow].
+  const windowKey = over ? JSON.stringify([over.over, over.since, over.until]) : "";
 
   // Which generation of the effect is allowed to write state. A ref rather
   // than a captured boolean so a poll tick started by an earlier generation
@@ -154,12 +204,12 @@ export function useQuery<K extends QueryName>(
   // A COUNTER RATHER THAN A CALLBACK holding the query, so an explicit ask
   // goes through exactly the same path as a poll tick: one implementation of
   // "what does the engine say", and a refetch that cannot drift from it.
-  const [asked, setAsked] = useState(0);
-  const refetch = useCallback(() => setAsked((n) => n + 1), []);
+  const [refetches, setRefetches] = useState(0);
+  const refetch = useCallback(() => setRefetches((n) => n + 1), []);
 
   useEffect(() => {
     if (!enabled) {
-      setState({ data: null, loading: false, error: null, refusal: null });
+      setState({ data: null, loading: false, error: null, refusal: null, asked: null });
       return;
     }
     const mine = ++generation.current;
@@ -169,10 +219,28 @@ export function useQuery<K extends QueryName>(
       // When this answer is asked again: the screen's own poll, unless the
       // engine said otherwise. `null` is never on a timer.
       let next: number | null = pollMs !== undefined && pollMs > 0 ? pollMs : null;
+      const asking = JSON.parse(key) as Record<string, unknown>;
+      if (windowKey !== "") {
+        // THE EDGES OF THIS ASK, read off the clock now — on the first ask and
+        // on every poll alike, which is what makes a minute's poll ask over
+        // the window ending a minute later rather than the one the screen
+        // rendered with.
+        const [chosen, sinceParam, untilParam] = JSON.parse(windowKey) as [Window, string, string];
+        const { since, until } = windowEdges(chosen, Date.now());
+        asking[sinceParam] = since;
+        asking[untilParam] = until;
+        setState((prev) => ({ ...prev, asked: { since, until } }));
+      }
       try {
-        const data = await socket.query(what, JSON.parse(key) as Record<string, unknown>);
+        const data = await socket.query(what, asking);
         if (generation.current !== mine) return;
-        setState({ data, loading: false, error: null, refusal: null });
+        setState((prev) => ({
+          data,
+          loading: false,
+          error: null,
+          refusal: null,
+          asked: prev.asked,
+        }));
       } catch (err) {
         if (generation.current !== mine) return;
         // A socket rejection always carries a code; anything else that
@@ -198,6 +266,7 @@ export function useQuery<K extends QueryName>(
           loading: false,
           error: code,
           refusal,
+          asked: prev.asked,
         }));
       } finally {
         if (generation.current === mine && next !== null) {
@@ -217,7 +286,7 @@ export function useQuery<K extends QueryName>(
     // re-ask; including it unconditionally would re-run every query on every
     // socket blip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, what, key, enabled, pollMs, asked, refetchOnReconnect && connected]);
+  }, [socket, what, key, windowKey, enabled, pollMs, refetches, refetchOnReconnect && connected]);
 
   // A TAB COMING BACK ASKS AGAIN.
   //

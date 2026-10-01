@@ -53,12 +53,11 @@ import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { useNow } from "~/lib/clock.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { useRestRead, type RestRead } from "~/lib/restRead.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { useTimeRange, type Offer } from "~/lib/range.ts";
+import { useWindow, type Offer } from "~/lib/range.ts";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SecretRow, WorkActivityRecord } from "~/protocol/index.ts";
 
@@ -217,29 +216,37 @@ function list<T>(value: T[] | null | undefined): T[] {
 const OPERATOR_KINDS = "operator,human";
 
 export function Audit() {
-  const now = useNow();
   const org = useOrg();
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE — the name and the kind — since
   // the only thing this screen asks of the chart is how to draw a writer.
   const who = useMemo(() => seatLookup(indexOrg(org)), [org]);
-  const range = useTimeRange(now, AUDIT_OFFER, false);
-  const { since, until } = range;
+  // THE CHOICE, NOT ITS EDGES. This screen read the one-second clock and
+  // turned it into `from` and `to` at render, so every tick was a new
+  // question: the tracker was asked for its feed once a second where the
+  // poll below says once a minute, and every row on screen was drawn again
+  // each time. The edges are computed when the feed is ASKED.
+  const range = useWindow(AUDIT_OFFER);
   const [actor, setActor] = useParam("actor", "");
   const [kind, setKind] = useParam("kind", "");
 
   // THE ONE SOURCE THAT TAKES THE WINDOW. `from` and `to` bound the AUTHORED
-  // instants, which is what somebody typing "last week" means (D113).
+  // instants, which is what somebody typing "last week" means (D113) — and
+  // they are the window as of each ask, the first and every poll after it.
   const work = useQuery(
     "work_activity",
     {
       container: "workspace",
       actor_kinds: OPERATOR_KINDS,
-      from: since,
-      to: until,
       limit: PAGE.work,
     },
-    { pollMs: POLL_MS },
+    { pollMs: POLL_MS, window: { over: range.window, since: "from", until: "to" } },
   );
+  // AND THE WINDOW EVERY OTHER SOURCE IS CUT TO: the one the tracker was last
+  // asked over, so the three sources narrowed here and the one the engine
+  // narrowed agree about where it starts. Null only before the first ask,
+  // when nothing has answered to be cut.
+  const since = work.asked?.since ?? "";
+  const until = work.asked?.until ?? "";
   // AND THE THREE THAT DO NOT. `page_activity` bounds on a log POSITION
   // rather than a clock, and neither the config history nor the credential
   // table has a window at all — so each is asked for its newest page and
@@ -337,6 +344,7 @@ export function Audit() {
 
   /** Newest first, narrowed to the window and to what the reader asked. */
   const shown = useMemo(() => {
+    if (!since || !until) return [];
     const from = Date.parse(since);
     const to = Date.parse(until);
     return rows
@@ -356,6 +364,7 @@ export function Audit() {
   // would be claiming those rows do not exist.
   const truncated = useMemo(() => {
     const short: string[] = [];
+    if (!since) return short;
     const from = Date.parse(since);
     const oldest = (list: { at: string }[], page: number, label: string) => {
       if (list.length < page) return;

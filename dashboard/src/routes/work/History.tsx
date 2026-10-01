@@ -63,7 +63,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
+import { ClockText } from "~/app/frame/cells.tsx";
 import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { barsOver, useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { describeChange, type LabelContext } from "~/lib/work.ts";
@@ -142,13 +142,12 @@ export function HistoryView({
 }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
   const { socket } = useClient();
   const viewer = useViewer();
   // ALIGNED TO THE BUCKET, so the hour in progress is on the chart while it is
   // still being spent and the query changes once per bucket rather than once
   // per second — the rule `lib/range.ts` states for every chart's edges.
-  const range = useTimeRange(now, HISTORY_OFFER);
+  const range = useTimeRange(HISTORY_OFFER);
   const [kind, setKind] = useParam("kind", "");
   const [actor, setActor] = useParam("actor", "");
   const limit = embedded ? FEED_PAGE.board : FEED_PAGE.page;
@@ -434,7 +433,7 @@ export function HistoryView({
       >
         <div className="work-log">
           {records.map((record) => (
-            <HistoryRow key={record.id} record={record} chrome={chrome} now={now} />
+            <HistoryRow key={record.id} record={record} chrome={chrome} />
           ))}
         </div>
       </QueryState>
@@ -494,19 +493,11 @@ function PublishCoverage({ answer }: { answer?: CoverageFacts | null }) {
 }
 
 /** One change, as the delta it was. */
-function HistoryRow({
-  record,
-  chrome,
-  now,
-}: {
-  record: WorkActivityRecord;
-  chrome: LabelContext;
-  now: number;
-}) {
+function HistoryRow({ record, chrome }: { record: WorkActivityRecord; chrome: LabelContext }) {
   return (
     <div className="work-log-row">
       <span className="work-log-when" title={fmtDateTime(record.at)}>
-        {relTime(record.at, now)}
+        <ClockText read={(now) => relTime(record.at, now)} />
       </span>
       <span className="work-log-key">
         {record.subject_key ? (

@@ -29,6 +29,7 @@
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { fmtMinute, parseUTC } from "~/lib/format.ts";
+import { useClockReading } from "~/lib/clock.ts";
 
 /** The windows every time-ranged screen offers, in the order a control reads. */
 export const RANGES = ["15m", "1h", "6h", "1d", "7d", "30d", "90d"] as const;
@@ -259,16 +260,22 @@ export function cutInto(span: number, cap: number): Cut {
   return { cell, cells: Math.max(1, Math.min(columns, Math.round(span / cell))) };
 }
 
-/** A window, as the engine's two parameters. */
-export interface TimeRange {
+/**
+ * A window as a screen holds it: what was chosen, and how to choose another.
+ *
+ * NO INSTANTS, and that is the point of it being a type of its own. The two
+ * edges of a named range are a function of WHEN they are read, and a screen
+ * that read them at render read them once a second: the one-second clock
+ * (`lib/clock.ts`) re-rendered it, a fresh pair of millisecond instants came
+ * out, and every question keyed on them was a new question. The audit asked
+ * the tracker for its feed once a second where it meant once a minute, and
+ * drew every row it held again each time. What a screen holds is the CHOICE;
+ * the edges are computed where they are spent — a chart's on its bucket
+ * ([useTimeRange]), a list's at the instant it asks (`useQuery`'s `window`).
+ */
+export interface WindowChoice {
   /** What was chosen, for a control and a heading. */
   window: Window;
-  /** The inclusive start, RFC3339. */
-  since: string;
-  /** The exclusive end, RFC3339. */
-  until: string;
-  /** The window immediately before this one, for a compare-to-previous. */
-  previous: { since: string; until: string };
   /** The bucket a chart over this window draws in. */
   bucket: Bucket;
   /** What this screen offers, so one declaration reaches the control too. */
@@ -276,6 +283,16 @@ export interface TimeRange {
   /** Set the window, which is a SECTION rather than a filter: a reader who
    *  widened the range and pressed back means the narrower one. */
   set: (next: Window) => void;
+}
+
+/** A window as the engine's two parameters — a chart's, on its bucket. */
+export interface TimeRange extends WindowChoice {
+  /** The inclusive start, RFC3339. */
+  since: string;
+  /** The exclusive end, RFC3339. */
+  until: string;
+  /** The window immediately before this one, for a compare-to-previous. */
+  previous: { since: string; until: string };
 }
 
 /**
@@ -289,7 +306,9 @@ export interface TimeRange {
  * not. The top edge becomes the END of the bucket in progress, so the current
  * hour is on the chart while it is still being spent rather than appearing
  * once it ends — and the window's identity, and therefore the query, changes
- * once per column rather than once per second.
+ * once per column rather than once per second. With no step the top edge is
+ * `now` itself, which is right only where `now` is the instant of ASKING:
+ * read at render, it is a different window every second.
  *
  * AN INTERVAL IS NOT ALIGNED AND DOES NOT MOVE. A reader who named two
  * instants asked for those instants; rounding them to a bucket would answer a
@@ -319,13 +338,15 @@ export function windowEdges(
 }
 
 /**
- * `window=` as two instants, and the setter that moves it.
+ * `window=`, as this screen can show it, and the setter that moves it.
  *
- * `align` is what separates a chart from a list: a chart asks for edges on the
- * bucket it draws so the query changes once per column, and a list asks for
- * the clock so its newest row is the newest row.
+ * THE CLOCK DOES NOT ENTER IT, so its identity changes when the reader picks
+ * another window and at no other time. A LIST holds this and nothing more: it
+ * computes its edges when it asks (`useQuery`'s `window` option), so its
+ * newest row is the newest row as of the ask, and a second passing between
+ * two asks changes no question and redraws nothing.
  */
-export function useTimeRange(now: number, offer: Offer, align = true): TimeRange {
+export function useWindow(offer: Offer): WindowChoice {
   const [raw, setRaw] = useParam("window", offer.fallback, "section");
   const { ranges, custom, fallback, buckets } = offer;
   // Rebuilt from the fields rather than held by identity: every caller writes
@@ -335,29 +356,52 @@ export function useTimeRange(now: number, offer: Offer, align = true): TimeRange
     () => ({ ranges, custom, fallback, buckets }),
     [ranges, custom, fallback, buckets],
   );
-  const window = parseWindow(raw, settled);
-  const bucket = bucketFor(window, buckets);
-  const step = align ? stepOf(bucket) : 0;
   // THE WINDOW AS A STRING is what the memo holds, because `parseWindow`
   // returns a fresh object for an interval and a dependency compared by
   // identity would rebuild on every render.
-  const key = windowParam(window);
-  // AND A RANGE'S ANCHOR IS THE CLOCK WHILE AN INTERVAL'S IS NOTHING. A
-  // reader who named two instants asked for those instants, so the tick that
-  // advances every other clock on the screen must not give this one a new
-  // identity — which is what makes a custom window stable to link to and to
-  // hold a query open on.
-  const anchor = isRange(window) ? now : 0;
+  const key = windowParam(parseWindow(raw, settled));
   return useMemo(() => {
-    const w = parseWindow(key, settled);
+    const window = parseWindow(key, settled);
     return {
-      window: w,
-      ...windowEdges(w, anchor, step),
-      bucket,
+      window,
+      bucket: bucketFor(window, settled.buckets),
       offer: settled,
       set: (next: Window) => setRaw(windowParam(next)),
     };
-  }, [key, settled, anchor, step, bucket, setRaw]);
+  }, [key, settled, setRaw]);
+}
+
+/**
+ * `window=` as a CHART draws it: two instants on the bucket it draws in.
+ *
+ * ALWAYS ALIGNED. The top edge is the end of the bucket in progress, so the
+ * edges change once per column, and a question keyed on them is asked again
+ * when a column rolls rather than when a second passes. A list that asks the
+ * engine has no column to roll; it takes [useWindow] and computes its edges
+ * when it asks.
+ *
+ * AND IT READS THE CLOCK AS THAT EDGE, not as the second (`useClockReading`):
+ * a screen that held `now` to hand in here rendered once a second — its grid,
+ * its axis and every row under them — to arrive at edges that move once an
+ * hour, and it renders now when the column rolls.
+ *
+ * AN INTERVAL'S ANCHOR IS NOTHING: a reader who named two instants asked for
+ * those instants, so the tick that advances every other clock on the screen
+ * must not give this one new edges.
+ */
+export function useTimeRange(offer: Offer): TimeRange {
+  const choice = useWindow(offer);
+  const step = stepOf(choice.bucket);
+  const ranged = isRange(choice.window);
+  const edge = useClockReading((now) => (ranged ? Math.ceil(now / step) * step : 0));
+  const { since, until, previous } = windowEdges(choice.window, edge, step);
+  // `previous.until` IS `since`, so these three strings are every instant the
+  // value carries, and the memo holds on exactly them.
+  const before = previous.since;
+  return useMemo(
+    () => ({ ...choice, since, until, previous: { since: before, until: since } }),
+    [choice, since, until, before],
+  );
 }
 
 /**

@@ -57,7 +57,6 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatFilter } from "~/lib/seats.ts";
 import { plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { BUCKET_MS, RANGE_MS, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Bucket, Offer, Window } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -203,7 +202,6 @@ function foldBars(rows: TurnRow[], since: string, until: string, bucket: Bucket)
 }
 
 function TurnList({ view, onChange }: { view: string; onChange: (v: string) => void }) {
-  const now = useNow();
   const org = useOrg();
   const agents = useAgents();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -225,7 +223,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
   // edge is the END of the bucket in progress, so the current column is drawn
   // while it is still being spent and the window's identity — and therefore
   // the query — changes once per column rather than once per second.
-  const range = useTimeRange(now, TURN_OFFER);
+  const range = useTimeRange(TURN_OFFER);
   const { since, until, bucket } = range;
   const list = useQuery(
     "turns",

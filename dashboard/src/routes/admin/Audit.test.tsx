@@ -19,6 +19,7 @@
  *     screen silent about that is claiming those rows do not exist.
  */
 
+import { Profiler } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -33,18 +34,12 @@ vi.mock("~/lib/store-hooks.ts", async () => {
   return { ...actual, useClient: vi.fn(), useConnection: vi.fn(), useOrg: vi.fn() };
 });
 
-/*
- * THE SCREEN'S CLOCK IS HELD STILL. The audit reads the shared one-second
- * clock (`useNow`), and a list's window follows it, so every real tick moved
- * the window's edges: the tracker was asked again and every row was rendered
- * again, once a second, for as long as a case ran. A case that took three
- * seconds on a loaded runner did three ticks of work it never asked for, and
- * the slower the runner the more ticks — the hundred-row case timed out on
- * exactly that. Only the interval the clock ticks on is faked; the one case
- * about time passing moves every timer itself.
- */
+// THE CLOCK RUNS FOR REAL. This suite used to fake the interval it ticks on,
+// because every tick re-asked the tracker and drew every row again, so a case
+// did more work the slower its runner was. A tick reaches only the date cells
+// whose words change now — which is what the case below about ticks pins — and
+// the cases about time passing move every timer themselves.
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   location.hash = "#/admin/audit";
   Object.defineProperty(globalThis, "fetch", {
     writable: true,
@@ -148,6 +143,91 @@ test("both history feeds are asked for who was writing, not for a list of people
   // AUTHORED instants, which is what a person typing "last week" means.
   expect(asked(query, "work_activity").from).toBeTruthy();
   expect(asked(query, "work_activity").to).toBeTruthy();
+});
+
+// THE TRACKER IS ASKED ON THE POLL, NOT ON THE CLOCK.
+//
+// The window's edges were read off the one-second clock at render and written
+// into the question, so every tick was a new question: the feed was asked one,
+// two, three, four times over three ticks where the poll says once a minute,
+// and a minute moved in one `act` re-keyed it sixty times in a row — which
+// React reports as "Maximum update depth exceeded". Keyed on the window, with
+// its edges computed by the ask, a tick asks nothing and the poll asks over
+// the window ending when it asks.
+test("the tracker is asked once a minute however often the clock ticks", async () => {
+  vi.useFakeTimers();
+  const errors = vi.spyOn(console, "error");
+  const query = serving({ work_activity: { records: [], complete: true } });
+  const asks = () =>
+    (query.mock.calls as unknown as [string, Record<string, unknown>][])
+      .filter(([what]) => what === "work_activity")
+      .map(([, params]) => params);
+  mount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(asks()).toHaveLength(1);
+
+  // FIFTY-NINE TICKS of the clock, one at a time, as a tab open on the screen
+  // sees them.
+  for (let tick = 1; tick < 60; tick++) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+  }
+  expect(asks()).toHaveLength(1);
+
+  // AND THE POLL, which asks over the window as of ITS instant: a minute on
+  // from the first ask, still seven days wide.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(asks()).toHaveLength(2);
+  const [first, second] = asks();
+  const at = (params: Record<string, unknown> | undefined, edge: "from" | "to") =>
+    Date.parse(String(params?.[edge]));
+  expect(at(second, "to") - at(first, "to")).toBe(60_000);
+  expect(at(second, "to") - at(second, "from")).toBe(7 * 24 * 60 * 60_000);
+
+  // A MINUTE MOVED IN ONE GO is one more ask, not sixty.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(asks()).toHaveLength(3);
+  expect(
+    errors.mock.calls.filter(([message]) => /Maximum update depth/.test(String(message))),
+  ).toEqual([]);
+});
+
+// AND A TICK DRAWS NOTHING. The window was the clock and the columns closed
+// over it, so every second re-asked the feed and drew every row again — a
+// probe counted 131 to 248 ms of render a tick for a hundred rows under the
+// development build. A row aged a minute reads "1m ago" for the next minute,
+// so ten ticks inside it are ten ticks in which nothing on this screen moves.
+test("a tick of the clock draws nothing on the audit", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  const records = Array.from({ length: 20 }, (_, i) =>
+    commit({ id: `h-${i}`, subject_key: `ENG-${i}`, excerpt: `edit ${i}` }),
+  );
+  serving({ work_activity: { records, complete: true } });
+  let commits = 0;
+  render(
+    <Profiler id="audit" onRender={() => (commits += 1)}>
+      <Router>
+        <Audit />
+      </Router>
+    </Profiler>,
+  );
+  await answered();
+  expect(screen.getByText("edit 19")).toBeTruthy();
+  const settled = commits;
+
+  for (let tick = 0; tick < 10; tick++) {
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+  }
+  expect(commits).toBe(settled);
 });
 
 // FOUR SOURCES, ONE FEED, NEWEST FIRST.
