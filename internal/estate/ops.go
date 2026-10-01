@@ -401,8 +401,8 @@ var opWorkSearch = defineGather("tracker.search", corpusOf[workSearchArgs](track
 		}
 		return b.WorkSearch.Slice(ctx, a.Text)
 	},
-	func(a workSearchArgs, parts []PartResult[tracker.SearchSlice]) ([]tracker.Ranked, error) {
-		return tracker.MergeSearch(answered(parts), a.Limit), nil
+	func(a workSearchArgs, g Gathered[tracker.SearchSlice]) ([]tracker.Ranked, error) {
+		return tracker.MergeSearch(g.Answered(), a.Limit), nil
 	}).floorless()
 
 type workloadArgs struct {
@@ -1060,8 +1060,8 @@ var opKnowledgeSearch = defineGather("knowledge.search", corpusOf[knowledgeArgs]
 		}
 		return b.Knowledge.Slice(ctx, a.query(b))
 	},
-	func(a knowledgeArgs, parts []PartResult[pages.SearchSlice]) ([]knowledge.Hit, error) {
-		return pages.MergeSearch(answered(parts), knowledge.Query{Limit: a.Limit}), nil
+	func(a knowledgeArgs, g Gathered[pages.SearchSlice]) ([]knowledge.Hit, error) {
+		return pages.MergeSearch(g.Answered(), knowledge.Query{Limit: a.Limit}), nil
 	}).floorless()
 
 // WHETHER AN INDEX IS STILL BUILDING is asked of every partition a search
@@ -1074,20 +1074,9 @@ var opKnowledgeBuilding = defineGather("knowledge.building", corpusOf[struct{}](
 		}
 		return b.Knowledge.Building(ctx), nil
 	},
-	func(_ struct{}, parts []PartResult[bool]) (bool, error) {
-		return slices.Contains(answered(parts), true), nil
+	func(_ struct{}, g Gathered[bool]) (bool, error) {
+		return slices.Contains(g.Answered(), true), nil
 	}).floorless()
-
-// answered is the values of the partitions that answered, in order.
-func answered[P any](parts []PartResult[P]) []P {
-	out := make([]P, 0, len(parts))
-	for _, p := range parts {
-		if p.Missing == nil {
-			out = append(out, p.Value)
-		}
-	}
-	return out
-}
 
 // served is what a node runs, as a seat's admission asks it.
 type served struct {

@@ -119,10 +119,11 @@ type request struct {
 
 	// Slices asks a gather operation for each of Partitions' own answer
 	// ([reply.Parts]) rather than the operation's whole one — the asker
-	// holds every partition's and merges them. A gather that addresses ONE
-	// partition is a single-partition read and never sets it, which is
-	// also what an older build's asker sends: the serving node answers
-	// such a request whole, exactly as before gathers.
+	// holds every partition's and merges them. A gather whose arguments
+	// address ONE partition is a single-partition read and never sets it,
+	// which is also what an older build's asker sends: the serving node
+	// answers such a request whole, from the arguments exactly as given —
+	// a paged list's cursor is that partition's own — as before gathers.
 	Slices bool `json:"slices,omitempty"`
 
 	// Level is the level each partition of a gather slice is read at
@@ -130,8 +131,9 @@ type request struct {
 	// level and empty where it does not.
 	Level statelog.ReadLevel `json:"level,omitempty"`
 
-	// Cursors are a paged gather's per-partition cursors, by partition id:
-	// each partition resumes from its own, which only it can read.
+	// Cursors are a paged gather's per-partition cursors, by partition id,
+	// sent with [request.Slices]: each partition resumes from its own,
+	// which only it can read, and one absent here is read from its start.
 	Cursors map[string]string `json:"cursors,omitempty"`
 }
 

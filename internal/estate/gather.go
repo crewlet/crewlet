@@ -44,11 +44,17 @@ import (
 //
 // # A gather of ONE partition is a single-partition read
 //
-// It asks for the operation's WHOLE answer rather than a slice of it, at the
-// level the read itself names — exactly the request a single-partition read
-// sends, and the one a build that predates gathers sends and answers. Under
-// layout 0 every gather is one, so nothing about a running fleet's reads
-// changes until a layout divides a domain.
+// A read whose arguments resolve to one partition asks for the operation's
+// WHOLE answer rather than a slice of it, at the level the read itself names,
+// with the arguments exactly as the caller gave them — a paged list's cursor
+// included, which is that partition's own and is never wrapped, decoded or
+// replaced — and it answers that partition's own next cursor. That is the
+// request a single-partition read sends, and the one a build that predates
+// gathers sends and answers, so under layout 0, where every gather is one,
+// nothing about a running fleet's reads or the cursors a caller holds changes
+// until a layout divides a domain. Only a list across several partitions mints
+// a gathered cursor ([Gathered.Cursor]), and it stays a gather to its last page
+// even once one partition is all it has left.
 //
 // # Never a short list
 //
@@ -75,12 +81,49 @@ type PartResult[P any] struct {
 	Missing *statelog.MissingPartition
 }
 
+// Gathered is every partition's answer to a gather, as its merge reads them.
+type Gathered[P any] struct {
+	Parts []PartResult[P]
+
+	// op is the gather; single is a read whose arguments address ONE
+	// partition — a single-partition read, whose cursor is that
+	// partition's own ([Gathered.Cursor]).
+	op     string
+	single bool
+}
+
+// Answered is the values of the partitions that answered, in order.
+func (g Gathered[P]) Answered() []P {
+	out := make([]P, 0, len(g.Parts))
+	for _, p := range g.Parts {
+		if p.Missing == nil {
+			out = append(out, p.Value)
+		}
+	}
+	return out
+}
+
+// Cursor is the cursor a paged list's next page resumes from, given where each
+// partition resumes ([mergePaged]): for a read of ONE partition that
+// partition's own — unchanged in shape from the single-partition read it is,
+// and empty when it has no more rows — and for a read across several every
+// partition's together ([encodeGatherCursor]).
+func (g Gathered[P]) Cursor(next map[statelog.PartitionID]string) string {
+	if g.single {
+		for _, p := range g.Parts {
+			return next[p.Partition]
+		}
+		return ""
+	}
+	return encodeGatherCursor(next)
+}
+
 // gatherOp is a typed handle on one registered gather: its declaration, and
 // the halves the router calls in the caller's own types.
 type gatherOp[A, P, R any] struct {
 	spec  *opSpec
 	addr  address[A]
-	merge func(args A, parts []PartResult[P]) (R, error)
+	merge func(args A, g Gathered[P]) (R, error)
 	hooks *gatherHooks[A]
 }
 
@@ -113,7 +156,7 @@ type gatherPaging[A any] struct {
 // at init, like [define].
 func defineGather[A, P, R any](name string, at address[A],
 	serve func(ctx context.Context, b Backend, p statelog.PartitionID, args A) (P, error),
-	merge func(args A, parts []PartResult[P]) (R, error),
+	merge func(args A, g Gathered[P]) (R, error),
 ) gatherOp[A, P, R] {
 	if _, dup := registry[name]; dup {
 		panic(fmt.Sprintf("estate: operation %q declared twice", name))
@@ -142,9 +185,6 @@ func defineGather[A, P, R any](name string, at address[A],
 	}
 	slice := func(ctx context.Context, b Backend, s sliceAsk, args A) (P, []statelog.Position, error) {
 		var zero P
-		if hooks.paging != nil {
-			args = hooks.paging.with(args, s.cursor)
-		}
 		streams := streamsOf(s.layout, s.partition)
 		var at []statelog.Position
 		if level := hooks.level; level != nil && s.level != "" {
@@ -183,6 +223,12 @@ func defineGather[A, P, R any](name string, at address[A],
 		if err != nil {
 			return nil, nil, err
 		}
+		if hooks.paging != nil {
+			// ONE PARTITION OF A LIST ACROSS SEVERAL: the arguments carry
+			// the gathered cursor, and this partition resumes from its
+			// own — the empty one where it has not been read from yet.
+			args = hooks.paging.with(args, s.cursor)
+		}
 		return slice(ctx, b, s, args)
 	}
 	spec.whole = func(ctx context.Context, b Backend, s sliceAsk, raw json.RawMessage) (
@@ -191,13 +237,19 @@ func defineGather[A, P, R any](name string, at address[A],
 		if err != nil {
 			return nil, nil, err
 		}
+		// THE ARGUMENTS AS GIVEN, cursor and all: a single-partition read's
+		// cursor is its partition's own.
 		v, at, err := slice(ctx, b, s, args)
 		if err != nil {
 			return nil, at, err
 		}
-		out, err := merge(args, []PartResult[P]{{
-			Partition: s.partition, Value: v, At: at, Cursor: s.cursor,
-		}})
+		cursor := ""
+		if hooks.paging != nil {
+			cursor = hooks.paging.cursor(args)
+		}
+		out, err := merge(args, Gathered[P]{op: name, single: true, Parts: []PartResult[P]{{
+			Partition: s.partition, Value: v, At: at, Cursor: cursor,
+		}}})
 		return out, at, err
 	}
 	registry[name] = spec
@@ -343,8 +395,12 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 	if err != nil {
 		return zero, statelog.Coverage{}, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
+	// ONE PARTITION ADDRESSED is a single-partition read, decided by what
+	// the arguments address and never by what a cursor left of it.
+	single := len(parts) == 1
+	addressed := len(parts)
 	cursors := map[statelog.PartitionID]string{}
-	if paging := o.hooks.paging; paging != nil {
+	if paging := o.hooks.paging; paging != nil && !single {
 		if gathered := paging.cursor(args); gathered != "" {
 			own, cursorErr := decodeGatherCursor(gathered)
 			if cursorErr != nil {
@@ -360,17 +416,17 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 		}
 	}
 	var level statelog.ReadLevel
-	if lv := o.hooks.level; lv != nil && len(parts) > 1 {
+	if lv := o.hooks.level; lv != nil && !single {
 		if !surface.Valid() {
 			return zero, statelog.Coverage{}, fmt.Errorf("estate: %s reads at a level and "+
 				"was asked from no surface, which is what decides it", spec.name)
 		}
-		level = statelog.GatherLevel(surface, lv.of(args), len(parts))
+		level = statelog.GatherLevel(surface, lv.of(args), addressed)
 	}
 	if len(parts) == 0 {
 		// EVERY PARTITION THE CURSOR NAMED HAS RUN OUT: the page past the
 		// last, which is empty and complete.
-		out, mergeErr := o.merge(args, nil)
+		out, mergeErr := o.merge(args, Gathered[P]{op: spec.name})
 		return out, statelog.Coverage{}, mergeErr
 	}
 	encoded, err := json.Marshal(args)
@@ -378,10 +434,10 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 		return zero, statelog.Coverage{}, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
 	}
 	plan := gatherPlan{
-		spec: spec, layout: layout, whole: len(parts) == 1, level: level,
+		spec: spec, layout: layout, whole: single, level: level,
 		args: encoded, cursors: cursors,
 		decode: func(raw json.RawMessage) (any, error) {
-			if len(parts) == 1 {
+			if single {
 				var out R
 				if len(raw) == 0 {
 					return out, nil
@@ -414,7 +470,7 @@ func gather[A, P, R any](ctx context.Context, r *Router, o gatherOp[A, P, R],
 		}
 		results = append(results, res)
 	}
-	out, err := o.merge(args, results)
+	out, err := o.merge(args, Gathered[P]{op: spec.name, Parts: results})
 	return out, cov, err
 }
 
@@ -446,8 +502,9 @@ type gatherPlan struct {
 	spec   *opSpec
 	layout statelog.Layout
 
-	// whole is a gather of ONE partition, which asks for the operation's
-	// whole answer — a single-partition read.
+	// whole is a read whose arguments address ONE partition, which asks
+	// for the operation's whole answer with the arguments as given — a
+	// single-partition read.
 	whole bool
 
 	// level is each slice's level, empty for a whole read and for an
@@ -788,7 +845,10 @@ func (r *Router) runLocalPart(ctx context.Context, plan gatherPlan, st *partStat
 	if unknown == nil && ok {
 		b.ServerSeams = r.seams
 		ask := sliceAsk{partition: st.p, layout: plan.layout, level: plan.level,
-			floors: r.floorsFor(plan.spec, plan.layout, st.p), cursor: plan.cursors[st.p], cpu: cpu}
+			floors: r.floorsFor(plan.spec, plan.layout, st.p), cursor: plan.cursors[st.p]}
+		if !plan.whole {
+			ask.cpu = cpu
+		}
 		out = runPart(ctx, r.self, plan.spec, b, ask, plan.args, plan.whole, acceptLagging)
 		r.session.Forget(out.obsolete...)
 	}

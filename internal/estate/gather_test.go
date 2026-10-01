@@ -43,14 +43,14 @@ var opTestList = defineGather("test.list", address[listArgs]{domain: trackerDoma
 			Level: a.Level, Session: a.Session, Cursor: a.Cursor, Limit: a.Limit,
 		}, time.Time{})
 	},
-	func(a listArgs, parts []PartResult[tracker.Answer]) (tracker.Answer, error) {
+	func(a listArgs, g Gathered[tracker.Answer]) (tracker.Answer, error) {
 		rows, next := mergePaged(
-			pagedParts(parts, func(p tracker.Answer) ([]tracker.TaskRow, string) {
+			pagedParts(g.Parts, func(p tracker.Answer) ([]tracker.TaskRow, string) {
 				return p.Rows, p.NextCursor
 			}),
 			func(x, y tracker.TaskRow) int { return cmp.Compare(x.Key, y.Key) },
 			func(r tracker.TaskRow) string { return r.Key }, a.Limit)
-		return tracker.Answer{Rows: rows, NextCursor: encodeGatherCursor(next)}, nil
+		return tracker.Answer{Rows: rows, NextCursor: g.Cursor(next)}, nil
 	}).
 	leveled(func(a listArgs) statelog.ReadLevel { return a.Level },
 		func(a listArgs, level statelog.ReadLevel, floor statelog.Position) listArgs {
@@ -690,6 +690,60 @@ func TestAGatherOfOnePartitionIsASingleRead(t *testing.T) {
 	var hits []knowledge.Hit
 	if err := json.Unmarshal(rep.Result, &hits); err != nil || len(hits) != 1 || rep.Parts != nil {
 		t.Fatalf("an older asker's search was answered %+v (%v), want its whole list", rep, err)
+	}
+}
+
+// A PAGED LIST OF ONE PARTITION IS A SINGLE-PARTITION READ TO ITS LAST PAGE:
+// the cursor it answers is the partition's own, unwrapped; the cursor it is
+// given is passed through untouched, never decoded as a gathered one; and an
+// older build's request carrying its own cursor is answered from it — so a
+// rolling upgrade under layout 0 neither repeats page one nor refuses page two
+// in either direction.
+func TestAPagedListOfOnePartitionKeepsItsOwnCursor(t *testing.T) {
+	t.Parallel()
+	f := newPartFleet(t, map[string][]statelog.PartitionID{"data-a": {statelog.EstatePartition}})
+	f.placement.layout, f.servers.layout = layoutZero, layoutZero
+	r := f.router(t, "agent-1", nil)
+	list := func(cursor string) tracker.Answer {
+		t.Helper()
+		answer, _, err := gather(t.Context(), r, opTestList, statelog.SurfaceOperator,
+			listArgs{Level: statelog.ReadLinearizable, Limit: 4, Cursor: cursor})
+		if err != nil {
+			t.Fatalf("page from %q: %v", cursor, err)
+		}
+		return answer
+	}
+	first := list("")
+	if first.NextCursor != "K03" {
+		t.Fatalf("page one's cursor = %q, want the partition's own K03", first.NextCursor)
+	}
+	// THE CURSOR A BUILD BEFORE GATHERS MINTED, handed to this one.
+	second := list("K03")
+	if len(second.Rows) != 4 || second.Rows[0].Key != "K04" || second.NextCursor != "K07" {
+		t.Fatalf("page two = %v next %q, want K04..K07 next K07", second.Rows, second.NextCursor)
+	}
+	for _, req := range f.nodes["data-a"].asked() {
+		if req.Slices || len(req.Cursors) != 0 {
+			t.Errorf("a one-partition list was asked as slices (%+v)", req)
+		}
+	}
+
+	// AN OLDER ASKER'S REQUEST: its own cursor in its arguments, no
+	// partitions, no cursors map.
+	raw, _ := json.Marshal(request{Op: opTestList.spec.name,
+		Args: json.RawMessage(`{"Level":"stale","Cursor":"K03","Limit":4}`)})
+	replies, err := f.client(t).Ask(t.Context(), Subject("data-a"), raw, 1)
+	if err != nil || len(replies) != 1 {
+		t.Fatalf("ask = (%d, %v)", len(replies), err)
+	}
+	var rep reply
+	var page tracker.Answer
+	if err := json.Unmarshal(replies[0], &rep); err != nil || json.Unmarshal(rep.Result, &page) != nil {
+		t.Fatalf("decode %s: %v", replies[0], err)
+	}
+	if len(page.Rows) != 4 || page.Rows[0].Key != "K04" || page.NextCursor != "K07" {
+		t.Fatalf("an older asker's page two = %v next %q, want K04..K07 next K07",
+			page.Rows, page.NextCursor)
 	}
 }
 

@@ -151,7 +151,7 @@ func (s server) answer(ctx context.Context, raw []byte) []byte {
 		// A GATHER OF ONE PARTITION, which is a single-partition read: its
 		// slice and the merge of that one slice, at the read's own level.
 		result, out.At, err = spec.whole(ctx, b, sliceAsk{
-			partition: p, layout: layout, floors: req.Floors, cursor: req.Cursors[p.String()],
+			partition: p, layout: layout, floors: req.Floors,
 		}, req.Args)
 	} else {
 		if spec.covered && !spec.floorless {
