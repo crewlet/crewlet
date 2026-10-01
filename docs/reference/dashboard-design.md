@@ -3137,10 +3137,17 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   REST, and they read through ONE hook: `useRestRead` (`lib/restRead.ts`),
   `useQuery`'s twin for the answers no socket question gives — the
   Integrations screen's setup listing, its pass history (a four-second tick
-  while a pass runs, a minute otherwise) and one pass while it runs, and the
-  credential listing with its reference index. It replaced four hand-written
-  loaders, each with its own generation counter, failure mapping and idea of
-  when to ask again, and each wrong about a different case. It keeps the last
+  while a pass runs, a minute otherwise) and one pass while it runs, the
+  credential listing with its reference index, and the org chart's guarded
+  reads (`useChartRead`, `lib/chartReads.ts`: a seat's runtime half on its
+  page, the chart behind the tool and knowledge pages), which also ask again
+  on every org push. It replaced five hand-written loaders, each with its own
+  generation counter, failure mapping and idea of when to ask again, and each
+  wrong about a different case — the chart's read a request nobody answered as
+  `failed` and asked again only on the next push, under a panel promising to
+  fill in "when it does", and a gateway's `404` as a seat the chart does not
+  hold; its `failed` now carries which failure it met, and the panel draws
+  that through `QueryState`. It keeps the last
   answer through any failure but a refusal on authority (a reader refused is
   shown nothing they were refused), starts from nothing when its question
   changes — in the very render that carries the new question, since each

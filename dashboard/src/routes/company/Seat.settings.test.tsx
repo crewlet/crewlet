@@ -585,6 +585,32 @@ test("the model fact names a refusal's grant, and an unavailable read claims not
   expect(headerFacts()).not.toContain("needs");
 });
 
+// A FAILED CHART READ SAYS WHICH FAILURE IT MET, in the banner every read
+// draws. The panel said "The engine did not answer. This panel fills in when it
+// does." over every one of them: over a `500` the engine DID answer, and over a
+// request nothing answered that nothing was going to ask again until the next
+// org push.
+test("the configured panel says which failure the chart read met", async () => {
+  mount(
+    "#/company/people/ceo",
+    answering,
+    () => () => json({ error: "internal_error", message: "It broke." }, 500),
+  );
+  await settle();
+  expect(screen.getAllByText(/tried to answer and failed/).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/fills in when it does/)).toBeNull();
+  cleanup();
+
+  mount("#/company/people/ceo", answering, () => () => {
+    throw new TypeError("Failed to fetch");
+  });
+  await settle();
+  expect(screen.getAllByText(/No answer from the engine reached this page/).length).toBeGreaterThan(
+    0,
+  );
+  expect(screen.queryByText(/fills in when it does/)).toBeNull();
+});
+
 // THE RAIL ASKS NOBODY, SO IT CLAIMS NOTHING.
 //
 // `SeatPeek` reads nothing guarded on purpose — a per-peek fetch of the whole

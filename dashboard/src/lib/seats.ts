@@ -53,6 +53,7 @@ import type {
   OrgSeat,
   OrgUnit,
   ProviderKeys,
+  RestFailure,
   SandboxEntry,
 } from "~/protocol/index.ts";
 
@@ -742,8 +743,12 @@ export type SeatReading =
    * the engine accepted was presented — and `reason` the deciding rule's.
    */
   | { state: "refused"; grants: readonly string[]; reason: string }
-  /** The engine could not answer: a node catching up, a socket gone, a fault. */
-  | { state: "failed" }
+  /**
+   * The engine could not answer, or nothing came back from it: a node
+   * catching up, a fault, a request past its deadline. `failure` says which,
+   * in the terms `QueryState` draws — see `ChartReading`.
+   */
+  | { state: "failed"; failure: RestFailure }
   /** Nothing has been asked, or nothing has come back. Never a claim. */
   | { state: "unread" };
 

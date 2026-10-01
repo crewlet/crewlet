@@ -214,12 +214,17 @@ function SettingsState({
         />
       );
     case "failed":
+      // THE SHARED BANNER, for the failure it was. This said "The engine did
+      // not answer. This panel fills in when it does." over every failure: a
+      // `500` the engine DID answer, a `503` it said waiting will not clear,
+      // and — before the read asked again on its own — a request past its
+      // deadline that nothing was going to repeat. The banner says which, and
+      // whether the read asks again.
       return (
-        <EmptyState
-          size="compact"
-          icon={<KeyGlyph size={32} />}
-          title="The org chart could not be read just now"
-          description="The engine did not answer. This panel fills in when it does."
+        <QueryState
+          error={reading.failure.error}
+          refusal={reading.failure.refusal}
+          loading={false}
         />
       );
     case "absent":

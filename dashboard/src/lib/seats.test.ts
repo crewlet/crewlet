@@ -497,7 +497,8 @@ describe("what only the org chart's own read says", () => {
     expect(
       seatReading({ state: "refused", grants: ["state:read"], reason: "needs a grant" }, null),
     ).toEqual({ state: "refused", grants: ["state:read"], reason: "needs a grant" });
-    expect(seatReading({ state: "failed" }, null)).toEqual({ state: "failed" });
+    const failed = { state: "failed", failure: { error: "unanswered", refusal: null } } as const;
+    expect(seatReading(failed, null)).toEqual(failed);
     expect(seatReading({ state: "unread" }, unitRead(backend))).toEqual({ state: "unread" });
   });
 
@@ -505,7 +506,12 @@ describe("what only the org chart's own read says", () => {
   // unit's arrive would be a list that grows when the second read lands.
   test("a unit read still out, refused or failed is the seat reading's own answer", () => {
     expect(seatReading(seatRead(devA), { state: "unread" }).state).toBe("unread");
-    expect(seatReading(seatRead(devA), { state: "failed" }).state).toBe("failed");
+    expect(
+      seatReading(seatRead(devA), {
+        state: "failed",
+        failure: { error: "query_failed", refusal: null },
+      }).state,
+    ).toBe("failed");
     expect(
       seatReading(seatRead(devA), { state: "refused", grants: ["config:read"], reason: "" }),
     ).toEqual({ state: "refused", grants: ["config:read"], reason: "" });
