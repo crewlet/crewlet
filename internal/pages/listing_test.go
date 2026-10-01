@@ -426,3 +426,52 @@ func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
 		t.Error("the lower-cased key wrote a record — want the same container")
 	}
 }
+
+// THE FEED SAYS WHERE ITS NODE IS ON THE LOG, and how much of that it applied.
+//
+// `log_seq` and `applied_through` were declared on the answer and never
+// filled, so every page of the feed said zero and zero: a node holding a
+// record it could not decode — whose checkpoint moves past it — read exactly
+// like one at the head of the log, and the audit, which says per source when
+// an answer is behind, had nothing to say it with.
+//
+// Mutation: leave either unset and the first half fails; take the applied
+// prefix from the checkpoint and the second does.
+func TestThePageFeedReportsItsPositionAndAppliedPrefix(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	r.write(author("jane"), pages.NewPage{Container: "ENG", Title: "Runbook", Body: "prose"})
+	r.write(author("jane"), pages.NewPage{Container: "ENG", Title: "Rotation", Body: "prose"})
+	r.drain()
+
+	caught := r.activity(pages.PageActivityQuery{})
+	if len(caught.Changes) == 0 {
+		t.Fatal("the feed holds no change, so this case tests nothing")
+	}
+	newest, oldest := caught.Changes[0].LogSeq, caught.Changes[len(caught.Changes)-1].LogSeq
+	if caught.LogSeq < newest {
+		t.Errorf("the feed is at %d, below its own newest change at %d", caught.LogSeq, newest)
+	}
+	if caught.AppliedThrough != caught.LogSeq {
+		t.Errorf("a node that retains nothing applied through %d of %d",
+			caught.AppliedThrough, caught.LogSeq)
+	}
+
+	// A RECORD THIS NODE RETAINS, at the oldest change's position: the
+	// checkpoint is past it and the applied prefix stops below it.
+	reader := r.retain(int64(oldest), objectPath("ENG", "x"))
+	behind, err := reader.Activity(t.Context(), pages.PageActivityQuery{
+		Freshness: statelog.Freshness{Level: statelog.ReadStale},
+	})
+	if err != nil {
+		t.Fatalf("activity: %v", err)
+	}
+	if behind.LogSeq != caught.LogSeq {
+		t.Errorf("retaining a record moved the position from %d to %d",
+			caught.LogSeq, behind.LogSeq)
+	}
+	if behind.AppliedThrough != oldest-1 {
+		t.Errorf("a node retaining the record at %d applied through %d, want %d",
+			oldest, behind.AppliedThrough, oldest-1)
+	}
+}

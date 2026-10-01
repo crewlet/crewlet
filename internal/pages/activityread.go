@@ -88,10 +88,22 @@ type PageActivity struct {
 	Changes    []PageChange `json:"changes"`
 	NextCursor string       `json:"next_cursor,omitempty"`
 
-	Level          statelog.ReadLevel `json:"read_level"`
-	LogSeq         uint64             `json:"log_seq"`
-	AppliedThrough uint64             `json:"applied_through"`
-	Complete       bool               `json:"complete"`
+	Level statelog.ReadLevel `json:"read_level"`
+
+	// LogSeq is this node's checkpoint on the pages log and AppliedThrough
+	// the prefix of it whose records produced their rows here, both
+	// composed positions, read in the transaction that read the changes.
+	//
+	// TWO NUMBERS, for the tracker feed's reason: the checkpoint moves past
+	// a record this node RETAINS — one this build cannot decode — so a node
+	// holding one reads as caught up by its position alone, and only the
+	// applied prefix stopping below it says otherwise. Both were declared
+	// here and never filled, so every answer said zero and zero: a node
+	// behind on the log was indistinguishable from one at its head, and the
+	// audit, which names a source whose answer is behind, could not.
+	LogSeq         uint64 `json:"log_seq"`
+	AppliedThrough uint64 `json:"applied_through"`
+	Complete       bool   `json:"complete"`
 }
 
 // MaxPageChanges is how many changes one page of the feed carries.
@@ -174,6 +186,14 @@ func (r *Reader) activity(ctx context.Context, q PageActivityQuery) (PageActivit
 				return err
 			}
 			out.Changes, out.NextCursor = changes, next
+			// IN THE SAME TRANSACTION as the changes, so the position
+			// describes exactly the rows this page was read from.
+			prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+			if err != nil {
+				return err
+			}
+			out.LogSeq = uint64(prefix.Settled.Packed())
+			out.AppliedThrough = uint64(prefix.Applied().Packed())
 			return nil
 		})
 	if err != nil {
