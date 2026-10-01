@@ -211,13 +211,15 @@ func (b *Backends) Close(ctx context.Context) {
 // THE ONE WAY OUT of [OpenBackends] once a queue exists, so no failing step
 // can reach the operator as a bare "connection closed" while the sentence
 // naming why it closed, and what to change, sits unread on the queue. The cause
-// is read AFTER the close, which is what gives the client's closed handler —
-// dispatched on the client's own goroutine once the call that failed has been
-// released — its moment to record it.
+// is read BEFORE the close: the client's closed handler runs on the client's
+// own goroutine once the call that failed has been released, so the read waits
+// for it where a connection is already closed — and after the close every
+// connection reads as closed, its owner's close included, with no handler
+// coming ([jetstream.Queue.LostDuring]).
 func (b *Backends) abandon(ctx context.Context, err error) error {
-	q := b.Queue
+	err = lostDuring(b.Queue, err)
 	b.Close(ctx)
-	return lostDuring(q, err)
+	return err
 }
 
 // OpenBackends builds everything a node runs on.

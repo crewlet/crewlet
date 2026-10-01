@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -85,6 +86,13 @@ type connectionLoss struct {
 
 	acksOnce sync.Once
 	acks     chan struct{}
+
+	// conns is every connection whose close for good is recorded here, so a
+	// start that failed can wait for the handler of one the client has
+	// already closed ([connectionLoss.settle]). Appended once a dial hands
+	// the connection out, and never pruned: a queue holds two.
+	mu    sync.Mutex
+	conns []*nats.Conn
 }
 
 func newConnectionLoss() *connectionLoss {
@@ -133,22 +141,44 @@ type watched struct {
 	settles bool
 }
 
-// during is err as a start that failed beside a recorded loss says it: the
-// classified sentence first, because it names what to change, and the failing
-// step's own error after it, because it says where the start was — both in the
-// chain, for a caller that asks either. err itself, unchanged, where nothing was
-// lost: a failure that had nothing to do with the broker is not dressed as one.
+// track notes nc as a connection whose close for good is recorded where at
+// says, once a dial is about to hand it out — after the contract check, which
+// closes a connection it refuses itself and so leaves no handler to wait for.
+// Nothing for an unwatched one.
+func (at watched) track(nc *nats.Conn) {
+	if at.loss == nil {
+		return
+	}
+	at.loss.mu.Lock()
+	at.loss.conns = append(at.loss.conns, nc)
+	at.loss.mu.Unlock()
+}
+
+// during is err as a start that failed beside a loss says it: the classified
+// sentence first, because it names what to change, and the failing step's own
+// error after it, because it says where the start was — both in the chain, for
+// a caller that asks either. err itself, unchanged, where nothing was lost: a
+// failure that had nothing to do with the broker is not dressed as one.
 //
 // ONE COMPOSITION for every start that can meet a loss — this queue's own open
 // ([newQueueOn]) and an engine's boot over it ([Queue.LostDuring]) — so the two
 // cannot word the same fact two ways.
 //
-// RECORDED, not suspected: the closed handler runs on the client's own
-// goroutine after the call that met the close has been released, so a step can
-// return a moment before its cause is recorded. Every caller reads this after
-// its own cleanup, which is what gives the handler that moment; a step that
-// still beats it carries its own error alone, as every step did before.
+// It SETTLES first ([connectionLoss.settle]), so a connection the client has
+// already closed is named whether or not its handler has run yet — which is
+// why it is asked BEFORE the start's own cleanup closes anything.
 func (l *connectionLoss) during(err error) error {
+	if err == nil {
+		return nil
+	}
+	l.settle()
+	return l.recorded(err)
+}
+
+// recorded is [connectionLoss.during] without the settle: the composition over
+// whatever is recorded now. For a queue whose own Stop has closed its
+// connection, where no handler is coming and a settle would wait for one.
+func (l *connectionLoss) recorded(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -157,6 +187,36 @@ func (l *connectionLoss) during(err error) error {
 		return err
 	}
 	return fmt.Errorf("%w; the start failed on it at: %w", cause, err)
+}
+
+// settle returns once the loss is recorded where a watched connection is
+// already closed, and at once where none is.
+//
+// THE HANDLER IS QUEUED BEFORE IsClosed CAN ANSWER TRUE. The client closes a
+// connection for good under its own lock and queues the closed handler before
+// it lets go, and IsClosed reads under that lock — so a watched connection that
+// reads as closed to a caller who has closed none of them is one whose handler
+// WILL run, on the client's own goroutine, and the wait for it ends. Without
+// this the cause was read whenever it happened to be there: the step that met
+// the close returns once the client releases it, the handler runs a moment
+// later, and a caller whose own cleanup was short — a queue's open closing its
+// one connection — composed the step's bare "connection closed" while the
+// sentence naming why was a moment from being recorded.
+//
+// HENCE BEFORE THE CALLER'S CLEANUP, never after it. A connection its owner
+// closed reads as closed too, and under [nats.NoCallbacksAfterClientClose] its
+// handler never runs, so asked after the cleanup this would wait on a loss
+// nobody will record.
+func (l *connectionLoss) settle() {
+	l.mu.Lock()
+	conns := slices.Clone(l.conns)
+	l.mu.Unlock()
+	for _, nc := range conns {
+		if nc.IsClosed() {
+			<-l.done
+			return
+		}
+	}
 }
 
 // lossWatch is the closed handler a watched connection is given: what a

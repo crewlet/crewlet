@@ -692,7 +692,11 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return heldToTheContract(nc, true)
+	if nc, err = heldToTheContract(nc, true); err != nil {
+		return nil, err
+	}
+	at.track(nc)
+	return nc, nil
 }
 
 func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
@@ -766,7 +770,11 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 	}
 	// The other place a connection is opened, and held to the same
 	// contract — see [embeddedServer.connect].
-	return heldToTheContract(nc, false)
+	if nc, err = heldToTheContract(nc, false); err != nil {
+		return nil, err
+	}
+	at.track(nc)
+	return nc, nil
 }
 
 // externalHandshake bounds each attempt to reach an EXTERNAL server: the dial,

@@ -387,9 +387,13 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 // closed the connection for good under it ([connectionLoss.during]). The one
 // way out once a connection exists, so no step can fail as a bare "connection
 // closed" while the sentence naming why sits on a queue nobody will hold.
+//
+// The cause is read BEFORE the close, for [connectionLoss.settle]'s reason:
+// after it the connection reads as closed whoever closed it.
 func (q *Queue) abandonOpen(err error) error {
+	err = q.lost.during(err)
 	q.nc.Close()
-	return q.lost.during(err)
+	return err
 }
 
 // ensureStreams provisions the engine's own streams, under ONE ceiling for
@@ -977,7 +981,9 @@ func (q *Queue) DialOwned() (*nats.Conn, error) {
 //
 // It does NOT close [Queue.AcksLost]: no delivery this queue made is settled
 // over it, so a node that lost only this one still acknowledges every turn it
-// finishes.
+// finishes. And a failed start's owner closes it only AFTER asking
+// [Queue.LostDuring], which reads a closed watched connection as one whose
+// handler is still to run.
 func (q *Queue) DialWatched() (*nats.Conn, error) {
 	return q.dialSecond(watched{loss: q.lost})
 }
@@ -1014,14 +1020,25 @@ func (q *Queue) Lost() <-chan struct{} { return q.lost.done }
 func (q *Queue) LostCause() error { return q.lost.lostCause() }
 
 // LostDuring is err, from a start that failed over this queue, carrying the
-// recorded [Queue.LostCause] beside it — and err unchanged where nothing was
-// lost.
+// [Queue.LostCause] beside it — and err unchanged where nothing was lost.
 //
 // For the step that fails BECAUSE a connection was closed for good: in its own
 // words it says the connection is closed and nothing an operator can act on,
-// while the sentence naming why and what to change is recorded here. Read it
-// after the start's own cleanup — see [connectionLoss.during] for why.
-func (q *Queue) LostDuring(err error) error { return q.lost.during(err) }
+// while the sentence naming why and what to change is recorded here. It waits
+// for that record where the client has already closed a connection and its
+// handler has not yet run ([connectionLoss.settle]), so ask it BEFORE the
+// start's own cleanup closes this queue or a connection [Queue.DialWatched]
+// handed out: one its owner closed reads as closed too, and no handler is
+// coming for it.
+//
+// A STOPPED queue closed its own connection, so it is answered from what is
+// recorded and never waited on.
+func (q *Queue) LostDuring(err error) error {
+	if q.isClosed() {
+		return q.lost.recorded(err)
+	}
+	return q.lost.during(err)
+}
 
 // AcksLost is closed once NATS has closed THIS QUEUE'S OWN connection for good:
 // the one every delivery it made is acknowledged, nacked and deferred over.

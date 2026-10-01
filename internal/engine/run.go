@@ -836,23 +836,23 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// "connection closed" and nothing an operator can act on, while the
 	// sentence naming the cause and the setting to change sits recorded on
 	// the queue. So the cause rides the error out beside the step's own
-	// ([lostDuring]), read once the teardown is done: the client's closed
-	// handler runs on its own goroutine after the failing call has been
-	// released, and the teardown is what gives it the moment to record.
-	// The queue is taken first because the teardown may close the backends.
+	// ([lostDuring]), read BEFORE the teardown: the client's closed handler
+	// runs on its own goroutine after the failing call has been released,
+	// so the read waits for it where a connection is already closed — and
+	// once the teardown has closed the backends every connection reads as
+	// closed, with no handler coming for this node's own close.
 	booted := false
-	broker := backends.Queue
 	defer func() {
 		if booted {
 			return
 		}
+		err = lostDuring(backends.Queue, err)
 		e.teardown(context.WithoutCancel(ctx))
 		log.InfoContext(ctx, "engine_boot_abandoned", "node", nodeID,
 			"detail", "this boot left nothing running: the state log, the "+
 				"shared MCP children, every duty loop and this node's "+
 				"admission are stopped, and any backends this engine opened "+
 				"itself are closed")
-		err = lostDuring(broker, err)
 	}()
 
 	// THE AUDIT TRAIL BEFORE THE NATIVE BACKENDS, whose identity writer and

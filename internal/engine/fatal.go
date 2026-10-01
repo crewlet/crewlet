@@ -32,7 +32,7 @@ type brokerLoss interface {
 // says "connection closed" and nothing an operator can act on, while the
 // sentence naming why — refused credentials, a max_payload lowered under the
 // node, its own embedded broker gone — and what to change is recorded on the
-// queue. Its callers read it after their own cleanup; see
+// queue. Its callers ask it BEFORE their own cleanup closes the backends; see
 // [jetstream.Queue.LostDuring] for why that order.
 func lostDuring(q queue.EventQueue, err error) error {
 	lost, ok := q.(brokerLoss)

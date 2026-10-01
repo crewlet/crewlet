@@ -286,6 +286,145 @@ func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
 	}
 }
 
+// A START WAITS FOR THE CAUSE OF A CONNECTION THE CLIENT HAS ALREADY CLOSED —
+// and waits for nothing where no watched connection is closed.
+//
+// The client closes a connection for good under its own lock, queues the closed
+// handler before it lets go, and runs the handler on a goroutine of its own, so
+// the step that met the close is released, fails and reaches its caller's
+// composition a moment before the cause is recorded. Read when it happened to
+// be there, the cause was named most of the time and dropped whenever the
+// caller's own cleanup was short. The composition has to wait for a handler the
+// client has queued, which it can tell by the connection reading as closed.
+//
+// The handler is the CASE's here — the connection is dialled unwatched and
+// tracked by hand, and the case records its cause late on purpose — so the
+// order is the case's rather than the scheduler's.
+//
+// Mutation: drop the settle from during and the second half goes red; settle
+// on a connection that is still open and the first half does.
+func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
+	t.Parallel()
+	const limit = queue.MaxPayloadBytes / 4
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
+	nc, err := dial(Config{URL: srv.URL()}, watched{})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(nc.Close)
+	l := newConnectionLoss()
+	watched{loss: l}.track(nc)
+	step := fmt.Errorf("ensure stream CREWLET_AGENT: %w", nats.ErrConnectionClosed)
+
+	compose := func() <-chan error {
+		out := make(chan error, 1)
+		go func() { out <- l.during(step) }()
+		return out
+	}
+
+	// OPEN: nothing to wait for, so the step's own error, at once.
+	select {
+	case got := <-compose():
+		if got == nil || got.Error() != step.Error() {
+			t.Errorf("nothing is closed and the step's error came back as %q", got)
+		}
+	case <-time.After(lostWithin):
+		t.Fatalf("a start whose connections are all open waited %s for a loss "+
+			"nothing will record", lostWithin)
+	}
+
+	// CLOSED BY THE CLIENT, its handler not yet run.
+	srv.Reload(limit)
+	sendPast(t, nc, limit)
+	deadline := time.Now().Add(lostWithin)
+	for !nc.IsClosed() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the connection is %v, not closed: the case staged nothing",
+				nc.Status())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	composed := compose()
+	select {
+	case got := <-composed:
+		t.Fatalf("the start composed %q while the connection it failed on was "+
+			"closed and its cause not yet recorded: an operator reads the bare "+
+			"step and not what to change", got)
+	case <-time.After(quietFor):
+	}
+	cause := lostConnection(lostServer(false, srv.URL()), nc.LastError(), false)
+	l.record(cause, true)
+	select {
+	case got := <-composed:
+		if got == nil || !strings.HasPrefix(got.Error(), cause.Error()) ||
+			!errors.Is(got, nats.ErrConnectionClosed) {
+			t.Errorf("the start said %q once the cause was recorded; it should "+
+				"open with %q and keep the step's own error", got, cause)
+		}
+	case <-time.After(lostWithin):
+		t.Fatalf("the cause was recorded and the start still waited %s", lostWithin)
+	}
+}
+
+// A STOPPED QUEUE IS ANSWERED FROM WHAT IS RECORDED, AND NEVER WAITED ON.
+//
+// Its own Stop closed its connection, so the connection reads as closed — and
+// under NoCallbacksAfterClientClose no handler is coming for a close its owner
+// made. A start that asked once the queue had stopped would wait for ever on a
+// loss nobody will record.
+//
+// And an open that fails for a reason of its own — a context cancelled under
+// it — reads the cause before it closes the one connection it holds, for the
+// same reason: closed first, that connection reads as closed and the read would
+// wait for a handler its own close suppressed.
+//
+// Mutation: drop the stopped-queue branch from LostDuring and the first half
+// hangs; close the connection before the read in abandonOpen and the second
+// does.
+func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
+	t.Parallel()
+	srv := externaltest.Start(t, queue.MaxPayloadBytes)
+	step := fmt.Errorf("record a node's admission: %w", nats.ErrConnectionClosed)
+
+	q := newQueueWith(t, Config{URL: srv.URL()})
+	if err := q.Stop(context.WithoutCancel(t.Context())); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	answered := make(chan error, 1)
+	go func() { answered <- q.LostDuring(step) }()
+	select {
+	case got := <-answered:
+		if got == nil || got.Error() != step.Error() {
+			t.Errorf("a stopped queue that lost nothing answered %q", got)
+		}
+	case <-time.After(lostWithin):
+		t.Fatalf("LostDuring on a stopped queue waited %s for a handler its own "+
+			"Stop suppressed", lostWithin)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	stop := context.WithoutCancel(cancelled)
+	opened := make(chan error, 1)
+	go func() {
+		q, err := Open(cancelled, Config{URL: srv.URL()})
+		if err == nil {
+			_ = q.Stop(stop)
+		}
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err == nil {
+			t.Fatal("an open under a cancelled context succeeded: the case " +
+				"staged nothing")
+		}
+	case <-time.After(lostWithin):
+		t.Fatalf("an open that failed for a reason of its own waited %s for a "+
+			"handler its own close suppressed", lostWithin)
+	}
+}
+
 // A CLOSE THIS NODE MADE ITSELF IS NOT A LOSS — and nor is a close of a
 // connection whose owner is the one to notice it.
 //
