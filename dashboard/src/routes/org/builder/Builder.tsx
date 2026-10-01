@@ -53,7 +53,7 @@ import {
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
-import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useConnection, useOrg, useOrgPushes, useSandboxes } from "~/lib/store-hooks.ts";
 import { needsSentence } from "~/lib/refusal.ts";
 import { useReader } from "~/lib/reader.ts";
 import { goSignIn } from "~/lib/session.ts";
@@ -813,17 +813,30 @@ function Lens({
   // no company to move, and hears only of one appearing: a push that names a
   // company is exactly that, and its check is the refusal that says so.
   //
+  // THE PUSH, COUNTED (`useOrgPushes`), and never the projection's identity:
+  // the store keeps a push deep-equal to the last as the object it already
+  // held, so a revision that moved nothing the projection carries — the
+  // mission, a provider, a seat's model chain — left `org` where it was, and
+  // an untouched draft went on standing on a revision the engine had replaced,
+  // its next dry run refused as a conflict nobody made. And A SOCKET COMING
+  // BACK, because a push sent while it was down is never sent again: the
+  // snapshot the handshake brings is only a push where the projection moved.
+  const orgPushes = useOrgPushes();
+  const heard = useRef({ pushes: orgPushes, connected });
+  useEffect(() => {
+    const was = heard.current;
+    heard.current = { pushes: orgPushes, connected };
+    if (orgPushes === was.pushes && !(connected && !was.connected)) return;
+    if (!loaded) return;
+    if (stateRef.current.mode === "edit" || orgName !== "") reset();
+  }, [orgPushes, connected, orgName, loaded, reset]);
+
   // THE PUSH ALSO CARRIES THE ENGINE'S DERIVATION of the chart it describes
   // — who reports to whom, the lead a unit inherits — which the reducer
   // keeps only while it describes the base's own rows.
-  const lastOrg = useRef(org);
   useEffect(() => {
     dispatchRaw({ type: "derived", derived: org?.derived ?? null });
-    if (lastOrg.current === org) return;
-    lastOrg.current = org;
-    if (!loaded) return;
-    if (stateRef.current.mode === "edit" || orgName !== "") reset();
-  }, [org, orgName, loaded, reset]);
+  }, [org]);
 
   // ---- Editing ------------------------------------------------------------
 

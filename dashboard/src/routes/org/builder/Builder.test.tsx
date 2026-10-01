@@ -757,6 +757,55 @@ describe("a company saved by somebody else", () => {
     expect(screen.queryByText("The settings changed since you started editing.")).toBeNull();
   });
 
+  // AND ON ONE THE PUSH CANNOT SHOW. The org push is a projection of the chart,
+  // and the store keeps a push deep-equal to the last as the object it already
+  // held — so a revision that moved nothing the projection carries leaves
+  // `org` where it was. The push still says an apply landed, which is what
+  // this lens checks again on.
+  test("an untouched draft is stood on a revision its org push looks the same for", async () => {
+    const engine = new Engine(company());
+    const { store, settle, checked } = mountBuilder({ engine });
+    act(() => store.applyOrg(engine.orgPush()));
+    await checked();
+    engine.settings = { ...engine.settings, mission: "Make better things" };
+    engine.revision = "r2";
+    const pushed = engine.orgPush();
+    expect(pushed).toEqual(store.state.org);
+    const reads = engine.sent("GET").length;
+    act(() => store.applyOrg(pushed));
+    await checked();
+    expect(engine.sent("GET").length).toBeGreaterThanOrEqual(reads + 2);
+
+    pressInView("Rename the company");
+    await settle();
+    expect(engine.checks().at(-1)?.headers["If-Match"]).toBe('"r2"');
+    expect(screen.queryByText("The settings changed since you started editing.")).toBeNull();
+  });
+
+  // AND ON A SOCKET THAT CAME BACK, which no push reaches: one sent while it
+  // was down is never sent again, and the snapshot the handshake brings moves
+  // nothing where the projection is the one already held.
+  test("an untouched draft is stood on a revision saved while its socket was down", async () => {
+    const engine = new Engine(company());
+    const { store, settle, checked } = mountBuilder({ engine });
+    act(() => store.applyOrg(engine.orgPush()));
+    await checked();
+    act(() => store.setConnected(false));
+    engine.settings = { ...engine.settings, mission: "Make better things" };
+    engine.revision = "r2";
+    const reads = engine.sent("GET").length;
+    act(() => {
+      store.setConnected(true);
+      store.applySnapshot({ org: engine.orgPush() } as never);
+    });
+    await checked();
+    expect(engine.sent("GET").length).toBeGreaterThanOrEqual(reads + 2);
+
+    pressInView("Rename the company");
+    await settle();
+    expect(engine.checks().at(-1)?.headers["If-Match"]).toBe('"r2"');
+  });
+
   test("a draft with work is not moved: the change is offered as an update", async () => {
     const engine = new Engine(company());
     const { store, settle, checked } = mountBuilder({ engine });

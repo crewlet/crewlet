@@ -99,9 +99,10 @@ export function useOrg() {
 
 /**
  * How many org projections have been pushed — the signal a chart read is
- * asked again on (`lib/chartReads.ts`), which `useOrg`'s identity is not: an
- * org push deep-equal to the last is shared by the store and moves nothing,
- * and it still says a chart write landed. See `StoreState.orgPushes`.
+ * asked again on (`lib/chartReads.ts`) and the org builder checks its draft
+ * again on, which `useOrg`'s identity is not: an org push deep-equal to the
+ * last is shared by the store and moves nothing, and it still says a chart
+ * write or a settings revision landed. See `StoreState.orgPushes`.
  */
 export function useOrgPushes() {
   return useSlice(["orgPushes"], (s) => s.orgPushes);

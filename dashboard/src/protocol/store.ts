@@ -140,7 +140,8 @@ export interface StoreState {
    * knowledge space) is pushed as a projection deep-equal to the last, which
    * the store shares and so does not move. Keyed on `org`'s identity, those
    * screens went on showing the settings from before the write. NOT part of
-   * what a snapshot replaces: a reconnect re-reads every chart read anyway.
+   * what a snapshot replaces: a reconnect re-reads every chart read anyway,
+   * and the org builder checks its draft again on one.
    */
   orgPushes: number;
 }

@@ -776,7 +776,14 @@ and a chart write that changed only what the projection leaves out (a seat's
 model chain, its credentials, a unit's knowledge space) is pushed as exactly
 that. The chart reads that hold the runtime half (`useChartRead`) are asked
 again on the COUNT of org pushes (`useOrgPushes`), never on the projection's
-identity, or they would go on showing the settings from before the write.
+identity, or they would go on showing the settings from before the write. The
+org builder checks its draft again on the same count, because the engine
+pushes the org after every apply and a settings revision that moved nothing
+the projection carries — the mission, a provider — is exactly such a push:
+keyed on the projection, an untouched draft went on standing on the replaced
+revision and its next dry run was refused as a conflict nobody made. It also
+checks again when the socket comes back, since a push sent while it was down
+is never sent again.
 
 **Which grid the keyboard drives is asked at the keystroke.** `j`, `k` and
 Enter go to the grid the reader last pressed a pointer in, else the first one
