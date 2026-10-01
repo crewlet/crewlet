@@ -313,13 +313,22 @@ func (v *View) follow(ctx context.Context) {
 func (v *View) read(ctx context.Context) {
 	bounded, cancel := context.WithTimeout(ctx, ViewConfirm)
 	defer cancel()
-	before, asked := v.takenCount(), v.now()
-	rec, found, err := v.maps.EstateMap(bounded)
-	if err != nil {
+	if err := v.readStore(bounded); err != nil {
 		v.failed(ctx, fmt.Errorf("read the estate map: %w", err))
-		return
+	}
+}
+
+// readStore reads the map from the store and takes in what it answered, dated
+// when it was ASKED ([View.confirmLocked]) — the one place a read is dated,
+// for the view's own confirmation and a caller's [View.Read] alike.
+func (v *View) readStore(ctx context.Context) error {
+	before, asked := v.takenCount(), v.now()
+	rec, found, err := v.maps.EstateMap(ctx)
+	if err != nil {
+		return err
 	}
 	v.answered(rec, found, before, asked)
+	return nil
 }
 
 // takenCount is how many take-ins the view has made: what a read compares
@@ -592,12 +601,9 @@ func (v *View) wholeServers(p statelog.PartitionID) ([]string, error) {
 // it — for a caller told its routing is stale, which must not wait for the
 // watch. [ErrNoMap] when the store holds none.
 func (v *View) Read(ctx context.Context) (Map, uint64, error) {
-	before, asked := v.takenCount(), v.now()
-	rec, found, err := v.maps.EstateMap(ctx)
-	if err != nil {
+	if err := v.readStore(ctx); err != nil {
 		return Map{}, 0, fmt.Errorf("%w: read the estate map: %w", coord.ErrUnavailable, err)
 	}
-	v.answered(rec, found, before, asked)
 	m, version, held, err := v.Map()
 	switch {
 	case err != nil:

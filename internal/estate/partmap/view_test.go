@@ -620,7 +620,11 @@ type heldMaps struct {
 }
 
 func (h *heldMaps) EstateMap(ctx context.Context) (coord.EstateMapRecord, bool, error) {
-	h.asked <- struct{}{}
+	select {
+	case h.asked <- struct{}{}:
+	case <-ctx.Done():
+		return coord.EstateMapRecord{}, false, ctx.Err()
+	}
 	select {
 	case <-h.release:
 	case <-ctx.Done():
@@ -634,6 +638,16 @@ func confirmedAtOf(v *View) time.Time {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.confirmedAt
+}
+
+// waitFor waits for a signal on ch, failing the test after five seconds.
+func waitFor(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
 }
 
 // A READ CONFIRMS THE MAP HALF AS OF WHEN IT WAS ASKED, never when its answer
@@ -681,6 +695,32 @@ func TestAReadConfirmsTheViewWhenItWasAsked(t *testing.T) {
 	if at := confirmedAtOf(v); !at.Equal(c.Now()) {
 		t.Errorf("a read asked before a delivery, answering after it, moved the "+
 			"confirmation back to %v from %v", at, c.Now())
+	}
+}
+
+// THE VIEW'S OWN CONFIRMATION READ IS DATED WHEN IT WAS ASKED, as a caller's
+// Read is: the read a running view makes every ViewConfirm, which is what keeps
+// a healthy fleet's view fresh and what the engine's case for a stale view
+// caught confirming the view after its clock had moved. The two take the
+// instant in one place; this holds the running view to it, which a case
+// driving Read alone cannot — the loop's read dated on arrival passed every
+// other case here.
+func TestTheViewsOwnReadIsDatedWhenItWasAsked(t *testing.T) {
+	t.Parallel()
+	c := &clock{now: base}
+	store, _, _ := storeWithMap(t)
+	held := &heldMaps{MapSource: quietWatch{store}, asked: make(chan struct{}, 1),
+		release: make(chan struct{})}
+	v := viewOver(t, held, coordmemory.New(), layoutZero, c)
+	run(t, v)
+
+	waitFor(t, held.asked, "the view to read the map")
+	c.advance(time.Minute)
+	close(held.release)
+	eventually(t, "the view's read to answer", func() bool { return !confirmedAtOf(v).IsZero() })
+	if at := confirmedAtOf(v); !at.Equal(base) {
+		t.Fatalf("the view's own read, asked at %v and answered a minute later, confirmed "+
+			"the view at %v — an instant the store was never asked at", base, at)
 	}
 }
 
